@@ -13,11 +13,14 @@ If any phase fails, stop and report which phase failed and why. Do not proceed t
 
 ## Phase 1: Spec
 
-Follow `skills/spec/SKILL.md`.
+If an issue number is provided ($ARGUMENTS):
+1. Read the existing issue via `gh issue view <issue-number>`.
+2. Use its spec as-is. Do not overwrite or regenerate the spec.
+3. Capture the issue number for all subsequent phases.
 
-If an issue number is provided ($ARGUMENTS), write the spec into that existing issue. Otherwise, create a new GitHub issue with the spec.
-
-Capture the issue number for use in all subsequent phases.
+If no issue number is provided:
+1. Follow `skills/spec/SKILL.md` to write a spec and create a new GitHub issue.
+2. Capture the new issue number for all subsequent phases.
 
 ## Phase 2: Branch
 
