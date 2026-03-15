@@ -24,6 +24,7 @@ Skills are slash commands that automate common development workflows. Each skill
 | **branch** | `/branch <issue>` | Create a local branch from a GitHub issue |
 | **run** | `/run <issue> <step(s)>` | Implement specific steps from a spec |
 | **run-agents** | `/run-agents <issue>` | Implement all steps, one subagent per step |
+| **dev-workflow** | `/dev-workflow [issue]` | Full pipeline: spec → review (Codex) → branch → implement → PR |
 | **commit** | `/commit [issue]` | Conventional commit of staged files |
 | **pr** | `/pr [issue]` | Commit, push, and open a pull request |
 | **pr-review** | `/pr-review [pr]` | Review a PR's code and submit comments |
