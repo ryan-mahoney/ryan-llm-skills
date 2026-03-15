@@ -14,9 +14,10 @@ If any phase fails, stop and report which phase failed and why. Do not proceed t
 ## Phase 1: Spec
 
 If an issue number is provided ($ARGUMENTS):
-1. Read the existing issue via `gh issue view <issue-number>`.
-2. Use its spec as-is. Do not overwrite or regenerate the spec.
-3. Capture the issue number for all subsequent phases.
+1. Extract the issue body: `gh issue view <issue-number> --json body --jq '.body'`.
+2. Validate the spec. The body must contain at least an **Implementation Steps** section. If the body is empty or missing required spec structure, stop and report: "Issue #<issue-number> does not contain a valid spec. Expected at least an Implementation Steps section."
+3. Use the spec as-is. Do not overwrite or regenerate it.
+4. Capture the issue number for all subsequent phases.
 
 If no issue number is provided:
 1. Follow `skills/spec/SKILL.md` to write a spec and create a new GitHub issue.
@@ -39,7 +40,7 @@ Agent(
   subagent_type: "general-purpose",
   description: "Implement issue #<issue-number> all steps",
   prompt: "Follow skills/run-agents/SKILL.md to implement all steps from GitHub issue #<issue-number>.
-Read the issue spec via gh issue view <issue-number>.
+Read the issue spec via gh issue view <issue-number> --json body --jq '.body'.
 Implement each step with a dedicated subagent. Commit after each verified step.
 Report per-step completion with commit hashes when done."
 )
