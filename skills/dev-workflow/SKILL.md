@@ -14,10 +14,9 @@ If any phase fails, stop and report which phase failed and why. Do not proceed t
 ## Phase 1: Spec
 
 If an issue number is provided ($ARGUMENTS):
-1. Extract the issue body: `gh issue view <issue-number> --json body --jq '.body'`.
-2. Validate the spec. The body must contain at least an **Implementation Steps** section. If the body is empty or missing required spec structure, stop and report: "Issue #<issue-number> does not contain a valid spec. Expected at least an Implementation Steps section."
-3. Use the spec as-is. Do not overwrite or regenerate it.
-4. Capture the issue number for all subsequent phases.
+1. Follow `skills/spec/SKILL.md` to write a spec.
+2. Write the spec to the existing issue: `gh issue edit <issue-number> --body '<spec body>'`.
+3. Capture the issue number for all subsequent phases.
 
 If no issue number is provided:
 1. Follow `skills/spec/SKILL.md` to write a spec and create a new GitHub issue.
