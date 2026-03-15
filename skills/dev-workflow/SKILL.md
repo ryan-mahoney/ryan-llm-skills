@@ -7,7 +7,7 @@ argument-hint: "[issue-number (optional)]"
 
 # Dev Workflow
 
-Based on the current analysis, execute the full development workflow: write a spec to a GitHub issue, create a branch, implement all steps, and open a PR.
+Based on the current analysis, execute the full development workflow: write a spec to a GitHub issue, review it via Codex CLI, create a branch, implement all steps, and open a PR.
 
 If any phase fails, stop and report which phase failed and why. Do not proceed to subsequent phases.
 
@@ -23,7 +23,47 @@ If no issue number is provided:
 1. Follow `skills/spec/SKILL.md` to write a spec and create a new GitHub issue.
 2. Capture the new issue number for all subsequent phases.
 
-## Phase 2: Branch
+## Phase 2: Review
+
+Run Codex CLI to review the spec with high reasoning effort. Codex will edit the issue body directly if changes are needed.
+
+```bash
+gh issue view <issue-number> --json body --jq '.body' | \
+codex exec --full-auto \
+  -m gpt-5.3-codex \
+  -c model_reasoning_effort="high" \
+  -o /tmp/review-<issue-number>.txt \
+  "You are reviewing a GitHub issue spec (piped via stdin). Apply this checklist:
+
+### Required Sections
+All 7 sections must be present and substantive:
+1. Qualifications — lists only skills actually needed.
+2. Problem Statement — 2-4 sentences: what is missing/broken, current behavior, what the spec addresses.
+3. Goal — one concrete sentence describing the outcome.
+4. Architecture — files with responsibilities, types/interfaces, design decisions with rationale, dependency map.
+5. Acceptance Criteria — numbered, observable, automatable assertions. Includes non-happy-path behaviors.
+6. Notes — trade-offs with rationale, risks and ambiguities.
+7. Implementation Steps — see below.
+
+### Architecture Review
+Flag: over-engineering, single-use abstractions, missing failure modes, unclear data flow, unjustified trade-offs.
+
+### Implementation Steps Review
+Each step needs: what (exact files/changes), why (tied to architecture/criteria), signatures/contracts, tests.
+Verify: deterministic, minimal, self-contained, forward-only.
+Order: types first, pure logic next, I/O after, integration last.
+Remove: manual QA, docs-only, full test suite runs, formatting, git workflow steps.
+
+If the spec needs changes, run: gh issue edit <issue-number> --body '<updated body>'
+Output whether the spec was modified and whether it is viable for implementation."
+```
+
+After codex returns:
+1. Read `/tmp/review-<issue-number>.txt` for the review outcome.
+2. If the spec was modified, proceed (the issue body is already updated).
+3. If the review reports the spec is fundamentally unviable, stop and report.
+
+## Phase 3: Branch
 
 Follow `skills/branch/SKILL.md` with the issue number.
 
@@ -31,7 +71,7 @@ Follow `skills/branch/SKILL.md` with the issue number.
 2. Create a descriptive branch name that includes the issue number.
 3. Check out the new branch.
 
-## Phase 3: Implement
+## Phase 4: Implement
 
 Delegate implementation to a subagent that follows `skills/run-agents/SKILL.md`:
 
@@ -48,7 +88,7 @@ Report per-step completion with commit hashes when done."
 
 After the subagent returns, verify that all steps completed successfully. If the subagent reports blockers, stop and report them.
 
-## Phase 4: PR
+## Phase 5: PR
 
 Follow `skills/pr/SKILL.md` with the issue number.
 
