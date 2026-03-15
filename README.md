@@ -65,3 +65,48 @@ Run `sync.sh` after any changes to instructions, rules, or guides:
 ```
 
 This copies instruction files, refreshes rule symlinks, and syncs skills. Each target directory (`~/.claude`, `~/.codex`, `~/.cline`) is only updated if it already exists.
+
+## Code Review (Optional): roborev
+
+`roborev` adds automated post-commit review for agent-driven workflows, so issues are surfaced right after commits instead of later in PR review.
+
+Install `roborev` globally (Homebrew recommended):
+
+```bash
+brew install roborev-dev/tap/roborev
+```
+
+Optional install alternatives:
+
+```bash
+curl -fsSL https://roborev.io/install.sh | bash
+go install github.com/roborev-dev/roborev/cmd/roborev@latest
+```
+
+Global vs per-repo setup:
+
+- Global defaults/config live in `~/.roborev/config.toml`
+- Each repository still needs `roborev init` once to install git hooks
+
+Quick start:
+
+```bash
+# one-time global setup
+brew install roborev-dev/tap/roborev
+roborev config set default_agent codex --global
+
+# per repository
+cd /path/to/repo
+roborev init
+```
+
+Optional global auto-fix loop on failed reviews:
+
+```toml
+# ~/.roborev/config.toml
+[[hooks]]
+event = "review.completed"
+command = "test {verdict} = F && roborev refine --max-iterations 5"
+```
+
+This runs an iterative fix + re-review loop when a review fails.
