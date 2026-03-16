@@ -34,7 +34,6 @@ Preflight requirement:
 REVIEW_FILE=/tmp/review-<issue-number>.txt
 
 codex exec --dangerously-bypass-approvals-and-sandbox \
-  -m gpt-5-codex \
   -c model_reasoning_effort="high" \
   -o "$REVIEW_FILE" \
   "You are reviewing GitHub issue #<issue-number> as an implementation spec.
