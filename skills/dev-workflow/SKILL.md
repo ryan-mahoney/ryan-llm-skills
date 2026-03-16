@@ -26,13 +26,28 @@ If no issue number is provided:
 
 Run Codex CLI to review the spec with high reasoning effort. Codex will edit the issue body directly if changes are needed.
 
+Preflight requirement:
+- `gh auth status` must be valid before running this phase.
+- The review must be based on GitHub issue content only (never repository-local files).
+
 ```bash
-gh issue view <issue-number> --json body --jq '.body' | \
-codex exec --full-auto \
-  -m gpt-5.3-codex \
+REVIEW_FILE=/tmp/review-<issue-number>.txt
+
+codex exec --dangerously-bypass-approvals-and-sandbox \
+  -m gpt-5-codex \
   -c model_reasoning_effort="high" \
-  -o /tmp/review-<issue-number>.txt \
-  "You are reviewing a GitHub issue spec (piped via stdin). Apply this checklist:
+  -o "$REVIEW_FILE" \
+  "You are reviewing GitHub issue #<issue-number> as an implementation spec.
+
+First, fetch the issue body directly from GitHub by running:
+gh issue view <issue-number> --json body --jq '.body'
+
+If that command fails for any reason (auth, permissions, network, gh CLI), stop immediately and output ONLY this compact JSON:
+{\"review_status\":\"failed\",\"spec_modified\":false,\"viable\":false,\"failure_reason\":\"<exact failure cause>\",\"summary\":\"Unable to fetch issue body from GitHub.\"}
+
+Do not read or review repository-local files as a substitute for issue content.
+
+If fetch succeeds, review the fetched issue body using this checklist:
 
 ### Required Sections
 All 7 sections must be present and substantive:
@@ -53,14 +68,25 @@ Verify: deterministic, minimal, self-contained, forward-only.
 Order: types first, pure logic next, I/O after, integration last.
 Remove: manual QA, docs-only, full test suite runs, formatting, git workflow steps.
 
-If the spec needs changes, run: gh issue edit <issue-number> --body '<updated body>'
-Output whether the spec was modified and whether it is viable for implementation."
+If the spec needs changes, run: gh issue edit <issue-number> --body '<updated body>'.
+
+At the end, output ONLY compact JSON with these exact keys:
+- review_status: \"success\" or \"failed\"
+- spec_modified: boolean
+- viable: boolean
+- failure_reason: empty string on success, otherwise a concise reason
+- summary: concise review outcome"
 ```
 
 After codex returns:
-1. Read `/tmp/review-<issue-number>.txt` for the review outcome.
-2. If the spec was modified, proceed (the issue body is already updated).
-3. If the review reports the spec is fundamentally unviable, stop and report.
+1. Validate `/tmp/review-<issue-number>.txt` exists and is valid JSON.
+2. Parse fields from JSON: `review_status`, `spec_modified`, `viable`, `failure_reason`.
+3. If `review_status` is `failed`, stop and report remediation:
+   - Authenticate GitHub CLI (`gh auth login` or refresh credentials).
+   - Re-run the workflow from Phase 2.
+4. If `review_status` is `success` but `viable` is `false`, stop and report the spec as unviable.
+5. If `spec_modified` is `true`, proceed (the issue body is already updated).
+6. Continue to Phase 3 only when `review_status=success` and `viable=true`.
 
 ## Phase 3: Branch
 
