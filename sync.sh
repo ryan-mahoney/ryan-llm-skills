@@ -47,3 +47,18 @@ if [ -d "$HOME/.cline" ]; then
   done
   echo "Synced Cline skills."
 fi
+
+# Augment: skill symlinks
+if [ -d "$HOME/.augment" ]; then
+  mkdir -p "$HOME/.augment/skills"
+  for d in "$AGENTS_DIR/skills/"*/; do
+    skill="$(basename "$d")"
+    target="$HOME/.augment/skills/$skill"
+    # Remove stale target (old SKILL.md-only dirs or broken symlinks)
+    if [ -d "$target" ] && [ ! -L "$target" ]; then
+      rm -rf "$target"
+    fi
+    ln -sfn "$d" "$target"
+  done
+  echo "Synced Augment skills."
+fi
