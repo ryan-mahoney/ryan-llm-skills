@@ -14,12 +14,12 @@ If any phase fails, stop and report which phase failed and why. Do not proceed t
 ## Phase 1: Spec
 
 If an issue number is provided ($ARGUMENTS):
-1. Follow `skills/spec/SKILL.md` to write a spec.
+1. Follow `~/.agents/skills/spec/SKILL.md` to write a spec.
 2. Write the spec to the existing issue: `gh issue edit <issue-number> --body '<spec body>'`.
 3. Capture the issue number for all subsequent phases.
 
 If no issue number is provided:
-1. Follow `skills/spec/SKILL.md` to write a spec and create a new GitHub issue.
+1. Follow `~/.agents/skills/spec/SKILL.md` to write a spec and create a new GitHub issue.
 2. Capture the new issue number for all subsequent phases.
 
 ## Phase 2: Review
@@ -87,41 +87,117 @@ After codex returns:
 5. If `spec_modified` is `true`, proceed (the issue body is already updated).
 6. Continue to Phase 3 only when `review_status=success` and `viable=true`.
 
-## Phase 3: Branch
+## Phase 3: Branch + Worktree
 
-Follow `skills/branch/SKILL.md` with the issue number.
+Create an isolated worktree so multiple dev-workflows can run concurrently against the same repository, each in its own VSCode window.
 
 1. Read the GitHub issue to understand the topic.
-2. Create a descriptive branch name that includes the issue number.
-3. Check out the new branch.
+2. Derive a descriptive slug from the issue title (e.g., `42-add-auth-middleware`).
+   The slug must include the issue number and be a valid branch name.
+3. Extract the repository name from `git remote get-url origin` (last path segment, strip `.git` suffix).
+4. Check for existing worktree/branch (enables re-entry after a crashed run):
+   - If `~/.worktrees/<repo-name>/<slug>` already exists, reuse it and skip to step 6.
+   - If branch `<slug>` exists but no worktree, run:
+     `git worktree add ~/.worktrees/<repo-name>/<slug> <slug>`
+   - If neither exists, create both from the latest remote main:
+     ```bash
+     git fetch origin
+     mkdir -p ~/.worktrees/<repo-name>
+     git worktree add ~/.worktrees/<repo-name>/<slug> -b <slug> origin/main
+     ```
+5. Record the absolute worktree path. All subsequent phases operate from this path.
+6. Copy environment files from the original repository root into the worktree:
+   ```bash
+   cp .env ~/.worktrees/<repo-name>/<slug>/.env
+   ```
+   If `.env` does not exist in the source repo, skip this step without failing.
+7. Color-code the VSCode window. Compute the color index as `<issue-number> % 8` and select the hex value from this palette:
 
-## Phase 4: Implement
+   | Index | Color  | Hex       |
+   |-------|--------|-----------|
+   | 0     | Teal   | `#0d7377` |
+   | 1     | Purple | `#6a1b9a` |
+   | 2     | Orange | `#e65100` |
+   | 3     | Blue   | `#1565c0` |
+   | 4     | Green  | `#2e7d32` |
+   | 5     | Red    | `#b71c1c` |
+   | 6     | Indigo | `#283593` |
+   | 7     | Brown  | `#4e342e` |
 
-Delegate implementation to a subagent that follows `skills/run-agents/SKILL.md`:
+   Write `.vscode/settings.json` in the worktree with the color settings:
+   - If no `.vscode/settings.json` exists, write:
+     ```json
+     {
+       "workbench.colorCustomizations": {
+         "titleBar.activeBackground": "<hex>",
+         "titleBar.activeForeground": "#ffffff",
+         "statusBar.background": "<hex>",
+         "statusBar.foreground": "#ffffff"
+       }
+     }
+     ```
+   - If `.vscode/settings.json` already exists, merge via `jq`:
+     ```bash
+     jq --arg bg "<hex>" \
+       '.["workbench.colorCustomizations"] = {"titleBar.activeBackground": $bg, "titleBar.activeForeground": "#ffffff", "statusBar.background": $bg, "statusBar.foreground": "#ffffff"}' \
+       .vscode/settings.json > /tmp/vscode-settings-tmp.json && mv /tmp/vscode-settings-tmp.json .vscode/settings.json
+     ```
+   - If `jq` is not available, write the file from scratch (color settings only).
+8. Write a continuation hook so the new VSCode window's Claude Code session automatically receives the next-phase instructions on startup.
 
-```txt
-Agent(
-  subagent_type: "general-purpose",
-  description: "Implement issue #<issue-number> all steps",
-  prompt: "Follow skills/run-agents/SKILL.md to implement all steps from GitHub issue #<issue-number>.
-Read the issue spec via gh issue view <issue-number> --json body --jq '.body'.
-Implement each step with a dedicated subagent. Commit after each verified step.
-Report per-step completion with commit hashes when done."
-)
-```
+   Create `<worktree-path>/.claude/hooks/continue.sh`:
 
-After the subagent returns, verify that all steps completed successfully. If the subagent reports blockers, stop and report them.
+   ```bash
+   #!/bin/bash
+   cat <<'PROMPT'
+   # Continue Dev Workflow — Issue #<issue-number>
 
-## Phase 5: PR
+   This worktree was created by the dev-workflow skill. Pick up from Phase 4.
 
-Follow `skills/pr/SKILL.md` with the issue number.
+   ## Phase 4: Implement
 
-1. Read the GitHub issue to understand the context.
-2. Commit any remaining staged files with a conventional commit.
-3. Push the branch to origin.
-4. Open a pull request:
-   - Title: short, imperative, under 70 characters.
-   - Body: summary of what changed and why, link to the issue.
-   - Reference and close the issue.
+   Follow `~/.agents/skills/run-agents/SKILL.md` to implement all steps from GitHub issue #<issue-number>.
+   Read the issue spec via `gh issue view <issue-number> --json body --jq '.body'`.
+   Implement each step with a dedicated subagent. Commit after each verified step.
 
-Do not add Co-Authored-By trailers, "Generated with" footers, or any AI model attribution.
+   ## Phase 5: PR
+
+   Follow `~/.agents/skills/pr/SKILL.md` with issue number <issue-number>.
+
+   1. Read the GitHub issue to understand the context.
+   2. Commit any remaining staged files with a conventional commit.
+   3. Push the branch to origin: `git push -u origin <slug>`.
+   4. Open a pull request:
+      - Title: short, imperative, under 70 characters.
+      - Body: summary of what changed and why, link to the issue.
+      - Reference and close the issue.
+   Do not add Co-Authored-By trailers, "Generated with" footers, or any AI model attribution.
+   PROMPT
+   ```
+
+   Make it executable: `chmod +x <worktree-path>/.claude/hooks/continue.sh`
+
+   Write `<worktree-path>/.claude/settings.json` (merge with existing if present):
+
+   ```json
+   {
+     "hooks": {
+       "SessionStart": [
+         {
+           "matcher": "startup",
+           "hooks": [
+             {
+               "type": "command",
+               "command": ".claude/hooks/continue.sh",
+               "timeout": 10
+             }
+           ]
+         }
+       ]
+     }
+   }
+   ```
+
+9. Open the worktree in a new VSCode window: `code --new-window ~/.worktrees/<repo-name>/<slug>`
+
+10. **STOP.** Do not proceed to implementation. Report the worktree path, issue number, and branch name to the user. The new VSCode window's Claude Code session will receive the continuation prompt via the SessionStart hook — the user just needs to type "go".
