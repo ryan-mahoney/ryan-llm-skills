@@ -19,16 +19,19 @@ Skills are slash commands that automate common development workflows. Each skill
 
 | Skill | Command | Purpose |
 |---|---|---|
-| **agent** | `/agent [path-or-scope]` | Analyze a repository's architecture and generate or update `AGENTS.md` for coding agents and contributors |
+| **agents-update** | `/agents-update [path-or-scope]` | Analyze a repository's architecture and generate or update `AGENTS.md` for coding agents and contributors |
 | **identify-where** | `/identify-where [plain-language functionality] [optional scope]` | Locate the top-level file(s) where a described behavior or feature likely lives |
 | **architect-initial** | `/architect-initial [problem-or-feature]` | Review the existing system architecture and propose a compatible implementation approach or explain why it does not fit |
 | **architect-inspect** | `/architect-inspect [top-level-file] [optional output path]` | Inspect and describe current architecture around a specific feature/component entry file |
 | **architect-critics** | `/architect-critics [proposal-or-file]` | Stress-test a proposal using expert or expert-lens critique and produce prioritized architectural feedback |
+| **controller-refactor-plan** | `/controller-refactor-plan [path to controller file] [optional output markdown path]` | Analyze one controller file for dead handlers and responsibility growth beyond controller boundaries |
+| **ux-auditor** | `/ux-auditor [prototype html] [component file]` | Audit UI implementation parity against an HTML prototype and produce a grouped correction checklist |
 | **spec** | `/spec [issue]` | Write an implementation spec to a GitHub issue |
 | **review** | `/review <issue>` | Review a spec for gaps, then edit the issue |
 | **branch** | `/branch <issue>` | Create a local branch from a GitHub issue |
 | **run** | `/run <issue> <step(s)>` | Implement specific steps from a spec |
 | **run-agents** | `/run-agents <issue>` | Implement all steps, one subagent per step |
+| **skill-factory** | `/skill-factory [description of task to automate]` | Create a reusable skill by extracting an existing repository workflow into a grounded `SKILL.md` |
 | **dev-workflow** | `/dev-workflow [issue]` | Full pipeline: spec → review (Codex) → branch → implement → PR |
 | **commit** | `/commit [issue]` | Conventional commit of staged files |
 | **pr** | `/pr [issue]` | Commit, push, and open a pull request |
