@@ -62,3 +62,21 @@ if [ -d "$HOME/.augment" ]; then
   done
   echo "Synced Augment skills."
 fi
+
+# OpenCode: rule symlinks and skill symlinks
+if [ -d "$HOME/.opencode" ]; then
+  mkdir -p "$HOME/.opencode/rules"
+  for f in "$AGENTS_DIR/rules/"*; do
+    ln -sfn "$f" "$HOME/.opencode/rules/$(basename "$f")"
+  done
+  mkdir -p "$HOME/.opencode/skills"
+  for d in "$AGENTS_DIR/skills/"*/; do
+    skill="$(basename "$d")"
+    target="$HOME/.opencode/skills/$skill"
+    if [ -d "$target" ] && [ ! -L "$target" ]; then
+      rm -rf "$target"
+    fi
+    ln -sfn "$d" "$target"
+  done
+  echo "Synced OpenCode rules and skills."
+fi
