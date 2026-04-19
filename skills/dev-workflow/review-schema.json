@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["review_status", "spec_modified", "viable", "failure_reason", "summary"],
+  "properties": {
+    "review_status": {
+      "type": "string",
+      "enum": ["success", "failed"]
+    },
+    "spec_modified": {
+      "type": "boolean"
+    },
+    "viable": {
+      "type": "boolean"
+    },
+    "failure_reason": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string"
+    }
+  }
+}

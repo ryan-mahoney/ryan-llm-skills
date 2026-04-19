@@ -35,14 +35,14 @@ REVIEW_FILE=/tmp/review-<issue-number>.txt
 
 codex exec --dangerously-bypass-approvals-and-sandbox \
   -c model_reasoning_effort="high" \
+  --output-schema ~/.agents/skills/dev-workflow/review-schema.json \
   -o "$REVIEW_FILE" \
   "You are reviewing GitHub issue #<issue-number> as an implementation spec.
 
 First, fetch the issue body directly from GitHub by running:
 gh issue view <issue-number> --json body --jq '.body'
 
-If that command fails for any reason (auth, permissions, network, gh CLI), stop immediately and output ONLY this compact JSON:
-{\"review_status\":\"failed\",\"spec_modified\":false,\"viable\":false,\"failure_reason\":\"<exact failure cause>\",\"summary\":\"Unable to fetch issue body from GitHub.\"}
+If that command fails for any reason (auth, permissions, network, gh CLI), return a structured response with review_status=\"failed\", spec_modified=false, viable=false, failure_reason set to the exact failure cause, and summary=\"Unable to fetch issue body from GitHub.\"
 
 Do not read or review repository-local files as a substitute for issue content.
 
@@ -67,14 +67,9 @@ Verify: deterministic, minimal, self-contained, forward-only.
 Order: types first, pure logic next, I/O after, integration last.
 Remove: manual QA, docs-only, full test suite runs, formatting, git workflow steps.
 
-If the spec needs changes, run: gh issue edit <issue-number> --body '<updated body>'.
+If the spec needs changes, run: gh issue edit <issue-number> --body '<updated body>' and set spec_modified=true.
 
-At the end, output ONLY compact JSON with these exact keys:
-- review_status: \"success\" or \"failed\"
-- spec_modified: boolean
-- viable: boolean
-- failure_reason: empty string on success, otherwise a concise reason
-- summary: concise review outcome"
+Your final response is constrained by an output schema. Set failure_reason to an empty string on success. Set viable=false only when the spec cannot be salvaged into a usable implementation plan."
 ```
 
 After codex returns:
