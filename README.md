@@ -21,14 +21,20 @@ Skills are slash commands that automate common development workflows. Each skill
 |---|---|---|
 | **agents-update** | `/agents-update [path-or-scope]` | Analyze a repository's architecture and generate or update `AGENTS.md` for coding agents and contributors |
 | **identify-where** | `/identify-where [plain-language functionality] [optional scope]` | Locate the top-level file(s) where a described behavior or feature likely lives |
+| **feature-list** | `/feature-list [target-scope]` | Produce a language-agnostic inventory of user- and operator-facing features grouped by capability, with entry points and supporting modules |
 | **architect-initial** | `/architect-initial [problem-or-feature]` | Review the existing system architecture and propose a compatible implementation approach or explain why it does not fit |
 | **architect-inspect** | `/architect-inspect [top-level-file] [optional output path]` | Inspect and describe current architecture around a specific feature/component entry file |
 | **architect-critics** | `/architect-critics [proposal-or-file]` | Stress-test a proposal using expert or expert-lens critique and produce prioritized architectural feedback |
 | **controller-refactor-plan** | `/controller-refactor-plan [path to controller file] [optional output markdown path]` | Analyze one controller file for dead handlers and responsibility growth beyond controller boundaries |
 | **ux-auditor** | `/ux-auditor [prototype html] [component file]` | Audit UI implementation parity against an HTML prototype and produce a grouped correction checklist |
+| **design-align** | `/design-align [path-to-top-level-component]` | Audit a React component tree against the FirstWho design system and recommend Tailwind CSS corrections |
+| **form-modernizer** | `/form-modernizer [FormComponentPath]` | Modernize a form via multi-phase analysis, redesign, TypeScript typing, and visual verification |
+| **angular-pr-complexity** | `/angular-pr-complexity <commit-hash>` | Score an Angular/Nx merge commit on size, spread, file types, and cognitive load |
+| **bun-test-fix** | `/bun-test-fix <path-to-test-file>` | Bring a test file into compliance with Bun test rules from `AGENTS.md` |
 | **spec** | `/spec [issue]` | Write an implementation spec to a GitHub issue |
 | **review** | `/review <issue>` | Review a spec for gaps, then edit the issue |
 | **branch** | `/branch <issue>` | Create a local branch from a GitHub issue |
+| **branch-worktree** | `/branch-worktree [description]` | Create a named branch and git worktree, then open it in a color-coded VSCode window |
 | **run** | `/run <issue> <step(s)>` | Implement specific steps from a spec |
 | **run-agents** | `/run-agents <issue>` | Implement all steps, one subagent per step |
 | **skill-factory** | `/skill-factory [description of task to automate]` | Create a reusable skill by extracting an existing repository workflow into a grounded `SKILL.md` |
@@ -47,6 +53,7 @@ Skills are slash commands that automate common development workflows. Each skill
 | **specops-spec-coherence** | `/specops-spec-coherence [analysis-dir]` | Audit a set of analysis specs for cross-spec coherence (dependency order, integration contracts, shared models, terminology) and patch gaps |
 | **specops-spec-conformance** | `/specops-spec-conformance [analysis-spec] [implementation-spec]` | Audit an implementation spec against its source analysis spec for dropped or weakened behavior and patch the implementation spec |
 | **specops-contract-tests** | `/specops-contract-tests [analysis-file]` | Generate a framework-agnostic pytest contract test file from a SpecOps analysis |
+| **specops-integration-test** | `/specops-integration-test [analysis-dir] [migrated-folder]` | Generate integration tests for normative cross-module pathways discovered from analysis specs and the migrated call graph, reusing existing unit-test mocks |
 | **specops-implementation-drift** | `/specops-implementation-drift [migrated-folder] [original-analysis]` | Re-analyze migrated code, diff against the original analysis, and produce corrective specs for each behavioral divergence |
 
 ## Rules
