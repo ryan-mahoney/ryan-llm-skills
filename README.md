@@ -41,8 +41,13 @@ Skills are slash commands that automate common development workflows. Each skill
 | **specops-refactor-plan** | `/specops-refactor-plan [target-folder] [refactor-goal]` | Create a refactor-focused SpecOps plan for an existing source folder and explicit goal |
 | **specops-analysis** | `/specops-analysis [scope]` | Produce a generalized SpecOps implementation-agnostic analysis/specification |
 | **specops-make-spec** | `/specops-make-spec [scope]` | Convert SpecOps analysis into a generalized deterministic implementation spec |
-| **specops-orchestrate-analysis** | `/specops-orchestrate-analysis [initial-plan]` | Orchestrate sequential subagents from initial-plan output across analysis and spec phases |
+| **specops-orchestrate-analysis** | `/specops-orchestrate-analysis [initial-plan]` | Orchestrate sequential subagents that generate one analysis per target from an initial plan |
 | **specops-orchestrate-spec-create** | `/specops-orchestrate-spec-create [analysis-files-or-dir]` | Orchestrate sequential subagents that generate one spec per analysis file |
+| **specops-ambiguity-audit** | `/specops-ambiguity-audit [analysis-file]` | Audit a SpecOps analysis spec for ambiguities, resolve them via parallel legacy-source research, and patch the spec |
+| **specops-spec-coherence** | `/specops-spec-coherence [analysis-dir]` | Audit a set of analysis specs for cross-spec coherence (dependency order, integration contracts, shared models, terminology) and patch gaps |
+| **specops-spec-conformance** | `/specops-spec-conformance [analysis-spec] [implementation-spec]` | Audit an implementation spec against its source analysis spec for dropped or weakened behavior and patch the implementation spec |
+| **specops-contract-tests** | `/specops-contract-tests [analysis-file]` | Generate a framework-agnostic pytest contract test file from a SpecOps analysis |
+| **specops-implementation-drift** | `/specops-implementation-drift [migrated-folder] [original-analysis]` | Re-analyze migrated code, diff against the original analysis, and produce corrective specs for each behavioral divergence |
 
 ## Rules
 
