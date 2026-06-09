@@ -65,8 +65,9 @@ Key fields to extract:
 
 ## Workflow
 
-1. Retrieve all PR review comments using the GraphQL API as shown above
-2. Consider each comment one at a time
-3. Make any necessary fixes for each comment
-4. Stage, commit, and push the changes for each comment (always, even for small fixes)
-5. Leave a reply comment on each addressed review comment using `gh api graphql` with the `addPullRequestReviewThread` mutation or `gh pr review --comment --body` for thread replies
+ 1. Retrieve all PR review comments using the GraphQL API as shown above
+ 2. Consider each comment one at a time
+ 3. Make any necessary fixes for each comment
+ 4. Stage, commit, and push the changes for each comment (always, even for small fixes)
+ 5. **Push must complete before replying** — the reviewer needs to see the fix commit on the branch
+ 6. Reply directly to the specific review thread (not as a standalone/general PR comment). Use `gh api graphql` with the `addPullRequestReviewThread` mutation (using the thread's `id`), or `gh pr review --comment --body` to reply to an inline review thread. Never leave loose top-level comments — every reply must be threaded under the original review comment it addresses.
