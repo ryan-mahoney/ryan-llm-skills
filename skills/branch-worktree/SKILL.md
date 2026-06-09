@@ -23,9 +23,21 @@ Create a git worktree with a structured branch name derived from a loose descrip
 
 ## Steps
 
-### 1. Derive branch name
+### 1. Resolve issue title (if issue number provided)
 
-Parse `$ARGUMENTS` into a valid branch name:
+If `$ARGUMENTS` starts with or contains only an issue number (e.g. `1087`, `#1087`, `issue 1087`), **you must look up the issue title** before deriving the branch name:
+
+```bash
+issue_title=$(gh issue view 1087 --json title --jq .title)
+```
+
+Combine the issue number and title as your working description. For example, issue `1087` with title `Redesign dashboard onboarding flow` becomes `1087 redesign dashboard onboarding flow`.
+
+**Never use a bare issue number as the branch name.** The branch must always include a descriptive slug derived from the issue title or the user's description. A branch named `1087` alone is invalid.
+
+### 2. Derive branch name
+
+Parse the resolved description into a valid branch name:
 
 1. Lowercase the entire string.
 2. If the string starts with a number, extract it as the issue prefix.
@@ -40,14 +52,15 @@ Parse `$ARGUMENTS` into a valid branch name:
 | `1087 redesign dashboard onboarding` | `1087-redesign-dashboard-onboarding` |
 | `fix candidate stage seed data` | `fix-candidate-stage-seed-data` |
 | `refactor/jobs list controller` | `refactor-jobs-list-controller` |
+| `1087` (issue looked up → "Redesign dashboard onboarding flow") | `1087-redesign-dashboard-onboarding-flow` |
 
-### 2. Extract repo name
+### 3. Extract repo name
 
 ```bash
 repo_name=$(basename "$(git remote get-url origin)" .git)
 ```
 
-### 3. Create worktree and branch
+### 4. Create worktree and branch
 
 **Critical rule:** The worktree must be on branch `<slug>`, never on `main`. The branch must not track any remote branch.
 
@@ -61,7 +74,7 @@ Verify the worktree is on the correct branch:
 ```bash
 actual_branch=$(git -C ~/.worktrees/<repo-name>/<slug> rev-parse --abbrev-ref HEAD)
 ```
-- If `actual_branch` equals `<slug>` → reuse it, skip to Step 3b.
+- If `actual_branch` equals `<slug>` → reuse it, skip to Step 4b.
 - If `actual_branch` is anything else (e.g. `main`) → **remove and recreate:**
   ```bash
   git worktree remove --force ~/.worktrees/<repo-name>/<slug>
@@ -84,7 +97,7 @@ git worktree add --no-track -b <slug> ~/.worktrees/<repo-name>/<slug> origin/mai
 
 `--no-track` prevents the new branch from tracking `origin/main`.
 
-### 3b. Verify branch and remove tracking
+### 4b. Verify branch and remove tracking
 
 After the worktree is ready (all cases), run these checks inside the worktree:
 
@@ -104,13 +117,13 @@ git branch --unset-upstream <slug> 2>/dev/null || true
 
 Record the absolute worktree path for all subsequent steps.
 
-### 4. Copy environment files
+### 5. Copy environment files
 
 ```bash
 cp .env ~/.worktrees/<repo-name>/<slug>/.env 2>/dev/null || true
 ```
 
-### 5. Color-code the VSCode window
+### 6. Color-code the VSCode window
 
 Compute a deterministic color index from the slug. Use a simple hash:
 
@@ -159,7 +172,7 @@ Write `.vscode/settings.json` in the worktree:
   ```
 - If `jq` is not available, overwrite with color settings only.
 
-### 6. Install dependencies
+### 7. Install dependencies
 
 Run dependency installation in the worktree so it's ready to work:
 
@@ -173,13 +186,13 @@ export PATH="$HOME/.bun/bin:$PATH"
 bun install --frozen-lockfile
 ```
 
-### 7. Open in VSCode
+### 8. Open in VSCode
 
 ```bash
 code --new-window ~/.worktrees/<repo-name>/<slug>
 ```
 
-### 8. Report
+### 9. Report
 
 Print a summary to the user:
 
@@ -196,6 +209,7 @@ Worktree ready:
 ## Conventions
 
 - Branch names follow the repo pattern: `NNNN-kebab-description` when an issue number is present, `kebab-description` otherwise.
+- **Always include a descriptive slug.** If the user provides only an issue number, look up the issue title via `gh issue view` and derive the description from it. A bare number (e.g. `1087`) is never a valid branch name.
 - Worktrees live under `~/.worktrees/<repo-name>/` to keep them out of the source repo.
 - `.vscode/settings.json` is gitignored in the repo, so color settings won't leak into commits.
 - Always fetch origin before branching to ensure the worktree starts from the latest main.

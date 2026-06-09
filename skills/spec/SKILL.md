@@ -9,7 +9,43 @@ argument-hint: "[issue-number (optional)]"
 
 If an issue number is provided ($ARGUMENTS), write the spec into the body of that existing GitHub issue. If no argument is provided, create a new GitHub issue with the spec.
 
-Based on the current analysis, create a markdown spec with the following sections.
+## Pre-Step — Reconcile Prior Critique Feedback
+
+Before writing the spec, check the conversation history for output from the `architect-critics` skill (a critique document with "Expert Perspectives," "Synthesis," and "Recommendations" sections, or a `CRITIQUE-*.md` file).
+
+### Match the correct critique to this spec
+
+Multiple unrelated critique files may exist. Do not blindly apply every critique you find. Match by:
+
+1. **Feature/proposal name** — the critique title (e.g., `CRITIQUE-user-onboarding.md`) should clearly correspond to the feature this spec covers.
+2. **Conversation proximity** — if the critique appeared in the current conversation thread, it is the intended input.
+3. **Referenced source** — the critique document includes a "Reviewing:" line pointing to the proposal file or conversation topic. Cross-reference that against the current analysis.
+
+If no matching critique is found, skip this pre-step and proceed directly to writing the spec. If multiple critiques seem relevant, reconcile each independently.
+
+### Triage each recommendation by scope and relevance
+
+Once the correct critique(s) are identified, reconcile pragmatically:
+
+| Priority | Action |
+|---|---|
+| **Must Address** — flaws that will cause real problems if shipped | Incorporate into the spec's architecture. If a recommendation changes a core decision, update the design and document the rationale. |
+| **Should Address** — meaningful improvements, not showstoppers | Address in the spec if the scope of the feature makes it natural to include. Otherwise, record in the Notes section as a known follow-up with a brief rationale for deferring. |
+| **Consider** — polish/refinement | Note in the Notes section only if relevant. Skip if out of scope. No need to address every consideration. |
+
+### Reconciliation principles
+
+- **Be pragmatic, not exhaustive.** Not every critique point needs to be addressed. A critique explores possibilities; the spec commits to decisions. It is acceptable to acknowledge a valid concern and consciously defer it.
+- **State your reasoning.** When deferring a critique recommendation, write one sentence in Notes explaining why (e.g., "deferred — adds complexity disproportionate to current load," "out of scope for this feature, tracked as follow-up").
+- **Don't over-engineer to satisfy hypotheticals.** If an expert raised a scalability concern that only matters at 100x current traffic, it is valid to acknowledge it and not design for it yet.
+- **Resolve tensions with project context.** Where experts disagreed, pick the side that fits the actual team size, timeline, and system maturity — and state why.
+- **Converge, don't accumulate.** The spec should read as a coherent plan, not a list of compromises. Integrate accepted changes naturally into the architecture.
+
+Apply the reconciled decisions when writing the Architecture, Notes, and Implementation Steps sections below.
+
+---
+
+Based on the current analysis (and any reconciled critique feedback), create a markdown spec with the following sections.
 
 ## Required Sections
 
