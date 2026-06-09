@@ -1,6 +1,6 @@
 ---
 name: dev-workflow
-description: This skill should be used when the user asks to "run the full workflow", "spec and implement", "dev workflow", "build this end to end", or "spec, branch, implement, and PR". Chains spec → branch → run-agents → PR into a single orchestrated flow.
+description: This skill should be used when the user asks to "run the full workflow", "spec and implement", "dev workflow", "build this end to end", or "spec, branch, implement, and PR". Chains spec → branch → run-spec → PR into a single orchestrated flow.
 disable-model-invocation: true
 argument-hint: "[issue-number (optional)]"
 ---
@@ -151,7 +151,7 @@ Create an isolated worktree so multiple dev-workflows can run concurrently again
 
    ## Phase 4: Implement
 
-   Follow `~/.agents/skills/run-agents/SKILL.md` to implement all steps from GitHub issue #<issue-number>.
+   Follow `~/.agents/skills/run-spec/SKILL.md` to implement all steps from GitHub issue #<issue-number>.
    Read the issue spec via `gh issue view <issue-number> --json body --jq '.body'`.
    Implement each step with a dedicated subagent. Commit after each verified step.
 

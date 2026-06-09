@@ -1,11 +1,11 @@
 ---
-name: review
-description: This skill should be used when the user asks to "review a spec", "review an issue", "check the plan", "review the implementation plan", or "find gaps in the spec". Reviews a GitHub issue spec for gaps and viability, then directly edits the issue if improvements are needed.
+name: review-spec
+description: This skill should be used when the user asks to "review a spec", "review an issue", "check the plan", "review the implementation plan", "find gaps in the spec", or "review spec". Reviews a GitHub issue spec for gaps and viability, then directly edits the issue if improvements are needed.
 disable-model-invocation: true
 argument-hint: "[issue-number]"
 ---
 
-# Review
+# Review Spec
 
 Review GitHub issue $ARGUMENTS.
 

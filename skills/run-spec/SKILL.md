@@ -1,11 +1,11 @@
 ---
-name: run-agents
-description: This skill should be used when the user asks to "execute the spec", "run the plan", "implement the issue", or "run all steps". Implements all steps from a GitHub issue spec.
+name: run-spec
+description: This skill should be used when the user asks to "execute the spec", "run the plan", "implement the issue", "run all steps", or "run spec". Implements all steps from a GitHub issue spec.
 disable-model-invocation: true
 argument-hint: "[issue-number]"
 ---
 
-# Run
+# Run Spec
 
 You are an orchestrator. Delegate implementation of each spec step to a dedicated subagent.
 You do not write production code directly unless subagent execution is unavailable.
