@@ -68,4 +68,5 @@ Key fields to extract:
 1. Retrieve all PR review comments using the GraphQL API as shown above
 2. Consider each comment one at a time
 3. Make any necessary fixes for each comment
-4. Leave a reply comment on each addressed review comment using `gh api graphql` with the `addPullRequestReviewThread` mutation or `gh pr review --comment --body` for thread replies
+4. Stage, commit, and push the changes for each comment (always, even for small fixes)
+5. Leave a reply comment on each addressed review comment using `gh api graphql` with the `addPullRequestReviewThread` mutation or `gh pr review --comment --body` for thread replies
