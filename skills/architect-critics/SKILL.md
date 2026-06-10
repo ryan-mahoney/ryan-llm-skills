@@ -17,7 +17,7 @@ This is not a rubber stamp. The value of this skill is in finding flaws, blind s
 
 Look for the material to critique:
 
-- A `PROPOSAL-*.md` file in the repo (output of the `architect-initial` skill)
+- `.specs/<feature-slug>/proposal.md` (output of the `architect-initial` skill). If multiple spec folders exist, match by the feature named in the conversation; failing that, use the most recently modified folder.
 - An architecture document the user has shared or uploaded
 - A plan described in the current conversation
 - Code or PRs the user wants reviewed at the architectural level
@@ -233,7 +233,7 @@ team-capacity, or domain-specific concerns.]
 ## Step 6 — Output
 
 - Write the critique as a markdown document.
-- If the user asked for a saved critique, or the workflow expects a persisted artifact, write `CRITIQUE-[feature-name].md` alongside the proposal.
+- If the proposal came from a spec folder, write the critique to `critique.md` in that same folder (`.specs/<feature-slug>/critique.md`). The `spec` skill reads this fixed path. For material from any other source, write `CRITIQUE-[feature-name].md` alongside it.
 - If the execution environment requires writing outputs to a staging path, follow that environment's documented file-output convention.
 - Present to the user and invite discussion. A good critique opens a conversation — the user may have context that changes the weight of a recommendation.
 

@@ -46,6 +46,9 @@ Before coding, read:
 
 Rules:
 - Implement ONLY this step. Do not do future steps.
+- If the step cannot be implemented as written (a referenced file, type, or
+  signature does not exist or does not match the spec), STOP and report the
+  discrepancy. Do not improvise an alternative design.
 - Keep changes simple, explicit, and fail-fast.
 - No speculative abstractions or over-engineering.
 - Prefer minimal, surgical edits.
@@ -77,9 +80,11 @@ Output requirements:
 
 ## After Each Subagent Returns
 
-1. Verify changed files match the step scope.
-2. Verify compliance: simple, explicit, no over-engineering, follows project patterns.
-3. Run targeted tests/checks if needed.
+Verification is mechanical — scope, tests, build. Do not re-review the design; the spec already passed review.
+
+1. Verify changed files match the files named in the step. Out-of-scope changes fail verification.
+2. Run the tests named in the step and confirm they pass. If the step names no tests, run the project's compile/lint check on the changed files.
+3. If the subagent reported a spec discrepancy, treat it as a spec defect (see Fix-Up Subagent), not a failed implementation.
 4. If incomplete or incorrect, run one fix-up subagent for that step (see below).
 5. Once verified, stage the changed files and commit:
    - Conventional commit message: `type(scope): description (#$1)`
@@ -106,13 +111,24 @@ Run targeted verification and report results."
 
 Allow up to 2 fix-up attempts per step. If still failing, stop and report blockers.
 
+If a step fails because the spec conflicts with the codebase (not because the subagent erred), do not burn fix-up attempts. Stop, post an issue comment describing the discrepancy (`gh issue comment $1 --body "..."`) so the spec can be corrected upstream, and report it as a spec defect.
+
+## Acceptance Gate
+
+After all steps succeed, verify the spec's Acceptance Criteria:
+
+1. For each criterion, run the tests that the steps' `Covers: AC-n` tags map to it. Do not run the entire test suite — only the mapped tests.
+2. Report criterion-by-criterion pass/fail.
+3. A failing criterion means the work is not complete. Treat it like a failed step: one fix-up subagent scoped to the covering step(s), then stop and report if still failing.
+
 ## Completion
 
-After all steps succeed:
+After the acceptance gate passes:
 
 1. Per-step completion report with commit hash.
 2. List of all modified files.
-3. Targeted tests/checks run and outcomes.
-4. Follow-up risks or manual checks needed.
+3. Acceptance criteria results (criterion-by-criterion).
+4. Targeted tests/checks run and outcomes.
+5. Follow-up risks or manual checks needed.
 
 Do not add Co-Authored-By trailers, "Generated with" footers, or any AI model attribution.

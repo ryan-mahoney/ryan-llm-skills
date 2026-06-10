@@ -110,6 +110,14 @@ When the solution fits, produce a concrete implementation plan. This is not a ha
 
 [If caveats, list them here with brief explanations.]
 
+## Critique Recommended: [YES or NO]
+
+[One sentence of rationale. YES when the verdict is COMPATIBLE WITH CAVEATS,
+or the proposal introduces new infrastructure, new dependencies, a data
+migration, or new security surface. NO for green-verdict proposals that
+follow existing patterns. This tells the user whether running the
+`architect-critics` stage is worth its cost.]
+
 ## Affected Areas
 
 [List every part of the codebase that will be touched, with file paths.]
@@ -125,8 +133,9 @@ When the solution fits, produce a concrete implementation plan. This is not a ha
 
 ### 1. [First logical unit of work]
 
-[Precise instructions: what file to create/modify, what pattern to follow,
-what to import, what to name things. Reference existing code as examples.]
+[Scope each step as a logical unit of work, not a final task breakdown —
+the `spec` stage owns deterministic step decomposition. Name the files
+involved and the pattern to follow. Reference existing code as examples.]
 
 **Pattern reference:** Follow the same approach used in `src/services/auth/`
 for service structure.
@@ -242,9 +251,11 @@ the value of the feature.]
 
 ## Step 5 — Output
 
-Write the proposal or assessment as a markdown document.
+Write the proposal or assessment as a markdown document and persist it for the downstream pipeline:
 
-- If the user asked for a saved design document, or the workflow expects a persisted artifact, write it to the repo root as `PROPOSAL-[feature-name].md` (or whatever the user prefers).
+- Create a spec folder at `.specs/<feature-slug>/` in the repo root, where `<feature-slug>` is a short kebab-case name for the feature. If that folder already exists for an unrelated feature, append `-2`, `-3`, etc.
+- Write the document to `.specs/<feature-slug>/proposal.md`. Downstream skills (`architect-critics`, `spec`) read this fixed path — do not vary the filename.
+- Announce the folder path in your response so later stages can find it.
 - If the execution environment requires writing outputs to a staging path, follow that environment's documented file-output convention.
 - Present the document to the user for review. Invite questions — the proposal is a conversation starter, not a final decree.
 

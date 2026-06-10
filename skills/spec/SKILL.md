@@ -9,23 +9,23 @@ argument-hint: "[issue-number (optional)]"
 
 If an issue number is provided ($ARGUMENTS), write the spec into the body of that existing GitHub issue. If no argument is provided, create a new GitHub issue with the spec.
 
-## Pre-Step — Reconcile Prior Critique Feedback
+## Pre-Step — Load Pipeline Inputs
 
-Before writing the spec, check the conversation history for output from the `architect-critics` skill (a critique document with "Expert Perspectives," "Synthesis," and "Recommendations" sections, or a `CRITIQUE-*.md` file).
+Before writing the spec, locate the spec folder for this feature: `.specs/<feature-slug>/`. Identify it from the conversation (the `architect-initial` skill announces the path) or, failing that, pick the `.specs/*/` folder whose `proposal.md` matches the feature under discussion (most recently modified wins on ties). The folder contains fixed-name artifacts:
 
-### Match the correct critique to this spec
+- **`proposal.md`** — the architecture proposal. This is the primary input for the Architecture and Implementation Steps sections. If there is no spec folder and no analysis in the current conversation, stop and tell the user there is nothing to spec from.
+- **`critique.md`** — optional. If present, reconcile it using the rules below. If absent, skip reconciliation — the critique stage is optional and its absence is not an error.
 
-Multiple unrelated critique files may exist. Do not blindly apply every critique you find. Match by:
+### Phase specs
 
-1. **Feature/proposal name** — the critique title (e.g., `CRITIQUE-user-onboarding.md`) should clearly correspond to the feature this spec covers.
-2. **Conversation proximity** — if the critique appeared in the current conversation thread, it is the intended input.
-3. **Referenced source** — the critique document includes a "Reviewing:" line pointing to the proposal file or conversation topic. Cross-reference that against the current analysis.
+A large proposal may be split into multiple specs, one per phase, each in its own issue. All phase specs share the same spec folder. When writing a phase spec:
 
-If no matching critique is found, skip this pre-step and proceed directly to writing the spec. If multiple critiques seem relevant, reconcile each independently.
+- State which phase of the proposal this spec covers in the Problem Statement.
+- Reconcile only the critique recommendations that fall within this phase's scope. Recommendations belonging to other phases are not deferrals — note them as "covered by phase N" only if helpful.
 
 ### Triage each recommendation by scope and relevance
 
-Once the correct critique(s) are identified, reconcile pragmatically:
+Reconcile the critique pragmatically:
 
 | Priority | Action |
 |---|---|
@@ -45,7 +45,7 @@ Apply the reconciled decisions when writing the Architecture, Notes, and Impleme
 
 ---
 
-Based on the current analysis (and any reconciled critique feedback), create a markdown spec with the following sections.
+Based on the proposal (and any reconciled critique feedback, plus the current analysis), create a markdown spec with the following sections.
 
 ## Required Sections
 
@@ -73,7 +73,7 @@ Avoid: abstractions with only one use, abstract layers "for future flexibility,"
 Aim for: data flow explainable in under 5 minutes, each component with a clear single responsibility, explicit failure modes, trade-offs stated with rationale.
 
 ### 5. Acceptance Criteria
-Numbered list of observable, automatable assertions:
+Numbered list (`AC-1`, `AC-2`, …) of observable, automatable assertions:
 - Group by concern (core behavior, error handling, edge cases, integration).
 - Include non-happy-path behaviors.
 - Each criterion should be testable without subjective judgment.
@@ -91,6 +91,7 @@ For each step include:
 2. Why: tie to architecture or acceptance criteria.
 3. Signatures/contracts: public API shape when adding or changing interfaces.
 4. Tests: concrete automated test assertions and target test files. Test behavior, not implementation. Focus on edge cases and failure modes.
+5. Coverage: which acceptance criteria this step satisfies, as a tag line (`Covers: AC-3, AC-7`). Every criterion must be covered by at least one step; a step covering no criterion must trace to a stated architectural need instead.
 
 #### Step Constraints
 
@@ -113,6 +114,16 @@ For each step include:
 - Running the entire test suite.
 - Formatting or lint-only chores.
 - Git workflow or PR process steps.
+
+## Issue Footer
+
+When a spec folder exists, end the issue body with a single metadata line so downstream skills can locate the proposal and critique:
+
+```
+Spec folder: .specs/<feature-slug>/
+```
+
+For phase specs, include the phase: `Spec folder: .specs/<feature-slug>/ (phase 2)`.
 
 ## Conventions
 
