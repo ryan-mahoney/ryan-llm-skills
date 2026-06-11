@@ -117,11 +117,39 @@ git branch --unset-upstream <slug> 2>/dev/null || true
 
 Record the absolute worktree path for all subsequent steps.
 
-### 5. Copy environment files
+### 5. Copy environment files and spec folder
+
+Copy the environment file:
 
 ```bash
 cp .env ~/.worktrees/<repo-name>/<slug>/.env 2>/dev/null || true
 ```
+
+**Copy the spec folder (if this worktree implements a spec).** The spec-driven skills (`architect-initial`, `architect-critics`, `spec`, `review-spec`, `architect-inspect`) read and write artifacts under `.specs/<feature-slug>/` at the repo root. Because the worktree branches from `origin/main`, any uncommitted spec work in the current checkout will be missing in the new worktree. Copy the relevant folder so the implementer can continue:
+
+```bash
+src_root="$(git rev-parse --show-toplevel)"
+dest="$HOME/.worktrees/<repo-name>/<slug>"
+
+if [ -d "$src_root/.specs" ]; then
+  # The branch slug may carry an issue-number prefix (e.g. 1087-redesign-dashboard);
+  # the feature-slug usually does not. Try the slug, then the slug with the leading
+  # NNNN- stripped, before falling back to copying every spec folder.
+  feature_slug="$(printf '%s' "<slug>" | sed -E 's/^[0-9]+-//')"
+  if [ -d "$src_root/.specs/<slug>" ]; then
+    mkdir -p "$dest/.specs"
+    cp -R "$src_root/.specs/<slug>" "$dest/.specs/"
+  elif [ -d "$src_root/.specs/$feature_slug" ]; then
+    mkdir -p "$dest/.specs"
+    cp -R "$src_root/.specs/$feature_slug" "$dest/.specs/"
+  else
+    # No confident match — copy the whole .specs tree so nothing is lost.
+    cp -R "$src_root/.specs" "$dest/.specs"
+  fi
+fi
+```
+
+If no `.specs` folder exists, this worktree isn't spec-driven — skip silently. Note in the final report which spec folder (if any) was copied.
 
 ### 6. Color-code the VSCode window
 
@@ -174,17 +202,35 @@ Write `.vscode/settings.json` in the worktree:
 
 ### 7. Install dependencies
 
-Run dependency installation in the worktree so it's ready to work:
+Get the worktree ready to work in. Resolve the install command in this order; stop at the first that applies:
 
-```bash
-cd ~/.worktrees/<repo-name>/<slug> && bun install --frozen-lockfile
-```
+1. **Bun project (default).** If `bun.lock`, `bun.lockb` is present, or AGENTS.md documents Bun:
+   ```bash
+   cd ~/.worktrees/<repo-name>/<slug> && bun install --frozen-lockfile
+   ```
+   If `bun` is not on PATH, prepend it and retry:
+   ```bash
+   export PATH="$HOME/.bun/bin:$PATH"
+   bun install --frozen-lockfile
+   ```
 
-If `bun` is not on PATH, try:
-```bash
-export PATH="$HOME/.bun/bin:$PATH"
-bun install --frozen-lockfile
-```
+2. **AGENTS.md documents the install step.** If it's not a Bun project, read `AGENTS.md` (root, then nearest parent) for a documented setup/install command and run exactly that.
+
+3. **Educated guess from the manifest/lockfile.** With no documented command, infer from what's present:
+   | Signal | Command |
+   |---|---|
+   | `pnpm-lock.yaml` | `pnpm install --frozen-lockfile` |
+   | `yarn.lock` | `yarn install --frozen-lockfile` |
+   | `package-lock.json` | `npm ci` |
+   | `package.json` only | `npm install` |
+   | `poetry.lock` | `poetry install` |
+   | `uv.lock` | `uv sync` |
+   | `requirements.txt` | `pip install -r requirements.txt` |
+   | `Gemfile` | `bundle install` |
+   | `go.mod` | `go mod download` |
+   | `Cargo.toml` | `cargo fetch` |
+
+4. **Skip on failure or no match.** If the resolved command fails, or none of the above apply, skip dependency installation and note it in the final report. Do not block opening the worktree on a failed install — the user can install manually.
 
 ### 8. Open in VSCode
 
@@ -202,6 +248,8 @@ Worktree ready:
   Tracks:   nothing (independent — push with `git push -u origin <slug>`)
   Path:     ~/.worktrees/<repo-name>/<slug>
   Color:    <color-name> (<hex>)
+  Spec:     <copied folder under .specs/, or "none">
+  Deps:     <command run, or "skipped — install manually">
 ```
 
 **STOP.** Do not proceed with any implementation work. The user will continue in the new VSCode window.
@@ -211,6 +259,8 @@ Worktree ready:
 - Branch names follow the repo pattern: `NNNN-kebab-description` when an issue number is present, `kebab-description` otherwise.
 - **Always include a descriptive slug.** If the user provides only an issue number, look up the issue title via `gh issue view` and derive the description from it. A bare number (e.g. `1087`) is never a valid branch name.
 - Worktrees live under `~/.worktrees/<repo-name>/` to keep them out of the source repo.
+- The spec-driven skills key off `.specs/<feature-slug>/` at the repo root. Copy that folder into spec-implementation worktrees so the spec travels with the branch; uncommitted spec work is otherwise lost when branching from `origin/main`.
+- Dependency installation defaults to Bun, then defers to AGENTS.md, then guesses from the lockfile, then skips. A failed install never blocks opening the worktree.
 - `.vscode/settings.json` is gitignored in the repo, so color settings won't leak into commits.
 - Always fetch origin before branching to ensure the worktree starts from the latest main.
 - **Never leave a worktree on `main`.** Every worktree must be on its own named branch.
