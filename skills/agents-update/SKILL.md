@@ -17,6 +17,8 @@ Coding agents make assumptions. They assume Rails conventions in a Django projec
 
 Survey the repository before writing anything. Use these checks as a recommended workflow and adapt the order to the repository's structure.
 
+For large repositories (monorepos, 10+ top-level areas), fan reconnaissance out: spawn parallel Explore subagents — one per package or top-level area — and synthesize their reports in the main context instead of reading everything yourself.
+
 ### 1a. Top-level inventory
 
 List the root directory contents. Pay attention to:
@@ -53,9 +55,17 @@ Open the files that reveal routing and wiring:
 - **Router config**: Look for route definitions, middleware chains, API versioning.
 - **Database config**: Migration directories, ORM config files, schema files (`schema.prisma`, `models.py`, `db/migrate/`).
 
-### 1e. Check for an existing AGENTS.md
+### 1e. Check for existing agent instruction files
 
-If one exists, read it fully. You will update it rather than replace it wholesale — preserve any human-written sections, custom notes, or team-specific guidance that is still accurate. Mark stale sections for revision.
+- **AGENTS.md** — if one exists, read it fully. Step 4 covers how to update it.
+- **Siblings** — also read `CLAUDE.md`, `.cursorrules`, and `.github/copilot-instructions.md` if present. Do not duplicate their content in AGENTS.md; where they contradict the actual repo, flag it with `<!-- REVIEW: ... -->`.
+
+### 1f. Mine for gotchas and ground-truth commands
+
+The Gotchas and Commands sections are the highest-value parts of the output. Source them from evidence, not memory:
+
+- **Commands**: `package.json` scripts, `Makefile`, `justfile`, and CI workflows (`.github/workflows/*`) are the source of truth — prefer the exact invocations CI runs. When the environment allows, verify cheap commands by running them (linter, `test --help`).
+- **Gotchas**: path aliases in `tsconfig.json` or bundler config, env validation files, husky/pre-commit hooks, `CONTRIBUTING.md`, comments matching `HACK|WORKAROUND|XXX`, and config files that `git log` shows are touched repeatedly.
 
 ---
 
@@ -77,6 +87,10 @@ Name the pattern precisely. Don't just say "MVC" — say which flavor. Examples:
 - **Modular monolith** (single deploy unit, but code organized into bounded modules)
 - **Hexagonal / Ports & Adapters**
 - **CQRS / Event-sourced**
+- **Library / SDK** (published package — the public API surface is the architecture)
+- **CLI tool** (commands, flags, and exit codes matter more than layers)
+- **Data pipeline / batch jobs** (stages, schedulers, input/output contracts)
+- **Infrastructure repo** (Terraform/CDK modules, environments, state management)
 - **Hybrid** — name the combination explicitly (e.g., "Next.js frontend + Rails API backend in a monorepo")
 
 If the project doesn't fit a clean label, describe it honestly rather than forcing a name.
@@ -91,7 +105,11 @@ If monorepo: identify each package/service, its role, and how they relate.
 
 Produce the file using the template below. Every section exists because it prevents a specific category of contributor or agent mistake. Do not add fluff sections. Include sections only when they are verified and materially useful; if a section is relevant but cannot be confirmed from the repository, omit it or mark it with `<!-- REVIEW: reason -->` rather than guessing.
 
-```markdown
+**Length budget:** AGENTS.md is loaded into every agent's context, so size is a cost. Target under ~150 lines. When trimming, keep Key Conventions and Gotchas first; cut exhaustive directory listings and tech-stack rows that state the obvious.
+
+**Adapt to the repo type:** the template assumes a web app. For a library, CLI, data pipeline, or infra repo, drop inapplicable sections (Routing, Frontend, Data Layer) and substitute ones that fit — Public API surface, CLI commands and flags, pipeline stages, module/environment layout.
+
+````markdown
 # AGENTS.md
 
 > Auto-generated architecture guide for LLM coding agents.
@@ -217,7 +235,7 @@ Things that WILL trip up a coding agent or new contributor if not stated explici
 [Where env vars are defined, whether there's validation, any required
 secrets for local dev. Mention `.env.example` if it exists.]
 
-```
+````
 
 ---
 
@@ -229,6 +247,7 @@ secrets for local dev. Mention `.env.example` if it exists.]
   - **Update** sections where the repo has changed (new dependencies, moved directories, changed patterns).
   - **Append** new sections from the template that are missing.
   - **Mark** anything you're unsure about with `<!-- REVIEW: [reason] -->` so a human can verify.
+  - **Refresh** the `Last updated` date in the header.
   - Keep the existing prose style if it's good. Don't rewrite working sentences just to match the template's voice.
   - Do not delete useful sections solely because they are not in the template if they still communicate accurate project-specific guidance.
 
@@ -241,7 +260,7 @@ Before finalizing, verify:
 1. **Could a contributor find every file they need?** — If someone is asked to "add a new API endpoint," does `AGENTS.md` tell them exactly where to put the route file, the model, the test, and the migration?
 2. **Are the gotchas real?** — Each gotcha should describe something a coding agent or new contributor would actually get wrong. Remove generic advice like "read the docs" or "follow best practices."
 3. **Is the tech stack table complete?** — Every version that matters for compatibility should be listed.
-4. **Are commands copy-pasteable?** — An agent should be able to run them verbatim.
+4. **Are commands copy-pasteable?** — An agent should be able to run them verbatim, and each one should be traceable to a package script, Makefile target, or CI step — not reconstructed from memory.
 5. **Is anything stale?** — If you found a discrepancy between AGENTS.md and the actual repo, flag it.
 6. **Did you avoid speculation?** — Never infer versions, commands, deployment targets, or architectural labels that are not evidenced by the repository. Prefer omission or `<!-- REVIEW: ... -->`.
 
@@ -250,6 +269,7 @@ Before finalizing, verify:
 ## Execution Notes
 
 - This skill involves reading many files. Batch your reads — don't open files one at a time when you can scan directories and read multiple files in sequence.
-- If the repo is very large (monorepo with 10+ packages), focus on the top-level structure first, then drill into packages only as needed. The AGENTS.md should have a monorepo overview section with pointers, not exhaustive docs for every sub-package.
+- If the repo is very large (monorepo with 10+ packages), focus on the top-level structure first, then drill into packages only as needed. The root AGENTS.md should be a monorepo overview with pointers, not exhaustive docs for every sub-package.
+- For packages with their own distinct conventions, prefer nested `packages/<name>/AGENTS.md` files — the AGENTS.md convention resolves the closest file to the code being edited — over inflating the root file.
 - The output file should be written to the repository root as `AGENTS.md`.
 - If the execution environment requires writing outputs to a staging path, follow that environment's documented file-output convention.

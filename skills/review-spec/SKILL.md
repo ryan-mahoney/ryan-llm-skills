@@ -27,7 +27,7 @@ If there is no spec folder or no `critique.md`, skip this check.
 
 ### Editing the issue
 If the spec should be changed, directly edit the content of issue $ARGUMENTS with an updated body that reflects an improved implementation spec. Edit with discipline:
-- **Only edit for substantive gaps.** A sound spec needs no changes. Do not restyle, reword, or reorganize a spec that already passes the checklist — churn is a cost.
+- **Only edit for substantive gaps.** A sound spec needs no changes. Do not restyle, reword, or reorganize a spec that already passes the checklist — churn is a cost. Splitting an oversized implementation step is a substantive change, not churn — see Granularity & Step Splitting.
 - **Preserve the author's intent and voice.** Refine specific sentences and sections; do not rewrite the whole spec into your own style.
 - **Report what changed.** After editing, summarize for the user the specific changes made and why (gap closed, ambiguity resolved, step split), so the edit to the shared issue is reviewable. If you made no changes, say so and why the spec passed.
 - **Converge on re-run.** Running this review again on an already-improved spec should find less each pass and trend toward no edits. If you find yourself rewriting prior edits, stop — the spec is already adequate.
@@ -96,7 +96,7 @@ Check coverage in both directions between Acceptance Criteria and Implementation
 - Verification tests in the steps should map to the observable assertions in the acceptance criteria.
 
 ### Granularity & Step Splitting
-Look for steps doing too much, and split them when it makes the work more verifiable. Split a step when:
+Evaluate every implementation step against the split triggers below. This is a required pass on each step, not an optional polish — under-split steps are the most commonly missed gap in otherwise sound specs. Treat any step touching multiple files or mixing concerns as a split candidate until the triggers say otherwise. Split a step when:
 - It touches multiple files or modules that could each be completed and verified on their own.
 - It bundles a type/contract change with the logic that consumes it (separate the contract from its consumer).
 - It mixes pure/domain logic with stateful or I/O work.
@@ -105,6 +105,8 @@ Look for steps doing too much, and split them when it makes the work more verifi
 - Half of it could land and be verified while the other half is still broken — that seam is a split point.
 
 After splitting, re-apply the four step constraints and the ordering rules to each new step. Each step must still be the smallest verifiable unit of progress.
+
+When summarizing the review, state the granularity verdict explicitly: which steps you split and why, or that every step was checked and none met a split trigger. Silence on granularity means the pass was skipped.
 
 Do not over-split. Keep steps together when:
 - They are a contract and its sole consumer that cannot compile or be tested apart.
