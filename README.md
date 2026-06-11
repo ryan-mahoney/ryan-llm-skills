@@ -43,7 +43,6 @@ Spec-driven development skills use `.specs/<feature-slug>/` as the local source 
 | **spec-audit** | `/spec-audit [feature-slug-or-spec-path]` | Execute the frozen conformance checklist against the implementation diff; PASS/VIOLATION/UNVERIFIABLE per criterion with evidence, report-only |
 | **spec-remediate** | `/spec-remediate [feature-slug-or-spec-path]` | Fix audit VIOLATIONs with one smart subagent per finding, converging code back to the frozen spec, then re-audit until clean; escalates spec/criteria defects |
 | **skill-factory** | `/skill-factory [description of task to automate]` | Create a reusable skill by extracting an existing repository workflow into a grounded `SKILL.md` |
-| **spec-dev-workflow** | `/spec-dev-workflow [feature-slug-or-description]` | Full local-first pipeline: spec-write -> spec-review -> spec-branch-worktree -> spec-run -> optional PR |
 | **commit** | `/commit [issue]` | Conventional commit of staged files |
 | **pr** | `/pr [issue]` | Commit, push, and open a pull request |
 | **pr-review** | `/pr-review [pr]` | Review a PR's code and submit comments |

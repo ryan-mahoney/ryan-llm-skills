@@ -442,7 +442,6 @@ spec_skills=(
   spec-run
   spec-audit
   spec-remediate
-  spec-dev-workflow
 )
 
 specops_skills=()

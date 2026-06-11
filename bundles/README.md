@@ -21,7 +21,6 @@ The spec-driven development workflow:
 - `spec-run`
 - `spec-audit`
 - `spec-remediate`
-- `spec-dev-workflow`
 
 Includes the Augment CLI subagent adapter:
 
