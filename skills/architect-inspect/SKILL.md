@@ -79,7 +79,7 @@ Build a high-level path:
 
 Keep this architectural (layer and flow), not a line-by-line code walkthrough.
 
-**Pattern reference:** Architecture-fit framing aligns with `skills/architect-initial/SKILL.md`.
+**Pattern reference:** Architecture-fit framing aligns with `skills/spec-architect-initial/SKILL.md`.
 
 ### 5. Assess boundaries and architectural health
 

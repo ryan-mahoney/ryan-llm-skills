@@ -1,13 +1,14 @@
 # LLM Skills & Rules
 
-Shared configuration for LLM coding agents (Claude Code, Codex, Cline). Contains reusable skills, design rules, and per-agent instruction files.
+Shared configuration for LLM coding agents (Claude Code, Codex, Augment, Cline, OpenCode). Contains reusable skills, design rules, optional harness adapters, and per-agent instruction files.
 
 ## Structure
 
 ```
 ~/.agents/
-├── sync.sh        # Sync instructions and rules to agent config dirs
-├── skills/        # Slash-command skills for Claude Code
+├── sync.sh        # Sync instructions, rules, skills, and adapters
+├── augment/       # Augment-specific adapter files, such as CLI subagents
+├── skills/        # Agent Skills / slash-command skills
 ├── rules/         # Design and copy guidance (symlinked into each agent)
 ├── claude/        # Claude Code global instructions → ~/.claude/CLAUDE.md
 └── codex/         # Codex global instructions → ~/.codex/AGENTS.md
@@ -15,30 +16,31 @@ Shared configuration for LLM coding agents (Claude Code, Codex, Cline). Contains
 
 ## Skills
 
-Skills are slash commands that automate common development workflows. Each skill lives in `skills/<name>/SKILL.md` and is shared across Claude Code and Cline.
+Skills are slash commands that automate common development workflows. Each skill lives in `skills/<name>/SKILL.md` and uses the Agent Skills format.
+
+Spec-driven development skills use `.specs/<feature-slug>/` as the local source of truth. GitHub issues are optional mirrors only when the current repository is hosted on GitHub and `gh` is authenticated.
 
 | Skill | Command | Purpose |
 |---|---|---|
 | **agents-update** | `/agents-update [path-or-scope]` | Analyze a repository's architecture and generate or update `AGENTS.md` for coding agents and contributors |
 | **identify-where** | `/identify-where [plain-language functionality] [optional scope]` | Locate the top-level file(s) where a described behavior or feature likely lives |
 | **feature-list** | `/feature-list [target-scope]` | Produce a language-agnostic inventory of user- and operator-facing features grouped by capability, with entry points and supporting modules |
-| **architect-initial** | `/architect-initial [problem-or-feature]` | Review the existing system architecture and propose a compatible implementation approach or explain why it does not fit |
+| **spec-architect-initial** | `/spec-architect-initial [problem-or-feature]` | Review the existing system architecture and write `.specs/<slug>/proposal.md`, or explain why the request does not fit |
 | **architect-inspect** | `/architect-inspect [top-level-file] [optional output path]` | Inspect and describe current architecture around a specific feature/component entry file |
-| **architect-critics** | `/architect-critics [proposal-or-file]` | Stress-test a proposal using expert or expert-lens critique and produce prioritized architectural feedback |
+| **spec-architect-critics** | `/spec-architect-critics [proposal-or-file]` | Stress-test `.specs/<slug>/proposal.md` using expert or expert-lens critique and write `.specs/<slug>/critique.md` |
 | **controller-refactor-plan** | `/controller-refactor-plan [path to controller file] [optional output markdown path]` | Analyze one controller file for dead handlers and responsibility growth beyond controller boundaries |
 | **ux-auditor** | `/ux-auditor [prototype html] [component file]` | Audit UI implementation parity against an HTML prototype and produce a grouped correction checklist |
 | **design-align** | `/design-align [path-to-top-level-component]` | Audit a React component tree against the FirstWho design system and recommend Tailwind CSS corrections |
 | **form-modernizer** | `/form-modernizer [FormComponentPath]` | Modernize a form via multi-phase analysis, redesign, TypeScript typing, and visual verification |
 | **angular-pr-complexity** | `/angular-pr-complexity <commit-hash>` | Score an Angular/Nx merge commit on size, spread, file types, and cognitive load |
 | **bun-test-fix** | `/bun-test-fix <path-to-test-file>` | Bring a test file into compliance with Bun test rules from `AGENTS.md` |
-| **spec** | `/spec [issue]` | Write an implementation spec to a GitHub issue |
-| **review** | `/review <issue>` | Review a spec for gaps, then edit the issue |
-| **branch** | `/branch <issue>` | Create a local branch from a GitHub issue |
-| **branch-worktree** | `/branch-worktree [description]` | Create a named branch and git worktree, then open it in a color-coded VSCode window |
-| **run** | `/run <issue> <step(s)>` | Implement specific steps from a spec |
-| **run-agents** | `/run-agents <issue>` | Implement all steps, one subagent per step |
+| **spec-write** | `/spec-write [feature-slug-or-issue]` | Write `.specs/<slug>/spec.md` and optionally mirror it to a GitHub issue |
+| **spec-review** | `/spec-review [feature-slug-or-spec-path]` | Review a local spec for gaps, edit `spec.md`, and optionally mirror changes to GitHub |
+| **spec-branch** | `/spec-branch [description-or-feature-slug]` | Create a local branch from a spec, description, or issue/ticket reference |
+| **spec-branch-worktree** | `/spec-branch-worktree [description-or-feature-slug]` | Create a named branch and git worktree, copy the spec folder, then open VSCode |
+| **spec-run** | `/spec-run [feature-slug-or-spec-path]` | Implement all steps from `spec.md`, one subagent per step when supported |
 | **skill-factory** | `/skill-factory [description of task to automate]` | Create a reusable skill by extracting an existing repository workflow into a grounded `SKILL.md` |
-| **dev-workflow** | `/dev-workflow [issue]` | Full pipeline: spec → review (Codex) → branch → implement → PR |
+| **spec-dev-workflow** | `/spec-dev-workflow [feature-slug-or-description]` | Full local-first pipeline: spec-write -> spec-review -> spec-branch-worktree -> spec-run -> optional PR |
 | **commit** | `/commit [issue]` | Conventional commit of staged files |
 | **pr** | `/pr [issue]` | Commit, push, and open a pull request |
 | **pr-review** | `/pr-review [pr]` | Review a PR's code and submit comments |
@@ -58,7 +60,7 @@ Skills are slash commands that automate common development workflows. Each skill
 
 ## Rules
 
-Design and copy guidance applied to frontend and UX work. Files in `rules/` are symlinked into `~/.claude/rules/` and `~/.codex/guides/`.
+Design and copy guidance applied to frontend and UX work. Files in `rules/` are symlinked into harness-specific rule/guide directories.
 
 | File | Scope |
 |---|---|
@@ -75,7 +77,8 @@ Each agent reads a global instruction file from its own config directory. The ca
 |---|---|
 | `claude/CLAUDE.md` | `~/.claude/CLAUDE.md` |
 | `codex/AGENTS.md` | `~/.codex/AGENTS.md` |
-| `skills/*/SKILL.md` | `~/.cline/skills/*/SKILL.md` (symlinked) |
+| `skills/*/SKILL.md` | Harness skill directories when needed; Augment also discovers `~/.agents/skills/` natively |
+| `augment/agents/*.md` | `~/.augment/agents/*.md` |
 
 ## Setup
 
@@ -85,7 +88,62 @@ Run `sync.sh` after any changes to instructions, rules, or guides:
 ~/.agents/sync.sh
 ```
 
-This copies instruction files, refreshes rule symlinks, and syncs skills. Each target directory (`~/.claude`, `~/.codex`, `~/.cline`) is only updated if it already exists.
+This copies instruction files, refreshes rule symlinks, syncs skills where needed, prunes stale skill symlinks after renames, and syncs harness adapters such as Augment CLI agents. Each target directory is only updated if it already exists.
+
+## Distribution Bundles
+
+Build portable installable skill bundles with:
+
+```bash
+scripts/build-skill-bundles.sh
+```
+
+This produces:
+
+- `dist/skill-bundles/spec-skills-<version>.tar.gz`
+- `dist/skill-bundles/spec-skills-<version>.zip`
+- `dist/skill-bundles/specops-skills-<version>.tar.gz`
+- `dist/skill-bundles/specops-skills-<version>.zip`
+
+Each archive contains a `skills/` directory, `bundle.json`, `README.md`, and `install.sh`. The `spec-skills` bundle also includes the Augment CLI subagent adapter under `augment/agents/`.
+
+Use `VERSION=<release>` to control the archive name and bundle metadata:
+
+```bash
+VERSION=2026.06.11 scripts/build-skill-bundles.sh
+```
+
+Generated bundle artifacts live under `dist/` and are ignored by git.
+
+Pushing a `v*` tag runs the GitHub Actions release workflow, builds both
+archives for each bundle, generates `SHA256SUMS`, and attaches the files to the
+GitHub Release:
+
+```bash
+git tag v2026.06.11
+git push origin v2026.06.11
+```
+
+## Augment Support
+
+Augment support has two layers:
+
+- Skills: Augment discovers Agent Skills from `~/.agents/skills/`, so the canonical `skills/*/SKILL.md` files are already usable by current Augment clients. The `~/.augment/skills/` mirror exists only for older clients and compatibility.
+- Subagents: Augment CLI subagents are separate markdown configs under `~/.augment/agents/` or `./.augment/agents/`. The spec workflow includes `augment/agents/spec-step-implementer.md` for `spec-run` to delegate one implementation step at a time.
+
+If Augment is already installed and `~/.augment/` exists, normal sync installs the adapter:
+
+```bash
+~/.agents/sync.sh
+```
+
+If Augment has not created `~/.augment/` yet, bootstrap the documented user-level config dirs with:
+
+```bash
+SYNC_AUGMENT=1 ~/.agents/sync.sh
+```
+
+For a repository-shared Augment setup, copy or symlink `augment/agents/spec-step-implementer.md` into that repo's `./.augment/agents/` directory.
 
 ## Code Review (Optional): roborev
 

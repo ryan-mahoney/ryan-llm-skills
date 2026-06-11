@@ -2,6 +2,62 @@
 set -euo pipefail
 
 AGENTS_DIR="$HOME/.agents"
+SYNC_AUGMENT="${SYNC_AUGMENT:-0}"
+
+sync_dir_symlinks() {
+  local source_dir="$1"
+  local target_dir="$2"
+
+  mkdir -p "$target_dir"
+
+  # Remove stale symlinks that point back into this source tree but whose source
+  # no longer exists. This keeps renamed skills from leaving old slash commands.
+  for target in "$target_dir"/*; do
+    [ -L "$target" ] || continue
+    local link
+    link="$(readlink "$target")"
+    case "$link" in
+      "$source_dir"/*)
+        [ -e "$target" ] || rm -f "$target"
+        ;;
+    esac
+  done
+
+  for d in "$source_dir"/*/; do
+    [ -d "$d" ] || continue
+    local name
+    name="$(basename "$d")"
+    local target="$target_dir/$name"
+    if [ -d "$target" ] && [ ! -L "$target" ]; then
+      rm -rf "$target"
+    fi
+    ln -sfn "$d" "$target"
+  done
+}
+
+sync_file_symlinks() {
+  local source_dir="$1"
+  local target_dir="$2"
+
+  [ -d "$source_dir" ] || return 0
+  mkdir -p "$target_dir"
+
+  for target in "$target_dir"/*; do
+    [ -L "$target" ] || continue
+    local link
+    link="$(readlink "$target")"
+    case "$link" in
+      "$source_dir"/*)
+        [ -e "$target" ] || rm -f "$target"
+        ;;
+    esac
+  done
+
+  for f in "$source_dir"/*; do
+    [ -f "$f" ] || continue
+    ln -sfn "$f" "$target_dir/$(basename "$f")"
+  done
+}
 
 # Claude Code: instructions, rule symlinks, and skill symlinks
 if [ -d "$HOME/.claude" ]; then
@@ -10,11 +66,7 @@ if [ -d "$HOME/.claude" ]; then
   for f in "$AGENTS_DIR/rules/"*; do
     ln -sfn "$f" "$HOME/.claude/rules/$(basename "$f")"
   done
-  mkdir -p "$HOME/.claude/skills"
-  for d in "$AGENTS_DIR/skills/"*/; do
-    skill="$(basename "$d")"
-    ln -sfn "$d" "$HOME/.claude/skills/$skill"
-  done
+  sync_dir_symlinks "$AGENTS_DIR/skills" "$HOME/.claude/skills"
   echo "Synced Claude Code instructions, rules, and skills."
 fi
 
@@ -25,42 +77,27 @@ if [ -d "$HOME/.codex" ]; then
   for f in "$AGENTS_DIR/rules/"*; do
     ln -sfn "$f" "$HOME/.codex/guides/$(basename "$f")"
   done
-  mkdir -p "$HOME/.codex/skills"
-  for d in "$AGENTS_DIR/skills/"*/; do
-    skill="$(basename "$d")"
-    ln -sfn "$d" "$HOME/.codex/skills/$skill"
-  done
+  sync_dir_symlinks "$AGENTS_DIR/skills" "$HOME/.codex/skills"
   echo "Synced Codex instructions, guides, and skills."
 fi
 
 # Cline: skill symlinks
 if [ -d "$HOME/.cline" ]; then
-  mkdir -p "$HOME/.cline/skills"
-  for d in "$AGENTS_DIR/skills/"*/; do
-    skill="$(basename "$d")"
-    target="$HOME/.cline/skills/$skill"
-    # Remove stale target (old SKILL.md-only dirs or broken symlinks)
-    if [ -d "$target" ] && [ ! -L "$target" ]; then
-      rm -rf "$target"
-    fi
-    ln -sfn "$d" "$target"
-  done
+  sync_dir_symlinks "$AGENTS_DIR/skills" "$HOME/.cline/skills"
   echo "Synced Cline skills."
 fi
 
-# Augment: skill symlinks
-if [ -d "$HOME/.augment" ]; then
-  mkdir -p "$HOME/.augment/skills"
-  for d in "$AGENTS_DIR/skills/"*/; do
-    skill="$(basename "$d")"
-    target="$HOME/.augment/skills/$skill"
-    # Remove stale target (old SKILL.md-only dirs or broken symlinks)
-    if [ -d "$target" ] && [ ! -L "$target" ]; then
-      rm -rf "$target"
-    fi
-    ln -sfn "$d" "$target"
-  done
-  echo "Synced Augment skills."
+# Augment: skills and CLI subagent configs.
+#
+# Augment discovers ~/.agents/skills natively in current clients, but CLI
+# subagents still live under ~/.augment/agents. Set SYNC_AUGMENT=1 to bootstrap
+# those user-level Augment config dirs even before Augment has created them.
+if [ -d "$HOME/.augment" ] || [ "$SYNC_AUGMENT" = "1" ]; then
+  # Augment now discovers ~/.agents/skills natively, but this mirror keeps older
+  # clients working and prunes stale aliases after skill renames.
+  sync_dir_symlinks "$AGENTS_DIR/skills" "$HOME/.augment/skills"
+  sync_file_symlinks "$AGENTS_DIR/augment/agents" "$HOME/.augment/agents"
+  echo "Synced Augment skills and agents."
 fi
 
 # OpenCode: rule symlinks and skill symlinks
@@ -69,14 +106,6 @@ if [ -d "$HOME/.opencode" ]; then
   for f in "$AGENTS_DIR/rules/"*; do
     ln -sfn "$f" "$HOME/.opencode/rules/$(basename "$f")"
   done
-  mkdir -p "$HOME/.opencode/skills"
-  for d in "$AGENTS_DIR/skills/"*/; do
-    skill="$(basename "$d")"
-    target="$HOME/.opencode/skills/$skill"
-    if [ -d "$target" ] && [ ! -L "$target" ]; then
-      rm -rf "$target"
-    fi
-    ln -sfn "$d" "$target"
-  done
+  sync_dir_symlinks "$AGENTS_DIR/skills" "$HOME/.opencode/skills"
   echo "Synced OpenCode rules and skills."
 fi

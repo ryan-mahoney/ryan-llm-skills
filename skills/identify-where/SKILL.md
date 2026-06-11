@@ -106,4 +106,4 @@ Use this output shape:
 - If evidence is weak, say so explicitly and list the next best files to inspect.
 - Keep recommendations entry-first, not utility-first.
 
-**Pattern reference:** Evidence-first reporting style should follow `skills/specops-analysis/SKILL.md` and architecture-context checks should follow `skills/architect-initial/SKILL.md`.
+**Pattern reference:** Evidence-first reporting style should follow `skills/specops-analysis/SKILL.md` and architecture-context checks should follow `skills/spec-architect-initial/SKILL.md`.

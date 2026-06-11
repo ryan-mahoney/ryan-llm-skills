@@ -1,0 +1,189 @@
+---
+name: spec-write
+description: This skill should be used when the user asks to "write a spec", "create a spec", "spec this out", "plan this feature", or "write an implementation plan" for a feature or change. Creates a structured implementation spec in .specs/<slug>/spec.md and mirrors it to GitHub only when the current repository is hosted on GitHub.
+disable-model-invocation: true
+argument-hint: "[feature-slug or GitHub issue number (optional)]"
+---
+
+# Spec Write
+
+Create a deterministic implementation spec from the current proposal and persist it to the repository-local spec folder. The local file is canonical; issue trackers are optional mirrors.
+
+## Output Contract
+
+Always write the completed spec to:
+
+```txt
+.specs/<feature-slug>/spec.md
+```
+
+If the current repository is a GitHub repository and `gh` is authenticated, also mirror the same spec body to a GitHub issue:
+
+- If `$ARGUMENTS` is an issue number, edit that issue.
+- If no issue number is provided, create a new issue.
+- If GitHub is unavailable, unauthenticated, or the repo is hosted elsewhere, skip the mirror and report the local spec path.
+
+Do not require GitHub for this workflow. Bitbucket, GitLab, self-hosted, and local-only repositories use `.specs/<feature-slug>/spec.md` only.
+
+## Pre-Step - Load Pipeline Inputs
+
+Before writing the spec, locate the spec folder for this feature: `.specs/<feature-slug>/`.
+
+Resolve the folder in this order:
+
+1. If `$ARGUMENTS` names an existing `.specs/<feature-slug>/` folder, use it.
+2. If the conversation names a folder announced by `spec-architect-initial`, use it.
+3. Pick the `.specs/*/` folder whose `proposal.md` matches the feature under discussion, using the most recently modified match on ties.
+4. If there is current architecture analysis in the conversation but no folder yet, create `.specs/<feature-slug>/` from a short kebab-case feature slug.
+
+The folder contains fixed-name artifacts:
+
+- **`proposal.md`** - the architecture proposal. This is the primary input for the Architecture and Implementation Steps sections. If there is no spec folder, no proposal, and no analysis in the current conversation, stop and tell the user there is nothing to spec from.
+- **`critique.md`** - optional. If present, reconcile it using the rules below. If absent, skip reconciliation; the critique stage is optional and its absence is not an error.
+- **`spec.md`** - the output of this skill. Overwrite it only after producing the complete updated spec body.
+
+### Phase specs
+
+A large proposal may be split into multiple specs, one per phase. All phase specs share the same spec folder unless the proposal explicitly creates separate folders.
+
+When writing a phase spec:
+
+- State which phase of the proposal this spec covers in the Problem Statement.
+- Reconcile only the critique recommendations that fall within this phase's scope. Recommendations belonging to other phases are not deferrals; note them as "covered by phase N" only if helpful.
+- End the spec with `Spec folder: .specs/<feature-slug>/ (phase N)`.
+
+## GitHub Mirror Detection
+
+Treat GitHub as an optional mirror only when all of these are true:
+
+1. `git remote get-url origin` identifies a GitHub remote, such as `git@github.com:owner/repo.git` or `https://github.com/owner/repo.git`.
+2. `command -v gh` succeeds.
+3. `gh auth status` succeeds for the remote host.
+
+If any check fails, continue with the local `spec.md` output and report why the GitHub mirror was skipped. Do not block spec creation on issue-tracker access.
+
+## Reconcile Critique Feedback
+
+Triage each recommendation by scope and relevance:
+
+| Priority | Action |
+|---|---|
+| **Must Address** - flaws that will cause real problems if shipped | Incorporate into the spec's architecture. If a recommendation changes a core decision, update the design and document the rationale. |
+| **Should Address** - meaningful improvements, not showstoppers | Address in the spec if the scope of the feature makes it natural to include. Otherwise, record in the Notes section as a known follow-up with a brief rationale for deferring. |
+| **Consider** - polish/refinement | Note in the Notes section only if relevant. Skip if out of scope. No need to address every consideration. |
+
+Reconciliation principles:
+
+- Be pragmatic, not exhaustive. A critique explores possibilities; the spec commits to decisions.
+- State your reasoning when deferring a critique recommendation.
+- Do not over-engineer to satisfy hypotheticals.
+- Resolve tensions using actual project context: team size, maturity, timeline, and current architecture.
+- Make the final spec read as one coherent plan, not an accumulated list of compromises.
+
+Apply reconciled decisions when writing the Architecture, Notes, and Implementation Steps sections below.
+
+## Required Sections
+
+Every section is required. If not applicable, include the heading with "N/A".
+
+### 1. Qualifications
+
+List concrete technical domains required for this implementation. Include only skills actually needed.
+
+### 2. Problem Statement
+
+In 2-4 sentences: what capability is missing or broken, what the current behavior is, and what this spec addresses.
+
+### 3. Goal
+
+One sentence describing the concrete outcome when implementation is complete.
+
+### 4. Architecture
+
+Include:
+
+- Files to create or modify, with responsibilities.
+- Key types, interfaces, or contracts in concrete syntax for the project's language.
+- Design decisions and rationale.
+- Dependency map covering internal modules and external packages/services.
+
+Design for current requirements, not imagined future ones. Start simple: boring technology, explicit boundaries, and data flow that can be explained in under 5 minutes. Fail fast on invalid inputs; do not add defensive fallbacks unless explicitly required.
+
+Avoid abstractions with only one use, abstract layers "for future flexibility," complex patterns without matching problem complexity, and optimizations without measured need.
+
+### 5. Acceptance Criteria
+
+Create a numbered list (`AC-1`, `AC-2`, etc.) of observable, automatable assertions:
+
+- Group by concern: core behavior, error handling, edge cases, integration.
+- Include non-happy-path behaviors.
+- Make every criterion testable without subjective judgment.
+
+### 6. Notes
+
+Cover trade-offs, risks, ambiguities, migration concerns, and sequencing dependencies.
+
+For each significant trade-off, state why this approach was chosen, what it gives up, what it gains, and which alternatives were considered.
+
+### 7. Implementation Steps
+
+Create a flat, numbered, sequential list of deterministic engineering tasks.
+
+For each step include:
+
+1. What to do: exact files and changes required.
+2. Why: tie to architecture or acceptance criteria.
+3. Signatures/contracts: public API shape when adding or changing interfaces.
+4. Tests: concrete automated test assertions and target test files. Test behavior, not implementation. Focus on edge cases and failure modes.
+5. Coverage: which acceptance criteria this step satisfies, as a tag line (`Covers: AC-3, AC-7`). Every criterion must be covered by at least one step; a step covering no criterion must trace to a stated architectural need instead.
+
+Step constraints:
+
+- **Deterministic:** No subjective instructions such as "improve", "clean up", or "refactor as needed".
+- **Minimal:** Smallest verifiable unit of progress.
+- **Self-contained:** Executable in isolation by a separate engineer or LLM context.
+- **Forward-only:** Target architecture only. No unnecessary compatibility layers.
+
+Step ordering:
+
+- Types and contracts first.
+- Pure/domain logic next.
+- Stateful and I/O modules after.
+- Integration wiring and verification tests last.
+
+Exclude:
+
+- Manual testing or QA checklists.
+- Documentation-only tasks.
+- Running the entire test suite.
+- Formatting or lint-only chores.
+- Git workflow or PR process steps.
+
+## Spec Footer
+
+End `spec.md` with a single metadata line so downstream skills can locate the folder:
+
+```txt
+Spec folder: .specs/<feature-slug>/
+```
+
+For phase specs, include the phase:
+
+```txt
+Spec folder: .specs/<feature-slug>/ (phase 2)
+```
+
+The GitHub mirror, when used, must contain the same footer.
+
+## Output Steps
+
+1. Write the final markdown body to `.specs/<feature-slug>/spec.md`.
+2. If GitHub mirroring is available, edit or create the issue with the same body.
+3. Report:
+   - Spec path.
+   - GitHub issue URL or "not mirrored".
+   - Proposal and critique inputs used.
+
+Do not implement the plan.
+
+Do not add Co-Authored-By trailers, "Generated with" footers, or any AI model attribution.

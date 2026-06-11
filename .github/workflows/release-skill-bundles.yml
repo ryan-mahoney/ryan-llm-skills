@@ -1,0 +1,89 @@
+name: Release Skill Bundles
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version label for generated bundle artifacts"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build and release skill bundles
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="${{ inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build skill bundles
+        shell: bash
+        run: VERSION="${{ steps.version.outputs.version }}" scripts/build-skill-bundles.sh
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cd dist/skill-bundles
+          shopt -s nullglob
+          sha256sum *.tar.gz *.zip > SHA256SUMS
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: skill-bundles-${{ steps.version.outputs.version }}
+          path: |
+            dist/skill-bundles/*.tar.gz
+            dist/skill-bundles/*.zip
+            dist/skill-bundles/SHA256SUMS
+
+      - name: Create or update GitHub release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          release_notes="$(mktemp)"
+          cat > "$release_notes" <<EOF
+          # Skill Bundles ${VERSION}
+
+          Download one of the generated archives, extract it, then run:
+
+          \`\`\`bash
+          ./install.sh
+          \`\`\`
+
+          Archives:
+
+          - \`spec-skills-${VERSION}.tar.gz\`
+          - \`spec-skills-${VERSION}.zip\`
+          - \`specops-skills-${VERSION}.tar.gz\`
+          - \`specops-skills-${VERSION}.zip\`
+          - \`SHA256SUMS\`
+          EOF
+
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release upload "$VERSION" dist/skill-bundles/*.tar.gz dist/skill-bundles/*.zip dist/skill-bundles/SHA256SUMS --clobber
+          else
+            gh release create "$VERSION" dist/skill-bundles/*.tar.gz dist/skill-bundles/*.zip dist/skill-bundles/SHA256SUMS \
+              --title "$VERSION" \
+              --notes-file "$release_notes"
+          fi

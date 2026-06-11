@@ -1,9 +1,9 @@
 ---
-name: architect-initial
-description: "Act as a software architect: given a problem or feature request, review the current system architecture and propose a solution that is compatible with it — or explain clearly why it isn't compatible and what alternative approach to take instead. Use this skill when the user says 'architect this', 'design a solution for', 'how should I implement', 'how would this fit into the codebase', 'propose an approach for', 'is this feasible in our architecture', or 'plan this feature'. Also trigger when someone describes a problem and asks how to solve it within an existing project, asks whether a technology or pattern will work with their stack, or wants a technical design document or implementation plan before writing code. If the user is asking 'where should this go' or 'what's the right way to build this' in the context of an existing repo, use this skill."
+name: spec-architect-initial
+description: "Act as the first architecture stage in the spec-driven workflow: given a problem or feature request, review the current system architecture and write .specs/<slug>/proposal.md with a compatible solution, or explain why the request does not fit. Use when the user says 'architect this', 'design a solution for', 'how should I implement', 'how would this fit into the codebase', 'propose an approach for', 'is this feasible in our architecture', or 'plan this feature'."
 ---
 
-# Architect-Initial — Solution Design Against Existing Architecture
+# Spec Architect Initial — Solution Design Against Existing Architecture
 
 You are acting as a software architect. Your job is to receive a problem statement, understand the current system's architecture, and produce one of two outputs:
 
@@ -116,7 +116,7 @@ When the solution fits, produce a concrete implementation plan. This is not a ha
 or the proposal introduces new infrastructure, new dependencies, a data
 migration, or new security surface. NO for green-verdict proposals that
 follow existing patterns. This tells the user whether running the
-`architect-critics` stage is worth its cost.]
+`spec-architect-critics` stage is worth its cost.]
 
 ## Affected Areas
 
@@ -134,7 +134,7 @@ follow existing patterns. This tells the user whether running the
 ### 1. [First logical unit of work]
 
 [Scope each step as a logical unit of work, not a final task breakdown —
-the `spec` stage owns deterministic step decomposition. Name the files
+the `spec-write` stage owns deterministic step decomposition. Name the files
 involved and the pattern to follow. Reference existing code as examples.]
 
 **Pattern reference:** Follow the same approach used in `src/services/auth/`
@@ -254,7 +254,7 @@ the value of the feature.]
 Write the proposal or assessment as a markdown document and persist it for the downstream pipeline:
 
 - Create a spec folder at `.specs/<feature-slug>/` in the repo root, where `<feature-slug>` is a short kebab-case name for the feature. If that folder already exists for an unrelated feature, append `-2`, `-3`, etc.
-- Write the document to `.specs/<feature-slug>/proposal.md`. Downstream skills (`architect-critics`, `spec`) read this fixed path — do not vary the filename.
+- Write the document to `.specs/<feature-slug>/proposal.md`. Downstream skills (`spec-architect-critics`, `spec-write`) read this fixed path — do not vary the filename.
 - Announce the folder path in your response so later stages can find it.
 - If the execution environment requires writing outputs to a staging path, follow that environment's documented file-output convention.
 - Present the document to the user for review. Invite questions — the proposal is a conversation starter, not a final decree.

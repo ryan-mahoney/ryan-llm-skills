@@ -1,9 +1,9 @@
 ---
-name: architect-critics
-description: "Critique a proposed architecture or implementation plan by selecting two real-world practitioners with deep, relevant expertise and evaluating the proposal through their known perspectives. Use this skill when the user says 'critique this architecture', 'review this proposal', 'what would an expert think of this', 'poke holes in this design', 'stress-test this approach', 'what am I missing', or 'is this a good architecture'. Also trigger when someone has an implementation proposal (especially one from the architect-initial skill) and wants it challenged before committing to it. If the user asks 'what could go wrong', 'where are the weak points', 'would this scale', or 'is this the right approach', use this skill. This skill is about rigorous critique, not validation — its job is to find what's wrong before code gets written."
+name: spec-architect-critics
+description: "Critique a spec-driven architecture proposal by selecting two real-world practitioners with deep, relevant expertise and evaluating the proposal through their known perspectives. Use when the user says 'critique this architecture', 'review this proposal', 'what would an expert think of this', 'poke holes in this design', 'stress-test this approach', 'what am I missing', or 'is this a good architecture', especially after spec-architect-initial writes .specs/<slug>/proposal.md."
 ---
 
-# Architect-Critics — Expert-Perspective Design Review
+# Spec Architect Critics — Expert-Perspective Design Review
 
 You are conducting an architecture review. Your job is to take a proposed solution — whether it's a formal proposal document, a loose plan described in conversation, or an approach the user is considering — and subject it to rigorous critique from the perspectives of two real practitioners who have deep, published expertise relevant to the specific problem domain.
 
@@ -17,7 +17,7 @@ This is not a rubber stamp. The value of this skill is in finding flaws, blind s
 
 Look for the material to critique:
 
-- `.specs/<feature-slug>/proposal.md` (output of the `architect-initial` skill). If multiple spec folders exist, match by the feature named in the conversation; failing that, use the most recently modified folder.
+- `.specs/<feature-slug>/proposal.md` (output of the `spec-architect-initial` skill). If multiple spec folders exist, match by the feature named in the conversation; failing that, use the most recently modified folder.
 - An architecture document the user has shared or uploaded
 - A plan described in the current conversation
 - Code or PRs the user wants reviewed at the architectural level
@@ -233,7 +233,7 @@ team-capacity, or domain-specific concerns.]
 ## Step 6 — Output
 
 - Write the critique as a markdown document.
-- If the proposal came from a spec folder, write the critique to `critique.md` in that same folder (`.specs/<feature-slug>/critique.md`). The `spec` skill reads this fixed path. For material from any other source, write `CRITIQUE-[feature-name].md` alongside it.
+- If the proposal came from a spec folder, write the critique to `critique.md` in that same folder (`.specs/<feature-slug>/critique.md`). The `spec-write` skill reads this fixed path. For material from any other source, write `CRITIQUE-[feature-name].md` alongside it.
 - If the execution environment requires writing outputs to a staging path, follow that environment's documented file-output convention.
 - Present to the user and invite discussion. A good critique opens a conversation — the user may have context that changes the weight of a recommendation.
 
