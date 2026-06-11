@@ -201,6 +201,111 @@ json_array() {
   printf ']'
 }
 
+write_spec_workflow_howto() {
+  cat <<'README'
+
+## How To Use The Spec Workflow
+
+The workflow turns a clear goal into reviewed architecture, then into a deterministic implementation spec, then into execution. The most important input is the first one: give `spec-architect-initial` a concrete description of what you want to achieve, why it matters, and any constraints you already know.
+
+Good initial input includes:
+
+- What behavior or capability you want.
+- Who or what triggers it.
+- What should change in the system when it works.
+- Constraints such as timeline, compatibility, security, performance, or deployment limits.
+- Any examples of similar existing behavior in the codebase.
+
+After `spec-architect-initial` writes its proposal, read the recommendation before continuing. This is the key decision point. If the proposal says the request does not fit the architecture, treat that as useful signal rather than a failure: adjust the goal, choose one of the alternatives, or make the required architecture change explicit before writing an implementation spec.
+
+### 1. Design The Approach
+
+```bash
+/spec-architect-initial describe the feature or change
+```
+
+This inspects the current repository and writes:
+
+```txt
+.specs/<feature-slug>/proposal.md
+```
+
+The proposal should say whether the change fits the current architecture, name the affected files, explain trade-offs, and recommend whether a critique pass is worth running.
+
+### 2. Challenge The Architecture (Optional)
+
+```bash
+/spec-architect-critics
+```
+
+Use this when the change is large, risky, cross-cutting, security-sensitive, introduces new dependencies, changes data, or when you simply want the architecture challenged before implementation. It writes:
+
+```txt
+.specs/<feature-slug>/critique.md
+```
+
+The critique is intentionally skeptical. Its job is to expose blind spots, not to rubber-stamp the proposal.
+
+### 3. Write The Implementation Spec
+
+```bash
+/spec-write
+```
+
+This converts the proposal, and optional critique, into:
+
+```txt
+.specs/<feature-slug>/spec.md
+```
+
+The spec is the implementation contract. It contains architecture, acceptance criteria, deterministic implementation steps, tests, and traceability tags. Local `spec.md` is canonical; GitHub issues are optional mirrors only when available.
+
+### 4. Review The Spec (Recommended For Difficult Changes)
+
+```bash
+/spec-review
+```
+
+This checks the spec against the actual codebase for missing files, invented patterns, ambiguity, weak acceptance criteria, poor step granularity, and dropped critique recommendations. Use it for difficult changes or whenever a spec will be handed to another person or agent.
+
+### 5. Create A Branch Or Worktree
+
+Use a worktree when you want isolated implementation work:
+
+```bash
+/spec-branch-worktree <feature-slug or description>
+```
+
+Use a normal branch when you want to stay in the current checkout:
+
+```bash
+/spec-branch <feature-slug or description>
+```
+
+The worktree command copies the relevant `.specs/<feature-slug>/` folder so the proposal, critique, and spec travel with the implementation branch.
+
+### 6. Execute The Spec
+
+```bash
+/spec-run <feature-slug or path-to-spec.md>
+```
+
+This implements every step from `spec.md`, one subagent per step when the harness supports subagents. Each verified step gets its own commit, then `spec-run` checks acceptance criteria at the end.
+
+### Quick Sequence
+
+```bash
+/spec-architect-initial build <clear goal and constraints>
+/spec-architect-critics     # optional
+/spec-write
+/spec-review                # recommended for difficult changes
+/spec-branch-worktree <feature-slug>
+/spec-run <feature-slug>
+```
+
+README
+}
+
 write_bundle_files() {
   local bundle_dir="$1"
   local name="$2"
@@ -223,6 +328,9 @@ write_bundle_files() {
         [ -f "$agent" ] || continue
         printf '%s\n' "- \`augment/agents/$(basename "$agent")\`"
       done
+    fi
+    if [ "$name" = "spec-skills" ]; then
+      write_spec_workflow_howto
     fi
     printf '\n## Install\n\n'
     printf '```bash\n./install.sh\n```\n\n'

@@ -24,6 +24,15 @@ Includes the Augment CLI subagent adapter:
 
 - `augment/agents/spec-step-implementer.md`
 
+The generated `spec-skills` README includes a workflow overview covering:
+
+1. Start with `spec-architect-initial` and a clear goal.
+2. Optionally run `spec-architect-critics` to challenge the architecture.
+3. Run `spec-write` to create `.specs/<feature-slug>/spec.md`.
+4. Run `spec-review` for difficult changes or handoffs.
+5. Create a branch/worktree with `spec-branch` or `spec-branch-worktree`.
+6. Execute with `spec-run`.
+
 ### specops-skills
 
 Every skill whose directory name starts with `specops-`.
