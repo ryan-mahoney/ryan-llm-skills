@@ -268,7 +268,22 @@ The spec is the implementation contract. It contains architecture, acceptance cr
 
 This checks the spec against the actual codebase for missing files, invented patterns, ambiguity, weak acceptance criteria, poor step granularity, and dropped critique recommendations. Use it for difficult changes or whenever a spec will be handed to another person or agent.
 
-### 5. Create A Branch Or Worktree
+### 5. Compile The Conformance Checklist
+
+```bash
+/spec-criteria
+```
+
+This compiles the frozen spec's normative prose into an executable conformance checklist:
+
+```txt
+.specs/<feature-slug>/criteria/
+.specs/<feature-slug>/invariants.md
+```
+
+Acceptance criteria are verified by tests; the checklist captures what tests cannot see: ownership directives, negative constraints, and licensed deviations from precedent. It is compiled blind to any implementation, so run it before `spec-run`. The same checklist can be given to implementers as guardrails. Cross-phase ownership invariants accumulate in `invariants.md` so later phases are audited against boundaries established by earlier ones.
+
+### 6. Create A Branch Or Worktree
 
 Use a worktree when you want isolated implementation work:
 
@@ -284,13 +299,29 @@ Use a normal branch when you want to stay in the current checkout:
 
 The worktree command copies the relevant `.specs/<feature-slug>/` folder so the proposal, critique, and spec travel with the implementation branch.
 
-### 6. Execute The Spec
+### 7. Execute The Spec
 
 ```bash
 /spec-run <feature-slug or path-to-spec.md>
 ```
 
 This implements every step from `spec.md`, one subagent per step when the harness supports subagents. Each verified step gets its own commit, then `spec-run` checks acceptance criteria at the end.
+
+### 8. Audit Conformance
+
+```bash
+/spec-audit <feature-slug>
+```
+
+This executes the compiled checklist against the branch diff and reports `PASS`/`VIOLATION`/`UNVERIFIABLE` per criterion with file:line evidence, writing `.specs/<feature-slug>/audit/`. It is report-only and orthogonal to correctness review: it answers "is it the thing the spec described", catching behaviorally-silent deviations that pass every test. Hand violations to the implementer and re-run; the criteria stay frozen, so re-audits are cheap.
+
+### 9. Remediate Audit Findings
+
+```bash
+/spec-remediate <feature-slug>
+```
+
+This reads the audit report and fixes each `VIOLATION` with one capable subagent per finding, converging the code back to the frozen spec — deleting duplicated rules, relocating misplaced logic — then re-runs `spec-audit` as the independent oracle, looping until the report is clean or a round cap is hit. It edits code but never rewrites the spec: when a violation is actually a spec defect, or a finding is `UNVERIFIABLE`, it escalates to `spec-review` or `spec-criteria` instead of bending the code. If the audit is already clean, it is a no-op.
 
 ### Quick Sequence
 
@@ -299,8 +330,11 @@ This implements every step from `spec.md`, one subagent per step when the harnes
 /spec-architect-critics     # optional
 /spec-write
 /spec-review                # recommended for difficult changes
+/spec-criteria              # compile the conformance checklist before implementing
 /spec-branch-worktree <feature-slug>
 /spec-run <feature-slug>
+/spec-audit <feature-slug>      # verify the implementation against the checklist
+/spec-remediate <feature-slug>  # fix any findings, then re-audit until clean
 ```
 
 README
@@ -402,9 +436,12 @@ spec_skills=(
   spec-architect-critics
   spec-write
   spec-review
+  spec-criteria
   spec-branch
   spec-branch-worktree
   spec-run
+  spec-audit
+  spec-remediate
   spec-dev-workflow
 )
 

@@ -36,9 +36,12 @@ Spec-driven development skills use `.specs/<feature-slug>/` as the local source 
 | **bun-test-fix** | `/bun-test-fix <path-to-test-file>` | Bring a test file into compliance with Bun test rules from `AGENTS.md` |
 | **spec-write** | `/spec-write [feature-slug-or-issue]` | Write `.specs/<slug>/spec.md` and optionally mirror it to a GitHub issue |
 | **spec-review** | `/spec-review [feature-slug-or-spec-path]` | Review a local spec for gaps, edit `spec.md`, and optionally mirror changes to GitHub |
+| **spec-criteria** | `/spec-criteria [feature-slug-or-spec-path]` | Compile a frozen spec's normative prose into an executable conformance checklist under `.specs/<slug>/criteria/`, blind to the implementation, accumulating cross-phase invariants in `invariants.md` |
 | **spec-branch** | `/spec-branch [description-or-feature-slug]` | Create a local branch from a spec, description, or issue/ticket reference |
 | **spec-branch-worktree** | `/spec-branch-worktree [description-or-feature-slug]` | Create a named branch and git worktree, copy the spec folder, then open VSCode |
 | **spec-run** | `/spec-run [feature-slug-or-spec-path]` | Implement all steps from `spec.md`, one subagent per step when supported |
+| **spec-audit** | `/spec-audit [feature-slug-or-spec-path]` | Execute the frozen conformance checklist against the implementation diff; PASS/VIOLATION/UNVERIFIABLE per criterion with evidence, report-only |
+| **spec-remediate** | `/spec-remediate [feature-slug-or-spec-path]` | Fix audit VIOLATIONs with one smart subagent per finding, converging code back to the frozen spec, then re-audit until clean; escalates spec/criteria defects |
 | **skill-factory** | `/skill-factory [description of task to automate]` | Create a reusable skill by extracting an existing repository workflow into a grounded `SKILL.md` |
 | **spec-dev-workflow** | `/spec-dev-workflow [feature-slug-or-description]` | Full local-first pipeline: spec-write -> spec-review -> spec-branch-worktree -> spec-run -> optional PR |
 | **commit** | `/commit [issue]` | Conventional commit of staged files |

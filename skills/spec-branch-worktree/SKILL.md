@@ -124,29 +124,39 @@ Copy the environment file:
 cp .env ~/.worktrees/<repo-name>/<slug>/.env 2>/dev/null || true
 ```
 
-Copy the spec folder if this worktree implements a spec. The spec-driven skills (`spec-architect-initial`, `spec-architect-critics`, `spec-write`, `spec-review`, `spec-run`, `architect-inspect`) read and write artifacts under `.specs/<feature-slug>/` at the repo root.
+Copy the entire spec slug folder if this worktree implements a spec. The spec-driven skills (`spec-architect-initial`, `spec-architect-critics`, `spec-write`, `spec-review`, `spec-criteria`, `spec-run`, `spec-audit`, `spec-remediate`, `architect-inspect`) read and write artifacts under `.specs/<feature-slug>/` at the repo root, including sidecar analysis/proposal files, nested folders such as `criteria/` and `audit/`, and the cross-phase `invariants.md` ledger that `spec-audit` and `spec-remediate` need in the worktree.
 
-Because the worktree may branch from a clean remote ref, uncommitted spec work in the current checkout can be missing. Copy the relevant folder so the spec travels with the branch:
+Because the worktree may branch from a clean remote ref, uncommitted spec work in the current checkout can be missing. Copy the relevant slug folder as a directory, preserving every file and subdirectory in it. Do not copy only `spec.md` or `proposal.md`.
 
 ```bash
 src_root="$(git rev-parse --show-toplevel)"
 dest="$HOME/.worktrees/<repo-name>/<slug>"
+copied_spec="none"
 
 if [ -d "$src_root/.specs" ]; then
   feature_slug="$(printf '%s' "<slug>" | sed -E 's/^[0-9]+-//; s/^[a-z]+-[0-9]+-//')"
   if [ -d "$src_root/.specs/<slug>" ]; then
-    mkdir -p "$dest/.specs"
-    cp -R "$src_root/.specs/<slug>" "$dest/.specs/"
+    src_spec_dir="$src_root/.specs/<slug>"
+    copied_spec="<slug>"
   elif [ -d "$src_root/.specs/$feature_slug" ]; then
-    mkdir -p "$dest/.specs"
-    cp -R "$src_root/.specs/$feature_slug" "$dest/.specs/"
+    src_spec_dir="$src_root/.specs/$feature_slug"
+    copied_spec="$feature_slug"
   else
-    cp -R "$src_root/.specs" "$dest/.specs"
+    src_spec_dir="$src_root/.specs"
+    copied_spec="all .specs"
+  fi
+
+  if [ "$copied_spec" = "all .specs" ]; then
+    mkdir -p "$dest/.specs"
+    cp -R "$src_spec_dir/." "$dest/.specs/"
+  else
+    mkdir -p "$dest/.specs/$copied_spec"
+    cp -R "$src_spec_dir/." "$dest/.specs/$copied_spec/"
   fi
 fi
 ```
 
-If no `.specs` folder exists, skip silently. Note in the final report which spec folder, if any, was copied.
+If no `.specs` folder exists, skip silently. Note in the final report which spec folder, if any, was copied, using the `copied_spec` value.
 
 ### 6. Color-Code the VSCode Window
 

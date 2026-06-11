@@ -33,6 +33,23 @@ Capture the feature slug from the `Spec folder:` footer or parent folder. Captur
 
 If the spec references files, types, or signatures that do not exist and are not explicitly part of a prior step, treat that as a spec defect and stop.
 
+## Load Conformance Guardrails (Optional)
+
+If `spec-criteria` was run, a compiled conformance checklist exists at `.specs/<feature-slug>/criteria/phase-<n>.md` (or `criteria.md`), with a cross-phase ledger at `.specs/<feature-slug>/invariants.md`. These let implementers avoid the behaviorally-silent conformance slips that pass tests but violate the spec's ownership and placement directives.
+
+**This step is best-effort and never blocking.** Most violations are cheap to fix at audit time, so a missing or unreadable checklist must not stop or delay `spec-run`:
+
+- If no `criteria/` file and no `invariants.md` exist, skip this section silently and proceed. Do not run `spec-criteria`, do not warn, do not block — `spec-audit` is the backstop either way.
+- If the files exist but cannot be parsed, skip silently and proceed.
+- Resolve the phase loosely: a phase marker in `spec.md`, else `criteria.md`, else the single `criteria/phase-*.md` if exactly one exists. If the phase is ambiguous (multiple phase files, no marker), skip silently — do not guess.
+
+When a checklist is found, extract guardrails with two deliberate limits:
+
+1. **Prose only, never the check.** Take each criterion's `Source:` quote (the spec sentence). Never include the `Check:` command, grep pattern, or expected hit set. The implementer must satisfy the *property*, not the proxy — handing it the grep invites letter-not-spirit evasion and destroys the audit's independence as verification.
+2. **High-risk constraints only.** Include only `X`-mode (cross-phase ownership) criteria and `invariants.md` entries not marked superseded, plus any `D`/`S` criterion whose violation would be expensive to fix once later code depends on it (ownership, placement, layering). Skip `G` trivia and anything already pinned by an acceptance criterion (`T`). These are the "built on the wrong foundation" failures worth preventing up front; the rest stays a pure end-audit.
+
+Collect the selected `Source:` quotes verbatim into a short guardrail list. This list is injected into every step's prompt (below). If the list is empty after filtering, omit the guardrail block from the prompt entirely.
+
 ## Execution Model: One Subagent Per Step
 
 For each step, run one subagent dedicated to that step.
@@ -61,6 +78,10 @@ You are implementing a single step from a repository-local implementation spec.
 Spec file: <absolute path to .specs/<feature-slug>/spec.md>
 GitHub mirror: <issue number or "none">
 Step to implement: <exact step text>
+
+Conformance guardrails (ownership/placement constraints this step must respect;
+omit this block entirely when the guardrail list is empty):
+<CONFORMANCE_GUARDRAILS — one Source quote per line, or omitted>
 
 Before coding, read:
 1. The full local spec file.

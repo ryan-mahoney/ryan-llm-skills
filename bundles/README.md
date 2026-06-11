@@ -15,9 +15,12 @@ The spec-driven development workflow:
 - `spec-architect-critics`
 - `spec-write`
 - `spec-review`
+- `spec-criteria`
 - `spec-branch`
 - `spec-branch-worktree`
 - `spec-run`
+- `spec-audit`
+- `spec-remediate`
 - `spec-dev-workflow`
 
 Includes the Augment CLI subagent adapter:
@@ -30,8 +33,11 @@ The generated `spec-skills` README includes a workflow overview covering:
 2. Optionally run `spec-architect-critics` to challenge the architecture.
 3. Run `spec-write` to create `.specs/<feature-slug>/spec.md`.
 4. Run `spec-review` for difficult changes or handoffs.
-5. Create a branch/worktree with `spec-branch` or `spec-branch-worktree`.
-6. Execute with `spec-run`.
+5. Run `spec-criteria` to compile the frozen spec into a conformance checklist (before implementation).
+6. Create a branch/worktree with `spec-branch` or `spec-branch-worktree`.
+7. Execute with `spec-run`.
+8. Run `spec-audit` to verify the implementation against the compiled checklist.
+9. Run `spec-remediate` to close any audit findings, then re-audit until clean.
 
 ### specops-skills
 

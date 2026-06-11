@@ -9,6 +9,16 @@ argument-hint: "[feature-slug, spec path, or GitHub issue number]"
 
 Review a spec for viability, ambiguity, traceability, and implementation readiness. The repository-local spec file is canonical.
 
+## Output Contract
+
+Always apply substantive review changes to the resolved local spec file first:
+
+```txt
+.specs/<feature-slug>/spec.md
+```
+
+GitHub issues are optional mirrors. Never update a GitHub issue instead of the local file, and never treat the issue body as the only persisted review output.
+
 ## Resolve the Spec
 
 Resolve the spec target in this order:
@@ -62,6 +72,16 @@ Edit with discipline:
 - Converge on re-run. Running this review again on an already-improved spec should trend toward no edits. If you find yourself rewriting prior edits, stop; the spec is already adequate.
 
 After editing `spec.md`, mirror the final body to GitHub only when an available mirror exists.
+
+## Output Steps
+
+1. Write any reviewed changes to the resolved local `spec.md`.
+2. If a GitHub mirror exists, update the issue with the final local `spec.md` body.
+3. Report:
+   - Spec path.
+   - GitHub issue URL or "not mirrored".
+   - Whether the local file changed.
+   - What changed and why, or that the spec already passed review.
 
 ## Review Checklist
 
