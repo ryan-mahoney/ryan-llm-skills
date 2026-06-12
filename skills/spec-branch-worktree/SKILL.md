@@ -124,7 +124,7 @@ Copy the environment file:
 cp .env ~/.worktrees/<repo-name>/<slug>/.env 2>/dev/null || true
 ```
 
-Copy the entire spec slug folder if this worktree implements a spec. The spec-driven skills (`spec-architect-initial`, `spec-architect-critics`, `spec-write`, `spec-review`, `spec-criteria`, `spec-run`, `spec-audit`, `spec-remediate`, `architect-inspect`) read and write artifacts under `.specs/<feature-slug>/` at the repo root, including sidecar analysis/proposal files, nested folders such as `criteria/` and `audit/`, and the cross-phase `invariants.md` ledger that `spec-audit` and `spec-remediate` need in the worktree.
+Copy the entire spec slug folder if this worktree implements a spec. The spec-driven skills (`spec-architect-initial`, `spec-architect-critics`, `spec-write`, `spec-review`, `spec-criteria`, `spec-run`, `spec-audit`, `spec-remediate`, `architect-inspect`) read and write artifacts under `.specs/<feature-slug>/` at the repo root, including sidecar analysis/proposal files, the `criteria.md` and `audit.md` checklists, and the cross-phase `invariants.md` ledger that `spec-audit` and `spec-remediate` need in the worktree.
 
 Because the worktree may branch from a clean remote ref, uncommitted spec work in the current checkout can be missing. Copy the relevant slug folder as a directory, preserving every file and subdirectory in it. Do not copy only `spec.md` or `proposal.md`.
 

@@ -20,16 +20,11 @@ Resolve the spec target in this order:
 3. If `$ARGUMENTS` is a GitHub issue number and the current repository is hosted on GitHub, read the issue with `gh issue view <issue-number> --json body --jq .body`, extract its `Spec folder: .specs/<feature-slug>/` footer, and use the local `.specs/<feature-slug>/spec.md`. If the local file is missing but the issue body has a valid footer, create the folder and write the issue body to `spec.md`.
 4. If no argument is provided, use the most recently modified `.specs/*/spec.md`.
 
-Then locate the audit report from local artifacts. Phase is a checklist/report identity only; a worktree does not need to know it is "phase N." Use this order:
-
-1. If the resolved `spec.md` footer or body contains a phase marker such as `(phase N)` or `Phase N of M`, use `.specs/<feature-slug>/audit/phase-<n>.md`.
-2. Else, if `.specs/<feature-slug>/audit.md` exists, use it.
-3. Else, if exactly one `.specs/<feature-slug>/audit/phase-*.md` file exists, use that file.
-4. Else, if multiple `audit/phase-*.md` files exist and no phase marker was resolved, stop and ask the user to pass the phase-specific audit path or add a phase marker to the local `spec.md`. Do not infer the phase from the branch name.
+Then locate the audit report: `.specs/<feature-slug>/audit.md`. Each phase runs in its own worktree, so there is exactly one audit report per worktree — phase is a content label only, never a file path.
 
 **If no audit report exists, stop** and instruct the user to run `spec-audit` first. Do not audit inline: this skill remediates a report produced by an independent audit pass; judging and patching in one context defeats that independence.
 
-Also read, when present, the matching `.specs/<feature-slug>/criteria/phase-<n>.md` (or `criteria.md`) and `.specs/<feature-slug>/invariants.md`. The criteria give each finding its `Source:` spec quote and ownership context; the ledger names cross-phase invariants a fix must not re-break.
+Also read, when present, `.specs/<feature-slug>/criteria.md` and `.specs/<feature-slug>/invariants.md`. The criteria give each finding its `Source:` spec quote and ownership context; the ledger names cross-phase invariants a fix must not re-break.
 
 ## Triage the Findings
 
@@ -120,7 +115,7 @@ One commit per finding, so each remediation is independently reviewable and reve
 
 After every code-drift finding has been addressed (fixed or escalated), re-run the audit as the independent oracle:
 
-1. Re-run `spec-audit` for this spec by following `~/.agents/skills/spec-audit/SKILL.md`. It regenerates `audit/phase-<n>.md` against the new code.
+1. Re-run `spec-audit` for this spec by following `~/.agents/skills/spec-audit/SKILL.md`. It regenerates `audit.md` against the new code.
 2. Compare the new VIOLATION set to the previous one:
    - Zero VIOLATIONs (ignoring any escalated spec-defect findings) → converged. Stop and report.
    - Fewer VIOLATIONs, all remaining ones are code drift → loop: remediate the new report.

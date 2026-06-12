@@ -1,6 +1,6 @@
 ---
 name: spec-audit
-description: This skill should be used when the user asks to "audit the implementation against the spec", "run the spec audit", "check spec conformance", "verify the branch against the criteria", or "spec audit". Executes the frozen conformance checklist from .specs/<slug>/criteria/ against the implementation diff and reports PASS/VIOLATION/UNVERIFIABLE per criterion with file:line evidence. Report-only; never edits production code.
+description: This skill should be used when the user asks to "audit the implementation against the spec", "run the spec audit", "check spec conformance", "verify the branch against the criteria", or "spec audit". Executes the frozen conformance checklist from .specs/<slug>/criteria.md against the implementation diff and reports PASS/VIOLATION/UNVERIFIABLE per criterion with file:line evidence. Report-only; never edits production code.
 disable-model-invocation: true
 argument-hint: "[feature-slug, spec path, or GitHub issue number]"
 ---
@@ -20,14 +20,7 @@ Resolve the spec target in this order:
 3. If `$ARGUMENTS` is a GitHub issue number and the current repository is hosted on GitHub, read the issue with `gh issue view <issue-number> --json body --jq .body`, extract its `Spec folder: .specs/<feature-slug>/` footer, and use the local `.specs/<feature-slug>/spec.md`. If the local file is missing but the issue body has a valid footer, create the folder and write the issue body to `spec.md`.
 4. If no argument is provided, use the most recently modified `.specs/*/spec.md`.
 
-Then locate the checklist from local artifacts. A worktree does not need to know that it is "phase N"; phase is only a planning/checklist artifact.
-
-Use this order:
-
-1. If the resolved `spec.md` footer or body contains a phase marker such as `(phase N)` or `Phase N of M`, use `.specs/<feature-slug>/criteria/phase-<n>.md`.
-2. Else, if `.specs/<feature-slug>/criteria.md` exists, use it.
-3. Else, if exactly one `.specs/<feature-slug>/criteria/phase-*.md` file exists, use that file and treat its phase number as the checklist identity for report naming.
-4. Else, if multiple `criteria/phase-*.md` files exist and no phase marker was resolved, stop and ask the user to pass the phase-specific criteria path or add a phase marker to the local `spec.md`. Do not infer the phase from the worktree branch name.
+Then locate the checklist: `.specs/<feature-slug>/criteria.md`. Each phase runs in its own worktree with its own copy of the spec folder, so there is exactly one checklist per worktree — phase is a content label only, never a file path, and needs no phase-qualified name or subdirectory.
 
 **If no checklist exists, stop** and instruct the user to run `spec-criteria` first. Do not derive criteria inline from the spec: compiling criteria while reading the implementation defeats the epistemic firewall the checklist exists to provide — an auditor that interprets the spec and judges the code in the same pass will harmonize them.
 
@@ -59,10 +52,7 @@ Do not soften verdicts. A behaviorally-silent violation — same observable beha
 
 ## Report
 
-Write the audit report next to the spec, overwriting any previous run:
-
-- If the checklist is `criteria/phase-<n>.md`, write `.specs/<feature-slug>/audit/phase-<n>.md`.
-- If the checklist is `criteria.md`, write `.specs/<feature-slug>/audit.md`.
+Write the audit report to `.specs/<feature-slug>/audit.md`, overwriting any previous run. One worktree holds one audit report, so the name is fixed — no phase-qualified name or subdirectory.
 
 1. Header: branch and merge-base (or PR/range), criteria file and its compile baseline, date, verdict counts.
 2. A verdict table: criterion ID, mode, one-line title, verdict.

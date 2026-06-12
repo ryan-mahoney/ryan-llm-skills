@@ -62,6 +62,15 @@ Treat GitHub as an optional mirror only when all of these are true:
 
 If any check fails, continue with the local `spec.md` output and report why the GitHub mirror was skipped. Do not block spec creation on issue-tracker access.
 
+## Issue-ID Folder Prefix
+
+When a GitHub issue is associated with this spec, prefix the spec folder slug with the issue number so the canonical folder is `.specs/<issue-number>-<feature-slug>/`.
+
+- Determine the issue number before finalizing the folder. When creating a new issue, create it first (title or provisional body) to obtain its number; when editing an existing issue, the number is already known.
+- If the resolved folder (e.g. `.specs/<feature-slug>/` from the architecture stage) is not already prefixed with this issue number, rename it to `.specs/<issue-number>-<feature-slug>/`, moving every artifact with it (`proposal.md`, `critique.md`, and any others). Use `git mv` when the folder is tracked.
+- The prefixed folder name is now the canonical slug. The `Spec folder:` footer and the issue body must reference it.
+- Repositories with no GitHub issue (Bitbucket, GitLab, self-hosted, local-only) keep the plain `.specs/<feature-slug>/` slug. Do not prefix.
+
 ## Reconcile Critique Feedback
 
 Triage each recommendation by scope and relevance:
@@ -161,7 +170,7 @@ Exclude:
 
 ## Spec Footer
 
-End `spec.md` with a single metadata line so downstream skills can locate the folder:
+End `spec.md` with a single metadata line so downstream skills can locate the folder. When the folder is issue-prefixed, use the prefixed slug (e.g. `Spec folder: .specs/<issue-number>-<feature-slug>/`):
 
 ```txt
 Spec folder: .specs/<feature-slug>/
@@ -177,9 +186,11 @@ The GitHub mirror, when used, must contain the same footer.
 
 ## Output Steps
 
-1. Write the final markdown body to `.specs/<feature-slug>/spec.md`.
-2. If GitHub mirroring is available, edit or create the issue with the same body.
-3. Report:
+1. Resolve the GitHub mirror and issue number (see GitHub Mirror Detection). When creating a new issue, create it first to reserve its number.
+2. Apply the issue-ID folder prefix when an issue number exists (see Issue-ID Folder Prefix), so the canonical folder is `.specs/<issue-number>-<feature-slug>/`. Without an issue number, the canonical folder stays `.specs/<feature-slug>/`.
+3. Write the final markdown body — footer included, referencing the canonical folder — to `<canonical folder>/spec.md`.
+4. If GitHub mirroring is available, set the issue body to the same content.
+5. Report:
    - Spec path.
    - GitHub issue URL or "not mirrored".
    - Proposal and critique inputs used.

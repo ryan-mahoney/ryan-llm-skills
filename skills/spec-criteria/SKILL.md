@@ -1,6 +1,6 @@
 ---
 name: spec-criteria
-description: This skill should be used when the user asks to "compile review criteria", "generate spec criteria", "compile the conformance checklist", "build guardrails from the spec", or "spec criteria". Compiles a frozen spec's normative prose into an executable conformance checklist at .specs/<slug>/criteria/, blind to any implementation of that spec, and accumulates cross-phase ownership invariants in .specs/<slug>/invariants.md.
+description: This skill should be used when the user asks to "compile review criteria", "generate spec criteria", "compile the conformance checklist", "build guardrails from the spec", or "spec criteria". Compiles a frozen spec's normative prose into an executable conformance checklist at .specs/<slug>/criteria.md, blind to any implementation of that spec, and accumulates cross-phase ownership invariants in .specs/<slug>/invariants.md.
 disable-model-invocation: true
 argument-hint: "[feature-slug, spec path, or GitHub issue number]"
 ---
@@ -22,7 +22,7 @@ Resolve the spec target in this order:
 
 If no local spec can be resolved, stop and report the missing input. Local `spec.md` is canonical; GitHub issues are optional mirrors.
 
-Capture the phase when one exists: a `(phase N)` marker in the spec footer, a "Phase N of M" line in the body, or a phase number in the issue title. Phased specs write `criteria/phase-<n>.md`; unphased specs write `criteria.md`.
+Capture the phase when one exists: a `(phase N)` marker in the spec footer, a "Phase N of M" line in the body, or a phase number in the issue title. The phase is a content label only — record it in the checklist header and the invariants ledger. Always write the checklist to the fixed name `criteria.md`: each phase runs in its own worktree with its own copy of the spec folder, so phase checklists never co-exist and need no phase-qualified name or subdirectory.
 
 ## Blindness Rule
 
@@ -48,7 +48,7 @@ When a statement fits two modes, prefer the cheaper deterministic one (G over D 
 
 ## Compile the Checklist
 
-Write `.specs/<feature-slug>/criteria/phase-<n>.md` (or `criteria.md`). Structure:
+Write `.specs/<feature-slug>/criteria.md`. Structure:
 
 1. A header recording: spec source and phase, baseline commit (`git rev-parse HEAD` at compile time), the blindness statement, and counts per mode.
 2. One block per compiled criterion:
