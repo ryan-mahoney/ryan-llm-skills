@@ -35,13 +35,13 @@ If the spec references files, types, or signatures that do not exist and are not
 
 ## Load Conformance Guardrails (Optional)
 
-If `spec-criteria` was run, a compiled conformance checklist exists at `.specs/<feature-slug>/criteria/phase-<n>.md` (or `criteria.md`), with a cross-phase ledger at `.specs/<feature-slug>/invariants.md`. These let implementers avoid the behaviorally-silent conformance slips that pass tests but violate the spec's ownership and placement directives.
+If `spec-criteria` was run, a compiled conformance checklist exists at `.specs/<feature-slug>/criteria.md`, with a cross-phase ledger at `.specs/<feature-slug>/invariants.md`. These let implementers avoid the behaviorally-silent conformance slips that pass tests but violate the spec's ownership and placement directives.
 
 **This step is best-effort and never blocking.** Most violations are cheap to fix at audit time, so a missing or unreadable checklist must not stop or delay `spec-run`:
 
-- If no `criteria/` file and no `invariants.md` exist, skip this section silently and proceed. Do not run `spec-criteria`, do not warn, do not block — `spec-audit` is the backstop either way.
+- If no `criteria.md` and no `invariants.md` exist, skip this section silently and proceed. Do not run `spec-criteria`, do not warn, do not block — `spec-audit` is the backstop either way.
 - If the files exist but cannot be parsed, skip silently and proceed.
-- Resolve the phase loosely: a phase marker in `spec.md`, else `criteria.md`, else the single `criteria/phase-*.md` if exactly one exists. If the phase is ambiguous (multiple phase files, no marker), skip silently — do not guess.
+- Read `.specs/<feature-slug>/criteria.md`. If it is missing, skip this section silently — do not guess or compile criteria inline.
 
 When a checklist is found, extract guardrails with two deliberate limits:
 
@@ -49,6 +49,19 @@ When a checklist is found, extract guardrails with two deliberate limits:
 2. **High-risk constraints only.** Include only `X`-mode (cross-phase ownership) criteria and `invariants.md` entries not marked superseded, plus any `D`/`S` criterion whose violation would be expensive to fix once later code depends on it (ownership, placement, layering). Skip `G` trivia and anything already pinned by an acceptance criterion (`T`). These are the "built on the wrong foundation" failures worth preventing up front; the rest stays a pure end-audit.
 
 Collect the selected `Source:` quotes verbatim into a short guardrail list. This list is injected into every step's prompt (below). If the list is empty after filtering, omit the guardrail block from the prompt entirely.
+
+## Per-Step Sub-Planning
+
+Before writing code for a step, each step subagent first produces a minimal,
+code-grounded plan for that one step at `.specs/<feature-slug>/subspecs/<step-number>-spec.md`,
+following the `spec-subspec-write` skill. The parent `spec.md` decided *what* and
+*why*; the subspec commits to *how* — the concrete edit sequence against the code as
+it exists now, grounded by reading only the files that step touches (not a repo
+re-analysis). The subagent then implements against its own subspec.
+
+This is always-on and best-effort: write the subspec, then implement. The subspec is
+a planning artifact, never a gate — a thin subspec for a trivial step is fine, and a
+failure to write one does not block the implementation.
 
 ## Execution Model: One Subagent Per Step
 
@@ -87,6 +100,17 @@ Before coding, read:
 1. The full local spec file.
 2. Any source files needed to implement this step.
 
+Plan before coding (per the spec-subspec-write skill):
+- First write a minimal, code-grounded plan for THIS step to
+  <absolute path to .specs/<feature-slug>/subspecs/<step-number>-spec.md>.
+- Ground it by reading ONLY the files this step names plus their immediate
+  neighbors (direct callers/callees and the existing test file). Do not re-survey
+  the repo or re-derive the architecture; spec.md already did that.
+- Capture: target files/symbols as they exist now, the ordered concrete edit
+  sequence, the specific test cases + target test file, and any stop conditions.
+- Then implement against your own subspec. If grounding reveals a spec/code
+  mismatch, STOP and report it instead of improvising.
+
 Rules:
 - Implement ONLY this step. Do not do future steps.
 - If the step cannot be implemented as written because a referenced file, type,
@@ -115,17 +139,18 @@ Engineering principles:
 - Do not add comments explaining what code obviously does.
 
 Output requirements:
-1. Summary of what changed and why.
-2. Exact files modified.
-3. Commands run for verification and their outcomes.
-4. Any assumptions, risks, or spec discrepancies.
+1. Path to the subspec written for this step.
+2. Summary of what changed and why.
+3. Exact files modified.
+4. Commands run for verification and their outcomes.
+5. Any assumptions, risks, or spec discrepancies.
 ```
 
 ## After Each Subagent Returns
 
 Verification is mechanical: scope, tests, build. Do not re-review the design; the spec already passed review.
 
-1. Verify changed files match the files named in the step. Out-of-scope changes fail verification.
+1. Verify changed files match the files named in the step. Out-of-scope changes fail verification. The step's own `.specs/<feature-slug>/subspecs/<step-number>-spec.md` is a planning artifact, not a production change, and does not count as out of scope.
 2. Run the tests named in the step and confirm they pass. If the step names no tests, run the project's compile/lint/type check that is narrowest for the changed files.
 3. If the subagent reported a spec discrepancy, treat it as a spec defect, not a failed implementation.
 4. If incomplete or incorrect, run one fix-up subagent for that step.
