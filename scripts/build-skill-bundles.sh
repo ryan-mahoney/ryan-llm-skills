@@ -277,7 +277,7 @@ This checks the spec against the actual codebase for missing files, invented pat
 This compiles the frozen spec's normative prose into an executable conformance checklist:
 
 ```txt
-.specs/<feature-slug>/criteria/
+.specs/<feature-slug>/criteria.md
 .specs/<feature-slug>/invariants.md
 ```
 
@@ -313,7 +313,7 @@ This implements every step from `spec.md`, one subagent per step when the harnes
 /spec-audit <feature-slug>
 ```
 
-This executes the compiled checklist against the branch diff and reports `PASS`/`VIOLATION`/`UNVERIFIABLE` per criterion with file:line evidence, writing `.specs/<feature-slug>/audit/`. It is report-only and orthogonal to correctness review: it answers "is it the thing the spec described", catching behaviorally-silent deviations that pass every test. Hand violations to the implementer and re-run; the criteria stay frozen, so re-audits are cheap.
+This executes the compiled checklist against the branch diff and reports `PASS`/`VIOLATION`/`UNVERIFIABLE` per criterion with file:line evidence, writing `.specs/<feature-slug>/audit.md`. It is report-only and orthogonal to correctness review: it answers "is it the thing the spec described", catching behaviorally-silent deviations that pass every test. Hand violations to the implementer and re-run; the criteria stay frozen, so re-audits are cheap.
 
 ### 9. Remediate Audit Findings
 
@@ -435,6 +435,7 @@ spec_skills=(
   spec-architect-initial
   spec-architect-critics
   spec-write
+  spec-subspec-write
   spec-review
   spec-criteria
   spec-branch

@@ -14,6 +14,7 @@ The spec-driven development workflow:
 - `spec-architect-initial`
 - `spec-architect-critics`
 - `spec-write`
+- `spec-subspec-write`
 - `spec-review`
 - `spec-criteria`
 - `spec-branch`
