@@ -109,3 +109,11 @@ if [ -d "$HOME/.opencode" ]; then
   sync_dir_symlinks "$AGENTS_DIR/skills" "$HOME/.opencode/skills"
   echo "Synced OpenCode rules and skills."
 fi
+
+# OpenCode permission config. Unlike Claude Code and Codex, OpenCode has no
+# runtime flag to skip permission prompts, so the "allow everything" posture
+# must live in config. Copy it to the live global config path if it exists.
+if [ -d "$HOME/.config/opencode" ]; then
+  cp "$AGENTS_DIR/opencode/opencode.jsonc" "$HOME/.config/opencode/opencode.jsonc"
+  echo "Synced OpenCode permission config."
+fi
