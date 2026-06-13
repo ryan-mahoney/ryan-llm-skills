@@ -87,7 +87,7 @@ After editing `spec.md`, mirror the final body to GitHub only when an available 
 
 ### Required Sections
 
-All 7 sections must be present and substantive:
+All 8 sections must be present and substantive:
 
 1. **Qualifications** - lists only skills actually needed, not a generic wish list.
 2. **Problem Statement** - grounded in 2-4 sentences: what's missing/broken, current behavior, what the spec addresses.
@@ -96,6 +96,7 @@ All 7 sections must be present and substantive:
 5. **Acceptance Criteria** - numbered, observable, automatable assertions grouped by concern. Includes non-happy-path behaviors. No subjective criteria.
 6. **Notes** - trade-offs with rationale, risks and ambiguities.
 7. **Implementation Steps** - see below.
+8. **Applicable Rules** - each listed rule path resolves to a real file, each has a relevance reason, and the selection matches what the spec touches (no padding with irrelevant rules; no obviously relevant rule missing — e.g. a spec that builds a form should select the form rule if one exists). "N/A" is correct for work touching no rule domain.
 
 ### Architecture Review
 

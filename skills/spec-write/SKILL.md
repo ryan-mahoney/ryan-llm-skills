@@ -91,6 +91,17 @@ Reconciliation principles:
 
 Apply reconciled decisions when writing the Architecture, Notes, and Implementation Steps sections below.
 
+## Select Applicable Rules
+
+Rule files are short, reusable convention guides (UX, forms, tables, copy, testing) that step implementers must follow when their subject matter is in play. Enumerate candidates from:
+
+1. A repo-local rules folder (`rules/` or `.agents/rules/`) when one exists.
+2. The user-global rules folder `~/.agents/rules/`.
+
+Select by relevance, not completeness: form rules only when the spec builds or changes a form, table rules for tabular UI, CTA/copy rules for user-facing text, testing rules when steps add tests, broad design rules only for user-facing UI work. A backend-only spec typically selects nothing, or only the testing rule. Repo-local rules win over global rules on conflict.
+
+Record the selection in the Applicable Rules section below. `spec-run` injects these paths into every step prompt, so an unselected rule is invisible at implementation time — but do not pad the list; irrelevant rules dilute the ones that matter.
+
 ## Required Sections
 
 Every section is required. If not applicable, include the heading with "N/A".
@@ -167,6 +178,17 @@ Exclude:
 - Running the entire test suite.
 - Formatting or lint-only chores.
 - Git workflow or PR process steps.
+
+### 8. Applicable Rules
+
+List the rule files selected above as resolvable paths, each with a one-line reason:
+
+```markdown
+- `~/.agents/rules/form-design.md` — spec adds a settings form
+- `~/.agents/rules/unit-testing.md` — steps add unit tests
+```
+
+If none apply, "N/A".
 
 ## Spec Footer
 

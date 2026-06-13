@@ -56,6 +56,24 @@ The point of reading is to replace the parent step's abstract references ("modif
 `parseConfig`") with concrete, current facts: real symbol names, real signatures,
 the real insertion point, the real test file.
 
+### New-code exception (reuse and nativeness)
+
+When the step creates a new function, helper, or file, two bounded look-ups are in
+scope despite the read-narrowly rule:
+
+1. **Pre-existence check.** Before planning a new implementation, search the repo
+   for an existing one — by likely symbol names and by behavior keywords. If an
+   equivalent exists, plan to reuse or extend it and record it in Targets. If the
+   parent spec explicitly mandates a new implementation anyway, record the conflict
+   under Open Questions rather than silently duplicating.
+2. **Model file.** Read one existing file of the same kind that the new code should
+   structurally resemble — the file the parent spec names as a pattern reference,
+   or the closest sibling if it names none. Match its layout, naming, imports, and
+   error idioms in the Edit Sequence.
+
+These are a few targeted searches and one or two extra file reads, not a repo
+survey. The read-narrowly rule still governs everything else.
+
 ## Required Sections
 
 Keep it minimal. Every section is required; use "N/A" only when genuinely empty.
@@ -71,6 +89,10 @@ tags copied from the parent spec.
 The files and symbols this step touches, **as they exist now**: file paths with the
 real function/type names and current signatures. Note anything the step assumed that
 the code contradicts.
+
+When the step creates new code, also record the pre-existence check result — the
+existing equivalent found, or the search terms that came up empty — and the model
+file chosen.
 
 ### 3. Edit Sequence
 

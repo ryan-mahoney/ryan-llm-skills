@@ -15,7 +15,7 @@ LLMs are bad at saying "this doesn't fit." They will cheerfully propose bolting 
 
 ---
 
-## Step 1 — Understand the Problem
+## Step 1 — Intake: Qualify the Request Before Doing Any Work
 
 Before touching any code or architecture docs, make sure you understand what's actually being asked. Restate the problem in your own words, covering:
 
@@ -24,7 +24,28 @@ Before touching any code or architecture docs, make sure you understand what's a
 - **What changes** as a result (new data, state transitions, side effects)
 - **Constraints** the user has mentioned (performance, cost, timeline, compatibility)
 
-If the problem statement is materially ambiguous, ask clarifying questions before proceeding. If the request is still actionable without blocking on an answer, proceed with explicit assumptions and label them clearly in the output. Don't guess silently — wrong assumptions here cascade into wrong architecture.
+### 1a. Run the underspecification rubric
+
+Apply this rubric to the request text plus a quick glance at the repo (README, dependency manifest — minutes, not the full Step 2 analysis). The point is to catch missing decisions *before* any architecture work is sunk. For each category, decide whether it is answered by the request, answerable from the repo, or missing:
+
+- **Compatibility posture** — Are there existing users, stored data, or API clients that must keep working? Or is this pre-launch / greenfield, where forward-only changes are cheaper and migration shims are waste?
+- **Scope boundaries** — What is explicitly out of scope? Is this the whole feature or one slice of it?
+- **Interface surface** — Where does this manifest: UI, HTTP API, CLI, background job, library function?
+- **Scale envelope** — Rough order of magnitude: tens of records or millions? One user or thousands concurrent?
+- **Error expectations** — When inputs are bad or a dependency fails, what should happen: fail fast, retry, queue, surface to the user?
+- **Definition of done** — What observable behavior tells us this is complete?
+
+### 1b. Ask only decision-relevant questions
+
+A missing rubric answer earns a question only if it passes the decision-relevance test: **would different answers produce materially different proposals?** If every plausible answer leads to the same architecture, don't ask — assume and declare.
+
+Ask at most one round of 3–5 questions, and ask them now, before starting Step 2. If the environment is non-interactive (headless or autonomous run), skip questions entirely and convert every gap to a declared assumption.
+
+### 1c. Declare the rest as vetoable assumptions
+
+Every rubric gap you did not ask about becomes a one-line declared assumption. These go in the **Constraints & Assumptions** section at the top of the output document (Step 4a/4b) so the user can veto any of them with one word at proposal review instead of discovering them in generated code. A wrong assumption caught at review costs a sentence; the same assumption caught during testing costs rework.
+
+Don't guess silently — wrong assumptions here cascade into wrong architecture.
 
 ---
 
@@ -105,6 +126,17 @@ When the solution fits, produce a concrete implementation plan. This is not a ha
 ## Summary
 
 [One paragraph: what you're building and how it fits into the existing architecture.]
+
+## Constraints & Assumptions
+
+[Intake answers and declared assumptions from Step 1, one line each. Mark
+each as user-confirmed or assumed — assumed lines are open to a one-word
+veto. Downstream stages read only spec artifacts, so anything decided in
+conversation must be restated here to survive.]
+
+- Compatibility: pre-launch, no existing users — forward-only changes, no
+  migration shims (assumed)
+- Interface: ships as a new REST endpoint, no UI in this slice (user-confirmed)
 
 ## Verdict: COMPATIBLE [or COMPATIBLE WITH CAVEATS]
 
@@ -190,6 +222,12 @@ When the solution doesn't fit, be direct and specific. Don't soften it into "it'
 ## Summary
 
 [One paragraph: what was requested and why it doesn't fit.]
+
+## Constraints & Assumptions
+
+[Intake answers and declared assumptions from Step 1, one line each, marked
+user-confirmed or assumed. An incompatibility verdict can hinge on an
+assumption — surfacing it here lets the user overturn the verdict cheaply.]
 
 ## Verdict: INCOMPATIBLE
 

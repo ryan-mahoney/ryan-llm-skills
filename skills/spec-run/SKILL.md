@@ -50,6 +50,12 @@ When a checklist is found, extract guardrails with two deliberate limits:
 
 Collect the selected `Source:` quotes verbatim into a short guardrail list. This list is injected into every step's prompt (below). If the list is empty after filtering, omit the guardrail block from the prompt entirely.
 
+## Load Applicable Rules (Optional)
+
+If the spec has an Applicable Rules section listing rule files, resolve each path. Best-effort and never blocking: if the section is absent, "N/A", or a listed file is missing, skip it silently and proceed.
+
+Pass the resolved paths into every step's prompt (below). Step subagents read the rule files themselves — do not inline rule contents into the prompt. If no paths resolve, omit the rules block from the prompt entirely.
+
 ## Per-Step Sub-Planning
 
 Before writing code for a step, each step subagent first produces a minimal,
@@ -57,7 +63,9 @@ code-grounded plan for that one step at `.specs/<feature-slug>/subspecs/<step-nu
 following the `spec-subspec-write` skill. The parent `spec.md` decided *what* and
 *why*; the subspec commits to *how* — the concrete edit sequence against the code as
 it exists now, grounded by reading only the files that step touches (not a repo
-re-analysis). The subagent then implements against its own subspec.
+re-analysis), plus the spec-subspec-write new-code checks (reuse search and model
+file) when the step creates new code. The subagent then implements against its own
+subspec.
 
 This is always-on and best-effort: write the subspec, then implement. The subspec is
 a planning artifact, never a gate — a thin subspec for a trivial step is fine, and a
@@ -96,6 +104,10 @@ Conformance guardrails (ownership/placement constraints this step must respect;
 omit this block entirely when the guardrail list is empty):
 <CONFORMANCE_GUARDRAILS — one Source quote per line, or omitted>
 
+Applicable rules (read each file before coding; they set the design, copy, or
+testing conventions this work must follow; omit this block when none apply):
+<APPLICABLE_RULE_PATHS — one path per line, or omitted>
+
 Before coding, read:
 1. The full local spec file.
 2. Any source files needed to implement this step.
@@ -106,6 +118,11 @@ Plan before coding (per the spec-subspec-write skill):
 - Ground it by reading ONLY the files this step names plus their immediate
   neighbors (direct callers/callees and the existing test file). Do not re-survey
   the repo or re-derive the architecture; spec.md already did that.
+- Exception when this step creates a new function, helper, or file: apply the
+  spec-subspec-write new-code checks — a targeted search for an existing
+  equivalent (reuse or extend it if found; if the spec mandates a new
+  implementation anyway, record the conflict instead of silently duplicating)
+  and one model file to match for layout, naming, and error idioms.
 - Capture: target files/symbols as they exist now, the ordered concrete edit
   sequence, the specific test cases + target test file, and any stop conditions.
 - Then implement against your own subspec. If grounding reveals a spec/code
