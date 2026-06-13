@@ -6,12 +6,12 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "3"
+  version: "4"
 ---
 
 # Spec Branch Worktree
 
-Create a git worktree with a structured branch name derived from a spec folder, ticket reference, or loose description. Configure the environment, color-code the VSCode window, copy the relevant `.specs/` folder, and open it.
+Create a git worktree with a structured branch name derived from a spec folder, ticket reference, or loose description. Configure the environment, color-code the VSCode window, copy the relevant `.specs/<feature-slug>/` folder, and open it.
 
 ## Arguments
 
@@ -36,7 +36,7 @@ Examples:
 
 ### 1. Resolve the Work Description
 
-If `$ARGUMENTS` names an existing `.specs/<feature-slug>/` folder, use `<feature-slug>` as the initial description. If `spec.md` or `proposal.md` contains a clear title, include it when deriving the final slug.
+If `$ARGUMENTS` names an existing `.specs/<feature-slug>/` folder, use `<feature-slug>` as the initial description and record `<feature-slug>` as the source spec slug for Step 5. If `spec.md` or `proposal.md` contains a clear title, include it when deriving the final slug, but keep the source spec slug anchored to the folder named by `$ARGUMENTS`.
 
 If `$ARGUMENTS` is only a number, treat it as a GitHub issue number only when the current repo has a GitHub remote and `gh issue view <number> --json title --jq .title` succeeds. Combine the number and title as the working description.
 
@@ -131,37 +131,35 @@ cp .env ~/.worktrees/<repo-name>/<slug>/.env 2>/dev/null || true
 
 Copy the entire spec slug folder if this worktree implements a spec. The spec-driven skills (`spec-architect-initial`, `spec-architect-critics`, `spec-write`, `spec-review`, `spec-criteria`, `spec-run`, `spec-audit`, `spec-remediate`, `architect-inspect`) read and write artifacts under `.specs/<feature-slug>/` at the repo root, including sidecar analysis/proposal files, the `criteria.md` and `audit.md` checklists, and the cross-phase `invariants.md` ledger that `spec-audit` and `spec-remediate` need in the worktree.
 
-Because the worktree may branch from a clean remote ref, uncommitted spec work in the current checkout can be missing. Copy the relevant slug folder as a directory, preserving every file and subdirectory in it. Do not copy only `spec.md` or `proposal.md`.
+Because the worktree may branch from a clean remote ref, uncommitted spec work in the current checkout can be missing. Create `.specs/` in the worktree and copy only the relevant slug folder as a directory, preserving every file and subdirectory in it. Do not copy only `spec.md` or `proposal.md`, and do not copy unrelated `.specs/*` folders.
 
 ```bash
 src_root="$(git rev-parse --show-toplevel)"
 dest="$HOME/.worktrees/<repo-name>/<slug>"
+source_spec_slug="<source-spec-slug-if-known>"
 copied_spec="none"
 
 if [ -d "$src_root/.specs" ]; then
   feature_slug="$(printf '%s' "<slug>" | sed -E 's/^[0-9]+-//; s/^[a-z]+-[0-9]+-//')"
-  if [ -d "$src_root/.specs/<slug>" ]; then
+  if [ -n "$source_spec_slug" ] && [ "$source_spec_slug" != "<source-spec-slug-if-known>" ] && [ -d "$src_root/.specs/$source_spec_slug" ]; then
+    src_spec_dir="$src_root/.specs/$source_spec_slug"
+    copied_spec="$source_spec_slug"
+  elif [ -d "$src_root/.specs/<slug>" ]; then
     src_spec_dir="$src_root/.specs/<slug>"
     copied_spec="<slug>"
   elif [ -d "$src_root/.specs/$feature_slug" ]; then
     src_spec_dir="$src_root/.specs/$feature_slug"
     copied_spec="$feature_slug"
-  else
-    src_spec_dir="$src_root/.specs"
-    copied_spec="all .specs"
   fi
 
-  if [ "$copied_spec" = "all .specs" ]; then
-    mkdir -p "$dest/.specs"
-    cp -R "$src_spec_dir/." "$dest/.specs/"
-  else
+  if [ "$copied_spec" != "none" ]; then
     mkdir -p "$dest/.specs/$copied_spec"
     cp -R "$src_spec_dir/." "$dest/.specs/$copied_spec/"
   fi
 fi
 ```
 
-If no `.specs` folder exists, skip silently. Note in the final report which spec folder, if any, was copied, using the `copied_spec` value.
+If no `.specs` folder exists, or no matching spec folder exists for the source spec slug, `<slug>`, or the derived `feature_slug`, skip silently. Note in the final report which spec folder, if any, was copied, using the `copied_spec` value.
 
 ### 6. Color-Code the VSCode Window
 
