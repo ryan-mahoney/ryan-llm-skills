@@ -1,6 +1,6 @@
 # LLM Skills & Rules
 
-Shared configuration for LLM coding agents (Claude Code, Codex, Augment, Cline, OpenCode). The centerpiece is two installable skill distributions — **spec-skills** and **specops-skills**. Alongside them sit a set of standalone utility skills, design rules, and per-agent instruction files.
+Shared configuration for LLM coding agents (Claude Code, Codex, Augment, Cline, OpenCode). The centerpiece is two installable skill distributions: **spec-skills** and **specops-skills**. The spec-skills bundle offers two front-halves into one pipeline, spec-driven and design-driven, that share the same implementation back-half. Alongside the bundles sit standalone utility skills, design rules, and per-agent instruction files.
 
 Skills are slash commands defined in `skills/<name>/SKILL.md` using the Agent Skills format.
 
@@ -8,21 +8,21 @@ Skills are slash commands defined in `skills/<name>/SKILL.md` using the Agent Sk
 
 Two portable, installable bundles. Build both with `scripts/build-skill-bundles.sh`; each archive contains a `skills/` directory plus `bundle.json`, `README.md`, and `install.sh`. The `spec-skills` archive also includes the shared `rules/` guides used by spec and design-spec workflows.
 
-### spec-skills — spec-driven development
+### spec-skills: spec-driven development
 
 A local-first workflow that turns a goal into reviewed architecture, then a deterministic implementation spec, then verified execution. Every stage reads and writes `.specs/<feature-slug>/` as the source of truth. GitHub issues are optional mirrors, used only when the repository is hosted on GitHub and `gh` is authenticated.
 
 Run the stages in order; each consumes the previous stage's artifact:
 
-1. `spec-architect-initial` — propose an architecture (`proposal.md`)
-2. `spec-architect-critics` — stress-test it (`critique.md`), optional
-3. `spec-write` — commit to an implementation spec (`spec.md`)
-4. `spec-review` — check the spec against the codebase, for difficult changes or handoffs
-5. `spec-criteria` — compile the frozen spec into a conformance checklist (`criteria.md`), before implementing
-6. `spec-branch` / `spec-branch-worktree` — create a branch (and worktree) carrying the spec folder
-7. `spec-run` — implement every step, one subagent per step; each step self-plans first
-8. `spec-audit` — verify the implementation against the checklist
-9. `spec-remediate` — fix any findings, then re-audit until clean
+1. `spec-architect-initial`: propose an architecture (`proposal.md`)
+2. `spec-architect-critics`: stress-test it (`critique.md`), optional
+3. `spec-write`: commit to an implementation spec (`spec.md`)
+4. `spec-review`: check the spec against the codebase, for difficult changes or handoffs
+5. `spec-criteria`: compile the frozen spec into a conformance checklist (`criteria.md`), before implementing
+6. `spec-branch` / `spec-branch-worktree`: create a branch (and worktree) carrying the spec folder
+7. `spec-run`: implement every step, one subagent per step; each step self-plans first
+8. `spec-audit`: verify the implementation against the checklist
+9. `spec-remediate`: fix any findings, then re-audit until clean
 
 | Skill | Command | Purpose |
 |---|---|---|
@@ -40,30 +40,30 @@ Run the stages in order; each consumes the previous stage's artifact:
 
 The `spec-skills` bundle also ships the Augment CLI subagent adapter `augment/agents/spec-step-implementer.md`, which `spec-run` uses to delegate one step at a time.
 
-#### design-spec — design-driven front-half
+### design-spec: design-driven front-half
 
-A design-focused front-half for the same pipeline, shipped in the `spec-skills` bundle. It reuses the canonical `.specs/<feature-slug>/` artifacts (`proposal.md`, `critique.md`, `spec.md`), so once a design spec is written, the engineering back half — `spec-criteria`, `spec-branch`, `spec-run`, `spec-audit`, `spec-remediate` — runs against it unchanged.
+The same pipeline, entered from design instead of architecture. It ships in the `spec-skills` bundle and reuses the canonical `.specs/<feature-slug>/` artifacts (`proposal.md`, `critique.md`, `spec.md`). Once a design spec is written, the engineering back-half runs against it unchanged: `spec-criteria`, `spec-branch`, `spec-run`, `spec-audit`, `spec-remediate`.
 
-The architect classifies each surface on two axes — **posture** (Functional → `functionalist-design.md`, Expressive → `expressive-design.md`) and **deliverable** (Prototype vs Real, in-code) — and the writer carries the selected posture rule into the spec's Applicable Rules so `spec-run` applies it at implementation time.
+The architect classifies each surface on two axes. Posture picks the applicable rule: Functional uses `functionalist-design.md`, Expressive uses `expressive-design.md`. Deliverable is Prototype or Real, in-code. The writer carries the selected posture rule into the spec's Applicable Rules, so `spec-run` applies it at implementation time.
 
 Run the design stages, then hand off to `spec-run`:
 
-1. `design-spec-architect` — classify and propose a design direction (`proposal.md`)
-2. `design-spec-prototype` — build and serve a viewable prototype (`prototype/`), optional
-3. `design-spec-critique` — critique the prototype, else the proposal (`critique.md`), optional
-4. `design-spec-writer` — commit to a `spec.md` in the standard 8-section contract
-5. `design-spec-review` — design-lens gap/ambiguity review of `spec.md`
-6. → `spec-criteria` / `spec-branch` / `spec-run` / `spec-audit` / `spec-remediate` as usual
+1. `design-spec-architect`: classify and propose a design direction (`proposal.md`)
+2. `design-spec-prototype`: build and serve a viewable prototype (`prototype/`), optional
+3. `design-spec-critique`: critique the prototype, else the proposal (`critique.md`), optional
+4. `design-spec-writer`: commit to a `spec.md` in the standard 8-section contract
+5. `design-spec-review`: design-lens gap and ambiguity review of `spec.md`
+6. Hand off to `spec-criteria` / `spec-branch` / `spec-run` / `spec-audit` / `spec-remediate` as usual
 
 | Skill | Command | Purpose |
 |---|---|---|
-| **design-spec-architect** | `/design-spec-architect [surface-or-feature]` | Review the design system and rules, classify posture and deliverable, and write `.specs/<slug>/proposal.md` — or explain that no new design is needed |
+| **design-spec-architect** | `/design-spec-architect [surface-or-feature]` | Review the design system and rules, classify posture and deliverable, and write `.specs/<slug>/proposal.md`, or explain that no new design is needed |
 | **design-spec-prototype** | `/design-spec-prototype [feature-slug or stack override]` | Build a fast, viewable prototype (default: single static HTML + Tailwind CDN) into `.specs/<slug>/prototype/` and serve it on localhost for comment |
 | **design-spec-critique** | `/design-spec-critique [feature-slug]` | Stress-test the prototype (else the proposal) through two real design practitioners or named design lenses and write `.specs/<slug>/critique.md` |
 | **design-spec-writer** | `/design-spec-writer [feature-slug or issue]` | Write `.specs/<slug>/spec.md` in the standard 8-section contract from the proposal, critique, and approved prototype, with design-specialized acceptance criteria and steps |
-| **design-spec-review** | `/design-spec-review [feature-slug-or-spec-path]` | Review `spec.md` from a design lens — token/state/accessibility coverage, design ambiguity, traceability — and edit it |
+| **design-spec-review** | `/design-spec-review [feature-slug-or-spec-path]` | Review `spec.md` from a design lens (token/state/accessibility coverage, design ambiguity, traceability) and edit it |
 
-### specops-skills — legacy migration
+### specops-skills: legacy migration
 
 A SpecOps pipeline for migrating legacy code: analyze the source into implementation-agnostic specs, harden and reconcile them, derive deterministic implementation specs, generate code, and verify the result preserves original behavior.
 
@@ -78,7 +78,7 @@ A SpecOps pipeline for migrating legacy code: analyze the source into implementa
 | **specops-make-spec** | `/specops-make-spec [scope]` | Convert SpecOps analysis into a generalized deterministic implementation spec |
 | **specops-orchestrate-spec-create** | `/specops-orchestrate-spec-create [analysis-files-or-dir]` | Orchestrate sequential subagents that generate one spec per analysis file |
 | **specops-spec-conformance** | `/specops-spec-conformance [analysis-spec] [implementation-spec]` | Audit an implementation spec against its source analysis spec for dropped or weakened behavior and patch the implementation spec |
-| **specops-run-spec** | `/specops-run-spec [spec-file]` | Implement every step in a SpecOps implementation spec via sequential subagents, committing each independently, with optional `roborev check`/`fix` per commit |
+| **specops-run-spec** | `/specops-run-spec [spec-file]` | Implement every step in a SpecOps implementation spec via sequential subagents, committing each independently |
 | **specops-contract-tests** | `/specops-contract-tests [analysis-file]` | Generate a framework-agnostic pytest contract test file from a SpecOps analysis |
 | **specops-integration-test** | `/specops-integration-test [analysis-dir] [migrated-folder]` | Generate integration tests for normative cross-module pathways discovered from analysis specs and the migrated call graph, reusing existing unit-test mocks |
 | **specops-implementation-drift** | `/specops-implementation-drift [migrated-folder] [original-analysis]` | Re-analyze migrated code, diff against the original analysis, and produce corrective specs for each behavioral divergence |
@@ -194,48 +194,3 @@ SYNC_AUGMENT=1 ~/.agents/sync.sh
 ```
 
 For a repository-shared Augment setup, copy or symlink `augment/agents/spec-step-implementer.md` into that repo's `./.augment/agents/` directory.
-
-## Code Review (Optional): roborev
-
-`roborev` adds automated post-commit review for agent-driven workflows, so issues are surfaced right after commits instead of later in PR review.
-
-Install `roborev` globally (Homebrew recommended):
-
-```bash
-brew install roborev-dev/tap/roborev
-```
-
-Optional install alternatives:
-
-```bash
-curl -fsSL https://roborev.io/install.sh | bash
-go install github.com/roborev-dev/roborev/cmd/roborev@latest
-```
-
-Global vs per-repo setup:
-
-- Global defaults/config live in `~/.roborev/config.toml`
-- Each repository still needs `roborev init` once to install git hooks
-
-Quick start:
-
-```bash
-# one-time global setup
-brew install roborev-dev/tap/roborev
-roborev config set default_agent codex --global
-
-# per repository
-cd /path/to/repo
-roborev init
-```
-
-Optional global auto-fix loop on failed reviews:
-
-```toml
-# ~/.roborev/config.toml
-[[hooks]]
-event = "review.completed"
-command = "test {verdict} = F && roborev refine --max-iterations 5"
-```
-
-This runs an iterative fix + re-review loop when a review fails.
