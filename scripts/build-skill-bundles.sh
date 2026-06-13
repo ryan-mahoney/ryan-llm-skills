@@ -36,6 +36,19 @@ copy_file() {
   cp "$src" "$bundle_dir/$dest_rel"
 }
 
+copy_rules() {
+  local bundle_dir="$1"
+  local src="$ROOT/rules"
+
+  if [ ! -d "$src" ]; then
+    echo "ERROR: missing rules directory" >&2
+    exit 1
+  fi
+
+  mkdir -p "$bundle_dir/rules"
+  cp "$src"/*.md "$bundle_dir/rules/"
+}
+
 write_install_script() {
   local bundle_dir="$1"
 
@@ -144,26 +157,49 @@ install_augment_agents_to() {
   done
 }
 
+install_rules_to() {
+  local target_dir="$1"
+
+  if [ ! -d "$BUNDLE_DIR/rules" ]; then
+    return 0
+  fi
+
+  mkdir -p "$target_dir"
+  for rule_file in "$BUNDLE_DIR/rules"/*.md; do
+    [ -f "$rule_file" ] || continue
+    install_entry "$rule_file" "$target_dir/$(basename "$rule_file")"
+  done
+}
+
 install_target() {
   case "$1" in
     agents)
       install_skills_to "$HOME/.agents/skills"
+      install_rules_to "$HOME/.agents/rules"
       ;;
     claude)
       install_skills_to "$HOME/.claude/skills"
+      install_rules_to "$HOME/.agents/rules"
+      install_rules_to "$HOME/.claude/rules"
       ;;
     codex)
       install_skills_to "$HOME/.codex/skills"
+      install_rules_to "$HOME/.agents/rules"
+      install_rules_to "$HOME/.codex/guides"
       ;;
     augment)
       install_skills_to "$HOME/.augment/skills"
       install_augment_agents_to "$HOME/.augment/agents"
+      install_rules_to "$HOME/.agents/rules"
       ;;
     opencode)
       install_skills_to "$HOME/.opencode/skills"
+      install_rules_to "$HOME/.agents/rules"
+      install_rules_to "$HOME/.opencode/rules"
       ;;
     cline)
       install_skills_to "$HOME/.cline/skills"
+      install_rules_to "$HOME/.agents/rules"
       ;;
     all)
       install_target agents
@@ -340,6 +376,73 @@ This reads the audit report and fixes each `VIOLATION` with one capable subagent
 README
 }
 
+write_design_spec_workflow_howto() {
+  cat <<'README'
+
+## Design-Driven Front-Half
+
+The design-spec skills add a design-focused front-half to the same `.specs/<feature-slug>/` contract. They are useful when the next implementation needs design direction, not only architecture.
+
+### 1. Propose The Design Direction
+
+```bash
+/design-spec-architect describe the surface or redesign
+```
+
+This reviews the existing design system and applicable rules, classifies the surface as functional, expressive, or hybrid, and writes:
+
+```txt
+.specs/<feature-slug>/proposal.md
+```
+
+### 2. Prototype The Direction (Optional)
+
+```bash
+/design-spec-prototype <feature-slug>
+```
+
+This builds a fast viewable prototype in:
+
+```txt
+.specs/<feature-slug>/prototype/
+```
+
+Use this when the direction is expressive, high-visibility, unsettled, or worth reacting to visually before writing the implementation spec.
+
+### 3. Critique The Design (Optional)
+
+```bash
+/design-spec-critique <feature-slug>
+```
+
+This critiques the prototype when present, otherwise the proposal, and writes:
+
+```txt
+.specs/<feature-slug>/critique.md
+```
+
+### 4. Write And Review The Design Spec
+
+```bash
+/design-spec-writer <feature-slug>
+/design-spec-review <feature-slug>
+```
+
+The writer creates the standard 8-section implementation contract at `.specs/<feature-slug>/spec.md`, including the selected design rules in Applicable Rules. The review pass checks token usage, states, accessibility, responsive behavior, traceability, and implementation readiness.
+
+After that, use the normal engineering back half:
+
+```bash
+/spec-criteria <feature-slug>
+/spec-branch <feature-slug>
+/spec-run <feature-slug>
+/spec-audit <feature-slug>
+/spec-remediate <feature-slug>
+```
+
+README
+}
+
 write_bundle_files() {
   local bundle_dir="$1"
   local name="$2"
@@ -356,6 +459,13 @@ write_bundle_files() {
     for skill in "${skills[@]}"; do
       printf '%s\n' "- \`$skill\`"
     done
+    if [ -d "$bundle_dir/rules" ]; then
+      printf '\n## Rules\n\n'
+      for rule in "$bundle_dir/rules"/*.md; do
+        [ -f "$rule" ] || continue
+        printf '%s\n' "- \`rules/$(basename "$rule")\`"
+      done
+    fi
     if [ -d "$bundle_dir/augment/agents" ]; then
       printf '\n## Augment Agents\n\n'
       for agent in "$bundle_dir/augment/agents"/*.md; do
@@ -365,6 +475,7 @@ write_bundle_files() {
     fi
     if [ "$name" = "spec-skills" ]; then
       write_spec_workflow_howto
+      write_design_spec_workflow_howto
     fi
     printf '\n## Install\n\n'
     printf '```bash\n./install.sh\n```\n\n'
@@ -391,6 +502,19 @@ write_bundle_files() {
     else
       printf '[]'
     fi
+    printf ',\n'
+    printf '  "rules": '
+    if [ -d "$bundle_dir/rules" ]; then
+      local rules=()
+      local rule
+      for rule in "$bundle_dir/rules"/*.md; do
+        [ -f "$rule" ] || continue
+        rules+=("rules/$(basename "$rule")")
+      done
+      json_array "${rules[@]}"
+    else
+      printf '[]'
+    fi
     printf '\n}\n'
   } > "$bundle_dir/bundle.json"
 }
@@ -413,6 +537,7 @@ build_bundle() {
 
   if [ "$name" = "spec-skills" ]; then
     copy_file "$bundle_dir" "augment/agents/spec-step-implementer.md" "augment/agents/spec-step-implementer.md"
+    copy_rules "$bundle_dir"
   fi
 
   write_install_script "$bundle_dir"
@@ -443,6 +568,11 @@ spec_skills=(
   spec-run
   spec-audit
   spec-remediate
+  design-spec-architect
+  design-spec-prototype
+  design-spec-critique
+  design-spec-writer
+  design-spec-review
 )
 
 specops_skills=()

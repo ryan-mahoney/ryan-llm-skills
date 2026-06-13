@@ -6,7 +6,7 @@ Skills are slash commands defined in `skills/<name>/SKILL.md` using the Agent Sk
 
 ## Distributions
 
-Two portable, installable bundles. Build both with `scripts/build-skill-bundles.sh`; each archive contains a `skills/` directory plus `bundle.json`, `README.md`, and `install.sh`.
+Two portable, installable bundles. Build both with `scripts/build-skill-bundles.sh`; each archive contains a `skills/` directory plus `bundle.json`, `README.md`, and `install.sh`. The `spec-skills` archive also includes the shared `rules/` guides used by spec and design-spec workflows.
 
 ### spec-skills — spec-driven development
 
@@ -39,6 +39,29 @@ Run the stages in order; each consumes the previous stage's artifact:
 | **spec-remediate** | `/spec-remediate [feature-slug-or-spec-path]` | Fix audit VIOLATIONs with one smart subagent per finding, converging code back to the frozen spec, then re-audit until clean; escalates spec/criteria defects |
 
 The `spec-skills` bundle also ships the Augment CLI subagent adapter `augment/agents/spec-step-implementer.md`, which `spec-run` uses to delegate one step at a time.
+
+#### design-spec — design-driven front-half
+
+A design-focused front-half for the same pipeline, shipped in the `spec-skills` bundle. It reuses the canonical `.specs/<feature-slug>/` artifacts (`proposal.md`, `critique.md`, `spec.md`), so once a design spec is written, the engineering back half — `spec-criteria`, `spec-branch`, `spec-run`, `spec-audit`, `spec-remediate` — runs against it unchanged.
+
+The architect classifies each surface on two axes — **posture** (Functional → `functionalist-design.md`, Expressive → `expressive-design.md`) and **deliverable** (Prototype vs Real, in-code) — and the writer carries the selected posture rule into the spec's Applicable Rules so `spec-run` applies it at implementation time.
+
+Run the design stages, then hand off to `spec-run`:
+
+1. `design-spec-architect` — classify and propose a design direction (`proposal.md`)
+2. `design-spec-prototype` — build and serve a viewable prototype (`prototype/`), optional
+3. `design-spec-critique` — critique the prototype, else the proposal (`critique.md`), optional
+4. `design-spec-writer` — commit to a `spec.md` in the standard 8-section contract
+5. `design-spec-review` — design-lens gap/ambiguity review of `spec.md`
+6. → `spec-criteria` / `spec-branch` / `spec-run` / `spec-audit` / `spec-remediate` as usual
+
+| Skill | Command | Purpose |
+|---|---|---|
+| **design-spec-architect** | `/design-spec-architect [surface-or-feature]` | Review the design system and rules, classify posture and deliverable, and write `.specs/<slug>/proposal.md` — or explain that no new design is needed |
+| **design-spec-prototype** | `/design-spec-prototype [feature-slug or stack override]` | Build a fast, viewable prototype (default: single static HTML + Tailwind CDN) into `.specs/<slug>/prototype/` and serve it on localhost for comment |
+| **design-spec-critique** | `/design-spec-critique [feature-slug]` | Stress-test the prototype (else the proposal) through two real design practitioners or named design lenses and write `.specs/<slug>/critique.md` |
+| **design-spec-writer** | `/design-spec-writer [feature-slug or issue]` | Write `.specs/<slug>/spec.md` in the standard 8-section contract from the proposal, critique, and approved prototype, with design-specialized acceptance criteria and steps |
+| **design-spec-review** | `/design-spec-review [feature-slug-or-spec-path]` | Review `spec.md` from a design lens — token/state/accessibility coverage, design ambiguity, traceability — and edit it |
 
 ### specops-skills — legacy migration
 
@@ -112,10 +135,12 @@ Design and copy guidance applied to frontend and UX work. Files in `rules/` are 
 
 | File | Scope |
 |---|---|
-| `functionalist-design.md` | Layout, typography, color, visual design |
+| `functionalist-design.md` | Functional surfaces: layout, typography, color, data-ink restraint |
+| `expressive-design.md` | Expressive surfaces: brand/marketing direction, distinctive type, atmosphere, motion |
 | `form-design.md` | Form structure, labels, validation |
 | `table-row-design.md` | Table layout, alignment, row interaction |
 | `cta-design.md` | Button wording, hierarchy, accessibility |
+| `ux-states.md` | Required states for data-driven views (empty, loading, error, partial, ideal) |
 
 ## Agent Instructions
 

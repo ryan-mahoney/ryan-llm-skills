@@ -15,6 +15,8 @@ When relevant, load and apply guidance from these files:
 - `form-design.md`
 - `table-row-design.md`
 - `functionalist-design.md`
+- `expressive-design.md`
+- `ux-states.md`
 
 ## When To Apply
 Apply this guidance by default for:
