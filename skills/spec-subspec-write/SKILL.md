@@ -3,6 +3,11 @@ name: spec-subspec-write
 description: This skill should be used when the user asks to "write a subspec", "plan this step", "write a step plan", or "detail step N" for a single implementation step that already exists in a reviewed spec. Creates a minimal, code-grounded implementation plan for one step at .specs/<slug>/subspecs/<step-number>-spec.md. spec-run invokes this per step before coding.
 disable-model-invocation: true
 argument-hint: "[step-number] [feature-slug or spec path (optional)]"
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "2"
 ---
 
 # Spec Subspec Write

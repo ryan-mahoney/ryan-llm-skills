@@ -1,6 +1,11 @@
 ---
 name: design-spec-architect
 description: "Act as the first stage in the design-spec workflow: given a UI/UX request, review the repo's design system and the active design rules, classify the work by posture and deliverable, and write .specs/<slug>/proposal.md with a concrete design direction — or explain why no new design is needed. Use when the user says 'design this', 'design a UI for', 'redesign', 'how should this look', 'mock up', 'lay out this screen', 'propose a design for', or 'what's the design approach'."
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "1"
 ---
 
 # Design Spec Architect — Design Direction Against the Existing System

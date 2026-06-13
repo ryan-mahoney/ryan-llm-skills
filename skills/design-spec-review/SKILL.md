@@ -3,6 +3,11 @@ name: design-spec-review
 description: This skill should be used when the user asks to "review the design spec", "check the design plan", "find gaps in the design spec", or "review design spec". Reviews .specs/<slug>/spec.md from a design lens for gaps, ambiguity, token/state/accessibility coverage, and implementation readiness, edits it when needed, and mirrors changes to GitHub only when a mirror exists.
 disable-model-invocation: true
 argument-hint: "[feature-slug, spec path, or GitHub issue number]"
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "1"
 ---
 
 # Design Spec Review

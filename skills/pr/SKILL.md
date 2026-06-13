@@ -3,6 +3,11 @@ name: pr
 description: This skill should be used when the user asks to "open a PR", "create a PR", "submit a PR", "push and open PR", or "send a pull request". Commits staged files, pushes the branch, and opens a PR referencing a GitHub issue.
 disable-model-invocation: true
 argument-hint: "[issue-number (optional)]"
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "2"
 ---
 
 # PR

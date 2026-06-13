@@ -3,6 +3,11 @@ name: commit
 description: This skill should be used when the user asks to "commit", "commit changes", "commit staged files", "conventional commit", or "commit this". Creates a conventional commit of staged files, using the GitHub issue for context.
 disable-model-invocation: true
 argument-hint: "[issue-number (optional)]"
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "1"
 ---
 
 # Commit

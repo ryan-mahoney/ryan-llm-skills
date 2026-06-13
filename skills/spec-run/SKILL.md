@@ -3,6 +3,11 @@ name: spec-run
 description: This skill should be used when the user asks to "execute the spec", "run the plan", "implement the spec", "implement the issue", "run all steps", or "run spec". Implements all steps from .specs/<slug>/spec.md, using a subagent per step when the harness supports subagents.
 disable-model-invocation: true
 argument-hint: "[feature-slug, spec path, or GitHub issue number]"
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "4"
 ---
 
 # Spec Run

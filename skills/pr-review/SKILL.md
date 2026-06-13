@@ -3,6 +3,11 @@ name: pr-review
 description: This skill should be used when the user asks to "review this PR", "review PR", "review the pull request", "code review PR", "give PR feedback", or "check this PR". Reviews a PR's code changes, submits review comments, and commits any fixes.
 disable-model-invocation: true
 argument-hint: "[pr-number (optional)]"
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "1"
 ---
 
 # PR Review

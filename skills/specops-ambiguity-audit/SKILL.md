@@ -1,6 +1,11 @@
 ---
 name: specops-ambiguity-audit
-description: Audit a SpecOps analysis specification for ambiguities that would force an implementer to make undocumented judgment calls, then resolve them by spawning parallel subagents to research the legacy source code and patching the spec with concrete answers. Use this skill whenever the user mentions auditing, hardening, reviewing, or finding gaps in an analysis spec, an analysis.md file, a spec document, a SpecOps spec, or any specification derived from legacy code. Also trigger when the user asks to find unclear statements, vague behaviors, judgment calls, underspecified behavior, or implementation gaps in a spec, even if they don't use the word "ambiguity" explicitly. Trigger before generating code from a spec, after a spec-driven implementation drifted from expected behavior, or as a pre-verification pass before marking a spec verified.
+description: "Audit a SpecOps analysis spec for ambiguities that would force an implementer to make undocumented judgment calls, then resolve them by spawning parallel subagents to research the legacy source and patching the spec with concrete answers. Use when the user mentions auditing, hardening, reviewing, or finding gaps in an analysis spec, an analysis.md file, or any spec derived from legacy code, or asks to find unclear statements, vague behaviors, judgment calls, or underspecified behavior — even without the word 'ambiguity'. Trigger before generating code from a spec, after a drifted implementation, or as a pre-verification pass before marking a spec verified."
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "1"
 ---
 
 # SpecOps Ambiguity Audit

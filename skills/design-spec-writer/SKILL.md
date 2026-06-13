@@ -3,6 +3,11 @@ name: design-spec-writer
 description: This skill should be used when the user asks to "write the design spec", "spec this design", "turn this design into a spec", "make the design implementable", or "write the implementation plan for this design". Creates a deterministic, design-focused implementation spec in .specs/<slug>/spec.md — the same contract spec-run consumes — from the proposal, critique, and any approved prototype.
 disable-model-invocation: true
 argument-hint: "[feature-slug or GitHub issue number (optional)]"
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "1"
 ---
 
 # Design Spec Writer

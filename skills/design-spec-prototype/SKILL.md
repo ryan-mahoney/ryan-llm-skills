@@ -3,6 +3,11 @@ name: design-spec-prototype
 description: This skill should be used when the user asks to "prototype this", "mock this up", "build a quick prototype", "show me a design", or "make a clickable mockup". Builds a fast, viewable design prototype from a proposal (or the conversation) and serves it on localhost so the user can open it and comment. Defaults to a single static HTML file using the Tailwind CDN.
 disable-model-invocation: true
 argument-hint: "[feature-slug, proposal path, or a stack override like 'in React']"
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "1"
 ---
 
 # Design Spec Prototype

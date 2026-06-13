@@ -3,6 +3,11 @@ name: pr-feedback
 description: This skill should be used when the user asks to "address PR feedback", "handle PR comments", "review PR feedback", "fix PR comments", or "respond to PR reviews". Retrieves PR review comments, addresses them one at a time, and leaves responses.
 disable-model-invocation: true
 argument-hint: "[pr-number (optional)]"
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "4"
 ---
 
 # PR Feedback

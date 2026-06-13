@@ -3,6 +3,11 @@ name: specops-orchestrate-spec-create
 description: This skill should be used when the user asks to generate specs for multiple analysis files by orchestrating sequential subagents that apply the specops-make-spec workflow per file.
 disable-model-invocation: true
 argument-hint: "[analysis-file-list-or-directory (optional)]"
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "1"
 ---
 
 # SpecOps Orchestrate Spec Create

@@ -1,6 +1,11 @@
 ---
 name: agents-update
 description: "Analyze a code repository's architecture and produce (or update) an AGENTS.md file that gives LLM coding agents a map of the project. Use this skill whenever the user says 'generate AGENTS.md', 'create AGENTS.md', 'update AGENTS.md', 'map this repo', 'document this project for agents', 'analyze the architecture', or any variation of 'help an LLM understand this codebase'. Also trigger when the user asks to onboard an AI agent onto a project, describe a repo's structure for Claude/Copilot/Cursor, or identify the architectural pattern of a codebase. If someone says 'what pattern does this project use' or 'where is everything in this repo', use this skill."
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "2"
 ---
 
 # Agent — Repository Architecture Mapper

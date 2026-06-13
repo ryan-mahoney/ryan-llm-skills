@@ -3,6 +3,11 @@ name: specops-refactor-plan
 description: This skill should be used when the user asks to create a refactor-focused SpecOps plan for a specific source folder and explicit refactor goal.
 disable-model-invocation: true
 argument-hint: "[target-folder] [refactor-goal]"
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "1"
 ---
 
 # SpecOps Refactor Plan

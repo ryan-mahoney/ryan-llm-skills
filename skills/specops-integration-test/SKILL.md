@@ -1,6 +1,11 @@
 ---
 name: specops-integration-test
-description: Generate integration tests for normative application runs in a SpecOps migration — pathways the system exercises in normal use that cross multiple modules and traverse real seams between them. The skill discovers significant pathways from both the analysis specs (intended integration points) and the migrated code (actual call graph), generates tests that reuse the project's existing unit-test mocks, and places them where the target platform stores integration tests. Use this skill whenever the user mentions integration tests, end-to-end tests, normative runs, cross-module test coverage, testing the migration as a system, generating tests that exercise multiple modules together, or verifying the migration's seams. Also trigger when the user asks "what should I integration test," "test the system end-to-end," or describes wanting tests beyond what unit tests cover. Run this after at least one round of code generation has produced runnable migrated code with passing unit tests, and re-run as the migration evolves to add tests for newly-completed pathways.
+description: "Generate integration tests for a SpecOps migration — normative runs that cross multiple modules and traverse real seams. Discovers pathways from the analysis specs and the migrated call graph, reuses the project's existing unit-test mocks, and places tests where the target platform keeps them. Use when the user mentions integration tests, end-to-end tests, normative runs, cross-module coverage, testing the migration as a system, or verifying its seams; or asks 'what should I integration test' or 'test the system end-to-end'. Run after a round of code generation yields runnable migrated code with passing unit tests, and re-run as the migration adds pathways."
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "1"
 ---
 
 # SpecOps Integration Test Generation

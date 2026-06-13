@@ -2,6 +2,11 @@
 name: design-align
 description: "Audit a React component tree against the FirstWho design system and recommend Tailwind CSS corrections. Use when asked to 'align to design system', 'design system audit', 'check design tokens', or 'fix styling to match design system'."
 argument-hint: "<path-to-top-level-component>"
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "1"
 ---
 
 # Design-Align — Design System Compliance Audit

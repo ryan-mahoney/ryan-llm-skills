@@ -1,6 +1,11 @@
 ---
 name: specops-spec-conformance
-description: Audit a SpecOps implementation spec against its source analysis spec to find requirements, policies, contracts, edge cases, error modes, invariants, defaults, side effects, or implementation steps that the implementation has dropped, weakened, contradicted, or silently changed — then patch the implementation spec to restore them. Use this skill whenever the user mentions auditing, comparing, conforming, reconciling, or checking an implementation spec against an analysis spec, finding gaps between two specs, ensuring an implementation spec preserves analysis behavior, or verifying spec derivation or traceability. Also trigger when the user describes "did the implementation spec lose anything from the analysis," "does the implementation match the analysis," "verify the implementation spec covers everything," or asks to confirm one spec is faithful to another. Run this before generating code from an implementation spec and after either spec is edited.
+description: "Audit a SpecOps implementation spec against its source analysis spec to find requirements, contracts, edge cases, error modes, invariants, defaults, side effects, or steps that the implementation dropped, weakened, contradicted, or silently changed — then patch the implementation spec to restore them. Use when the user mentions auditing, comparing, conforming, or reconciling an implementation spec against an analysis spec, finding gaps between two specs, or verifying spec derivation or traceability; or asks 'did the implementation spec lose anything', 'does it match the analysis', or to confirm one spec is faithful to another. Run before generating code from an implementation spec and after either spec is edited."
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "1"
 ---
 
 # SpecOps Spec Conformance Audit

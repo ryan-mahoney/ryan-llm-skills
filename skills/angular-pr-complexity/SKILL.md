@@ -2,6 +2,11 @@
 name: angular-pr-complexity
 description: "Analyze a git merge commit for PR complexity. Use when: 'analyze this PR', 'how complex is this commit', 'PR complexity for', 'score this merge'."
 argument-hint: "<commit-hash>"
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "1"
 ---
 
 # Angular PR Complexity Analysis

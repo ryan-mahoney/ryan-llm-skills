@@ -3,6 +3,11 @@ name: specops-orchestrate-analysis
 description: This skill should be used when the user asks to orchestrate SpecOps analysis from an initial plan output across all targets using sequential subagents.
 disable-model-invocation: true
 argument-hint: "[initial-plan-file-or-scope]"
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "2"
 ---
 
 # SpecOps Orchestrate Analysis

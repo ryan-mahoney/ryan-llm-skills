@@ -2,6 +2,11 @@
 name: identify-where
 description: "Identify where a plain-language feature or behavior lives in the current codebase and return the top-level file(s) to inspect first. Use this when the user says 'where is X implemented', 'find where this logic lives', 'which file handles Y', 'locate this feature', or 'what file should I read first for Z'. Also trigger when someone describes behavior in prose and wants likely owning files."
 argument-hint: "[plain-language functionality description] [optional search scope path]"
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "2"
 ---
 
 # Identify-Where

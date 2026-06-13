@@ -3,6 +3,11 @@ name: spec-remediate
 description: This skill should be used when the user asks to "remediate the audit findings", "fix the spec violations", "close the audit findings", "fix conformance violations", or "spec remediate". Reads a spec-audit report, drives one smart subagent per VIOLATION to converge the code back to the frozen spec, and re-audits until clean. Edits production code; never rewrites the spec.
 disable-model-invocation: true
 argument-hint: "[feature-slug, spec path, or GitHub issue number]"
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "2"
 ---
 
 # Spec Remediate

@@ -3,6 +3,11 @@ name: feature-list
 description: This skill should be used when the user asks for an inventory of features a codebase provides, grouped logically into capability areas. Produces an implementation-language-agnostic catalog of user-facing and operator-facing features, their entry points, and their supporting modules. Uses sub-agents to shard discovery across the repository so the top-level context stays small.
 disable-model-invocation: true
 argument-hint: "[target-scope (optional)]"
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "1"
 ---
 
 # Feature List

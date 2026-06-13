@@ -2,6 +2,11 @@
 name: architect-inspect
 description: "Inspect a top-level file for a component or feature, then analyze and describe the current architecture around it (boundaries, dependencies, data flow, and risks). Use this when the user says 'inspect this architecture', 'analyze this component architecture', 'explain how this feature is structured', or 'how does this module fit into the system'."
 argument-hint: "[top-level file path] [optional output markdown path]"
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "2"
 ---
 
 # Architect-Inspect

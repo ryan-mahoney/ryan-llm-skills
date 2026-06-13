@@ -2,6 +2,11 @@
 name: spec-branch-worktree
 description: "Create a named branch and git worktree for spec-driven work, then open it in a color-coded VSCode window. Use when: 'spec branch worktree', 'new spec worktree', 'worktree for', 'start a worktree', 'create worktree'."
 argument-hint: "[description, feature-slug, or issue/ticket reference]"
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "3"
 ---
 
 # Spec Branch Worktree

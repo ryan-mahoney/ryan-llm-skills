@@ -3,6 +3,11 @@ name: specops-initial-plan
 description: This skill should be used when the user asks to create an initial SpecOps plan or to extract a comprehensive implementation-language-agnostic specification from an existing codebase, module, subsystem, service, or workflow.
 disable-model-invocation: true
 argument-hint: "[target-scope (optional)]"
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "1"
 ---
 
 # SpecOps Initial Plan

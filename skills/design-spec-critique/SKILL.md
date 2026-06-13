@@ -1,6 +1,11 @@
 ---
 name: design-spec-critique
 description: "Critique a design proposal or prototype by selecting two real design practitioners with deep, relevant expertise and evaluating the work through their known perspectives. Use when the user says 'critique this design', 'design review', 'review this prototype', 'poke holes in this UI', 'what's wrong with this design', 'is this good design', or 'what am I missing', especially after design-spec-architect writes proposal.md or design-spec-prototype builds a prototype."
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "1"
 ---
 
 # Design Spec Critique — Practitioner-Perspective Design Review

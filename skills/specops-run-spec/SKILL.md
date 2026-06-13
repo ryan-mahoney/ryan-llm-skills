@@ -3,6 +3,11 @@ name: specops-run-spec
 description: This skill should be used when the user asks to "run the spec", "implement the spec", or "execute the spec". Implements every step in a SpecOps implementation spec by delegating each step (or logical group of adjacent steps) to a sequential subagent, conventional-committing each one independently, and — when `roborev` is on the path — running `roborev check` on every commit and `roborev fix` (with spec context, so the fix cannot silently drift the implementation away from the spec) on any commit that fails.
 disable-model-invocation: true
 argument-hint: "[spec-file]"
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "1"
 ---
 
 # SpecOps Run Spec

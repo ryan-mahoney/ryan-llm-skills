@@ -2,6 +2,11 @@
 name: controller-refactor-plan
 description: "Analyze one controller file, determine which handlers are no longer wired from routes, and assess whether controller responsibilities have grown beyond validation/response orchestration. Produce analysis only (no implementation plan). Use this when the user says 'analyze this controller', 'is this controller still used', 'find dead controller handlers', or 'does this controller do too much'."
 argument-hint: "[path to controller file] [optional output markdown path]"
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "1"
 ---
 
 # Controller Analysis

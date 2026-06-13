@@ -3,6 +3,11 @@ name: specops-make-spec
 description: This skill should be used when the user asks to convert a SpecOps analysis into a deterministic implementation specification for a specific project, stack, and engineering standards.
 disable-model-invocation: true
 argument-hint: "[analysis-scope-or-file (optional)]"
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "1"
 ---
 
 # SpecOps Make Spec

@@ -3,6 +3,11 @@ name: specops-analysis
 description: This skill should be used when the user asks for a SpecOps analysis of existing systems, modules, services, or workflows to produce a comprehensive implementation-language-agnostic specification, including explicit and implicit business rules, decision logic, defaults, thresholds, workflow constraints, and user-visible policies enforced by the system.
 disable-model-invocation: true
 argument-hint: "[target-scope (optional)]"
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "2"
 ---
 
 # SpecOps Analysis

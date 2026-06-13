@@ -3,6 +3,11 @@ name: spec-audit
 description: This skill should be used when the user asks to "audit the implementation against the spec", "run the spec audit", "check spec conformance", "verify the branch against the criteria", or "spec audit". Executes the frozen conformance checklist from .specs/<slug>/criteria.md against the implementation diff and reports PASS/VIOLATION/UNVERIFIABLE per criterion with file:line evidence. Report-only; never edits production code.
 disable-model-invocation: true
 argument-hint: "[feature-slug, spec path, or GitHub issue number]"
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "2"
 ---
 
 # Spec Audit

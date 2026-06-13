@@ -1,6 +1,11 @@
 ---
 name: specops-implementation-drift
-description: Audit migrated code by re-running the SpecOps analysis on the new target folder, comparing it against the original analysis spec, and generating corrective specs for each behavioral divergence so the next code-generation iteration converges toward the original behavior. Use this skill whenever the user mentions checking whether migrated code preserves original behavior, comparing migrated code against the original analysis, finding drift between legacy and migrated implementations, post-implementation verification, generating correction specs from a code analysis diff, closing the loop on a code-gen iteration, or reanalyzing a migrated module. Also trigger when the user describes "does the new code do what the old code does," "find where the migration drifted," "diff the migrated implementation against the spec," or "generate corrective specs based on a code diff." Run this after any round of code generation in a SpecOps migration, then iterate until corrections converge.
+description: "Audit migrated code by re-running the SpecOps analysis on the new target folder, comparing it against the original analysis spec, and generating corrective specs for each behavioral divergence so the next code-generation pass converges on the original behavior. Use when the user mentions checking whether migrated code preserves original behavior, finding drift between legacy and migrated implementations, post-implementation verification, or reanalyzing a migrated module; or asks 'does the new code do what the old code does', 'find where the migration drifted', or to diff the migrated code against the spec. Run after any round of code generation, then iterate until corrections converge."
+license: MIT
+metadata:
+  author: Ryan Mahoney
+  homepage: ryan-mahoney.net
+  version: "1"
 ---
 
 # SpecOps Implementation Drift Audit
