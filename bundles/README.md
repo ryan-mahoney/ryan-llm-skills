@@ -7,9 +7,14 @@ archives under `dist/skill-bundles/`. Generated artifacts are not committed.
 
 ## Bundles
 
+The build currently emits two installable bundles, not three. `spec-skills`
+contains two workflow front-halves because the design-spec skills depend on the
+same `.specs/<feature-slug>/` contract and engineering back-half as the
+spec-driven workflow.
+
 ### spec-skills
 
-The spec-driven development workflow:
+The spec-driven development workflow plus the design-spec front-half:
 
 - `spec-architect-initial`
 - `spec-architect-critics`
@@ -22,6 +27,11 @@ The spec-driven development workflow:
 - `spec-run`
 - `spec-audit`
 - `spec-remediate`
+- `design-spec-architect`
+- `design-spec-prototype`
+- `design-spec-critique`
+- `design-spec-writer`
+- `design-spec-review`
 
 Includes the Augment CLI subagent adapter:
 
@@ -38,6 +48,13 @@ The generated `spec-skills` README includes a workflow overview covering:
 7. Execute with `spec-run`.
 8. Run `spec-audit` to verify the implementation against the compiled checklist.
 9. Run `spec-remediate` to close any audit findings, then re-audit until clean.
+
+It also includes the design-spec front-half:
+
+1. Run `design-spec-architect` to propose a design direction.
+2. Optionally run `design-spec-prototype` and `design-spec-critique`.
+3. Run `design-spec-writer` and `design-spec-review`.
+4. Hand off to the same `spec-criteria` / `spec-run` / `spec-audit` back-half.
 
 ### specops-skills
 

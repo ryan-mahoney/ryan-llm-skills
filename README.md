@@ -1,12 +1,12 @@
 # LLM Skills & Rules
 
-Shared configuration for LLM coding agents (Claude Code, Codex, Augment, Cline, OpenCode). The centerpiece is two installable skill distributions: **spec-skills** and **specops-skills**. The spec-skills bundle offers two front-halves into one pipeline, spec-driven and design-driven, that share the same implementation back-half. Alongside the bundles sit standalone utility skills, design rules, and per-agent instruction files.
+Shared configuration for LLM coding agents (Claude Code, Codex, Augment, Cline, OpenCode). The centerpiece is two installable skill bundles with three workflow families: **spec-skills** contains both the spec-driven development workflow and the design-driven front-half, while **specops-skills** contains the legacy migration workflow. Design-spec is not a separate bundle because it depends on the same `.specs/<feature-slug>/` contract, conformance checklist, implementation back-half, rules, and Augment adapter as the spec workflow. Alongside the bundles sit standalone utility skills, design rules, and per-agent instruction files.
 
 Skills are slash commands defined in `skills/<name>/SKILL.md` using the Agent Skills format.
 
-## Distributions
+## Bundles And Workflows
 
-Two portable, installable bundles. Build both with `scripts/build-skill-bundles.sh`; each archive contains a `skills/` directory plus `bundle.json`, `README.md`, and `install.sh`. The `spec-skills` archive also includes the shared `rules/` guides used by spec and design-spec workflows.
+Two portable, installable bundles produce three documented workflows. Build the bundles with `scripts/build-skill-bundles.sh`; each archive contains a `skills/` directory plus `bundle.json`, `README.md`, and `install.sh`. The `spec-skills` archive also includes the shared `rules/` guides used by both spec and design-spec workflows.
 
 ### spec-skills: spec-driven development
 
@@ -93,6 +93,8 @@ This produces, under `dist/skill-bundles/` (git-ignored):
 
 - `spec-skills-<version>.tar.gz` / `.zip`
 - `specops-skills-<version>.tar.gz` / `.zip`
+
+There is no separate `design-spec-skills` archive. The design-spec skills ship inside `spec-skills` because they write the same `spec.md` contract and then hand off to `spec-criteria`, `spec-run`, `spec-audit`, and `spec-remediate`.
 
 Extract an archive and run `./install.sh` (see `./install.sh --help` for harness-specific targets). Set `VERSION` to control the archive name and bundle metadata:
 
