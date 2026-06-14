@@ -7,7 +7,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "5"
+  version: "6"
 ---
 
 # Spec Run
@@ -15,6 +15,12 @@ metadata:
 You are an orchestrator. Implement every step in a reviewed implementation spec. Delegate each spec step to a dedicated subagent when the current harness supports subagents. Do not write production code directly unless subagent execution is unavailable.
 
 Use surgical, low-risk changes. Do not add complexity, unnecessary conditions, or unnecessary backward compatibility.
+
+## Non-Interactive Operation
+
+This skill runs to completion without user interaction. Do not pause to ask clarifying questions, request confirmation, or wait for input mid-run. When something is unclear or underspecified, make a reasonable, well-grounded decision from the available context — the conversation, the repository, existing conventions, and the spec's own intent — then proceed. Summarize every such judgement call and its rationale in the final report so the user can review what was decided and why.
+
+Stop only when a required input is genuinely missing and cannot be inferred (for example, no spec to work from). In that case, report what is missing and halt — do not ask for it interactively.
 
 ## Orchestration Contract
 

@@ -7,7 +7,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "2"
+  version: "3"
 ---
 
 # Spec Criteria
@@ -15,6 +15,12 @@ metadata:
 Compile a reviewed, frozen spec into a conformance checklist that `spec-audit` can execute after implementation. Acceptance criteria are already verified by tests; this skill captures everything tests structurally cannot see: ownership directives ("validation stays store-owned"), negative constraints ("no parser definitions in appServer.ts"), and licensed deviations from precedent ("mirror X, except these deltas"). A behaviorally-silent violation of these passes every test — the checklist is the only artifact that can catch it.
 
 Run this after `spec-review` passes and before `spec-run`. The same checklist may be injected into implementer prompts as guardrails; for negative constraints, teaching to the test is the point.
+
+## Non-Interactive Operation
+
+This skill runs to completion without user interaction. Do not pause to ask clarifying questions, request confirmation, or wait for input mid-run. When something is unclear or underspecified, make a reasonable, well-grounded decision from the available context — the spec artifacts, the precedent code the spec cites, and the spec's own intent — then proceed. Summarize every such judgement call and its rationale in the final report so the user can review what was decided and why.
+
+Stop only when a required input is genuinely missing and cannot be inferred (for example, no spec to compile from). In that case, report what is missing and halt — do not ask for it interactively.
 
 ## Resolve the Spec
 

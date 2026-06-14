@@ -7,12 +7,18 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "3"
+  version: "4"
 ---
 
 # Spec Write
 
 Create a deterministic implementation spec from the current proposal and persist it to the repository-local spec folder. The local file is canonical; issue trackers are optional mirrors.
+
+## Non-Interactive Operation
+
+This skill runs to completion without user interaction. Do not pause to ask clarifying questions, request confirmation, or wait for input mid-run. When something is unclear or underspecified, make a reasonable, well-grounded decision from the available context — the conversation, the repository, existing conventions, and the spec's own intent — then proceed. Summarize every such judgement call and its rationale in the final report so the user can review what was decided and why.
+
+Stop only when a required input is genuinely missing and cannot be inferred (for example, no proposal or analysis to spec from). In that case, report what is missing and halt — do not ask for it interactively.
 
 ## Output Contract
 

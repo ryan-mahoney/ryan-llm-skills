@@ -7,12 +7,18 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "3"
+  version: "4"
 ---
 
 # Spec Review
 
 Review a spec for viability, ambiguity, traceability, and implementation readiness. The repository-local spec file is canonical.
+
+## Non-Interactive Operation
+
+This skill runs to completion without user interaction. Do not pause to ask clarifying questions, request confirmation, or wait for input mid-run. When something is unclear or underspecified, make a reasonable, well-grounded decision from the available context — the conversation, the repository, existing conventions, and the spec's own intent — then proceed. When an ambiguity is genuinely indeterminate, resolve it as an open question in the spec's Notes rather than asking the user. Summarize every such judgement call and its rationale in the final report so the user can review what was decided and why.
+
+Stop only when a required input is genuinely missing and cannot be inferred (for example, no spec to review). In that case, report what is missing and halt — do not ask for it interactively.
 
 ## Output Contract
 

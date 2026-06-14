@@ -7,7 +7,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "2"
+  version: "3"
 ---
 
 # Spec Audit
@@ -15,6 +15,12 @@ metadata:
 Execute a compiled conformance checklist against an implementation. This skill answers "is it the thing the spec described", not "is it correct" — correctness review (roborev, generic code review) is a separate, orthogonal gate. A criterion can be violated while every test passes; most criteria exist precisely because tests cannot see them. "All tests pass" is never exculpatory evidence here.
 
 Run this at the end of a branch, after correctness review. Re-running after fixes is cheap because the criteria are frozen.
+
+## Non-Interactive Operation
+
+This skill runs to completion without user interaction. Do not pause to ask clarifying questions, request confirmation, or wait for input mid-run. When something is unclear or underspecified, make a reasonable, well-grounded decision from the available context — the criteria checklist, the diff, the spec's intent, and the repository — then proceed. Summarize every such judgement call and its rationale in the final report so the user can review what was decided and why.
+
+Stop only when a required input is genuinely missing and cannot be inferred (for example, no compiled checklist to execute). In that case, report what is missing and which prerequisite skill must run first, then halt — do not ask for it interactively.
 
 ## Resolve the Spec and Criteria
 

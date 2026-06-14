@@ -7,12 +7,20 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "1"
+  version: "2"
 ---
 
 # Design Spec Prototype
 
 Build a fast, throwaway-OK prototype the user can open in a browser and react to, and serve it on localhost. The prototype is a **façade** — it shows the design, not a working system. An approved prototype becomes the visual source of truth that `design-spec-writer` later translates into a real spec.
+
+## Non-Interactive Operation
+
+This skill runs to completion without user interaction. Do not pause to ask clarifying questions, request confirmation, or wait for input before building. When a design detail is unclear or underspecified, make a reasonable, well-grounded decision from the available context — the proposal, the governing rule, the repo's design system, and the conversation — build to it, then proceed. Summarize every such judgement call and its rationale in the final output so the user can review what was decided and why.
+
+Building and serving the prototype is autonomous; the **Iterate** step below is a normal turn-by-turn conversation — apply feedback when the user gives it, but never block the initial build waiting for it.
+
+Stop only when there is genuinely nothing to prototype — no proposal and no design direction in the conversation. In that case, report that and halt — do not ask what to prototype interactively.
 
 ## Default Build: Static HTML + Tailwind CDN
 
@@ -30,7 +38,7 @@ This needs no toolchain, no install, and serves instantly. Put custom tokens in 
 
 1. If `$ARGUMENTS` names a `.specs/<slug>/` folder or a `proposal.md` path, read that proposal.
 2. Otherwise use the most recently modified `.specs/*/proposal.md` that matches the feature under discussion.
-3. If there is no proposal, build from the design direction described in the conversation. If there is neither, stop and ask what to prototype.
+3. If there is no proposal, build from the design direction described in the conversation. If there is neither, report that there is nothing to prototype and stop.
 
 From the proposal, carry forward: the **Context Verdict** (posture + governing rules), the **Design Direction**, the **States** to render, and the **Design System Usage** (tokens/components to mirror).
 

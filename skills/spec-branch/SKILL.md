@@ -7,12 +7,18 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "1"
+  version: "2"
 ---
 
 # Spec Branch
 
 Create a new local branch related to a spec-driven task.
+
+## Non-Interactive Operation
+
+This skill runs to completion without user interaction. Do not pause to ask clarifying questions, request confirmation, or wait for input mid-run. When the branch topic is unclear or underspecified, infer it from the available context — the spec folder under discussion, the most recently modified `.specs/*/` folder, or the work described in the conversation — then proceed. Summarize every such judgement call and its rationale in the final report so the user can review what was decided and why.
+
+Stop only when no branch topic can be inferred from any source. In that case, report that there is nothing to branch from and halt — do not ask for a description interactively.
 
 ## Inputs
 
@@ -23,14 +29,14 @@ Use `$ARGUMENTS` as the branch topic. It may be:
 - A ticket reference plus description, such as `PROJ-123 add invoice retry`.
 - A GitHub issue number, only when the current repo is hosted on GitHub.
 
-If `$ARGUMENTS` is empty, ask the user for a short description. Do not create a branch from an empty or bare identifier.
+If `$ARGUMENTS` is empty, infer the topic from context — the spec folder under discussion, the most recently modified `.specs/*/` folder, or the work described in the conversation. Only if no topic can be inferred from any source, report that there is nothing to branch from and stop. Do not create a branch from an empty or bare identifier.
 
 ## Resolve the Topic
 
 1. Confirm the current directory is a git repository: `git rev-parse --git-dir`.
 2. If `$ARGUMENTS` names `.specs/<feature-slug>/`, read `spec.md` or `proposal.md` and derive the branch topic from the feature slug and title.
 3. If `$ARGUMENTS` is only a number and the current repo has a GitHub remote, try `gh issue view <number> --json title --jq .title`.
-4. If the GitHub lookup fails, or the repo is not GitHub-hosted, ask for a descriptive title. A bare number is not a valid branch name.
+4. If the GitHub lookup fails, or the repo is not GitHub-hosted, derive a descriptive title from the conversation or the referenced spec/ticket. A bare number is not a valid branch name; if no descriptive context exists, report that and stop.
 
 ## Derive the Branch Name
 

@@ -7,12 +7,18 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "1"
+  version: "2"
 ---
 
 # Design Spec Review
 
 Review a design-focused implementation spec for viability, ambiguity, traceability, and readiness — grounded in the actual repository and its design system. The local `spec.md` is canonical. This is the design counterpart to `spec-review`; it enforces the same 8-section contract so the spec stays consumable by `spec-run`, and adds design-specific ambiguity checks.
+
+## Non-Interactive Operation
+
+This skill runs to completion without user interaction. Do not pause to ask clarifying questions, request confirmation, or wait for input mid-run. When something is unclear or underspecified, make a reasonable, well-grounded decision from the available context — the repository, the design system, existing conventions, and the spec's own intent — then proceed. When a design ambiguity is genuinely indeterminate, resolve it as an open question in the spec's Notes rather than asking the user. Summarize every such judgement call and its rationale in the final report so the user can review what was decided and why.
+
+Stop only when a required input is genuinely missing and cannot be inferred (for example, no spec to review). In that case, report what is missing and halt — do not ask for it interactively.
 
 ## Output Contract
 

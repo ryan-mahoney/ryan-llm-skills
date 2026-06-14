@@ -6,12 +6,18 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "4"
+  version: "5"
 ---
 
 # Spec Branch Worktree
 
 Create a git worktree with a structured branch name derived from a spec folder, ticket reference, or loose description. Configure the environment, color-code the VSCode window, copy the relevant `.specs/<feature-slug>/` folder, and open it.
+
+## Non-Interactive Operation
+
+This skill runs to completion without user interaction. Do not pause to ask clarifying questions, request confirmation, or wait for input mid-run. When the work description is unclear or underspecified, infer it from the available context — the spec folder under discussion, the most recently modified `.specs/*/` folder, or the work described in the conversation — then proceed. Summarize every such judgement call and its rationale in the final report so the user can review what was decided and why.
+
+Stop only when no work description can be inferred from any source. In that case, report that there is nothing to create a worktree from and halt — do not ask for a description interactively.
 
 ## Arguments
 
@@ -28,7 +34,7 @@ Examples:
 
 ## Before Starting
 
-1. Confirm `$ARGUMENTS` is not empty. If empty, ask the user to describe the work.
+1. Confirm `$ARGUMENTS` is not empty. If empty, infer the work from context — the spec folder under discussion, the most recently modified `.specs/*/` folder, or the work described in the conversation. Only if nothing can be inferred, report that there is nothing to create a worktree from and stop.
 2. Confirm the current directory is a git repository: `git rev-parse --git-dir`.
 3. Confirm `code` CLI is available: `which code`.
 
@@ -40,7 +46,7 @@ If `$ARGUMENTS` names an existing `.specs/<feature-slug>/` folder, use `<feature
 
 If `$ARGUMENTS` is only a number, treat it as a GitHub issue number only when the current repo has a GitHub remote and `gh issue view <number> --json title --jq .title` succeeds. Combine the number and title as the working description.
 
-If the current repo is not hosted on GitHub, or the GitHub lookup fails, ask for a descriptive title. A bare number is not a valid worktree branch name.
+If the current repo is not hosted on GitHub, or the GitHub lookup fails, derive a descriptive title from the conversation or the referenced spec/ticket. A bare number is not a valid worktree branch name; if no descriptive context exists, report that and stop.
 
 For non-GitHub tickets, use the ticket reference when the user provided enough description, such as `PROJ-123 add invoice retry`.
 

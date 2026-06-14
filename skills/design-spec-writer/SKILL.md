@@ -7,7 +7,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "1"
+  version: "2"
 ---
 
 # Design Spec Writer
@@ -15,6 +15,12 @@ metadata:
 Turn an approved design direction into a deterministic implementation spec that `spec-run` can execute without modification. The output is `.specs/<feature-slug>/spec.md` in the **exact same 8-section contract** the engineering `spec-write` produces — so `spec-criteria`, `spec-branch`, `spec-run`, `spec-audit`, and `spec-remediate` all work unchanged. The difference is the content: design tokens, components, states, interaction, and accessibility instead of services and data layers.
 
 The local `spec.md` is canonical; issue trackers are optional mirrors.
+
+## Non-Interactive Operation
+
+This skill runs to completion without user interaction. Do not pause to ask clarifying questions, request confirmation, or wait for input mid-run. When something is unclear or underspecified, make a reasonable, well-grounded decision from the available context — the proposal, critique, any approved prototype, the repo's design system, and the spec's own intent — then proceed. Summarize every such judgement call and its rationale in the final report so the user can review what was decided and why.
+
+Stop only when a required input is genuinely missing and cannot be inferred (for example, no proposal, prototype, or design direction to spec from). In that case, report what is missing and halt — do not ask for it interactively.
 
 ## Output Contract
 

@@ -7,7 +7,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "2"
+  version: "3"
 ---
 
 # Spec Remediate
@@ -15,6 +15,12 @@ metadata:
 Close the conformance loop. `spec-audit` reports VIOLATIONs but never edits code; this skill consumes that report and fixes the findings, then re-audits until the report is clean or a cap is reached.
 
 Every fix converges the code **back to the frozen spec** — it never re-designs, re-scopes, or "improves." The audit finding is the brief and the spec is the target; remediation is a constrained search toward an existing answer, not a design task. The report/remediate split mirrors the compile/audit firewall: the skill that judges does not patch, and the skill that patches does not re-judge its own work — `spec-audit` re-runs as the independent oracle.
+
+## Non-Interactive Operation
+
+This skill runs to completion without user interaction. Do not pause to ask clarifying questions, request confirmation, or wait for input mid-run. When something is unclear or underspecified, make a reasonable, well-grounded decision from the available context — the audit report, the criteria, the frozen spec, and the repository — then proceed. Summarize every such judgement call and its rationale in the final report so the user can review what was decided and why.
+
+Stop only when a required input is genuinely missing and cannot be inferred (for example, no audit report to remediate), or when the convergence cap is reached. In that case, report the state and halt — do not ask for direction interactively.
 
 ## Resolve the Spec and Audit Report
 
