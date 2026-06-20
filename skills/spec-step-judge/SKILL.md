@@ -1,11 +1,11 @@
 ---
 name: spec-step-judge
-description: This skill should be used when the user or an external task-runner asks to judge, evaluate, review, or "close out" a single already-implemented spec step — applying scoped corrections only if the step fell short, then adapting not-yet-run steps to what that step learned. It is the judging half of an externally-orchestrated, isolated per-step pipeline that pairs with spec-step-run (no spec-run orchestrator). Reads the step's learning file, evaluates the committed change against its Covers criteria and guardrails, fixes only that step when it failed, and edits future step text in spec.md — with an Adaptations log — when learnings warrant. Trigger on "judge this step", "evaluate the step implementation", "review the implemented step", "apply step learnings", "adapt future steps", or "spec step judge".
+description: This skill should be used when the user or an external task-runner asks to judge, evaluate, review, or "close out" a single already-implemented spec step — applying scoped corrections only if the step fell short, then adapting not-yet-run steps to what that step learned. It is the judging half of an externally-orchestrated, isolated per-step pipeline that pairs with spec-step-run (no spec-run orchestrator). Given only a step marker (spec path plus step), it is self-sufficient: it resolves the step's learning file, subspec, criteria.md, invariants.md, blockers.md, and applicable rules deterministically from the spec directory and needs no other context from the caller. Reads the step's learning file, evaluates the committed change against its Covers criteria and guardrails, fixes only that step when it failed, and edits future step text in spec.md — with an Adaptations log — when learnings warrant. Trigger on "judge this step", "evaluate the step implementation", "review the implemented step", "apply step learnings", "adapt future steps", or "spec step judge".
 mode: coding
 scope: document
 capability: orchestrator
 disable-model-invocation: true
-argument-hint: "spec=<path/to/spec.md> step=<number-or-exact-step> [learning=<path>] [subspec=<path>] [criteria=<path>] [invariants=<path>] [rules=<path,...>] [blockers=<path>]"
+argument-hint: "spec=<path/to/spec.md> step=<number-or-exact-step>"
 license: MIT
 metadata:
   author: Ryan Mahoney
@@ -52,28 +52,30 @@ inferred; report what is missing and halt.
 
 ## Required Inputs
 
-Stop before judging if either required input is missing or unreadable:
+This skill takes one thing: a **step marker**. Everything else is derived. Stop
+before judging if either part of the marker is missing or unreadable:
 
 1. `spec`: path to the local `spec.md`.
 2. `step`: the exact step number, stable step id, or full step text that was just
    implemented.
 
-Use any provided `learning`, `subspec`, `criteria`, `invariants`, `rules`, or
-`blockers` paths as explicit inputs. If a supplied explicit path is missing or
-unreadable, stop and report the bad path.
+Do not expect the caller to pass anything else. A dumb sequential orchestrator
+invokes this skill once per step with only the marker, carrying no state between
+runs. Resolve every related artifact yourself from the spec directory
+(`<spec-dir>` = the folder containing `spec.md`):
 
-Default paths are allowed only after the spec path is known:
-
-- `learning`: `<spec-dir>/learnings/<step-number>-learning.md`. This is the file
+- `learning`:   `<spec-dir>/learnings/<step-number>-learning.md` — the file
   `spec-step-run` emitted for this step. If it is absent, evaluate from the
   committed diff alone and flag the missing learning in the report — do not block.
-- `subspec`: `<spec-dir>/subspecs/<step-number>-spec.md`, when the step is numeric.
-- `criteria`: sibling `criteria.md`, if present.
-- `invariants`: sibling `invariants.md`, if present.
-- `blockers`: sibling `blockers.md`.
+- `subspec`:    `<spec-dir>/subspecs/<step-number>-spec.md`
+- `criteria`:   `<spec-dir>/criteria.md`
+- `invariants`: `<spec-dir>/invariants.md`
+- `blockers`:   `<spec-dir>/blockers.md`
+- rules: the local paths listed in the spec's Applicable Rules section
 
-Missing default related files are non-blocking, except the learning file is read
-when present because it drives adaptation.
+Treat a missing sibling artifact as non-blocking absence, not an error. Never block
+waiting for a path the caller did not give you. The learning file is the one input
+worth reading whenever it exists, because it drives adaptation.
 
 ## Resolve The Step And Its Change
 
@@ -164,8 +166,8 @@ Output:
   future steps. Keep changes minimal, explicit, and fail-fast. Re-run the targeted
   verification as the oracle, then commit on its own:
   `fix(<scope>): <step-id> <short description>`.
-- `blocked` (spec defect) → do not bend the code to a wrong step. Record it in the
-  blockers path and stop both the correction and the adaptation tracks: a step the
+- `blocked` (spec defect) → do not bend the code to a wrong step. Record it in
+  `<spec-dir>/blockers.md` and stop both the correction and the adaptation tracks: a step the
   judge could not validate is not a safe basis for adapting later steps. Report and
   halt.
 

@@ -1,11 +1,11 @@
 ---
 name: spec-step-run
-description: This skill should be used when the user asks to implement, run, execute, or complete exactly one step from a reviewed project-local spec and provides the spec path plus the target step number/text, optionally with explicit criteria.md, invariants.md, subspec, blocker, or related rule paths. Performs the same single-step planning, implementation, verification, and commit workflow as spec-run, but never runs every step or the whole acceptance gate. Built for externally-orchestrated, isolated per-step runs: it always emits a per-step learning file at learnings/<step>-learning.md that spec-step-judge and later steps consume.
+description: This skill should be used when the user or an external task-runner asks to implement, run, execute, or complete exactly one step from a reviewed project-local spec, given only a step marker: the spec path plus the target step number/text. Self-sufficient by design — it resolves every related artifact (criteria.md, invariants.md, prior-step learnings, subspec, blockers.md, applicable rules) deterministically from the spec directory and needs no other context from the caller. Performs the same single-step planning, implementation, verification, and commit workflow as spec-run, but never runs every step or the whole acceptance gate. Built for externally-orchestrated, isolated per-step runs: it consumes earlier steps' learning files and always emits its own at learnings/<step>-learning.md that spec-step-judge and later steps consume.
 mode: coding
 scope: document
 capability: orchestrator
 disable-model-invocation: true
-argument-hint: "spec=<path/to/spec.md> step=<number-or-exact-step> [criteria=<path>] [invariants=<path>] [rules=<path,...>] [subspec=<path>]"
+argument-hint: "spec=<path/to/spec.md> step=<number-or-exact-step>"
 license: MIT
 metadata:
   author: Ryan Mahoney
@@ -16,7 +16,7 @@ metadata:
 # Spec Step Run
 
 Implement exactly one step from a reviewed local spec. This is the one-step
-variant of `spec-run`: read the provided spec and related files, create or update
+variant of `spec-run`: read the spec and its related files, create or update
 the step subspec, implement only that step, verify targeted behavior, emit a
 per-step learning file, and commit only that step's changes.
 
@@ -26,29 +26,34 @@ acceptance gate. Do not resolve a GitHub mirror or guess the latest spec.
 This skill is the implementation half of an externally-orchestrated per-step
 pipeline: `spec-write` produces the spec and an external task-runner dispatches
 each step to this skill in isolation, with no `spec-run` orchestrator carrying
-state between steps. The learning file this skill emits is therefore the durable
-channel by which `spec-step-judge` and later steps see what this step discovered.
+state between steps. Because nothing else carries that state, this skill is
+self-contained: it reconstructs what earlier steps did by reading their learning
+files, and the learning file it emits is the durable channel by which
+`spec-step-judge` and later steps see what this step discovered.
 
 ## Required Inputs
 
-Stop before coding if either required input is missing or unreadable:
+This skill takes one thing: a **step marker**. Everything else is derived. Stop
+before coding if either part of the marker is missing or unreadable:
 
 1. `spec`: path to the local `spec.md`.
 2. `step`: the exact step number, stable step id, or full step text to implement.
 
-Use any provided `criteria`, `invariants`, `rules`, `subspec`, or `blockers` paths
-as explicit inputs. If a supplied related path is missing or unreadable, stop and
-report the bad path.
+Do not expect the caller to pass anything else. A dumb sequential orchestrator
+invokes this skill once per step with only the marker, carrying no state between
+runs. Resolve every related artifact yourself from the spec directory
+(`<spec-dir>` = the folder containing `spec.md`):
 
-Default paths are allowed only after the spec path is known:
+- `criteria`:   `<spec-dir>/criteria.md`
+- `invariants`: `<spec-dir>/invariants.md`
+- `subspec`:    `<spec-dir>/subspecs/<step-number>-spec.md`
+- `blockers`:   `<spec-dir>/blockers.md`
+- prior learnings: `<spec-dir>/learnings/<k>-learning.md` for every earlier step `k`
+- rules: the local paths listed in the spec's Applicable Rules section
 
-- `criteria`: sibling `criteria.md`, if present.
-- `invariants`: sibling `invariants.md`, if present.
-- `subspec`: `<spec-dir>/subspecs/<step-number>-spec.md`, when the step has a
-  numeric identifier.
-- `blockers`: sibling `blockers.md`.
-
-Missing default related files are non-blocking.
+Treat a missing sibling artifact as non-blocking absence, not an error: a fresh
+spec has no learnings yet, and not every spec has criteria. Never block waiting for
+a path the caller did not give you.
 
 ## Resolve The Step
 
@@ -65,12 +70,41 @@ Before coding, confirm the resolved step:
 If multiple steps match, stop and ask the caller to provide a unique step
 identifier. If no step matches, stop and report the missing step.
 
+## Load Prior Step Context
+
+A dumb orchestrator carries no memory between steps, so this skill must reconstruct
+what earlier steps did before touching code. Read, in order:
+
+1. **Adaptations.** Any `## Adaptations` section in `spec.md`. `spec-step-judge`
+   edits future step text and logs it here. The step text you implement is the
+   *current* text in `spec.md`, already incorporating any adaptation — honor it over
+   any earlier version.
+2. **Prior learnings.** Every `<spec-dir>/learnings/<k>-learning.md` for each step
+   `k` ordered before this one. Distill their *Findings for later steps* and
+   *Discrepancies & risks* into a short prior-step context block: renamed or new
+   symbols, changed signatures, relocated code, steps rendered unnecessary, and
+   newly required prerequisites. These describe the code as it actually is now and
+   override the spec's original assumptions where they conflict.
+3. **Blockers.** `<spec-dir>/blockers.md`. If an unresolved blocker names this step,
+   or names a prerequisite this step needs, stop now: emit a `blocked` step learning
+   (see Emit Step Learning) and report. Do not implement on top of a known blocker.
+
+Two early exits before any code:
+
+- **Already done.** If `<spec-dir>/learnings/<step-number>-learning.md` already
+  exists with a terminal outcome and the step's targets are already satisfied in the
+  working tree, report already-complete and stop. Do not produce a duplicate commit.
+- **Rendered unnecessary.** If prior findings say this step is no longer needed,
+  confirm against the current code. If it is genuinely satisfied, write an
+  `as-specified` learning recording why, and skip implementation rather than forcing
+  an empty change.
+
+Carry the distilled prior-step context into the subspec and the implementer prompt.
+
 ## Load Guardrails
 
-Read explicit `criteria` and `invariants` paths when supplied. Otherwise read the
-default sibling files only if they exist.
-
-Extract a short guardrail list for this step:
+Read the sibling `criteria.md` and `invariants.md` when they exist. Extract a short
+guardrail list for this step:
 
 - From `criteria.md`, use only prose `Source:` lines. Never copy `Check:` commands,
   grep patterns, or expected hit sets into the implementation prompt.
@@ -83,10 +117,8 @@ If no guardrails apply, omit the guardrail block entirely.
 
 ## Load Applicable Rules
 
-Use explicit `rules` paths from the invocation when provided. Also inspect the
-spec's Applicable Rules section and resolve listed local paths. This is
-best-effort: missing spec-listed rules are skipped silently, but missing explicit
-rules are blocking.
+Resolve the local rule paths listed in the spec's Applicable Rules section. This is
+best-effort: silently skip any listed rule file that is missing.
 
 Pass rule paths through to the implementer to read directly. Do not inline rule
 contents into the prompt.
@@ -96,22 +128,22 @@ contents into the prompt.
 Before coding, produce a minimal, code-grounded subspec for this one step,
 following the `spec-subspec-write` contract.
 
-Write it to the explicit `subspec` path when supplied; otherwise use:
+Write it to:
 
 ```txt
 <spec-dir>/subspecs/<step-number>-spec.md
 ```
 
-If the step does not have a numeric identifier and no `subspec` path was supplied,
-write:
+If the step does not have a numeric identifier, write:
 
 ```txt
 <spec-dir>/subspecs/step-<short-slug>-spec.md
 ```
 
-The subspec must capture target files/symbols as they exist now, concrete edit
-sequence, targeted tests, assumptions, and hard stop conditions. A hard blocker in
-the subspec stops implementation.
+The subspec must capture target files/symbols as they exist now — reconciled with
+the prior-step context, since earlier steps may have moved or renamed them —
+concrete edit sequence, targeted tests, assumptions, and hard stop conditions. A
+hard blocker in the subspec stops implementation.
 
 ## Execution
 
@@ -128,6 +160,11 @@ Spec file: <absolute spec path>
 Step to implement: <exact resolved step text>
 Subspec file: <absolute subspec path>
 
+Prior-step context — what earlier steps already changed (omit when empty). Treat
+this as the current state of the code; where it conflicts with the spec's original
+wording for this step, follow the prior finding and note the conflict:
+<one fact per line>
+
 Conformance guardrails (omit when empty):
 <one guardrail per line>
 
@@ -142,6 +179,8 @@ Before coding, read:
 
 Rules:
 - Implement ONLY this step. Do not do previous or future steps.
+- Verify the prior-step context against the actual files before relying on it; it
+  reflects what earlier steps reported, not necessarily the final tree.
 - If the step cannot be implemented as written because a referenced file, type,
   signature, or project convention does not exist or conflicts with the code,
   STOP and report the discrepancy.
@@ -174,8 +213,8 @@ After implementation, verify mechanically:
    relevant typecheck, compile, or test command for the changed files.
 3. If verification fails, make at most two fix-up attempts scoped to this same
    step. Do not broaden into neighboring steps.
-4. If the issue is a spec/code discrepancy, record it in the blocker path, write a
-   `blocked` step learning file (see Emit Step Learning), and stop.
+4. If the issue is a spec/code discrepancy, record it in `<spec-dir>/blockers.md`,
+   write a `blocked` step learning file (see Emit Step Learning), and stop.
 5. Otherwise write the step learning file (see Emit Step Learning), even when
    nothing was learned.
 6. Stage only this step's files — including the subspec and learning file — and
@@ -212,7 +251,8 @@ learnings and the verification outcome — not the implementer. Keep it minimal;
    the future assumption it touches. `None` when the step landed as the spec
    assumed.
 4. **Discrepancies & risks** — spec/code mismatches, assumptions made under
-   ambiguity, and any weak or skipped verification. `None` when empty.
+   ambiguity, conflicts between the spec and prior-step context and how you resolved
+   them, and any weak or skipped verification. `None` when empty.
 5. **Verification** — the targeted commands run, their outcomes, and the number of
    fix-up attempts, so the judge can weigh confidence.
 

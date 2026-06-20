@@ -1,6 +1,6 @@
 ---
 name: spec-subspec-write
-description: This skill should be used when the user asks to "write a subspec", "plan this step", "write a step plan", or "detail step N" for a single implementation step that already exists in a reviewed spec. Creates a minimal, code-grounded implementation plan for one step at .specs/<slug>/subspecs/<step-number>-spec.md. spec-run invokes this per step before coding.
+description: This skill should be used when the user asks to "write a subspec", "plan this step", "write a step plan", or "detail step N" for a single implementation step that already exists in a reviewed spec. Creates a minimal, code-grounded implementation plan for one step at .specs/<slug>/subspecs/<step-number>-spec.md. spec-run and spec-step-run invoke this contract per step before coding.
 disable-model-invocation: true
 argument-hint: "[step-number] [feature-slug or spec path (optional)]"
 license: MIT
@@ -30,13 +30,17 @@ Write the completed subspec to:
 
 Create the `subspecs/` folder if it does not exist. The file name uses the step's
 number from the parent spec's Implementation Steps list (e.g. step 3 →
-`3-spec.md`). Overwrite an existing file only after producing the complete body.
+`3-spec.md`). For a step with no numeric id, use `step-<short-slug>-spec.md`, the
+same naming `spec-step-run` and `spec-step-judge` expect. Overwrite an existing file
+only after producing the complete body.
 
 ## Resolve Inputs
 
-1. **Spec folder.** Resolve the same way `spec-run` does: a path or `.specs/<slug>/`
-   folder in `$ARGUMENTS`, else the folder named in the conversation, else the most
-   recently modified `.specs/*/spec.md`.
+1. **Spec folder.** When an explicit spec path or step marker is supplied — as when
+   `spec-step-run` follows this contract — use it exactly and never guess. For
+   standalone manual use, resolve the same way `spec-run` does: a path or
+   `.specs/<slug>/` folder in `$ARGUMENTS`, else the folder named in the
+   conversation, else the most recently modified `.specs/*/spec.md`.
 2. **Step.** Take the step number from `$ARGUMENTS`. Read `spec.md`, locate that
    numbered step in the Implementation Steps section, and capture its full text:
    what-to-do, why, signatures/contracts, tests, and `Covers:` tags.
