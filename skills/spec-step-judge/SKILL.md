@@ -10,7 +10,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "3"
+  version: "4"
 ---
 
 # Spec Step Judge
@@ -231,6 +231,12 @@ Constraints:
 - **Preserve traceability.** Never change a step's `Covers:` tags or the
   Acceptance Criteria intent. You may refine *how* a step is done, not *what* it
   must satisfy.
+- **Re-score complexity when it shifts.** When an adaptation materially changes a
+  future step's difficulty — adds or removes scope, new abstractions, integration
+  risk — update that step's `Complexity:` tag (`easy`/`medium`/`hard`) to match the
+  adapted work, so per-step model routing stays accurate. Leave the tag untouched
+  when the adaptation does not change the step's difficulty. Note any tag change in
+  the `## Adaptations` entry.
 - **Keep the step set fixed.** Never add, delete, insert, or renumber a step; the
   remaining step count must stay constant. Every edit lands inside an existing
   not-yet-run step.

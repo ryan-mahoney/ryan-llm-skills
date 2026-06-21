@@ -10,7 +10,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "6"
+  version: "7"
 ---
 
 # Spec Write
@@ -64,7 +64,7 @@ When writing a phase spec:
 
 - State which phase of the proposal this spec covers in the Problem Statement.
 - Reconcile only the critique recommendations that fall within this phase's scope. Recommendations belonging to other phases are not deferrals; note them as "covered by phase N" only if helpful.
-- End the spec with the footer block, keeping the phase marker on the folder line: `Spec folder: .specs/<feature-slug>/ (phase N)` followed by the `Complexity:` and `Visual design:` lines (see Spec Footer).
+- End the spec with the footer block, keeping the phase marker on the folder line: `Spec folder: .specs/<feature-slug>/ (phase N)` followed by the `Visual design:` line (see Spec Footer).
 
 ## GitHub Mirror Detection
 
@@ -170,6 +170,17 @@ For each step include:
 3. Signatures/contracts: public API shape when adding or changing interfaces.
 4. Tests: concrete automated test assertions and target test files. Test behavior, not implementation. Focus on edge cases and failure modes.
 5. Coverage: which acceptance criteria this step satisfies, as a tag line (`Covers: AC-3, AC-7`). Every criterion must be covered by at least one step; a step covering no criterion must trace to a stated architectural need instead.
+6. Complexity: how hard *this step* is, as a tag line (`Complexity: easy`). One of `easy`, `medium`, `hard` — see the rubric below. The system uses per-step tags to route each step to an appropriately strong implementation model, so score every step, not just the spec.
+
+Each step's `Covers:` and `Complexity:` tag lines sit together at the end of the step. Judge complexity by *this step's own* work, applying the rubric the same way every time so the label is reproducible across runs. Anchor the choice on four signals — scope (files/modules this step touches), novelty (new abstractions vs. reusing existing patterns), domain difficulty (the Qualifications this step exercises), and integration risk (state, I/O, migrations, blast radius this step incurs):
+
+| Tier | When |
+|---|---|
+| `easy` | One file or a few closely-related files; uses existing patterns directly; no new abstractions; local or pure logic; low blast radius. |
+| `medium` | Several files, or some new types/functions following established patterns; limited state/IO; standard domain knowledge. |
+| `hard` | New architecture/abstractions, cross-module integration, concurrency, migrations, non-trivial algorithms, specialized domain depth, or a wide high-risk change where subtle correctness dominates. |
+
+When torn between two tiers, choose the higher one — an under-powered model is the costlier error.
 
 Step constraints:
 
@@ -206,20 +217,9 @@ If none apply, "N/A".
 
 ## Implementation Profile
 
-After writing the spec body, classify the whole spec along two standardized axes and emit them in the footer (below). These are coarse, reproducible labels the system uses to route the spec to an appropriately strong implementation model. Judge the spec as a whole, not any single step, and apply the rubric the same way every time so the label is reproducible across runs.
+Complexity is scored **per step**, not for the spec as a whole — each step in Implementation Steps carries its own `Complexity:` tag (see §7) so the system can route each step to an appropriately strong implementation model. Do not emit a spec-level complexity.
 
-### Complexity
-
-Pick exactly one tier. Judge by the hardest part of the work, not the average: a mostly-trivial spec with one genuinely intricate step is `hard`. Anchor the choice on four signals — scope (files/modules touched), novelty (new abstractions vs. reusing existing patterns), domain difficulty (the Qualifications section), and integration risk (state, I/O, migrations, blast radius).
-
-| Tier | When |
-|---|---|
-| `easy` | One file or a few closely-related files; uses existing patterns directly; no new abstractions; local or pure logic; low blast radius. |
-| `moderate` | Several files within one module; some new types or functions, but following established patterns; limited state/IO; standard domain knowledge. |
-| `hard` | Multiple modules or new architecture/abstractions; concurrency, migrations, non-trivial algorithms, or cross-cutting integration; meaningful blast radius. |
-| `expert` | Specialized domain depth (cryptography, distributed consensus, performance-critical paths, novel algorithm design, intricate concurrency) or a wide, high-risk change where subtle correctness dominates. |
-
-When torn between two tiers, choose the higher one — an under-powered model is the costlier error.
+The footer carries one spec-wide axis, classified after writing the spec body: a reproducible Visual design flag. Apply the rubric the same way every time so the label is reproducible across runs.
 
 ### Visual design
 
@@ -232,21 +232,19 @@ The flag is binary — emit exactly one.
 
 ## Spec Footer
 
-End `spec.md` with a metadata footer block so downstream skills can locate the folder and route the work. The first line is the canonical folder; the next two are the implementation profile. When the folder is issue-prefixed, use the prefixed slug (e.g. `Spec folder: .specs/<issue-number>-<feature-slug>/`):
+End `spec.md` with a metadata footer block so downstream skills can locate the folder and route the work. The first line is the canonical folder; the second is the spec-wide Visual design flag. Per-step complexity is not in the footer — it lives on each step (see §7). When the folder is issue-prefixed, use the prefixed slug (e.g. `Spec folder: .specs/<issue-number>-<feature-slug>/`):
 
 ```txt
 Spec folder: .specs/<feature-slug>/
-Complexity: hard
 Visual design: no-visual-design
 ```
 
-`Complexity` is exactly one of `easy`, `moderate`, `hard`, `expert`. `Visual design` is exactly one of `yes-visual-design`, `no-visual-design`.
+`Visual design` is exactly one of `yes-visual-design`, `no-visual-design`.
 
 For phase specs, keep the phase marker on the folder line:
 
 ```txt
 Spec folder: .specs/<feature-slug>/ (phase 2)
-Complexity: moderate
 Visual design: yes-visual-design
 ```
 
@@ -256,7 +254,7 @@ The GitHub mirror, when used, must contain the same footer block.
 
 1. Resolve the GitHub mirror and issue number (see GitHub Mirror Detection). When creating a new issue, create it first to reserve its number.
 2. Apply the issue-ID folder prefix when an issue number exists (see Issue-ID Folder Prefix), so the canonical folder is `.specs/<issue-number>-<feature-slug>/`. Without an issue number, the canonical folder stays `.specs/<feature-slug>/`.
-3. Write the final markdown body — footer block included (`Spec folder:`, `Complexity:`, `Visual design:`), referencing the canonical folder — to `<canonical folder>/spec.md`.
+3. Write the final markdown body — including each step's `Complexity:` tag (§7) and the footer block (`Spec folder:`, `Visual design:`), referencing the canonical folder — to `<canonical folder>/spec.md`.
 4. If GitHub mirroring is available, set the issue body to the same content.
 5. Report:
    - Spec path.
