@@ -7,7 +7,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "3"
+  version: "4"
 ---
 
 # Design Spec Writer
@@ -120,9 +120,9 @@ Trade-offs with rationale, posture rationale, risks, what was deferred from crit
 
 ### 7. Implementation Steps
 
-A flat, numbered, sequential list of deterministic engineering tasks. For each: **What to do** (exact files/changes), **Why** (tie to architecture or an AC), **Signatures/contracts** (component prop shapes when adding/changing interfaces), **Tests** (concrete assertions and target files — Storybook stories, Playwright/visual snapshots, jest-axe, Testing Library; behavior and states, not implementation), **Coverage** (`Covers: AC-3, AC-7`), and **Complexity** (`Complexity: easy`). Every AC must be covered by at least one step; a step covering no AC must trace to a stated architectural need.
+A flat, numbered, sequential list of deterministic engineering tasks. For each: **What to do** (exact files/changes), **Why** (tie to architecture or an AC), **Signatures/contracts** (component prop shapes when adding/changing interfaces), **Tests** (concrete assertions and target files — Storybook stories, Playwright/visual snapshots, jest-axe, Testing Library; behavior and states, not implementation), **Coverage** (`Covers: AC-3, AC-7`), **Complexity** (`Complexity: easy`), and **Visual design** (`Visual: yes` or `Visual: no`). Every AC must be covered by at least one step; a step covering no AC must trace to a stated architectural need.
 
-Each step's `Covers:` and `Complexity:` tag lines sit together at the end of the step. Score complexity by *this step's own* work, applying the rubric the same way every time so the label is reproducible across runs. The system uses per-step tags to route each step to an appropriately strong implementation model, so score every step. Anchor the choice on scope (files/components this step touches), novelty (new patterns vs. reusing existing components/tokens), domain difficulty (the design and a11y depth this step exercises), and integration risk (state wiring, motion, cross-component blast radius):
+Each step's `Covers:`, `Complexity:`, and `Visual:` tag lines sit together at the end of the step. Score complexity by *this step's own* work, applying the rubric the same way every time so the label is reproducible across runs. The system uses per-step tags to route each step to an appropriately strong implementation model, so score every step. Anchor the choice on scope (files/components this step touches), novelty (new patterns vs. reusing existing components/tokens), domain difficulty (the design and a11y depth this step exercises), and integration risk (state wiring, motion, cross-component blast radius):
 
 | Tier | When |
 |---|---|
@@ -130,7 +130,11 @@ Each step's `Covers:` and `Complexity:` tag lines sit together at the end of the
 | `medium` | Several components, or some new components/variants following established patterns; limited state/interaction wiring; standard design knowledge. |
 | `hard` | New design-system primitives or tokens, cross-component composition, complex interaction/motion/focus management, non-trivial responsive or a11y work, or a wide high-risk change where subtle visual or accessibility correctness dominates. |
 
-When torn between two tiers, choose the higher one — an under-powered model is the costlier error. Each step's name, one-line description, and this `Complexity:` value are also emitted to `spec-steps.json` (see Machine-Readable Step Index); the JSON `difficulty` must equal the step's `Complexity:` tag.
+When torn between two tiers, choose the higher one — an under-powered model is the costlier error.
+
+Flag each step's `Visual:` by whether *that step* produces or changes visual UI — component markup, layout, styling/theming, design-system implementation (tokens included), or prototypes — `Visual: yes`. Steps with no visual output — pure config wiring, data shaping, or text-only test scaffolding — are `Visual: no`. Most steps in a design spec are `Visual: yes`; flag every step regardless. The system routes `Visual: yes` steps to design-capable handling and visual verification.
+
+Each step's name, one-line description, `Complexity:` value, and `Visual:` flag are also emitted to `spec-steps.json` (see Machine-Readable Step Index); the JSON `difficulty` must equal the step's `Complexity:` tag and `visualDesign` must equal its `Visual:` flag (`Visual: yes` → `true`).
 
 Step constraints: **Deterministic** (no "polish", "make it nicer", "clean up"), **Minimal** (smallest verifiable unit), **Self-contained** (executable in isolation), **Forward-only** (target design only, no compatibility shims).
 
@@ -158,10 +162,11 @@ If none apply, "N/A".
 
 ## Spec Footer
 
-End `spec.md` with the locator line (use the issue-prefixed slug when an issue exists):
+End `spec.md` with the locator line plus the spec-wide Visual design roll-up (use the issue-prefixed slug when an issue exists). The roll-up is `yes-visual-design` when any step is `Visual: yes`, else `no-visual-design` — for a design spec it is almost always `yes-visual-design`. Per-step visual flags live on each step (see §7); the footer is a convenience summary:
 
 ```txt
 Spec folder: .specs/<feature-slug>/
+Visual design: yes-visual-design
 ```
 
 For phase specs: `Spec folder: .specs/<feature-slug>/ (phase 2)`. The GitHub mirror, when used, contains the same footer.
@@ -170,7 +175,7 @@ For phase specs: `Spec folder: .specs/<feature-slug>/ (phase 2)`. The GitHub mir
 
 Alongside `spec.md`, write a machine-readable index of the implementation steps to `.specs/<feature-slug>/spec-steps.json`, using the canonical (issue-prefixed when applicable) folder named in the `Spec folder:` footer. This is the same contract `spec-write` produces, so the same external task-runner can route design and engineering specs identically.
 
-The file is a derived index, not a second source of truth — `spec.md` stays canonical for full step text, `Covers:` tags, and `Complexity:` tags. It is a JSON object with a `steps` array, one entry per Implementation Step in spec order:
+The file is a derived index, not a second source of truth — `spec.md` stays canonical for full step text, `Covers:` tags, `Complexity:` tags, and `Visual:` flags. It is a JSON object with a `steps` array, one entry per Implementation Step in spec order:
 
 ```json
 {
@@ -180,7 +185,8 @@ The file is a derived index, not a second source of truth — `spec.md` stays ca
       "step": 1,
       "name": "Add color and spacing tokens",
       "description": "Define the new design tokens and Tailwind config entries in tailwind.config.ts.",
-      "difficulty": "easy"
+      "difficulty": "easy",
+      "visualDesign": true
     }
   ]
 }
@@ -193,6 +199,7 @@ Field contract:
 - `name` — a terse imperative title (verb + object), roughly eight words or fewer. Not the full "What to do" prose.
 - `description` — one front-loaded, plain-language sentence summarizing what the step does.
 - `difficulty` — exactly one of `easy`, `medium`, `hard`, identical to the step's `Complexity:` tag.
+- `visualDesign` — boolean; `true` when the step implements user-facing visual design, identical to the step's `Visual:` flag (`Visual: yes` → `true`, `Visual: no` → `false`).
 
 Write `spec-steps.json` only after the spec body is final, so the index matches the committed step list, numbering, and complexity tags. Exactly one entry per step, in order. The GitHub mirror carries only the spec body; do not attach the JSON to the issue.
 
@@ -200,8 +207,8 @@ Write `spec-steps.json` only after the spec body is final, so the index matches 
 
 1. Resolve the GitHub mirror and issue number (create the issue first to reserve its number when creating new).
 2. Apply the issue-ID folder prefix when an issue number exists, so the canonical folder is `.specs/<issue-number>-<feature-slug>/`; without one it stays `.specs/<feature-slug>/`.
-3. Write the final markdown body — footer included, with each step's `Complexity:` tag — to `<canonical folder>/spec.md`.
-4. Write the machine-readable step index to `<canonical folder>/spec-steps.json` (see Machine-Readable Step Index), one entry per step, each `difficulty` matching that step's `Complexity:` tag.
+3. Write the final markdown body — footer included (with the Visual design roll-up), each step carrying its `Complexity:` and `Visual:` tags — to `<canonical folder>/spec.md`.
+4. Write the machine-readable step index to `<canonical folder>/spec-steps.json` (see Machine-Readable Step Index), one entry per step, each `difficulty` matching that step's `Complexity:` tag and each `visualDesign` matching its `Visual:` flag.
 5. If GitHub mirroring is available, set the issue body to the same spec content. Do not attach `spec-steps.json` to the issue.
 6. Report: spec path; step-index path (`spec-steps.json`); GitHub issue URL or "not mirrored"; and the inputs used (proposal, critique, prototype).
 

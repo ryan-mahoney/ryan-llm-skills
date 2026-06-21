@@ -10,7 +10,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "5"
+  version: "6"
 ---
 
 # Spec Step Judge
@@ -231,22 +231,28 @@ Constraints:
 - **Preserve traceability.** Never change a step's `Covers:` tags or the
   Acceptance Criteria intent. You may refine *how* a step is done, not *what* it
   must satisfy.
-- **Re-score complexity when it shifts.** When an adaptation materially changes a
-  future step's difficulty — adds or removes scope, new abstractions, integration
-  risk — update that step's `Complexity:` tag (`easy`/`medium`/`hard`) to match the
-  adapted work, so per-step model routing stays accurate. Leave the tag untouched
-  when the adaptation does not change the step's difficulty. Note any tag change in
-  the `## Adaptations` entry.
+- **Re-score complexity and re-flag visual when they shift.** When an adaptation
+  materially changes a future step's difficulty — adds or removes scope, new
+  abstractions, integration risk — update that step's `Complexity:` tag
+  (`easy`/`medium`/`hard`) to match the adapted work, so per-step model routing stays
+  accurate. Likewise, when an adaptation changes whether the step does user-facing
+  visual-design work, update its `Visual:` tag (`yes`/`no`). Leave a tag untouched
+  when the adaptation does not change that axis. Note any tag change in the
+  `## Adaptations` entry.
 - **Keep `spec-steps.json` in sync.** `spec-write` emits a derived step index at
-  `<spec-dir>/spec-steps.json` (`steps[]` of `{step, name, description, difficulty}`)
-  that the external task-runner routes on. Whenever you edit a not-yet-run step in
-  `spec.md` — rewrite its content, reduce it to obsolete, or re-score its
-  `Complexity:` — update that step's matching entry (by `step` number) in
-  `spec-steps.json` so its `name`, `description`, and `difficulty` reflect the
-  adapted step. `difficulty` must equal the new `Complexity:` tag. Never change the
-  entry count or step numbers — the same fixed-step-count invariant applies to the
-  index. This is best-effort: if `spec-steps.json` does not exist, skip silently and
-  do not create one; `spec.md` stays canonical.
+  `<spec-dir>/spec-steps.json` (`steps[]` of
+  `{step, name, description, difficulty, visualDesign}`) that the external
+  task-runner routes on. Whenever you edit a not-yet-run step in `spec.md` — rewrite
+  its content, reduce it to obsolete, re-score its `Complexity:`, or re-flag its
+  `Visual:` — update that step's matching entry (by `step` number) in
+  `spec-steps.json` so its `name`, `description`, `difficulty`, and `visualDesign`
+  reflect the adapted step. `difficulty` must equal the new `Complexity:` tag and
+  `visualDesign` must equal the new `Visual:` flag (`yes` → `true`). If a flip
+  changes the spec-wide roll-up — no step is `Visual: yes` anymore, or one is for the
+  first time — also update the footer's `Visual design:` line. Never change the entry
+  count or step numbers — the same fixed-step-count invariant applies to the index.
+  This is best-effort: if `spec-steps.json` does not exist, skip silently and do not
+  create one; `spec.md` stays canonical.
 - **Keep the step set fixed.** Never add, delete, insert, or renumber a step; the
   remaining step count must stay constant. Every edit lands inside an existing
   not-yet-run step.
