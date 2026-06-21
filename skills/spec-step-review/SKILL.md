@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "3"
+  version: "4"
 ---
 
 # Spec Step Review
@@ -43,6 +43,18 @@ artifact — the review file — that `spec-step-fix` consumes.
 
 Single pass: review once, write the file, stop. There is no per-step re-review
 loop; the end-of-run `spec-branch-refine` loop is the thorough backstop.
+
+## Run Directly — No Subagents
+
+Do this skill's work directly in your own context. Do **not** spawn subagents,
+fan out parallel agents, or delegate the run to another agent. This is a leaf
+skill: the external task-runner already dispatches it in isolation, one step at a
+time, so a nested agent adds no isolation — only the failure modes of delegation
+(needless fan-out, or a child whose completion goes unnoticed). The reviewer is
+already independent of the fixer — `spec-step-fix` is a separate skill invocation
+in its own context — so no in-skill agent is needed to keep them apart. (Invoking
+a conditional-lens skill below is an in-context skill call, not a subagent, and
+stays allowed.)
 
 ## Non-Interactive Operation
 
@@ -107,9 +119,9 @@ Read these to review *as the spec intended*, not to re-run conformance checks:
 
 ## Review For Correctness
 
-Do the review in a dedicated read-only subagent when the harness supports
-subagents, so the reviewer stays independent of any later fixer. If no subagent
-mechanism is available, review directly and note that here and in the report.
+Review the step's diff directly. The reviewer's independence from the fixer is
+structural — `spec-step-fix` runs as a separate skill — so no subagent is needed
+for it.
 
 Apply three lenses to the step's diff. These are bug classes, not style nits:
 
@@ -243,7 +255,7 @@ Report:
 1. Spec path and resolved step.
 2. Review file path.
 3. Verdict (`pass` | `needs-fix`) and the actionable/advisory counts.
-4. The target reviewed (commit sha or working tree) and whether a subagent was used.
+4. The target reviewed (commit sha or working tree).
 5. Any input that was missing or any weak-target caveat.
 
 Do not implement fixes — that is `spec-step-fix`. Do not add Co-Authored-By trailers, "Generated with" footers, or any AI model attribution.

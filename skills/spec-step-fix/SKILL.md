@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "4"
+  version: "5"
 ---
 
 # Spec Step Fix
@@ -34,6 +34,15 @@ spec-step-run → spec-step-judge → spec-step-review → spec-step-fix
 
 The external review orchestrator schedules this skill right after `spec-step-review`.
 Single pass: decide, fix the actionable findings, verify, commit, stop.
+
+## Run Directly — No Subagents
+
+Do this skill's work directly in your own context. Do **not** spawn subagents,
+fan out parallel agents, or delegate the run to another agent. This is a leaf
+skill: the external task-runner already dispatches it in isolation, one step at a
+time, so a nested agent adds no isolation — only the failure modes of delegation
+(needless fan-out, or a child whose completion goes unnoticed). Decide each
+finding, edit, verify, and commit yourself.
 
 ## Non-Interactive Operation
 
@@ -93,8 +102,7 @@ ones; otherwise dismiss them `false-positive`/`intentional` (if settled) or
 
 ## Apply The Fixes
 
-Use one subagent to apply the fixes when the harness supports subagents; otherwise
-apply directly and note the limitation. Constraints:
+Apply the fixes directly. Constraints:
 
 - Scope changes to **this step's** code and its tests. Do not wander into other
   steps. If a finding truly requires touching another step's code, dismiss it as

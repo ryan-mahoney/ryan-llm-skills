@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "7"
+  version: "8"
 ---
 
 # Spec Step Judge
@@ -38,6 +38,20 @@ A clean step that taught nothing is a no-op success: no correction, no adaptatio
 
 This skill never runs, dequeues, or schedules the next step. The external
 task-runner owns ordering and dispatch.
+
+## Run Directly — No Subagents
+
+Do this skill's work directly in your own context. Do **not** spawn subagents,
+fan out parallel agents, or delegate the run to another agent. This is a leaf
+skill: the external task-runner already dispatches it in isolation, one step at a
+time, so a nested agent adds no isolation — only the failure modes of delegation
+(needless fan-out, or a child whose completion goes unnoticed). Evaluate,
+correct, and adapt yourself.
+
+The judge-versus-patcher independence the prior version got from separate
+subagents is preserved by **sequence** instead: complete and record the verdict
+before you touch any code, and never revise the verdict to justify a correction.
+A frozen verdict keeps both honest without a nested agent.
 
 ## Non-Interactive Operation
 
@@ -98,10 +112,10 @@ entries not marked superseded.
 
 ## Evaluate The Step
 
-Keep the judge independent of the patcher: do the evaluation first, in a dedicated
-read-only subagent, before any correction subagent touches code. Use one subagent
-for the evaluation when the harness supports subagents; if none is available,
-evaluate directly and report that limitation here and in the final report.
+Evaluate first, directly, and finish it before any correction: complete the
+evaluation, settle on a verdict, and record it — only then may you touch code.
+This time-ordering, not a separate agent, is what keeps the judge independent of
+the patcher; do not revise the verdict afterward to justify a fix.
 
 The evaluation is verification, not redesign — the spec already passed review.
 Judge on three axes:
@@ -123,6 +137,9 @@ Verdict, one of:
 - `blocked` — a spec defect: honoring the step is wrong or contradicts the code.
 
 ### Judge Contract
+
+Follow this as your own evaluation checklist — it is self-directed, not a prompt
+to hand to a subagent.
 
 ```txt
 You are judging a single, already-committed implementation step. You evaluate;
@@ -160,8 +177,8 @@ Output:
 ## Apply Corrections — Only If Needed
 
 - `pass` → skip this section entirely. A no-op is a success state.
-- `needs-correction` → run one correction subagent scoped to **this step only** —
-  a fix-up, not a redesign. Up to two attempts. Never broaden into neighboring or
+- `needs-correction` → make one correction pass scoped to **this step only** — a
+  fix-up, not a redesign. Up to two attempts. Never broaden into neighboring or
   future steps. Keep changes minimal, explicit, and fail-fast. Re-run the targeted
   verification as the oracle, then commit on its own:
   `fix(<scope>): <step-id> <short description>`.
@@ -170,11 +187,14 @@ Output:
   judge could not validate is not a safe basis for adapting later steps. Report and
   halt.
 
-Keep judge and patcher separate: the evaluation subagent never edits, and the
-correction subagent never re-judges its own work — the targeted test re-run is the
-independent oracle.
+Keep judgement and correction separate in time, not in agents: the verdict is
+fixed before any edit, and once correcting you do not re-judge to bless your own
+work — the targeted test re-run is the independent oracle.
 
 ### Correction Contract
+
+Follow this as your own correction checklist — self-directed, not a prompt to hand
+to a subagent.
 
 ```txt
 The judge found this step's implementation incomplete or non-conforming.
@@ -263,8 +283,8 @@ Constraints:
 Commit the spec edits separately from any code correction:
 `chore(spec): adapt step(s) <n>[,m] from step <k> learnings`.
 
-The orchestrator performs these edits directly — it already holds the learning and
-the future step text. Do not delegate spec rewriting to the correction subagent.
+Perform these edits directly — you already hold the learning and the future step
+text. Do not delegate spec rewriting.
 
 ## Verify And Commit
 
@@ -284,8 +304,8 @@ the future step text. Do not delegate spec rewriting to the correction subagent.
   exists. Never edits completed steps' code, the Acceptance Criteria intent, or any
   `Covers:` tag, and never adds, removes, inserts, renumbers, or otherwise changes
   the number of steps (in `spec.md` or the index).
-- Judging and patching are separated at the subagent boundary; the targeted test
-  re-run is the oracle, never self-assessment.
+- Judging and patching are separated in sequence — the verdict is recorded before
+  any edit; the targeted test re-run is the oracle, never self-assessment.
 - Does not run, dequeue, or schedule the next step — the external task-runner owns
   ordering.
 - No new scope. Does not fix correctness, style, or performance issues unrelated to

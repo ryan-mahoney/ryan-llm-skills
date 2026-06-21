@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "4"
+  version: "5"
 ---
 
 # Spec Step Run
@@ -29,6 +29,15 @@ state between steps. Because nothing else carries that state, this skill is
 self-contained: it reconstructs what earlier steps did by reading their learning
 files, and the learning file it emits is the durable channel by which
 `spec-step-judge` and later steps see what this step discovered.
+
+## Run Directly — No Subagents
+
+Do this skill's work directly in your own context. Do **not** spawn subagents,
+fan out parallel agents, or delegate the run to another agent. This is a leaf
+skill: the external task-runner already dispatches it in isolation, one step at a
+time, so a nested agent adds no isolation — only the failure modes of delegation
+(needless fan-out, or a child whose completion goes unnoticed). Read, plan,
+implement, verify, and commit the step yourself.
 
 ## Required Inputs
 
@@ -146,11 +155,9 @@ hard blocker in the subspec stops implementation.
 
 ## Execution
 
-Use one dedicated subagent for the step when the current harness supports
-subagents. If no subagent mechanism is available, report that limitation before
-implementing directly and again in the final report.
-
-Give the implementer this contract:
+Implement the step directly, under the working contract below. The contract is
+self-directed — your own checklist for this run — not a prompt to hand to a
+subagent; do not delegate implementation.
 
 ```txt
 You are implementing exactly one step from a repository-local implementation spec.
