@@ -1,16 +1,15 @@
 ---
 name: spec-step-review
 description: This skill should be used when the user or an external task-runner asks to review, code-review, or correctness-check a single already-implemented spec step for bugs — given only a step marker (spec path plus step). The read-only correctness counterpart to spec-step-judge: it hunts for logic, security, and over-complexity defects in that step's committed diff and writes a structured findings file at reviews/<step>-review.md. It never edits code and never re-checks conformance (that is spec-step-judge / spec-audit). Self-sufficient by design — resolves the step's commit, subspec, learning, criteria, and invariants deterministically from the spec directory. spec-step-fix consumes its output. Trigger on "review this step", "code-review the step", "correctness review the step", "find bugs in this step", or "spec step review".
-mode: review
+mode: coding
 scope: document
-capability: reviewer
 disable-model-invocation: true
 argument-hint: "spec=<path/to/spec.md> step=<number-or-exact-step>"
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "2"
+  version: "3"
 ---
 
 # Spec Step Review

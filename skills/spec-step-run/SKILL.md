@@ -3,14 +3,13 @@ name: spec-step-run
 description: This skill should be used when the user or an external task-runner asks to implement, run, execute, or complete exactly one step from a reviewed project-local spec, given only a step marker: the spec path plus the target step number/text. Self-sufficient by design — it resolves every related artifact (criteria.md, invariants.md, prior-step learnings, subspec, blockers.md, applicable rules) deterministically from the spec directory and needs no other context from the caller. Performs the same single-step planning, implementation, verification, and commit workflow as spec-run, but never runs every step or the whole acceptance gate. Built for externally-orchestrated, isolated per-step runs: it consumes earlier steps' learning files and always emits its own at learnings/<step>-learning.md that spec-step-judge and later steps consume.
 mode: coding
 scope: document
-capability: orchestrator
 disable-model-invocation: true
 argument-hint: "spec=<path/to/spec.md> step=<number-or-exact-step>"
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "3"
+  version: "4"
 ---
 
 # Spec Step Run

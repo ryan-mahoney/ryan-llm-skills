@@ -3,14 +3,13 @@ name: spec-step-fix
 description: This skill should be used when the user or an external task-runner asks to fix, apply, or act on a single step's correctness review — given only a step marker (spec path plus step). The mutating counterpart to spec-step-review: it reads reviews/<step>-review.md, decides per finding whether to fix or dismiss, applies the actionable fixes scoped to that step, runs targeted tests, writes reviews/<step>-fix.md, and commits. Self-sufficient by design — resolves the review file and the step's files deterministically from the spec directory. It is coupled to spec-step-review only through the review file. Trigger on "fix the step review", "apply the step review", "address the step's findings", or "spec step fix".
 mode: coding
 scope: document
-capability: patcher
 disable-model-invocation: true
 argument-hint: "spec=<path/to/spec.md> step=<number-or-exact-step>"
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "2"
+  version: "3"
 ---
 
 # Spec Step Fix

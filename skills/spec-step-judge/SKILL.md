@@ -3,14 +3,13 @@ name: spec-step-judge
 description: This skill should be used when the user or an external task-runner asks to judge, evaluate, review, or "close out" a single already-implemented spec step — applying scoped corrections only if the step fell short, then adapting not-yet-run steps to what that step learned. It is the judging half of an externally-orchestrated, isolated per-step pipeline that pairs with spec-step-run (no spec-run orchestrator). Given only a step marker (spec path plus step), it is self-sufficient: it resolves the step's learning file, subspec, criteria.md, invariants.md, blockers.md, and applicable rules deterministically from the spec directory and needs no other context from the caller. Reads the step's learning file, evaluates the committed change against its Covers criteria and guardrails, fixes only that step when it failed, and rewrites the content of not-yet-run steps in spec.md — adding to, reducing, or replacing a future step's content, but never changing how many steps remain — with an Adaptations log, when learnings warrant. Trigger on "judge this step", "evaluate the step implementation", "review the implemented step", "apply step learnings", "adapt future steps", or "spec step judge".
 mode: coding
 scope: document
-capability: orchestrator
 disable-model-invocation: true
 argument-hint: "spec=<path/to/spec.md> step=<number-or-exact-step>"
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "6"
+  version: "7"
 ---
 
 # Spec Step Judge

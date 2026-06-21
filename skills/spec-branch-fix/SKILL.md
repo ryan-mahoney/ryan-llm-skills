@@ -3,14 +3,13 @@ name: spec-branch-fix
 description: This skill should be used when the user or the spec-branch-refine loop asks to fix, apply, or act on a branch correctness review for one iteration — coupled to spec-branch-review only through the review file. It parses the review's YAML block, decides per finding whether to fix or dismiss (recording a dismissal class that controls re-raise suppression), applies the actionable fixes across the branch, runs tests, writes reviews/branch-<i>-fix.md, and always commits the review/fix artifacts. Trigger on "fix the branch review", "apply the branch review", "address the branch findings", or "spec branch fix".
 mode: coding
 scope: document
-capability: patcher
 disable-model-invocation: true
 argument-hint: "[spec=<path/to/spec.md>] [iter=<n>]"
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "4"
+  version: "5"
 ---
 
 # Spec Branch Fix

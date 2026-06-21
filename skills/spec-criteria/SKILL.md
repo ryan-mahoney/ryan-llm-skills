@@ -3,14 +3,13 @@ name: spec-criteria
 description: This skill should be used when the user asks to "compile review criteria", "generate spec criteria", "compile the conformance checklist", "build guardrails from the spec", or "spec criteria". Compiles a frozen spec's normative prose into an executable conformance checklist at .specs/<slug>/criteria.md, blind to any implementation of that spec, and accumulates cross-phase ownership invariants in .specs/<slug>/invariants.md.
 mode: coding
 scope: document
-capability: repo-write
 disable-model-invocation: true
 argument-hint: "[feature-slug, spec path, or GitHub issue number]"
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "4"
+  version: "5"
 ---
 
 # Spec Criteria

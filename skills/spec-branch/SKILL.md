@@ -3,14 +3,13 @@ name: spec-branch
 description: This skill should be used when the user asks to "create a spec branch", "make a spec branch", "start a branch", or "branch from spec". Creates a local branch from a spec, description, or issue/ticket reference without requiring GitHub.
 mode: coding
 scope: document
-capability: git-mutating
 disable-model-invocation: true
 argument-hint: "[description, feature-slug, or issue/ticket reference]"
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "4"
+  version: "5"
 ---
 
 # Spec Branch

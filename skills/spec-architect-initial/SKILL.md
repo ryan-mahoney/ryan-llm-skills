@@ -3,12 +3,11 @@ name: spec-architect-initial
 description: "Act as the first architecture stage in the spec-driven workflow: given a problem or feature request, review the current system architecture and write .specs/<slug>/proposal.md with a compatible solution, or explain why the request does not fit. Use when the user says 'architect this', 'design a solution for', 'how should I implement', 'how would this fit into the codebase', 'propose an approach for', 'is this feasible in our architecture', or 'plan this feature'."
 mode: coding
 scope: document
-capability: repo-write
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "3"
+  version: "4"
 ---
 
 # Spec Architect Initial — Solution Design Against Existing Architecture

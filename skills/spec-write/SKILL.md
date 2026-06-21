@@ -3,14 +3,13 @@ name: spec-write
 description: This skill should be used when the user asks to "write a spec", "create a spec", "spec this out", "plan this feature", or "write an implementation plan" for a feature or change. Creates a structured implementation spec in .specs/<slug>/spec.md and mirrors it to GitHub only when the current repository is hosted on GitHub.
 mode: coding
 scope: document
-capability: repo-write
 disable-model-invocation: true
 argument-hint: "[feature-slug or GitHub issue number (optional)]"
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "9"
+  version: "10"
 ---
 
 # Spec Write
