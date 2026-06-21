@@ -7,7 +7,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "2"
+  version: "3"
 ---
 
 # Spec Subspec Write
