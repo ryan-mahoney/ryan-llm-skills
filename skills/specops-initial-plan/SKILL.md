@@ -7,7 +7,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "1"
+  version: "2"
 ---
 
 # SpecOps Initial Plan
@@ -20,6 +20,14 @@ If `$ARGUMENTS` is not provided, infer `TARGET_SCOPE` from user request and repo
 Discover and analyze source artifacts relevant to `TARGET_SCOPE`, including code, tests, configs, schemas, and docs.
 
 When details are ambiguous or missing, explicitly mark uncertainty. Do not silently infer business rules.
+
+## Scope
+
+Multi-target decomposition now lives in the `specops-decompose` skill. This skill is
+scoped to SINGLE-TARGET deep-planning of one `TARGET_SCOPE`. To produce the multi-target
+manifest (`docs/specops/targets.json`), use `specops-decompose`, not this skill.
+
+The analysis instructions below are unchanged.
 
 ## Required Output Sections
 

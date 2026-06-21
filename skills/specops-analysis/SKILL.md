@@ -7,7 +7,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "2"
+  version: "3"
 ---
 
 # SpecOps Analysis
@@ -20,6 +20,16 @@ If `$ARGUMENTS` is not provided, infer `TARGET_SCOPE` from the request and repos
 Analyze all relevant evidence for `TARGET_SCOPE`, including source code, tests, docs, configs, schemas, runbooks, migrations, fixtures, seeds, job definitions, telemetry hooks, user-facing text, and operational artifacts when present.
 
 When ambiguity exists, explicitly call it out. Do not silently infer intent.
+
+## Manifest-driven invocation
+
+When the orchestrator invokes this skill with a manifest target entry (instead of a free-text target scope), read `name`, `scope`, the effective `source_globs`, and `tier2_path` directly from that entry — do not infer `TARGET_SCOPE`.
+
+- Use `source_globs` as the analysis scope.
+- Write the resulting spec to the entry's `tier2_path` instead of choosing an output path.
+- Return the analyzed `source_hash` — the unit-relative content hash over the target's `source_globs` — so the orchestrator can stamp manifest freshness.
+
+This is only an alternate entry path. All analysis behavior below is unchanged.
 
 ## Analysis Expectations
 

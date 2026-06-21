@@ -7,7 +7,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "2"
+  version: "3"
 ---
 
 # SpecOps Orchestrate Analysis
@@ -20,6 +20,16 @@ Primary objective:
 - Ensure per-target analysis outputs are produced consistently and verified before moving to the next target.
 
 Do not generate specs. Do not implement product code directly unless subagents are unavailable.
+
+## Status
+
+DEPRECATED for the decomposition-first AGENTS documentation pipeline. An external
+orchestrator — driving `specops-decompose` for the persisted target manifest and a
+per-target `specops-analysis` pass — supersedes this skill for that pipeline.
+
+It remains a documented LOCAL FALLBACK: use it to run an analysis pipeline from a
+single initial-plan artifact when the external orchestrator is unavailable. The
+orchestration instructions below are unchanged.
 
 ## Inputs
 

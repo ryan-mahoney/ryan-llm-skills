@@ -205,11 +205,13 @@ fix:
   silenced by being
   set aside. A reviewer may still re-raise a suppressed dismissal it disagrees with,
   clearly marked, so genuine disagreement surfaces.
-- **Artifacts are always committed.** They are product, not scratch — iteration
-  memory, dismissal memory, and the audit trail. The fix skill commits the
-  review+fix pair (a `chore(reviews):` commit when there is no code change); the loop
-  driver commits the trailing review on any terminal stop — clean, cap, or stalled.
-  The read-only reviewer never commits.
+- **Artifacts are always written, but never force-added.** They are product, not
+  scratch — iteration memory, dismissal memory, and the audit trail. The fix skill
+  commits the review+fix pair only when those files are already tracked or not
+  ignored by Git; the loop driver follows the same rule for the trailing review on
+  any terminal stop — clean, cap, or stalled. If `.specs/` is ignored and the only
+  changes are untracked review artifacts, leave them local and report that no
+  artifact commit was made. The read-only reviewer never commits.
 
 ---
 

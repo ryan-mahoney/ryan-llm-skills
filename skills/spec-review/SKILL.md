@@ -3,14 +3,13 @@ name: spec-review
 description: This skill should be used when the user asks to "review a spec", "review an issue", "check the plan", "review the implementation plan", "find gaps in the spec", or "review spec". Reviews .specs/<slug>/spec.md for gaps and viability, edits it when needed, and mirrors changes to GitHub only when a GitHub mirror exists.
 mode: coding
 scope: document
-capability: repo-write
 disable-model-invocation: true
 argument-hint: "[feature-slug, spec path, or GitHub issue number]"
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "6"
+  version: "7"
 ---
 
 # Spec Review

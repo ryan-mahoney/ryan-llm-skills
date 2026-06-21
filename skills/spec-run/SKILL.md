@@ -3,14 +3,13 @@ name: spec-run
 description: This skill should be used when the user asks to "execute the spec", "run the plan", "implement the spec", "implement the issue", "run all steps", or "run spec". Implements all steps from .specs/<slug>/spec.md, honoring criteria/invariants guardrails, using a subagent per step when the harness supports subagents, and committing each verified step separately.
 mode: coding
 scope: document
-capability: orchestrator
 disable-model-invocation: true
 argument-hint: "[feature-slug, spec path, GitHub issue number, optional criteria.md/invariants.md paths]"
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "8"
+  version: "9"
 ---
 
 # Spec Run

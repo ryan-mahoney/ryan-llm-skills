@@ -1,20 +1,20 @@
 ---
 name: design-spec-writer
-description: This skill should be used when the user asks to "write the design spec", "spec this design", "turn this design into a spec", "make the design implementable", or "write the implementation plan for this design". Creates a deterministic, design-focused implementation spec in .specs/<slug>/spec.md — the same contract spec-run consumes — from the proposal, critique, and any approved prototype.
+description: This skill should be used when the user asks to "write the design spec", "spec this design", "turn this design into a spec", "make the design implementable", or "write the implementation plan for this design". Creates a deterministic, design-focused implementation spec in .specs/<slug>/spec.md — the same contract spec-run consumes — from the proposal, critique, and any approved prototype, and automatically mirrors it to GitHub when available unless the user opts out.
 disable-model-invocation: true
 argument-hint: "[feature-slug or GitHub issue number (optional)]"
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "4"
+  version: "5"
 ---
 
 # Design Spec Writer
 
 Turn an approved design direction into a deterministic implementation spec that `spec-run` can execute without modification. The output is `.specs/<feature-slug>/spec.md` in the **exact same 8-section contract** the engineering `spec-write` produces — so `spec-criteria`, `spec-branch`, `spec-run`, `spec-audit`, and `spec-remediate` all work unchanged. The difference is the content: design tokens, components, states, interaction, and accessibility instead of services and data layers.
 
-The local `spec.md` is canonical; issue trackers are optional mirrors.
+The local `spec.md` is canonical; GitHub issues are automatic mirrors when available and not explicitly disabled.
 
 ## Non-Interactive Operation
 
@@ -30,7 +30,7 @@ Always write the completed spec to:
 .specs/<feature-slug>/spec.md
 ```
 
-If the current repository is a GitHub repository and `gh` is authenticated, also mirror the same spec body to a GitHub issue (edit the issue named by `$ARGUMENTS`, else create one). If GitHub is unavailable, unauthenticated, or hosted elsewhere, skip the mirror and report the local path. Bitbucket, GitLab, self-hosted, and local-only repos use `spec.md` only. (Same GitHub-mirror detection and issue-ID folder prefix rules as `spec-write`.)
+If the current repository is a GitHub repository and `gh` is authenticated, also mirror the same spec body to a GitHub issue without asking for confirmation, unless the user explicitly says not to mirror. Edit the issue named by `$ARGUMENTS`, else create one. If GitHub is unavailable, unauthenticated, hosted elsewhere, or explicitly opted out, skip the mirror and report the local path. Bitbucket, GitLab, self-hosted, and local-only repos use `spec.md` only. (Same GitHub-mirror detection and issue-ID folder prefix rules as `spec-write`.)
 
 ## Pre-Step — Load Pipeline Inputs
 
