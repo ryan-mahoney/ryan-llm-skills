@@ -10,7 +10,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "4"
+  version: "5"
 ---
 
 # Spec Step Judge
@@ -237,6 +237,16 @@ Constraints:
   adapted work, so per-step model routing stays accurate. Leave the tag untouched
   when the adaptation does not change the step's difficulty. Note any tag change in
   the `## Adaptations` entry.
+- **Keep `spec-steps.json` in sync.** `spec-write` emits a derived step index at
+  `<spec-dir>/spec-steps.json` (`steps[]` of `{step, name, description, difficulty}`)
+  that the external task-runner routes on. Whenever you edit a not-yet-run step in
+  `spec.md` — rewrite its content, reduce it to obsolete, or re-score its
+  `Complexity:` — update that step's matching entry (by `step` number) in
+  `spec-steps.json` so its `name`, `description`, and `difficulty` reflect the
+  adapted step. `difficulty` must equal the new `Complexity:` tag. Never change the
+  entry count or step numbers — the same fixed-step-count invariant applies to the
+  index. This is best-effort: if `spec-steps.json` does not exist, skip silently and
+  do not create one; `spec.md` stays canonical.
 - **Keep the step set fixed.** Never add, delete, insert, or renumber a step; the
   remaining step count must stay constant. Every edit lands inside an existing
   not-yet-run step.
@@ -257,17 +267,18 @@ the future step text. Do not delegate spec rewriting to the correction subagent.
   and scoped.
 - Confirm `git diff --name-only` for each commit is confined to its track: a
   correction touches only the step's code and tests; an adaptation touches only
-  `spec.md`.
+  `spec.md` and, when it exists, the sibling `spec-steps.json`.
 - The judge writes no learning file of its own. The step's learning file stays as
   `spec-step-run`'s record; the judge's actions are captured by the correction
   commit, the `## Adaptations` log, and the completion report.
 
 ## Boundaries
 
-- Edits only the just-run step's code (a scoped fix-up) and not-yet-run step
-  *content* in `spec.md`. Never edits completed steps' code, the Acceptance Criteria
-  intent, or any `Covers:` tag, and never adds, removes, inserts, renumbers, or
-  otherwise changes the number of steps.
+- Edits only the just-run step's code (a scoped fix-up), not-yet-run step *content*
+  in `spec.md`, and the matching entries in the sibling `spec-steps.json` when it
+  exists. Never edits completed steps' code, the Acceptance Criteria intent, or any
+  `Covers:` tag, and never adds, removes, inserts, renumbers, or otherwise changes
+  the number of steps (in `spec.md` or the index).
 - Judging and patching are separated at the subagent boundary; the targeted test
   re-run is the oracle, never self-assessment.
 - Does not run, dequeue, or schedule the next step — the external task-runner owns

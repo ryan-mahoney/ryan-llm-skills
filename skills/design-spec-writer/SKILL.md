@@ -7,7 +7,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "2"
+  version: "3"
 ---
 
 # Design Spec Writer
@@ -120,7 +120,17 @@ Trade-offs with rationale, posture rationale, risks, what was deferred from crit
 
 ### 7. Implementation Steps
 
-A flat, numbered, sequential list of deterministic engineering tasks. For each: **What to do** (exact files/changes), **Why** (tie to architecture or an AC), **Signatures/contracts** (component prop shapes when adding/changing interfaces), **Tests** (concrete assertions and target files — Storybook stories, Playwright/visual snapshots, jest-axe, Testing Library; behavior and states, not implementation), and **Coverage** (`Covers: AC-3, AC-7`). Every AC must be covered by at least one step; a step covering no AC must trace to a stated architectural need.
+A flat, numbered, sequential list of deterministic engineering tasks. For each: **What to do** (exact files/changes), **Why** (tie to architecture or an AC), **Signatures/contracts** (component prop shapes when adding/changing interfaces), **Tests** (concrete assertions and target files — Storybook stories, Playwright/visual snapshots, jest-axe, Testing Library; behavior and states, not implementation), **Coverage** (`Covers: AC-3, AC-7`), and **Complexity** (`Complexity: easy`). Every AC must be covered by at least one step; a step covering no AC must trace to a stated architectural need.
+
+Each step's `Covers:` and `Complexity:` tag lines sit together at the end of the step. Score complexity by *this step's own* work, applying the rubric the same way every time so the label is reproducible across runs. The system uses per-step tags to route each step to an appropriately strong implementation model, so score every step. Anchor the choice on scope (files/components this step touches), novelty (new patterns vs. reusing existing components/tokens), domain difficulty (the design and a11y depth this step exercises), and integration risk (state wiring, motion, cross-component blast radius):
+
+| Tier | When |
+|---|---|
+| `easy` | One component or a few closely-related files; uses existing tokens/primitives directly; no new patterns; local styling or markup; low blast radius. |
+| `medium` | Several components, or some new components/variants following established patterns; limited state/interaction wiring; standard design knowledge. |
+| `hard` | New design-system primitives or tokens, cross-component composition, complex interaction/motion/focus management, non-trivial responsive or a11y work, or a wide high-risk change where subtle visual or accessibility correctness dominates. |
+
+When torn between two tiers, choose the higher one — an under-powered model is the costlier error. Each step's name, one-line description, and this `Complexity:` value are also emitted to `spec-steps.json` (see Machine-Readable Step Index); the JSON `difficulty` must equal the step's `Complexity:` tag.
 
 Step constraints: **Deterministic** (no "polish", "make it nicer", "clean up"), **Minimal** (smallest verifiable unit), **Self-contained** (executable in isolation), **Forward-only** (target design only, no compatibility shims).
 
@@ -156,12 +166,43 @@ Spec folder: .specs/<feature-slug>/
 
 For phase specs: `Spec folder: .specs/<feature-slug>/ (phase 2)`. The GitHub mirror, when used, contains the same footer.
 
+## Machine-Readable Step Index
+
+Alongside `spec.md`, write a machine-readable index of the implementation steps to `.specs/<feature-slug>/spec-steps.json`, using the canonical (issue-prefixed when applicable) folder named in the `Spec folder:` footer. This is the same contract `spec-write` produces, so the same external task-runner can route design and engineering specs identically.
+
+The file is a derived index, not a second source of truth — `spec.md` stays canonical for full step text, `Covers:` tags, and `Complexity:` tags. It is a JSON object with a `steps` array, one entry per Implementation Step in spec order:
+
+```json
+{
+  "spec": ".specs/<feature-slug>/spec.md",
+  "steps": [
+    {
+      "step": 1,
+      "name": "Add color and spacing tokens",
+      "description": "Define the new design tokens and Tailwind config entries in tailwind.config.ts.",
+      "difficulty": "easy"
+    }
+  ]
+}
+```
+
+Field contract:
+
+- `spec` — the canonical path to `spec.md`, matching the `Spec folder:` footer.
+- `step` — the step's number in `spec.md` (integer, 1-based). Downstream skills and the external task-runner address steps by this number.
+- `name` — a terse imperative title (verb + object), roughly eight words or fewer. Not the full "What to do" prose.
+- `description` — one front-loaded, plain-language sentence summarizing what the step does.
+- `difficulty` — exactly one of `easy`, `medium`, `hard`, identical to the step's `Complexity:` tag.
+
+Write `spec-steps.json` only after the spec body is final, so the index matches the committed step list, numbering, and complexity tags. Exactly one entry per step, in order. The GitHub mirror carries only the spec body; do not attach the JSON to the issue.
+
 ## Output Steps
 
 1. Resolve the GitHub mirror and issue number (create the issue first to reserve its number when creating new).
 2. Apply the issue-ID folder prefix when an issue number exists, so the canonical folder is `.specs/<issue-number>-<feature-slug>/`; without one it stays `.specs/<feature-slug>/`.
-3. Write the final markdown body — footer included — to `<canonical folder>/spec.md`.
-4. If GitHub mirroring is available, set the issue body to the same content.
-5. Report: spec path; GitHub issue URL or "not mirrored"; and the inputs used (proposal, critique, prototype).
+3. Write the final markdown body — footer included, with each step's `Complexity:` tag — to `<canonical folder>/spec.md`.
+4. Write the machine-readable step index to `<canonical folder>/spec-steps.json` (see Machine-Readable Step Index), one entry per step, each `difficulty` matching that step's `Complexity:` tag.
+5. If GitHub mirroring is available, set the issue body to the same spec content. Do not attach `spec-steps.json` to the issue.
+6. Report: spec path; step-index path (`spec-steps.json`); GitHub issue URL or "not mirrored"; and the inputs used (proposal, critique, prototype).
 
 Do not implement the plan. Do not add Co-Authored-By trailers, "Generated with" footers, or any AI model attribution.

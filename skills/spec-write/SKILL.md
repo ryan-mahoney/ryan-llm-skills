@@ -10,7 +10,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "7"
+  version: "8"
 ---
 
 # Spec Write
@@ -182,6 +182,8 @@ Each step's `Covers:` and `Complexity:` tag lines sit together at the end of the
 
 When torn between two tiers, choose the higher one — an under-powered model is the costlier error.
 
+Each step's terse name, one-line description, and this `Complexity:` value are also emitted to a machine-readable `spec-steps.json` index (see Machine-Readable Step Index). The JSON `difficulty` field must equal the step's `Complexity:` tag verbatim — the tag in `spec.md` is canonical; the JSON mirrors it.
+
 Step constraints:
 
 - **Deterministic:** No subjective instructions such as "improve", "clean up", or "refactor as needed".
@@ -250,14 +252,54 @@ Visual design: yes-visual-design
 
 The GitHub mirror, when used, must contain the same footer block.
 
+## Machine-Readable Step Index
+
+Alongside `spec.md`, write a machine-readable index of the implementation steps to:
+
+```txt
+.specs/<feature-slug>/spec-steps.json
+```
+
+Use the canonical (issue-prefixed when applicable) folder, the same one named in the `Spec folder:` footer.
+
+This file is a derived index, not a second source of truth. `spec.md` stays canonical — the full step text, `Covers:` tags, and `Complexity:` tag all live there. `spec-steps.json` exists so an external task-runner can enumerate the steps and route each one to an appropriately strong implementation model without parsing markdown. It is the same routing signal §7 describes, in a parsable shape.
+
+The index is a JSON object with a `steps` array — one entry per Implementation Step, in spec order:
+
+```json
+{
+  "spec": ".specs/<feature-slug>/spec.md",
+  "steps": [
+    {
+      "step": 1,
+      "name": "Define the FooConfig type",
+      "description": "Add the FooConfig interface and its defaults to src/config.ts.",
+      "difficulty": "easy"
+    }
+  ]
+}
+```
+
+Field contract:
+
+- `spec` — the canonical (issue-prefixed when applicable) path to `spec.md`, matching the `Spec folder:` footer.
+- `step` — the step's number in `spec.md` (integer, 1-based, matching the Implementation Steps list). Downstream skills and the external task-runner address steps by this number.
+- `name` — a terse imperative title for the step (verb + object), roughly eight words or fewer. Not the full "What to do" prose.
+- `description` — one front-loaded, plain-language sentence summarizing what the step does.
+- `difficulty` — exactly one of `easy`, `medium`, `hard`, identical to the step's `Complexity:` tag.
+
+Write `spec-steps.json` only after the spec body is final, so the index matches the committed step list, numbering, and complexity tags exactly. There must be exactly one entry per step, in the same order. The GitHub mirror carries only the spec body; do not attach the JSON to the issue.
+
 ## Output Steps
 
 1. Resolve the GitHub mirror and issue number (see GitHub Mirror Detection). When creating a new issue, create it first to reserve its number.
 2. Apply the issue-ID folder prefix when an issue number exists (see Issue-ID Folder Prefix), so the canonical folder is `.specs/<issue-number>-<feature-slug>/`. Without an issue number, the canonical folder stays `.specs/<feature-slug>/`.
 3. Write the final markdown body — including each step's `Complexity:` tag (§7) and the footer block (`Spec folder:`, `Visual design:`), referencing the canonical folder — to `<canonical folder>/spec.md`.
-4. If GitHub mirroring is available, set the issue body to the same content.
-5. Report:
+4. Write the machine-readable step index to `<canonical folder>/spec-steps.json` (see Machine-Readable Step Index), one entry per step, each `difficulty` matching that step's `Complexity:` tag.
+5. If GitHub mirroring is available, set the issue body to the same spec content. Do not attach `spec-steps.json` to the issue.
+6. Report:
    - Spec path.
+   - Step-index path (`spec-steps.json`).
    - GitHub issue URL or "not mirrored".
    - Proposal and critique inputs used.
 
