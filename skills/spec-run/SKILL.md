@@ -10,10 +10,12 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "7"
+  version: "8"
 ---
 
 # Spec Run
+
+> **`.specs/` is untracked working state — often gitignored.** Read and write spec files directly on the filesystem; do not run `git diff`/`log`/`status`/`show` on paths under `.specs/` to read, compare, or recover them — git returning nothing there is expected, not an error. This is scoped to `.specs/`; diffing the code under review is unaffected. For moves, use `git mv` only when the path is tracked, otherwise `mv`.
 
 You are an orchestrator. Implement every step in a reviewed implementation spec. Delegate each spec step to a dedicated subagent when the current harness supports subagents. Do not write production code directly unless subagent execution is unavailable.
 

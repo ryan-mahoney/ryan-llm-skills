@@ -10,10 +10,12 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "4"
+  version: "5"
 ---
 
 # Spec Audit
+
+> **`.specs/` is untracked working state — often gitignored.** Read and write spec files directly on the filesystem; do not run `git diff`/`log`/`status`/`show` on paths under `.specs/` to read, compare, or recover them — git returning nothing there is expected, not an error. This is scoped to `.specs/`; diffing the code under review is unaffected. For moves, use `git mv` only when the path is tracked, otherwise `mv`.
 
 Execute a compiled conformance checklist against an implementation. This skill answers "is it the thing the spec described", not "is it correct" — correctness review (roborev, generic code review) is a separate, orthogonal gate. A criterion can be violated while every test passes; most criteria exist precisely because tests cannot see them. "All tests pass" is never exculpatory evidence here.
 
