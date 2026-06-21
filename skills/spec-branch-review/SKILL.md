@@ -1,6 +1,6 @@
 ---
 name: spec-branch-review
-description: This skill should be used when the user or the spec-branch-refine loop asks to code-review or correctness-check the whole branch for bugs at the end of implementation. Reviews the branch diff (committed merge-base..HEAD by default, or the working tree including untracked files with scope=working-tree) in one spec-aware pass and writes structured findings — a machine-readable YAML block plus prose — to reviews/branch-<i>-review.md. It runs a fixed core review (correctness, security, simplification) and fans out specialized lenses by risk (design, deep-security, data/deployment, dependency, performance, test-quality), delegating to existing skills where available. Read-only — it never edits code and never re-checks conformance (that is spec-audit). spec-branch-fix consumes its output. Trigger on "review the branch", "code-review the branch", "branch correctness review", "find bugs across the branch", or "spec branch review".
+description: This skill should be used when the user or the spec-branch-refine loop asks to code-review or correctness-check the whole branch for bugs at the end of implementation. Reviews the branch diff (committed merge-base..HEAD by default, or the working tree including untracked files with scope=working-tree) in one spec-aware pass and writes structured findings — a machine-readable YAML block plus prose — to reviews/branch-<i>-review.md. It runs a fixed core review (correctness, security, simplification, AI-authorship tells) and fans out specialized lenses by risk (design, deep-security, data/deployment, dependency, performance, test-quality), delegating to existing skills where available. Read-only — it never edits code and never re-checks conformance (that is spec-audit). spec-branch-fix consumes its output. Trigger on "review the branch", "code-review the branch", "branch correctness review", "find bugs across the branch", or "spec branch review".
 mode: review
 scope: document
 capability: reviewer
@@ -10,7 +10,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "3"
+  version: "4"
 ---
 
 # Spec Branch Review
@@ -126,9 +126,9 @@ independent of the later fixer. Merge all findings into one file.
 
 ### Core review (always runs)
 
-One pass over the whole branch diff applying three lenses — the same bug classes as
-`spec-step-review`, but across the integrated change where cross-step interactions
-live:
+One pass over the whole branch diff applying four lenses — the same bug classes as
+`spec-step-review`, plus an AI-authorship pass, across the integrated change where
+cross-step interactions live:
 
 1. **Correctness / logic** — boundary and null/empty errors, wrong conditions,
    unhandled errors and rejections, races and ordering, resource leaks, broken
@@ -140,6 +140,19 @@ live:
    branch introduces or exposes.
 3. **Simplification / maintainability** — abstractions that don't earn their keep,
    dead/duplicated code, needless indirection (almost always advisory).
+4. **AI-authorship tells** — this branch was written by an LLM (`spec-step-run`), so
+   hunt the failure modes current models still produce that slip past ordinary
+   review: references to APIs, methods, imports, fields, or config keys that do not
+   exist in this codebase or its dependencies (hallucinated symbols); copy-paste
+   blocks left with stale identifiers from the source context (a renamed concept
+   whose body still names the old entity); over-broad `catch`/`except` that swallows
+   the real error, or a silent fallback to empty/zero/null that masks failure instead
+   of surfacing it; collection or key access that assumes non-empty/present without
+   checking; and reinvented helpers that duplicate something already in the repo.
+   File each under its **natural category** — a hallucinated call or swallowed error
+   is `correctness`, a reinvented helper is `simplification`. This lens is a hunting
+   heuristic, not a new category, and it never re-flags a trade-off the learnings
+   already record as deliberate.
 
 ### Conditional fan-out (fan out by risk, not by habit)
 
@@ -230,7 +243,7 @@ review:
   verdict: pass | needs-fix
   actionable: <count>
   advisory: <count>
-  lenses: [correctness, security, simplification]   # plus any fired: design, deep-security, data-deploy, dependency, performance, test-quality
+  lenses: [correctness, security, simplification, ai-authorship]   # plus any fired: design, deep-security, data-deploy, dependency, performance, test-quality
   findings:
     - id: F1
       severity: HIGH
