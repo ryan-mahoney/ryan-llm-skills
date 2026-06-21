@@ -1,13 +1,16 @@
 ---
 name: spec-review
 description: This skill should be used when the user asks to "review a spec", "review an issue", "check the plan", "review the implementation plan", "find gaps in the spec", or "review spec". Reviews .specs/<slug>/spec.md for gaps and viability, edits it when needed, and mirrors changes to GitHub only when a GitHub mirror exists.
+mode: coding
+scope: document
+capability: repo-write
 disable-model-invocation: true
 argument-hint: "[feature-slug, spec path, or GitHub issue number]"
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "4"
+  version: "5"
 ---
 
 # Spec Review
@@ -27,6 +30,16 @@ Always apply substantive review changes to the resolved local spec file first:
 ```txt
 .specs/<feature-slug>/spec.md
 ```
+
+Always write a Markdown review report to:
+
+```txt
+.specs/<feature-slug>/spec-review.md
+```
+
+The report is unconditional — write it on every run, including a pass where `spec.md` is left unchanged. Use the native `Write` tool. The server registers the file automatically via spec-folder registration; no MCP-tool call is needed.
+
+Report content: spec path, mirror status, whether `spec.md` changed, per-change rationale (or that the spec passed review unchanged), granularity verdict, and any open questions.
 
 GitHub issues are optional mirrors. Never update a GitHub issue instead of the local file, and never treat the issue body as the only persisted review output.
 
@@ -87,8 +100,9 @@ After editing `spec.md`, mirror the final body to GitHub only when an available 
 ## Output Steps
 
 1. Write any reviewed changes to the resolved local `spec.md`.
-2. If a GitHub mirror exists, update the issue with the final local `spec.md` body.
-3. Report:
+2. Write a review report to `.specs/<feature-slug>/spec-review.md` describing what changed and why — or, on a no-edit pass, a short report stating the spec passed review unchanged. This write is unconditional.
+3. If a GitHub mirror exists, update the issue with the final local `spec.md` body.
+4. Report:
    - Spec path.
    - GitHub issue URL or "not mirrored".
    - Whether the local file changed.

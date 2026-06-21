@@ -1,11 +1,14 @@
 ---
 name: spec-architect-critics
 description: "Critique a spec-driven architecture proposal by selecting two real-world practitioners with deep, relevant expertise and evaluating the proposal through their known perspectives. Use when the user says 'critique this architecture', 'review this proposal', 'what would an expert think of this', 'poke holes in this design', 'stress-test this approach', 'what am I missing', or 'is this a good architecture', especially after spec-architect-initial writes .specs/<slug>/proposal.md."
+mode: coding
+scope: document
+capability: repo-write
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "1"
+  version: "2"
 ---
 
 # Spec Architect Critics — Expert-Perspective Design Review

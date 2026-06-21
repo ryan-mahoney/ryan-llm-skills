@@ -1,13 +1,16 @@
 ---
 name: spec-remediate
 description: This skill should be used when the user asks to "remediate the audit findings", "fix the spec violations", "close the audit findings", "fix conformance violations", or "spec remediate". Reads a spec-audit report, drives one smart subagent per VIOLATION to converge the code back to the frozen spec, and re-audits until clean. Edits production code; never rewrites the spec.
+mode: coding
+scope: document
+capability: orchestrator
 disable-model-invocation: true
 argument-hint: "[feature-slug, spec path, or GitHub issue number]"
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "3"
+  version: "4"
 ---
 
 # Spec Remediate
@@ -131,9 +134,20 @@ After every code-drift finding has been addressed (fixed or escalated), re-run t
    - Zero VIOLATIONs (ignoring any escalated spec-defect findings) → converged. Stop and report.
    - Fewer VIOLATIONs, all remaining ones are code drift → loop: remediate the new report.
    - A finding flips a previously-passing criterion to VIOLATION (a fix broke conformance elsewhere) → treat as a new code-drift finding and remediate it next round.
-3. Cap at **3 remediation rounds**. If VIOLATIONs remain after the cap, stop and report the unresolved findings rather than looping indefinitely — persistent non-convergence usually signals a spec defect or a criteria defect, not a code bug.
+3. Cap at **3 remediation rounds**. If VIOLATIONs remain after the cap, stop and report the unresolved findings rather than looping indefinitely — persistent non-convergence usually signals a spec defect or a criteria defect, not a code bug. When VIOLATIONs remain after the cap, also set `verdict: non-converged` in the refreshed `audit.md` front-matter (the re-audit in step 1 just rewrote it). `non-converged` is the only value this skill writes into `audit.md`; it does not re-judge convergence (convergence is still measured by re-running `spec-audit` per the "## Boundaries" rule) — the mark is a metadata flag the in-app review gate reads so it can route a non-converged audit to "Fix findings" rather than treating the re-audit's `violations` verdict as the final word.
 
 Do not silently re-run past the cap. Surfacing "did not converge in N rounds" is the correct outcome; hand it back.
+
+## Evidence
+
+Write `.specs/<feature-slug>/remediation.md` with the per-finding outcomes across all remediation rounds: fixed (with the commit hash that closed it), escalated (with the reason — spec defect or criteria defect), or unresolved (still open at the cap). This file is the persistent evidence artifact that survives the re-audit that rewrites `audit.md` to clean — without it, the record of what the gate caught disappears into a rewritten clean audit.
+
+Rules:
+
+- The file path is `.specs/<feature-slug>/remediation.md` — fixed name, one worktree holds one `remediation.md`, mirroring `audit.md`'s one-per-worktree rule. No phase-qualified name or subdirectory.
+- Write the file before the convergence loop's cap-exit — update it at the end of every round, before the next re-audit, so even a non-converged run preserves the evidence. A converged run also writes it (with all findings marked fixed or escalated, none unresolved).
+- The content is the per-finding outcomes across **all** rounds, not just the final round's unresolved findings. The unresolved-at-cap subset is additionally recorded in `blockers.md` per the "## Escalation" rule; `remediation.md` carries the full per-finding ledger, `blockers.md` carries the escalation subset. Both files may exist after a non-converged run.
+- The file is overwritten on each run — a new remediation pass replaces the previous `remediation.md`, not appends to it.
 
 ## Escalation
 
@@ -147,7 +161,7 @@ When a GitHub issue mirror is available, also post escalations as an issue comme
 
 ## Boundaries
 
-- **Edits production code and tests; never the spec, criteria, or audit report.** Those are inputs. If the spec is wrong, escalate — do not patch it here.
+- **Edits production code and tests; never the spec or criteria.** Edits `audit.md` ONLY to set `verdict: non-converged` in the front matter when the convergence loop exits at the cap with unresolved findings; the re-audit by `spec-audit` otherwise rewrites `audit.md`. Never edits the spec, criteria, or `audit.md`'s finding blocks. If the spec is wrong, escalate — do not patch it here.
 - **No re-audit by this skill's own reasoning.** Convergence is measured by re-running `spec-audit`, not by self-assessment. The judge stays independent of the patcher.
 - **No new scope.** Do not fix correctness, style, or performance issues the audit did not raise; those belong to other gates. Confine any incidental concern to a single note in the completion report.
 
@@ -156,7 +170,7 @@ When a GitHub issue mirror is available, also post escalations as an issue comme
 After the loop converges or hits the cap, report:
 
 1. Spec path, audit report path, and GitHub mirror, if any.
-2. Per-finding outcome: fixed (with commit hash), escalated (with reason), or unresolved.
+2. Per-finding outcomes written to `.specs/<feature-slug>/remediation.md` and summarized here: fixed (with commit hash), escalated (with reason), or unresolved.
 3. Remediation rounds run and the VIOLATION count after each.
 4. Final audit verdict counts.
 5. Escalations filed (spec-review / spec-criteria) and any `blockers.md` entries.

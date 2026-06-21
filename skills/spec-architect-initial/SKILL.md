@@ -1,11 +1,14 @@
 ---
 name: spec-architect-initial
 description: "Act as the first architecture stage in the spec-driven workflow: given a problem or feature request, review the current system architecture and write .specs/<slug>/proposal.md with a compatible solution, or explain why the request does not fit. Use when the user says 'architect this', 'design a solution for', 'how should I implement', 'how would this fit into the codebase', 'propose an approach for', 'is this feasible in our architecture', or 'plan this feature'."
+mode: coding
+scope: document
+capability: repo-write
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "2"
+  version: "3"
 ---
 
 # Spec Architect Initial — Solution Design Against Existing Architecture
@@ -125,7 +128,14 @@ When the solution fits, produce a concrete implementation plan. This is not a ha
 
 ### Proposal Structure
 
+The front-matter block below MUST be the first bytes of `proposal.md` — it is the machine-readable signal source; the human `## Verdict` / `## Critique Recommended` sections below it remain the prose.
+
 ```markdown
+---
+verdict: COMPATIBLE | COMPATIBLE_WITH_CAVEATS
+critique_recommended: true | false
+---
+
 # Implementation Proposal: [Feature/Problem Name]
 
 ## Summary
@@ -221,7 +231,14 @@ When the solution doesn't fit, be direct and specific. Don't soften it into "it'
 
 ### Assessment Structure
 
+The front-matter block below MUST be the first bytes of `proposal.md` — it is the machine-readable signal source; the human `## Verdict` section below it remains the prose.
+
 ```markdown
+---
+verdict: INCOMPATIBLE
+critique_recommended: false
+---
+
 # Architecture Assessment: [Feature/Problem Name]
 
 ## Summary

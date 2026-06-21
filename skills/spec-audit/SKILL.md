@@ -1,13 +1,16 @@
 ---
 name: spec-audit
 description: This skill should be used when the user asks to "audit the implementation against the spec", "run the spec audit", "check spec conformance", "verify the branch against the criteria", or "spec audit". Executes the frozen conformance checklist from .specs/<slug>/criteria.md against the implementation diff and reports PASS/VIOLATION/UNVERIFIABLE per criterion with file:line evidence. Report-only; never edits production code.
+mode: coding
+scope: document
+capability: shell
 disable-model-invocation: true
 argument-hint: "[feature-slug, spec path, or GitHub issue number]"
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "3"
+  version: "4"
 ---
 
 # Spec Audit
@@ -64,6 +67,25 @@ Do not soften verdicts. A behaviorally-silent violation — same observable beha
 ## Report
 
 Write the audit report to `.specs/<feature-slug>/audit.md`, overwriting any previous run. One worktree holds one audit report, so the name is fixed — no phase-qualified name or subdirectory.
+
+Begin `audit.md` with the front-matter block below as the first bytes of the file — before the human-readable report. No leading blank line, no leading heading, no front-matter anywhere else in the file. The block is the machine-readable signal the in-app review gate parses (`parseAuditSignal`) and freshness-checks (`resolveAuditVerdict`); the human-readable report follows below it.
+
+```
+---
+verdict: clean | violations | non-converged
+violations: <integer>
+unverifiable: <integer>
+reviewed_ahead: <commits between the audit merge-base and HEAD at audit time>
+---
+```
+
+- `verdict` is `clean` when `violations === 0`, else `violations`. The parser rejects a `clean` verdict with a positive count and a `violations` verdict with a zero count as self-contradictory, so the count and the verdict must agree.
+- `violations` is the count of VIOLATION entries in the report's verdict table (the integer the parser cross-checks against `verdict`).
+- `unverifiable` is the count of UNVERIFIABLE entries.
+- `reviewed_ahead` is `git rev-list --count <merge-base>..HEAD`, where `<merge-base>` is the audit's diff base — the same merge-base the "Determine the Audit Scope" section above computes its diff range from. Emit it on every audit so the resolver can freshness-check the audit against the worktree's current ahead-count.
+- `spec-audit` emits `clean` (when `violations === 0`) or `violations` only. `non-converged` is reserved for `spec-remediate`, which sets it only when it exits at the remediation cap with unresolved findings; never emit `non-converged` from this skill.
+
+The human-readable report body follows the front-matter, unchanged:
 
 1. Header: branch and merge-base (or PR/range), criteria file and its compile baseline, date, verdict counts.
 2. A verdict table: criterion ID, mode, one-line title, verdict.
