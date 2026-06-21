@@ -1,6 +1,6 @@
 ---
 name: spec-step-judge
-description: This skill should be used when the user or an external task-runner asks to judge, evaluate, review, or "close out" a single already-implemented spec step — applying scoped corrections only if the step fell short, then adapting not-yet-run steps to what that step learned. It is the judging half of an externally-orchestrated, isolated per-step pipeline that pairs with spec-step-run (no spec-run orchestrator). Given only a step marker (spec path plus step), it is self-sufficient: it resolves the step's learning file, subspec, criteria.md, invariants.md, blockers.md, and applicable rules deterministically from the spec directory and needs no other context from the caller. Reads the step's learning file, evaluates the committed change against its Covers criteria and guardrails, fixes only that step when it failed, and edits future step text in spec.md — with an Adaptations log — when learnings warrant. Trigger on "judge this step", "evaluate the step implementation", "review the implemented step", "apply step learnings", "adapt future steps", or "spec step judge".
+description: This skill should be used when the user or an external task-runner asks to judge, evaluate, review, or "close out" a single already-implemented spec step — applying scoped corrections only if the step fell short, then adapting not-yet-run steps to what that step learned. It is the judging half of an externally-orchestrated, isolated per-step pipeline that pairs with spec-step-run (no spec-run orchestrator). Given only a step marker (spec path plus step), it is self-sufficient: it resolves the step's learning file, subspec, criteria.md, invariants.md, blockers.md, and applicable rules deterministically from the spec directory and needs no other context from the caller. Reads the step's learning file, evaluates the committed change against its Covers criteria and guardrails, fixes only that step when it failed, and rewrites the content of not-yet-run steps in spec.md — adding to, reducing, or replacing a future step's content, but never changing how many steps remain — with an Adaptations log, when learnings warrant. Trigger on "judge this step", "evaluate the step implementation", "review the implemented step", "apply step learnings", "adapt future steps", or "spec step judge".
 mode: coding
 scope: document
 capability: orchestrator
@@ -10,7 +10,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "2"
+  version: "3"
 ---
 
 # Spec Step Judge
@@ -203,19 +203,37 @@ section — there is nothing to adapt.
 `learnings/<n>-learning.md` yet. Never touch an already-run step, its code, or its
 committed history.
 
+You may rewrite the *content* of a not-yet-run step — adding to it, trimming it, or
+replacing it outright — so it stays implementable as written against the discovered
+reality. The one hard invariant: **the number of remaining steps does not change.**
+The external orchestrator owns the step count and addresses steps by number, so you
+adapt within the existing slots and never add, remove, insert, or renumber a step.
+
 For each finding that materially changes a future step — a renamed or new symbol
 the step references, a changed signature, relocated code, a step rendered
 unnecessary, a newly required prerequisite — make the minimal edit to that future
-step's text in `spec.md` so it stays implementable as written against the
-discovered reality. Constraints:
+step's content in `spec.md`. Three shapes of edit, all count-preserving:
+
+- **Add / replace** — expand or rewrite a future step's content to match reality:
+  new symbol names, a changed signature, relocated code, or a different
+  implementation path that still satisfies the same criteria.
+- **Reduce to obsolete** — a step the learning makes unnecessary keeps its number
+  and is marked obsolete in place, with the reason. Its slot stays; its work
+  empties. Never delete the step.
+- **Absorb a prerequisite** — fold newly required prerequisite work into the
+  content of the not-yet-run step that needs it (or the earliest not-yet-run step
+  that can carry it). If no existing future step can absorb it, do NOT add a step:
+  record it as an escalation in the report (and in `<spec-dir>/blockers.md` when it
+  blocks a later step) and leave the count unchanged.
+
+Constraints:
 
 - **Preserve traceability.** Never change a step's `Covers:` tags or the
   Acceptance Criteria intent. You may refine *how* a step is done, not *what* it
   must satisfy.
-- **Keep step numbers stable.** The external runner addresses steps by number, so
-  never renumber. A step the learning makes unnecessary is marked obsolete with a
-  reason in place, not deleted. A genuinely new prerequisite is appended as a new
-  highest-numbered step, not inserted.
+- **Keep the step set fixed.** Never add, delete, insert, or renumber a step; the
+  remaining step count must stay constant. Every edit lands inside an existing
+  not-yet-run step.
 - **Log every edit.** Append (create if absent) an `## Adaptations` section at the
   end of `spec.md`. One entry per edit: the source step and its learning path, the
   future step(s) changed, what changed, and why. This restores the provenance the
@@ -240,9 +258,10 @@ the future step text. Do not delegate spec rewriting to the correction subagent.
 
 ## Boundaries
 
-- Edits only the just-run step's code (a scoped fix-up) and not-yet-run step *text*
-  in `spec.md`. Never edits completed steps' code, the Acceptance Criteria intent,
-  or any `Covers:` tag, and never renumbers steps.
+- Edits only the just-run step's code (a scoped fix-up) and not-yet-run step
+  *content* in `spec.md`. Never edits completed steps' code, the Acceptance Criteria
+  intent, or any `Covers:` tag, and never adds, removes, inserts, renumbers, or
+  otherwise changes the number of steps.
 - Judging and patching are separated at the subagent boundary; the targeted test
   re-run is the oracle, never self-assessment.
 - Does not run, dequeue, or schedule the next step — the external task-runner owns
