@@ -7,7 +7,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "5"
+  version: "6"
 ---
 
 # Design Spec Writer
@@ -121,6 +121,8 @@ Trade-offs with rationale, posture rationale, risks, what was deferred from crit
 ### 7. Implementation Steps
 
 A flat, numbered, sequential list of deterministic engineering tasks. For each: **What to do** (exact files/changes), **Why** (tie to architecture or an AC), **Signatures/contracts** (component prop shapes when adding/changing interfaces), **Tests** (concrete assertions and target files — Storybook stories, Playwright/visual snapshots, jest-axe, Testing Library; behavior and states, not implementation), **Coverage** (`Covers: AC-3, AC-7`), **Complexity** (`Complexity: easy`), and **Visual design** (`Visual: yes` or `Visual: no`). Every AC must be covered by at least one step; a step covering no AC must trace to a stated architectural need.
+
+Number the steps with sequential integers starting at 1 (1, 2, 3, …) as one continuous list. Do not group steps under "Phase" headings and do not use tiered or decimal numbers (`1.1`, `2.3`, `3.2.1`). Even when the design is organized in phases, the Implementation Steps stay one flat integer sequence — the external task-runner addresses steps by this number. A phase *spec* (one of several `spec.md` files for a multi-phase design, per Phase specs above) still keeps its own flat 1..N list.
 
 Each step's `Covers:`, `Complexity:`, and `Visual:` tag lines sit together at the end of the step. Score complexity by *this step's own* work, applying the rubric the same way every time so the label is reproducible across runs. The system uses per-step tags to route each step to an appropriately strong implementation model, so score every step. Anchor the choice on scope (files/components this step touches), novelty (new patterns vs. reusing existing components/tokens), domain difficulty (the design and a11y depth this step exercises), and integration risk (state wiring, motion, cross-component blast radius):
 

@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "11"
+  version: "12"
 ---
 
 # Spec Write
@@ -163,6 +163,8 @@ For each significant trade-off, state why this approach was chosen, what it give
 ### 7. Implementation Steps
 
 Create a flat, numbered, sequential list of deterministic engineering tasks.
+
+Number the steps with sequential integers starting at 1 (1, 2, 3, …) as one continuous list. Do not group steps under "Phase" headings and do not use tiered or decimal numbers (`1.1`, `2.3`, `3.2.1`). Even when the proposal is organized in phases, the Implementation Steps stay one flat integer sequence — the whole downstream pipeline (`spec-run`, `spec-step-run`, `spec-step-judge`, the external task-runner) addresses steps by this number. A phase *spec* (one of several `spec.md` files for a multi-phase proposal, per Phase specs above) still keeps its own flat 1..N list.
 
 For each step include:
 

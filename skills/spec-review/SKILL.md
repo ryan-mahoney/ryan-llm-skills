@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "7"
+  version: "8"
 ---
 
 # Spec Review
@@ -40,7 +40,7 @@ Always write a Markdown review report to:
 
 The report is unconditional — write it on every run, including a pass where `spec.md` is left unchanged. Use the native `Write` tool. The server registers the file automatically via spec-folder registration; no MCP-tool call is needed.
 
-Report content: spec path, mirror status, whether `spec.md` changed, per-change rationale (or that the spec passed review unchanged), granularity verdict, and any open questions.
+Report content: spec path, mirror status, whether `spec.md` changed, per-change rationale (or that the spec passed review unchanged), granularity verdict, step-numbering normalization and `spec-steps.json` reconciliation, and any open questions.
 
 GitHub issues are optional mirrors. Never update a GitHub issue instead of the local file, and never treat the issue body as the only persisted review output.
 
@@ -92,21 +92,43 @@ Edit with discipline:
 
 - Only edit for substantive gaps. A sound spec needs no changes. Do not restyle, reword, or reorganize a spec that already passes the checklist.
 - Splitting an oversized implementation step is substantive, not churn; see Granularity & Step Splitting.
+- Flattening phase groupings or tiered/decimal step numbers into a single sequential integer list is substantive, not churn; see Flat Sequential Numbering.
 - Preserve the author's intent and voice. Refine specific sentences and sections; do not rewrite the whole spec into your own style.
 - Report what changed and why so the edit is reviewable.
 - Converge on re-run. Running this review again on an already-improved spec should trend toward no edits. If you find yourself rewriting prior edits, stop; the spec is already adequate.
 
 After editing `spec.md`, mirror the final body to GitHub only when an available mirror exists.
 
+## Step Index Consistency
+
+`spec.md` is canonical, but `spec-write` emits a derived index at `.specs/<feature-slug>/spec-steps.json` — `steps[]` of `{step, name, description, difficulty, visualDesign}` — that the external task-runner enumerates and routes on. An index that disagrees with `spec.md` misaddresses or misroutes steps, so reconcile it to the final step list on every run:
+
+- **After changing the step list.** Whenever this review flattens phases or tiered numbers, splits an oversized step, removes a step that should not exist, or renumbers, rewrite `spec-steps.json` to match the final `spec.md`.
+- **On drift, even with no spec edit.** Compare the existing index against the final step list. If entry count, numbering, names, difficulties, or visual flags disagree, reconcile the index to `spec.md` — the markdown wins.
+
+Each reconciled index has exactly one entry per step, in spec order, with:
+
+- `step` — the step's new 1-based number.
+- `name`, `description` — match the step's title and intent.
+- `difficulty` — equal to the step's `Complexity:` tag (`easy`/`medium`/`hard`).
+- `visualDesign` — equal to the step's `Visual:` flag (`Visual: yes` → `true`).
+- `spec` (top level) — the canonical (issue-prefixed when applicable) path to `spec.md`.
+
+If flattening or splitting changes the spec-wide roll-up — no step is `Visual: yes` anymore, or one is for the first time — also update the footer's `Visual design:` line.
+
+Unlike `spec-step-judge`, this review may change the step count and numbering: no step has run yet, so renumbering is safe. Rewrite the whole index to match rather than preserving a fixed count. If the steps changed and no `spec-steps.json` exists, create it from the final step list using the `spec-write` schema; if no steps changed and none exists, do not create one.
+
 ## Output Steps
 
 1. Write any reviewed changes to the resolved local `spec.md`.
-2. Write a review report to `.specs/<feature-slug>/spec-review.md` describing what changed and why — or, on a no-edit pass, a short report stating the spec passed review unchanged. This write is unconditional.
-3. If a GitHub mirror exists, update the issue with the final local `spec.md` body.
-4. Report:
+2. Reconcile `.specs/<feature-slug>/spec-steps.json` with the final step list (see Step Index Consistency).
+3. Write a review report to `.specs/<feature-slug>/spec-review.md` describing what changed and why — or, on a no-edit pass, a short report stating the spec passed review unchanged. This write is unconditional.
+4. If a GitHub mirror exists, update the issue with the final local `spec.md` body.
+5. Report:
    - Spec path.
    - GitHub issue URL or "not mirrored".
    - Whether the local file changed.
+   - Whether `spec-steps.json` was reconciled, and how (flattened numbering, split steps, drift fix, or unchanged).
    - What changed and why, or that the spec already passed review.
 
 ## Review Checklist
@@ -175,6 +197,19 @@ Verify step ordering:
 - Pure/domain logic next.
 - Stateful and I/O modules after.
 - Integration wiring and verification tests last.
+
+### Flat Sequential Numbering
+
+Implementation Steps must be a single flat list numbered with sequential integers starting at 1 (1, 2, 3, …). The entire downstream pipeline — `spec-run`, `spec-step-run`, `spec-step-judge`, and the external task-runner — addresses steps by this number and routes on the matching `spec-steps.json` entry, so any other shape breaks step resolution.
+
+Normalize these structures into the flat list, preserving step order and content:
+
+- **Phase groupings.** Steps grouped under "Phase 1 / Phase 2 …" headings, or carrying a `Phase N:` prefix, inside Implementation Steps. Remove the grouping and renumber every step as one continuous 1..N sequence. The phase headings carry no execution meaning; fold any per-phase context that would otherwise be lost into the affected steps.
+- **Tiered or decimal numbers.** `1.1`, `2.3`, `3.2.1`, `1a`, `2b`, or any nested scheme. Renumber to flat integers in the same order.
+
+When renumbering, fix any cross-references between steps (e.g. "after step 2.1" → "after step 5") so they point at the new numbers. `Covers:` tags reference acceptance criteria (`AC-n`), not step numbers, so they are unaffected — do not touch them. Flattening is substantive, not churn; perform it even on an otherwise passing spec, and reconcile `spec-steps.json` to the new numbering (see Step Index Consistency).
+
+This normalizes only the Implementation Steps numbering. It does not change the spec's identity as one phase of a multi-phase proposal: leave the `Spec folder: .specs/<slug>/ (phase N)` footer marker untouched.
 
 ### Traceability
 
