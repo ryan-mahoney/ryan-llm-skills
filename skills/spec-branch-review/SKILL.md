@@ -1,6 +1,6 @@
 ---
 name: spec-branch-review
-description: This skill should be used when the user or the spec-branch-refine loop asks to code-review or correctness-check the whole branch for bugs at the end of implementation. Reviews the branch diff (committed merge-base..HEAD by default, or the working tree including untracked files with scope=working-tree) in one spec-aware pass and writes structured findings — a machine-readable YAML block plus prose — to reviews/branch-<i>-review.md. It runs a fixed core review (correctness, security, simplification, AI-authorship tells) and fans out specialized lenses by risk (design, deep-security, data/deployment, dependency, performance, test-quality), delegating to existing skills where available. Read-only — it never edits code and never re-checks conformance (that is spec-audit). spec-branch-fix consumes its output. Trigger on "review the branch", "code-review the branch", "branch correctness review", "find bugs across the branch", or "spec branch review".
+description: This skill should be used when the user or the spec-branch-refine loop asks to code-review or correctness-check the whole branch for bugs at the end of implementation. Reviews the branch diff (committed merge-base..HEAD by default, or the working tree including untracked files with scope=working-tree) in one spec-aware pass and writes structured findings — a machine-readable YAML block plus prose — to reviews/branch-<i>-review.md. It runs a fixed core review (correctness, reference/contract integrity, security, simplification, AI-authorship tells) and fans out specialized lenses by risk (design, deep-security, data/deployment, dependency, performance, test-quality), delegating to existing skills where available. Read-only — it never edits code and never re-checks conformance (that is spec-audit). spec-branch-fix consumes its output. Trigger on "review the branch", "code-review the branch", "branch correctness review", "find bugs across the branch", or "spec branch review".
 mode: review
 scope: document
 capability: reviewer
@@ -10,7 +10,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "4"
+  version: "5"
 ---
 
 # Spec Branch Review
@@ -126,24 +126,39 @@ independent of the later fixer. Merge all findings into one file.
 
 ### Core review (always runs)
 
-One pass over the whole branch diff applying four lenses — the same bug classes as
-`spec-step-review`, plus an AI-authorship pass, across the integrated change where
-cross-step interactions live:
+One pass over the whole branch diff applying five lenses — the same bug classes as
+`spec-step-review`, plus branch-level reference/contract integrity and an
+AI-authorship pass, across the integrated change where cross-step interactions live:
 
 1. **Correctness / logic** — boundary and null/empty errors, wrong conditions,
    unhandled errors and rejections, races and ordering, resource leaks, broken
    async, data-integrity gaps, and **integration bugs** the per-step reviews could
    not see (mismatched contracts between steps, a caller and callee that disagree,
    state set in one step and misread in another).
-2. **Security** — injection, missing validation on trust boundaries, authz/ownership
+2. **Reference & contract integrity** — the cross-file consistency that only a
+   whole-branch view can check, and the highest-yield class an integrated review
+   adds over per-step review. Two sub-checks:
+   - **Reference existence** — every symbol, import, file path, route, env var,
+     config key, CLI flag, or feature flag the branch *references* actually exists
+     in the branch's end state. Flag the dangling ones: a call to a function that
+     was renamed or never added, an import of a deleted module, a config key read
+     but never defined, a flag a command passes that the callee removed.
+   - **Producer/consumer agreement** — where one part of the branch produces a
+     value, shape, or interface another part consumes, confirm they still agree
+     across the *whole* diff: a changed function signature and its call sites, a
+     renamed field and its readers, a removed return value still destructured, an
+     event emitted with one payload and handled expecting another. A rename or
+     removal applied in one place but not its mirror is the canonical defect here.
+3. **Security** — injection, missing validation on trust boundaries, authz/ownership
    gaps, secrets, unsafe deserialization, weak crypto/randomness. Flag what the
    branch introduces or exposes.
-3. **Simplification / maintainability** — abstractions that don't earn their keep,
+4. **Simplification / maintainability** — abstractions that don't earn their keep,
    dead/duplicated code, needless indirection (almost always advisory).
-4. **AI-authorship tells** — this branch was written by an LLM (`spec-step-run`), so
+5. **AI-authorship tells** — this branch was written by an LLM (`spec-step-run`), so
    hunt the failure modes current models still produce that slip past ordinary
-   review: references to APIs, methods, imports, fields, or config keys that do not
-   exist in this codebase or its dependencies (hallucinated symbols); copy-paste
+   review: invented methods or options on a third-party library or framework API
+   that the dependency does not actually expose (hallucinated dependency
+   symbols — repo-internal dangling references belong to lens 2); copy-paste
    blocks left with stale identifiers from the source context (a renamed concept
    whose body still names the old entity); over-broad `catch`/`except` that swallows
    the real error, or a silent fallback to empty/zero/null that masks failure instead
@@ -243,7 +258,7 @@ review:
   verdict: pass | needs-fix
   actionable: <count>
   advisory: <count>
-  lenses: [correctness, security, simplification, ai-authorship]   # plus any fired: design, deep-security, data-deploy, dependency, performance, test-quality
+  lenses: [correctness, reference-integrity, security, simplification, ai-authorship]   # plus any fired: design, deep-security, data-deploy, dependency, performance, test-quality
   findings:
     - id: F1
       severity: HIGH
