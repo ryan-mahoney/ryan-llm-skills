@@ -1,6 +1,6 @@
 ---
 name: spec-write
-description: This skill should be used when the user asks to "write a spec", "create a spec", "spec this out", "plan this feature", or "write an implementation plan" for a feature or change. Creates a structured implementation spec in .specs/<slug>/spec.md and mirrors it to GitHub only when the current repository is hosted on GitHub.
+description: This skill should be used when the user asks to "write a spec", "create a spec", "spec this out", "plan this feature", or "write an implementation plan" for a feature or change. Creates a structured implementation spec in .specs/<slug>/spec.md and automatically mirrors it to GitHub when the current repository is hosted on GitHub, `gh` is authenticated, and the user has not opted out.
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,12 +9,12 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "10"
+  version: "11"
 ---
 
 # Spec Write
 
-Create a deterministic implementation spec from the current proposal and persist it to the repository-local spec folder. The local file is canonical; issue trackers are optional mirrors.
+Create a deterministic implementation spec from the current proposal and persist it to the repository-local spec folder. The local file is canonical; GitHub issues are automatic mirrors when available and not explicitly disabled.
 
 ## Non-Interactive Operation
 
@@ -30,13 +30,14 @@ Always write the completed spec to:
 .specs/<feature-slug>/spec.md
 ```
 
-If the current repository is a GitHub repository and `gh` is authenticated, also mirror the same spec body to a GitHub issue:
+If the current repository is a GitHub repository and `gh` is authenticated, also mirror the same spec body to a GitHub issue without asking for confirmation, unless the user explicitly says not to mirror:
 
 - If `$ARGUMENTS` is an issue number, edit that issue.
 - If no issue number is provided, create a new issue.
+- If the user explicitly opts out of GitHub mirroring, skip the mirror and report the local spec path.
 - If GitHub is unavailable, unauthenticated, or the repo is hosted elsewhere, skip the mirror and report the local spec path.
 
-Do not require GitHub for this workflow. Bitbucket, GitLab, self-hosted, and local-only repositories use `.specs/<feature-slug>/spec.md` only.
+Do not require GitHub for this workflow. Bitbucket, GitLab, self-hosted, and local-only repositories use `.specs/<feature-slug>/spec.md` only. Do not ask whether to mirror in the normal GitHub case; the default is yes.
 
 ## Pre-Step - Load Pipeline Inputs
 
@@ -67,13 +68,14 @@ When writing a phase spec:
 
 ## GitHub Mirror Detection
 
-Treat GitHub as an optional mirror only when all of these are true:
+Treat GitHub as an automatic mirror only when all of these are true:
 
 1. `git remote get-url origin` identifies a GitHub remote, such as `git@github.com:owner/repo.git` or `https://github.com/owner/repo.git`.
 2. `command -v gh` succeeds.
 3. `gh auth status` succeeds for the remote host.
+4. The user has not explicitly opted out of mirroring for this run.
 
-If any check fails, continue with the local `spec.md` output and report why the GitHub mirror was skipped. Do not block spec creation on issue-tracker access.
+If any check fails, continue with the local `spec.md` output and report why the GitHub mirror was skipped. Do not block spec creation on issue-tracker access, and do not ask for confirmation before mirroring when all checks pass.
 
 ## Issue-ID Folder Prefix
 
