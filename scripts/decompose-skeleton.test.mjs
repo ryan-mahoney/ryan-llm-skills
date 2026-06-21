@@ -6,6 +6,10 @@ import path from "node:path";
 
 import { derive } from "./decompose-skeleton.mjs";
 
+function apiTarget(manifest) {
+  return manifest.targets.find((t) => t.structural_unit === "packages/api");
+}
+
 const KEBAB = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 function makeTempRepo() {
@@ -96,6 +100,64 @@ test("a repo with no detectable module system yields one low-confidence root uni
     assert.equal(manifest.targets.length, 1);
     assert.equal(manifest.targets[0].structural_unit, ".");
     assert.equal(manifest.coverage.low_confidence, true);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("source_hash is unchanged after an mtime-only touch of a matched file", () => {
+  const repo = workspaceRepo();
+  try {
+    const before = apiTarget(derive(repo)).source_hash;
+
+    const matched = path.join(repo, "packages/api/index.js");
+    const future = new Date("2030-01-01T00:00:00Z");
+    fs.utimesSync(matched, future, future);
+
+    const after = apiTarget(derive(repo)).source_hash;
+
+    assert.equal(after, before);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("source_hash changes after a content edit of a matched file", () => {
+  const repo = workspaceRepo();
+  try {
+    const before = apiTarget(derive(repo)).source_hash;
+
+    write(repo, "packages/api/index.js", "export const api = 2;");
+
+    const after = apiTarget(derive(repo)).source_hash;
+
+    assert.notEqual(after, before);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("reconcile preserves curated name/scope/last_synthesized and recomputes source_hash", () => {
+  const repo = workspaceRepo();
+  try {
+    const existing = derive(repo);
+    const apiSlug = apiTarget(existing).slug;
+    const curated = existing.targets.find((t) => t.slug === apiSlug);
+    curated.name = "API Service";
+    curated.scope = "Handles inbound API requests";
+    curated.last_synthesized = "2025-01-15T00:00:00Z";
+    curated.source_hash = "sha256:stale";
+
+    write(repo, "packages/api/index.js", "export const api = 3;");
+    const reconciled = derive(repo, { manifest: existing });
+    const result = reconciled.targets.find((t) => t.slug === apiSlug);
+    const freshHash = derive(repo).targets.find((t) => t.slug === apiSlug).source_hash;
+
+    assert.equal(result.name, "API Service");
+    assert.equal(result.scope, "Handles inbound API requests");
+    assert.equal(result.last_synthesized, "2025-01-15T00:00:00Z");
+    assert.equal(result.source_hash, freshHash);
+    assert.deepEqual(result.source_globs, ["packages/api/**"]);
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
   }

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 const IGNORED_DIRS = new Set([
@@ -186,13 +187,39 @@ function computeCoverage(repoRoot, targets, lowConfidence) {
   return { unassigned, overlaps, low_confidence: lowConfidence };
 }
 
+function sha256(contents) {
+  return createHash("sha256").update(contents).digest("hex");
+}
+
+export function sourceHash(repoRoot, globs) {
+  const entries = walkSourceFiles(repoRoot)
+    .filter((file) => globs.some((g) => matches(file, g)))
+    .map((file) => `${file}\0${sha256(fs.readFileSync(path.join(repoRoot, file)))}`)
+    .sort((a, b) => a.localeCompare(b));
+  return "sha256:" + sha256(entries.join("\n"));
+}
+
+function reconcile(targets, manifest) {
+  const prior = new Map(manifest.targets.map((t) => [t.slug, t]));
+  for (const target of targets) {
+    const carry = prior.get(target.slug);
+    if (!carry) continue;
+    target.name = carry.name;
+    target.scope = carry.scope;
+    target.last_synthesized = carry.last_synthesized;
+  }
+}
+
 export function derive(repoRoot, { manifest } = {}) {
   if (!repoRoot) throw new Error("repoRoot is required");
   if (!isDir(repoRoot)) throw new Error(`not a directory: ${repoRoot}`);
-  void manifest;
 
   const { units, lowConfidence } = detectUnits(repoRoot);
   const targets = buildTargets(units);
+  for (const target of targets) {
+    target.source_hash = sourceHash(repoRoot, target.source_globs);
+  }
+  if (manifest) reconcile(targets, manifest);
   const coverage = computeCoverage(repoRoot, targets, lowConfidence);
 
   return {
@@ -205,14 +232,43 @@ export function derive(repoRoot, { manifest } = {}) {
   };
 }
 
+function parseArgs(argv) {
+  const args = { repoRoot: argv[2], manifestPath: null };
+  for (let i = 3; i < argv.length; i++) {
+    if (argv[i] === "--manifest") {
+      args.manifestPath = argv[++i];
+      if (!args.manifestPath) throw new Error("--manifest requires a path");
+    } else {
+      throw new Error(`unknown argument: ${argv[i]}`);
+    }
+  }
+  return args;
+}
+
 function main() {
-  const repoRoot = process.argv[2];
-  if (!repoRoot) {
-    console.error("usage: node scripts/decompose-skeleton.mjs <repo-root>");
+  let args;
+  try {
+    args = parseArgs(process.argv);
+  } catch (err) {
+    console.error(err.message);
     process.exit(1);
   }
-  const manifest = derive(path.resolve(repoRoot));
-  console.log(JSON.stringify(manifest, null, 2));
+  if (!args.repoRoot) {
+    console.error("usage: node scripts/decompose-skeleton.mjs <repo-root> [--manifest <path>]");
+    process.exit(1);
+  }
+
+  let manifest;
+  if (args.manifestPath) {
+    if (!fs.existsSync(args.manifestPath)) {
+      console.error(`manifest not found: ${args.manifestPath}`);
+      process.exit(1);
+    }
+    manifest = readJson(args.manifestPath);
+  }
+
+  const result = derive(path.resolve(args.repoRoot), { manifest });
+  console.log(JSON.stringify(result, null, 2));
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
