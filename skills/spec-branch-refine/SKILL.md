@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "5"
+  version: "6"
 ---
 
 # Spec Branch Refine
@@ -70,9 +70,11 @@ refine was interrupted — resume rather than overwrite). Then:
    parsed for control flow.
 3. **Stop on clean or cap** — these two stops apply before any fix:
    - **Clean** — `verdict: pass` (no actionable findings). Stop; the branch is clean.
-     Commit the terminal review artifact (see Artifact Commit Policy).
+     Commit the terminal review artifact when it is tracked or not ignored (see
+     Artifact Commit Policy).
    - **Cap** — `i == max-iterations`. Stop; report the residual actionable findings,
-     and commit the terminal review artifact (see Artifact Commit Policy).
+     and commit the terminal review artifact when it is tracked or not ignored
+     (see Artifact Commit Policy).
 4. **Compute recurrence, then check stalled** — this order is what prevents both the
    premature stop and the oscillation:
    - **Recurrence set** = actionable signatures in `branch-<i>` that `branch-<i-1>-fix.md`
@@ -83,7 +85,8 @@ refine was interrupted — resume rather than overwrite). Then:
      unchanged from `branch-<i-1>`. That is a genuine dead end: fixing produced nothing
      and the same bugs remain. An identical actionable set after a fix that *did* change
      code is **not** stalled — it gets another iteration, with the recurrence set
-     terminalized (next bullet). Commit the terminal review artifact on this stop.
+     terminalized (next bullet). Commit the terminal review artifact on this stop
+     when it is tracked or not ignored.
 5. **Fix.** Run `spec-branch-fix` for iteration `i`. Pass the **recurrence set** as a
    *terminalize* instruction: each of those signatures must reach a terminal state
    this iteration — resolved by a genuinely *different* change, or **dismissed** with a
@@ -99,18 +102,23 @@ different fix or an explicit dismissal is still available.
 
 ## Artifact Commit Policy
 
-Review and fix artifacts are part of the product (iteration memory, dismissal memory,
-audit trail) and are always committed. `spec-branch-fix` commits the review+fix pair
-for any iteration it runs. But every terminal stop — **clean**, **cap**, and
+Review and fix artifacts are part of the product (iteration memory, dismissal
+memory, audit trail) and are always written. They are committed only when already
+tracked or not ignored by Git; never force-add ignored `.specs/` artifacts.
+`spec-branch-fix` commits the review+fix pair for any iteration it runs when those
+artifacts are committable. But every terminal stop — **clean**, **cap**, and
 **stalled** — happens *before* `spec-branch-fix` runs for iteration `i`, so on any of
-the three the driver owns committing that trailing `branch-<i>-review.md` itself:
+the three the driver owns the trailing `branch-<i>-review.md` artifact:
 
 ```txt
 chore(reviews): record branch review (iter <i>)
 ```
 
-This keeps the read-only reviewer from ever committing while still guaranteeing no
-review artifact is left uncommitted.
+Before staging it, check `git ls-files --error-unmatch <path>` and
+`git check-ignore -q <path>`. If the artifact is ignored and untracked, leave it on
+disk and report that no artifact commit was made because the repository ignores it.
+This keeps the read-only reviewer from ever committing while still guaranteeing the
+review artifact is recorded on disk.
 
 ## Reporting
 
@@ -124,7 +132,8 @@ Report:
    advisory findings never required to fix), with their `file:symbol` and signature.
 5. The review/fix artifact paths written under `<spec-dir>/reviews/`.
 6. The commit hashes produced (fix commits, plus any `chore(reviews):` artifact
-   commit the driver made on a clean/stalled stop).
+   commit the driver made on a clean/stalled stop), or note `none` when ignored
+   local artifacts were the only changes.
 
 A first-iteration `pass` is the common, good outcome on a well-built branch: report
 "clean after 1 review, no fixes needed."

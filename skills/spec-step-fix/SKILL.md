@@ -1,6 +1,6 @@
 ---
 name: spec-step-fix
-description: This skill should be used when the user or an external task-runner asks to fix, apply, or act on a single step's correctness review — given only a step marker (spec path plus step). The mutating counterpart to spec-step-review: it reads reviews/<step>-review.md, decides per finding whether to fix or dismiss, applies the actionable fixes scoped to that step, runs targeted tests, writes reviews/<step>-fix.md, and commits. Self-sufficient by design — resolves the review file and the step's files deterministically from the spec directory. It is coupled to spec-step-review only through the review file. Trigger on "fix the step review", "apply the step review", "address the step's findings", or "spec step fix".
+description: This skill should be used when the user or an external task-runner asks to fix, apply, or act on a single step's correctness review — given only a step marker (spec path plus step). The mutating counterpart to spec-step-review: it reads reviews/<step>-review.md, decides per finding whether to fix or dismiss, applies the actionable fixes scoped to that step, runs targeted tests, writes reviews/<step>-fix.md, and commits code plus any review artifacts that are tracked or not ignored. Self-sufficient by design — resolves the review file and the step's files deterministically from the spec directory. It is coupled to spec-step-review only through the review file. Trigger on "fix the step review", "apply the step review", "address the step's findings", or "spec step fix".
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "3"
+  version: "4"
 ---
 
 # Spec Step Fix
@@ -163,9 +163,13 @@ Fix: <spec-dir>/reviews/step-<step-number>-fix.md (step <step-number>)
 ## Commit
 
 Review and fix artifacts are part of the product — iteration memory, dismissal
-memory, and the human audit trail — so they are **always recorded and committed**,
-never left dangling. After verification passes, stage this step's changed code/tests
-plus both `reviews/step-<step-number>-review.md` and `-fix.md`, and commit:
+memory, and the human audit trail — so they are **always written**. Commit them
+only when they are already tracked or are not ignored by Git. Before staging
+artifact paths, check `git ls-files --error-unmatch <path>` and
+`git check-ignore -q <path>`; never use `git add -f` / `--force` to override an
+ignore rule for `.specs/` artifacts. After verification passes, stage this step's
+changed code/tests plus any committable `reviews/step-<step-number>-review.md`
+and `-fix.md`, and commit:
 
 ```txt
 fix(<scope>): address step <step-number> review
@@ -173,12 +177,16 @@ fix(<scope>): address step <step-number> review
 
 Append `(#<issue-number>)` if a GitHub issue number is known from the spec footer.
 If nothing actionable was fixed (all dismissed / `verdict: pass`), there is no code
-change — still commit the review and fix artifacts on their own so the audit trail
-is durable:
+change. If the review artifacts are committable, commit them on their own so the
+audit trail is durable:
 
 ```txt
 chore(reviews): record step <step-number> review
 ```
+
+If the only changes are ignored, untracked `.specs/` review artifacts, do not make
+a commit. Leave the artifacts on disk and report that they were written locally but
+not committed because the repository ignores them.
 
 ## Completion Report
 
@@ -188,7 +196,8 @@ Report:
 2. Review file consumed and fix file written.
 3. Per-finding decisions (fixed / dismissed) in one line each.
 4. Verification commands and outcomes.
-5. Commit hash (the `fix(...)` or no-op `chore(reviews): ...` commit).
+5. Commit hash (the `fix(...)` or no-op `chore(reviews): ...` commit), or `none`
+   when only ignored local review artifacts changed.
 6. Anything deferred to the branch review (out-of-scope / `deferred` / `unfixable`).
 
 Do not add Co-Authored-By trailers, "Generated with" footers, or any AI model

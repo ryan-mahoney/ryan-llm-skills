@@ -1,6 +1,6 @@
 ---
 name: spec-branch-fix
-description: This skill should be used when the user or the spec-branch-refine loop asks to fix, apply, or act on a branch correctness review for one iteration — coupled to spec-branch-review only through the review file. It parses the review's YAML block, decides per finding whether to fix or dismiss (recording a dismissal class that controls re-raise suppression), applies the actionable fixes across the branch, runs tests, writes reviews/branch-<i>-fix.md, and always commits the review/fix artifacts. Trigger on "fix the branch review", "apply the branch review", "address the branch findings", or "spec branch fix".
+description: This skill should be used when the user or the spec-branch-refine loop asks to fix, apply, or act on a branch correctness review for one iteration — coupled to spec-branch-review only through the review file. It parses the review's YAML block, decides per finding whether to fix or dismiss (recording a dismissal class that controls re-raise suppression), applies the actionable fixes across the branch, runs tests, writes reviews/branch-<i>-fix.md, and commits code plus any review artifacts that are tracked or not ignored. Trigger on "fix the branch review", "apply the branch review", "address the branch findings", or "spec branch fix".
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "5"
+  version: "6"
 ---
 
 # Spec Branch Fix
@@ -179,21 +179,28 @@ whether the branch is genuinely stalled.
 ## Commit
 
 Review and fix artifacts are part of the product — iteration and dismissal memory,
-and the human audit trail — so they are **always recorded and committed**. After
-verification passes, stage the changed code/tests plus
-`reviews/branch-<iteration>-review.md` and `-fix.md`, and commit:
+and the human audit trail — so they are **always written**. Commit them only when
+they are already tracked or are not ignored by Git. Before staging artifact paths,
+check `git ls-files --error-unmatch <path>` and `git check-ignore -q <path>`;
+never use `git add -f` / `--force` to override an ignore rule for `.specs/`
+artifacts. After verification passes, stage the changed code/tests plus any
+committable `reviews/branch-<iteration>-review.md` and `-fix.md`, and commit:
 
 ```txt
 fix(<scope>): address branch review (iter <iteration>)
 ```
 
 Append `(#<issue-number>)` if the spec footer names a GitHub issue. If nothing
-actionable was fixed (`material_change: false`), there is no code change — still
-commit the review and fix artifacts so the audit trail is durable:
+actionable was fixed (`material_change: false`), there is no code change. If the
+review artifacts are committable, commit them so the audit trail is durable:
 
 ```txt
 chore(reviews): record branch review (iter <iteration>)
 ```
+
+If the only changes are ignored, untracked `.specs/` review artifacts, do not make
+a commit. Leave the artifacts on disk and report that they were written locally but
+not committed because the repository ignores them.
 
 ## Completion Report
 
@@ -203,7 +210,8 @@ Report:
 2. Review file consumed and fix file written.
 3. Per-finding decisions (fixed / dismissed + class) in one line each.
 4. Verification commands and outcomes.
-5. Commit hash (the `fix(...)` or no-op `chore(reviews): ...` commit) and `material_change`.
+5. Commit hash (the `fix(...)` or no-op `chore(reviews): ...` commit, or `none`
+   when only ignored local review artifacts changed) and `material_change`.
 
 Do not add Co-Authored-By trailers, "Generated with" footers, or any AI model
 attribution.
