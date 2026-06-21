@@ -3,8 +3,18 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
-import { derive } from "./decompose-skeleton.mjs";
+import { derive, check } from "./decompose-skeleton.mjs";
+
+const SCRIPT_PATH = fileURLToPath(new URL("./decompose-skeleton.mjs", import.meta.url));
+
+function writeManifest(repo, manifest) {
+  const manifestPath = path.join(repo, "targets.json");
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+  return manifestPath;
+}
 
 function apiTarget(manifest) {
   return manifest.targets.find((t) => t.structural_unit === "packages/api");
@@ -253,6 +263,134 @@ test("a dangling override unit throws", () => {
     base.overrides = [{ op: "relabel", unit: "packages/missing", name: "X", scope: "y" }];
 
     assert.throws(() => derive(repo, { manifest: base }), /unknown unit: packages\/missing/);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("check passes on a script-produced manifest", () => {
+  const repo = workspaceRepo();
+  try {
+    const manifestPath = writeManifest(repo, derive(repo));
+
+    const result = check(repo, manifestPath);
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.violations, []);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("check fails when source_globs is hand-edited to disagree with derivation", () => {
+  const repo = workspaceRepo();
+  try {
+    const manifest = derive(repo);
+    const apiSlug = apiTarget(manifest).slug;
+    apiTarget(manifest).source_globs = ["packages/web/**"];
+    const manifestPath = writeManifest(repo, manifest);
+
+    const result = check(repo, manifestPath);
+
+    assert.equal(result.ok, false);
+    assert.ok(
+      result.violations.some((v) => v.includes("source_globs mismatch") && v.includes(apiSlug)),
+      `expected a source_globs mismatch for ${apiSlug}, got: ${JSON.stringify(result.violations)}`
+    );
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("check fails when a required field is missing", () => {
+  const repo = workspaceRepo();
+  try {
+    const manifest = derive(repo);
+    delete manifest.coverage;
+    const manifestPath = writeManifest(repo, manifest);
+
+    const result = check(repo, manifestPath);
+
+    assert.equal(result.ok, false);
+    assert.ok(
+      result.violations.some((v) => v.includes("coverage")),
+      `expected a coverage violation, got: ${JSON.stringify(result.violations)}`
+    );
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("check fails when a slug is duplicated", () => {
+  const repo = workspaceRepo();
+  try {
+    const manifest = derive(repo);
+    const duplicated = manifest.targets[0];
+    manifest.targets.push({ ...duplicated });
+    const manifestPath = writeManifest(repo, manifest);
+
+    const result = check(repo, manifestPath);
+
+    assert.equal(result.ok, false);
+    assert.ok(
+      result.violations.some((v) => v === `duplicate slug: ${duplicated.slug}`),
+      `expected a duplicate slug violation, got: ${JSON.stringify(result.violations)}`
+    );
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("check fails when a source_globs entry resolves to no files", () => {
+  const repo = workspaceRepo();
+  try {
+    const manifest = derive(repo);
+    apiTarget(manifest).source_globs = ["does/not/exist/**"];
+    const manifestPath = writeManifest(repo, manifest);
+
+    const result = check(repo, manifestPath);
+
+    assert.equal(result.ok, false);
+    assert.ok(
+      result.violations.some((v) => v.includes("glob resolves to no files: does/not/exist/**")),
+      `expected a no-files glob violation, got: ${JSON.stringify(result.violations)}`
+    );
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("check throws a contextual error for a missing manifest file", () => {
+  const repo = workspaceRepo();
+  try {
+    assert.throws(
+      () => check(repo, path.join(repo, "no-such.json")),
+      /cannot read manifest/
+    );
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("CLI --check exits 0 on a script-produced manifest and 1 on a tampered one", () => {
+  const repo = workspaceRepo();
+  try {
+    const manifestPath = writeManifest(repo, derive(repo));
+
+    const pass = spawnSync("node", [SCRIPT_PATH, repo, "--check", manifestPath], {
+      encoding: "utf8",
+    });
+    assert.equal(pass.status, 0);
+
+    const manifest = derive(repo);
+    apiTarget(manifest).source_globs = ["does/not/exist/**"];
+    const tamperedPath = writeManifest(repo, manifest);
+
+    const fail = spawnSync("node", [SCRIPT_PATH, repo, "--check", tamperedPath], {
+      encoding: "utf8",
+    });
+    assert.equal(fail.status, 1);
+    assert.match(fail.stderr, /glob resolves to no files/);
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
   }

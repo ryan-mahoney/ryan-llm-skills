@@ -322,12 +322,133 @@ export function derive(repoRoot, { manifest } = {}) {
   };
 }
 
+function isObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNonEmptyString(value) {
+  return typeof value === "string" && value !== "";
+}
+
+const TARGET_FIELD_SPECS = [
+  { field: "slug", type: "non-empty string", ok: isNonEmptyString },
+  { field: "name", type: "string", ok: (v) => typeof v === "string" },
+  { field: "scope", type: "string", ok: (v) => typeof v === "string" },
+  { field: "origin", type: '"derived" or "override"', ok: (v) => v === "derived" || v === "override" },
+  { field: "structural_unit", type: "non-empty string", ok: isNonEmptyString },
+  {
+    field: "source_globs",
+    type: "non-empty array of strings",
+    ok: (v) => Array.isArray(v) && v.length >= 1 && v.every((g) => typeof g === "string"),
+  },
+  { field: "tier2_path", type: "string", ok: (v) => typeof v === "string" },
+  { field: "source_hash", type: "string or null", ok: (v) => v === null || typeof v === "string" },
+  { field: "last_synthesized", type: "string or null", ok: (v) => v === null || typeof v === "string" },
+];
+
+function validateSchema(manifest, violations) {
+  if (typeof manifest.version !== "number") violations.push("version must be a number");
+  if (!isObject(manifest.system)) violations.push("system must be an object");
+  if (!Array.isArray(manifest.targets)) violations.push("targets must be an array");
+  if (!Array.isArray(manifest.overrides)) violations.push("overrides must be an array");
+  if (!Array.isArray(manifest.renames)) violations.push("renames must be an array");
+  if (!isObject(manifest.coverage)) violations.push("coverage is required");
+
+  if (!Array.isArray(manifest.targets)) return;
+
+  manifest.targets.forEach((target, i) => {
+    const label = isNonEmptyString(target?.slug) ? `slug ${target.slug}` : `target[${i}]`;
+    for (const spec of TARGET_FIELD_SPECS) {
+      if (!spec.ok(target?.[spec.field])) {
+        violations.push(`${label} ${spec.field} must be ${spec.type}`);
+      }
+    }
+  });
+
+  const seen = new Set();
+  const duplicates = new Set();
+  for (const target of manifest.targets) {
+    if (!isNonEmptyString(target?.slug)) continue;
+    if (seen.has(target.slug)) duplicates.add(target.slug);
+    seen.add(target.slug);
+  }
+  for (const slug of duplicates) violations.push(`duplicate slug: ${slug}`);
+}
+
+function validateGlobsResolve(repoRoot, manifest, violations) {
+  if (!Array.isArray(manifest.targets)) return;
+  const files = walkSourceFiles(repoRoot);
+  for (const target of manifest.targets) {
+    if (!Array.isArray(target?.source_globs)) continue;
+    const slug = isNonEmptyString(target.slug) ? target.slug : "?";
+    for (const glob of target.source_globs) {
+      if (typeof glob !== "string") continue;
+      let resolved;
+      try {
+        resolved = files.some((file) => matches(file, glob));
+      } catch {
+        violations.push(`unsupported glob: ${glob} (slug ${slug})`);
+        continue;
+      }
+      if (!resolved) violations.push(`glob resolves to no files: ${glob} (slug ${slug})`);
+    }
+  }
+}
+
+function validateMembership(repoRoot, manifest, violations) {
+  if (!Array.isArray(manifest.targets)) return;
+  let fresh;
+  try {
+    fresh = derive(repoRoot, { manifest });
+  } catch (err) {
+    violations.push(`derivation failed: ${err.message}`);
+    return;
+  }
+  const freshBySlug = new Map(fresh.targets.map((t) => [t.slug, t]));
+  for (const target of manifest.targets) {
+    const derived = freshBySlug.get(target?.slug);
+    if (!derived) continue;
+    if (target.structural_unit !== derived.structural_unit) {
+      violations.push(
+        `structural_unit mismatch for ${target.slug}: manifest=${target.structural_unit} derived=${derived.structural_unit}`
+      );
+    }
+    if (JSON.stringify(target.source_globs) !== JSON.stringify(derived.source_globs)) {
+      violations.push(
+        `source_globs mismatch for ${target.slug}: manifest=${JSON.stringify(target.source_globs)} derived=${JSON.stringify(derived.source_globs)}`
+      );
+    }
+  }
+}
+
+export function check(repoRoot, manifestPath) {
+  if (!repoRoot) throw new Error("repoRoot is required");
+  if (!isDir(repoRoot)) throw new Error(`not a directory: ${repoRoot}`);
+
+  let manifest;
+  try {
+    manifest = readJson(manifestPath);
+  } catch (err) {
+    throw new Error(`cannot read manifest ${manifestPath}: ${err.message}`);
+  }
+
+  const violations = [];
+  validateSchema(manifest, violations);
+  validateGlobsResolve(repoRoot, manifest, violations);
+  validateMembership(repoRoot, manifest, violations);
+
+  return { ok: violations.length === 0, violations };
+}
+
 function parseArgs(argv) {
-  const args = { repoRoot: argv[2], manifestPath: null };
+  const args = { repoRoot: argv[2], manifestPath: null, checkPath: null };
   for (let i = 3; i < argv.length; i++) {
     if (argv[i] === "--manifest") {
       args.manifestPath = argv[++i];
       if (!args.manifestPath) throw new Error("--manifest requires a path");
+    } else if (argv[i] === "--check") {
+      args.checkPath = argv[++i];
+      if (!args.checkPath) throw new Error("--check requires a path");
     } else {
       throw new Error(`unknown argument: ${argv[i]}`);
     }
@@ -344,8 +465,22 @@ function main() {
     process.exit(1);
   }
   if (!args.repoRoot) {
-    console.error("usage: node scripts/decompose-skeleton.mjs <repo-root> [--manifest <path>]");
+    console.error(
+      "usage: node scripts/decompose-skeleton.mjs <repo-root> [--manifest <path>] | --check <path>"
+    );
     process.exit(1);
+  }
+
+  if (args.checkPath) {
+    let result;
+    try {
+      result = check(path.resolve(args.repoRoot), args.checkPath);
+    } catch (err) {
+      console.error(err.message);
+      process.exit(1);
+    }
+    for (const violation of result.violations) console.error(violation);
+    process.exit(result.ok ? 0 : 1);
   }
 
   let manifest;
