@@ -1,13 +1,16 @@
 ---
 name: spec-branch-refine
 description: This skill should be used when the user asks to run the end-of-process branch correctness loop — review the whole branch, fix the findings, re-review, and repeat until clean or an iteration cap is reached. The in-process, file-backed replacement for an external review daemon's refine loop. It drives spec-branch-review and spec-branch-fix in alternation, holds the cross-iteration convergence and dedup state, and stops on a clean verdict, on no progress, or at the cap. The external review orchestrator runs it after the last step; it is also runnable standalone. Trigger on "refine the branch", "review-fix loop the branch", "run the branch correctness loop", "iterate review and fix until clean", or "spec branch refine".
+mode: coding
+scope: document
+capability: orchestrator
 disable-model-invocation: true
 argument-hint: "[spec=<path/to/spec.md>] [max-iterations=<n>]"
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "2"
+  version: "3"
 ---
 
 # Spec Branch Refine

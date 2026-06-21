@@ -1,13 +1,16 @@
 ---
 name: spec-branch-review
 description: This skill should be used when the user or the spec-branch-refine loop asks to code-review or correctness-check the whole branch for bugs at the end of implementation. Reviews the branch diff (committed merge-base..HEAD by default, or the working tree including untracked files with scope=working-tree) in one spec-aware pass and writes structured findings — a machine-readable YAML block plus prose — to reviews/branch-<i>-review.md. It runs a fixed core review (correctness, security, simplification) and fans out specialized lenses by risk (design, deep-security, data/deployment, dependency, performance, test-quality), delegating to existing skills where available. Read-only — it never edits code and never re-checks conformance (that is spec-audit). spec-branch-fix consumes its output. Trigger on "review the branch", "code-review the branch", "branch correctness review", "find bugs across the branch", or "spec branch review".
+mode: review
+scope: document
+capability: reviewer
 disable-model-invocation: true
 argument-hint: "[spec=<path/to/spec.md>] [iter=<n>] [scope=committed|working-tree] [base=<ref>] [since=<commit>]"
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "2"
+  version: "3"
 ---
 
 # Spec Branch Review
