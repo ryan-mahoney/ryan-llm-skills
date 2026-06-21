@@ -175,6 +175,81 @@ function buildTargets(unitPaths) {
   });
 }
 
+function overrideTarget(slug, structuralUnit, sourceGlobs) {
+  return {
+    slug,
+    name: "",
+    scope: "",
+    origin: "override",
+    structural_unit: structuralUnit,
+    source_globs: sourceGlobs,
+    tier2_path: `docs/specops/analysis/${slug}.md`,
+    source_hash: null,
+    last_synthesized: null,
+  };
+}
+
+function findUnit(targets, unitPath, op) {
+  const target = targets.find((t) => t.structural_unit === unitPath);
+  if (!target) throw new Error(`override ${op} references unknown unit: ${unitPath}`);
+  return target;
+}
+
+function applyMerge(targets, override) {
+  const members = override.units.map((unit) => findUnit(targets, unit, "merge"));
+  const memberSet = new Set(members);
+  const union = [...new Set(members.flatMap((t) => t.source_globs))].sort((a, b) => a.localeCompare(b));
+  const remaining = targets.filter((t) => !memberSet.has(t));
+  return [...remaining, overrideTarget(override.into, override.into, union)];
+}
+
+function applySplit(targets, override) {
+  const parent = findUnit(targets, override.unit, "split");
+  const children = override.into.map((child) =>
+    overrideTarget(child.slug, child.subpath, [`${child.subpath}/**`])
+  );
+  const remaining = targets.filter((t) => t !== parent);
+  return [...remaining, ...children];
+}
+
+function applyRelabel(targets, override) {
+  const target = findUnit(targets, override.unit, "relabel");
+  target.name = override.name;
+  target.scope = override.scope;
+  target.origin = "override";
+  return targets;
+}
+
+function applyOverrides(targets, overrides) {
+  let current = targets;
+  for (const override of overrides) {
+    if (override.op === "merge") current = applyMerge(current, override);
+    else if (override.op === "split") current = applySplit(current, override);
+    else if (override.op === "relabel") current = applyRelabel(current, override);
+    else throw new Error(`override op unknown: ${override.op}`);
+  }
+  return current;
+}
+
+function detectRenames(freshTargets, manifest) {
+  const priorSlugs = new Set(manifest.targets.map((t) => t.slug));
+  const freshSlugs = new Set(freshTargets.map((t) => t.slug));
+  const newTargets = [...freshTargets]
+    .filter((t) => !priorSlugs.has(t.slug))
+    .sort((a, b) => a.slug.localeCompare(b.slug));
+  const consumed = new Set();
+
+  const renames = [];
+  for (const prior of manifest.targets) {
+    if (freshSlugs.has(prior.slug)) continue;
+    const match = newTargets.find((t) => !consumed.has(t.slug) && t.source_hash === prior.source_hash);
+    if (!match) continue;
+    consumed.add(match.slug);
+    renames.push({ old_slug: prior.slug, new_slug: match.slug });
+  }
+  return renames;
+}
+
 function computeCoverage(repoRoot, targets, lowConfidence) {
   const unassigned = [];
   const overlaps = [];
@@ -191,10 +266,23 @@ function sha256(contents) {
   return createHash("sha256").update(contents).digest("hex");
 }
 
+function globBase(glob) {
+  return glob === "**" ? "" : glob.replace(/\/\*\*$/, "");
+}
+
+function unitRelative(file, globs) {
+  for (const glob of globs) {
+    if (!matches(file, glob)) continue;
+    const base = globBase(glob);
+    return base === "" ? file : file.slice(base.length + 1);
+  }
+  return file;
+}
+
 export function sourceHash(repoRoot, globs) {
   const entries = walkSourceFiles(repoRoot)
     .filter((file) => globs.some((g) => matches(file, g)))
-    .map((file) => `${file}\0${sha256(fs.readFileSync(path.join(repoRoot, file)))}`)
+    .map((file) => `${unitRelative(file, globs)}\0${sha256(fs.readFileSync(path.join(repoRoot, file)))}`)
     .sort((a, b) => a.localeCompare(b));
   return "sha256:" + sha256(entries.join("\n"));
 }
@@ -215,19 +303,21 @@ export function derive(repoRoot, { manifest } = {}) {
   if (!isDir(repoRoot)) throw new Error(`not a directory: ${repoRoot}`);
 
   const { units, lowConfidence } = detectUnits(repoRoot);
-  const targets = buildTargets(units);
+  const overrides = manifest?.overrides ?? [];
+  const targets = applyOverrides(buildTargets(units), overrides);
   for (const target of targets) {
     target.source_hash = sourceHash(repoRoot, target.source_globs);
   }
   if (manifest) reconcile(targets, manifest);
+  const renames = manifest ? detectRenames(targets, manifest) : [];
   const coverage = computeCoverage(repoRoot, targets, lowConfidence);
 
   return {
     version: 1,
     system: { summary: "", external_dependencies: [] },
     targets,
-    overrides: [],
-    renames: [],
+    overrides,
+    renames,
     coverage,
   };
 }

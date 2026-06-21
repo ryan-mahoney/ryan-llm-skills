@@ -162,3 +162,98 @@ test("reconcile preserves curated name/scope/last_synthesized and recomputes sou
     fs.rmSync(repo, { recursive: true, force: true });
   }
 });
+
+function singleUnitRepo() {
+  const repo = makeTempRepo();
+  write(repo, "src/alpha/index.js", "export const alpha = 1;");
+  return repo;
+}
+
+test("merge override yields one override target with union globs, surviving a second reconcile", () => {
+  const repo = workspaceRepo();
+  try {
+    const base = derive(repo);
+    base.overrides = [
+      { op: "merge", units: ["packages/api", "packages/web"], into: "platform" },
+    ];
+
+    const merged = derive(repo, { manifest: base });
+    const overrideTargets = merged.targets.filter((t) => t.origin === "override");
+
+    assert.equal(overrideTargets.length, 1);
+    assert.equal(overrideTargets[0].slug, "platform");
+    assert.deepEqual(overrideTargets[0].source_globs, ["packages/api/**", "packages/web/**"]);
+    assert.equal(merged.targets.some((t) => t.structural_unit === "packages/api"), false);
+    assert.equal(merged.targets.some((t) => t.structural_unit === "packages/web"), false);
+
+    const reconciledAgain = derive(repo, { manifest: merged });
+    const survivor = reconciledAgain.targets.find((t) => t.slug === "platform");
+
+    assert.ok(survivor);
+    assert.equal(survivor.origin, "override");
+    assert.deepEqual(survivor.source_globs, ["packages/api/**", "packages/web/**"]);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("renaming a unit dir without changing contents emits a renames entry", () => {
+  const repo = singleUnitRepo();
+  try {
+    const base = derive(repo);
+    const oldSlug = base.targets.find((t) => t.structural_unit === "src/alpha").slug;
+
+    fs.renameSync(path.join(repo, "src/alpha"), path.join(repo, "src/beta"));
+
+    const after = derive(repo, { manifest: base });
+    const newSlug = after.targets.find((t) => t.structural_unit === "src/beta").slug;
+
+    assert.deepEqual(after.renames, [{ old_slug: oldSlug, new_slug: newSlug }]);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("renaming a unit dir with content changes yields remove+add, no renames entry", () => {
+  const repo = singleUnitRepo();
+  try {
+    const base = derive(repo);
+    const oldSlug = base.targets.find((t) => t.structural_unit === "src/alpha").slug;
+
+    fs.renameSync(path.join(repo, "src/alpha"), path.join(repo, "src/beta"));
+    write(repo, "src/beta/index.js", "export const beta = 99;");
+
+    const after = derive(repo, { manifest: base });
+    const newTarget = after.targets.find((t) => t.structural_unit === "src/beta");
+
+    assert.deepEqual(after.renames, []);
+    assert.equal(after.targets.some((t) => t.slug === oldSlug), false);
+    assert.ok(newTarget);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("an unknown override op throws", () => {
+  const repo = workspaceRepo();
+  try {
+    const base = derive(repo);
+    base.overrides = [{ op: "frobnicate", unit: "packages/api" }];
+
+    assert.throws(() => derive(repo, { manifest: base }), /unknown.*frobnicate|frobnicate/);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("a dangling override unit throws", () => {
+  const repo = workspaceRepo();
+  try {
+    const base = derive(repo);
+    base.overrides = [{ op: "relabel", unit: "packages/missing", name: "X", scope: "y" }];
+
+    assert.throws(() => derive(repo, { manifest: base }), /unknown unit: packages\/missing/);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
