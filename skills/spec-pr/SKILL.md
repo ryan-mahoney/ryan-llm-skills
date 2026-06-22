@@ -1,6 +1,8 @@
 ---
 name: spec-pr
 description: This skill should be used when the user asks to "open a PR", "open the spec PR", "create a PR for this spec", "submit a PR", "push and open PR", or "send a pull request" for spec-driven work. Rebases the branch onto the default branch so it is mergeable at PR time — always rebasing when behind and resolving conflicts itself (the PR review is the safety net; it never merges) — commits any staged changes, force-pushes with lease, then opens (or updates) a GitHub pull request whose body is drafted from the spec's artifacts (spec.md, proposal/requirements/critique, criteria/invariants, audit, spec-review, branch reviews, learnings, blockers). Leaves an auditable pr-rebase-log.md and pr-message.md in .specs/<slug>/. Named spec-pr to avoid colliding with built-in PR skills.
+mode: coding
+scope: document
 disable-model-invocation: true
 argument-hint: "[spec=<path/to/spec.md>] [issue-number]"
 license: MIT
@@ -37,14 +39,16 @@ the PR, documenting every decision loudly (in `pr-rebase-log.md` and the PR body
 reviewer can check your work. Stopping to ask a human is the rare exception, reserved for
 the cases in *Resolving Conflicts*.
 
-This skill leaves two artifacts in `<spec-dir>` so its work is auditable after the fact:
+This skill leaves three artifacts in `<spec-dir>` so its work is auditable after the fact:
 
 - **`pr-rebase-log.md`** — a detailed record of the rebase: whether one was needed, the
   base it rebased onto, every conflict, how each was resolved and why, and how the
   resolution was verified.
 - **`pr-message.md`** — the exact PR title and body it drafted and submitted.
+- **`pr-url.json`** — the machine-readable PR URL the app reads to mark the spec's PR as
+  submitted: `{ "url": "<pull request url>", "submittedAt": "<ISO 8601 timestamp>" }`.
 
-Both are written under `.specs/<slug>/`, which is untracked working state (see banner)
+All are written under `.specs/<slug>/`, which is untracked working state (see banner)
 — write them directly with normal file writes.
 
 ## Resolve The Spec
@@ -182,6 +186,12 @@ remote moved under you — stop and report rather than overwriting someone else'
    - **No PR exists** → create it from `pr-message.md`.
    - **PR exists** → update its body from `pr-message.md` (`gh pr edit`); the force-push
      already refreshed the diff. Do not open a duplicate.
+4. **Write `<spec-dir>/pr-url.json`** with the URL of the PR just opened or updated, as
+   JSON: `{ "url": "<pull request url>", "submittedAt": "<ISO 8601 timestamp>" }`. Use the
+   PR URL `gh` returned (or `gh pr view --json url`) and the current time. Overwrite it on
+   every run so it always reflects the latest PR for this branch (create or update).
+5. **Register both artifacts with `track_file`** so the app sees them: call `track_file`
+   once for `pr-message.md`'s repoRelPath and once for `pr-url.json`'s repoRelPath.
 
 ## Stage 5 — Verify Mergeable, Then Report
 
@@ -198,8 +208,8 @@ remote moved under you — stop and report rather than overwriting someone else'
    - The spec artifacts that informed the body, the latest branch-review verdict, and
      any open `blockers.md` items surfaced.
    - The linked/closed issue, if any.
-   - The paths to the two artifacts written this run: `<spec-dir>/pr-rebase-log.md` and
-     `<spec-dir>/pr-message.md`.
+   - The paths to the artifacts written this run: `<spec-dir>/pr-rebase-log.md`,
+     `<spec-dir>/pr-message.md`, and `<spec-dir>/pr-url.json`.
 
 If mergeability comes back `CONFLICTING` despite a clean local rebase, the base moved
 between fetch and push — say so and recommend re-running this skill.
