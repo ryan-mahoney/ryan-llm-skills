@@ -127,7 +127,7 @@ Standalone skills outside the two distributions.
 | **bun-test-fix** | `/bun-test-fix <path-to-test-file>` | Bring a test file into compliance with Bun test rules from `AGENTS.md` |
 | **skill-factory** | `/skill-factory [description of task to automate]` | Create a reusable skill by extracting an existing repository workflow into a grounded `SKILL.md` |
 | **commit** | `/commit [issue]` | Conventional commit of staged files |
-| **pr** | `/pr [issue]` | Commit, push, and open a pull request |
+| **spec-pr** | `/spec-pr [spec] [issue]` | Rebase the branch to mergeable, commit, force-push, then open or update a spec-aware pull request |
 | **pr-review** | `/pr-review [pr]` | Review a PR's code and submit comments |
 | **pr-feedback** | `/pr-feedback [pr]` | Address PR review comments one by one |
 
