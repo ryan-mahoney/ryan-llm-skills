@@ -443,6 +443,89 @@ After that, use the normal engineering back half:
 README
 }
 
+write_specops_workflow_howto() {
+  cat <<'README'
+
+## How To Use The SpecOps Workflow
+
+SpecOps has two related jobs: preserving legacy behavior during migration, and keeping agent-readable deep specs current for a repository. Multi-target repositories should start with a deterministic target manifest.
+
+### 1. Decompose The Repository
+
+```bash
+/specops-decompose [repo-root]
+```
+
+This writes:
+
+```txt
+docs/specops/targets.json
+```
+
+The manifest is the stable spine for the rest of the workflow. Structural fields such as `slug`, `source_globs`, `coverage`, and `source_hash` are derived by `scripts/decompose-skeleton.mjs`; the agent only fills prose fields such as target `name`, `scope`, and the system summary. The skill writes only the manifest.
+
+You can validate the manifest structure directly:
+
+```bash
+node scripts/decompose-skeleton.mjs <repo-root> --check docs/specops/targets.json
+```
+
+### 2. Analyze Each Target
+
+Have the orchestrator call `specops-analysis` once per manifest target, passing the target entry. The analysis skill uses the entry's `name`, `scope`, `source_globs`, and `tier2_path`, writes the deep spec to that `tier2_path`, and returns the analyzed `source_hash` so the orchestrator can stamp the manifest.
+
+Manual fallback for a single target:
+
+```bash
+/specops-analysis <scope>
+```
+
+### 3. Harden And Reconcile Analysis Specs
+
+Use the audit skills before deriving implementation specs:
+
+```bash
+/specops-ambiguity-audit <analysis-file>
+/specops-spec-coherence <analysis-dir>
+```
+
+Run `specops-spec-coherence` when multiple analysis specs need to agree on shared models, side effects, terminology, or implementation order.
+
+### 4. Derive And Verify Implementation Specs
+
+```bash
+/specops-make-spec <analysis-file-or-scope>
+/specops-spec-conformance <analysis-spec> <implementation-spec>
+```
+
+The conformance pass checks that the implementation spec did not drop, weaken, contradict, or silently change behavior from the analysis spec.
+
+### 5. Execute And Test The Migration
+
+```bash
+/specops-run-spec <spec-file>
+/specops-contract-tests <analysis-file>
+/specops-integration-test <analysis-dir> <migrated-folder>
+/specops-implementation-drift <migrated-folder> <original-analysis>
+```
+
+Use drift audit after code generation to compare the migrated behavior back to the original analysis.
+
+### 6. Refresh Deep Specs From A Branch
+
+For ongoing agent documentation, the orchestrator should call:
+
+```bash
+/specops-update-spec <target manifest entry + branch/diff context>
+```
+
+This patches one target's existing deep spec in place, edits only sections traceable to the diff, re-validates Evidence references, and returns refreshed `source_hash` plus `last_synthesized`. It does not read or write the whole manifest; the orchestrator owns that file.
+
+`specops-orchestrate-analysis` remains available as a local fallback for older initial-plan-driven runs, but the manifest-driven `specops-decompose` -> `specops-analysis` path is the documented pipeline for new multi-target work.
+
+README
+}
+
 write_bundle_files() {
   local bundle_dir="$1"
   local name="$2"
@@ -476,6 +559,8 @@ write_bundle_files() {
     if [ "$name" = "spec-skills" ]; then
       write_spec_workflow_howto
       write_design_spec_workflow_howto
+    elif [ "$name" = "specops-skills" ]; then
+      write_specops_workflow_howto
     fi
     printf '\n## Install\n\n'
     printf '```bash\n./install.sh\n```\n\n'

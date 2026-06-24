@@ -65,14 +65,18 @@ Run the design stages, then hand off to `spec-run`:
 
 ### specops-skills: legacy migration
 
-A SpecOps pipeline for migrating legacy code: analyze the source into implementation-agnostic specs, harden and reconcile them, derive deterministic implementation specs, generate code, and verify the result preserves original behavior.
+A SpecOps pipeline for migrating legacy code and maintaining agent-readable system specs: decompose the source into a stable target manifest, analyze each target into implementation-agnostic specs, harden and reconcile them, derive deterministic implementation specs, generate code, and verify the result preserves original behavior.
+
+For multi-target repositories, start with `specops-decompose`. It writes `docs/specops/targets.json`, a machine-readable manifest whose target partition is derived by `scripts/decompose-skeleton.mjs`. The manifest becomes the spine an external orchestrator can iterate: run `specops-analysis` once per target to create deep specs, then run `specops-update-spec` for changed targets when a branch or diff needs the deep spec refreshed in place.
 
 | Skill | Command | Purpose |
 |---|---|---|
+| **specops-decompose** | `/specops-decompose [repo-root]` | Produce or refresh `docs/specops/targets.json`, deriving stable target slugs/globs/coverage mechanically and filling only target names, scopes, and system summary prose |
 | **specops-initial-plan** | `/specops-initial-plan [scope]` | Create a generalized SpecOps analysis and initial implementation-agnostic plan |
 | **specops-refactor-plan** | `/specops-refactor-plan [target-folder] [refactor-goal]` | Create a refactor-focused SpecOps plan for an existing source folder and explicit goal |
 | **specops-analysis** | `/specops-analysis [scope]` | Produce a generalized SpecOps implementation-agnostic analysis/specification |
-| **specops-orchestrate-analysis** | `/specops-orchestrate-analysis [initial-plan]` | Orchestrate sequential subagents that generate one analysis per target from an initial plan |
+| **specops-update-spec** | `/specops-update-spec [target manifest entry + branch/diff context]` | Update one target's deep spec in place from a branch or diff, then return refreshed `source_hash` and `last_synthesized` for the orchestrator |
+| **specops-orchestrate-analysis** | `/specops-orchestrate-analysis [initial-plan]` | Legacy fallback for orchestrating sequential per-target analysis from an initial plan; superseded in the decomposition-first pipeline by external orchestration over `targets.json` |
 | **specops-ambiguity-audit** | `/specops-ambiguity-audit [analysis-file]` | Audit a SpecOps analysis spec for ambiguities, resolve them via parallel legacy-source research, and patch the spec |
 | **specops-spec-coherence** | `/specops-spec-coherence [analysis-dir]` | Audit a set of analysis specs for cross-spec coherence (dependency order, integration contracts, shared models, terminology) and patch gaps |
 | **specops-make-spec** | `/specops-make-spec [scope]` | Convert SpecOps analysis into a generalized deterministic implementation spec |

@@ -60,6 +60,14 @@ It also includes the design-spec front-half:
 
 Every skill whose directory name starts with `specops-`.
 
+The decomposition-first agent documentation flow starts with:
+
+1. Run `specops-decompose` to produce `docs/specops/targets.json`, the stable target manifest.
+2. Have the external orchestrator call `specops-analysis` once per manifest target to write deep specs under each target's `tier2_path`.
+3. When a branch changes source, have the orchestrator call `specops-update-spec` for each affected target so the existing deep spec is patched in place and the manifest freshness fields can be updated.
+
+The older `specops-orchestrate-analysis` skill remains available as a local fallback, but the manifest-driven path is the documented pipeline for new multi-target agent docs automation.
+
 ## Build
 
 ```bash
