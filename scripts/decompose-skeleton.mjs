@@ -24,6 +24,36 @@ const IGNORED_DIRS = new Set([
 const IGNORED_FILES = new Set([".DS_Store"]);
 
 const SOURCE_ROOTS = ["src", "lib", "app", "packages", "services", "cmd"];
+const SOURCE_ROOT_SET = new Set(SOURCE_ROOTS);
+
+const SEMANTIC_CONTAINER_DIRS = new Set([
+  "areas",
+  "contexts",
+  "domains",
+  "features",
+  "flows",
+  "modules",
+  "plugins",
+  "routes",
+  "slices",
+  "subsystems",
+  "workflows",
+]);
+
+const BOUNDARY_MARKER_FILES = new Set([
+  "Cargo.toml",
+  "Gemfile",
+  "go.mod",
+  "mix.exs",
+  "package.json",
+  "pom.xml",
+  "pyproject.toml",
+  "setup.py",
+]);
+
+const MAX_FRONTIER_DEPTH = 5;
+const LARGE_UNIT_FILE_THRESHOLD = 40;
+const LARGE_UNIT_CHILD_THRESHOLD = 3;
 
 function isDir(p) {
   return fs.existsSync(p) && fs.statSync(p).isDirectory();
@@ -36,6 +66,22 @@ function childDirs(dir) {
     .filter((e) => e.isDirectory() && !IGNORED_DIRS.has(e.name))
     .map((e) => e.name)
     .sort((a, b) => a.localeCompare(b));
+}
+
+function basename(relPath) {
+  return relPath === "." ? "." : path.posix.basename(relPath);
+}
+
+function joinRel(parent, child) {
+  return parent === "." ? child : `${parent}/${child}`;
+}
+
+function hasBoundaryMarker(repoRoot, relDir) {
+  const absDir = path.join(repoRoot, relDir);
+  for (const marker of BOUNDARY_MARKER_FILES) {
+    if (fs.existsSync(path.join(absDir, marker))) return true;
+  }
+  return false;
 }
 
 function walkSourceFiles(repoRoot) {
@@ -53,6 +99,28 @@ function walkSourceFiles(repoRoot) {
   };
   recurse(repoRoot, "");
   return files;
+}
+
+function fileIsUnder(file, relDir) {
+  return relDir === "." || file === relDir || file.startsWith(`${relDir}/`);
+}
+
+function filesUnder(files, relDir) {
+  return files.filter((file) => fileIsUnder(file, relDir));
+}
+
+function childUnitStats(repoRoot, relDir, files) {
+  return childDirs(path.join(repoRoot, relDir))
+    .map((name) => {
+      const relPath = joinRel(relDir, name);
+      return {
+        name,
+        relPath,
+        fileCount: filesUnder(files, relPath).length,
+        hasBoundaryMarker: hasBoundaryMarker(repoRoot, relPath),
+      };
+    })
+    .filter((child) => child.fileCount > 0 || child.hasBoundaryMarker);
 }
 
 function matches(relPath, glob) {
@@ -138,19 +206,104 @@ function resolveWorkspaceUnits(repoRoot, globs) {
   return [...units];
 }
 
-function detectUnits(repoRoot) {
-  const wsUnits = resolveWorkspaceUnits(repoRoot, workspaceGlobs(repoRoot));
-  if (wsUnits.length) return { units: wsUnits, lowConfidence: false };
+function sourceRootsUnder(repoRoot, relDir) {
+  return SOURCE_ROOTS.map((root) => joinRel(relDir, root)).filter((candidate) =>
+    isDir(path.join(repoRoot, candidate))
+  );
+}
 
-  for (const root of SOURCE_ROOTS) {
-    if (isDir(path.join(repoRoot, root))) {
-      const children = childDirs(path.join(repoRoot, root));
-      if (children.length) return { units: children.map((c) => `${root}/${c}`), lowConfidence: false };
+function candidateFrontier(repoRoot, relDir, files, { forceSplit = false, depth = 0 } = {}) {
+  if (depth >= MAX_FRONTIER_DEPTH) return [relDir];
+
+  const children = childUnitStats(repoRoot, relDir, files);
+  if (children.length === 0) return [relDir];
+
+  const totalFiles = filesUnder(files, relDir).length;
+  const childFiles = children.reduce((sum, child) => sum + child.fileCount, 0);
+  const relBase = basename(relDir);
+  const isSourceRoot = SOURCE_ROOT_SET.has(relBase);
+  const isSemanticContainer = SEMANTIC_CONTAINER_DIRS.has(relBase);
+  const hasBoundaryChildren = children.filter((child) => child.hasBoundaryMarker).length >= 2;
+  const isLargeUnit =
+    totalFiles >= LARGE_UNIT_FILE_THRESHOLD &&
+    children.length >= LARGE_UNIT_CHILD_THRESHOLD &&
+    childFiles >= Math.floor(totalFiles * 0.7);
+
+  const shouldSplit =
+    forceSplit || isSourceRoot || isSemanticContainer || hasBoundaryChildren || isLargeUnit;
+
+  if (!shouldSplit) return [relDir];
+
+  return children.flatMap((child) =>
+    candidateFrontier(repoRoot, child.relPath, files, { forceSplit: false, depth: depth + 1 })
+  );
+}
+
+function semanticContainerFrontiers(repoRoot, relDir, files) {
+  const frontiers = [];
+  const stack = [{ relDir, depth: 0 }];
+  const seen = new Set();
+
+  while (stack.length) {
+    const current = stack.pop();
+    if (seen.has(current.relDir) || current.depth > 3) continue;
+    seen.add(current.relDir);
+
+    if (SEMANTIC_CONTAINER_DIRS.has(basename(current.relDir))) {
+      const units = candidateFrontier(repoRoot, current.relDir, files, { forceSplit: true });
+      if (units.length >= 2) frontiers.push(units);
+      continue;
+    }
+
+    for (const child of childUnitStats(repoRoot, current.relDir, files)) {
+      stack.push({ relDir: child.relPath, depth: current.depth + 1 });
     }
   }
 
-  const topLevel = childDirs(repoRoot);
-  if (topLevel.length) return { units: topLevel, lowConfidence: false };
+  return frontiers;
+}
+
+function refineWorkspaceUnit(repoRoot, unit, files) {
+  const semanticFrontiers = semanticContainerFrontiers(repoRoot, unit, files);
+  if (semanticFrontiers.length) {
+    return [...new Set(semanticFrontiers.flat())].sort((a, b) => a.localeCompare(b));
+  }
+
+  const internalSourceRoots = sourceRootsUnder(repoRoot, unit);
+  const sourceRootUnits = internalSourceRoots.flatMap((root) =>
+    candidateFrontier(repoRoot, root, files, { forceSplit: true })
+  );
+  const unitFileCount = filesUnder(files, unit).length;
+  if (
+    sourceRootUnits.length >= LARGE_UNIT_CHILD_THRESHOLD &&
+    unitFileCount >= LARGE_UNIT_FILE_THRESHOLD
+  ) {
+    return sourceRootUnits;
+  }
+
+  return [unit];
+}
+
+function detectUnits(repoRoot) {
+  const files = walkSourceFiles(repoRoot);
+  const wsUnits = resolveWorkspaceUnits(repoRoot, workspaceGlobs(repoRoot));
+  if (wsUnits.length) {
+    return {
+      units: wsUnits.flatMap((unit) => refineWorkspaceUnit(repoRoot, unit, files)),
+      lowConfidence: false,
+    };
+  }
+
+  const sourceRootUnits = [];
+  for (const root of SOURCE_ROOTS) {
+    if (isDir(path.join(repoRoot, root))) {
+      sourceRootUnits.push(...candidateFrontier(repoRoot, root, files, { forceSplit: true }));
+    }
+  }
+  if (sourceRootUnits.length) return { units: sourceRootUnits, lowConfidence: false };
+
+  const topLevel = childUnitStats(repoRoot, ".", files).map((child) => child.relPath);
+  if (topLevel.length) return { units: topLevel, lowConfidence: true };
 
   return { units: ["."], lowConfidence: true };
 }

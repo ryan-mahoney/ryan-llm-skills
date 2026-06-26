@@ -115,6 +115,84 @@ test("a repo with no detectable module system yields one low-confidence root uni
   }
 });
 
+test("source roots split through semantic containers to deeper units", () => {
+  const repo = makeTempRepo();
+  try {
+    write(repo, "src/features/accounts/index.js", "export const accounts = 1;");
+    write(repo, "src/features/billing/index.js", "export const billing = 1;");
+    write(repo, "src/shared/format.js", "export const format = 1;");
+
+    const manifest = derive(repo);
+    const units = manifest.targets.map((t) => t.structural_unit);
+
+    assert.deepEqual(units, [
+      "src/features/accounts",
+      "src/features/billing",
+      "src/shared",
+    ]);
+    assert.equal(manifest.coverage.low_confidence, false);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("all recognizable source roots contribute units", () => {
+  const repo = makeTempRepo();
+  try {
+    write(repo, "src/api/index.js", "export const api = 1;");
+    write(repo, "services/worker/index.js", "export const worker = 1;");
+
+    const manifest = derive(repo);
+    const units = manifest.targets.map((t) => t.structural_unit);
+
+    assert.deepEqual(units, ["services/worker", "src/api"]);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("workspace packages split when semantic internal frontiers are present", () => {
+  const repo = makeTempRepo();
+  try {
+    write(repo, "package.json", JSON.stringify({ workspaces: ["packages/*"] }));
+    write(repo, "packages/app/package.json", "{}");
+    write(repo, "packages/app/src/domains/accounts/index.js", "export const accounts = 1;");
+    write(repo, "packages/app/src/domains/billing/index.js", "export const billing = 1;");
+    write(repo, "packages/app/src/domains/reports/index.js", "export const reports = 1;");
+    write(repo, "packages/app/src/workflows/import/index.js", "export const importFlow = 1;");
+    write(repo, "packages/app/src/workflows/export/index.js", "export const exportFlow = 1;");
+
+    const manifest = derive(repo);
+    const units = manifest.targets.map((t) => t.structural_unit);
+
+    assert.deepEqual(units, [
+      "packages/app/src/domains/accounts",
+      "packages/app/src/domains/billing",
+      "packages/app/src/domains/reports",
+      "packages/app/src/workflows/export",
+      "packages/app/src/workflows/import",
+    ]);
+    assert.equal(manifest.targets.every((t) => t.origin === "derived"), true);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("top-level directory fallback is marked low confidence", () => {
+  const repo = makeTempRepo();
+  try {
+    write(repo, "alpha/index.js", "export const alpha = 1;");
+    write(repo, "beta/index.js", "export const beta = 1;");
+
+    const manifest = derive(repo);
+
+    assert.deepEqual(manifest.targets.map((t) => t.structural_unit), ["alpha", "beta"]);
+    assert.equal(manifest.coverage.low_confidence, true);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test("source_hash is unchanged after an mtime-only touch of a matched file", () => {
   const repo = workspaceRepo();
   try {

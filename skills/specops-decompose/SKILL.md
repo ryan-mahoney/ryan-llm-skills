@@ -15,8 +15,11 @@ metadata:
 Produce a stable `docs/specops/targets.json` manifest for a repository. This is a leaf skill: a
 thin LLM layer over the deterministic core `scripts/decompose-skeleton.mjs`. The script owns the
 partition — slugs, structural units, source globs, coverage, content hashes, overrides, and
-renames. You own only prose: per-target `name` and `scope`, and the `system` summary. The only
-stochastic output is that prose. Do not orchestrate; do not run other skills.
+renames. Its detector considers workspaces, multiple source roots, and bounded recursive
+frontiers through common semantic containers such as `features`, `domains`, `modules`, `routes`,
+and `workflows`; it may split a large package or source root below the first directory layer when
+the structure is clear. You own only prose: per-target `name` and `scope`, and the `system`
+summary. The only stochastic output is that prose. Do not orchestrate; do not run other skills.
 
 ## Input
 
@@ -111,8 +114,9 @@ Return a short report to the orchestrator that names, explicitly:
   with an override).
 - `renames` — `{old_slug, new_slug}` entries the script detected (a target whose directory moved
   with unchanged content); the orchestrator should migrate the corresponding spec.
-- `coverage.low_confidence` — `true` when no module system was detectable and the repo collapsed
-  to a single root unit; signals the partition needs human review.
+- `coverage.low_confidence` — `true` when no module system or recognized source-root frontier was
+  detectable, including top-level-directory fallback or collapse to a single root unit; signals the
+  partition needs human review.
 
 Also state the manifest path written and any `--check` violations.
 
@@ -174,6 +178,23 @@ slug on every run:
    ancestor, and so on) until the slug is unique.
 
 Same `structural_unit` path ⇒ same slug, every run. A single root unit slugs to `root`.
+
+## Reference: partition detection
+
+The script derives a stable target frontier in this order:
+
+1. Workspace packages from `package.json` or `pnpm-workspace.yaml` are preferred. A workspace unit
+   remains a target unless it contains a clear internal semantic frontier, or unless it is large and
+   has several child units under an internal source root.
+2. Without workspaces, all recognizable source roots are considered, not just the first one found:
+   `src`, `lib`, `app`, `packages`, `services`, and `cmd`.
+3. Within a source root, the detector recursively descends through semantic container directories
+   such as `features`, `domains`, `modules`, `routes`, and `workflows`, so `src/features/billing`
+   becomes a target rather than the shallower `src/features`.
+4. If no recognized module or source-root frontier exists, the script falls back to top-level
+   directories and marks `coverage.low_confidence: true`.
+
+This keeps the partition deterministic while avoiding the earlier one-level-only target list.
 
 ## Reference: source_hash basis
 
