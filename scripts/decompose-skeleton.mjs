@@ -22,6 +22,8 @@ const IGNORED_DIRS = new Set([
 ]);
 
 const IGNORED_FILES = new Set([".DS_Store"]);
+const UNASSIGNED_SAMPLE_LIMIT = 50;
+const UNASSIGNED_SAMPLE_PER_TOP_LEVEL = 3;
 
 const SOURCE_ROOTS = ["src", "lib", "app", "packages", "services", "cmd"];
 const SOURCE_ROOT_SET = new Set(SOURCE_ROOTS);
@@ -412,7 +414,42 @@ function computeCoverage(repoRoot, targets, lowConfidence) {
     else if (owners.length > 1) overlaps.push({ path: file, slugs: owners.map((t) => t.slug) });
   }
   unassigned.sort((a, b) => a.localeCompare(b));
-  return { unassigned, overlaps, low_confidence: lowConfidence };
+  return {
+    unassigned: summarizeUnassigned(unassigned),
+    overlaps,
+    low_confidence: lowConfidence,
+  };
+}
+
+function summarizeUnassigned(unassigned) {
+  const byTopLevel = new Map();
+  const samplesByTopLevel = new Map();
+
+  for (const file of unassigned) {
+    const [topLevel] = file.split("/");
+    byTopLevel.set(topLevel, (byTopLevel.get(topLevel) ?? 0) + 1);
+
+    const samples = samplesByTopLevel.get(topLevel) ?? [];
+    if (samples.length < UNASSIGNED_SAMPLE_PER_TOP_LEVEL) {
+      samples.push(file);
+      samplesByTopLevel.set(topLevel, samples);
+    }
+  }
+
+  const topLevelSummary = [...byTopLevel.entries()]
+    .map(([path, count]) => ({ path, count }))
+    .sort((a, b) => b.count - a.count || a.path.localeCompare(b.path));
+
+  const sample = topLevelSummary
+    .flatMap(({ path }) => samplesByTopLevel.get(path) ?? [])
+    .slice(0, UNASSIGNED_SAMPLE_LIMIT);
+
+  return {
+    count: unassigned.length,
+    by_top_level: topLevelSummary,
+    sample,
+    truncated: unassigned.length > UNASSIGNED_SAMPLE_LIMIT,
+  };
 }
 
 function sha256(contents) {
