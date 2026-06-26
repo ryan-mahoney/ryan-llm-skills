@@ -7,19 +7,20 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "1"
+  version: "2"
 ---
 
 # SpecOps Decompose
 
 Produce a stable `docs/specops/targets.json` manifest for a repository. This is a leaf skill: a
 thin LLM layer over the deterministic core `scripts/decompose-skeleton.mjs`. The script owns the
-partition — slugs, structural units, source globs, coverage, content hashes, overrides, and
-renames. Its detector considers workspaces, multiple source roots, and bounded recursive
-frontiers through common semantic containers such as `features`, `domains`, `modules`, `routes`,
-and `workflows`; it may split a large package or source root below the first directory layer when
-the structure is clear. You own only prose: per-target `name` and `scope`, and the `system`
-summary. The only stochastic output is that prose. Do not orchestrate; do not run other skills.
+partition — slugs, structural units, source globs, compact coverage summary, content hashes,
+overrides, and renames. Its detector considers workspaces, multiple source roots, and bounded
+recursive frontiers through common semantic containers such as `features`, `domains`, `modules`,
+`routes`, and `workflows`; it may split a large package or source root below the first directory
+layer when the structure is clear. You own only prose: per-target `name` and `scope`, and the
+`system` summary. The only stochastic output is that prose. Do not orchestrate; do not run other
+skills.
 
 ## Input
 
@@ -35,6 +36,9 @@ Run the script and capture the JSON it prints to stdout:
 ```bash
 node scripts/decompose-skeleton.mjs <REPO_ROOT>
 ```
+
+If the skill bundle does not contain `scripts/decompose-skeleton.mjs`, use the shared suite
+script at `~/.agents/scripts/decompose-skeleton.mjs`.
 
 If `docs/specops/targets.json` already exists in the target repo, pass it so curated prose,
 overrides, and renames are reconciled and preserved:
@@ -56,7 +60,8 @@ The script's structural fields are the contract. **Never edit** any of:
 - `source_globs`
 - `origin`
 - `source_hash`
-- `coverage` (`unassigned`, `overlaps`, `low_confidence`)
+- `coverage` (`unassigned.count`, `unassigned.by_top_level`, `unassigned.sample`,
+  `unassigned.truncated`, `overlaps`, `low_confidence`)
 - `overrides`
 - `renames`
 
@@ -111,7 +116,8 @@ structural fields to make the check pass.
 Return a short report to the orchestrator that names, explicitly:
 
 - `coverage.unassigned` — source files matched by no target (gaps the orchestrator may resolve
-  with an override).
+  with an override), reported as a compact summary with `count`, grouped `by_top_level`, capped
+  `sample`, and `truncated` flag. Do not expand or store the full raw file list in the manifest.
 - `renames` — `{old_slug, new_slug}` entries the script detected (a target whose directory moved
   with unchanged content); the orchestrator should migrate the corresponding spec.
 - `coverage.low_confidence` — `true` when no module system or recognized source-root frontier was
@@ -155,7 +161,12 @@ you can reproduce it without reading the script:
   ],
   "renames": [ { "old_slug": "string", "new_slug": "string" } ],
   "coverage": {
-    "unassigned": ["path"],
+    "unassigned": {
+      "count": 0,
+      "by_top_level": [ { "path": "string", "count": 0 } ],
+      "sample": ["path"],
+      "truncated": false
+    },
     "overlaps": [ { "path": "string", "slugs": ["string", "…"] } ],
     "low_confidence": false
   }
@@ -164,7 +175,9 @@ you can reproduce it without reading the script:
 
 `name` and `scope` are LLM-authored; `system.summary` and `system.external_dependencies` are
 LLM-authored. Every other field is derived by the script. `overrides` are author-supplied curation
-the script applies; you never invent them in this skill.
+the script applies; you never invent them in this skill. `coverage.unassigned` is intentionally a
+summary rather than a complete path list because generated, vendored, and local artifact files can
+make the raw list too large and unstable for a committed manifest.
 
 ## Reference: slug rule
 
