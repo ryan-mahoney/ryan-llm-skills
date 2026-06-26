@@ -60,12 +60,23 @@ It also includes the design-spec front-half:
 
 Every skill whose directory name starts with `specops-`.
 
-The decomposition-first agent documentation flow starts with:
+The decomposition-first agent documentation flow writes:
+
+- `docs/specops/targets.json` — deterministic target manifest and freshness spine.
+- `docs/specops/analysis/<slug>.md` — deep implementation-agnostic analysis.
+- `docs/specops/agents/<slug>.md` — compressed target doc an agent should read first.
+- `AGENTS.md` — compact generated index between `<!-- agents-docs:start -->` and `<!-- agents-docs:end -->`.
+
+Bootstrap structured docs:
 
 1. Run `specops-decompose` to produce `docs/specops/targets.json`, the stable target manifest.
-2. Run `specops-orchestrate-analysis` so the in-harness orchestrator calls `specops-analysis` once per manifest target to write deep specs under each target's `tier2_path`.
-3. Run `specops-agent-docs` and `specops-index-agents` to create compressed target docs under `docs/specops/agents/` and link them from root `AGENTS.md`.
-4. On a branch or PR, run `specops-branch-refresh` so changed files refresh the affected analysis docs, compressed agent docs, manifest freshness fields, and AGENTS index.
+2. Run `specops-orchestrate-analysis` so the in-harness orchestrator calls `specops-analysis` once per manifest target, writes deep specs, creates compressed target docs, and refreshes the root `AGENTS.md` index.
+
+Refresh a branch or PR:
+
+1. Run `specops-branch-refresh` so changed files refresh the affected analysis docs, compressed agent docs, manifest freshness fields, and AGENTS index.
+
+`specops-agent-docs` and `specops-index-agents` are leaf utilities normally called by the orchestrators, but they can be run manually to repair compressed docs or the generated index.
 
 The legacy initial-plan mode in `specops-orchestrate-analysis` remains available as a fallback, but the manifest-driven path is the documented pipeline for new multi-target agent docs automation.
 

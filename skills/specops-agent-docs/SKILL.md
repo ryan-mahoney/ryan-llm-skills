@@ -16,6 +16,10 @@ Build compressed, agent-facing target docs from the deeper SpecOps analysis laye
 the Tier-1 working memory an agent should read first; the deep analysis remains the evidence-rich
 source of truth.
 
+This is a leaf utility. In the normal bootstrap flow, `specops-orchestrate-analysis` invokes it
+after deep analysis completes. In the normal branch/PR flow, `specops-branch-refresh` invokes it
+for affected targets. Run it directly only to repair or regenerate compressed docs.
+
 ## Inputs
 
 - Manifest path or repo root: `$ARGUMENTS` (or infer from current repository).

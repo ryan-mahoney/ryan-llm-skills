@@ -15,6 +15,10 @@ metadata:
 Update the root `AGENTS.md` file with a generated index block that points agents at the structured
 SpecOps docs. The root file stays compact; the per-target agent docs carry the detail.
 
+This is a leaf utility. In the normal bootstrap flow, `specops-orchestrate-analysis` invokes it
+after compressed docs are built. In the normal branch/PR flow, `specops-branch-refresh` invokes it
+after affected target docs are refreshed. Run it directly only to repair or regenerate the index.
+
 ## Inputs
 
 - Manifest path or repo root: `$ARGUMENTS` (or infer from current repository).

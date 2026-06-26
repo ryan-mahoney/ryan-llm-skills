@@ -1,6 +1,6 @@
 # LLM Skills & Rules
 
-Shared configuration for LLM coding agents (Claude Code, Codex, Augment, Cline, OpenCode). The centerpiece is two installable skill bundles with three workflow families: **spec-skills** contains both the spec-driven development workflow and the design-driven front-half, while **specops-skills** contains the legacy migration workflow. Design-spec is not a separate bundle because it depends on the same `.specs/<feature-slug>/` contract, conformance checklist, implementation back-half, rules, and Augment adapter as the spec workflow. Alongside the bundles sit standalone utility skills, design rules, and per-agent instruction files.
+Shared configuration for LLM coding agents (Claude Code, Codex, Augment, Cline, OpenCode). The centerpiece is two installable skill bundles with three workflow families: **spec-skills** contains both the spec-driven development workflow and the design-driven front-half, while **specops-skills** contains the legacy migration and structured agent-documentation workflow. Design-spec is not a separate bundle because it depends on the same `.specs/<feature-slug>/` contract, conformance checklist, implementation back-half, rules, and Augment adapter as the spec workflow. Alongside the bundles sit standalone utility skills, design rules, and per-agent instruction files.
 
 Skills are slash commands defined in `skills/<name>/SKILL.md` using the Agent Skills format.
 
@@ -63,11 +63,23 @@ Run the design stages, then hand off to `spec-run`:
 | **design-spec-writer** | `/design-spec-writer [feature-slug or issue]` | Write `.specs/<slug>/spec.md` in the standard 8-section contract from the proposal, critique, and approved prototype, with design-specialized acceptance criteria and steps |
 | **design-spec-review** | `/design-spec-review [feature-slug-or-spec-path]` | Review `spec.md` from a design lens (token/state/accessibility coverage, design ambiguity, traceability) and edit it |
 
-### specops-skills: legacy migration
+### specops-skills: SpecOps / agent documentation
 
-A SpecOps pipeline for migrating legacy code and maintaining agent-readable system specs: decompose the source into a stable target manifest, analyze each target into implementation-agnostic specs, harden and reconcile them, derive deterministic implementation specs, generate code, and verify the result preserves original behavior.
+A SpecOps pipeline for migrating legacy code and maintaining structured, agent-readable system docs: decompose the source into a stable target manifest, analyze each target into implementation-agnostic specs, compress those specs into target docs optimized for coding agents, index them from `AGENTS.md`, and keep the set fresh as branches change.
 
-For multi-target repositories, start with `specops-decompose`. It writes `docs/specops/targets.json`, a machine-readable manifest whose target partition is derived by `scripts/decompose-skeleton.mjs`. The manifest becomes the spine for `specops-orchestrate-analysis` to iterate in-harness: run `specops-analysis` once per target to create deep specs, then build compressed target docs under `docs/specops/agents/` and index them from root `AGENTS.md`. On branches and PRs, `specops-branch-refresh` maps changed files to targets, refreshes affected analysis docs, rebuilds compressed agent docs, stamps manifest freshness, and updates the AGENTS index.
+Generated artifacts in target repos:
+
+- `docs/specops/targets.json` — deterministic target manifest and freshness spine.
+- `docs/specops/analysis/<slug>.md` — deep implementation-agnostic analysis.
+- `docs/specops/agents/<slug>.md` — compressed target doc an agent should read first.
+- `AGENTS.md` — compact generated index between `<!-- agents-docs:start -->` and `<!-- agents-docs:end -->`.
+
+Two common flows:
+
+1. **Bootstrap structured docs:** run `specops-decompose`, then `specops-orchestrate-analysis`. The orchestrator analyzes each manifest target, builds compressed agent docs, and refreshes the `AGENTS.md` index.
+2. **Refresh a branch or PR:** run `specops-branch-refresh`. It maps changed files to targets, refreshes affected deep analysis docs, rebuilds compressed agent docs, stamps manifest freshness fields, and updates the `AGENTS.md` index.
+
+`specops-agent-docs` and `specops-index-agents` are leaf utilities. They are usually invoked by `specops-orchestrate-analysis` or `specops-branch-refresh`, but can be run manually to repair compressed docs or the index.
 
 | Skill | Command | Purpose |
 |---|---|---|

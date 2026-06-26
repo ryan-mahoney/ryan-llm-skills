@@ -479,7 +479,29 @@ write_specops_workflow_howto() {
 
 ## How To Use The SpecOps Workflow
 
-SpecOps has two related jobs: preserving legacy behavior during migration, and keeping agent-readable deep specs current for a repository. Multi-target repositories should start with a deterministic target manifest.
+SpecOps has two related jobs: preserving legacy behavior during migration, and keeping structured,
+agent-readable system docs current for a repository. Multi-target repositories should start with a
+deterministic target manifest.
+
+Generated artifacts in target repos:
+
+- `docs/specops/targets.json` — deterministic target manifest and freshness spine.
+- `docs/specops/analysis/<slug>.md` — deep implementation-agnostic analysis.
+- `docs/specops/agents/<slug>.md` — compressed target doc an agent should read first.
+- `AGENTS.md` — compact generated index between `<!-- agents-docs:start -->` and `<!-- agents-docs:end -->`.
+
+Two common flows:
+
+1. **Bootstrap structured docs:** run `specops-decompose`, then `specops-orchestrate-analysis`.
+   The orchestrator analyzes each manifest target, builds compressed agent docs, and refreshes the
+   `AGENTS.md` index.
+2. **Refresh a branch or PR:** run `specops-branch-refresh`. It maps changed files to targets,
+   refreshes affected deep analysis docs, rebuilds compressed agent docs, stamps manifest freshness
+   fields, and updates the `AGENTS.md` index.
+
+`specops-agent-docs` and `specops-index-agents` are leaf utilities. They are usually invoked by
+`specops-orchestrate-analysis` or `specops-branch-refresh`, but can be run manually to repair
+compressed docs or the index.
 
 ### 1. Decompose The Repository
 
@@ -501,7 +523,7 @@ You can validate the manifest structure directly:
 node scripts/decompose-skeleton.mjs <repo-root> --check docs/specops/targets.json
 ```
 
-### 2. Analyze Each Target
+### 2. Analyze Each Target And Build Agent Docs
 
 Run the in-harness orchestrator:
 
@@ -509,7 +531,11 @@ Run the in-harness orchestrator:
 /specops-orchestrate-analysis [repo-root]
 ```
 
-It calls `specops-analysis` once per manifest target, passing the target entry. The analysis skill uses the entry's `name`, `scope`, `source_globs`, and `tier2_path`, writes the deep spec to that `tier2_path`, and returns the analyzed `source_hash` so the orchestrator can stamp the manifest.
+It calls `specops-analysis` once per manifest target, passing the target entry. The analysis skill
+uses the entry's `name`, `scope`, `source_globs`, and `tier2_path`, writes the deep spec to that
+`tier2_path`, and returns the analyzed `source_hash` so the orchestrator can stamp the manifest.
+After analysis, the orchestrator invokes `specops-agent-docs` and `specops-index-agents` to write
+compressed target docs and refresh the root `AGENTS.md` index.
 
 Manual fallback for a single target:
 
@@ -517,9 +543,9 @@ Manual fallback for a single target:
 /specops-analysis <scope>
 ```
 
-### 3. Build Compressed Agent Docs And Index AGENTS.md
+### 3. Repair Compressed Agent Docs Or AGENTS.md Manually
 
-After deep analysis exists, generate compact per-target docs and link them from root `AGENTS.md`:
+When only the compressed docs or generated index need repair, run the leaves directly:
 
 ```bash
 /specops-agent-docs [repo-root]
