@@ -1,0 +1,4 @@
+interface:
+  display_name: "SpecOps Agent Docs"
+  short_description: "Build compressed per-target agent docs from SpecOps analysis."
+  default_prompt: "Build or refresh compressed agent docs from docs/specops/targets.json."

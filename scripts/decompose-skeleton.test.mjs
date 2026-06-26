@@ -48,6 +48,7 @@ function projection(manifest) {
     slug: t.slug,
     structural_unit: t.structural_unit,
     source_globs: t.source_globs,
+    agent_path: t.agent_path,
   }));
 }
 
@@ -73,7 +74,7 @@ test("every source file is owned by exactly one target or unassigned, with no ov
       const owners = manifest.targets.filter((t) => t.source_globs.some((g) => g.endsWith("/**") && file.startsWith(g.slice(0, -3) + "/")));
       assert.equal(owners.length, 1, `${file} should have exactly one owner`);
     }
-    assert.ok(manifest.coverage.unassigned.includes("README.md"));
+    assert.ok(manifest.coverage.unassigned.sample.includes("README.md"));
     assert.deepEqual(manifest.coverage.overlaps, []);
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
@@ -88,6 +89,9 @@ test("slugs are unique, kebab-case, and stable for a fixed structural_unit path"
 
     assert.equal(new Set(slugs).size, slugs.length);
     for (const slug of slugs) assert.match(slug, KEBAB);
+    for (const target of manifest.targets) {
+      assert.equal(target.agent_path, `docs/specops/agents/${target.slug}.md`);
+    }
 
     const reran = derive(repo);
     for (const target of manifest.targets) {

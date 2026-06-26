@@ -1,0 +1,4 @@
+interface:
+  display_name: "SpecOps Index Agents"
+  short_description: "Update AGENTS.md with a generated target index."
+  default_prompt: "Update AGENTS.md with the SpecOps agent-docs index."

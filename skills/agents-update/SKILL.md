@@ -1,11 +1,11 @@
 ---
 name: agents-update
-description: "Analyze a code repository's architecture and produce (or update) an AGENTS.md file that gives LLM coding agents a map of the project. Use this skill whenever the user says 'generate AGENTS.md', 'create AGENTS.md', 'update AGENTS.md', 'map this repo', 'document this project for agents', 'analyze the architecture', or any variation of 'help an LLM understand this codebase'. Also trigger when the user asks to onboard an AI agent onto a project, describe a repo's structure for Claude/Copilot/Cursor, or identify the architectural pattern of a codebase. If someone says 'what pattern does this project use' or 'where is everything in this repo', use this skill."
+description: "Analyze a code repository's architecture and produce (or update) an AGENTS.md file that gives LLM coding agents a map of the project. Use this skill whenever the user says 'generate AGENTS.md', 'create AGENTS.md', 'update AGENTS.md', 'map this repo', 'document this project for agents', 'analyze the architecture', or any variation of 'help an LLM understand this codebase'. Also trigger when the user asks to onboard an AI agent onto a project, describe a repo's structure for Claude/Copilot/Cursor, or identify the architectural pattern of a codebase. If structured SpecOps agent docs exist, preserve or refresh the generated AGENTS.md index block rather than duplicating those docs inline."
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "2"
+  version: "3"
 ---
 
 # Agent — Repository Architecture Mapper
@@ -65,7 +65,18 @@ Open the files that reveal routing and wiring:
 - **AGENTS.md** — if one exists, read it fully. Step 4 covers how to update it.
 - **Siblings** — also read `CLAUDE.md`, `.cursorrules`, and `.github/copilot-instructions.md` if present. Do not duplicate their content in AGENTS.md; where they contradict the actual repo, flag it with `<!-- REVIEW: ... -->`.
 
-### 1f. Mine for gotchas and ground-truth commands
+### 1f. Check for structured SpecOps agent docs
+
+If `docs/specops/targets.json` exists:
+
+- Read the manifest summary and target list.
+- Preserve any existing generated block between `<!-- agents-docs:start -->` and
+  `<!-- agents-docs:end -->`.
+- Do not copy per-target docs into AGENTS.md. The root AGENTS.md should contain only a compact
+  index that links to `docs/specops/agents/<slug>.md` and `docs/specops/analysis/<slug>.md`.
+- If the generated block is missing or stale, run or recommend `specops-index-agents`.
+
+### 1g. Mine for gotchas and ground-truth commands
 
 The Gotchas and Commands sections are the highest-value parts of the output. Source them from evidence, not memory:
 
@@ -249,6 +260,7 @@ secrets for local dev. Mention `.env.example` if it exists.]
 - **No existing AGENTS.md**: Create it fresh from the template.
 - **Existing AGENTS.md**: Read it carefully. Then:
   - **Preserve** any human-written commentary, team-specific notes, or sections not covered by this template.
+  - **Preserve** the generated SpecOps agent-docs block between `<!-- agents-docs:start -->` and `<!-- agents-docs:end -->`; update it only via `specops-index-agents`.
   - **Update** sections where the repo has changed (new dependencies, moved directories, changed patterns).
   - **Append** new sections from the template that are missing.
   - **Mark** anything you're unsure about with `<!-- REVIEW: [reason] -->` so a human can verify.

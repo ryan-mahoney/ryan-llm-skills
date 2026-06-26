@@ -49,6 +49,17 @@ copy_rules() {
   cp "$src"/*.md "$bundle_dir/rules/"
 }
 
+copy_scripts() {
+  local bundle_dir="$1"
+  shift
+
+  mkdir -p "$bundle_dir/scripts"
+  local script
+  for script in "$@"; do
+    copy_file "$bundle_dir" "scripts/$script" "scripts/$script"
+  done
+}
+
 write_install_script() {
   local bundle_dir="$1"
 
@@ -171,35 +182,55 @@ install_rules_to() {
   done
 }
 
+install_scripts_to() {
+  local target_dir="$1"
+
+  if [ ! -d "$BUNDLE_DIR/scripts" ]; then
+    return 0
+  fi
+
+  mkdir -p "$target_dir"
+  for script_file in "$BUNDLE_DIR/scripts"/*; do
+    [ -f "$script_file" ] || continue
+    install_entry "$script_file" "$target_dir/$(basename "$script_file")"
+  done
+}
+
 install_target() {
   case "$1" in
     agents)
       install_skills_to "$HOME/.agents/skills"
       install_rules_to "$HOME/.agents/rules"
+      install_scripts_to "$HOME/.agents/scripts"
       ;;
     claude)
       install_skills_to "$HOME/.claude/skills"
       install_rules_to "$HOME/.agents/rules"
       install_rules_to "$HOME/.claude/rules"
+      install_scripts_to "$HOME/.agents/scripts"
       ;;
     codex)
       install_skills_to "$HOME/.codex/skills"
       install_rules_to "$HOME/.agents/rules"
       install_rules_to "$HOME/.codex/guides"
+      install_scripts_to "$HOME/.agents/scripts"
       ;;
     augment)
       install_skills_to "$HOME/.augment/skills"
       install_augment_agents_to "$HOME/.augment/agents"
       install_rules_to "$HOME/.agents/rules"
+      install_scripts_to "$HOME/.agents/scripts"
       ;;
     opencode)
       install_skills_to "$HOME/.opencode/skills"
       install_rules_to "$HOME/.agents/rules"
       install_rules_to "$HOME/.opencode/rules"
+      install_scripts_to "$HOME/.agents/scripts"
       ;;
     cline)
       install_skills_to "$HOME/.cline/skills"
       install_rules_to "$HOME/.agents/rules"
+      install_scripts_to "$HOME/.agents/scripts"
       ;;
     all)
       install_target agents
@@ -472,7 +503,13 @@ node scripts/decompose-skeleton.mjs <repo-root> --check docs/specops/targets.jso
 
 ### 2. Analyze Each Target
 
-Have the orchestrator call `specops-analysis` once per manifest target, passing the target entry. The analysis skill uses the entry's `name`, `scope`, `source_globs`, and `tier2_path`, writes the deep spec to that `tier2_path`, and returns the analyzed `source_hash` so the orchestrator can stamp the manifest.
+Run the in-harness orchestrator:
+
+```bash
+/specops-orchestrate-analysis [repo-root]
+```
+
+It calls `specops-analysis` once per manifest target, passing the target entry. The analysis skill uses the entry's `name`, `scope`, `source_globs`, and `tier2_path`, writes the deep spec to that `tier2_path`, and returns the analyzed `source_hash` so the orchestrator can stamp the manifest.
 
 Manual fallback for a single target:
 
@@ -480,7 +517,20 @@ Manual fallback for a single target:
 /specops-analysis <scope>
 ```
 
-### 3. Harden And Reconcile Analysis Specs
+### 3. Build Compressed Agent Docs And Index AGENTS.md
+
+After deep analysis exists, generate compact per-target docs and link them from root `AGENTS.md`:
+
+```bash
+/specops-agent-docs [repo-root]
+/specops-index-agents [repo-root]
+```
+
+Compressed docs live at `docs/specops/agents/<slug>.md` unless the manifest target supplies an
+explicit `agent_path`. `AGENTS.md` receives only a generated table of contents block; target detail
+stays in the compressed docs and deep analysis files.
+
+### 4. Harden And Reconcile Analysis Specs
 
 Use the audit skills before deriving implementation specs:
 
@@ -491,7 +541,7 @@ Use the audit skills before deriving implementation specs:
 
 Run `specops-spec-coherence` when multiple analysis specs need to agree on shared models, side effects, terminology, or implementation order.
 
-### 4. Derive And Verify Implementation Specs
+### 5. Derive And Verify Implementation Specs
 
 ```bash
 /specops-make-spec <analysis-file-or-scope>
@@ -500,7 +550,7 @@ Run `specops-spec-coherence` when multiple analysis specs need to agree on share
 
 The conformance pass checks that the implementation spec did not drop, weaken, contradict, or silently change behavior from the analysis spec.
 
-### 5. Execute And Test The Migration
+### 6. Execute And Test The Migration
 
 ```bash
 /specops-run-spec <spec-file>
@@ -511,17 +561,23 @@ The conformance pass checks that the implementation spec did not drop, weaken, c
 
 Use drift audit after code generation to compare the migrated behavior back to the original analysis.
 
-### 6. Refresh Deep Specs From A Branch
+### 7. Refresh Agent Docs From A Branch Or PR
 
-For ongoing agent documentation, the orchestrator should call:
+For ongoing agent documentation, run:
+
+```bash
+/specops-branch-refresh [repo-root] [base-ref]
+```
+
+It maps changed files to manifest targets, calls `specops-update-spec` or `specops-analysis` for
+affected targets, refreshes compressed agent docs, updates only freshness fields in the manifest,
+and rewrites the generated `AGENTS.md` index block.
+
+Manual fallback for one target remains:
 
 ```bash
 /specops-update-spec <target manifest entry + branch/diff context>
 ```
-
-This patches one target's existing deep spec in place, edits only sections traceable to the diff, re-validates Evidence references, and returns refreshed `source_hash` plus `last_synthesized`. It does not read or write the whole manifest; the orchestrator owns that file.
-
-`specops-orchestrate-analysis` remains available as a local fallback for older initial-plan-driven runs, but the manifest-driven `specops-decompose` -> `specops-analysis` path is the documented pipeline for new multi-target work.
 
 README
 }
@@ -547,6 +603,13 @@ write_bundle_files() {
       for rule in "$bundle_dir/rules"/*.md; do
         [ -f "$rule" ] || continue
         printf '%s\n' "- \`rules/$(basename "$rule")\`"
+      done
+    fi
+    if [ -d "$bundle_dir/scripts" ]; then
+      printf '\n## Scripts\n\n'
+      for script in "$bundle_dir/scripts"/*; do
+        [ -f "$script" ] || continue
+        printf '%s\n' "- \`scripts/$(basename "$script")\`"
       done
     fi
     if [ -d "$bundle_dir/augment/agents" ]; then
@@ -600,6 +663,19 @@ write_bundle_files() {
     else
       printf '[]'
     fi
+    printf ',\n'
+    printf '  "scripts": '
+    if [ -d "$bundle_dir/scripts" ]; then
+      local scripts=()
+      local script
+      for script in "$bundle_dir/scripts"/*; do
+        [ -f "$script" ] || continue
+        scripts+=("scripts/$(basename "$script")")
+      done
+      json_array "${scripts[@]}"
+    else
+      printf '[]'
+    fi
     printf '\n}\n'
   } > "$bundle_dir/bundle.json"
 }
@@ -623,6 +699,8 @@ build_bundle() {
   if [ "$name" = "spec-skills" ]; then
     copy_file "$bundle_dir" "augment/agents/spec-step-implementer.md" "augment/agents/spec-step-implementer.md"
     copy_rules "$bundle_dir"
+  elif [ "$name" = "specops-skills" ]; then
+    copy_scripts "$bundle_dir" "decompose-skeleton.mjs" "agent-docs.mjs"
   fi
 
   write_install_script "$bundle_dir"

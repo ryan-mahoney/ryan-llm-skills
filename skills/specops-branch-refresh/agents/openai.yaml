@@ -1,0 +1,4 @@
+interface:
+  display_name: "SpecOps Branch Refresh"
+  short_description: "Refresh analysis and agent docs for branch changes."
+  default_prompt: "Refresh SpecOps analysis, agent docs, and AGENTS.md for this branch."

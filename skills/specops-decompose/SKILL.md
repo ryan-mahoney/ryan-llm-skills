@@ -1,21 +1,21 @@
 ---
 name: specops-decompose
-description: This skill should be used when the user asks to decompose a repository into a stable, machine-readable SpecOps target manifest (docs/specops/targets.json) — running the deterministic skeleton-derivation core, filling in per-target name and scope prose and the system summary, and reporting coverage, renames, and low-confidence to the orchestrator.
+description: This skill should be used when the user asks to decompose a repository into a stable, machine-readable SpecOps target manifest (docs/specops/targets.json) — running the deterministic skeleton-derivation core, filling in per-target name and scope prose and the system summary, assigning deep analysis and compressed agent-doc paths, and reporting coverage, renames, and low-confidence to the orchestrator.
 disable-model-invocation: true
 argument-hint: "[repo-root (optional)]"
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "2"
+  version: "3"
 ---
 
 # SpecOps Decompose
 
 Produce a stable `docs/specops/targets.json` manifest for a repository. This is a leaf skill: a
 thin LLM layer over the deterministic core `scripts/decompose-skeleton.mjs`. The script owns the
-partition — slugs, structural units, source globs, compact coverage summary, content hashes,
-overrides, and renames. Its detector considers workspaces, multiple source roots, and bounded
+partition — slugs, structural units, source globs, deep analysis paths, compressed agent-doc paths,
+compact coverage summary, content hashes, overrides, and renames. Its detector considers workspaces, multiple source roots, and bounded
 recursive frontiers through common semantic containers such as `features`, `domains`, `modules`,
 `routes`, and `workflows`; it may split a large package or source root below the first directory
 layer when the structure is clear. You own only prose: per-target `name` and `scope`, and the
@@ -58,6 +58,8 @@ The script's structural fields are the contract. **Never edit** any of:
 - `slug`
 - `structural_unit`
 - `source_globs`
+- `tier2_path`
+- `agent_path`
 - `origin`
 - `source_hash`
 - `coverage` (`unassigned.count`, `unassigned.by_top_level`, `unassigned.sample`,
@@ -128,7 +130,8 @@ Also state the manifest path written and any `--check` violations.
 
 ## Guardrail
 
-This skill writes **only** `docs/specops/targets.json`. It must not write per-target specs, an
+This skill writes **only** `docs/specops/targets.json`. It must not write per-target specs,
+compressed agent docs, an
 `AGENTS.md`, or any other file. If reconnaissance suggests a target's spec is stale, report it —
 do not generate or edit it here.
 
@@ -150,6 +153,7 @@ you can reproduce it without reading the script:
       "structural_unit": "string", // repo-relative path the slug derives from, e.g. "packages/submissions"
       "source_globs": ["string"],  // >=1; generated projection of the unit (and overrides), never hand-authored
       "tier2_path": "docs/specops/analysis/<slug>.md",
+      "agent_path": "docs/specops/agents/<slug>.md",
       "source_hash": "sha256:…" | null,
       "last_synthesized": "ISO-8601" | null
     }

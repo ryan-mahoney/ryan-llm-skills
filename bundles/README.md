@@ -63,10 +63,11 @@ Every skill whose directory name starts with `specops-`.
 The decomposition-first agent documentation flow starts with:
 
 1. Run `specops-decompose` to produce `docs/specops/targets.json`, the stable target manifest.
-2. Have the external orchestrator call `specops-analysis` once per manifest target to write deep specs under each target's `tier2_path`.
-3. When a branch changes source, have the orchestrator call `specops-update-spec` for each affected target so the existing deep spec is patched in place and the manifest freshness fields can be updated.
+2. Run `specops-orchestrate-analysis` so the in-harness orchestrator calls `specops-analysis` once per manifest target to write deep specs under each target's `tier2_path`.
+3. Run `specops-agent-docs` and `specops-index-agents` to create compressed target docs under `docs/specops/agents/` and link them from root `AGENTS.md`.
+4. On a branch or PR, run `specops-branch-refresh` so changed files refresh the affected analysis docs, compressed agent docs, manifest freshness fields, and AGENTS index.
 
-The older `specops-orchestrate-analysis` skill remains available as a local fallback, but the manifest-driven path is the documented pipeline for new multi-target agent docs automation.
+The legacy initial-plan mode in `specops-orchestrate-analysis` remains available as a fallback, but the manifest-driven path is the documented pipeline for new multi-target agent docs automation.
 
 ## Build
 

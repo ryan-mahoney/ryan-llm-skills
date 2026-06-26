@@ -67,7 +67,7 @@ Run the design stages, then hand off to `spec-run`:
 
 A SpecOps pipeline for migrating legacy code and maintaining agent-readable system specs: decompose the source into a stable target manifest, analyze each target into implementation-agnostic specs, harden and reconcile them, derive deterministic implementation specs, generate code, and verify the result preserves original behavior.
 
-For multi-target repositories, start with `specops-decompose`. It writes `docs/specops/targets.json`, a machine-readable manifest whose target partition is derived by `scripts/decompose-skeleton.mjs`. The manifest becomes the spine an external orchestrator can iterate: run `specops-analysis` once per target to create deep specs, then run `specops-update-spec` for changed targets when a branch or diff needs the deep spec refreshed in place.
+For multi-target repositories, start with `specops-decompose`. It writes `docs/specops/targets.json`, a machine-readable manifest whose target partition is derived by `scripts/decompose-skeleton.mjs`. The manifest becomes the spine for `specops-orchestrate-analysis` to iterate in-harness: run `specops-analysis` once per target to create deep specs, then build compressed target docs under `docs/specops/agents/` and index them from root `AGENTS.md`. On branches and PRs, `specops-branch-refresh` maps changed files to targets, refreshes affected analysis docs, rebuilds compressed agent docs, stamps manifest freshness, and updates the AGENTS index.
 
 | Skill | Command | Purpose |
 |---|---|---|
@@ -76,7 +76,10 @@ For multi-target repositories, start with `specops-decompose`. It writes `docs/s
 | **specops-refactor-plan** | `/specops-refactor-plan [target-folder] [refactor-goal]` | Create a refactor-focused SpecOps plan for an existing source folder and explicit goal |
 | **specops-analysis** | `/specops-analysis [scope]` | Produce a generalized SpecOps implementation-agnostic analysis/specification |
 | **specops-update-spec** | `/specops-update-spec [target manifest entry + branch/diff context]` | Update one target's deep spec in place from a branch or diff, then return refreshed `source_hash` and `last_synthesized` for the orchestrator |
-| **specops-orchestrate-analysis** | `/specops-orchestrate-analysis [initial-plan]` | Legacy fallback for orchestrating sequential per-target analysis from an initial plan; superseded in the decomposition-first pipeline by external orchestration over `targets.json` |
+| **specops-orchestrate-analysis** | `/specops-orchestrate-analysis [manifest-path-or-repo-root]` | Orchestrate sequential per-target analysis from `docs/specops/targets.json` in-harness; also supports the legacy initial-plan flow as a fallback |
+| **specops-agent-docs** | `/specops-agent-docs [manifest-path-or-repo-root] [target-slug]` | Build compressed per-target agent docs from deep SpecOps analysis under `docs/specops/agents/` |
+| **specops-index-agents** | `/specops-index-agents [manifest-path-or-repo-root]` | Update the generated `AGENTS.md` table of contents for structured SpecOps agent docs |
+| **specops-branch-refresh** | `/specops-branch-refresh [repo-root] [base-ref]` | Refresh affected analysis docs, compressed agent docs, manifest freshness, and the AGENTS index for the current branch |
 | **specops-ambiguity-audit** | `/specops-ambiguity-audit [analysis-file]` | Audit a SpecOps analysis spec for ambiguities, resolve them via parallel legacy-source research, and patch the spec |
 | **specops-spec-coherence** | `/specops-spec-coherence [analysis-dir]` | Audit a set of analysis specs for cross-spec coherence (dependency order, integration contracts, shared models, terminology) and patch gaps |
 | **specops-make-spec** | `/specops-make-spec [scope]` | Convert SpecOps analysis into a generalized deterministic implementation spec |

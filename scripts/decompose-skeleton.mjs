@@ -324,6 +324,7 @@ function buildTargets(unitPaths) {
       structural_unit: unit,
       source_globs: unit === "." ? ["**"] : [`${unit}/**`],
       tier2_path: `docs/specops/analysis/${slug}.md`,
+      agent_path: `docs/specops/agents/${slug}.md`,
       source_hash: null,
       last_synthesized: null,
     };
@@ -339,6 +340,7 @@ function overrideTarget(slug, structuralUnit, sourceGlobs) {
     structural_unit: structuralUnit,
     source_globs: sourceGlobs,
     tier2_path: `docs/specops/analysis/${slug}.md`,
+    agent_path: `docs/specops/agents/${slug}.md`,
     source_hash: null,
     last_synthesized: null,
   };
@@ -532,6 +534,7 @@ const TARGET_FIELD_SPECS = [
     ok: (v) => Array.isArray(v) && v.length >= 1 && v.every((g) => typeof g === "string"),
   },
   { field: "tier2_path", type: "string", ok: (v) => typeof v === "string" },
+  { field: "agent_path", type: "string", ok: (v) => typeof v === "string" },
   { field: "source_hash", type: "string or null", ok: (v) => v === null || typeof v === "string" },
   { field: "last_synthesized", type: "string or null", ok: (v) => v === null || typeof v === "string" },
 ];
