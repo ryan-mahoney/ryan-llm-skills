@@ -156,25 +156,8 @@ Each agent reads a global instruction file from its own config directory. The ca
 |---|---|
 | `claude/CLAUDE.md` | `~/.claude/CLAUDE.md` |
 | `codex/AGENTS.md` | `~/.codex/AGENTS.md` |
-| `opencode/opencode.jsonc` | `~/.config/opencode/opencode.jsonc` |
 | `skills/*/SKILL.md` | Harness skill directories when needed; Augment also discovers `~/.agents/skills/` natively |
 | `augment/agents/*.md` | `~/.augment/agents/*.md` |
-
-### OpenCode permissions
-
-Claude Code and Codex both expose a runtime switch to eliminate every permission
-prompt for a session — `claude --dangerously-skip-permissions` and
-`codex --dangerously-bypass-approvals-and-sandbox` (alias `--yolo`). OpenCode has
-no equivalent flag: the only way to run it without approval prompts is to declare
-it in config. `opencode/opencode.jsonc` is that config, kept here as the source
-of truth and synced to `~/.config/opencode/opencode.jsonc`.
-
-It sets every permission to `allow`. The prompts that are easy to miss are not
-bash patterns — reading `~/.agents/rules` and writing `/tmp` are gated by
-`external_directory`, which defaults to `ask` for any path outside the project
-directory OpenCode was launched in. The two `deny` bash patterns (`mkfs`, `dd`)
-block silently rather than prompting, as a safety net against unrecoverable disk
-wipes; remove them for unrestricted allow.
 
 ## Repository Layout & Sync
 
@@ -186,7 +169,6 @@ wipes; remove them for unrestricted allow.
 ├── rules/         # Design and copy guidance (symlinked into each agent)
 ├── claude/        # Claude Code global instructions → ~/.claude/CLAUDE.md
 ├── codex/         # Codex global instructions → ~/.codex/AGENTS.md
-├── opencode/      # OpenCode permission config → ~/.config/opencode/opencode.jsonc
 └── scripts/       # Bundle build script
 ```
 
