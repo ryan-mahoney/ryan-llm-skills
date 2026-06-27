@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "8"
+  version: "10"
 ---
 
 # Spec Step Judge
@@ -81,6 +81,8 @@ runs. Resolve every related artifact yourself from the spec directory
   `spec-step-run` emitted for this step. If it is absent, evaluate from the
   committed diff alone and flag the missing learning in the report — do not block.
 - `subspec`:    `<spec-dir>/subspecs/<step-number>-spec.md`
+- prior learnings: `<spec-dir>/learnings/<k>-learning.md` for each earlier step `k` —
+  read to confirm this step did not revert or contradict earlier spec-conformant work.
 - `criteria`:   `<spec-dir>/criteria.md`
 - `invariants`: `<spec-dir>/invariants.md`
 - `blockers`:   `<spec-dir>/blockers.md`
@@ -105,7 +107,8 @@ to the most recent commit touching the step's named files. Read the diff with
 `git show <commit>`.
 
 Before judging, read: the resolved step text and its `Covers:` tags, the subspec,
-the learning file, and the guardrails. Extract guardrails with the same limits
+the learning file, the earlier steps' learning files (to catch regressions), and the
+guardrails. Extract guardrails with the same limits
 `spec-step-run` uses — only prose `Source:` lines from `criteria.md` (never
 `Check:` commands, grep patterns, or expected hit sets) and live `invariants.md`
 entries not marked superseded.
@@ -118,7 +121,7 @@ This time-ordering, not a separate agent, is what keeps the judge independent of
 the patcher; do not revise the verdict afterward to justify a fix.
 
 The evaluation is verification, not redesign — the spec already passed review.
-Judge on three axes:
+Judge on four axes:
 
 1. **Scope** — the committed change stays within the step's intent; no
    out-of-scope edits. The step's subspec and learning files do not count as
@@ -126,9 +129,21 @@ Judge on three axes:
 2. **Conformance** — the change satisfies the step's `Covers:` criteria and the
    high-risk guardrails (ownership, placement, layering), and the learning's
    discrepancies do not reveal a behaviorally-silent spec violation.
-3. **Verification** — re-run the targeted tests named by the step or subspec and
-   confirm green. If the step names none, run the narrowest typecheck, compile, or
-   test command for the changed files.
+3. **Verification** — re-run the targeted tests named by the step or subspec —
+   scoped to those specific files or filters — and confirm green. If the step names
+   none, use judgment to run the narrowest meaningful check for the changed files
+   (typically a typecheck or compile), not the test runner. **Never run the entire
+   test suite**: per-step verification stays targeted; the full suite is reserved for
+   the branch-level stage (running it here multiplies memory use across concurrent
+   steps and projects).
+4. **No regression** — the change does not revert or contradict a prior step's
+   spec-conformant decision or a fact an earlier learning recorded. Scan the earlier
+   `learnings/<k>-learning.md` files: if this step undoes correct prior work to make
+   its own tests pass — a re-broken contract, a reverted label or signature, a
+   re-introduced bug an earlier step fixed — that is `needs-correction` even when the
+   step's own targeted tests are green. When the regression cannot be fixed within
+   this step's scope (honoring this step genuinely requires editing a completed step),
+   record it as a `blocked` spec defect instead.
 
 Verdict, one of:
 
@@ -158,13 +173,18 @@ Read before judging:
 1. The resolved step text and its Covers: tags in the spec.
 2. The step's committed diff.
 3. The subspec and learning file, when present.
+4. The earlier steps' learning files, to catch a regression of prior work.
 
-Evaluate on three axes — do NOT re-open the design:
+Evaluate on four axes — do NOT re-open the design:
 - Scope: changes confined to this step's intent (subspec/learning files excepted).
 - Conformance: satisfies the Covers criteria and the guardrails above; the
   learning reveals no silent spec violation.
-- Verification: re-run the step's targeted tests (or the narrowest check for the
-  changed files) and confirm they pass.
+- Verification: re-run the step's targeted tests (or, when none are named, the
+  narrowest check for the changed files — never the full test suite) and confirm
+  they pass.
+- No regression: the diff does not revert or contradict a prior step's
+  spec-conformant work or an earlier learning's recorded fact, even if this step's
+  own tests pass.
 
 Output:
 1. Verdict: pass | needs-correction | blocked.
@@ -286,6 +306,30 @@ Commit the spec edits separately from any code correction:
 Perform these edits directly — you already hold the learning and the future step
 text. Do not delegate spec rewriting.
 
+## Emit The Judgement File
+
+Always write a judgement artifact before the completion report. Write it to:
+
+```txt
+<spec-dir>/judgements/step-<step-number>-judge.md
+```
+
+Use `judgements/step-<short-slug>-judge.md` for a step with no numeric id. Create
+the `judgements/` folder if it does not exist. The file must include:
+
+1. **Verdict** — `pass`, `corrected`, or `blocked`, with one-line rationale.
+2. **Correction summary** — correction commit, files changed, or `none`.
+3. **Adaptation summary** — future steps changed, adaptation commit, or `none`.
+4. **Commits** — implementation commit judged, plus correction/adaptation commits.
+5. **Verification commands** — commands run and outcomes.
+6. **Blockers** — blockers, escalations, or `none`.
+
+End the file with a single locator line:
+
+```txt
+Judgement: <spec-dir>/judgements/step-<step-number>-judge.md (step <step-number>)
+```
+
 ## Verify And Commit
 
 - Code corrections and spec adaptations are **separate** commits, each conventional
@@ -312,6 +356,14 @@ text. Do not delegate spec rewriting.
   this step or unsupported by its learnings; confine any incidental concern to a
   single note in the report.
 
+## Be Terse
+
+Spend words on the durable artifacts — the judgement file and the `## Adaptations`
+log — and on the verification record. Everywhere else omit needless words: skip
+preamble, do not restate these instructions or narrate intent, and keep the
+completion report a terse list, not an essay. Terseness must never drop a verdict
+rationale, an adaptation reason, or a required field.
+
 ## Completion Report
 
 Report:
@@ -319,11 +371,12 @@ Report:
 1. Spec path and resolved step.
 2. Learning file consumed and its outcome, or "missing — judged from the diff".
 3. Verdict: `pass`, `corrected`, or `blocked`.
-4. Correction commit hash and files, or "none needed".
-5. Adaptations: each future step edited with its reason, plus the adaptation commit
+4. Judgement file path.
+5. Correction commit hash and files, or "none needed".
+6. Adaptations: each future step edited with its reason, plus the adaptation commit
    hash — or "none".
-6. Verification commands and outcomes.
-7. Blockers, escalations, and any follow-up risks.
+7. Verification commands and outcomes.
+8. Blockers, escalations, and any follow-up risks.
 
 Do not add Co-Authored-By trailers, "Generated with" footers, or any AI model
 attribution.

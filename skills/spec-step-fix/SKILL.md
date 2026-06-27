@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "5"
+  version: "6"
 ---
 
 # Spec Step Fix
@@ -115,9 +115,13 @@ If a finding's context is unclear, read the relevant source before changing it.
 
 ## Verify
 
-Run the step's targeted tests — those named by the step or its subspec, else the
-narrowest typecheck/compile/test for the changed files. The test re-run is the
-oracle, not self-assessment. Make at most **two** fix-up attempts for a fix that
+Run the step's targeted tests — those named by the step or its subspec, scoped to
+those specific files or filters. If none are named, use judgment to run the narrowest
+meaningful check for the changed files (typically a typecheck or compile), not the
+test runner. **Never run the entire test suite**: per-step verification stays
+targeted; the full suite is reserved for the branch-level stage (running it here
+multiplies memory use across concurrent steps and projects). The targeted re-run is
+the oracle, not self-assessment. Make at most **two** fix-up attempts for a fix that
 breaks verification. If a finding cannot be resolved without breaking the build or
 exceeding scope, revert that change and dismiss it as `unfixable` (a reason that
 does **not** suppress re-raise — the branch review will see it again), and continue.
@@ -196,6 +200,14 @@ If the only changes are ignored, untracked `.specs/` review artifacts, do not ma
 a commit. Leave the artifacts on disk and report that they were written locally but
 not committed because the repository ignores them.
 
+## Be Terse
+
+Spend words on the durable artifact — the fix file: its YAML decisions and the
+one-line note per finding. Everywhere else omit needless words: skip preamble, do
+not restate these instructions or narrate intent, and keep the completion report a
+terse list, not an essay. Terseness must never drop a per-finding decision, a
+dismissal class, or a signature.
+
 ## Completion Report
 
 Report:
@@ -207,6 +219,3 @@ Report:
 5. Commit hash (the `fix(...)` or no-op `chore(reviews): ...` commit), or `none`
    when only ignored local review artifacts changed.
 6. Anything deferred to the branch review (out-of-scope / `deferred` / `unfixable`).
-
-Do not add Co-Authored-By trailers, "Generated with" footers, or any AI model
-attribution.

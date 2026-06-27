@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "4"
+  version: "7"
 ---
 
 # Spec Step Review
@@ -123,6 +123,23 @@ Review the step's diff directly. The reviewer's independence from the fixer is
 structural — `spec-step-fix` runs as a separate skill — so no subagent is needed
 for it.
 
+Review adversarially. Assume the step contains at least one defect and make it your
+job to find the most likely failure before you may pass it. A `pass` is a claim you
+tried to break this code and could not — not the absence of an attempt. Form the
+strongest bug hypothesis the diff invites, test it against the code, and when it does
+not hold, record it under **Considered & Dismissed** with the reason. Do this even
+when the verdict is `pass`: an audited pass names what it ruled out, a blind one names
+nothing.
+
+Before judging duplicated or reinvented code, use repository-search tools to find
+precedent. Prefer `code_search` when the harness exposes it: issue semantic queries
+for the behavior this step adds (not just exact symbol names), then use `rg`/file
+reads on the returned paths to confirm whether an existing helper, route, parser,
+store, component, or workflow already covers the same behavior. If `code_search` is
+not available, use exact search with `rg` and note that the semantic precedent pass
+was unavailable. Do not report duplication from memory alone; ground it in a
+searched, cited existing implementation.
+
 Apply three lenses to the step's diff. These are bug classes, not style nits:
 
 1. **Correctness / logic.** Off-by-one and boundary errors; null/undefined and
@@ -130,18 +147,26 @@ Apply three lenses to the step's diff. These are bug classes, not style nits:
    rejection paths; swallowed errors; race conditions and ordering assumptions;
    resource leaks (unclosed handles, timers, listeners); incorrect async/await;
    data-integrity gaps (non-atomic read-modify-write, missing idempotency where it
-   matters).
+   matters); misunderstood external-API behavior — a third-party or platform call
+   that exists and typechecks but whose runtime contract the code assumes wrongly
+   (a callback fed each delta versus the cumulative text, an iterator's order or
+   termination, mutation-in-place versus a copy, rejection versus a thrown error),
+   checked against the dependency's source or types rather than memory.
 2. **Security.** Injection (SQL/command/path/template/XSS/SSRF); missing input
    validation on trust boundaries; authz/ownership gaps; secrets in code; unsafe
    deserialization; weak crypto or randomness for security purposes. Flag only what
    this diff introduces or directly exposes.
 3. **Simplification / maintainability.** Abstractions that don't earn their keep,
    dead or duplicated code, needless indirection, clever code that sacrifices
-   clarity. These are almost always advisory (see severity).
+   clarity. For duplicated or reinvented behavior, first run the precedent search
+   above and cite the existing implementation that should have been reused or
+   extended. These are almost always advisory (see severity).
 
 Skip pure formatting and naming nits a linter would catch. Prefer a few real
-findings over a long list. If the diff is clean, say so — an empty findings list
-with verdict `pass` is the common, good outcome.
+findings over a long list. An empty findings list with verdict `pass` is a good
+outcome only when it is the product of a genuine attempt to break the code — the
+hypothesis you formed and ruled out belongs in Considered & Dismissed — not a default
+reached by reading the diff once and finding nothing obvious.
 
 **Conditional lens (only when this step's diff fires a risk trigger).** A single
 step is usually pure correctness, but when its diff clearly touches a high-risk
@@ -242,11 +267,32 @@ What: ...
 Why:  ...
 Fix:  ...
 
+## Considered & Dismissed
+
+The adversarial hypotheses you raised and dropped — recorded so the pass is
+auditable, never affecting the verdict. One line each: the code anchor, the bug you
+suspected, and why it does not hold (the diff handles it, or the spec/learning
+sanctions it).
+
+- `src/foo.ts:loopBound` — suspected the bound drops the last element. Dismissed: the
+  loop uses `<=` and the test covers the final index.
+
 Review: <spec-dir>/reviews/step-<step-number>-review.md (step <step-number>)
 ````
 
-A clean step stays minimal: `verdict: pass`, `actionable: 0`, empty `findings: []`,
-`## Findings\nNone`, and the locator line.
+A clean step stays minimal but never empty-handed: `verdict: pass`, `actionable: 0`,
+empty `findings: []`, `## Findings\nNone`, and — when the diff invited any plausible
+bug — a `## Considered & Dismissed` entry naming the hypothesis you ruled out, then the
+locator line. A pass with no findings and nothing considered is valid only for a
+trivial diff that invited no hypothesis at all.
+
+## Be Terse
+
+Spend words on the durable artifact — the review file: its YAML contract and the
+one-line What/Why/Fix per finding. Everywhere else omit needless words: skip
+preamble, do not restate these instructions or narrate intent, and keep the
+completion report a terse list, not an essay. Terseness must never drop a finding,
+a signature, or a Considered & Dismissed entry that makes a pass auditable.
 
 ## Completion Report
 

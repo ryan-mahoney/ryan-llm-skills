@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "5"
+  version: "7"
 ---
 
 # Spec Step Run
@@ -153,6 +153,11 @@ the prior-step context, since earlier steps may have moved or renamed them —
 concrete edit sequence, targeted tests, assumptions, and hard stop conditions. A
 hard blocker in the subspec stops implementation.
 
+When the step adds new code, search for existing implementations and precedents
+first, using the available repository-search tools — grep/ripgrep for symbols or
+literals, and any semantic or codebase search the harness offers for behavior and
+precedent — so you reuse or extend rather than duplicate.
+
 ## Execution
 
 Implement the step directly, under the working contract below. The contract is
@@ -187,6 +192,11 @@ Rules:
 - Implement ONLY this step. Do not do previous or future steps.
 - Verify the prior-step context against the actual files before relying on it; it
   reflects what earlier steps reported, not necessarily the final tree.
+- Verify any external API behavior you depend on against its source or type
+  definitions before relying on it — confirm what the call actually does at runtime
+  (callback payloads, iteration/streaming order, delta vs cumulative, mutation,
+  error modes), not merely that it typechecks. Never assume library behavior from
+  memory.
 - If the step cannot be implemented as written because a referenced file, type,
   signature, or project convention does not exist or conflicts with the code,
   STOP and report the discrepancy.
@@ -194,7 +204,7 @@ Rules:
 - Follow existing project patterns.
 - Add or adjust tests only when needed for this step.
 - Run only targeted verification for changed behavior.
-- Do not run the full suite unless the step explicitly requires it.
+- Never run the full test suite here; it is reserved for the branch-level stage.
 - Do not add AI attribution, generated-by footers, or co-author trailers.
 
 Output:
@@ -215,8 +225,12 @@ After implementation, verify mechanically:
 
 1. Inspect `git diff --name-only` and ensure changes are scoped to the target step.
    The subspec and step learning files are allowed.
-2. Run the tests named by the step or subspec. If none are named, run the narrowest
-   relevant typecheck, compile, or test command for the changed files.
+2. Run the tests named by the step or subspec — scoped to those specific files or
+   filters, nothing broader. If none are named, use judgment to run the narrowest
+   meaningful check for the changed files (typically a typecheck or compile), not the
+   test runner. **Never run the entire test suite** here (no unfiltered test-runner
+   invocation) — it is the branch-level stage's job, and running it per step
+   multiplies memory across concurrent runs.
 3. If verification fails, make at most two fix-up attempts scoped to this same
    step. Do not broaden into neighboring steps.
 4. If the issue is a spec/code discrepancy, record it in `<spec-dir>/blockers.md`,
@@ -271,6 +285,15 @@ Learning: <spec-dir>/learnings/<step-number>-learning.md (step <step-number>)
 A purely `as-specified` step with no findings is the common case and stays terse:
 `Outcome: as-specified`, both lists `None`, and the verification line.
 
+## Be Terse
+
+Spend words on the durable artifacts — the subspec and the step learning file —
+and on the verification record; those are load-bearing for later steps and the
+judge. Everywhere else omit needless words: skip preamble, do not restate these
+instructions or narrate what you are about to do, and keep the completion report a
+terse list, not an essay. Terseness must never drop a required field or a
+cross-step finding.
+
 ## Completion Report
 
 Report:
@@ -282,6 +305,3 @@ Report:
 5. Files changed.
 6. Verification commands and outcomes.
 7. Any assumptions, blockers, or follow-up risks.
-
-Do not add Co-Authored-By trailers, "Generated with" footers, or any AI model
-attribution.

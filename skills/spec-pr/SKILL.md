@@ -190,8 +190,6 @@ remote moved under you — stop and report rather than overwriting someone else'
    JSON: `{ "url": "<pull request url>", "submittedAt": "<ISO 8601 timestamp>" }`. Use the
    PR URL `gh` returned (or `gh pr view --json url`) and the current time. Overwrite it on
    every run so it always reflects the latest PR for this branch (create or update).
-5. **Register both artifacts with `track_file`** so the app sees them: call `track_file`
-   once for `pr-message.md`'s repoRelPath and once for `pr-url.json`'s repoRelPath.
 
 ## Stage 5 — Verify Mergeable, Then Report
 
