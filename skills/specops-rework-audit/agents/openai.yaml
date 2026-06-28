@@ -1,0 +1,4 @@
+interface:
+  display_name: "SpecOps Rework Audit"
+  short_description: "Find rework hotspots and who holds the context, without blame."
+  default_prompt: "Audit this repository for rework hotspots and who to consult."

@@ -67,6 +67,12 @@ The decomposition-first agent documentation flow writes:
 - `docs/specops/agents/<slug>.md` — compressed target doc an agent should read first.
 - `AGENTS.md` — compact generated index between `<!-- agents-docs:start -->` and `<!-- agents-docs:end -->`.
 
+The commit-history skills add a coverage ledger and history-derived docs under `docs/specops/history/`:
+
+- `ledger.jsonl` / `frontier.json` — append-only commit-coverage ledger and per-lens frontier (`doc`, `intent`, `rework`), backed by `scripts/commit-ledger.mjs`. Committed, so coverage survives squash-merge.
+- `decisions/active.md` / `decisions/superseded.md` — product decisions reconstructed from history, with abrogated decisions moved aside.
+- `rework.md` — rework hotspot report and a non-blame Context Map of who to consult.
+
 Bootstrap structured docs:
 
 1. Run `specops-decompose` to produce `docs/specops/targets.json`, the stable target manifest.
@@ -74,9 +80,17 @@ Bootstrap structured docs:
 
 Refresh a branch or PR:
 
-1. Run `specops-branch-refresh` so changed files refresh the affected analysis docs, compressed agent docs, manifest freshness fields, and AGENTS index.
+1. Run `specops-branch-refresh` so changed files refresh the affected analysis docs, compressed agent docs, manifest freshness fields, and AGENTS index. It also records `doc` coverage in the ledger.
 
 `specops-agent-docs` and `specops-index-agents` are leaf utilities normally called by the orchestrators, but they can be run manually to repair compressed docs or the generated index.
+
+Understand changes and past decisions:
+
+1. Run `specops-doc-catchup` to document any commits the ledger shows as uncovered (or `--status` to just report them); after a squash/rebase, `node scripts/commit-ledger.mjs reconcile <repo>` re-anchors the frontier.
+2. Run `specops-decision-ledger` to reconstruct active and superseded product decisions by walking history (via the `specops-intent-extract` leaf).
+3. Run `specops-rework-audit` to surface rework hotspots and who holds the context.
+
+`specops-intent-extract` is a leaf used by `specops-decision-ledger`. The deterministic `scripts/commit-ledger.mjs` (commit coverage, churn, frontier reconciliation) ships in the `specops-skills` bundle.
 
 The legacy initial-plan mode in `specops-orchestrate-analysis` remains available as a fallback, but the manifest-driven path is the documented pipeline for new multi-target agent docs automation.
 

@@ -13,13 +13,15 @@ metadata:
 # SpecOps Branch Refresh
 
 Refresh structured agent documentation for a branch. This is the orchestrator that connects branch
-diffs to deep analysis updates, compressed agent docs, and the root `AGENTS.md` index.
+diffs to deep analysis updates, compressed agent docs, the root `AGENTS.md` index, and the
+commit-coverage ledger.
 
 ## Inputs
 
 - Repo root: `$ARGUMENTS` or current repository.
 - Optional base ref: default is detected by `scripts/agent-docs.mjs`.
 - Manifest path: `docs/specops/targets.json`.
+- Commit-coverage ledger: `docs/specops/history/ledger.jsonl` and `docs/specops/history/frontier.json`.
 
 ## Procedure
 
@@ -74,7 +76,28 @@ target slug. Verify the target's `agent_path` exists, or the fallback
 
 Invoke `specops-index-agents` to update the generated block in root `AGENTS.md`.
 
-### 6. Report
+### 6. Record Doc Coverage
+
+After a clean refresh, append commit-level `doc` coverage so a missed run can be caught up later
+and the record survives squash-merge (it is a committed file, unlike the branch SHAs):
+
+```bash
+node scripts/commit-ledger.mjs record <repo-root> --lens doc --all-uncovered --base <base-ref>
+```
+
+Use `~/.agents/scripts/commit-ledger.mjs` if the target repo does not carry the script.
+
+- Record only when every affected target refreshed cleanly. If any target was blocked or left
+  ambiguous, skip recording and report that doc coverage was **not** advanced, so
+  `specops-doc-catchup` can retry those commits without double-counting.
+- The ledger and frontier live under `docs/specops/history/`; the command creates them on first run.
+- A reachable frontier takes precedence over `--base`, so reruns are idempotent and never re-record
+  a covered commit.
+- If the command reports `reconcile_needed` (the frontier is unreachable after a squash or rebase),
+  run `node scripts/commit-ledger.mjs reconcile <repo-root>` and report the re-anchor instead of
+  recording blindly.
+
+### 7. Report
 
 Return:
 
@@ -84,6 +107,7 @@ Return:
 - compressed agent docs updated
 - manifest freshness fields changed
 - AGENTS index status
+- doc-coverage commits recorded and the new frontier, or why coverage was not advanced
 - unowned files and unresolved blockers
 
 ## Manifest Write Rules
@@ -104,3 +128,5 @@ All other manifest changes must come from `specops-decompose`.
 - Preserve human-authored AGENTS content outside the generated `agents-docs` markers.
 - If a target update is ambiguous, leave the existing doc in place and report the ambiguity rather
   than silently rewriting unrelated sections.
+- Treat the ledger as append-only. Write `docs/specops/history/` only through `commit-ledger.mjs`
+  (`record`, `reconcile`); never hand-edit or delete existing rows.

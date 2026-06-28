@@ -25,11 +25,21 @@ function targetAgentPath(target) {
   return target.agent_path || `docs/specops/agents/${target.slug}.md`;
 }
 
+// Supports the four glob shapes the decomposition core can emit (see
+// scripts/decompose-skeleton.mjs): "**", "*", "dir/**", and the shallow
+// remainder shapes "dir/*" and "*".
 function matches(relPath, glob) {
   if (glob === "**") return true;
+  if (glob === "*") return !relPath.includes("/");
   if (glob.endsWith("/**")) {
     const prefix = glob.slice(0, -3);
     return relPath === prefix || relPath.startsWith(`${prefix}/`);
+  }
+  if (glob.endsWith("/*")) {
+    const prefix = glob.slice(0, -2);
+    if (!relPath.startsWith(`${prefix}/`)) return false;
+    const rest = relPath.slice(prefix.length + 1);
+    return rest.length > 0 && !rest.includes("/");
   }
   throw new Error(`unsupported glob shape: ${glob}`);
 }

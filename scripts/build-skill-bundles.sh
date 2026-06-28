@@ -605,6 +605,55 @@ Manual fallback for one target remains:
 /specops-update-spec <target manifest entry + branch/diff context>
 ```
 
+### 8. Track Commit Coverage And Catch Up Missed Docs
+
+Doc freshness is content-based: the manifest's `source_hash` answers "is this target stale
+now?" but not "which commits were documented?". The commit-coverage ledger answers the second
+question and survives squash-merge because it is committed to the repository.
+
+```bash
+node scripts/commit-ledger.mjs status <repo-root>
+/specops-doc-catchup [repo-root]
+```
+
+The ledger lives under `docs/specops/history/`:
+
+- `ledger.jsonl` — one append-only row per commit, per lens (`doc`, `intent`, `rework`).
+- `frontier.json` — the last covered commit per lens.
+
+`specops-branch-refresh` records `doc`-lens coverage after a successful refresh.
+`specops-doc-catchup` is the recovery orchestrator: when someone forgot to refresh, it reads the
+uncovered commits from the ledger, fans out subagents to refresh the affected targets, then
+records coverage. Run `--status` for a read-only report of undocumented commits. If a branch was
+squash-merged before being covered, run `node scripts/commit-ledger.mjs reconcile <repo-root>` to
+re-anchor the frontier honestly.
+
+### 9. Reconstruct Product Decisions From History
+
+```bash
+/specops-decision-ledger [repo-root]
+```
+
+This walks commits oldest-first, extracts the intent of each change from its message and its code
+(via the `specops-intent-extract` leaf), and maintains two files under
+`docs/specops/history/decisions/`:
+
+- `active.md` — product decisions and intent currently in force.
+- `superseded.md` — decisions a later commit abrogated, annotated with the overriding commit.
+
+It uses the `intent` lens of the ledger, so reruns only process new commits.
+
+### 10. Find Rework Hotspots And Who To Consult
+
+```bash
+/specops-rework-audit [repo-root]
+```
+
+This reads deterministic churn metrics (`node scripts/commit-ledger.mjs churn`) plus supersession
+density from the decision ledger, then interprets the hotspots: healthy fast iteration versus a
+likely process gap. Its output is a Context Map — who to talk to and the specific context they
+hold — framed for process improvement, never blame.
+
 README
 }
 
@@ -726,7 +775,7 @@ build_bundle() {
     copy_file "$bundle_dir" "augment/agents/spec-step-implementer.md" "augment/agents/spec-step-implementer.md"
     copy_rules "$bundle_dir"
   elif [ "$name" = "specops-skills" ]; then
-    copy_scripts "$bundle_dir" "decompose-skeleton.mjs" "agent-docs.mjs"
+    copy_scripts "$bundle_dir" "decompose-skeleton.mjs" "agent-docs.mjs" "commit-ledger.mjs"
   fi
 
   write_install_script "$bundle_dir"

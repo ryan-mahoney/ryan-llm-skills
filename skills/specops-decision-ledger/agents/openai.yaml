@@ -1,0 +1,4 @@
+interface:
+  display_name: "SpecOps Decision Ledger"
+  short_description: "Reconstruct active and superseded product decisions from git history."
+  default_prompt: "Reconstruct the product decision ledger from this repository's history."

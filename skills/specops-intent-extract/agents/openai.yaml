@@ -1,0 +1,4 @@
+interface:
+  display_name: "SpecOps Intent Extract"
+  short_description: "Extract one commit's intent and decisions from message and code."
+  default_prompt: "Extract a structured intent record for this commit."

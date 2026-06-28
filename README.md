@@ -73,6 +73,10 @@ Generated artifacts in target repos:
 - `docs/specops/analysis/<slug>.md` — deep implementation-agnostic analysis.
 - `docs/specops/agents/<slug>.md` — compressed target doc an agent should read first.
 - `AGENTS.md` — compact generated index between `<!-- agents-docs:start -->` and `<!-- agents-docs:end -->`.
+- `docs/specops/history/ledger.jsonl` — append-only commit-coverage ledger (one row per commit, per lens).
+- `docs/specops/history/frontier.json` — last covered commit per lens (`doc`, `intent`, `rework`).
+- `docs/specops/history/decisions/active.md` and `superseded.md` — product decisions reconstructed from history.
+- `docs/specops/history/rework.md` — rework hotspot report and Context Map.
 
 Two common flows:
 
@@ -80,6 +84,32 @@ Two common flows:
 2. **Refresh a branch or PR:** run `specops-branch-refresh`. It maps changed files to targets, refreshes affected deep analysis docs, rebuilds compressed agent docs, stamps manifest freshness fields, and updates the `AGENTS.md` index.
 
 `specops-agent-docs` and `specops-index-agents` are leaf utilities. They are usually invoked by `specops-orchestrate-analysis` or `specops-branch-refresh`, but can be run manually to repair compressed docs or the index.
+
+#### Understanding changes: commit coverage, decisions, and rework
+
+Three capabilities read git history to keep docs honest and to recover *why* the code became what it is. They share a commit-coverage **ledger** under `docs/specops/history/`, backed by the deterministic `scripts/commit-ledger.mjs`.
+
+**The problem they solve.** The manifest's `source_hash` is a content hash: it answers "is this target stale right now?" but not "which commits were processed, by whom, when?". The ledger answers the second question. It records, per commit, which "lens" has processed it — `doc` (documentation refreshed), `intent` (decisions extracted), or `rework` (churn audited) — and a per-lens *frontier* pointing at the last covered commit. Because the ledger is a committed file, the record **survives squash-merge** even though the branch SHAs do not. When a squash or rebase orphans the frontier, `node scripts/commit-ledger.mjs reconcile <repo>` re-anchors it to the newest still-reachable commit, or records a single squash-boundary row and reports that per-commit granularity was lost — rather than silently double-counting.
+
+- **Doc coverage and catch-up.** `specops-branch-refresh` records `doc` coverage after each clean refresh, so missed runs are detectable. `specops-doc-catchup` is the recovery orchestrator: it reads the uncovered commits and fans out subagents to bring docs current commit-by-commit, then records coverage. Run it with `--status` for a read-only report of undocumented commits.
+- **Decision archaeology.** `specops-decision-ledger` walks history forward, extracting each commit's intent and product decisions via the `specops-intent-extract` leaf (a two-step micro-pipeline: "what changed" then "why"). It maintains `active.md` (decisions in force) and, when a later commit overrides an earlier decision, moves the abrogated one to `superseded.md`, annotated with the overriding commit.
+- **Rework audit.** `specops-rework-audit` combines deterministic churn metrics with supersession density from the decision ledger, classifies hotspots as healthy iteration or a likely process gap, and produces a **Context Map** — who holds the relevant context and what to ask them. It is explicitly framed for process improvement and knowledge transfer, never blame.
+
+The split is deliberate: mechanical git accounting (commit enumeration, file→target mapping, churn, frontier math, squash reconciliation) is deterministic; interpretation (intent, supersession, healthy-vs-process-gap, who-to-consult) stays with the LLM, fanned out across subagents for large histories.
+
+Get started in a repo that already has `docs/specops/targets.json`:
+
+```bash
+# which commits are undocumented? (read-only)
+node scripts/commit-ledger.mjs status <repo-root>
+
+/specops-doc-catchup            # catch up any missed doc coverage
+/specops-decision-ledger        # reconstruct active + superseded product decisions
+/specops-rework-audit           # find rework hotspots and who to consult
+
+# after a squash/rebase orphaned a frontier:
+node scripts/commit-ledger.mjs reconcile <repo-root>
+```
 
 | Skill | Command | Purpose |
 |---|---|---|
@@ -91,7 +121,11 @@ Two common flows:
 | **specops-orchestrate-analysis** | `/specops-orchestrate-analysis [manifest-path-or-repo-root]` | Orchestrate sequential per-target analysis from `docs/specops/targets.json` in-harness; also supports the legacy initial-plan flow as a fallback |
 | **specops-agent-docs** | `/specops-agent-docs [manifest-path-or-repo-root] [target-slug]` | Build compressed per-target agent docs from deep SpecOps analysis under `docs/specops/agents/` |
 | **specops-index-agents** | `/specops-index-agents [manifest-path-or-repo-root]` | Update the generated `AGENTS.md` table of contents for structured SpecOps agent docs |
-| **specops-branch-refresh** | `/specops-branch-refresh [repo-root] [base-ref]` | Refresh affected analysis docs, compressed agent docs, manifest freshness, and the AGENTS index for the current branch |
+| **specops-branch-refresh** | `/specops-branch-refresh [repo-root] [base-ref]` | Refresh affected analysis docs, compressed agent docs, manifest freshness, and the AGENTS index for the current branch; record `doc` coverage in the ledger |
+| **specops-doc-catchup** | `/specops-doc-catchup [repo-root] [--status]` | Catch up agent docs for commits the ledger shows as undocumented, fanning out subagents; reconcile a frontier broken by squash or rebase |
+| **specops-intent-extract** | `/specops-intent-extract <commit-sha-or-range> [repo-root]` | Leaf: extract one commit's intent and product decisions from its message and code; returns a structured intent record |
+| **specops-decision-ledger** | `/specops-decision-ledger [repo-root] [--since ref]` | Walk history forward, reconstructing `active.md` and `superseded.md` product decisions; abrogated decisions move aside with their overriding commit |
+| **specops-rework-audit** | `/specops-rework-audit [repo-root] [--since ref]` | Find rework/churn hotspots and a non-blame Context Map of who to consult, from churn metrics plus supersession density |
 | **specops-ambiguity-audit** | `/specops-ambiguity-audit [analysis-file]` | Audit a SpecOps analysis spec for ambiguities, resolve them via parallel legacy-source research, and patch the spec |
 | **specops-spec-coherence** | `/specops-spec-coherence [analysis-dir]` | Audit a set of analysis specs for cross-spec coherence (dependency order, integration contracts, shared models, terminology) and patch gaps |
 | **specops-make-spec** | `/specops-make-spec [scope]` | Convert SpecOps analysis into a generalized deterministic implementation spec |

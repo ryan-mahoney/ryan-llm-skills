@@ -1,0 +1,4 @@
+interface:
+  display_name: "SpecOps Doc Catch-Up"
+  short_description: "Document commits that were never refreshed, ledger-driven."
+  default_prompt: "Catch up SpecOps agent docs for any commits missing coverage."

@@ -74,6 +74,23 @@ test("changedTargets maps changed files to owning targets and reports unowned fi
   assert.deepEqual(result.unowned_files, ["README.md"]);
 });
 
+test("changedTargets matches shallow remainder globs without throwing", () => {
+  const remainderManifest = {
+    targets: [
+      { slug: "scripts", source_globs: ["scripts/*"] },
+      { slug: "root", source_globs: ["*"] },
+    ],
+  };
+  const result = changedTargets(remainderManifest, [
+    "scripts/build.sh",
+    "Makefile",
+    "scripts/nested/deep.sh",
+  ]);
+
+  assert.deepEqual(result.targets.map((target) => target.slug), ["root", "scripts"]);
+  assert.deepEqual(result.unowned_files, ["scripts/nested/deep.sh"]);
+});
+
 test("targetAgentPath falls back for older manifests without agent_path", () => {
   assert.equal(targetAgentPath({ slug: "accounts" }), "docs/specops/agents/accounts.md");
 });
