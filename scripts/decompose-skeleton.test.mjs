@@ -43,6 +43,28 @@ function workspaceRepo() {
   return repo;
 }
 
+// Mirror the script's matches() semantics so tests can assert ownership for
+// every supported glob shape, including the shallow remainder globs.
+function owns(glob, file) {
+  if (glob === "**") return true;
+  if (glob === "*") return !file.includes("/");
+  if (glob.endsWith("/**")) {
+    const prefix = glob.slice(0, -3);
+    return file === prefix || file.startsWith(`${prefix}/`);
+  }
+  if (glob.endsWith("/*")) {
+    const prefix = glob.slice(0, -2);
+    if (!file.startsWith(`${prefix}/`)) return false;
+    const rest = file.slice(prefix.length + 1);
+    return rest.length > 0 && !rest.includes("/");
+  }
+  return false;
+}
+
+function ownersOf(manifest, file) {
+  return manifest.targets.filter((t) => t.source_globs.some((g) => owns(g, file)));
+}
+
 function projection(manifest) {
   return manifest.targets.map((t) => ({
     slug: t.slug,
@@ -64,17 +86,25 @@ test("derive produces identical slug/structural_unit/source_globs across two run
   }
 });
 
-test("every source file is owned by exactly one target or unassigned, with no overlaps", () => {
+test("every source file is owned by exactly one target, with no overlaps and nothing unassigned", () => {
   const repo = workspaceRepo();
   try {
     const manifest = derive(repo);
-    const matchedFiles = ["packages/api/index.js", "packages/web/main.js"];
+    const allFiles = [
+      "packages/api/index.js",
+      "packages/web/main.js",
+      "package.json",
+      "README.md",
+    ];
 
-    for (const file of matchedFiles) {
-      const owners = manifest.targets.filter((t) => t.source_globs.some((g) => g.endsWith("/**") && file.startsWith(g.slice(0, -3) + "/")));
-      assert.equal(owners.length, 1, `${file} should have exactly one owner`);
+    for (const file of allFiles) {
+      assert.equal(ownersOf(manifest, file).length, 1, `${file} should have exactly one owner`);
     }
-    assert.ok(manifest.coverage.unassigned.sample.includes("README.md"));
+    // Loose root files are owned by a root remainder target, not silently dropped.
+    const root = manifest.targets.find((t) => t.structural_unit === ".");
+    assert.equal(root.origin, "remainder");
+    assert.deepEqual(root.source_globs, ["*"]);
+    assert.equal(manifest.coverage.unassigned.count, 0);
     assert.deepEqual(manifest.coverage.overlaps, []);
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
@@ -140,6 +170,82 @@ test("source roots split through semantic containers to deeper units", () => {
   }
 });
 
+test("loose files directly in a split source root are captured by a shallow remainder", () => {
+  const repo = makeTempRepo();
+  try {
+    // src is a source root that splits into subdir units; the files sitting
+    // directly in src/ would otherwise be orphaned.
+    write(repo, "src/utils/helpers.js", "export const h = 1;");
+    write(repo, "src/models/user.js", "export const u = 1;");
+    write(repo, "src/index.js", "export const i = 1;");
+    write(repo, "src/auth.js", "export const a = 1;");
+
+    const manifest = derive(repo);
+    const remainder = manifest.targets.find((t) => t.structural_unit === "src");
+
+    assert.ok(remainder, "expected a remainder target for loose files in src");
+    assert.equal(remainder.origin, "remainder");
+    assert.deepEqual(remainder.source_globs, ["src/*"]);
+    assert.equal(ownersOf(manifest, "src/index.js").length, 1);
+    assert.equal(ownersOf(manifest, "src/auth.js").length, 1);
+    assert.equal(manifest.coverage.unassigned.count, 0);
+    assert.deepEqual(manifest.coverage.overlaps, []);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("a shallow remainder owns only direct children, never nested files of sibling units", () => {
+  const repo = makeTempRepo();
+  try {
+    write(repo, "src/utils/helpers.js", "export const h = 1;");
+    write(repo, "src/index.js", "export const i = 1;");
+
+    const manifest = derive(repo);
+
+    // src/* must not swallow src/utils/helpers.js (owned by the src/utils unit).
+    assert.deepEqual(ownersOf(manifest, "src/utils/helpers.js").map((t) => t.structural_unit), [
+      "src/utils",
+    ]);
+    assert.deepEqual(ownersOf(manifest, "src/index.js").map((t) => t.structural_unit), ["src"]);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("a remainder hash is content-stable across an mtime-only touch", () => {
+  const repo = makeTempRepo();
+  try {
+    write(repo, "src/utils/helpers.js", "export const h = 1;");
+    write(repo, "src/index.js", "export const i = 1;");
+
+    const before = derive(repo).targets.find((t) => t.structural_unit === "src").source_hash;
+    const touched = path.join(repo, "src/index.js");
+    const future = new Date("2030-01-01T00:00:00Z");
+    fs.utimesSync(touched, future, future);
+    const after = derive(repo).targets.find((t) => t.structural_unit === "src").source_hash;
+
+    assert.equal(after, before);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("check passes on a manifest containing remainder targets", () => {
+  const repo = makeTempRepo();
+  try {
+    write(repo, "src/utils/helpers.js", "export const h = 1;");
+    write(repo, "src/index.js", "export const i = 1;");
+    const manifestPath = writeManifest(repo, derive(repo));
+
+    const result = check(repo, manifestPath);
+
+    assert.equal(result.ok, true, JSON.stringify(result.violations));
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test("all recognizable source roots contribute units", () => {
   const repo = makeTempRepo();
   try {
@@ -167,16 +273,25 @@ test("workspace packages split when semantic internal frontiers are present", ()
     write(repo, "packages/app/src/workflows/export/index.js", "export const exportFlow = 1;");
 
     const manifest = derive(repo);
-    const units = manifest.targets.map((t) => t.structural_unit);
+    const derivedUnits = manifest.targets
+      .filter((t) => t.origin === "derived")
+      .map((t) => t.structural_unit);
 
-    assert.deepEqual(units, [
+    assert.deepEqual(derivedUnits, [
       "packages/app/src/domains/accounts",
       "packages/app/src/domains/billing",
       "packages/app/src/domains/reports",
       "packages/app/src/workflows/export",
       "packages/app/src/workflows/import",
     ]);
-    assert.equal(manifest.targets.every((t) => t.origin === "derived"), true);
+    // The loose package.json files (repo root and the split package root) are
+    // captured by remainder targets rather than dropped.
+    const remainderUnits = manifest.targets
+      .filter((t) => t.origin === "remainder")
+      .map((t) => t.structural_unit)
+      .sort((a, b) => a.localeCompare(b));
+    assert.deepEqual(remainderUnits, [".", "packages/app"]);
+    assert.equal(manifest.coverage.unassigned.count, 0);
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
   }

@@ -57,6 +57,11 @@ at the end of this file.
 4. Preserve target order exactly as it appears in the manifest.
 5. Announce the ordered execution plan before delegating: target slug, scope, source globs, and output path.
 
+A target's `origin` may be `derived`, `override`, or `remainder`. Analyze all three identically — a
+`remainder` target is a bucket of loose files from an under-organized directory (its `source_globs`
+use a shallow `dir/*` or `*` shape that matches only direct-child files) and gets the same analysis
+pass as any other target. Do not skip it.
+
 If the manifest is missing, empty, malformed, or has no targets, stop and tell the caller to run
 `specops-decompose` first unless they explicitly asked for the legacy initial-plan fallback.
 

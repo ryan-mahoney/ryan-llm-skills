@@ -127,9 +127,16 @@ function childUnitStats(repoRoot, relDir, files) {
 
 function matches(relPath, glob) {
   if (glob === "**") return true;
+  if (glob === "*") return !relPath.includes("/");
   if (glob.endsWith("/**")) {
     const prefix = glob.slice(0, -3);
     return relPath === prefix || relPath.startsWith(`${prefix}/`);
+  }
+  if (glob.endsWith("/*")) {
+    const prefix = glob.slice(0, -2);
+    if (!relPath.startsWith(`${prefix}/`)) return false;
+    const rest = relPath.slice(prefix.length + 1);
+    return rest.length > 0 && !rest.includes("/");
   }
   throw new Error(`unsupported glob shape: ${glob}`);
 }
@@ -346,6 +353,39 @@ function overrideTarget(slug, structuralUnit, sourceGlobs) {
   };
 }
 
+// Guarantee every walked source file has an owner. Files sitting directly in a
+// directory that the partition split into child units (or directly in the repo
+// root) are owned by no `dir/**` target. Group every such orphan by its
+// immediate parent directory and emit one shallow `dir/*` remainder target per
+// parent, so loose top-level files in an under-organized repo are analyzed
+// rather than silently dropped into coverage.unassigned.
+function appendRemainders(repoRoot, targets) {
+  const parents = new Set();
+  for (const file of walkSourceFiles(repoRoot)) {
+    if (targets.some((t) => t.source_globs.some((g) => matches(file, g)))) continue;
+    const slash = file.lastIndexOf("/");
+    parents.add(slash === -1 ? "." : file.slice(0, slash));
+  }
+
+  const taken = new Set(targets.map((t) => t.slug));
+  for (const parent of [...parents].sort((a, b) => a.localeCompare(b))) {
+    const slug = uniqueSlug(parent, taken);
+    taken.add(slug);
+    targets.push({
+      slug,
+      name: "",
+      scope: "",
+      origin: "remainder",
+      structural_unit: parent,
+      source_globs: [parent === "." ? "*" : `${parent}/*`],
+      tier2_path: `docs/specops/analysis/${slug}.md`,
+      agent_path: `docs/specops/agents/${slug}.md`,
+      source_hash: null,
+      last_synthesized: null,
+    });
+  }
+}
+
 function findUnit(targets, unitPath, op) {
   const target = targets.find((t) => t.structural_unit === unitPath);
   if (!target) throw new Error(`override ${op} references unknown unit: ${unitPath}`);
@@ -459,7 +499,8 @@ function sha256(contents) {
 }
 
 function globBase(glob) {
-  return glob === "**" ? "" : glob.replace(/\/\*\*$/, "");
+  if (glob === "**" || glob === "*") return "";
+  return glob.replace(/\/\*\*?$/, "");
 }
 
 function unitRelative(file, globs) {
@@ -497,6 +538,7 @@ export function derive(repoRoot, { manifest } = {}) {
   const { units, lowConfidence } = detectUnits(repoRoot);
   const overrides = manifest?.overrides ?? [];
   const targets = applyOverrides(buildTargets(units), overrides);
+  appendRemainders(repoRoot, targets);
   for (const target of targets) {
     target.source_hash = sourceHash(repoRoot, target.source_globs);
   }
@@ -526,7 +568,11 @@ const TARGET_FIELD_SPECS = [
   { field: "slug", type: "non-empty string", ok: isNonEmptyString },
   { field: "name", type: "string", ok: (v) => typeof v === "string" },
   { field: "scope", type: "string", ok: (v) => typeof v === "string" },
-  { field: "origin", type: '"derived" or "override"', ok: (v) => v === "derived" || v === "override" },
+  {
+    field: "origin",
+    type: '"derived", "override", or "remainder"',
+    ok: (v) => v === "derived" || v === "override" || v === "remainder",
+  },
   { field: "structural_unit", type: "non-empty string", ok: isNonEmptyString },
   {
     field: "source_globs",

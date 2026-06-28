@@ -18,7 +18,10 @@ partition — slugs, structural units, source globs, deep analysis paths, compre
 compact coverage summary, content hashes, overrides, and renames. Its detector considers workspaces, multiple source roots, and bounded
 recursive frontiers through common semantic containers such as `features`, `domains`, `modules`,
 `routes`, and `workflows`; it may split a large package or source root below the first directory
-layer when the structure is clear. You own only prose: per-target `name` and `scope`, and the
+layer when the structure is clear. After partitioning it closes coverage gaps: any source file
+sitting directly in a split directory (or the repo root) that no target owns is captured by a
+shallow per-directory **remainder** target (`origin: "remainder"`, glob `dir/*` or `*`), so loose
+files in an under-organized repo are analyzed rather than silently dropped. You own only prose: per-target `name` and `scope`, and the
 `system` summary. The only stochastic output is that prose. Do not orchestrate; do not run other
 skills.
 
@@ -79,6 +82,10 @@ For each target with an empty `name` or empty `scope`, author concise prose:
 - `name`: a short, human-readable label for the unit (a noun phrase, not the slug).
 - `scope`: ONE line describing what the unit is responsible for.
 
+For a `remainder` target, ground the prose in the actual loose files it covers (its glob matches
+only that directory's direct children) and make the label read as a bucket — e.g. "Source root
+(loose modules)" with a scope naming the responsibilities those files carry.
+
 Use light reconnaissance to ground the prose — read the unit's entry points and a few key files.
 For a large repo you may spawn **at most one level** of `Explore` subagents (the suite's
 one-subagent-deep bound). Do not nest subagents. Do not re-partition. Front-load the scope: lead
@@ -117,9 +124,13 @@ structural fields to make the check pass.
 
 Return a short report to the orchestrator that names, explicitly:
 
-- `coverage.unassigned` — source files matched by no target (gaps the orchestrator may resolve
-  with an override), reported as a compact summary with `count`, grouped `by_top_level`, capped
-  `sample`, and `truncated` flag. Do not expand or store the full raw file list in the manifest.
+- `coverage.unassigned` — source files matched by no target, reported as a compact summary with
+  `count`, grouped `by_top_level`, capped `sample`, and `truncated` flag. Gap closure normally drives
+  this to `0`; a nonzero count signals files an override removed from coverage. Do not expand or
+  store the full raw file list in the manifest.
+- `remainder` targets — any target with `origin: "remainder"`. Name them and report them explicitly:
+  they are loose-file buckets for under-organized directories and flag where the repo lacks module
+  structure the orchestrator or a curator may want to revisit.
 - `renames` — `{old_slug, new_slug}` entries the script detected (a target whose directory moved
   with unchanged content); the orchestrator should migrate the corresponding spec.
 - `coverage.low_confidence` — `true` when no module system or recognized source-root frontier was
@@ -149,7 +160,7 @@ you can reproduce it without reading the script:
       "slug": "string",            // kebab-case, unique, derived deterministically from structural_unit
       "name": "string",            // LLM-authored
       "scope": "string",           // LLM-authored, one line
-      "origin": "derived" | "override",
+      "origin": "derived" | "override" | "remainder",
       "structural_unit": "string", // repo-relative path the slug derives from, e.g. "packages/submissions"
       "source_globs": ["string"],  // >=1; generated projection of the unit (and overrides), never hand-authored
       "tier2_path": "docs/specops/analysis/<slug>.md",
@@ -210,8 +221,21 @@ The script derives a stable target frontier in this order:
    becomes a target rather than the shallower `src/features`.
 4. If no recognized module or source-root frontier exists, the script falls back to top-level
    directories and marks `coverage.low_confidence: true`.
+5. **Gap closure (remainder targets).** Splitting a directory descends into its child *directories*,
+   so files sitting directly in a split directory (e.g. `src/index.js` when `src` splits into
+   `src/utils` and `src/models`) and loose files in the repo root would otherwise have no owner.
+   After steps 1–4 the script groups every still-unowned file by its immediate parent directory and
+   emits one shallow remainder target per parent: `origin: "remainder"`, `structural_unit` the parent
+   path, and a single-level glob (`dir/*`, or `*` for the repo root) that matches only that
+   directory's direct-child files — never nested files already owned by a deeper unit. This
+   guarantees every walked file is owned by exactly one target.
 
-This keeps the partition deterministic while avoiding the earlier one-level-only target list.
+This keeps the partition deterministic while avoiding the earlier one-level-only target list and the
+silent dropping of loose files in flat or lightly-organized repositories.
+
+A `remainder` target is a signal as much as a unit: it marks a directory that holds loose,
+unorganized source. The orchestrator analyzes it like any other target, but it is also the natural
+place for a curator to apply a `split` or `merge` override later.
 
 ## Reference: source_hash basis
 
