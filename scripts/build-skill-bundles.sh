@@ -515,7 +515,7 @@ This writes:
 docs/specops/targets.json
 ```
 
-The manifest is the stable spine for the rest of the workflow. Structural fields such as `slug`, `source_globs`, `coverage`, and `source_hash` are derived by `scripts/decompose-skeleton.mjs`; the agent only fills prose fields such as target `name`, `scope`, and the system summary. The skill writes only the manifest.
+The manifest is the stable spine for the rest of the workflow. Structural fields such as `slug`, `source_globs`, `coverage`, and `source_hash` are derived by `scripts/decompose-skeleton.mjs`, which discovers files git-aware (honoring `.gitignore`) so runtime output and other ignored noise are never analyzed. The agent runs a curate pass over the `--frontier` fingerprints to author durable `overrides` (`exclude`/`collapse`/`merge`/`split`/`relabel`) — the judgment a structure-only script cannot make — and fills prose fields such as target `name`, `scope`, and the system summary. Overrides are committed once and replayed deterministically, so the partition stays idempotent. The skill writes only the manifest.
 
 You can validate the manifest structure directly:
 

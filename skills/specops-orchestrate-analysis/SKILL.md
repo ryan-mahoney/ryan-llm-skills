@@ -59,8 +59,15 @@ at the end of this file.
 
 A target's `origin` may be `derived`, `override`, or `remainder`. Analyze all three identically — a
 `remainder` target is a bucket of loose files from an under-organized directory (its `source_globs`
-use a shallow `dir/*` or `*` shape that matches only direct-child files) and gets the same analysis
-pass as any other target. Do not skip it.
+use a shallow `dir/*` or `*` shape that matches only direct-child files), and an `override` target
+is a curated merge/collapse of units; both get the same analysis pass as any other target. Do not
+skip them.
+
+Files in `coverage.excluded` are **not** targets — the decompose curate stage deliberately removed
+them from analysis (runtime output, vendored code, generated artifacts) and recorded the reason.
+There is nothing to analyze for them; do not invent targets for excluded paths. Surface the
+`coverage.excluded` summary (count + reasons) in the run report so a human can see what was skipped
+and pull anything back via a decompose override if it was wrongly excluded.
 
 If the manifest is missing, empty, malformed, or has no targets, stop and tell the caller to run
 `specops-decompose` first unless they explicitly asked for the legacy initial-plan fallback.
@@ -176,6 +183,8 @@ After all targets complete:
    - missing returned hash
    - mismatch requiring `specops-decompose`
 4. Report remaining risks, ambiguities, and any blocked targets.
+   - Include the `coverage.excluded` summary (count + per-reason breakdown) so the set of
+     deliberately un-analyzed files is visible alongside the analyzed targets.
 5. Invoke `specops-agent-docs` for all completed targets to create compressed docs under each
    target's `agent_path`.
 6. Invoke `specops-index-agents` to update the generated block in root `AGENTS.md`.

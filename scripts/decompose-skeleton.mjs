@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const IGNORED_DIRS = new Set([
@@ -21,7 +22,7 @@ const IGNORED_DIRS = new Set([
   ".github",
 ]);
 
-const IGNORED_FILES = new Set([".DS_Store"]);
+const IGNORED_FILES = new Set([".DS_Store", ".gitkeep", ".keep"]);
 const UNASSIGNED_SAMPLE_LIMIT = 50;
 const UNASSIGNED_SAMPLE_PER_TOP_LEVEL = 3;
 
@@ -61,32 +62,53 @@ function isDir(p) {
   return fs.existsSync(p) && fs.statSync(p).isDirectory();
 }
 
-function childDirs(dir) {
-  if (!isDir(dir)) return [];
-  return fs
-    .readdirSync(dir, { withFileTypes: true })
-    .filter((e) => e.isDirectory() && !IGNORED_DIRS.has(e.name))
-    .map((e) => e.name)
-    .sort((a, b) => a.localeCompare(b));
-}
+// ---------------------------------------------------------------------------
+// File discovery (git-aware)
+//
+// The repository — not the raw filesystem — defines what is source. Prefer
+// `git ls-files` so every .gitignore (including nested ones like demo/.gitignore)
+// decides what is noise; the script's hardcoded ignore list can never keep pace
+// with a repo's own declarations. Fall back to a filesystem walk when git is
+// unavailable or the path is not its own work-tree root, so non-git callers and
+// the test temp repos keep working. Either way IGNORED_DIRS / IGNORED_FILES still
+// drop tests, docs, and build output, and the list is sorted for stable order.
+// ---------------------------------------------------------------------------
 
-function basename(relPath) {
-  return relPath === "." ? "." : path.posix.basename(relPath);
-}
-
-function joinRel(parent, child) {
-  return parent === "." ? child : `${parent}/${child}`;
-}
-
-function hasBoundaryMarker(repoRoot, relDir) {
-  const absDir = path.join(repoRoot, relDir);
-  for (const marker of BOUNDARY_MARKER_FILES) {
-    if (fs.existsSync(path.join(absDir, marker))) return true;
+function samePath(a, b) {
+  try {
+    return fs.realpathSync(a) === fs.realpathSync(b);
+  } catch {
+    return path.resolve(a) === path.resolve(b);
   }
-  return false;
 }
 
-function walkSourceFiles(repoRoot) {
+function gitFiles(repoRoot) {
+  let topLevel;
+  try {
+    topLevel = execFileSync("git", ["-C", repoRoot, "rev-parse", "--show-toplevel"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return null;
+  }
+  // Only trust git when repoRoot is the root of the work tree, so a non-git
+  // directory nested inside some other repo is not partitioned with that repo's
+  // ignore rules.
+  if (!topLevel || !samePath(topLevel, repoRoot)) return null;
+  try {
+    const out = execFileSync(
+      "git",
+      ["-C", repoRoot, "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 << 28 }
+    );
+    return out.split("\0").filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
+function walkFilesystem(repoRoot) {
   const files = [];
   const recurse = (absDir, relDir) => {
     for (const entry of fs.readdirSync(absDir, { withFileTypes: true })) {
@@ -94,13 +116,41 @@ function walkSourceFiles(repoRoot) {
         if (IGNORED_DIRS.has(entry.name)) continue;
         recurse(path.join(absDir, entry.name), relDir ? `${relDir}/${entry.name}` : entry.name);
       } else if (entry.isFile()) {
-        if (IGNORED_FILES.has(entry.name)) continue;
         files.push(relDir ? `${relDir}/${entry.name}` : entry.name);
       }
     }
   };
   recurse(repoRoot, "");
   return files;
+}
+
+function withinIgnoredDir(file) {
+  return file.split("/").some((segment) => IGNORED_DIRS.has(segment));
+}
+
+function discoverFiles(repoRoot) {
+  const raw = gitFiles(repoRoot) ?? walkFilesystem(repoRoot);
+  return raw
+    .filter((file) => !IGNORED_FILES.has(path.posix.basename(file)))
+    .filter((file) => !withinIgnoredDir(file))
+    .sort((a, b) => a.localeCompare(b));
+}
+
+function isGitMode(repoRoot) {
+  return gitFiles(repoRoot) !== null;
+}
+
+// ---------------------------------------------------------------------------
+// Directory structure, derived from the discovered file set (never readdir), so
+// a git-ignored directory can never form a unit or a boundary.
+// ---------------------------------------------------------------------------
+
+function basename(relPath) {
+  return relPath === "." ? "." : path.posix.basename(relPath);
+}
+
+function joinRel(parent, child) {
+  return parent === "." ? child : `${parent}/${child}`;
 }
 
 function fileIsUnder(file, relDir) {
@@ -111,15 +161,40 @@ function filesUnder(files, relDir) {
   return files.filter((file) => fileIsUnder(file, relDir));
 }
 
-function childUnitStats(repoRoot, relDir, files) {
-  return childDirs(path.join(repoRoot, relDir))
+function dirExists(relDir, files) {
+  if (relDir === ".") return files.length > 0;
+  return files.some((file) => file.startsWith(`${relDir}/`));
+}
+
+function childDirNames(relDir, files) {
+  const prefix = relDir === "." ? "" : `${relDir}/`;
+  const names = new Set();
+  for (const file of files) {
+    if (prefix && !file.startsWith(prefix)) continue;
+    const rest = file.slice(prefix.length);
+    const slash = rest.indexOf("/");
+    if (slash === -1) continue; // a file directly in relDir, not a child directory
+    names.add(rest.slice(0, slash));
+  }
+  return [...names].sort((a, b) => a.localeCompare(b));
+}
+
+function hasBoundaryMarker(relDir, fileSet) {
+  for (const marker of BOUNDARY_MARKER_FILES) {
+    if (fileSet.has(joinRel(relDir, marker))) return true;
+  }
+  return false;
+}
+
+function childUnitStats(relDir, files, fileSet) {
+  return childDirNames(relDir, files)
     .map((name) => {
       const relPath = joinRel(relDir, name);
       return {
         name,
         relPath,
         fileCount: filesUnder(files, relPath).length,
-        hasBoundaryMarker: hasBoundaryMarker(repoRoot, relPath),
+        hasBoundaryMarker: hasBoundaryMarker(relPath, fileSet),
       };
     })
     .filter((child) => child.fileCount > 0 || child.hasBoundaryMarker);
@@ -199,32 +274,32 @@ function parsePnpmPackages(pnpmPath) {
   return packages;
 }
 
-function resolveWorkspaceUnits(repoRoot, globs) {
+function resolveWorkspaceUnits(globs, files, fileSet) {
   const units = new Set();
   for (const glob of globs) {
     if (glob.endsWith("/*")) {
-      const parent = glob.slice(0, -2);
-      for (const child of childDirs(path.join(repoRoot, parent))) {
-        const rel = parent ? `${parent}/${child}` : child;
-        if (fs.existsSync(path.join(repoRoot, rel, "package.json"))) units.add(rel);
+      const parent = glob.slice(0, -2) || ".";
+      for (const child of childDirNames(parent, files)) {
+        const rel = joinRel(parent, child);
+        if (fileSet.has(joinRel(rel, "package.json"))) units.add(rel);
       }
     } else if (!glob.includes("*")) {
-      if (fs.existsSync(path.join(repoRoot, glob, "package.json"))) units.add(glob);
+      if (fileSet.has(joinRel(glob, "package.json"))) units.add(glob);
     }
   }
   return [...units];
 }
 
-function sourceRootsUnder(repoRoot, relDir) {
+function sourceRootsUnder(relDir, files) {
   return SOURCE_ROOTS.map((root) => joinRel(relDir, root)).filter((candidate) =>
-    isDir(path.join(repoRoot, candidate))
+    dirExists(candidate, files)
   );
 }
 
-function candidateFrontier(repoRoot, relDir, files, { forceSplit = false, depth = 0 } = {}) {
+function candidateFrontier(relDir, files, fileSet, { forceSplit = false, depth = 0 } = {}) {
   if (depth >= MAX_FRONTIER_DEPTH) return [relDir];
 
-  const children = childUnitStats(repoRoot, relDir, files);
+  const children = childUnitStats(relDir, files, fileSet);
   if (children.length === 0) return [relDir];
 
   const totalFiles = filesUnder(files, relDir).length;
@@ -244,11 +319,11 @@ function candidateFrontier(repoRoot, relDir, files, { forceSplit = false, depth 
   if (!shouldSplit) return [relDir];
 
   return children.flatMap((child) =>
-    candidateFrontier(repoRoot, child.relPath, files, { forceSplit: false, depth: depth + 1 })
+    candidateFrontier(child.relPath, files, fileSet, { forceSplit: false, depth: depth + 1 })
   );
 }
 
-function semanticContainerFrontiers(repoRoot, relDir, files) {
+function semanticContainerFrontiers(relDir, files, fileSet) {
   const frontiers = [];
   const stack = [{ relDir, depth: 0 }];
   const seen = new Set();
@@ -259,12 +334,12 @@ function semanticContainerFrontiers(repoRoot, relDir, files) {
     seen.add(current.relDir);
 
     if (SEMANTIC_CONTAINER_DIRS.has(basename(current.relDir))) {
-      const units = candidateFrontier(repoRoot, current.relDir, files, { forceSplit: true });
+      const units = candidateFrontier(current.relDir, files, fileSet, { forceSplit: true });
       if (units.length >= 2) frontiers.push(units);
       continue;
     }
 
-    for (const child of childUnitStats(repoRoot, current.relDir, files)) {
+    for (const child of childUnitStats(current.relDir, files, fileSet)) {
       stack.push({ relDir: child.relPath, depth: current.depth + 1 });
     }
   }
@@ -272,15 +347,15 @@ function semanticContainerFrontiers(repoRoot, relDir, files) {
   return frontiers;
 }
 
-function refineWorkspaceUnit(repoRoot, unit, files) {
-  const semanticFrontiers = semanticContainerFrontiers(repoRoot, unit, files);
+function refineWorkspaceUnit(unit, files, fileSet) {
+  const semanticFrontiers = semanticContainerFrontiers(unit, files, fileSet);
   if (semanticFrontiers.length) {
     return [...new Set(semanticFrontiers.flat())].sort((a, b) => a.localeCompare(b));
   }
 
-  const internalSourceRoots = sourceRootsUnder(repoRoot, unit);
+  const internalSourceRoots = sourceRootsUnder(unit, files);
   const sourceRootUnits = internalSourceRoots.flatMap((root) =>
-    candidateFrontier(repoRoot, root, files, { forceSplit: true })
+    candidateFrontier(root, files, fileSet, { forceSplit: true })
   );
   const unitFileCount = filesUnder(files, unit).length;
   if (
@@ -294,27 +369,30 @@ function refineWorkspaceUnit(repoRoot, unit, files) {
 }
 
 function detectUnits(repoRoot) {
-  const files = walkSourceFiles(repoRoot);
-  const wsUnits = resolveWorkspaceUnits(repoRoot, workspaceGlobs(repoRoot));
+  const files = discoverFiles(repoRoot);
+  const fileSet = new Set(files);
+  const wsUnits = resolveWorkspaceUnits(workspaceGlobs(repoRoot), files, fileSet);
   if (wsUnits.length) {
     return {
-      units: wsUnits.flatMap((unit) => refineWorkspaceUnit(repoRoot, unit, files)),
+      units: wsUnits.flatMap((unit) => refineWorkspaceUnit(unit, files, fileSet)),
       lowConfidence: false,
+      files,
+      fileSet,
     };
   }
 
   const sourceRootUnits = [];
   for (const root of SOURCE_ROOTS) {
-    if (isDir(path.join(repoRoot, root))) {
-      sourceRootUnits.push(...candidateFrontier(repoRoot, root, files, { forceSplit: true }));
+    if (dirExists(root, files)) {
+      sourceRootUnits.push(...candidateFrontier(root, files, fileSet, { forceSplit: true }));
     }
   }
-  if (sourceRootUnits.length) return { units: sourceRootUnits, lowConfidence: false };
+  if (sourceRootUnits.length) return { units: sourceRootUnits, lowConfidence: false, files, fileSet };
 
-  const topLevel = childUnitStats(repoRoot, ".", files).map((child) => child.relPath);
-  if (topLevel.length) return { units: topLevel, lowConfidence: true };
+  const topLevel = childUnitStats(".", files, fileSet).map((child) => child.relPath);
+  if (topLevel.length) return { units: topLevel, lowConfidence: true, files, fileSet };
 
-  return { units: ["."], lowConfidence: true };
+  return { units: ["."], lowConfidence: true, files, fileSet };
 }
 
 function buildTargets(unitPaths) {
@@ -358,10 +436,12 @@ function overrideTarget(slug, structuralUnit, sourceGlobs) {
 // root) are owned by no `dir/**` target. Group every such orphan by its
 // immediate parent directory and emit one shallow `dir/*` remainder target per
 // parent, so loose top-level files in an under-organized repo are analyzed
-// rather than silently dropped into coverage.unassigned.
-function appendRemainders(repoRoot, targets) {
+// rather than silently dropped into coverage.unassigned. Excluded files are
+// skipped so an `exclude` override is never re-captured by a remainder.
+function appendRemainders(files, targets, excluded) {
   const parents = new Set();
-  for (const file of walkSourceFiles(repoRoot)) {
+  for (const file of files) {
+    if (isExcluded(file, excluded)) continue;
     if (targets.some((t) => t.source_globs.some((g) => matches(file, g)))) continue;
     const slash = file.lastIndexOf("/");
     parents.add(slash === -1 ? "." : file.slice(0, slash));
@@ -417,13 +497,104 @@ function applyRelabel(targets, override) {
   return targets;
 }
 
-function applyOverrides(targets, overrides) {
+// Inverse of split: fold an over-split directory subtree into one target. Every
+// target whose structural_unit is `unit` or sits under it is replaced by a
+// single override target with a clean `unit/**` glob. This is the primary cure
+// for the deterministic core over-splitting a loosely-organized subtree (e.g. a
+// demo/config tree) into one bucket per directory.
+function applyCollapse(targets, override) {
+  const unit = override.unit;
+  if (!isNonEmptyString(unit)) throw new Error("override collapse requires a unit path");
+  const under = (t) => t.structural_unit === unit || t.structural_unit.startsWith(`${unit}/`);
+  const remaining = targets.filter((t) => !under(t));
+  if (remaining.length === targets.length) {
+    throw new Error(`override collapse references unknown unit: ${unit}`);
+  }
+  const glob = unit === "." ? "**" : `${unit}/**`;
+  return [...remaining, overrideTarget(override.into, unit, [glob])];
+}
+
+// Project an exclude override's unit paths and/or raw globs to supported glob
+// shapes. An exclude removes its files from analysis entirely: no target owns
+// them, no remainder re-captures them, and coverage reports them under
+// `excluded` (with the reason) rather than `unassigned`.
+function unitGlob(unitPath) {
+  if (unitPath === "." || unitPath === "" || unitPath === "**" || unitPath === "*") return "**";
+  if (unitPath.endsWith("/**") || unitPath.endsWith("/*")) return unitPath;
+  return `${unitPath}/**`;
+}
+
+function normalizeExclude(override) {
+  const reason =
+    typeof override.reason === "string" && override.reason !== ""
+      ? override.reason
+      : "excluded by override";
+  const raw = [];
+  if (Array.isArray(override.units)) raw.push(...override.units);
+  if (Array.isArray(override.globs)) raw.push(...override.globs);
+  if (raw.length === 0) throw new Error('exclude override requires "units" or "globs"');
+  const rules = raw.map((u) => ({ glob: unitGlob(u), reason }));
+  for (const rule of rules) {
+    if (rule.glob === "**") {
+      throw new Error('exclude override cannot target the entire repository ("." or "**")');
+    }
+  }
+  return rules;
+}
+
+function globSubsumedBy(targetGlob, exGlob) {
+  const exBase = globBase(exGlob);
+  if (exBase === "") return true;
+  const targetBase = globBase(targetGlob);
+  return targetBase === exBase || targetBase.startsWith(`${exBase}/`);
+}
+
+function applyExclude(targets, rules) {
+  return targets.filter(
+    (t) => !t.source_globs.every((g) => rules.some((rule) => globSubsumedBy(g, rule.glob)))
+  );
+}
+
+function isExcluded(file, excluded) {
+  return excluded.some((rule) => matches(file, rule.glob));
+}
+
+// Overrides apply in two phases around remainder gap-closure, because they need
+// different views of the target set:
+//
+//   pre-remainder  (exclude, split): operate on derived units. `split` exposes
+//     loose files in the split parent that the remainder pass must then catch;
+//     `exclude` records globs so the remainder pass skips excluded files. Both
+//     must run before remainders exist.
+//   post-remainder (collapse, merge, relabel): regroup the full target set,
+//     including the loose-file remainder buckets — which is the whole point of
+//     curating an under-organized repo. These cannot run until remainders exist.
+//
+// Relative order within each phase follows the overrides array.
+function applyPreRemainderOverrides(targets, overrides) {
+  let current = targets;
+  const excluded = [];
+  for (const override of overrides) {
+    if (override.op === "exclude") {
+      const rules = normalizeExclude(override);
+      excluded.push(...rules);
+      current = applyExclude(current, rules);
+    } else if (override.op === "split") {
+      current = applySplit(current, override);
+    }
+  }
+  return { targets: current, excluded };
+}
+
+function applyPostRemainderOverrides(targets, overrides) {
   let current = targets;
   for (const override of overrides) {
     if (override.op === "merge") current = applyMerge(current, override);
-    else if (override.op === "split") current = applySplit(current, override);
+    else if (override.op === "collapse") current = applyCollapse(current, override);
     else if (override.op === "relabel") current = applyRelabel(current, override);
-    else throw new Error(`override op unknown: ${override.op}`);
+    else if (override.op !== "exclude" && override.op !== "split") {
+      throw new Error(`override op unknown: ${override.op}`);
+    }
   }
   return current;
 }
@@ -447,10 +618,16 @@ function detectRenames(freshTargets, manifest) {
   return renames;
 }
 
-function computeCoverage(repoRoot, targets, lowConfidence) {
+function computeCoverage(files, targets, lowConfidence, excluded) {
   const unassigned = [];
   const overlaps = [];
-  for (const file of walkSourceFiles(repoRoot)) {
+  const excludedFiles = [];
+  for (const file of files) {
+    const exRule = excluded.find((rule) => matches(file, rule.glob));
+    if (exRule) {
+      excludedFiles.push({ file, reason: exRule.reason });
+      continue;
+    }
     const owners = targets.filter((t) => t.source_globs.some((g) => matches(file, g)));
     if (owners.length === 0) unassigned.push(file);
     else if (owners.length > 1) overlaps.push({ path: file, slugs: owners.map((t) => t.slug) });
@@ -459,6 +636,7 @@ function computeCoverage(repoRoot, targets, lowConfidence) {
   return {
     unassigned: summarizeUnassigned(unassigned),
     overlaps,
+    excluded: summarizeExcluded(excludedFiles),
     low_confidence: lowConfidence,
   };
 }
@@ -494,6 +672,24 @@ function summarizeUnassigned(unassigned) {
   };
 }
 
+function summarizeExcluded(excludedFiles) {
+  const sortedFiles = excludedFiles.map((entry) => entry.file).sort((a, b) => a.localeCompare(b));
+  const byReason = new Map();
+  for (const { reason } of excludedFiles) byReason.set(reason, (byReason.get(reason) ?? 0) + 1);
+  const reasons = [...byReason.entries()]
+    .map(([reason, count]) => ({ reason, count }))
+    .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason));
+
+  const base = summarizeUnassigned(sortedFiles);
+  return {
+    count: base.count,
+    reasons,
+    by_top_level: base.by_top_level,
+    sample: base.sample,
+    truncated: base.truncated,
+  };
+}
+
 function sha256(contents) {
   return createHash("sha256").update(contents).digest("hex");
 }
@@ -512,8 +708,8 @@ function unitRelative(file, globs) {
   return file;
 }
 
-export function sourceHash(repoRoot, globs) {
-  const entries = walkSourceFiles(repoRoot)
+export function sourceHash(repoRoot, globs, files = discoverFiles(repoRoot)) {
+  const entries = files
     .filter((file) => globs.some((g) => matches(file, g)))
     .map((file) => `${unitRelative(file, globs)}\0${sha256(fs.readFileSync(path.join(repoRoot, file)))}`)
     .sort((a, b) => a.localeCompare(b));
@@ -535,24 +731,141 @@ export function derive(repoRoot, { manifest } = {}) {
   if (!repoRoot) throw new Error("repoRoot is required");
   if (!isDir(repoRoot)) throw new Error(`not a directory: ${repoRoot}`);
 
-  const { units, lowConfidence } = detectUnits(repoRoot);
+  const { units, lowConfidence, files } = detectUnits(repoRoot);
   const overrides = manifest?.overrides ?? [];
-  const targets = applyOverrides(buildTargets(units), overrides);
-  appendRemainders(repoRoot, targets);
-  for (const target of targets) {
-    target.source_hash = sourceHash(repoRoot, target.source_globs);
+  const { targets, excluded } = applyPreRemainderOverrides(buildTargets(units), overrides);
+  appendRemainders(files, targets, excluded);
+  const grouped = applyPostRemainderOverrides(targets, overrides);
+  for (const target of grouped) {
+    target.source_hash = sourceHash(repoRoot, target.source_globs, files);
   }
-  if (manifest) reconcile(targets, manifest);
-  const renames = manifest ? detectRenames(targets, manifest) : [];
-  const coverage = computeCoverage(repoRoot, targets, lowConfidence);
+  if (manifest) reconcile(grouped, manifest);
+  const renames = manifest ? detectRenames(grouped, manifest) : [];
+  const coverage = computeCoverage(files, grouped, lowConfidence, excluded);
 
   return {
     version: 1,
     system: { summary: "", external_dependencies: [] },
-    targets,
+    targets: grouped,
     overrides,
     renames,
     coverage,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Frontier fingerprints — compact, deterministic evidence for the LLM curate
+// stage so it can classify role, group, and exclude without reading every file.
+// ---------------------------------------------------------------------------
+
+const CODE_EXTS = new Set([
+  ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".rb",
+  ".java", ".kt", ".cs", ".php", ".swift", ".c", ".cc", ".cpp", ".h", ".hpp",
+  ".m", ".scala", ".clj", ".ex", ".exs", ".vue", ".svelte", ".sh",
+]);
+const DATA_EXTS = new Set([
+  ".json", ".jsonl", ".ndjson", ".yaml", ".yml", ".toml", ".csv", ".tsv",
+  ".xml", ".log", ".lock", ".pid", ".sqlite", ".db", ".parquet",
+]);
+const DOC_EXTS = new Set([".md", ".mdx", ".rst", ".txt", ".adoc"]);
+
+const RUNTIME_OUTPUT_RE =
+  /(^|\/)(logs?|artifacts?|cache|caches|coverage|recordings?|cassettes?|snapshots?|__snapshots__|fixtures?|output|outputs)(\/|$)/i;
+const DEMO_RE = /(^|\/)(demo|demos|example|examples|samples?|sandbox)(\/|$)/i;
+
+function classifyLooksLike(owned, codeN, dataN, docN) {
+  if (owned.length === 0) return "empty";
+  const total = owned.length;
+  if (codeN / total >= 0.6) return "code";
+  if (docN / total >= 0.6) return "docs";
+  if (dataN / total >= 0.6) return "data";
+  return "mixed";
+}
+
+function suggestDisposition(unit, owned, codeN, looksLike) {
+  const signals = [];
+  if (owned.some((f) => RUNTIME_OUTPUT_RE.test(f)) || /(^|\/)runs\.jsonl$/.test(unit + "/")) {
+    signals.push("runtime-output");
+  }
+  if (owned.some((f) => /\.(log|pid)$/.test(f))) signals.push("logs-or-pids");
+  if (owned.length > 0 && codeN === 0) signals.push("no-code");
+  if (unit.split("/").some((s) => s.startsWith("."))) signals.push("dotfile-config");
+  if (looksLike === "docs") signals.push("docs");
+  if (looksLike === "data") signals.push("data");
+  if (owned.length > 0 && owned.length <= 2) signals.push("tiny");
+  if (DEMO_RE.test(unit + "/")) signals.push("example-or-demo");
+
+  let suggested = "analyze";
+  if (signals.includes("runtime-output") || signals.includes("logs-or-pids")) suggested = "exclude";
+  else if (
+    signals.includes("dotfile-config") ||
+    signals.includes("docs") ||
+    (signals.includes("no-code") && signals.includes("data"))
+  ) {
+    suggested = "summarize";
+  }
+  return { suggested_disposition: suggested, signals };
+}
+
+function fingerprintTarget(target, repoRoot, files) {
+  const owned = files.filter((f) => target.source_globs.some((g) => matches(f, g)));
+  const extensions = {};
+  let totalBytes = 0;
+  let codeN = 0;
+  let dataN = 0;
+  let docN = 0;
+  for (const f of owned) {
+    const ext = path.posix.extname(f).toLowerCase() || "(none)";
+    extensions[ext] = (extensions[ext] ?? 0) + 1;
+    if (CODE_EXTS.has(ext)) codeN++;
+    else if (DATA_EXTS.has(ext)) dataN++;
+    else if (DOC_EXTS.has(ext)) docN++;
+    try {
+      totalBytes += fs.statSync(path.join(repoRoot, f)).size;
+    } catch {
+      // unreadable / vanished file contributes no bytes
+    }
+  }
+  const looks_like = classifyLooksLike(owned, codeN, dataN, docN);
+  const { suggested_disposition, signals } = suggestDisposition(
+    target.structural_unit,
+    owned,
+    codeN,
+    looks_like
+  );
+  return {
+    slug: target.slug,
+    structural_unit: target.structural_unit,
+    origin: target.origin,
+    source_globs: target.source_globs,
+    file_count: owned.length,
+    total_bytes: totalBytes,
+    extensions,
+    sample_files: owned.slice(0, 8),
+    looks_like,
+    suggested_disposition,
+    signals,
+  };
+}
+
+export function frontier(repoRoot, { manifest } = {}) {
+  if (!repoRoot) throw new Error("repoRoot is required");
+  if (!isDir(repoRoot)) throw new Error(`not a directory: ${repoRoot}`);
+  const files = discoverFiles(repoRoot);
+  const fileSet = new Set(files);
+  const result = derive(repoRoot, { manifest });
+  const units = result.targets.map((target) => fingerprintTarget(target, repoRoot, files));
+  const topLevel = childUnitStats(".", files, fileSet).map((child) => ({
+    path: child.relPath,
+    file_count: child.fileCount,
+  }));
+  return {
+    repo_root: repoRoot,
+    git_mode: isGitMode(repoRoot),
+    file_count: files.length,
+    units,
+    top_level: topLevel,
+    coverage: result.coverage,
   };
 }
 
@@ -616,7 +929,7 @@ function validateSchema(manifest, violations) {
 
 function validateGlobsResolve(repoRoot, manifest, violations) {
   if (!Array.isArray(manifest.targets)) return;
-  const files = walkSourceFiles(repoRoot);
+  const files = discoverFiles(repoRoot);
   for (const target of manifest.targets) {
     if (!Array.isArray(target?.source_globs)) continue;
     const slug = isNonEmptyString(target.slug) ? target.slug : "?";
@@ -680,7 +993,7 @@ export function check(repoRoot, manifestPath) {
 }
 
 function parseArgs(argv) {
-  const args = { repoRoot: argv[2], manifestPath: null, checkPath: null };
+  const args = { repoRoot: argv[2], manifestPath: null, checkPath: null, frontier: false };
   for (let i = 3; i < argv.length; i++) {
     if (argv[i] === "--manifest") {
       args.manifestPath = argv[++i];
@@ -688,11 +1001,22 @@ function parseArgs(argv) {
     } else if (argv[i] === "--check") {
       args.checkPath = argv[++i];
       if (!args.checkPath) throw new Error("--check requires a path");
+    } else if (argv[i] === "--frontier") {
+      args.frontier = true;
     } else {
       throw new Error(`unknown argument: ${argv[i]}`);
     }
   }
   return args;
+}
+
+function loadManifest(manifestPath) {
+  if (!manifestPath) return undefined;
+  if (!fs.existsSync(manifestPath)) {
+    console.error(`manifest not found: ${manifestPath}`);
+    process.exit(1);
+  }
+  return readJson(manifestPath);
 }
 
 function main() {
@@ -705,7 +1029,7 @@ function main() {
   }
   if (!args.repoRoot) {
     console.error(
-      "usage: node scripts/decompose-skeleton.mjs <repo-root> [--manifest <path>] | --check <path>"
+      "usage: node scripts/decompose-skeleton.mjs <repo-root> [--manifest <path>] [--frontier] | --check <path>"
     );
     process.exit(1);
   }
@@ -722,13 +1046,18 @@ function main() {
     process.exit(result.ok ? 0 : 1);
   }
 
-  let manifest;
-  if (args.manifestPath) {
-    if (!fs.existsSync(args.manifestPath)) {
-      console.error(`manifest not found: ${args.manifestPath}`);
+  const manifest = loadManifest(args.manifestPath);
+
+  if (args.frontier) {
+    let out;
+    try {
+      out = frontier(path.resolve(args.repoRoot), { manifest });
+    } catch (err) {
+      console.error(err.message);
       process.exit(1);
     }
-    manifest = readJson(args.manifestPath);
+    console.log(JSON.stringify(out, null, 2));
+    return;
   }
 
   const result = derive(path.resolve(args.repoRoot), { manifest });

@@ -6,9 +6,30 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { derive, check } from "./decompose-skeleton.mjs";
+import { derive, check, frontier } from "./decompose-skeleton.mjs";
 
 const SCRIPT_PATH = fileURLToPath(new URL("./decompose-skeleton.mjs", import.meta.url));
+
+function hasGit() {
+  try {
+    return spawnSync("git", ["--version"], { encoding: "utf8" }).status === 0;
+  } catch {
+    return false;
+  }
+}
+
+const GIT = hasGit();
+
+// Turn a temp repo into a git work tree so discoverFiles takes the git-aware
+// path. No commit is needed: `ls-files --cached --others --exclude-standard`
+// already excludes .gitignore'd paths from the untracked set.
+function gitInit(repo) {
+  const run = (args) => spawnSync("git", ["-C", repo, ...args], { encoding: "utf8" });
+  run(["init", "-q"]);
+  run(["config", "user.email", "t@t.test"]);
+  run(["config", "user.name", "decompose-test"]);
+  run(["add", "-A"]);
+}
 
 function writeManifest(repo, manifest) {
   const manifestPath = path.join(repo, "targets.json");
@@ -588,6 +609,300 @@ test("CLI --check exits 0 on a script-produced manifest and 1 on a tampered one"
     });
     assert.equal(fail.status, 1);
     assert.match(fail.stderr, /glob resolves to no files/);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Layer 1: git-aware file discovery
+// ---------------------------------------------------------------------------
+
+test("git mode excludes gitignored files and dirs from the partition", { skip: !GIT }, () => {
+  const repo = makeTempRepo();
+  try {
+    write(repo, "src/index.js", "export const i = 1;");
+    write(repo, "src/util.js", "export const u = 1;");
+    write(repo, ".gitignore", "ignored/\n*.log\n");
+    write(repo, "ignored/output.json", "{}"); // ignored directory
+    write(repo, "src/debug.log", "noise"); // ignored file beside source
+    gitInit(repo);
+
+    const manifest = derive(repo);
+    const f = frontier(repo);
+
+    // A kept parent glob like src/** still matches an ignored path *string*, so
+    // assert on the discovered set (frontier), not on glob ownership: the
+    // ignored dir forms no unit and the ignored files are never discovered.
+    assert.equal(manifest.targets.some((t) => t.structural_unit === "ignored"), false);
+    assert.equal(f.units.some((u) => u.structural_unit === "ignored"), false);
+    assert.equal(f.file_count, 3); // .gitignore, src/index.js, src/util.js
+    const src = f.units.find((u) => u.structural_unit === "src");
+    assert.equal(src.file_count, 2); // debug.log excluded
+    assert.ok(!src.sample_files.includes("src/debug.log"));
+    assert.equal(manifest.coverage.unassigned.count, 0);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("git mode still drops IGNORED_DIRS like tests/ even though they are tracked", { skip: !GIT }, () => {
+  const repo = makeTempRepo();
+  try {
+    write(repo, "src/index.js", "export const i = 1;");
+    write(repo, "tests/index.test.js", "test('x', () => {});");
+    gitInit(repo);
+
+    const manifest = derive(repo);
+
+    assert.equal(manifest.targets.some((t) => t.structural_unit.startsWith("tests")), false);
+    assert.equal(ownersOf(manifest, "tests/index.test.js").length, 0);
+    assert.equal(manifest.coverage.unassigned.count, 0);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("git mode honors a nested .gitignore", { skip: !GIT }, () => {
+  const repo = makeTempRepo();
+  try {
+    write(repo, "pkg/index.js", "export const i = 1;");
+    write(repo, "pkg/data/.gitignore", "runs/\n");
+    write(repo, "pkg/data/keep.json", "{}");
+    write(repo, "pkg/data/runs/out.json", "{}"); // excluded by the nested rule
+    gitInit(repo);
+
+    const manifest = derive(repo);
+    const f = frontier(repo);
+
+    assert.equal(manifest.targets.some((t) => t.structural_unit === "pkg/data/runs"), false);
+    assert.equal(f.file_count, 3); // pkg/index.js, pkg/data/.gitignore, pkg/data/keep.json
+    assert.ok(!f.units.some((u) => u.sample_files.includes("pkg/data/runs/out.json")));
+    assert.equal(manifest.coverage.unassigned.count, 0);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test(".gitkeep placeholder-only directories never form a target", () => {
+  const repo = makeTempRepo();
+  try {
+    write(repo, "src/index.js", "export const i = 1;");
+    write(repo, "data/pending/.gitkeep", "");
+    write(repo, "data/done/.gitkeep", "");
+
+    const manifest = derive(repo);
+
+    assert.equal(manifest.targets.some((t) => t.structural_unit.startsWith("data")), false);
+    assert.equal(manifest.coverage.unassigned.count, 0);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Layer 2: exclude / collapse overrides, remainder grouping, coverage.excluded
+// ---------------------------------------------------------------------------
+
+test("exclude override drops files from analysis and reports them under coverage.excluded", () => {
+  const repo = makeTempRepo();
+  try {
+    write(repo, "src/app/index.js", "export const a = 1;");
+    write(repo, "vendor/lib/big.js", "export const b = 1;");
+    write(repo, "vendor/lib/more.js", "export const c = 1;");
+
+    const base = derive(repo);
+    base.overrides = [{ op: "exclude", units: ["vendor"], reason: "third-party vendored code" }];
+
+    const manifest = derive(repo, { manifest: base });
+
+    assert.equal(manifest.targets.some((t) => t.structural_unit.startsWith("vendor")), false);
+    assert.equal(ownersOf(manifest, "vendor/lib/big.js").length, 0);
+    // Excluded, not unassigned — and the reason is carried for the curator.
+    assert.equal(manifest.coverage.unassigned.count, 0);
+    assert.equal(manifest.coverage.excluded.count, 2);
+    assert.equal(manifest.coverage.excluded.reasons[0].reason, "third-party vendored code");
+    assert.equal(manifest.coverage.excluded.reasons[0].count, 2);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("a clean manifest reports zero excluded files", () => {
+  const repo = workspaceRepo();
+  try {
+    const manifest = derive(repo);
+    assert.equal(manifest.coverage.excluded.count, 0);
+    assert.deepEqual(manifest.coverage.excluded.reasons, []);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("exclude targeting the whole repository throws rather than dropping everything", () => {
+  const repo = workspaceRepo();
+  try {
+    const base = derive(repo);
+    base.overrides = [{ op: "exclude", units: ["."], reason: "oops" }];
+    assert.throws(() => derive(repo, { manifest: base }), /entire repository/);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("collapse override folds an over-split subtree into one clean target", () => {
+  const repo = makeTempRepo();
+  try {
+    write(repo, "src/index.js", "export const i = 1;");
+    write(repo, "config/a/one.json", "{}");
+    write(repo, "config/a/two.json", "{}");
+    write(repo, "config/b/three.json", "{}");
+    write(repo, "config/root.json", "{}");
+
+    const base = derive(repo);
+    const preSplit = base.targets.filter((t) => t.structural_unit.startsWith("config"));
+    assert.ok(preSplit.length >= 2, "expected config to over-split into multiple buckets");
+
+    base.overrides = [{ op: "collapse", unit: "config", into: "app-config" }];
+    const manifest = derive(repo, { manifest: base });
+
+    const collapsed = manifest.targets.filter(
+      (t) => t.structural_unit === "config" || t.structural_unit.startsWith("config/")
+    );
+    assert.equal(collapsed.length, 1);
+    assert.equal(collapsed[0].slug, "app-config");
+    assert.deepEqual(collapsed[0].source_globs, ["config/**"]);
+    for (const f of [
+      "config/a/one.json",
+      "config/a/two.json",
+      "config/b/three.json",
+      "config/root.json",
+    ]) {
+      assert.equal(ownersOf(manifest, f).length, 1, `${f} should have exactly one owner`);
+    }
+    assert.equal(manifest.coverage.unassigned.count, 0);
+    assert.deepEqual(manifest.coverage.overlaps, []);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("collapse override on an unknown unit throws", () => {
+  const repo = singleUnitRepo();
+  try {
+    const base = derive(repo);
+    base.overrides = [{ op: "collapse", unit: "does/not/exist", into: "x" }];
+    assert.throws(() => derive(repo, { manifest: base }), /unknown unit: does\/not\/exist/);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("merge override can group loose-file remainder buckets created after partitioning", () => {
+  const repo = makeTempRepo();
+  try {
+    write(repo, "src/index.js", "export const i = 1;");
+    write(repo, "guides/a.txt", "x");
+    write(repo, "handbook/b.txt", "y");
+
+    const base = derive(repo);
+    assert.ok(base.targets.some((t) => t.structural_unit === "guides"));
+    assert.ok(base.targets.some((t) => t.structural_unit === "handbook"));
+
+    base.overrides = [{ op: "merge", units: ["guides", "handbook"], into: "writing" }];
+    const manifest = derive(repo, { manifest: base });
+
+    const merged = manifest.targets.find((t) => t.slug === "writing");
+    assert.ok(merged, "expected merged remainder buckets to survive as one override target");
+    assert.equal(merged.origin, "override");
+    assert.deepEqual([...merged.source_globs].sort(), ["guides/*", "handbook/*"]);
+    assert.equal(manifest.targets.some((t) => t.structural_unit === "guides"), false);
+    assert.equal(ownersOf(manifest, "guides/a.txt").length, 1);
+    assert.equal(manifest.coverage.unassigned.count, 0);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("derive is identical across runs with a fixed override set", () => {
+  const repo = workspaceRepo();
+  try {
+    const base = derive(repo);
+    base.overrides = [{ op: "merge", units: ["packages/api", "packages/web"], into: "platform" }];
+
+    const a = derive(repo, { manifest: base });
+    const b = derive(repo, { manifest: base });
+
+    assert.deepEqual(projection(a), projection(b));
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("a curated manifest with collapse + exclude overrides passes --check", () => {
+  const repo = makeTempRepo();
+  try {
+    write(repo, "src/index.js", "export const i = 1;");
+    write(repo, "config/a/one.json", "{}");
+    write(repo, "config/b/two.json", "{}");
+    write(repo, "vendor/x.js", "export const x = 1;");
+
+    const base = derive(repo);
+    base.overrides = [
+      { op: "exclude", units: ["vendor"], reason: "vendored" },
+      { op: "collapse", unit: "config", into: "app-config" },
+    ];
+    const manifestPath = writeManifest(repo, derive(repo, { manifest: base }));
+
+    const result = check(repo, manifestPath);
+
+    assert.equal(result.ok, true, JSON.stringify(result.violations));
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Frontier fingerprints (curate-stage input)
+// ---------------------------------------------------------------------------
+
+test("frontier reports a fingerprint and a disposition suggestion per unit", () => {
+  const repo = makeTempRepo();
+  try {
+    write(repo, "src/index.js", "export const i = 1;");
+    write(repo, "logs/run.log", "noise");
+
+    const f = frontier(repo);
+
+    assert.equal(typeof f.file_count, "number");
+    assert.ok(Array.isArray(f.units));
+    assert.ok(Array.isArray(f.top_level));
+
+    const src = f.units.find((u) => u.structural_unit === "src");
+    assert.ok(src);
+    assert.equal(src.looks_like, "code");
+    assert.equal(src.suggested_disposition, "analyze");
+    assert.ok(Array.isArray(src.sample_files));
+
+    const logs = f.units.find((u) => u.structural_unit === "logs");
+    assert.ok(logs);
+    assert.ok(logs.signals.includes("runtime-output"), JSON.stringify(logs.signals));
+    assert.equal(logs.suggested_disposition, "exclude");
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("CLI --frontier prints the fingerprint document", () => {
+  const repo = makeTempRepo();
+  try {
+    write(repo, "src/index.js", "export const i = 1;");
+
+    const out = spawnSync("node", [SCRIPT_PATH, repo, "--frontier"], { encoding: "utf8" });
+    assert.equal(out.status, 0, out.stderr);
+    const doc = JSON.parse(out.stdout);
+    assert.ok(Array.isArray(doc.units));
+    assert.ok(doc.units.some((u) => u.structural_unit === "src"));
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
   }
