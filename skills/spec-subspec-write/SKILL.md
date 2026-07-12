@@ -4,12 +4,12 @@ description: This skill should be used when the user asks to "write a subspec", 
 mode: coding
 scope: document
 disable-model-invocation: true
-argument-hint: "[step-number] [spec path (optional when the paths stanza is present)]"
+argument-hint: "[step-number] [.specs/<feature>/spec.md]"
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "11"
+  version: "12"
 ---
 
 # Spec Subspec Write
@@ -26,13 +26,7 @@ The parent `spec-prepare` agent is the only writer of shared preparation artifac
 
 ## Canonical Paths and Inputs
 
-Use the exact absolute paths in the **Canonical spec artifact paths** stanza:
-
-- Read the injected `spec` path.
-- Use the injected step marker and current spec SHA-256 generation.
-- Write only the injected `step subspec` path in `artifactsRoot`.
-
-When invoked standalone, the caller must supply the absolute spec and subspec paths, step number, and current lowercase SHA-256 spec hash. If any is missing, return `blocked`; never guess paths or derive a legacy folder convention.
+Require the resolved `.specs/<feature>/spec.md`, step number, and current lowercase SHA-256 spec hash. Write only sibling `step-<NNN>-subspec.md`. If any input is missing or multiple spec folders match, return `blocked`; never guess by modification time.
 
 Write the complete Markdown body to a temporary file in the destination directory, then rename it over the final path. The file begins with a level-1 heading.
 
@@ -154,7 +148,7 @@ Do not mirror the verification YAML in prose, repeat `Covers:` tags, or add empt
 End with exactly:
 
 ```txt
-Subspec: <absolute step subspec path> (step <step-number>)
+Subspec: .specs/<feature>/step-<NNN>-subspec.md (step <step-number>)
 ```
 
 ## Output

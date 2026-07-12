@@ -1,15 +1,15 @@
 ---
 name: spec-run
-description: Implement every step from a current package produced by spec-prepare. Use when the user asks to run or execute a prepared spec outside the re-story in-app orchestrator. Consume immutable prepared subspecs, execute steps sequentially through spec-step-run, verify the recorded focused commands mechanically, and commit each successful step separately; never plan, rewrite preparation artifacts, or perform per-step review passes.
+description: Implement every step from a current standalone .specs package produced by spec-prepare. Use when the user asks to run or execute a prepared spec. Consume immutable prepared subspecs, execute steps sequentially through spec-step-run, verify the recorded focused commands mechanically, and commit each successful step separately; never plan, rewrite preparation artifacts, or perform per-step review passes.
 mode: coding
 scope: document
 disable-model-invocation: true
-argument-hint: "[absolute spec path or feature-document folder]"
+argument-hint: "[.specs/<feature>/spec.md or spec folder]"
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "13"
+  version: "14"
 ---
 
 # Spec Run
@@ -20,15 +20,12 @@ Run steps sequentially. Dispatch one dedicated implementation agent per step whe
 
 ## Resolve The Prepared Package
 
-When a `# Canonical spec artifact paths` stanza is present, use every listed absolute path exactly.
-
-Without a stanza, require an explicit absolute `spec.md` path or feature-document folder. Set `artifactsRoot` to the folder containing `spec.md` and `machineStateRoot` to `<artifactsRoot>/.restory/spec`. Do not search for a most-recent spec, use an issue mirror, or inspect a checkout-local artifact directory.
+Resolve an explicit `.specs/<feature>/spec.md` or `.specs/<feature>/` argument first, then the folder named in the conversation or `Spec folder:` footer. If exactly one prepared `.specs/*/spec.md` exists, use it. Stop on ambiguity rather than choosing by modification time or using an issue mirror.
 
 Read:
 
-- `spec.md` and `<machineStateRoot>/spec-steps.json`;
-- `<artifactsRoot>/spec-prepare.md`;
-- `<machineStateRoot>/preparation.json`;
+- sibling `spec.md` and `spec-steps.json`;
+- sibling `spec-prepare.md` and `preparation.json`;
 - every subspec bound by the manifest;
 - optional bound `criteria.md` and `invariants.md`;
 - applicable rule paths, existing blockers, and prior step learnings.
@@ -50,7 +47,7 @@ Do not invoke `spec-subspec-write`, a planner, a judge, a per-step reviewer, or 
 For each indexed step in ascending order:
 
 1. Revalidate the complete preparation package.
-2. Provide the implementation agent with the canonical path stanza, exact step text, immutable subspec, preparation manifest, applicable rules, relevant prose-only criteria statements, live invariants, prior learnings, and unresolved blockers.
+2. Provide the implementation agent with the resolved spec-folder path, exact step text, immutable subspec, preparation manifest, applicable rules, relevant prose-only criteria statements, live invariants, prior learnings, and unresolved blockers.
 3. Require the agent to read and follow `~/.agents/skills/spec-step-run/SKILL.md` in full.
 4. Wait for that step to reach a terminal result before continuing.
 

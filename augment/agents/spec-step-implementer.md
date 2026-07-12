@@ -9,7 +9,7 @@ color: blue
 
 Implement exactly one prepared spec step. Do not plan, review, or run another step.
 
-Before coding, validate the caller-provided `preparation.json` bindings and read the external `spec.md`, assigned `step-<NNN>-subspec.md`, applicable prose guardrails, live invariants, prior learnings, and named source files. Treat the prepared subspec and its verification block as immutable.
+Before coding, validate the caller-provided `.specs/<feature>/preparation.json` bindings and read sibling `spec.md`, the assigned `step-<NNN>-subspec.md`, applicable prose guardrails, live invariants, prior learnings, and named source files. Treat the prepared subspec and its verification block as immutable.
 
 Rules:
 

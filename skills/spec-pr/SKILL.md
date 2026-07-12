@@ -9,18 +9,14 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "3"
+  version: "4"
 ---
 
 # Spec PR
 
-> **Spec artifacts live in the feature document folder — outside the git checkout.**
-> Read and write them directly on the filesystem at the absolute paths you are given;
-> do not run `git diff`/`log`/`status`/`show` on artifact paths to read or recover
-> them — they are not in any repository, so git returning nothing there is expected,
-> not an error. This is scoped to spec artifacts; the rebase and diff of the **code**
-> are unaffected. The PR body *summarizes* these artifacts; the artifacts themselves
-> are not part of the PR diff.
+> **`.specs/` is standalone working state and is often gitignored.** Read and write
+> it directly; do not depend on git history to recover it. The PR body summarizes
+> these artifacts, while the code rebase and diff remain ordinary git operations.
 
 Open a pull request for spec-driven work that **is mergeable at the time it is
 opened**. The common failure this skill removes: open a PR, then discover the branch
@@ -59,30 +55,20 @@ This skill leaves three artifacts so its work is auditable after the fact:
   needed, the base it rebased onto, every conflict, how each was resolved and why, and
   how the resolution was verified.
 - **`<spec-dir>/pr-message.md`** — the exact PR title and body it drafted and submitted.
-- **`<machineStateRoot>/pr-url.json`** — the machine-readable PR URL the app reads to
-  mark the spec's PR as submitted: `{ "url": "<pull request url>", "submittedAt": "<ISO 8601 timestamp>" }`.
+- **`<spec-dir>/pr-url.json`** — the machine-readable PR URL record:
+  `{ "url": "<pull request url>", "submittedAt": "<ISO 8601 timestamp>" }`.
 
-`<spec-dir>` is the feature document folder — the folder outside the git checkout
-holding `spec.md` and the other spec artifacts (the stanza's `artifactsRoot`).
-`<machineStateRoot>` is the machine-state folder from the stanza
-(`<documentRoot>/.restory/spec/`). Write the artifacts directly with normal file
-writes at those absolute paths — atomically (temp file in the destination directory,
-then rename), never inside the git checkout, and start each markdown artifact with a
-level-1 `#` heading on line 1.
+`<spec-dir>` is the resolved `.specs/<feature>/` folder holding `spec.md` and its
+sibling artifacts. Write the artifacts atomically and start each Markdown artifact
+with a level-1 `#` heading. Use spec-folder-relative references in durable content.
 
 ## Resolve The Spec
 
-Resolve `<spec-dir>` (the feature document folder containing `spec.md`):
+Resolve `<spec-dir>` from explicit `spec=<path>` or `.specs/<feature>/` first, then
+the folder named in the conversation or the `Spec folder:` footer. If exactly one
+`.specs/*/spec.md` exists, use it. Stop on ambiguity rather than choosing by
+modification time.
 
-1. If the prompt includes a **# Canonical spec artifact paths** stanza, use its paths
-   exactly — the `spec` path, `artifactsRoot`, `machineStateRoot`, and the listed
-   `pr-rebase-log.md`, `pr-message.md`, and `pull request URL` locations. The stanza
-   is the primary path source.
-2. Else, if `spec=<path>` or a feature document folder is given in `$ARGUMENTS`, use it.
-3. Else the feature document folder named in the conversation.
-4. Else the directory containing the active working document file.
-
-Never fall back to a spec folder inside a git checkout, and never create one there.
 If no spec resolves, this is not necessarily fatal — fall back to a plain branch PR
 (skip artifact gathering) and say so in the completion report. A resolved spec makes a
 richer PR body; its absence does not block opening the PR.
@@ -228,7 +214,7 @@ the lease check identified as foreign.
 1. Draft the PR title and body — the reviewer's brief from *Gather Spec Artifacts*:
    - Title: short, imperative, under 70 characters.
    - Body: what changed and why, how it was verified, what remains. Footer links the
-     spec folder (`Spec folder: <absolute path of the feature document folder>/`). If the rebase resolved conflicts — especially any
+     spec folder (`Spec folder: .specs/<feature>/`). If the rebase resolved conflicts — especially any
      flagged uncertain in `pr-rebase-log.md` — call them out here so the reviewer checks
      them.
 2. **Write the title and body to `<spec-dir>/pr-message.md`** before submitting, and
@@ -239,7 +225,7 @@ the lease check identified as foreign.
    - **No PR exists** → create it from `pr-message.md`.
    - **PR exists** → update its body from `pr-message.md` (`gh pr edit`); the force-push
      already refreshed the diff. Do not open a duplicate.
-4. **Write `<machineStateRoot>/pr-url.json`** with the URL of the PR just opened or updated,
+4. **Write `<spec-dir>/pr-url.json`** with the URL of the PR just opened or updated,
    as JSON: `{ "url": "<pull request url>", "submittedAt": "<ISO 8601 timestamp>" }`. Use the
    PR URL `gh` returned (or `gh pr view --json url`) and the current time. Overwrite it on
    every run so it always reflects the latest PR for this branch (create or update).
@@ -258,7 +244,7 @@ the lease check identified as foreign.
    - The spec artifacts that informed the body, the latest branch-review verdict, and
      any open `blockers.md` items surfaced.
    - The paths to the artifacts written this run: `<spec-dir>/pr-rebase-log.md`,
-     `<spec-dir>/pr-message.md`, and `<machineStateRoot>/pr-url.json`.
+     `<spec-dir>/pr-message.md`, and `<spec-dir>/pr-url.json`.
 
 If mergeability comes back `CONFLICTING` despite a clean local rebase, the base moved
 between fetch and push — say so and recommend re-running this skill.

@@ -1,28 +1,28 @@
 ---
 name: spec-branch-worktree
-description: Create or reuse a named git branch and worktree for spec-driven work, prepare its local environment, and open it in a color-coded VSCode window. Use for "spec branch worktree", "new spec worktree", "worktree for", "start a worktree", or "create worktree". Feature-document artifacts remain outside the checkout and are never copied.
+description: Create or reuse a named git branch and worktree for standalone spec-driven work, copy the matching .specs/<feature>/ package into it, prepare the local environment, and open it in VS Code. Use for "spec branch worktree", "new spec worktree", "worktree for", "start a worktree", or "create worktree".
 mode: coding
 scope: document
 disable-model-invocation: true
-argument-hint: "[description, feature-document path, or issue/ticket reference]"
+argument-hint: "[description, .specs feature path, or issue/ticket reference]"
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "8"
+  version: "9"
 ---
 
 # Spec Branch Worktree
 
-Create or reuse one branch worktree under `~/.worktrees/<repo-name>/<slug>`. Spec artifacts live in the external feature document folder; use them only to derive intent and never copy them into the worktree.
+Create or reuse one branch worktree under `~/.worktrees/<repo-name>/<slug>`. When the work is driven by `.specs/<feature>/`, copy that complete package into the worktree and treat the destination copy as canonical for all subsequent stages on the branch.
 
 ## Resolve Input
 
 Resolve the work description in this order:
 
 1. Explicit `$ARGUMENTS`.
-2. An explicit feature-document/spec/proposal path; use its title and folder name.
-3. The feature document or work named in the conversation.
+2. An explicit `.specs/<feature>/` folder or a file inside it; use its title and folder name and record the source feature slug.
+3. The spec folder or work named in the conversation.
 
 If only a GitHub issue number is supplied, use `gh issue view <number> --json title --jq .title` only when the current repository has a GitHub remote. For other ticket identifiers, require descriptive context. If no description resolves, stop with:
 
@@ -31,7 +31,7 @@ outcome: blocked
 reason: missing-work-description
 ```
 
-When a **# Canonical spec artifact paths** stanza is present, `artifactsRoot` may inform the description, but no artifact path is a worktree destination.
+If no explicit path is supplied and exactly one `.specs/*/spec.md` or `.specs/*/proposal.md` matches the conversation, use it. Stop on ambiguity rather than choosing by modification time.
 
 ## Derive Names
 
@@ -69,13 +69,20 @@ Verify `git -C "$dest" rev-parse --abbrev-ref HEAD` equals `<slug>`, then remove
 
 ## Prepare The Worktree
 
-Copy only local environment configuration when present:
+Copy local environment configuration when present:
 
 ```bash
 cp "$repo_root/.env" "$dest/.env" 2>/dev/null || true
 ```
 
-Never create or copy a spec-artifact directory in `dest`.
+When a source spec slug was resolved, copy the entire source folder into `$dest/.specs/<source-slug>/`, preserving every file and subdirectory. Do not copy only `spec.md`, do not copy unrelated feature folders, and do not rewrite paths inside artifacts. Relative artifact references remain valid because the `.specs/<feature>/` shape is unchanged.
+
+If the destination feature folder already exists:
+
+- Reuse it when its files are byte-identical to the source.
+- If either copy has diverged, stop with `reason: spec-folder-conflict`; never merge or overwrite silently.
+
+After a successful copy, the destination is the active spec folder for this branch. The source remains an inert handoff copy; subsequent spec skills must run from the worktree and must not write back to the source checkout.
 
 Choose a deterministic title/status-bar color from the slug using `cksum % 8`: teal `#0d7377`, purple `#6a1b9a`, orange `#e65100`, blue `#1565c0`, green `#2e7d32`, red `#b71c1c`, indigo `#283593`, or brown `#4e342e`. Merge these keys into `$dest/.vscode/settings.json` when possible:
 
@@ -104,7 +111,7 @@ branch: <slug>
 worktree: <absolute path>
 base: <base ref>
 tracking: none
-artifacts: external | none
+spec: copied:<slug> | reused:<slug> | none
 environment: copied | absent
 dependencies: <command and outcome | skipped>
 vscode: opened

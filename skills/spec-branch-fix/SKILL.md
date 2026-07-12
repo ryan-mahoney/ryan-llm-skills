@@ -1,6 +1,6 @@
 ---
 name: spec-branch-fix
-description: This skill should be used when the user or the spec-branch-refine loop asks to fix, apply, or act on a branch correctness review for one iteration — coupled to spec-branch-review only through the review file. It parses the review's YAML block, decides per finding whether to fix or dismiss (recording a dismissal class that controls re-raise suppression), applies the actionable fixes across the branch, runs tests, writes reviews/branch-<i>-fix.md in the feature document folder, and commits the code changes (spec/review artifacts live outside the checkout and are never committed). Trigger on "fix the branch review", "apply the branch review", "address the branch findings", or "spec branch fix".
+description: This skill should be used when the user or the spec-branch-refine loop asks to fix, apply, or act on a branch correctness review for one iteration. It consumes .specs/<feature>/reviews/branch-<i>-review.md, fixes or dismisses each finding, writes the matching fix record, verifies the code, and commits code changes. Trigger on "fix the branch review", "apply the branch review", "address the branch findings", or "spec branch fix".
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,12 +9,12 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "7"
+  version: "8"
 ---
 
 # Spec Branch Fix
 
-> **Spec artifacts live in the feature document folder — outside the git checkout.** Read and write them directly on the filesystem at the absolute paths you are given; do not run `git diff`/`log`/`status`/`show` on artifact paths to read, compare, or recover them — they are not in any repository, so git returning nothing there is expected, not an error. This is scoped to spec artifacts; diffing the code under review is unaffected.
+> **`.specs/` is standalone working state and is often gitignored.** Read and write it directly; do not depend on git history to recover it. Diffing implementation code is unaffected.
 
 Apply one iteration of the final branch review. `spec-branch-review` wrote
 `reviews/branch-<iteration>-review.md`; this skill reads it, decides what to act on,
@@ -45,12 +45,10 @@ missing and cannot be inferred; report what is missing and halt.
 
 ## Resolve Inputs
 
-- **Spec.** As `spec-branch-review` resolves it: the
-  **# Canonical spec artifact paths** stanza when present (use its exact absolute
-  `spec` path and `artifactsRoot`), else `spec=<path>` or a supplied feature document folder, else
-  the conversation, else the directory containing the active working document file.
-  `<spec-dir>` is the feature document folder — outside the git checkout. Never
-  fall back to a spec folder inside a git checkout.
+- **Spec.** Resolve exactly as `spec-branch-review`: explicit `spec=<path>` or
+  `.specs/<feature>/` first, then conversation/footer context, then the sole
+  `.specs/*/spec.md` candidate. Stop on ambiguity. `<spec-dir>` is the resolved
+  `.specs/<feature>/` folder.
 - **Iteration.** Use `iter=<n>` when given. Standalone default: the highest existing
   `<spec-dir>/reviews/branch-<k>-review.md` that has **no** matching
   `branch-<k>-fix.md` yet.
@@ -137,7 +135,7 @@ Write to:
 <spec-dir>/reviews/branch-<iteration>-fix.md
 ```
 
-This lives in the `reviews/` subfolder of the feature document folder, next to the
+This lives in the `reviews/` subfolder of the spec folder, next to the
 review it consumes. Write it atomically (temp file in the destination directory,
 then rename) and begin it with a level-1 `#` heading on line 1. The file leads with
 a fenced `fix:` YAML block — the machine-readable record the loop driver parses —
@@ -189,10 +187,9 @@ whether the branch is genuinely stalled.
 
 ## Commit
 
-Review and fix artifacts are part of the product — iteration and dismissal memory,
-and the human audit trail — so they are **always written**, to the `reviews/`
-subfolder of the feature document folder, outside the git checkout. They are never
-committed to the repository and must never be force-added into it. After
+Review and fix artifacts are durable standalone workflow state, so they are **always
+written** to the spec folder's `reviews/` subfolder. Do not stage or commit `.specs`
+unless the repository explicitly tracks it. After
 verification passes, stage the changed code/tests and commit:
 
 ```txt
@@ -200,9 +197,8 @@ fix(<scope>): address branch review (iter <iteration>)
 ```
 
 If nothing actionable was fixed (`material_change: false`), there is no code
-change — spec/review artifacts live outside the checkout, so a review pass with no
-code changes produces no commit. Leave the artifacts on disk and report that they
-were written to the feature document folder.
+change, so a review pass with no code changes produces no commit. Leave the artifacts
+on disk and report their paths.
 
 ## Completion Report
 
@@ -212,8 +208,8 @@ Report:
 2. Review file consumed and fix file written.
 3. Per-finding decisions (fixed / dismissed + class) in one line each.
 4. Verification commands and outcomes.
-5. Commit hash (the `fix(...)` commit, or `none` when only review/fix artifacts —
-   which live outside the checkout and are never committed — changed) and
+5. Commit hash (the `fix(...)` commit, or `none` when only review/fix artifacts
+   changed) and
    `material_change`.
 
 Do not add Co-Authored-By trailers, "Generated with" footers, or any AI model

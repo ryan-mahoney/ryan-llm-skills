@@ -4,12 +4,12 @@ description: Implement exactly one prepared spec step, using its immutable subsp
 mode: coding
 scope: document
 disable-model-invocation: true
-argument-hint: "spec=<absolute spec.md path> step=<number-or-exact-step>"
+argument-hint: "spec=.specs/<feature>/spec.md step=<number-or-exact-step>"
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "11"
+  version: "12"
 ---
 
 # Spec Step Run
@@ -20,21 +20,14 @@ final branch review, or redesign the prepared plan.
 
 ## Canonical Inputs
 
-The prompt must include the `# Canonical spec artifact paths` stanza. Use its
-absolute paths exactly:
-
-- `spec` — canonical `spec.md`.
-- `artifactsRoot` — `spec-prepare.md`, `criteria.md`, `invariants.md`, blockers,
-  prepared `step-<NNN>-subspec.md` files, and step learnings.
-- `machineStateRoot` — `spec-steps.json` and `.restory/spec/preparation.json`.
-- `step subspec` and `step learning` — the target step's exact artifact paths.
+The prompt must identify the resolved `.specs/<feature>/` folder and target step. Read `spec.md`, `spec-steps.json`, `spec-prepare.md`, `preparation.json`, optional criteria/invariants/blockers, the target `step-<NNN>-subspec.md`, and prior step learnings from that folder. Write the target `step-<NNN>-learning.md` there.
 
 Artifact writes are atomic: write a sibling temporary file and rename it over the
 destination. Markdown artifacts begin with a level-1 heading.
 
 ## Gate On Current Preparation
 
-Before reading production code, validate `.restory/spec/preparation.json` using the
+Before reading production code, validate sibling `preparation.json` using the
 strict version 1 contract. Recompute the SHA-256 binding for `spec.md`,
 `spec-steps.json`, `spec-prepare.md`, every declared subspec, and optional
 `criteria.md`/`invariants.md`. Require:

@@ -1,13 +1,13 @@
 ---
 name: spec-architect-critics
-description: "Critique a spec-driven architecture proposal in the feature document folder by selecting two real practitioners with relevant expertise and evaluating the proposal through their documented perspectives. Use for architecture critiques, proposal reviews, stress tests, expert perspectives, and gap-finding after spec-architect-initial."
+description: "Critique a standalone spec-driven architecture proposal in .specs/<feature>/proposal.md by selecting two real practitioners with relevant expertise and evaluating the proposal through their documented perspectives. Use for architecture critiques, proposal reviews, stress tests, expert perspectives, and gap-finding after spec-architect-initial."
 mode: coding
 scope: document
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "3"
+  version: "4"
 ---
 
 # Spec Architect Critics — Expert-Perspective Design Review
@@ -24,7 +24,7 @@ This is not a rubber stamp. The value of this skill is in finding flaws, blind s
 
 Look for the material to critique:
 
-- `proposal.md` in the feature document folder. Use the exact absolute `proposal` path from a canonical-path stanza when present; otherwise require an explicit proposal/feature-document path or active working document folder. Never search for a most-recent spec or a checkout-local artifact folder.
+- Resolve `proposal.md` from an explicit `.specs/<feature>/` folder or file first. Otherwise use the feature folder named in the conversation; if exactly one `.specs/*/proposal.md` exists, use it. Stop on ambiguity rather than guessing by modification time.
 - An architecture document the user has shared or uploaded
 - A plan described in the current conversation
 - Code or PRs the user wants reviewed at the architectural level
@@ -240,7 +240,8 @@ team-capacity, or domain-specific concerns.]
 ## Step 6 — Output
 
 - Write the critique as a markdown document.
-- Write to the canonical stanza's exact `critique` path or `critique.md` in the explicitly resolved feature document folder. For other material, write beside the supplied source.
+- Write `critique.md` in the resolved `.specs/<feature>/` folder. For non-pipeline material, write `CRITIQUE-[name].md` beside the supplied source.
+- Refer to sibling artifacts by filename or spec-folder-relative path, never by a machine-specific absolute path.
 - Write atomically with a level-1 heading on line 1.
 - Report `outcome: critiqued`, the path, Must/Should/Consider counts, and `next: spec-write`.
 

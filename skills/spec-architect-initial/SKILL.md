@@ -1,13 +1,13 @@
 ---
 name: spec-architect-initial
-description: "Act as the first architecture stage in the spec-driven workflow: given a problem or feature request, review the current system architecture and write proposal.md in the feature document folder with a compatible solution, or explain why the request does not fit. Use when the user says 'architect this', 'design a solution for', 'how should I implement', 'how would this fit into the codebase', 'propose an approach for', 'is this feasible in our architecture', or 'plan this feature'."
+description: "Act as the first architecture stage in a standalone spec-driven workflow: review the current system and write .specs/<feature>/proposal.md with a compatible solution, or explain why the request does not fit. Use when the user says 'architect this', 'design a solution for', 'how should I implement', 'how would this fit into the codebase', 'propose an approach for', 'is this feasible in our architecture', or 'plan this feature'."
 mode: coding
 scope: document
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "4"
+  version: "5"
 ---
 
 # Spec Architect Initial — Solution Design Against Existing Architecture
@@ -24,7 +24,7 @@ LLMs are bad at saying "this doesn't fit." They will cheerfully propose bolting 
 
 ## Step 1 — Intake: Qualify the Request Before Doing Any Work
 
-Before touching any code or architecture docs, make sure you understand what's actually being asked. When the feature document folder contains `requirements.md`, read it first. Restate the problem in your own words, covering:
+Before touching any code or architecture docs, make sure you understand what's actually being asked. When the resolved spec folder contains `requirements.md`, read it first. Restate the problem in your own words, covering:
 
 - **What** needs to happen (the functional requirement)
 - **Who / what** triggers it (user action, cron job, webhook, another service)
@@ -310,10 +310,11 @@ the value of the feature.]
 
 ## Step 5 — Output
 
-Write the proposal in the external feature document folder:
+Write the proposal to `.specs/<feature-slug>/proposal.md` in the current repository:
 
-- Use the exact absolute `proposal` path from a **# Canonical spec artifact paths** stanza when present.
-- Otherwise resolve an explicit requirements/spec path or containing folder, or the directory containing the active working document, and write `proposal.md` there. Never create or search for a checkout-local artifact folder.
+- If the user supplies an existing `.specs/<feature-slug>/` folder or a file inside it, use that folder.
+- Otherwise derive a short kebab-case slug from the request and create `.specs/<feature-slug>/`.
+- Keep every pipeline artifact for the feature in that folder. Use relative paths when one artifact references another so the folder remains valid when copied into a worktree.
 - Write atomically. Keep required front matter first and the level-1 heading immediately after it.
 - Report `outcome: proposed` or `outcome: rejected`, the proposal path, and `next: spec-architect-critics | spec-write`.
 - Present the document to the user for review. Invite questions — the proposal is a conversation starter, not a final decree.

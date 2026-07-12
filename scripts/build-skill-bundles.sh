@@ -291,11 +291,10 @@ After `spec-architect-initial` writes its proposal, read the recommendation befo
 /spec-architect-initial describe the feature or change
 ```
 
-This inspects the current repository and writes `proposal.md` in the external
-feature document folder supplied by the harness:
+This inspects the current repository and writes the standalone proposal to:
 
 ```txt
-<artifactsRoot>/proposal.md
+.specs/<feature>/proposal.md
 ```
 
 The proposal should say whether the change fits the current architecture, name the affected files, explain trade-offs, and recommend whether a critique pass is worth running.
@@ -309,7 +308,7 @@ The proposal should say whether the change fits the current architecture, name t
 Use this when the change is large, risky, cross-cutting, security-sensitive, introduces new dependencies, changes data, or when you simply want the architecture challenged before implementation. It writes:
 
 ```txt
-<artifactsRoot>/critique.md
+.specs/<feature>/critique.md
 ```
 
 The critique is intentionally skeptical. Its job is to expose blind spots, not to rubber-stamp the proposal.
@@ -323,8 +322,8 @@ The critique is intentionally skeptical. Its job is to expose blind spots, not t
 This converts the proposal, and optional critique, into:
 
 ```txt
-<artifactsRoot>/spec.md
-<machineStateRoot>/spec-steps.json
+.specs/<feature>/spec.md
+.specs/<feature>/spec-steps.json
 ```
 
 The spec is the implementation contract. It contains architecture, acceptance criteria, deterministic implementation steps, tests, and traceability tags. The writer never touches GitHub.
@@ -338,11 +337,11 @@ The spec is the implementation contract. It contains architecture, acceptance cr
 Preparation code-grounds and corrects the spec, reconciles the step index, derives prose-only guardrails, plans every step sequentially, and publishes a hash-bound manifest only when the complete package is current:
 
 ```txt
-<artifactsRoot>/spec-prepare.md
-<artifactsRoot>/criteria.md
-<artifactsRoot>/invariants.md
-<artifactsRoot>/step-<NNN>-subspec.md
-<machineStateRoot>/preparation.json
+.specs/<feature>/spec-prepare.md
+.specs/<feature>/criteria.md
+.specs/<feature>/invariants.md
+.specs/<feature>/step-<NNN>-subspec.md
+.specs/<feature>/preparation.json
 ```
 
 `criteria.md` and `invariants.md` are prose guidance, never executable audit programs. The manifest is the last write and binds every prepared artifact by SHA-256.
@@ -361,7 +360,7 @@ Use a normal branch when you want to stay in the current checkout:
 /spec-branch <feature-slug or description>
 ```
 
-Feature-document artifacts stay outside the checkout and are never copied into the worktree.
+The worktree command copies the complete matching `.specs/<feature>/` folder and the destination copy becomes active for that branch.
 
 ### 6. Execute The Prepared Spec
 
@@ -408,7 +407,7 @@ write_design_spec_workflow_howto() {
 
 ## Design-Driven Front-Half
 
-The design-spec skills add a design-focused front-half to the same external feature-document contract. They are useful when the next implementation needs design direction, not only architecture.
+The design-spec skills add a design-focused front-half to the same standalone `.specs/<feature>/` contract. They are useful when the next implementation needs design direction, not only architecture.
 
 ### 1. Propose The Design Direction
 
@@ -419,7 +418,7 @@ The design-spec skills add a design-focused front-half to the same external feat
 This reviews the existing design system and applicable rules, classifies the surface as functional, expressive, or hybrid, and writes:
 
 ```txt
-<artifactsRoot>/proposal.md
+.specs/<feature>/proposal.md
 ```
 
 ### 2. Prototype The Direction (Optional)
@@ -431,7 +430,7 @@ This reviews the existing design system and applicable rules, classifies the sur
 This builds a fast viewable prototype in:
 
 ```txt
-<prototypeRoot>/
+.specs/<feature>/prototype/
 ```
 
 Use this when the direction is expressive, high-visibility, unsettled, or worth reacting to visually before writing the implementation spec.
@@ -445,7 +444,7 @@ Use this when the direction is expressive, high-visibility, unsettled, or worth 
 This critiques the prototype when present, otherwise the proposal, and writes:
 
 ```txt
-<artifactsRoot>/critique.md
+.specs/<feature>/critique.md
 ```
 
 ### 4. Write The Design Spec
@@ -454,7 +453,7 @@ This critiques the prototype when present, otherwise the proposal, and writes:
 /design-spec-writer <feature-slug>
 ```
 
-The writer creates the standard implementation contract at `<artifactsRoot>/spec.md`, including selected design rules, states, accessibility, responsive behavior, traceability, and deterministic steps. It writes the step index under `machineStateRoot` and never touches GitHub.
+The writer creates the standard implementation contract at `.specs/<feature>/spec.md`, including selected design rules, states, accessibility, responsive behavior, traceability, and deterministic steps. It writes `spec-steps.json` beside the spec and never touches GitHub.
 
 After that, use the normal engineering back half:
 

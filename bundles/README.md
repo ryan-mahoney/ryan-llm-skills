@@ -8,8 +8,8 @@ archives under `dist/skill-bundles/`. Generated artifacts are not committed.
 ## Bundles
 
 The build emits two installable bundles. `spec-skills` contains both architecture
-and design authoring because they produce the same external feature-document and
-machine-state contracts for preparation and execution.
+and design authoring because they use the same standalone `.specs/<feature>/`
+filename contract for preparation and execution.
 
 ### spec-skills
 
@@ -44,7 +44,7 @@ The generated `spec-skills` README includes a workflow overview covering:
 2. Optionally run `spec-architect-critics` to challenge the architecture.
 3. Run `spec-write` to create `spec.md` and the machine step index.
 4. Run `spec-prepare` to ground and correct the spec, derive prose guardrails, plan each step, and publish the manifest.
-5. Create a branch/worktree with `spec-branch` or `spec-branch-worktree`; external artifacts are not copied.
+5. Create a branch/worktree with `spec-branch` or `spec-branch-worktree`; worktree creation copies the matching `.specs` feature package.
 6. Execute the immutable prepared package with `spec-run`.
 7. Run `spec-branch-refine` to review and fix the integrated branch to convergence.
 8. Publish with `spec-pr`.

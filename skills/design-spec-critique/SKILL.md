@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "2"
+  version: "3"
 ---
 
 # Design Spec Critique — Practitioner-Perspective Design Review
@@ -20,11 +20,11 @@ This is not a rubber stamp. The value is finding flaws, blind spots, over-decora
 
 In priority order:
 
-1. **The canonical `prototypeRoot`.** When a canonical-path stanza exists, use its exact path. Otherwise resolve it from an explicit feature document folder. If a prototype exists, critique it as the most concrete artifact.
-2. **The canonical `proposal` path** when there is no prototype.
+1. **The feature prototype.** Resolve `.specs/<feature>/prototype/` from an explicit spec folder or source path. If it exists, critique it as the most concrete artifact.
+2. **Sibling `proposal.md`** in the resolved `.specs/<feature>/` folder when there is no prototype.
 3. A design shared in the conversation, or shipped UI the user points to.
 
-Never search for the most recently modified spec or derive a checkout-local artifact folder. Read `proposal.md` for the intended Context Verdict even when critiquing the prototype.
+Never select the most recently modified spec when multiple feature folders exist. Read `proposal.md` for the intended Context Verdict even when critiquing the prototype.
 
 ### 1b. Extract the core claims
 
@@ -150,7 +150,7 @@ Wrong posture or direction — needs rethinking. State which and why.]
 
 ## Step 6 — Output
 
-- Write to the stanza's exact absolute `critique` path, or `critique.md` in the explicitly resolved feature document folder. For non-pipeline material, write `CRITIQUE-[name].md` beside the supplied source.
+- Write `critique.md` in the resolved `.specs/<feature>/` folder. For non-pipeline material, write `CRITIQUE-[name].md` beside the supplied source.
 - Write atomically and begin with the level-1 heading.
 - When you critiqued a prototype, reference specific screens, states, and elements so the findings are actionable.
 - Report `outcome: critiqued`, the critique path, confidence, and counts for Must/Should/Consider. Recommend the single next stage (`design-spec-writer` or another prototype iteration).

@@ -9,12 +9,12 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "11"
+  version: "12"
 ---
 
 # Spec Prepare
 
-> **Spec artifacts live in the feature document folder — outside the git checkout.** Read and write them directly at the absolute paths in the **Canonical spec artifact paths** stanza. Do not use git commands to read, compare, or recover artifact files. Diffing repository code while grounding the spec remains allowed.
+> **`.specs/` is standalone working state and is often gitignored.** Read and write its files directly; do not depend on git history to recover them. Diffing repository code while grounding the spec remains allowed.
 
 Prepare the complete, immutable implementation package for a spec. This is the sole stage between spec writing and implementation. It combines code-grounded spec review, step-index reconciliation, prose guardrail and invariant derivation, and per-step subspec planning.
 
@@ -28,17 +28,18 @@ Do not implement production code or write to GitHub issues.
 
 ## Canonical Inputs and Outputs
 
-Use the exact absolute paths from the **Canonical spec artifact paths** stanza:
+Resolve the spec folder from an explicit `.specs/<feature>/spec.md` or `.specs/<feature>/` argument, then the `Spec folder:` footer or conversation context. If exactly one candidate exists, use it; stop on ambiguity rather than choosing the most recently modified folder.
 
-- `spec` — canonical `spec.md`.
-- `artifactsRoot` — flat human artifact folder.
-- `specPrepare` — `spec-prepare.md` preparation report.
-- `criteria` — `criteria.md` prose guardrails, when the spec establishes them.
-- `invariants` — `invariants.md` live cross-step or cross-phase constraints, when applicable.
-- `machineStateRoot` and `step index (machine JSON)` — canonical `spec-steps.json`.
-- `preparation manifest (machine JSON)` — canonical `.restory/spec/preparation.json`.
+Keep the complete prepared package flat in that folder:
 
-Step subspecs are the canonical `step-<NNN>-subspec.md` files in `artifactsRoot`, with step numbers zero-padded to at least three digits. Do not derive alternate folders or legacy names.
+- `spec.md` — canonical spec.
+- `spec-steps.json` — derived machine step index.
+- `spec-prepare.md` — preparation report.
+- `criteria.md` and `invariants.md` — optional prose guardrails.
+- `step-<NNN>-subspec.md` — immutable execution cards.
+- `preparation.json` — validity manifest, published last.
+
+Use relative filenames and checkout-relative `.specs/<feature>/...` paths inside artifacts. Do not persist machine-specific absolute paths. Step numbers are zero-padded to at least three digits.
 
 Write every Markdown artifact atomically and begin it with a level-1 heading. Write machine JSON atomically with a trailing newline. A temporary file must be in the destination directory and renamed over the final destination.
 
@@ -48,9 +49,9 @@ Perform these transformations in exactly this order. They are deliberately seque
 
 ### 1. Resolve and invalidate
 
-1. Resolve all injected canonical paths and confirm `spec.md` is readable.
-2. Read `proposal.md` and `critique.md` from `artifactsRoot` when present.
-3. **Invalidate first:** remove the canonical preparation manifest before editing any preparation artifact or launching a subagent. A missing manifest is already invalidated. Any other removal error stops the run.
+1. Resolve the spec folder and confirm `spec.md` is readable.
+2. Read sibling `proposal.md` and `critique.md` when present.
+3. **Invalidate first:** remove `preparation.json` before editing any preparation artifact or launching a subagent. A missing manifest is already invalidated. Any other removal error stops the run.
 4. Do not restore or retain the old manifest on any failure.
 
 ### 2. Review and correct the spec
@@ -71,7 +72,7 @@ Preserve intent and voice. Do not restyle a sound spec. Re-running preparation a
 
 ### 3. Reconcile the step index
 
-`spec.md` is canonical. Rewrite `spec-steps.json` to contain exactly one entry per final implementation step, in ascending order, using the current strict step-index schema. Each entry's number, name, description, difficulty, and visual-design flag must match the Markdown step. The top-level `spec` path must equal the injected absolute spec path.
+`spec.md` is canonical. Rewrite `spec-steps.json` to contain exactly one entry per final implementation step, in ascending order, using the current strict step-index schema. Each entry's number, name, description, difficulty, and visual-design flag must match the Markdown step. The top-level `spec` path must equal the checkout-relative path in the `Spec folder:` footer.
 
 ### 4. Derive prose guardrails and invariants
 

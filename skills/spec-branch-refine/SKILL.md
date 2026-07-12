@@ -1,6 +1,6 @@
 ---
 name: spec-branch-refine
-description: This skill should be used when the user asks to run the end-of-process branch correctness loop — review the whole branch, fix the findings, re-review, and repeat until clean or an iteration cap is reached. The in-process, file-backed replacement for an external review daemon's refine loop. It drives spec-branch-review and spec-branch-fix in alternation, holds the cross-iteration convergence and dedup state, and stops on a clean verdict, on no progress, or at the cap. The external review orchestrator runs it after the last step; it is also runnable standalone. Trigger on "refine the branch", "review-fix loop the branch", "run the branch correctness loop", "iterate review and fix until clean", or "spec branch refine".
+description: This skill should be used when the user asks to run the end-of-process branch correctness loop — review the whole branch, fix the findings, re-review, and repeat until clean or an iteration cap is reached. The in-process, file-backed replacement for an external review daemon's refine loop. It drives spec-branch-review and spec-branch-fix in alternation, holds the cross-iteration convergence and dedup state, and stops on a clean verdict, on no progress, or at the cap. Run it once after the last implemented step, or standalone at any time. Trigger on "refine the branch", "review-fix loop the branch", "run the branch correctness loop", "iterate review and fix until clean", or "spec branch refine".
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,12 +9,12 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "6"
+  version: "7"
 ---
 
 # Spec Branch Refine
 
-> **Spec artifacts live in the feature document folder — outside the git checkout.** Read and write them directly on the filesystem at the absolute paths you are given; do not run `git diff`/`log`/`status`/`show` on artifact paths to read, compare, or recover them — they are not in any repository, so git returning nothing there is expected, not an error. This is scoped to spec artifacts; diffing the code under review is unaffected.
+> **`.specs/` is standalone working state and is often gitignored.** Read and write it directly; do not depend on git history to recover it. Diffing implementation code is unaffected.
 
 Drive the final branch review loop to convergence. Alternate `spec-branch-review`
 (find correctness, integration, and bounded guardrail defects) and `spec-branch-fix` (apply fixes), re-reviewing after each fix, until
@@ -35,7 +35,7 @@ spec-branch-refine
      stop when: verdict pass · no progress · i == max
 ```
 
-The external review orchestrator runs this skill once after the last step. The
+Run this skill once after the last implemented step. The
 review's bounded guardrail lens consumes only spec acceptance/step obligations,
 criteria `Statement:` values, and live invariants; those findings use the same loop
 and verdict as correctness findings. It is also the right standalone entry point for "clean up this
@@ -50,14 +50,10 @@ condition below is met.
 
 ## Resolve Inputs
 
-- **Spec.** When the prompt includes a **# Canonical spec artifact paths** stanza,
-  use its exact absolute `spec` path and `artifactsRoot` — the stanza is the primary
-  path source. Otherwise: `spec=<path>` (or a feature document folder containing
-  `spec.md`), else the folder named in the conversation, else the directory
-  containing the active working document file. `<spec-dir>` is the feature document
-  folder — the folder outside the git checkout holding `spec.md` and the other
-  artifacts (the stanza's `artifactsRoot`). Never fall back to a spec folder inside
-  a git checkout. If none resolves, stop and report.
+- **Spec.** Resolve explicit `spec=<path>` or `.specs/<feature>/` first, then the
+  folder named in the conversation or `Spec folder:` footer. If exactly one
+  `.specs/*/spec.md` exists, use it. Stop on ambiguity. `<spec-dir>` is the resolved
+  `.specs/<feature>/` folder.
 - **Max iterations.** `max-iterations=<n>`, default **10**. This caps **total review
   iterations**: the loop runs at most `n` reviews (and therefore at most `n-1` fixes,
   since the final review is what detects the cap). Defining the cap on reviews makes
@@ -103,14 +99,10 @@ different fix or an explicit dismissal is still available.
 
 ## Artifact Policy
 
-Review and fix artifacts are part of the product (iteration memory, dismissal
-memory, audit trail) and are always written — to `<spec-dir>/reviews/` in the
-feature document folder (`<artifactsRoot>/reviews/branch-<k>-review.md` and
-`branch-<k>-fix.md`), outside the git checkout. Because they live outside the
-checkout, they are never committed to the repository and must never be force-added
-into it. A review pass whose only output is these artifacts produces no commit;
-the artifacts are durable on disk in the document folder. Only code changes made
-by `spec-branch-fix` are committed.
+Review and fix artifacts are durable iteration memory and are always written to
+`<spec-dir>/reviews/`. Do not stage or commit `.specs` unless the repository
+explicitly tracks it. A review pass whose only output is these artifacts produces
+no commit; only code changes made by `spec-branch-fix` are committed.
 
 ## Reporting
 
@@ -122,11 +114,9 @@ Report:
 3. Per-iteration one-liners: actionable count in, fixes applied, dismissals.
 4. Final verdict and any residual findings (actionable left at cap/stalled, plus
    advisory findings never required to fix), with their `file:symbol` and signature.
-5. The review/fix artifact paths written under `<spec-dir>/reviews/` in the
-   feature document folder.
+5. The review/fix artifact paths written under `<spec-dir>/reviews/`.
 6. The commit hashes produced (fix commits), or note `none` when review/fix
-   artifacts — which live outside the checkout and are never committed — were the
-   only changes.
+   artifacts were the only changes.
 
 A first-iteration `pass` is the common, good outcome on a well-built branch: report
 "clean after 1 review, no fixes needed."

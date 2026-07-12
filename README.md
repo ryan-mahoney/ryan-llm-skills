@@ -10,15 +10,15 @@ Two portable, installable bundles produce three documented workflows. Build the 
 
 ### spec-skills: spec-driven development
 
-A local-first workflow that turns a goal into reviewed architecture, a prepared immutable implementation package, sequential commits, and one convergent whole-branch review. Human artifacts live in an external feature document folder. Machine state lives under `<documentRoot>/.restory/spec/`. The checkout contains only implementation changes.
+A standalone workflow that turns a goal into reviewed architecture, a prepared immutable implementation package, sequential commits, and one convergent whole-branch review. Each feature's human and machine artifacts live together under `.specs/<feature>/`, usually as gitignored working state.
 
 Run the stages in order:
 
-1. `spec-architect-initial`: write `proposal.md` in the feature document folder.
+1. `spec-architect-initial`: write `.specs/<feature>/proposal.md`.
 2. `spec-architect-critics`: stress-test the proposal and write `critique.md` (optional).
 3. `spec-write`: write `spec.md` plus the machine step index without touching GitHub.
 4. `spec-prepare`: code-ground and correct the spec, derive prose guardrails, plan every step sequentially, and publish `preparation.json` last.
-5. `spec-branch` / `spec-branch-worktree`: create the implementation branch or worktree without copying artifacts.
+5. `spec-branch` / `spec-branch-worktree`: create the implementation branch or copy the complete feature package into a new worktree.
 6. `spec-run`: consume the prepared package exactly and commit each verified step separately.
 7. `spec-branch-refine`: drive whole-branch review and fix passes to convergence.
 8. `spec-pr`: rebase, publish, and open or update the PR.
@@ -27,14 +27,14 @@ Run the stages in order:
 
 | Skill | Command | Purpose |
 |---|---|---|
-| **spec-architect-initial** | `/spec-architect-initial [problem-or-feature]` | Review the architecture and write `proposal.md` in the external feature document folder |
+| **spec-architect-initial** | `/spec-architect-initial [problem-or-feature]` | Review the architecture and write `.specs/<feature>/proposal.md` |
 | **spec-architect-critics** | `/spec-architect-critics [proposal-or-file]` | Stress-test `proposal.md` and write `critique.md` |
-| **spec-write** | `/spec-write [feature-document-or-spec-path]` | Write `spec.md` and the machine-readable step index without GitHub side effects |
-| **spec-prepare** | `/spec-prepare [feature-document-or-spec-path]` | Correct and ground the spec, derive prose guardrails, prepare every step, and publish the hash-bound manifest |
+| **spec-write** | `/spec-write [feature-slug-or-spec-path]` | Write `spec.md` and the machine-readable step index without GitHub side effects |
+| **spec-prepare** | `/spec-prepare [feature-slug-or-spec-path]` | Correct and ground the spec, derive prose guardrails, prepare every step, and publish the hash-bound manifest |
 | **spec-subspec-write** | `/spec-subspec-write [step-number] [spec-path]` | Leaf planner used sequentially by `spec-prepare` to write one immutable step subspec |
 | **spec-branch** | `/spec-branch [description-or-feature-slug]` | Create a local branch from a spec, description, or issue/ticket reference |
-| **spec-branch-worktree** | `/spec-branch-worktree [description-or-feature-slug]` | Create a branch and worktree while leaving external artifacts in place |
-| **spec-run** | `/spec-run [absolute-spec-path-or-feature-document]` | Execute immutable prepared subspecs sequentially and commit each successful step |
+| **spec-branch-worktree** | `/spec-branch-worktree [description-or-feature-slug]` | Create a branch/worktree and hand off the matching `.specs` package |
+| **spec-run** | `/spec-run [feature-slug-or-spec-path]` | Execute immutable prepared subspecs sequentially and commit each successful step |
 | **spec-step-run** | delegated | Implement and verify exactly one prepared step without replanning |
 | **spec-branch-refine** | `/spec-branch-refine [spec-path]` | Alternate whole-branch review and fix passes until clean or capped |
 | **spec-branch-review** | delegated | Review per commit, then the integrated branch, including bounded prose guardrails |
@@ -46,7 +46,7 @@ The `spec-skills` bundle also ships the Augment CLI subagent adapter `augment/ag
 
 ### design-spec: design-driven front-half
 
-The same pipeline, entered from design instead of architecture. It ships in `spec-skills` and uses the same external feature document and machine-state roots. Once `design-spec-writer` writes the spec and step index, `spec-prepare` owns all grounding, guardrail derivation, and step planning.
+The same standalone pipeline, entered from design instead of architecture. It uses the same `.specs/<feature>/` package. Once `design-spec-writer` writes the spec and step index, `spec-prepare` owns all grounding, guardrail derivation, and step planning.
 
 The architect classifies each surface on two axes. Posture picks the applicable rule: Functional uses `functionalist-design.md`, Expressive uses `expressive-design.md`. Deliverable is Prototype or Real, in-code. The writer carries the selected posture rule into the spec's Applicable Rules, so `spec-run` applies it at implementation time.
 
@@ -60,10 +60,10 @@ Run the design stages, then hand off to `spec-run`:
 
 | Skill | Command | Purpose |
 |---|---|---|
-| **design-spec-architect** | `/design-spec-architect [surface-or-feature]` | Review the design system and write `proposal.md` in the feature document folder |
-| **design-spec-prototype** | `/design-spec-prototype [feature-document-or-stack-override]` | Build and serve a prototype under the external prototype root |
-| **design-spec-critique** | `/design-spec-critique [feature-document]` | Critique the prototype or proposal and write `critique.md` |
-| **design-spec-writer** | `/design-spec-writer [feature-document]` | Write the design-focused `spec.md` and machine step index without GitHub side effects |
+| **design-spec-architect** | `/design-spec-architect [surface-or-feature]` | Review the design system and write `.specs/<feature>/proposal.md` |
+| **design-spec-prototype** | `/design-spec-prototype [feature-or-stack-override]` | Build and serve `.specs/<feature>/prototype/` |
+| **design-spec-critique** | `/design-spec-critique [feature]` | Critique the prototype or proposal and write `critique.md` |
+| **design-spec-writer** | `/design-spec-writer [feature]` | Write the design-focused `spec.md` and machine step index without GitHub side effects |
 
 ### specops-skills: SpecOps / agent documentation
 

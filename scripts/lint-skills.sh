@@ -6,6 +6,7 @@
 #   - `name:` present and equal to the skill's directory name
 #   - non-empty `description:`
 #   - `version:` present (under metadata)
+#   - standalone spec/design skills contain no Restory artifact-protocol terms
 #
 # Advisory warnings (intent-dependent — never block):
 #   - missing `disable-model-invocation:`  (omitted on purpose by model-invocable skills)
@@ -77,6 +78,15 @@ for f in "${files[@]}"; do
     echo "ERROR  $f: no 'version:' in metadata"
     errors=$((errors + 1))
   fi
+
+  case "$dir" in
+    spec-*|design-spec-*)
+      if grep -Eiq '(Canonical spec artifact paths|\.restory/spec|feature[- ]document|artifactsRoot|machineStateRoot|prototypeRoot|documentRoot)' "$f"; then
+        echo "ERROR  $f: standalone skill contains a Restory-specific artifact contract"
+        errors=$((errors + 1))
+      fi
+      ;;
+  esac
 
   if ! grep -q '^disable-model-invocation:' "$f"; then
     echo "warn   $f: no 'disable-model-invocation:' — intentional only if this skill is meant to be model-invocable"

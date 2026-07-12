@@ -9,12 +9,12 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "11"
+  version: "12"
 ---
 
 # Spec Branch Review
 
-> **Spec artifacts live in the feature document folder — outside the git checkout.** Read and write them directly on the filesystem at the absolute paths you are given; do not run `git diff`/`log`/`status`/`show` on artifact paths to read, compare, or recover them — they are not in any repository, so git returning nothing there is expected, not an error. This is scoped to spec artifacts; diffing the code under review is unaffected.
+> **`.specs/` is standalone working state and is often gitignored.** Read and write it directly; do not depend on git history to recover it. Diffing implementation code under review is unaffected.
 
 Review the whole branch for **correctness and prepared-guardrail** defects and write the
 findings to `reviews/branch-<iteration>-review.md`. This is the read-only half of
@@ -51,14 +51,10 @@ inferred; report what is missing and halt.
 
 ## Resolve Inputs
 
-- **Spec.** When the prompt includes a **# Canonical spec artifact paths** stanza,
-  use its exact absolute `spec` path and `artifactsRoot` — the stanza is the
-  primary path source. Otherwise: if `spec=<path>` or a feature document folder is
-  supplied, use it exactly; else the folder named in the conversation; else the
-  directory containing the active working document file. `<spec-dir>` is the
-  feature document folder — the folder outside the git checkout containing
-  `spec.md` and the other artifacts (the stanza's `artifactsRoot`). Never fall back
-  to a spec folder inside a git checkout. If no spec resolves, stop and report.
+- **Spec.** Resolve `spec=<path>` or an explicit `.specs/<feature>/` folder first;
+  otherwise use the folder named in the conversation or the `Spec folder:` footer.
+  If exactly one `.specs/*/spec.md` exists, use it. Stop on ambiguity rather than
+  selecting by modification time. `<spec-dir>` is that `.specs/<feature>/` folder.
 - **Iteration.** Use `iter=<n>` when given. Standalone default: one higher than the
   highest existing `<spec-dir>/reviews/branch-<k>-review.md`, or `1` if none exist.
 - **Comparison base.** Resolve the point the branch is diffed against, in this order:
@@ -94,7 +90,7 @@ Read for judgement:
 
 - `spec.md` — the whole intent, plus any `## Adaptations` log.
 - Every `step-<NNN>-subspec.md` in `<spec-dir>` — what each step meant to do (per-step
-  artifacts live flat in the document folder, step numbers zero-padded to three digits).
+  artifacts live flat in the spec folder, step numbers zero-padded to three digits).
 - Every `step-<NNN>-learning.md` in `<spec-dir>` — what each step discovered and any
   recorded trade-offs. Do not flag a recorded, deliberate trade-off as a bug.
 - `criteria.md` — consume only prose `Statement:` values.
@@ -382,7 +378,7 @@ Write to:
 <spec-dir>/reviews/branch-<iteration>-review.md
 ```
 
-This is the `branch reviews` path from the **# Canonical spec artifact paths** stanza (`<artifactsRoot>/reviews/branch-<k>-review.md`, k = 1, 2, 3, …). Create `reviews/` if needed, write atomically (temp file in the destination directory, then rename), and begin the file with a level-1 `#` heading on line 1. The file leads with a fenced YAML block — the
+Create `reviews/` if needed, write atomically (temp file in the destination directory, then rename), and begin the file with a level-1 `#` heading on line 1. The file leads with a fenced YAML block — the
 machine-readable contract that `spec-branch-fix` and `spec-branch-refine` parse —
 followed by human-readable prose that only explains the findings. Downstream skills
 read the YAML first; the prose is never parsed for control flow.

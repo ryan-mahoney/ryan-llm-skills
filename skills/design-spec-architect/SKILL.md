@@ -1,11 +1,11 @@
 ---
 name: design-spec-architect
-description: "Act as the first stage in the design-spec workflow: review the repo's design system and active rules, classify a UI/UX request by posture and deliverable, and write proposal.md in the feature document folder with one concrete design direction—or explain why no new design is needed. Use for design, redesign, layout, mockup-direction, and design-approach requests."
+description: "Act as the first stage in a standalone design-spec workflow: review the repo's design system and active rules, classify a UI/UX request by posture and deliverable, and write .specs/<feature>/proposal.md with one concrete design direction—or explain why no new design is needed. Use for design, redesign, layout, mockup-direction, and design-approach requests."
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "2"
+  version: "3"
 ---
 
 # Design Spec Architect — Design Direction Against the Existing System
@@ -223,8 +223,8 @@ reuses existing patterns within an established system.]
 
 ## Step 6 — Output
 
-- When the prompt includes a **# Canonical spec artifact paths** stanza, write to its exact absolute `proposal` path and treat `artifactsRoot` as the feature document folder.
-- Otherwise use an explicit feature-document/proposal path, a folder named in the conversation, or the directory containing the active working document. Never create or search for a spec folder inside a checkout.
+- Resolve an explicit `.specs/<feature>/` folder or file first, then a folder named in the conversation. Otherwise derive a short kebab-case slug and create `.specs/<feature-slug>/`.
+- Write `proposal.md` there and refer to sibling artifacts with relative paths.
 - Atomically write `proposal.md`; keep its required front matter first and place the level-1 heading immediately after it.
 - Report `outcome: proposed` or `outcome: reuse-existing`, the proposal path, posture, governing rules, and whether prototype/critique are recommended. This compact summary is the next stage's routing view.
 

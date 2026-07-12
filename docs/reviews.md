@@ -10,28 +10,25 @@ mechanical verification of the immutable contracts produced by `spec-prepare`.
 
 ## Artifact Locations
 
-Spec and review artifacts live outside the git checkout. Use the absolute paths in
-the `# Canonical spec artifact paths` stanza.
+Spec and review artifacts live together in the standalone feature package:
 
 ```text
-<artifactsRoot>/
+.specs/<feature>/
 ├── spec.md
 ├── spec-prepare.md
 ├── criteria.md                 # optional prose guardrails
 ├── invariants.md               # optional live invariants
 ├── step-<NNN>-subspec.md       # immutable prepared plans
 ├── step-<NNN>-learning.md      # execution evidence
+├── spec-steps.json
+├── preparation.json
 └── reviews/
     ├── branch-<i>-review.md
     └── branch-<i>-fix.md
-
-<machineStateRoot>/
-├── spec-steps.json
-└── preparation.json
 ```
 
-These artifacts are never staged or committed. A worktree does not copy them because
-their absolute feature-document paths are checkout-independent.
+`.specs/` is usually gitignored. A worktree handoff copies the complete feature
+folder, preserves its relative references, and makes the destination copy active.
 
 ## Review Stages
 

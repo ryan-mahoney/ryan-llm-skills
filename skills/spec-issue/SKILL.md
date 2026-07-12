@@ -7,7 +7,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "2"
+  version: "3"
 ---
 
 # Spec Issue
@@ -22,7 +22,7 @@ Resolve the Markdown source in this order:
 2. A `spec.md` path named in the conversation.
 3. `spec.md` in the current directory.
 
-The source must be an existing readable file. Do not search for a pipeline-specific directory or infer a file from checkout conventions, a feature-document layout, or machine state. If no file resolves, stop and report the missing input.
+The source must be an existing readable file. Do not infer a source from modification time or hidden machine state. If no file resolves, stop and report the missing input.
 
 Treat an integer in `$ARGUMENTS` as the issue number to update. Without an explicit issue number, create a new issue. Do not discover an issue number from filenames, folder names, branch names, footers, sidecars, or pipeline artifacts.
 
