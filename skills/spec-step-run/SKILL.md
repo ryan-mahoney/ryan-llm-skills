@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "10"
+  version: "11"
 ---
 
 # Spec Step Run
@@ -55,9 +55,11 @@ manifest, spec, step index, criteria, invariants, preparation report, or subspec
 The prepared subspec is immutable during execution. Read and follow it; **never
 create, rewrite, patch, regenerate, or replace the prepared subspec**. Prior-step
 learnings may clarify the current tree, but they may not change the prepared edit
-sequence or verification contract. If code drift makes any target, symbol,
-signature, setup, or command materially wrong, block the step and require a fresh
-`spec-prepare` run.
+sequence or verification contract. Adapt renamed private symbols, equivalent local
+fixtures, mechanical signature propagation, and minor placement drift within the
+same owner when behavior, public contracts, architecture, acceptance coverage, and
+verification intent remain unchanged. Record that as `outcome: adapted`. Block and
+require fresh preparation when any of those protected properties would change.
 
 Read the full spec, the target subspec, applicable rules, relevant source/test files,
 prior step learnings, and unresolved blockers. From `criteria.md`, consume only
@@ -85,13 +87,12 @@ The subspec's strict `verification` block is authoritative:
 2. Run every command in `commands` exactly as written and no broader substitute.
    **Never replace a prepared focused command with a full-suite run or add an
    unfiltered test-runner command.**
-3. Apply its setup, hazards, and stop conditions. If a command hangs, terminate the
-   process promptly, record the hang as a failed attempt, and diagnose only within
-   this step.
-4. Honor `max_fix_attempts` exactly; it must be `1` or `2`. Each correction attempt
-   remains scoped to this step and reruns the authoritative command. After the
-   limit, block. Do not weaken assertions, skip a required case, alter the command,
-   or broaden into another step to obtain green output.
+3. Apply any non-obvious setup and hazards recorded in the card.
+   If a command hangs, terminate the process promptly, record the hang as a failed
+   attempt, and diagnose only within this step.
+4. Make at most two scoped correction attempts and rerun the authoritative command
+   after each. Then block. Do not weaken assertions, skip a required case, alter the
+   verification intent, or broaden into another step to obtain green output.
 
 Record the red/green sequence, exact commands, outcomes, hang termination, and
 fix-attempt count in the step learning. A command that cannot run as prepared is a

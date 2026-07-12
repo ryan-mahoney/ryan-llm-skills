@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "12"
+  version: "13"
 ---
 
 # Spec Run
@@ -43,7 +43,7 @@ Repeat this validation before every step dispatch. A missing, invalid, stale, in
 
 Treat every prepared subspec and its strict `planning` and `verification` blocks as immutable inputs. Neither the orchestrator nor an implementation agent may create, rewrite, patch, regenerate, replace, or supplement a subspec.
 
-Do not invoke `spec-subspec-write`, a planner, a judge, a per-step reviewer, or a per-step fix agent. Do not re-ground the spec, redesign its steps, derive new guardrails, invent tests, or replace focused commands. Code or repository drift that contradicts a prepared target, signature, setup, or command is a blocker requiring fresh preparation.
+Do not invoke `spec-subspec-write`, a planner, a judge, a per-step reviewer, or a per-step fix agent. Do not re-ground the spec, redesign its steps, derive new guardrails, invent tests, or replace focused commands. Let `spec-step-run` adapt private mechanical drift within its protected behavioral boundaries; drift that changes behavior, public contracts, architecture, acceptance coverage, or verification intent is a blocker requiring fresh preparation.
 
 ## Execute One Step At A Time
 
@@ -64,7 +64,7 @@ After each step returns, verify only the execution contract:
 2. Every exact prepared verification command ran in the required phase and no broader or full-suite substitute ran.
 3. Declared red/green evidence exists for test-first steps.
 4. Hung commands were terminated and counted as attempts.
-5. Fix attempts did not exceed the prepared `max_fix_attempts` of `1` or `2`.
+5. Fix attempts did not exceed the shared `spec-step-run` limit of two.
 6. The learning record and exactly one step commit exist.
 
 Do not rerun commands merely to duplicate the implementer's evidence. Rerun only when the returned record is incomplete or internally inconsistent and the exact prepared command can resolve that evidence gap without changing code. Any scope, command, preparation, or verification mismatch blocks the run; do not dispatch the next step.

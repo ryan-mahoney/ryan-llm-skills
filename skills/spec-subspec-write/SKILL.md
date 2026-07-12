@@ -1,6 +1,6 @@
 ---
 name: spec-subspec-write
-description: This skill should be used when the user asks to "write a subspec", "plan this step", "write a step plan", or "detail step N" for one implementation step in a prepared spec. Produces the uniquely owned, code-grounded step subspec with strict planning and verification contracts for spec-prepare to validate before implementation.
+description: This skill should be used when the user asks to "write a subspec", "plan this step", "write a step plan", or "detail step N" for one implementation step in a prepared spec, or when spec-prepare escalates a genuinely uncertain step. Produces a compact, code-grounded execution card with strict planning and verification contracts.
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,18 +9,18 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "10"
+  version: "11"
 ---
 
 # Spec Subspec Write
 
-Produce a minimal, code-grounded implementation plan for exactly one step of a reviewed spec. The parent `spec.md` owns what and why; this subspec commits to how and to the focused verification contract that implementation must execute.
+Produce a compact, code-grounded execution card for exactly one step of a reviewed spec. The parent `spec.md` owns the objective, rationale, public contracts, and acceptance coverage; do not copy them into a second plan. This skill is normally a deep-planning fallback because `spec-prepare` writes routine cards directly.
 
 ## Leaf-Agent Boundary and Ownership
 
 This skill is a leaf planning task. Do not spawn, delegate to, or coordinate another subagent.
 
-Write only the assigned **step subspec**. `spec-subspec-write` is the unique owner of initial subspec creation, and this invocation owns exactly one canonical `step-<NNN>-subspec.md`. Never edit `spec.md`, `spec-steps.json`, `criteria.md`, `invariants.md`, `spec-prepare.md`, `preparation.json`, another step's subspec, or production/test code.
+Write only the assigned **step subspec**. This invocation owns exactly one canonical `step-<NNN>-subspec.md`. Never edit `spec.md`, `spec-steps.json`, `criteria.md`, `invariants.md`, `spec-prepare.md`, `preparation.json`, another step's subspec, or production/test code.
 
 The parent `spec-prepare` agent is the only writer of shared preparation artifacts and the only authority that may correct or renumber the spec. Report a mismatch through the planning verdict; do not improvise a new design.
 
@@ -40,12 +40,12 @@ Write the complete Markdown body to a temporary file in the destination director
 
 Read the full spec, then isolate the assigned numbered step including its objective, files, contracts, tests, `Covers:`, `Complexity:`, and `Visual:` tags. Confirm that the injected step number exists and that the current spec bytes match the injected hash.
 
-Ground narrowly:
+Ground only the unresolved risk that caused escalation:
 
 - Read every exact target file the step names.
-- Read current definitions of modified/called symbols and their immediate callers/callees.
+- Read current definitions of modified/called symbols and only consequential immediate callers/callees.
 - Read the existing test file or nearest repository test precedent for the behavior.
-- Read repository `AGENTS.md` test rules and any directly referenced test guidance; extract applicable runner hazards into the Test Contract.
+- Read repository `AGENTS.md` test rules and directly referenced guidance only when they affect the target verifier or setup.
 - Read applicable rule paths injected by the parent.
 
 Do not survey unrelated modules or re-derive architecture.
@@ -55,7 +55,7 @@ Do not survey unrelated modules or re-derive architecture.
 When the step creates a function, helper, file, or new test harness:
 
 1. Search with the available repository-search tools for an equivalent by exact likely symbols/literals and behavior keywords. Reuse or extend an equivalent when found; if the spec mandates duplication, return `needs-spec-correction`.
-2. Read one model file of the same kind and match its naming, layout, imports, error style, and test setup.
+2. Read one model file of the same kind only when the new shape is not already fixed by the spec or an adjacent target.
 3. For runtime behavior of a third-party/platform API, confirm semantics from installed source/types or official documentation. If it cannot be confirmed, name the assumption and return `blocked` when correctness depends on it.
 
 These are bounded lookups, not a repository survey.
@@ -76,7 +76,7 @@ Immediately after the H1 and a one-sentence objective, emit this YAML block with
 
 ```yaml
 planning:
-  version: 1
+  version: 2
   spec_sha256: <64 lowercase hexadecimal characters matching current spec bytes>
   step: <integer >= 1 matching the assigned step>
   output_file: <canonical step-NNN-subspec.md basename>
@@ -98,21 +98,11 @@ verification:
     - <repository-relative test file>
   cases:
     - <observable behavior and expected result>
-  precedent:
-    - <test file and named pattern followed>
-  setup:
-    - <fixture, dependency-injection seam, timer/mock setup, or "none">
-  hazards:
-    - <applicable repository runner hazard, or "none identified">
-  expected_red: <true | false>
-  max_fix_attempts: <1 | 2>
-  stop_conditions:
-    - <bounded halt condition>
 ```
 
-No extra keys are allowed. For a `ready` verdict, every list must be non-empty, each command/test path must be concrete, `max_fix_attempts` must be 1 or 2, and the block must agree with the human Test Contract. `expected_red` must be `true` for test-first and `false` for implementation-first.
+No extra keys are allowed. For a `ready` verdict, every list must be non-empty and each command/test path must be concrete. The shared `spec-step-run` policy owns fix-attempt limits, hang handling, and the implications of the selected strategy; do not repeat that policy in every card.
 
-For `needs-spec-correction` or `blocked`, keep the exact block shape. Use the narrowest prospective verification known; when none can be determined, use a single explanatory list item and an exact stop condition. The parent will not publish this result as ready.
+For `needs-spec-correction` or `blocked`, keep the exact block shape. Use the narrowest prospective verification known; when none can be determined, use one explanatory item in each list. The parent will not publish this result as ready.
 
 ### Select the strategy deliberately
 
@@ -137,50 +127,27 @@ Every ready plan names exact commands scoped to the changed behavior: a test fil
 
 Do not write complete routine test bodies in the subspec. A minimal harness skeleton is allowed only when fake-timer ordering, fixture construction, or a non-obvious mock boundary is itself the key planning risk; justify that skeleton in Setup.
 
-Set `max_fix_attempts` to at most 2. Stop conditions must require terminating a hanging focused command and blocking after the declared attempt limit instead of weakening assertions, skipping required tests, or broadening into unrelated modules.
+## Compact Human Sections
 
-## Required Human Sections
+After the two machine blocks, include only:
 
-Keep the plan concise. Every section is required.
+### Targets
 
-### 1. Step Reference
+Name each file, symbol or public shape, and add/change/remove action. Include reuse-search or external-behavior evidence only when it resolved the escalated risk.
 
-State the step number, one-line objective, and copied `Covers:` tags.
+### Edit Sequence
 
-### 2. Targets
+Give a short ordered sequence. Each item names a file, symbol, and operation. Inline only new or changed public shapes; reference existing code rather than transcribing it.
 
-Name current files, symbols, signatures, bounded reuse-search results, model file, external behavior source, and any contradiction discovered.
+### Setup and Hazards
 
-### 3. Edit Sequence
+Include only non-obvious fixture, dependency-injection, timer, mock, runner, migration, or external-runtime details needed by the implementor. Write `None` when no special handling applies.
 
-Give an ordered concrete sequence. Each item names a file, symbol, and add/change/remove operation. Inline only new or changed public shapes; reference existing code rather than transcribing it.
+### Correction or Blocker
 
-### 4. Test Contract
+For `ready`, omit this section. Otherwise state the exact parent-spec correction or genuine blocking decision/evidence. Do not propose unrelated redesign.
 
-Mirror the strict verification block in readable form. Include:
-
-- Strategy and why it fits this step.
-- Exact focused commands and target test files.
-- Behavioral cases with expected results and acceptance-criterion mapping.
-- Repository test precedent followed.
-- Fixture, dependency-injection, timer, mock, or harness setup.
-- Applicable AGENTS/test-guide runner hazards.
-- Expected red state when test-first.
-- Maximum fix attempts and explicit hang/failure stop conditions.
-
-The YAML block is machine-readable; this section carries the repository-grounded rationale. They must not disagree.
-
-### 5. Spec Correction or Blocker
-
-For `ready`, write `None`. Otherwise state the exact parent-spec correction or blocking decision/evidence. Do not propose unrelated redesign.
-
-### 6. Prior-Step Context
-
-Copy only injected prior-step learnings relevant to these targets. Write `None` when there are none.
-
-### 7. Open Questions & Stop Conditions
-
-List risks and explicit halt conditions. A hard blocker must be plainly labeled.
+Do not mirror the verification YAML in prose, repeat `Covers:` tags, or add empty prior-context and open-question sections.
 
 ## Footer
 

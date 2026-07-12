@@ -1,6 +1,6 @@
 ---
 name: spec-prepare
-description: This skill should be used when the user asks to "prepare a spec", "review and prepare the implementation plan", "make this spec implementation-ready", or "prepare spec". Reviews and corrects spec.md, derives prose guardrails and live invariants, plans every implementation step through sequential spec-subspec-write subagents, and atomically publishes preparation.json only when the complete package is current.
+description: This skill should be used when the user asks to "prepare a spec", "review and prepare the implementation plan", "make this spec implementation-ready", or "prepare spec". Reviews and corrects spec.md, derives prose guardrails and live invariants, writes difficulty-routed execution cards, and atomically publishes preparation.json only when the complete package is current.
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "10"
+  version: "11"
 ---
 
 # Spec Prepare
@@ -18,7 +18,7 @@ metadata:
 
 Prepare the complete, immutable implementation package for a spec. This is the sole stage between spec writing and implementation. It combines code-grounded spec review, step-index reconciliation, prose guardrail and invariant derivation, and per-step subspec planning.
 
-Preparation is one visible workflow stage but an internally ordered coordinator. The parent preparation agent is the only writer of shared artifacts: `spec.md`, `spec-steps.json`, `criteria.md`, `invariants.md`, `spec-prepare.md`, and `preparation.json`. Each step subagent may write only the one step-subspec path assigned to it. Never let subagents concurrently edit shared state.
+Preparation is one visible workflow stage owned by one capable preparation agent. That agent writes the shared artifacts and, by default, every step subspec. A `spec-subspec-write` leaf is an exceptional deep-planning fallback, not a mandatory pass for every step; when used, it may write only its assigned subspec. Never let a fallback leaf edit shared state.
 
 ## Non-Interactive Operation
 
@@ -91,27 +91,23 @@ When cross-step or cross-phase ownership constraints exist, atomically update `i
 
 If no criteria or invariants apply, ensure the corresponding artifact is absent and bind it as `null` in the final manifest. Removal happens before subspec planning so the final file set is unambiguous.
 
-### 5. Plan every step sequentially
+### 5. Write difficulty-routed execution cards
 
-Invoke exactly one `spec-subspec-write` subagent for each indexed step, in ascending step order. The preparation stage's selected model is inherited by every planning subagent; there is no separate model selector.
+Use each `spec-steps.json` entry's existing `difficulty` as the default preparation budget. Process the steps in ascending order in the same preparation invocation and write one canonical `step-<NNN>-subspec.md` execution card per step:
 
-Strict orchestration rules:
+| Difficulty | Grounding budget | Card depth |
+|---|---|---|
+| `easy` | Verify named paths, modified public shapes, and an exact focused command. Do not survey callers or search for precedent unless a target is missing. | Minimal |
+| `medium` | Read named symbols, their immediate integration seam, and the existing target test or nearest test file. | Grounded |
+| `hard` | Inspect the relevant cross-module contracts, consequential callers/callees, and test architecture. | Detailed |
 
-1. Never run two step-planning subagents concurrently.
-2. Give the subagent the full current spec, exact step marker, canonical spec hash, canonical output path, applicable rules, and relevant prior prepared-step findings.
-3. The subagent is a leaf: it must not delegate or spawn another subagent.
-4. The subagent owns only its assigned `step-<NNN>-subspec.md`. The parent owns all shared artifacts and is the only agent allowed to renumber steps or alter the spec/index/guardrails/invariants/report/manifest.
-5. After each subagent returns, read and validate the complete subspec before advancing. A file existing is not success.
+Difficulty bounds effort; it does not require delegation. A hard but explicit propagation can still be planned directly. Deepen any card only when repository evidence exposes a missing target, new public or ownership boundary, ambiguous acceptance behavior, unavailable focused verifier, architecture conflict, concurrency or migration risk, destructive data change, security boundary, or uncertain external runtime contract.
 
-Every result must contain strict `planning` and `verification` blocks matching the `spec-subspec-write` contract. Validate exact keys and types, the current lowercase SHA-256 spec hash, the assigned step number, the expected output filename, the verdict, and the complete Test Contract.
+Every card must contain strict `planning` and `verification` blocks matching the compact contract in `spec-subspec-write`. The parent validates hashes, step numbers, filenames, concrete targets, focused commands, and observable cases mechanically. It does not create a second prose copy of the verification contract or semantically re-judge an equivalent planner's work.
 
-Handle the planning verdict before dispatching another step:
+Correct locally resolvable problems directly. Accumulate spec corrections discovered while producing cards, update the spec/index/guardrails once, then regenerate only cards whose inputs or required behavior changed. A missing field or stale private symbol is a repair, not a blocker.
 
-- `ready` — accept only when both strict blocks and the human Test Contract are complete and mutually consistent; then advance.
-- `needs-spec-correction` — do not advance. Reconcile the reported mismatch into `spec.md`, rewrite `spec-steps.json`, regenerate guardrails/invariants when affected, compute the new spec hash, discard every already-written subspec invalidated by the correction, and rerun the same logical step against the corrected generation. If renumbering changes its number, use the new indexed number.
-- `blocked` — stop immediately. Preserve the subspec as diagnostic evidence, write the failure into `spec-prepare.md`, and do not write `preparation.json`.
-
-Any missing, malformed, mismatched, or incomplete contract is `blocked`. In particular, reject a `ready` subspec whose verification omits focused commands, test files, behavioral cases, precedent, setup, runner hazards, stop conditions, or a bounded fix-attempt limit.
+Use `spec-subspec-write` only when an escalation trigger remains unresolved after the bounded grounding above. The fallback leaf must return a compact card or identify the exact genuine blocker; the parent still owns all shared artifacts. Stop without publishing only for a required product decision, unavailable dependency, or irreconcilable spec/repository contract that cannot be resolved from local evidence.
 
 ### 6. Validate the complete package
 
@@ -121,7 +117,7 @@ After the last step, reread every final artifact. Confirm:
 - Step numbers are exactly the ascending `spec-steps.json` numbers.
 - There is exactly one canonical subspec per indexed step and no unexpected canonical step number.
 - Every planning verdict is `ready`.
-- Every verification contract is valid and has a matching human Test Contract.
+- Every verification contract has concrete focused commands and observable cases.
 - Criteria contain prose `Statement` properties only.
 - The report, spec, index, optional criteria/invariants, and all subspecs are final before manifest hashing begins.
 
@@ -133,7 +129,7 @@ Atomically write `spec-prepare.md` on every run. Include:
 - Review changes and rationale, or an unchanged verdict.
 - Step-index reconciliation.
 - Guardrails and invariant counts.
-- One row per step with planning verdict, subspec path, verification strategy, and focused commands.
+- One row per step with difficulty, card depth, subspec path, verification strategy, and focused commands.
 - Corrections/reruns and open blockers.
 - Overall outcome: `prepared` or `blocked`.
 
@@ -164,9 +160,9 @@ Only for a completely valid package, compute SHA-256 over the final file bytes a
 
 Use a hash string instead of `null` when the optional artifact exists. Include exactly one `steps` entry per indexed step. No keys beyond this schema are allowed. Validate all bindings immediately before rename; a changed or missing binding stops publication.
 
-## Subagent Prompt Requirements
+## Exceptional Deep-Planning Fallback
 
-Each sequential leaf prompt must say, in substance:
+When an escalation trigger requires a `spec-subspec-write` leaf, its prompt must say, in substance:
 
 - Plan only the assigned step and write only the assigned subspec.
 - Read `spec-subspec-write` fully and obey it.
@@ -175,7 +171,7 @@ Each sequential leaf prompt must say, in substance:
 - Return one of `ready`, `needs-spec-correction`, or `blocked`; never silently improvise around a spec/code mismatch.
 - Do not implement code or modify shared preparation artifacts.
 
-Do not dispatch the next prompt until the parent has validated and reconciled the current result.
+Do not use fallback delegation for routine grounding, formatting, or validation work the preparation agent can complete directly.
 
 ## Output
 
