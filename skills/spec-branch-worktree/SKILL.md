@@ -1,203 +1,83 @@
 ---
 name: spec-branch-worktree
-description: "Create a named branch and git worktree for spec-driven work, then open it in a color-coded VSCode window. Use when: 'spec branch worktree', 'new spec worktree', 'worktree for', 'start a worktree', 'create worktree'."
+description: Create or reuse a named git branch and worktree for spec-driven work, prepare its local environment, and open it in a color-coded VSCode window. Use for "spec branch worktree", "new spec worktree", "worktree for", "start a worktree", or "create worktree". Feature-document artifacts remain outside the checkout and are never copied.
 mode: coding
 scope: document
-argument-hint: "[description, feature-slug, or issue/ticket reference]"
+disable-model-invocation: true
+argument-hint: "[description, feature-document path, or issue/ticket reference]"
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "7"
+  version: "8"
 ---
 
 # Spec Branch Worktree
 
-Create a git worktree with a structured branch name derived from a spec folder, ticket reference, or loose description. Configure the environment, color-code the VSCode window, copy the relevant `.specs/<feature-slug>/` folder, and open it.
+Create or reuse one branch worktree under `~/.worktrees/<repo-name>/<slug>`. Spec artifacts live in the external feature document folder; use them only to derive intent and never copy them into the worktree.
 
-## Non-Interactive Operation
+## Resolve Input
 
-This skill runs to completion without user interaction. Do not pause to ask clarifying questions, request confirmation, or wait for input mid-run. When the work description is unclear or underspecified, infer it from the available context — the spec folder under discussion, the most recently modified `.specs/*/` folder, or the work described in the conversation — then proceed. Summarize every such judgement call and its rationale in the final report so the user can review what was decided and why.
+Resolve the work description in this order:
 
-Stop only when no work description can be inferred from any source. In that case, report that there is nothing to create a worktree from and halt — do not ask for a description interactively.
+1. Explicit `$ARGUMENTS`.
+2. An explicit feature-document/spec/proposal path; use its title and folder name.
+3. The feature document or work named in the conversation.
 
-## Arguments
+If only a GitHub issue number is supplied, use `gh issue view <number> --json title --jq .title` only when the current repository has a GitHub remote. For other ticket identifiers, require descriptive context. If no description resolves, stop with:
 
-`$ARGUMENTS` is a free-text description of the work. It may start with a ticket or issue prefix.
+```txt
+outcome: blocked
+reason: missing-work-description
+```
 
-Examples:
+When a **# Canonical spec artifact paths** stanza is present, `artifactsRoot` may inform the description, but no artifact path is a worktree destination.
 
-| Input | Branch |
-|---|---|
-| `1087 redesign dashboard onboarding` | `1087-redesign-dashboard-onboarding` |
-| `PROJ-123 add invoice retry` | `proj-123-add-invoice-retry` |
-| `fix candidate stage seed data` | `fix-candidate-stage-seed-data` |
-| `.specs/new-billing-export/` | `new-billing-export` |
+## Derive Names
 
-## Before Starting
+Normalize the description to a branch slug:
 
-1. Confirm `$ARGUMENTS` is not empty. If empty, infer the work from context — the spec folder under discussion, the most recently modified `.specs/*/` folder, or the work described in the conversation. Only if nothing can be inferred, report that there is nothing to create a worktree from and stop.
-2. Confirm the current directory is a git repository: `git rev-parse --git-dir`.
-3. Confirm `code` CLI is available: `which code`.
+1. Lowercase.
+2. Preserve a leading issue/ticket identifier.
+3. Replace separators and repeated punctuation with one hyphen.
+4. Trim hyphens.
+5. Limit to 60 characters at a word boundary.
 
-## Steps
-
-### 1. Resolve the Work Description
-
-If `$ARGUMENTS` names an existing `.specs/<feature-slug>/` folder, use `<feature-slug>` as the initial description and record `<feature-slug>` as the source spec slug for Step 5. If `spec.md` or `proposal.md` contains a clear title, include it when deriving the final slug, but keep the source spec slug anchored to the folder named by `$ARGUMENTS`.
-
-If `$ARGUMENTS` is only a number, treat it as a GitHub issue number only when the current repo has a GitHub remote and `gh issue view <number> --json title --jq .title` succeeds. Combine the number and title as the working description.
-
-If the current repo is not hosted on GitHub, or the GitHub lookup fails, derive a descriptive title from the conversation or the referenced spec/ticket. A bare number is not a valid worktree branch name; if no descriptive context exists, report that and stop.
-
-For non-GitHub tickets, use the ticket reference when the user provided enough description, such as `PROJ-123 add invoice retry`.
-
-### 2. Derive Branch Name
-
-Parse the resolved description into a valid branch name:
-
-1. Lowercase the entire string.
-2. Preserve a leading issue or ticket prefix when present (`123`, `PROJ-123`, etc.).
-3. Replace `/`, spaces, underscores, and consecutive special characters with a single `-`.
-4. Strip leading/trailing hyphens.
-5. Truncate to 60 characters max, trimming at the last full word boundary when possible.
-
-The result is `<slug>`.
-
-### 3. Extract Repo Name and Base Ref
+Resolve:
 
 ```bash
-repo_name=$(basename "$(git remote get-url origin 2>/dev/null || basename "$(git rev-parse --show-toplevel)")" .git)
+repo_root=$(git rev-parse --show-toplevel)
+repo_name=$(basename "$(git remote get-url origin 2>/dev/null || printf '%s' "$repo_root")" .git)
+dest="$HOME/.worktrees/$repo_name/<slug>"
 git fetch origin 2>/dev/null || true
 default_branch=$(git remote show origin 2>/dev/null | awk '/HEAD branch/ {print $NF}')
 base_ref="origin/${default_branch:-main}"
 git rev-parse --verify "$base_ref" >/dev/null 2>&1 || base_ref="HEAD"
 ```
 
-### 4. Create Worktree and Branch
+Require a git repository and the `code` CLI before mutating anything.
 
-Critical rules:
+## Create Or Reuse
 
-- The worktree must be on branch `<slug>`, never on `main`.
-- The branch must not track a remote branch.
-- Worktrees live under `~/.worktrees/<repo-name>/`.
+- If `dest` is an existing worktree on branch `<slug>`, reuse it.
+- If `dest` exists but is not that worktree/branch, stop with `reason: worktree-path-conflict`; never force-remove it.
+- If branch `<slug>` exists elsewhere, stop with `reason: branch-already-checked-out`.
+- If the branch exists and is free, run `git worktree add "$dest" <slug>`.
+- Otherwise run `git worktree add --no-track -b <slug> "$dest" "$base_ref"`.
 
-**Case A - Worktree path already exists (`~/.worktrees/<repo-name>/<slug>`):**
+Verify `git -C "$dest" rev-parse --abbrev-ref HEAD` equals `<slug>`, then remove upstream tracking with `git -C "$dest" branch --unset-upstream <slug> 2>/dev/null || true`.
 
-Verify the worktree is on the correct branch:
+## Prepare The Worktree
 
-```bash
-actual_branch=$(git -C ~/.worktrees/<repo-name>/<slug> rev-parse --abbrev-ref HEAD)
-```
-
-- If `actual_branch` equals `<slug>`, reuse it and skip to Step 4b.
-- If `actual_branch` is anything else, remove and recreate it:
-  ```bash
-  git worktree remove --force ~/.worktrees/<repo-name>/<slug>
-  ```
-  Then fall through to Case C.
-
-**Case B - Branch `<slug>` exists locally but no worktree:**
+Copy only local environment configuration when present:
 
 ```bash
-mkdir -p ~/.worktrees/<repo-name>
-git worktree add ~/.worktrees/<repo-name>/<slug> <slug>
+cp "$repo_root/.env" "$dest/.env" 2>/dev/null || true
 ```
 
-**Case C - Neither exists:**
+Never create or copy a spec-artifact directory in `dest`.
 
-```bash
-mkdir -p ~/.worktrees/<repo-name>
-git worktree add --no-track -b <slug> ~/.worktrees/<repo-name>/<slug> "$base_ref"
-```
-
-### 4b. Verify Branch and Remove Tracking
-
-Run these checks inside the worktree:
-
-```bash
-cd ~/.worktrees/<repo-name>/<slug>
-
-actual_branch=$(git rev-parse --abbrev-ref HEAD)
-if [ "$actual_branch" != "<slug>" ]; then
-  echo "ERROR: Worktree is on branch '$actual_branch', expected '<slug>'. Aborting."
-  exit 1
-fi
-
-git branch --unset-upstream <slug> 2>/dev/null || true
-```
-
-Record the absolute worktree path for all subsequent steps.
-
-### 5. Copy Environment Files and Spec Folder
-
-Copy the environment file:
-
-```bash
-cp .env ~/.worktrees/<repo-name>/<slug>/.env 2>/dev/null || true
-```
-
-Copy the entire spec slug folder if this worktree implements a spec. The spec-driven skills (`spec-architect-initial`, `spec-architect-critics`, `spec-write`, `spec-review`, `spec-criteria`, `spec-run`, `spec-audit`, `spec-remediate`, `architect-inspect`) read and write artifacts under `.specs/<feature-slug>/` at the repo root, including sidecar analysis/proposal files, the `criteria.md` and `audit.md` checklists, and the cross-phase `invariants.md` ledger that `spec-audit` and `spec-remediate` need in the worktree.
-
-Because the worktree may branch from a clean remote ref, uncommitted spec work in the current checkout can be missing. Create `.specs/` in the worktree and copy only the relevant slug folder as a directory, preserving every file and subdirectory in it. Do not copy only `spec.md` or `proposal.md`, and do not copy unrelated `.specs/*` folders.
-
-```bash
-src_root="$(git rev-parse --show-toplevel)"
-dest="$HOME/.worktrees/<repo-name>/<slug>"
-source_spec_slug="<source-spec-slug-if-known>"
-copied_spec="none"
-
-if [ -d "$src_root/.specs" ]; then
-  feature_slug="$(printf '%s' "<slug>" | sed -E 's/^[0-9]+-//; s/^[a-z]+-[0-9]+-//')"
-  if [ -n "$source_spec_slug" ] && [ "$source_spec_slug" != "<source-spec-slug-if-known>" ] && [ -d "$src_root/.specs/$source_spec_slug" ]; then
-    src_spec_dir="$src_root/.specs/$source_spec_slug"
-    copied_spec="$source_spec_slug"
-  elif [ -d "$src_root/.specs/<slug>" ]; then
-    src_spec_dir="$src_root/.specs/<slug>"
-    copied_spec="<slug>"
-  elif [ -d "$src_root/.specs/$feature_slug" ]; then
-    src_spec_dir="$src_root/.specs/$feature_slug"
-    copied_spec="$feature_slug"
-  fi
-
-  if [ "$copied_spec" != "none" ]; then
-    mkdir -p "$dest/.specs/$copied_spec"
-    cp -R "$src_spec_dir/." "$dest/.specs/$copied_spec/"
-  fi
-fi
-```
-
-If no `.specs` folder exists, or no matching spec folder exists for the source spec slug, `<slug>`, or the derived `feature_slug`, skip silently. Note in the final report which spec folder, if any, was copied, using the `copied_spec` value.
-
-### 6. Color-Code the VSCode Window
-
-Compute a deterministic color index from the slug:
-
-```bash
-hash_val=$(printf '%s' "<slug>" | cksum | awk '{print $1}')
-color_index=$((hash_val % 8))
-```
-
-Select the hex value from this palette:
-
-| Index | Color | Hex |
-|---|---|---|
-| 0 | Teal | `#0d7377` |
-| 1 | Purple | `#6a1b9a` |
-| 2 | Orange | `#e65100` |
-| 3 | Blue | `#1565c0` |
-| 4 | Green | `#2e7d32` |
-| 5 | Red | `#b71c1c` |
-| 6 | Indigo | `#283593` |
-| 7 | Brown | `#4e342e` |
-
-Write `.vscode/settings.json` in the worktree:
-
-- If the file does not exist, write the color settings.
-- If the file exists and `jq` is available, merge the color settings.
-- If `jq` is not available, overwrite with color settings only.
-
-Use this JSON shape:
+Choose a deterministic title/status-bar color from the slug using `cksum % 8`: teal `#0d7377`, purple `#6a1b9a`, orange `#e65100`, blue `#1565c0`, green `#2e7d32`, red `#b71c1c`, indigo `#283593`, or brown `#4e342e`. Merge these keys into `$dest/.vscode/settings.json` when possible:
 
 ```json
 {
@@ -210,45 +90,24 @@ Use this JSON shape:
 }
 ```
 
-### 7. Install Dependencies
+Install dependencies using the first matching repository signal: Bun lock/AGENTS guidance → `bun install --frozen-lockfile`; documented non-Bun setup → exact documented command; then pnpm, yarn, npm, Poetry, uv, pip, Bundler, Go, or Cargo lock/project files. A failed or unavailable install is non-fatal but must be reported explicitly.
 
-Get the worktree ready to work in. Resolve the install command in this order and stop at the first that applies:
+Open with `code --new-window "$dest"`.
 
-| Signal | Command |
-|---|---|
-| `bun.lock`, `bun.lockb`, or AGENTS.md documents Bun | `bun install --frozen-lockfile` |
-| AGENTS.md documents a non-Bun setup command | Run exactly that command |
-| `pnpm-lock.yaml` | `pnpm install --frozen-lockfile` |
-| `yarn.lock` | `yarn install --frozen-lockfile` |
-| `package-lock.json` | `npm ci` |
-| `package.json` only | `npm install` |
-| `poetry.lock` | `poetry install` |
-| `uv.lock` | `uv sync` |
-| `requirements.txt` | `pip install -r requirements.txt` |
-| `Gemfile` | `bundle install` |
-| `go.mod` | `go mod download` |
-| `Cargo.toml` | `cargo fetch` |
+## Report
 
-If the resolved command fails, or none applies, skip dependency installation and note it in the final report. Do not block opening the worktree on a failed install.
-
-### 8. Open in VSCode
-
-```bash
-code --new-window ~/.worktrees/<repo-name>/<slug>
-```
-
-### 9. Report
-
-Print a summary:
+Return one compact, definitive summary:
 
 ```txt
-Worktree ready:
-  Branch:   <slug>
-  Tracks:   nothing (push with `git push -u origin <slug>`)
-  Path:     ~/.worktrees/<repo-name>/<slug>
-  Color:    <color-name> (<hex>)
-  Spec:     <copied folder under .specs/, or "none">
-  Deps:     <command run, or "skipped - install manually">
+outcome: ready
+branch: <slug>
+worktree: <absolute path>
+base: <base ref>
+tracking: none
+artifacts: external | none
+environment: copied | absent
+dependencies: <command and outcome | skipped>
+vscode: opened
 ```
 
-Stop after reporting. Do not proceed with implementation work in the original window.
+On failure, return `outcome: blocked`, a stable `reason`, and the conflicting path/branch or missing prerequisite. Stop after reporting; do not implement the spec.

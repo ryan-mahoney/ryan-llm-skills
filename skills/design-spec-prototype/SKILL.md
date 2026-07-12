@@ -7,7 +7,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "2"
+  version: "3"
 ---
 
 # Design Spec Prototype
@@ -36,9 +36,9 @@ This needs no toolchain, no install, and serves instantly. Put custom tokens in 
 
 ## Resolve the Input
 
-1. If `$ARGUMENTS` names a `.specs/<slug>/` folder or a `proposal.md` path, read that proposal.
-2. Otherwise use the most recently modified `.specs/*/proposal.md` that matches the feature under discussion.
-3. If there is no proposal, build from the design direction described in the conversation. If there is neither, report that there is nothing to prototype and stop.
+1. When the prompt includes a **# Canonical spec artifact paths** stanza, read its exact `proposal` path and write under its exact `prototypeRoot`.
+2. Otherwise use an explicit proposal/feature-document path, a folder named in the conversation, or the directory containing the active working document; use `<feature-document-folder>/prototype` as `prototypeRoot`.
+3. If there is no proposal, build from a concrete design direction in the conversation. If neither exists, report `outcome: blocked` with `reason: missing-design-direction` and stop. Never search for a most-recent spec or write inside the checkout.
 
 From the proposal, carry forward: the **Context Verdict** (posture + governing rules), the **Design Direction**, the **States** to render, and the **Design System Usage** (tokens/components to mirror).
 
@@ -51,7 +51,7 @@ From the proposal, carry forward: the **Context Verdict** (posture + governing r
 
 ## Where to Write
 
-Write prototype files to `.specs/<feature-slug>/prototype/`:
+Write prototype files to the resolved absolute `prototypeRoot` outside the checkout:
 
 - Default: `index.html` (plus any local assets).
 - To compare directions, produce `index.html`, `variant-b.html`, etc., and a small index page linking them with one-line labels. Offer this only when the direction is genuinely contested — one strong prototype beats three timid ones.
@@ -60,7 +60,7 @@ Write prototype files to `.specs/<feature-slug>/prototype/`:
 
 Start a local static server in the background and report the URL:
 
-- Static build: serve `.specs/<feature-slug>/prototype/` with `python3 -m http.server <port> --bind 127.0.0.1` (run in the background). Pick an uncommon port (e.g. 4321) and bump it on collision.
+- Static build: serve `prototypeRoot` with `python3 -m http.server <port> --directory <prototypeRoot> --bind 127.0.0.1` in the background. Pick an uncommon port and bump it on collision.
 - Report `http://localhost:<port>/` (and `/variant-b.html` etc. when present).
 - Bind to loopback only.
 
@@ -86,12 +86,11 @@ Keep overrides as light as the request allows. A prototype is a façade; do not 
 
 ## Output
 
-Report:
+Report this compact routing summary before optional commentary:
 
-1. The prototype files written, with paths.
-2. The served URL(s) and which states/variants each shows.
-3. The posture and rule the prototype follows, and which design tokens it mirrors.
-4. What to look at and how to give feedback.
-5. A reminder that an approved prototype is the visual source of truth for `design-spec-writer`.
+- `outcome`: `served` or `blocked`.
+- `prototypeRoot`, files, and URL when served.
+- Posture/rules and rendered states.
+- One concrete next action: review the URL, then run `design-spec-critique` or `design-spec-writer`.
 
 Do not commit the prototype unless asked. Do not add Co-Authored-By trailers, "Generated with" footers, or any AI model attribution.

@@ -291,10 +291,11 @@ After `spec-architect-initial` writes its proposal, read the recommendation befo
 /spec-architect-initial describe the feature or change
 ```
 
-This inspects the current repository and writes:
+This inspects the current repository and writes `proposal.md` in the external
+feature document folder supplied by the harness:
 
 ```txt
-.specs/<feature-slug>/proposal.md
+<artifactsRoot>/proposal.md
 ```
 
 The proposal should say whether the change fits the current architecture, name the affected files, explain trade-offs, and recommend whether a critique pass is worth running.
@@ -308,7 +309,7 @@ The proposal should say whether the change fits the current architecture, name t
 Use this when the change is large, risky, cross-cutting, security-sensitive, introduces new dependencies, changes data, or when you simply want the architecture challenged before implementation. It writes:
 
 ```txt
-.specs/<feature-slug>/critique.md
+<artifactsRoot>/critique.md
 ```
 
 The critique is intentionally skeptical. Its job is to expose blind spots, not to rubber-stamp the proposal.
@@ -322,35 +323,31 @@ The critique is intentionally skeptical. Its job is to expose blind spots, not t
 This converts the proposal, and optional critique, into:
 
 ```txt
-.specs/<feature-slug>/spec.md
+<artifactsRoot>/spec.md
+<machineStateRoot>/spec-steps.json
 ```
 
-The spec is the implementation contract. It contains architecture, acceptance criteria, deterministic implementation steps, tests, and traceability tags. Local `spec.md` is canonical; GitHub issues are optional mirrors only when available.
+The spec is the implementation contract. It contains architecture, acceptance criteria, deterministic implementation steps, tests, and traceability tags. The writer never touches GitHub.
 
-### 4. Review The Spec (Recommended For Difficult Changes)
+### 4. Prepare The Implementation Package
 
 ```bash
-/spec-review
+/spec-prepare
 ```
 
-This checks the spec against the actual codebase for missing files, invented patterns, ambiguity, weak acceptance criteria, poor step granularity, and dropped critique recommendations. Use it for difficult changes or whenever a spec will be handed to another person or agent.
-
-### 5. Compile The Conformance Checklist
-
-```bash
-/spec-criteria
-```
-
-This compiles the frozen spec's normative prose into an executable conformance checklist:
+Preparation code-grounds and corrects the spec, reconciles the step index, derives prose-only guardrails, plans every step sequentially, and publishes a hash-bound manifest only when the complete package is current:
 
 ```txt
-.specs/<feature-slug>/criteria.md
-.specs/<feature-slug>/invariants.md
+<artifactsRoot>/spec-prepare.md
+<artifactsRoot>/criteria.md
+<artifactsRoot>/invariants.md
+<artifactsRoot>/step-<NNN>-subspec.md
+<machineStateRoot>/preparation.json
 ```
 
-Acceptance criteria are verified by tests; the checklist captures what tests cannot see: ownership directives, negative constraints, and licensed deviations from precedent. It is compiled blind to any implementation, so run it before `spec-run`. The same checklist can be given to implementers as guardrails. Cross-phase ownership invariants accumulate in `invariants.md` so later phases are audited against boundaries established by earlier ones.
+`criteria.md` and `invariants.md` are prose guidance, never executable audit programs. The manifest is the last write and binds every prepared artifact by SHA-256.
 
-### 6. Create A Branch Or Worktree
+### 5. Create A Branch Or Worktree
 
 Use a worktree when you want isolated implementation work:
 
@@ -364,31 +361,31 @@ Use a normal branch when you want to stay in the current checkout:
 /spec-branch <feature-slug or description>
 ```
 
-The worktree command copies the relevant `.specs/<feature-slug>/` folder so the proposal, critique, and spec travel with the implementation branch.
+Feature-document artifacts stay outside the checkout and are never copied into the worktree.
 
-### 7. Execute The Spec
+### 6. Execute The Prepared Spec
 
 ```bash
 /spec-run <feature-slug or path-to-spec.md>
 ```
 
-This implements every step from `spec.md`, one subagent per step when the harness supports subagents. Each verified step gets its own commit, then `spec-run` checks acceptance criteria at the end.
+This validates `preparation.json`, consumes each immutable prepared subspec, delegates one step at a time to `spec-step-run`, verifies the recorded focused commands mechanically, and commits each successful step separately. It never replans or rewrites preparation artifacts.
 
-### 8. Audit Conformance
-
-```bash
-/spec-audit <feature-slug>
-```
-
-This executes the compiled checklist against the branch diff and reports `PASS`/`VIOLATION`/`UNVERIFIABLE` per criterion with file:line evidence, writing `.specs/<feature-slug>/audit.md`. It is report-only and orthogonal to correctness review: it answers "is it the thing the spec described", catching behaviorally-silent deviations that pass every test. Hand violations to the implementer and re-run; the criteria stay frozen, so re-audits are cheap.
-
-### 9. Remediate Audit Findings
+### 7. Refine The Whole Branch
 
 ```bash
-/spec-remediate <feature-slug>
+/spec-branch-refine
 ```
 
-This reads the audit report and fixes each `VIOLATION` with one capable subagent per finding, converging the code back to the frozen spec — deleting duplicated rules, relocating misplaced logic — then re-runs `spec-audit` as the independent oracle, looping until the report is clean or a round cap is hit. It edits code but never rewrites the spec: when a violation is actually a spec defect, or a finding is `UNVERIFIABLE`, it escalates to `spec-review` or `spec-criteria` instead of bending the code. If the audit is already clean, it is a no-op.
+This alternates `spec-branch-review` and `spec-branch-fix` to convergence. Review runs isolated per-commit passes, then integrated whole-branch checks and a bounded prose-guardrail lens. Guardrail mismatches are ordinary findings in the same fix lifecycle.
+
+### 8. Publish The Pull Request
+
+```bash
+/spec-pr
+```
+
+This rebases first, commits, pushes, opens or updates the PR, and records the rebase log, PR message, and PR URL artifacts. `spec-issue` is a separate optional command and does not implicitly link the PR.
 
 ### Quick Sequence
 
@@ -396,12 +393,11 @@ This reads the audit report and fixes each `VIOLATION` with one capable subagent
 /spec-architect-initial build <clear goal and constraints>
 /spec-architect-critics     # optional
 /spec-write
-/spec-review                # recommended for difficult changes
-/spec-criteria              # compile the conformance checklist before implementing
+/spec-prepare
 /spec-branch-worktree <feature-slug>
 /spec-run <feature-slug>
-/spec-audit <feature-slug>      # verify the implementation against the checklist
-/spec-remediate <feature-slug>  # fix any findings, then re-audit until clean
+/spec-branch-refine
+/spec-pr
 ```
 
 README
@@ -412,7 +408,7 @@ write_design_spec_workflow_howto() {
 
 ## Design-Driven Front-Half
 
-The design-spec skills add a design-focused front-half to the same `.specs/<feature-slug>/` contract. They are useful when the next implementation needs design direction, not only architecture.
+The design-spec skills add a design-focused front-half to the same external feature-document contract. They are useful when the next implementation needs design direction, not only architecture.
 
 ### 1. Propose The Design Direction
 
@@ -423,7 +419,7 @@ The design-spec skills add a design-focused front-half to the same `.specs/<feat
 This reviews the existing design system and applicable rules, classifies the surface as functional, expressive, or hybrid, and writes:
 
 ```txt
-.specs/<feature-slug>/proposal.md
+<artifactsRoot>/proposal.md
 ```
 
 ### 2. Prototype The Direction (Optional)
@@ -435,7 +431,7 @@ This reviews the existing design system and applicable rules, classifies the sur
 This builds a fast viewable prototype in:
 
 ```txt
-.specs/<feature-slug>/prototype/
+<prototypeRoot>/
 ```
 
 Use this when the direction is expressive, high-visibility, unsettled, or worth reacting to visually before writing the implementation spec.
@@ -449,26 +445,25 @@ Use this when the direction is expressive, high-visibility, unsettled, or worth 
 This critiques the prototype when present, otherwise the proposal, and writes:
 
 ```txt
-.specs/<feature-slug>/critique.md
+<artifactsRoot>/critique.md
 ```
 
-### 4. Write And Review The Design Spec
+### 4. Write The Design Spec
 
 ```bash
 /design-spec-writer <feature-slug>
-/design-spec-review <feature-slug>
 ```
 
-The writer creates the standard 8-section implementation contract at `.specs/<feature-slug>/spec.md`, including the selected design rules in Applicable Rules. The review pass checks token usage, states, accessibility, responsive behavior, traceability, and implementation readiness.
+The writer creates the standard implementation contract at `<artifactsRoot>/spec.md`, including selected design rules, states, accessibility, responsive behavior, traceability, and deterministic steps. It writes the step index under `machineStateRoot` and never touches GitHub.
 
 After that, use the normal engineering back half:
 
 ```bash
-/spec-criteria <feature-slug>
+/spec-prepare <feature-slug>
 /spec-branch <feature-slug>
 /spec-run <feature-slug>
-/spec-audit <feature-slug>
-/spec-remediate <feature-slug>
+/spec-branch-refine <feature-slug>
+/spec-pr <feature-slug>
 ```
 
 README
@@ -799,18 +794,25 @@ spec_skills=(
   spec-architect-critics
   spec-write
   spec-subspec-write
-  spec-review
-  spec-criteria
+  spec-prepare
   spec-branch
   spec-branch-worktree
   spec-run
-  spec-audit
-  spec-remediate
+  spec-run-glm
+  spec-run-glm-deepseek
+  spec-run-glm-mimo
+  spec-run-kimi-stepfun
+  spec-run-deepseek-longcat
+  spec-step-run
+  spec-branch-refine
+  spec-branch-review
+  spec-branch-fix
+  spec-pr
+  spec-issue
   design-spec-architect
   design-spec-prototype
   design-spec-critique
   design-spec-writer
-  design-spec-review
 )
 
 specops_skills=()

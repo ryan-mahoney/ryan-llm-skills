@@ -1,11 +1,11 @@
 ---
 name: design-spec-architect
-description: "Act as the first stage in the design-spec workflow: given a UI/UX request, review the repo's design system and the active design rules, classify the work by posture and deliverable, and write .specs/<slug>/proposal.md with a concrete design direction — or explain why no new design is needed. Use when the user says 'design this', 'design a UI for', 'redesign', 'how should this look', 'mock up', 'lay out this screen', 'propose a design for', or 'what's the design approach'."
+description: "Act as the first stage in the design-spec workflow: review the repo's design system and active rules, classify a UI/UX request by posture and deliverable, and write proposal.md in the feature document folder with one concrete design direction—or explain why no new design is needed. Use for design, redesign, layout, mockup-direction, and design-approach requests."
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "1"
+  version: "2"
 ---
 
 # Design Spec Architect — Design Direction Against the Existing System
@@ -223,10 +223,10 @@ reuses existing patterns within an established system.]
 
 ## Step 6 — Output
 
-- Create `.specs/<feature-slug>/` in the repo root (`<feature-slug>` is a short kebab-case name). If the folder exists for an unrelated feature, append `-2`, `-3`. This is the **same canonical folder** the `spec-*` skills use, so `design-spec-prototype`, `design-spec-critique`, `design-spec-writer`, and `spec-run` all find it.
-- Write the document to `.specs/<feature-slug>/proposal.md` — downstream stages read this fixed path; do not vary the filename.
-- Announce the folder path. Present the proposal for review and invite questions — it is a conversation starter.
-- If reusing-existing is the honest answer, write the No-new-design assessment to the same path and say so plainly.
+- When the prompt includes a **# Canonical spec artifact paths** stanza, write to its exact absolute `proposal` path and treat `artifactsRoot` as the feature document folder.
+- Otherwise use an explicit feature-document/proposal path, a folder named in the conversation, or the directory containing the active working document. Never create or search for a spec folder inside a checkout.
+- Atomically write `proposal.md`; keep its required front matter first and place the level-1 heading immediately after it.
+- Report `outcome: proposed` or `outcome: reuse-existing`, the proposal path, posture, governing rules, and whether prototype/critique are recommended. This compact summary is the next stage's routing view.
 
 ---
 

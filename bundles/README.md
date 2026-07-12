@@ -7,10 +7,9 @@ archives under `dist/skill-bundles/`. Generated artifacts are not committed.
 
 ## Bundles
 
-The build currently emits two installable bundles, not three. `spec-skills`
-contains two workflow front-halves because the design-spec skills depend on the
-same `.specs/<feature-slug>/` contract and engineering back-half as the
-spec-driven workflow.
+The build emits two installable bundles. `spec-skills` contains both architecture
+and design authoring because they produce the same external feature-document and
+machine-state contracts for preparation and execution.
 
 ### spec-skills
 
@@ -20,18 +19,25 @@ The spec-driven development workflow plus the design-spec front-half:
 - `spec-architect-critics`
 - `spec-write`
 - `spec-subspec-write`
-- `spec-review`
-- `spec-criteria`
+- `spec-prepare`
 - `spec-branch`
 - `spec-branch-worktree`
 - `spec-run`
-- `spec-audit`
-- `spec-remediate`
+- `spec-run-glm`
+- `spec-run-glm-deepseek`
+- `spec-run-glm-mimo`
+- `spec-run-kimi-stepfun`
+- `spec-run-deepseek-longcat`
+- `spec-step-run`
+- `spec-branch-refine`
+- `spec-branch-review`
+- `spec-branch-fix`
+- `spec-pr`
+- `spec-issue`
 - `design-spec-architect`
 - `design-spec-prototype`
 - `design-spec-critique`
 - `design-spec-writer`
-- `design-spec-review`
 
 Includes the Augment CLI subagent adapter:
 
@@ -41,20 +47,21 @@ The generated `spec-skills` README includes a workflow overview covering:
 
 1. Start with `spec-architect-initial` and a clear goal.
 2. Optionally run `spec-architect-critics` to challenge the architecture.
-3. Run `spec-write` to create `.specs/<feature-slug>/spec.md`.
-4. Run `spec-review` for difficult changes or handoffs.
-5. Run `spec-criteria` to compile the frozen spec into a conformance checklist (before implementation).
-6. Create a branch/worktree with `spec-branch` or `spec-branch-worktree`.
-7. Execute with `spec-run`.
-8. Run `spec-audit` to verify the implementation against the compiled checklist.
-9. Run `spec-remediate` to close any audit findings, then re-audit until clean.
+3. Run `spec-write` to create `spec.md` and the machine step index.
+4. Run `spec-prepare` to ground and correct the spec, derive prose guardrails, plan each step, and publish the manifest.
+5. Create a branch/worktree with `spec-branch` or `spec-branch-worktree`; external artifacts are not copied.
+6. Execute the immutable prepared package with `spec-run`.
+7. Run `spec-branch-refine` to review and fix the integrated branch to convergence.
+8. Publish with `spec-pr`.
+
+`spec-issue` remains an optional standalone GitHub mirror and does not participate in this sequence.
 
 It also includes the design-spec front-half:
 
 1. Run `design-spec-architect` to propose a design direction.
 2. Optionally run `design-spec-prototype` and `design-spec-critique`.
-3. Run `design-spec-writer` and `design-spec-review`.
-4. Hand off to the same `spec-criteria` / `spec-run` / `spec-audit` back-half.
+3. Run `design-spec-writer`.
+4. Hand off to the same `spec-prepare` / `spec-run` / `spec-branch-refine` back-half.
 
 ### specops-skills
 

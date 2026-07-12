@@ -1,6 +1,6 @@
 ---
 name: spec-branch-review
-description: This skill should be used when the user or the spec-branch-refine loop asks to code-review or correctness-check the whole branch for bugs at the end of implementation. Reviews the branch diff (committed merge-base..HEAD by default, or the working tree including untracked files with scope=working-tree) in a spec-aware pass that decomposes the range into per-commit reviews and aggregates them (replicating roborev's per-commit→range design), then writes structured findings — a machine-readable YAML block plus prose — to reviews/branch-<i>-review.md. It runs a fixed core review (correctness, reference/contract integrity, security, simplification, AI-authorship tells) and fans out specialized lenses by risk (design, deep-security, data/deployment, dependency, performance, test-quality), delegating to existing skills where available. Read-only — it never edits code and never re-checks conformance (that is spec-audit). spec-branch-fix consumes its output. Trigger on "review the branch", "code-review the branch", "branch correctness review", "find bugs across the branch", or "spec branch review".
+description: This skill should be used when the user or the spec-branch-refine loop asks to review the whole implemented branch. It performs correctness and integration review plus a bounded guardrail lens from the prepared spec, then writes ordinary structured findings for spec-branch-fix.
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,24 +9,22 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "9"
+  version: "11"
 ---
 
 # Spec Branch Review
 
-> **`.specs/` is untracked working state — often gitignored.** Read and write spec files directly on the filesystem; do not run `git diff`/`log`/`status`/`show` on paths under `.specs/` to read, compare, or recover them — git returning nothing there is expected, not an error. This is scoped to `.specs/`; diffing the code under review is unaffected. For moves, use `git mv` only when the path is tracked, otherwise `mv`.
+> **Spec artifacts live in the feature document folder — outside the git checkout.** Read and write them directly on the filesystem at the absolute paths you are given; do not run `git diff`/`log`/`status`/`show` on artifact paths to read, compare, or recover them — they are not in any repository, so git returning nothing there is expected, not an error. This is scoped to spec artifacts; diffing the code under review is unaffected.
 
-Review the whole branch for **correctness** defects in one pass and write the
+Review the whole branch for **correctness and prepared-guardrail** defects and write the
 findings to `reviews/branch-<iteration>-review.md`. This is the read-only half of
 the branch *correctness* loop driven by `spec-branch-refine`: it finds bugs; its
 partner `spec-branch-fix` reads the file and applies fixes. This skill never edits
 code.
 
-This is correctness, not conformance. `spec-audit` checks the branch against
-`criteria.md`; this skill is the orthogonal bug-hunt the project otherwise
-outsourced to roborev. It is spec-aware — it has the whole spec, every subspec, and
+This is the single final review boundary. It is spec-aware — it has the whole spec, every subspec, and
 every learning — so it can tell an intended design from a defect far better than a
-blind diff review can. Spec-awareness, though, is not what gave roborev its recall —
+blind diff review can. Spec-awareness, though, is not what gave the original approach its recall —
 **per-commit decomposition** did, and this skill now replicates it: it reviews each
 commit's small diff and aggregates the findings, instead of skimming the whole
 combined diff once (see Review).
@@ -53,11 +51,14 @@ inferred; report what is missing and halt.
 
 ## Resolve Inputs
 
-- **Spec.** If `spec=<path>` or a `.specs/<slug>/` folder is supplied, use it
-  exactly. Otherwise resolve like `spec-run`: a path in the arguments, else the
-  folder named in the conversation, else the most recently modified
-  `.specs/*/spec.md`. `<spec-dir>` is the folder containing it. If no spec
-  resolves, stop and report.
+- **Spec.** When the prompt includes a **# Canonical spec artifact paths** stanza,
+  use its exact absolute `spec` path and `artifactsRoot` — the stanza is the
+  primary path source. Otherwise: if `spec=<path>` or a feature document folder is
+  supplied, use it exactly; else the folder named in the conversation; else the
+  directory containing the active working document file. `<spec-dir>` is the
+  feature document folder — the folder outside the git checkout containing
+  `spec.md` and the other artifacts (the stanza's `artifactsRoot`). Never fall back
+  to a spec folder inside a git checkout. If no spec resolves, stop and report.
 - **Iteration.** Use `iter=<n>` when given. Standalone default: one higher than the
   highest existing `<spec-dir>/reviews/branch-<k>-review.md`, or `1` if none exist.
 - **Comparison base.** Resolve the point the branch is diffed against, in this order:
@@ -89,14 +90,25 @@ inferred; report what is missing and halt.
 
 ## Load Spec-Aware Context
 
-Read for judgement (not to re-run conformance):
+Read for judgement:
 
 - `spec.md` — the whole intent, plus any `## Adaptations` log.
-- Every `<spec-dir>/subspecs/*-spec.md` — what each step meant to do.
-- Every `<spec-dir>/learnings/*-learning.md` — what each step discovered and any
+- Every `step-<NNN>-subspec.md` in `<spec-dir>` — what each step meant to do (per-step
+  artifacts live flat in the document folder, step numbers zero-padded to three digits).
+- Every `step-<NNN>-learning.md` in `<spec-dir>` — what each step discovered and any
   recorded trade-offs. Do not flag a recorded, deliberate trade-off as a bug.
-- `criteria.md` / `invariants.md` are background only. Never convert their `Check:`
-  commands or grep patterns into findings — conformance is `spec-audit`'s job.
+- `criteria.md` — consume only prose `Statement:` values.
+- `invariants.md` — consume only live invariant statements not marked superseded.
+
+### Bounded guardrail lens
+
+After correctness/integration review, check only three sources: observable
+acceptance criteria and step obligations in `spec.md`, criteria `Statement:` values,
+and live invariants. Do not execute embedded commands, invent checks, inspect retired
+audit artifacts, or expand into a second conformance program. A concrete mismatch is
+an ordinary finding with `category: guardrail`, the same evidence, signature,
+severity, actionability, dismissal, fix, and re-review lifecycle as every other
+finding. Do not create a separate verdict or report.
 
 ## Load Prior Dismissals (dedup)
 
@@ -123,29 +135,9 @@ only the ones that mean "this is not a bug" do:
   <class> iter <k>)`) with explicit rationale. This surfaces real disagreement
   without letting the loop oscillate silently.
 
-## Load Per-Step Reviews (carry-forward)
-
-This is the in-process equivalent of roborev's stored per-commit reviews — the
-mechanism that actually gave roborev its recall. Read every
-`<spec-dir>/reviews/step-*-review.md` and its paired `step-*-fix.md`, and collect each
-step finding's signature, severity, and fix outcome. These are the branch's
-**per-commit review layer**: the defects already surfaced step-by-step on small,
-focused diffs, where recall is highest.
-
-- A step finding still **open** (no fix, or dismissed `deferred`/`unfixable`) is a
-  carry-forward candidate — re-confirm it persists in the final tree (Stage C below)
-  and emit it at branch level rather than rediscovering it from scratch.
-- Honour `step-*-fix.md` dismissals by the same class table as the branch dismissals
-  above: `false-positive`/`intentional` suppress, `deferred`/`unfixable` re-raise.
-- **When no step reviews exist** — the step loop did not run them, as in many specs —
-  the per-commit pass below is not optional. It *is* the step review, run now at
-  branch time. Never let absent step reviews collapse the core review into a single
-  whole-diff skim; that is the exact failure that lets a clean `pass` hide real bugs.
-
 ## Review: Per-Commit Passes + Aggregation
 
-Roborev — the external reviewer this skill replaces — does not get its recall from a
-cleverer prompt. It gets it from **structure**. It reviews every commit individually
+An external per-commit reviewer does not get its recall from a cleverer prompt. It gets it from **structure**. It reviews every commit individually
 as that commit lands (a small, focused diff), stores each finding, and then the
 branch/range review **aggregates those per-commit reviews and keeps the ones that
 still persist in the final tree**. A single pass over the whole combined diff — what
@@ -161,37 +153,32 @@ findings into one file.
 
 ### Core review (always runs) — decompose, review per commit, then aggregate
 
-The core review applies the **same five lenses** as before (the `spec-step-review` bug
-classes, plus branch-level reference/contract integrity and an AI-authorship pass), but
-in three stages instead of one blind pass:
+The core review applies five lenses (correctness, reference/contract integrity,
+security, simplification, and AI-authorship), but
+in three stages instead of one combined pass:
 
 **Stage A — Decompose the range into commits.** List `git rev-list --reverse
-<base>..HEAD`; each commit is a review unit. Map each to the step it implements when
-resolvable — the `subspecs/<n>-spec.md` named in the commit subject, identified by the
-learning/subspec file it touches, or taken in order — so the per-commit reviewer
-carries that step's **intent**, the spec-aware analogue of roborev's commit-message
-intent check. Attach any `reviews/step-<n>-review.md` loaded above as that commit's
-existing review.
+<base>..HEAD`; each commit is a review unit. Map commits to steps using the commit SHA
+recorded in `step-<NNN>-learning.md`, an explicit step marker in the subject, or spec
+order as a last resort. Give each reviewer that step's immutable subspec intent.
 
 **Stage B — Per-commit review pass (the recall engine).** For each commit, review
 **that commit's own diff** (`git show <sha>`), not the combined diff, applying the
 localized lenses — 1 (correctness), 3 (security), 4 (simplification), 5
 (AI-authorship) — to its small, focused change, seeded with the step's subspec intent.
 Fan out one read-only subagent per commit when the harness supports it so each stays
-focused on its unit. A commit already covered by a trustworthy, still-applicable
-`step-<n>-review.md` may be carried forward without re-review; every other commit gets
-a fresh focused pass. This is the stage that surfaces what the old whole-diff pass
+focused on its unit. Every commit gets a focused pass. This is the stage that surfaces what the old whole-diff pass
 missed — review the small units, never only the combined blob. (Across refine
 iterations, a commit whose files the previous fix did not touch may reuse its prior
 per-commit result; re-review only the commits the last fix changed, then always re-run
 Stage C.)
 
-**Stage C — Aggregate + integrate (the range layer).** Over the union of every
-per-commit finding plus the integrated end state:
+**Stage C — Aggregate + integrate (the range layer).** Over the union of fresh
+per-commit findings plus the integrated end state:
 
 - **Carry forward** each per-commit finding that **still persists in the final tree**,
   and **drop** any a later commit already fixed — a defect introduced at commit C and
-  resolved at C+3 is not a branch finding. This is roborev's exact rule: do not
+  resolved at C+3 is not a branch finding. This is the per-commit review rule: do not
   re-raise a per-commit issue unless it persists in the final code.
 - Run **lens 2 (reference & contract integrity)** here, and only here — it is
   inherently whole-branch and invisible commit-by-commit: a rename applied in one
@@ -199,17 +186,35 @@ per-commit finding plus the integrated end state:
 - Add the cross-commit/integration findings no single commit reveals, then **dedup by
   signature** so a defect that recurs across commits is reported once.
 
+**Stage D — Semantic precedent and duplication pass.** After the integrated
+end-state review, run a repository precedent search for the branch's new or changed
+behaviors. Prefer the `code_search` MCP tool when this turn exposes it: search by
+behavior and responsibility (for example "resolve feature worktree code index
+status", "track generated review artifact", "parse branch review verdict"), not only
+by newly introduced symbol names. For each meaningful hit, switch to exact search
+(`rg`) and direct file reads to confirm whether the branch duplicates an existing
+helper, store, parser, route, UI state model, or workflow. If `code_search` is not
+available, perform the same pass with exact search only and record that semantic
+search was unavailable.
+
+This pass is mandatory for the branch review because duplicated/reinvented
+functionality is often invisible in a narrow diff. Report only confirmed overlap:
+state the existing implementation, the new implementation, and the concrete harm
+(divergent behavior, stale copy, future fix needing two edits, broken single source
+of truth). Do not flag mere similarity if both implementations intentionally serve
+different contracts.
+
 The five lenses (Stage B runs 1, 3, 4, 5 per commit; Stage C runs 2 plus the
 aggregation):
 
 1. **Correctness / logic** — boundary and null/empty errors, wrong conditions,
    unhandled errors and rejections, races and ordering, resource leaks, broken
-   async, data-integrity gaps, and **integration bugs** the per-step reviews could
+   async, data-integrity gaps, and **integration bugs** the per-commit passes could
    not see (mismatched contracts between steps, a caller and callee that disagree,
    state set in one step and misread in another).
 2. **Reference & contract integrity** (Stage C — whole-branch) — the cross-file
    consistency that only a whole-branch view can check, and the highest-yield class an
-   integrated review adds over per-step review. Two sub-checks:
+   integrated review adds beyond isolated per-commit passes. Two sub-checks:
    - **Reference existence** — every symbol, import, file path, route, env var,
      config key, CLI flag, or feature flag the branch *references* actually exists
      in the branch's end state. Flag the dangling ones: a call to a function that
@@ -228,24 +233,35 @@ aggregation):
    dead/duplicated code, needless indirection, and internal-contract inconsistencies
    (a docstring that contradicts the code's behavior, one error type where the rest
    of the module raises another, a caller that cannot discriminate the failure).
-   These are usually `LOW`/advisory — but they are still **findings to emit**, never
-   a reason to stay silent.
+   Duplicated/reinvented behavior must be grounded in Stage D's repository search,
+   preferably `code_search` plus exact confirmation. These are usually
+   `LOW`/advisory — but they are still **findings to emit**, never a reason to stay
+   silent.
 5. **AI-authorship tells** — this branch was written by an LLM (`spec-step-run`), so
    hunt the failure modes current models still produce that slip past ordinary
    review: invented methods or options on a third-party library or framework API
    that the dependency does not actually expose (hallucinated dependency
    symbols — repo-internal dangling references belong to lens 2), judged from the
    project's dependency manifest and lockfile rather than memory, which may be stale
-   on recent APIs; copy-paste
+   on recent APIs; **misunderstood** third-party behavior — a dependency call that
+   *exists* and typechecks but whose runtime contract was assumed wrongly (a callback
+   fed each delta versus the cumulative text, an iterator's order or termination,
+   mutation-in-place versus a copy, a rejection versus a thrown error), judged from
+   the dependency's own source or type definitions rather than memory; copy-paste
    blocks left with stale identifiers from the source context (a renamed concept
    whose body still names the old entity); over-broad `catch`/`except` that swallows
    the real error, or a silent fallback to empty/zero/null that masks failure instead
    of surfacing it; collection or key access that assumes non-empty/present without
-   checking; and reinvented helpers that duplicate something already in the repo.
+   checking; reinvented helpers that duplicate something already in the repo
+   according to the semantic precedent pass; and **over-editing** — a fix or step
+   that rewrites or restructures working code beyond what the change required (a
+   function reshaped where a localized edit sufficed, nesting or branching the
+   original lacked), which passes every test and so slips past every gate but this
+   review.
    File each under its **natural category** — a hallucinated call or swallowed error
-   is `correctness`, a reinvented helper is `simplification`. This lens is a hunting
-   heuristic, not a new category, and it never re-flags a trade-off the learnings
-   already record as deliberate.
+   is `correctness`, a reinvented helper or needless rewrite is `simplification`. This
+   lens is a hunting heuristic, not a new category, and it never re-flags a trade-off
+   the learnings already record as deliberate.
 
 ### Conditional fan-out (fan out by risk, not by habit)
 
@@ -334,18 +350,16 @@ collapsing to a silent pass. They apply to the core lenses and to every fired le
   **Considered & dismissed** list in the prose, each with its citation. This is
   non-actionable and never affects the verdict — but it turns a silent `pass` into an
   auditable one: a reader sees the candidate was weighed and why it is not a bug,
-  instead of wondering whether the review looked at all. This is exactly where a
-  blind whole-diff pass fails — it reports `pass` with no evidence it ever considered
-  the defect a spec-unaware tool (roborev) would raise. Keep it to candidates with a
+instead of wondering whether the review looked at all. This is exactly where a
+blind whole-diff pass fails — it reports `pass` with no evidence it ever considered
+the defect a spec-unaware external tool would raise. Keep it to candidates with a
   concrete code location and an explicit citation; never pad it with nits.
 
 ## Severity, Actionability, Verdict
 
-Identical rule to `spec-step-review`:
-
 - **Severity** `HIGH`/`MED`/`LOW`; **Category** `correctness`/`security`/`perf`/
-  `simplification`/`design`.
-- **Actionable** = `HIGH` or `MED` in `correctness` or `security`. All else is
+  `simplification`/`design`/`guardrail`.
+- **Actionable** = `HIGH` or `MED` in `correctness`, `security`, or `guardrail`. All else is
   **advisory**. The split gates only the **verdict and the loop**: advisory findings
   are recorded and never block `spec-branch-refine`, but they are **always emitted**.
   The split must never collapse to silence — a clean diff yields `findings: []`; a
@@ -368,7 +382,7 @@ Write to:
 <spec-dir>/reviews/branch-<iteration>-review.md
 ```
 
-Create `reviews/` if needed. The file leads with a fenced YAML block — the
+This is the `branch reviews` path from the **# Canonical spec artifact paths** stanza (`<artifactsRoot>/reviews/branch-<k>-review.md`, k = 1, 2, 3, …). Create `reviews/` if needed, write atomically (temp file in the destination directory, then rename), and begin the file with a level-1 `#` heading on line 1. The file leads with a fenced YAML block — the
 machine-readable contract that `spec-branch-fix` and `spec-branch-refine` parse —
 followed by human-readable prose that only explains the findings. Downstream skills
 read the YAML first; the prose is never parsed for control flow.
@@ -390,7 +404,6 @@ review:
   advisory: <count>
   lenses: [correctness, reference-integrity, security, simplification, ai-authorship]   # plus any fired: design, deep-security, data-deploy, dependency, performance, test-quality
   commits_reviewed: <n>             # informational: commits decomposed and reviewed in the per-commit pass (Stage B)
-  step_reviews_ingested: <n>        # informational: prior step-*-review.md files carried forward
   findings:
     - id: F1
       severity: HIGH
@@ -448,8 +461,8 @@ Report:
 1. Spec path and iteration.
 2. Review file path.
 3. Verdict and actionable/advisory counts.
-4. The lenses that ran (and any delegated skill), and any risk trigger that did not fire;
-   how many commits the per-commit pass (Stage B) reviewed and how many step reviews it carried forward.
+4. The lenses that ran (and any delegated skill), any risk trigger that did not fire,
+   and how many commits the per-commit pass (Stage B) reviewed.
 5. The scope and diff target (e.g. `committed merge-base..HEAD`), whether the working
    tree was dirty (and excluded), and how many prior dismissals were honored — by class.
 

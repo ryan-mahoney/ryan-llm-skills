@@ -1,79 +1,65 @@
 ---
 name: spec-branch
-description: This skill should be used when the user asks to "create a spec branch", "make a spec branch", "start a branch", or "branch from spec". Creates a local branch from a spec, description, or issue/ticket reference without requiring GitHub.
+description: Create or switch to a local branch from a feature-document spec, work description, or ticket reference without requiring GitHub. Use for "create a spec branch", "make a spec branch", "start a branch", or "branch from spec". Reads external feature-document artifacts for context but never moves or writes them.
 mode: coding
 scope: document
 disable-model-invocation: true
-argument-hint: "[description, feature-slug, or issue/ticket reference]"
+argument-hint: "[description, feature-document path, or issue/ticket reference]"
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "5"
+  version: "6"
 ---
 
 # Spec Branch
 
-> **`.specs/` is untracked working state — often gitignored.** Read and write spec files directly on the filesystem; do not run `git diff`/`log`/`status`/`show` on paths under `.specs/` to read, compare, or recover them — git returning nothing there is expected, not an error. This is scoped to `.specs/`; diffing the code under review is unaffected. For moves, use `git mv` only when the path is tracked, otherwise `mv`.
+Create or switch to one local branch. Feature-document artifacts remain outside the checkout and are read only for naming context.
 
-Create a new local branch related to a spec-driven task.
+## Resolve The Topic
 
-## Non-Interactive Operation
+Resolve in this order:
 
-This skill runs to completion without user interaction. Do not pause to ask clarifying questions, request confirmation, or wait for input mid-run. When the branch topic is unclear or underspecified, infer it from the available context — the spec folder under discussion, the most recently modified `.specs/*/` folder, or the work described in the conversation — then proceed. Summarize every such judgement call and its rationale in the final report so the user can review what was decided and why.
+1. Explicit `$ARGUMENTS`.
+2. An explicit feature-document, `spec.md`, or `proposal.md` path.
+3. The feature/work named in the conversation.
 
-Stop only when no branch topic can be inferred from any source. In that case, report that there is nothing to branch from and halt — do not ask for a description interactively.
+When a **# Canonical spec artifact paths** stanza exists, use its `spec` or `proposal` title as context. Do not search for a most-recent spec.
 
-## Inputs
+A number is a GitHub issue only when the current repository has a GitHub remote and `gh issue view <number> --json title --jq .title` succeeds. A non-GitHub ticket needs accompanying descriptive text.
 
-Use `$ARGUMENTS` as the branch topic. It may be:
+If no descriptive topic resolves, make no changes and report:
 
-- A `.specs/<feature-slug>/` folder name.
-- A free-text work description.
-- A ticket reference plus description, such as `PROJ-123 add invoice retry`.
-- A GitHub issue number, only when the current repo is hosted on GitHub.
+```txt
+outcome: blocked
+reason: missing-branch-topic
+```
 
-If `$ARGUMENTS` is empty, infer the topic from context — the spec folder under discussion, the most recently modified `.specs/*/` folder, or the work described in the conversation. Only if no topic can be inferred from any source, report that there is nothing to branch from and stop. Do not create a branch from an empty or bare identifier.
+## Derive The Branch
 
-## Resolve the Topic
+Normalize the topic:
 
-1. Confirm the current directory is a git repository: `git rev-parse --git-dir`.
-2. If `$ARGUMENTS` names `.specs/<feature-slug>/`, read `spec.md` or `proposal.md` and derive the branch topic from the feature slug and title.
-3. If `$ARGUMENTS` is only a number and the current repo has a GitHub remote, try `gh issue view <number> --json title --jq .title`.
-4. If the GitHub lookup fails, or the repo is not GitHub-hosted, derive a descriptive title from the conversation or the referenced spec/ticket. A bare number is not a valid branch name; if no descriptive context exists, report that and stop.
+1. Lowercase it.
+2. Preserve a leading issue/ticket identifier.
+3. Replace separators and repeated punctuation with one hyphen.
+4. Trim hyphens.
+5. Limit to 60 characters at a word boundary.
 
-## Derive the Branch Name
+Require `git rev-parse --git-dir` to succeed. Then:
 
-Parse the resolved topic into a valid branch name:
+- Existing local branch: `git switch <branch>`.
+- New branch: `git switch -c <branch>`.
+- Remove upstream tracking: `git branch --unset-upstream <branch> 2>/dev/null || true`.
 
-1. Lowercase the entire string.
-2. Preserve a leading issue or ticket prefix when present (`123`, `PROJ-123`, etc.).
-3. Replace `/`, spaces, underscores, and consecutive special characters with a single `-`.
-4. Strip leading/trailing hyphens.
-5. Truncate to 60 characters max, trimming at the last full word boundary when possible.
-
-Examples:
-
-| Input | Branch |
-|---|---|
-| `1087 redesign dashboard onboarding` | `1087-redesign-dashboard-onboarding` |
-| `PROJ-123 add invoice retry` | `proj-123-add-invoice-retry` |
-| `fix candidate stage seed data` | `fix-candidate-stage-seed-data` |
-| `.specs/new-billing-export/` | `new-billing-export` |
-
-## Create the Branch
-
-1. Check whether the branch already exists: `git rev-parse --verify <branch-name>`.
-2. If it exists, switch to it with `git switch <branch-name>`.
-3. If it does not exist, create it from the current HEAD with `git switch -c <branch-name>`.
-4. Remove upstream tracking if present: `git branch --unset-upstream <branch-name> 2>/dev/null || true`.
+Never move, rename, copy, stage, or commit feature-document artifacts.
 
 ## Report
 
-Report:
+```txt
+outcome: ready
+branch: <branch>
+source: feature-document | description | ticket | github-issue
+tracking: none
+```
 
-- Branch name.
-- Source topic: spec folder, GitHub issue, ticket reference, or free-text description.
-- Tracking status: none.
-
-Do not implement the spec after creating the branch.
+On failure, use `outcome: blocked` with a stable reason and the relevant git error. Do not implement the spec.

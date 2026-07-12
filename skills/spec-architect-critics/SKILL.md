@@ -1,6 +1,6 @@
 ---
 name: spec-architect-critics
-description: "Critique a spec-driven architecture proposal by selecting two real-world practitioners with deep, relevant expertise and evaluating the proposal through their known perspectives. Use when the user says 'critique this architecture', 'review this proposal', 'what would an expert think of this', 'poke holes in this design', 'stress-test this approach', 'what am I missing', or 'is this a good architecture', especially after spec-architect-initial writes .specs/<slug>/proposal.md."
+description: "Critique a spec-driven architecture proposal in the feature document folder by selecting two real practitioners with relevant expertise and evaluating the proposal through their documented perspectives. Use for architecture critiques, proposal reviews, stress tests, expert perspectives, and gap-finding after spec-architect-initial."
 mode: coding
 scope: document
 license: MIT
@@ -24,12 +24,12 @@ This is not a rubber stamp. The value of this skill is in finding flaws, blind s
 
 Look for the material to critique:
 
-- `.specs/<feature-slug>/proposal.md` (output of the `spec-architect-initial` skill). If multiple spec folders exist, match by the feature named in the conversation; failing that, use the most recently modified folder.
+- `proposal.md` in the feature document folder. Use the exact absolute `proposal` path from a canonical-path stanza when present; otherwise require an explicit proposal/feature-document path or active working document folder. Never search for a most-recent spec or a checkout-local artifact folder.
 - An architecture document the user has shared or uploaded
 - A plan described in the current conversation
 - Code or PRs the user wants reviewed at the architectural level
 
-Read it fully. Also read `AGENTS.md` if it exists — you need the system context to evaluate whether the proposal actually fits.
+Read it fully. Also read `AGENTS.md` and validate relevant codebase claims against real repository files.
 
 ### 1b. Extract the core claims
 
@@ -240,9 +240,9 @@ team-capacity, or domain-specific concerns.]
 ## Step 6 — Output
 
 - Write the critique as a markdown document.
-- If the proposal came from a spec folder, write the critique to `critique.md` in that same folder (`.specs/<feature-slug>/critique.md`). The `spec-write` skill reads this fixed path. For material from any other source, write `CRITIQUE-[feature-name].md` alongside it.
-- If the execution environment requires writing outputs to a staging path, follow that environment's documented file-output convention.
-- Present to the user and invite discussion. A good critique opens a conversation — the user may have context that changes the weight of a recommendation.
+- Write to the canonical stanza's exact `critique` path or `critique.md` in the explicitly resolved feature document folder. For other material, write beside the supplied source.
+- Write atomically with a level-1 heading on line 1.
+- Report `outcome: critiqued`, the path, Must/Should/Consider counts, and `next: spec-write`.
 
 ---
 

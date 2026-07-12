@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "1"
+  version: "2"
 ---
 
 # Design Spec Critique — Practitioner-Perspective Design Review
@@ -20,11 +20,11 @@ This is not a rubber stamp. The value is finding flaws, blind spots, over-decora
 
 In priority order:
 
-1. **A prototype** at `.specs/<feature-slug>/prototype/`. If one exists, critique it — it is the most concrete artifact. Read its code, and reason about the rendered result (layout, hierarchy, type, color, spacing, motion, states). If a running URL was reported, note that you are evaluating the rendered design.
-2. **`proposal.md`** at `.specs/<feature-slug>/proposal.md` when there is no prototype.
+1. **The canonical `prototypeRoot`.** When a canonical-path stanza exists, use its exact path. Otherwise resolve it from an explicit feature document folder. If a prototype exists, critique it as the most concrete artifact.
+2. **The canonical `proposal` path** when there is no prototype.
 3. A design shared in the conversation, or shipped UI the user points to.
 
-If multiple spec folders exist, match by the feature under discussion; on ties use the most recently modified. Read `proposal.md` for the intended Context Verdict even when critiquing the prototype — you judge the prototype against its own stated posture.
+Never search for the most recently modified spec or derive a checkout-local artifact folder. Read `proposal.md` for the intended Context Verdict even when critiquing the prototype.
 
 ### 1b. Extract the core claims
 
@@ -150,9 +150,10 @@ Wrong posture or direction — needs rethinking. State which and why.]
 
 ## Step 6 — Output
 
-- Write the critique to `.specs/<feature-slug>/critique.md` — the **same canonical path** `design-spec-writer` and `spec-write` read. For material from any other source, write `CRITIQUE-[name].md` alongside it.
+- Write to the stanza's exact absolute `critique` path, or `critique.md` in the explicitly resolved feature document folder. For non-pipeline material, write `CRITIQUE-[name].md` beside the supplied source.
+- Write atomically and begin with the level-1 heading.
 - When you critiqued a prototype, reference specific screens, states, and elements so the findings are actionable.
-- Present to the user and invite discussion; they may have context that reweights a recommendation.
+- Report `outcome: critiqued`, the critique path, confidence, and counts for Must/Should/Consider. Recommend the single next stage (`design-spec-writer` or another prototype iteration).
 
 ## Principles
 

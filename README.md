@@ -1,6 +1,6 @@
 # LLM Skills & Rules
 
-Shared configuration for LLM coding agents (Claude Code, Codex, Augment, Cline, OpenCode). The centerpiece is two installable skill bundles with three workflow families: **spec-skills** contains both the spec-driven development workflow and the design-driven front-half, while **specops-skills** contains the legacy migration and structured agent-documentation workflow. Design-spec is not a separate bundle because it depends on the same `.specs/<feature-slug>/` contract, conformance checklist, implementation back-half, rules, and Augment adapter as the spec workflow. Alongside the bundles sit standalone utility skills, design rules, and per-agent instruction files.
+Shared configuration for LLM coding agents (Claude Code, Codex, Augment, Cline, and OpenCode). Two installable bundles carry the main workflows: **spec-skills** for prepared spec-driven development, including its design front-half, and **specops-skills** for legacy migration and structured agent documentation. Standalone utilities, design rules, and harness-specific instructions live alongside them.
 
 Skills are slash commands defined in `skills/<name>/SKILL.md` using the Agent Skills format.
 
@@ -10,39 +10,48 @@ Two portable, installable bundles produce three documented workflows. Build the 
 
 ### spec-skills: spec-driven development
 
-A local-first workflow that turns a goal into reviewed architecture, then a deterministic implementation spec, then verified execution. Every stage reads and writes `.specs/<feature-slug>/` as the source of truth. GitHub issues are optional mirrors, used only when the repository is hosted on GitHub and `gh` is authenticated.
+A local-first workflow that turns a goal into reviewed architecture, a prepared immutable implementation package, sequential commits, and one convergent whole-branch review. Human artifacts live in an external feature document folder. Machine state lives under `<documentRoot>/.restory/spec/`. The checkout contains only implementation changes.
 
-Run the stages in order; each consumes the previous stage's artifact:
+Run the stages in order:
 
-1. `spec-architect-initial`: propose an architecture (`proposal.md`)
-2. `spec-architect-critics`: stress-test it (`critique.md`), optional
-3. `spec-write`: commit to an implementation spec (`spec.md`)
-4. `spec-review`: check the spec against the codebase, for difficult changes or handoffs
-5. `spec-criteria`: compile the frozen spec into a conformance checklist (`criteria.md`), before implementing
-6. `spec-branch` / `spec-branch-worktree`: create a branch (and worktree) carrying the spec folder
-7. `spec-run`: implement every step, one subagent per step; each step self-plans first
-8. `spec-audit`: verify the implementation against the checklist
-9. `spec-remediate`: fix any findings, then re-audit until clean
+1. `spec-architect-initial`: write `proposal.md` in the feature document folder.
+2. `spec-architect-critics`: stress-test the proposal and write `critique.md` (optional).
+3. `spec-write`: write `spec.md` plus the machine step index without touching GitHub.
+4. `spec-prepare`: code-ground and correct the spec, derive prose guardrails, plan every step sequentially, and publish `preparation.json` last.
+5. `spec-branch` / `spec-branch-worktree`: create the implementation branch or worktree without copying artifacts.
+6. `spec-run`: consume the prepared package exactly and commit each verified step separately.
+7. `spec-branch-refine`: drive whole-branch review and fix passes to convergence.
+8. `spec-pr`: rebase, publish, and open or update the PR.
+
+`spec-issue` is an optional standalone convenience for mirroring a Markdown spec to GitHub. It writes no pipeline state and does not influence preparation, execution, review, or PR behavior.
 
 | Skill | Command | Purpose |
 |---|---|---|
-| **spec-architect-initial** | `/spec-architect-initial [problem-or-feature]` | Review the existing system architecture and write `.specs/<slug>/proposal.md`, or explain why the request does not fit |
-| **spec-architect-critics** | `/spec-architect-critics [proposal-or-file]` | Stress-test `proposal.md` using expert or expert-lens critique and write `.specs/<slug>/critique.md` |
-| **spec-write** | `/spec-write [feature-slug-or-issue]` | Write `.specs/<slug>/spec.md` from the proposal and critique, and optionally mirror it to a GitHub issue |
-| **spec-subspec-write** | `/spec-subspec-write [step-number] [feature-slug]` | Write a minimal, code-grounded plan for one step at `.specs/<slug>/subspecs/<n>-spec.md`; invoked by `spec-run` before coding each step |
-| **spec-review** | `/spec-review [feature-slug-or-spec-path]` | Review a local spec for gaps, edit `spec.md`, and optionally mirror changes to GitHub |
-| **spec-criteria** | `/spec-criteria [feature-slug-or-spec-path]` | Compile a frozen spec's normative prose into an executable conformance checklist at `.specs/<slug>/criteria.md`, blind to the implementation, accumulating cross-phase invariants in `invariants.md` |
+| **spec-architect-initial** | `/spec-architect-initial [problem-or-feature]` | Review the architecture and write `proposal.md` in the external feature document folder |
+| **spec-architect-critics** | `/spec-architect-critics [proposal-or-file]` | Stress-test `proposal.md` and write `critique.md` |
+| **spec-write** | `/spec-write [feature-document-or-spec-path]` | Write `spec.md` and the machine-readable step index without GitHub side effects |
+| **spec-prepare** | `/spec-prepare [feature-document-or-spec-path]` | Correct and ground the spec, derive prose guardrails, prepare every step, and publish the hash-bound manifest |
+| **spec-subspec-write** | `/spec-subspec-write [step-number] [spec-path]` | Leaf planner used sequentially by `spec-prepare` to write one immutable step subspec |
 | **spec-branch** | `/spec-branch [description-or-feature-slug]` | Create a local branch from a spec, description, or issue/ticket reference |
-| **spec-branch-worktree** | `/spec-branch-worktree [description-or-feature-slug]` | Create a named branch and git worktree, copy the spec folder, then open VSCode |
-| **spec-run** | `/spec-run [feature-slug-or-spec-path]` | Implement all steps from `spec.md`, one subagent per step; each step self-plans via `spec-subspec-write` before coding |
-| **spec-audit** | `/spec-audit [feature-slug-or-spec-path]` | Execute the frozen conformance checklist against the implementation diff; PASS/VIOLATION/UNVERIFIABLE per criterion with evidence, report-only |
-| **spec-remediate** | `/spec-remediate [feature-slug-or-spec-path]` | Fix audit VIOLATIONs with one smart subagent per finding, converging code back to the frozen spec, then re-audit until clean; escalates spec/criteria defects |
+| **spec-branch-worktree** | `/spec-branch-worktree [description-or-feature-slug]` | Create a branch and worktree while leaving external artifacts in place |
+| **spec-run** | `/spec-run [absolute-spec-path-or-feature-document]` | Execute immutable prepared subspecs sequentially and commit each successful step |
+| **spec-step-run** | delegated | Implement and verify exactly one prepared step without replanning |
+| **spec-branch-refine** | `/spec-branch-refine [spec-path]` | Alternate whole-branch review and fix passes until clean or capped |
+| **spec-branch-review** | delegated | Review per commit, then the integrated branch, including bounded prose guardrails |
+| **spec-branch-fix** | delegated | Apply or dismiss structured branch findings and commit fixes |
+| **spec-pr** | `/spec-pr [spec-path]` | Rebase, commit, push, open or update the PR, and record PR artifacts |
+| **spec-issue** | `/spec-issue [markdown-path] [issue-number]` | Standalone GitHub issue creation or update with no pipeline integration |
+
+OpenCode routing variants (`spec-run-glm`, `spec-run-glm-deepseek`,
+`spec-run-glm-mimo`, `spec-run-kimi-stepfun`, and
+`spec-run-deepseek-longcat`) inherit the same prepared-execution contract. They
+select orchestrator and implementer models only; none invokes a runtime planner.
 
 The `spec-skills` bundle also ships the Augment CLI subagent adapter `augment/agents/spec-step-implementer.md`, which `spec-run` uses to delegate one step at a time.
 
 ### design-spec: design-driven front-half
 
-The same pipeline, entered from design instead of architecture. It ships in the `spec-skills` bundle and reuses the canonical `.specs/<feature-slug>/` artifacts (`proposal.md`, `critique.md`, `spec.md`). Once a design spec is written, the engineering back-half runs against it unchanged: `spec-criteria`, `spec-branch`, `spec-run`, `spec-audit`, `spec-remediate`.
+The same pipeline, entered from design instead of architecture. It ships in `spec-skills` and uses the same external feature document and machine-state roots. Once `design-spec-writer` writes the spec and step index, `spec-prepare` owns all grounding, guardrail derivation, and step planning.
 
 The architect classifies each surface on two axes. Posture picks the applicable rule: Functional uses `functionalist-design.md`, Expressive uses `expressive-design.md`. Deliverable is Prototype or Real, in-code. The writer carries the selected posture rule into the spec's Applicable Rules, so `spec-run` applies it at implementation time.
 
@@ -51,17 +60,15 @@ Run the design stages, then hand off to `spec-run`:
 1. `design-spec-architect`: classify and propose a design direction (`proposal.md`)
 2. `design-spec-prototype`: build and serve a viewable prototype (`prototype/`), optional
 3. `design-spec-critique`: critique the prototype, else the proposal (`critique.md`), optional
-4. `design-spec-writer`: commit to a `spec.md` in the standard 8-section contract
-5. `design-spec-review`: design-lens gap and ambiguity review of `spec.md`
-6. Hand off to `spec-criteria` / `spec-branch` / `spec-run` / `spec-audit` / `spec-remediate` as usual
+4. `design-spec-writer`: write `spec.md` and its step index.
+5. Hand off to `spec-prepare`, branching, `spec-run`, and `spec-branch-refine`.
 
 | Skill | Command | Purpose |
 |---|---|---|
-| **design-spec-architect** | `/design-spec-architect [surface-or-feature]` | Review the design system and rules, classify posture and deliverable, and write `.specs/<slug>/proposal.md`, or explain that no new design is needed |
-| **design-spec-prototype** | `/design-spec-prototype [feature-slug or stack override]` | Build a fast, viewable prototype (default: single static HTML + Tailwind CDN) into `.specs/<slug>/prototype/` and serve it on localhost for comment |
-| **design-spec-critique** | `/design-spec-critique [feature-slug]` | Stress-test the prototype (else the proposal) through two real design practitioners or named design lenses and write `.specs/<slug>/critique.md` |
-| **design-spec-writer** | `/design-spec-writer [feature-slug or issue]` | Write `.specs/<slug>/spec.md` in the standard 8-section contract from the proposal, critique, and approved prototype, with design-specialized acceptance criteria and steps |
-| **design-spec-review** | `/design-spec-review [feature-slug-or-spec-path]` | Review `spec.md` from a design lens (token/state/accessibility coverage, design ambiguity, traceability) and edit it |
+| **design-spec-architect** | `/design-spec-architect [surface-or-feature]` | Review the design system and write `proposal.md` in the feature document folder |
+| **design-spec-prototype** | `/design-spec-prototype [feature-document-or-stack-override]` | Build and serve a prototype under the external prototype root |
+| **design-spec-critique** | `/design-spec-critique [feature-document]` | Critique the prototype or proposal and write `critique.md` |
+| **design-spec-writer** | `/design-spec-writer [feature-document]` | Write the design-focused `spec.md` and machine step index without GitHub side effects |
 
 ### specops-skills: SpecOps / agent documentation
 
@@ -147,7 +154,7 @@ This produces, under `dist/skill-bundles/` (git-ignored):
 - `spec-skills-<version>.tar.gz` / `.zip`
 - `specops-skills-<version>.tar.gz` / `.zip`
 
-There is no separate `design-spec-skills` archive. The design-spec skills ship inside `spec-skills` because they write the same `spec.md` contract and then hand off to `spec-criteria`, `spec-run`, `spec-audit`, and `spec-remediate`.
+There is no separate `design-spec-skills` archive. The design-spec skills ship inside `spec-skills` because they write the same artifact contract and hand off to `spec-prepare`, `spec-run`, and `spec-branch-refine`.
 
 Extract an archive and run `./install.sh` (see `./install.sh --help` for harness-specific targets). Set `VERSION` to control the archive name and bundle metadata:
 
@@ -180,7 +187,6 @@ Standalone skills outside the two distributions.
 | **bun-test-fix** | `/bun-test-fix <path-to-test-file>` | Bring a test file into compliance with Bun test rules from `AGENTS.md` |
 | **skill-factory** | `/skill-factory [description of task to automate]` | Create a reusable skill by extracting an existing repository workflow into a grounded `SKILL.md` |
 | **commit** | `/commit [issue]` | Conventional commit of staged files |
-| **spec-pr** | `/spec-pr [spec] [issue]` | Rebase the branch to mergeable, commit, force-push, then open or update a spec-aware pull request |
 | **pr-review** | `/pr-review [pr]` | Review a PR's code and submit comments |
 | **pr-feedback** | `/pr-feedback [pr]` | Address PR review comments one by one |
 

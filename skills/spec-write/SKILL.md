@@ -1,20 +1,20 @@
 ---
 name: spec-write
-description: This skill should be used when the user asks to "write a spec", "create a spec", "spec this out", "plan this feature", or "write an implementation plan" for a feature or change. Creates a structured implementation spec in .specs/<slug>/spec.md and automatically mirrors it to GitHub when the current repository is hosted on GitHub, `gh` is authenticated, and the user has not opted out.
+description: This skill should be used when the user asks to "write a spec", "create a spec", "spec this out", "plan this feature", or "write an implementation plan" for a feature or change. Creates a structured implementation spec at spec.md in the feature document folder without interacting with GitHub issues.
 mode: coding
 scope: document
 disable-model-invocation: true
-argument-hint: "[feature-slug or GitHub issue number (optional)]"
+argument-hint: "[feature-slug (optional)]"
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "12"
+  version: "13"
 ---
 
 # Spec Write
 
-Create a deterministic implementation spec from the current proposal and persist it to the repository-local spec folder. The local file is canonical; GitHub issues are automatic mirrors when available and not explicitly disabled.
+Create a deterministic implementation spec from the current proposal and persist it to the feature document folder — a folder outside the git checkout owned by the app. The local file is canonical. This skill never creates, edits, or renames around GitHub issues.
 
 ## Non-Interactive Operation
 
@@ -24,67 +24,47 @@ Stop only when a required input is genuinely missing and cannot be inferred (for
 
 ## Output Contract
 
-Always write the completed spec to:
+Always write the completed spec to `spec.md` in the feature document folder:
 
 ```txt
-.specs/<feature-slug>/spec.md
+<feature-document-folder>/spec.md
 ```
 
-If the current repository is a GitHub repository and `gh` is authenticated, also mirror the same spec body to a GitHub issue without asking for confirmation, unless the user explicitly says not to mirror:
+When the prompt includes a **# Canonical spec artifact paths** stanza, it is the primary path source — use its exact absolute `spec` path (and its `machineStateRoot` for the step index below).
 
-- If `$ARGUMENTS` is an issue number, edit that issue.
-- If no issue number is provided, create a new issue.
-- If the user explicitly opts out of GitHub mirroring, skip the mirror and report the local spec path.
-- If GitHub is unavailable, unauthenticated, or the repo is hosted elsewhere, skip the mirror and report the local spec path.
+Write every artifact atomically: write the full content to a temporary file in the destination directory, then rename it over the final path. Every markdown artifact begins with a level-1 `#` heading on line 1. Never write spec artifacts inside the git checkout or worktree.
 
-Do not require GitHub for this workflow. Bitbucket, GitLab, self-hosted, and local-only repositories use `.specs/<feature-slug>/spec.md` only. Do not ask whether to mirror in the normal GitHub case; the default is yes.
+This skill writes the local spec only. It does **not** create, edit, comment on, label, or close GitHub issues, and it does **not** rename the feature document folder to add an issue-number prefix.
 
 ## Pre-Step - Load Pipeline Inputs
 
-Before writing the spec, locate the spec folder for this feature: `.specs/<feature-slug>/`.
+Before writing the spec, locate the feature document folder for this feature — the folder outside the git checkout that holds the spec artifacts.
 
 Resolve the folder in this order:
 
-1. If `$ARGUMENTS` names an existing `.specs/<feature-slug>/` folder, use it.
-2. If the conversation names a folder announced by `spec-architect-initial`, use it.
-3. Pick the `.specs/*/` folder whose `proposal.md` matches the feature under discussion, using the most recently modified match on ties.
-4. If there is current architecture analysis in the conversation but no folder yet, create `.specs/<feature-slug>/` from a short kebab-case feature slug.
+1. If the prompt includes a **# Canonical spec artifact paths** stanza, use its paths exactly — the `artifactsRoot` is the feature document folder.
+2. If `$ARGUMENTS` is a path to a spec/proposal/requirements file or its containing folder, use that folder.
+3. If the conversation names a feature document folder announced by `spec-architect-initial`, use it.
+4. Otherwise use the directory containing the active working document file.
+
+Never fall back to a spec folder inside a git checkout, and never create one there. If no feature document folder can be resolved, stop and report the missing input.
 
 The folder contains fixed-name artifacts:
 
-- **`proposal.md`** - the architecture proposal. This is the primary input for the Architecture and Implementation Steps sections. If there is no spec folder, no proposal, and no analysis in the current conversation, stop and tell the user there is nothing to spec from.
+- **`requirements.md`** - optional. What was asked for; read it when present.
+- **`proposal.md`** - the architecture proposal. This is the primary input for the Architecture and Implementation Steps sections. If there is no feature document folder, no proposal, and no analysis in the current conversation, stop and tell the user there is nothing to spec from.
 - **`critique.md`** - optional. If present, reconcile it using the rules below. If absent, skip reconciliation; the critique stage is optional and its absence is not an error.
 - **`spec.md`** - the output of this skill. Overwrite it only after producing the complete updated spec body.
 
 ### Phase specs
 
-A large proposal may be split into multiple specs, one per phase. All phase specs share the same spec folder unless the proposal explicitly creates separate folders.
+A large proposal may be split into multiple specs, one per phase. All phase specs share the same feature document folder unless the proposal explicitly creates separate folders.
 
 When writing a phase spec:
 
 - State which phase of the proposal this spec covers in the Problem Statement.
 - Reconcile only the critique recommendations that fall within this phase's scope. Recommendations belonging to other phases are not deferrals; note them as "covered by phase N" only if helpful.
-- End the spec with the footer block, keeping the phase marker on the folder line: `Spec folder: .specs/<feature-slug>/ (phase N)` followed by the `Visual design:` line (see Spec Footer).
-
-## GitHub Mirror Detection
-
-Treat GitHub as an automatic mirror only when all of these are true:
-
-1. `git remote get-url origin` identifies a GitHub remote, such as `git@github.com:owner/repo.git` or `https://github.com/owner/repo.git`.
-2. `command -v gh` succeeds.
-3. `gh auth status` succeeds for the remote host.
-4. The user has not explicitly opted out of mirroring for this run.
-
-If any check fails, continue with the local `spec.md` output and report why the GitHub mirror was skipped. Do not block spec creation on issue-tracker access, and do not ask for confirmation before mirroring when all checks pass.
-
-## Issue-ID Folder Prefix
-
-When a GitHub issue is associated with this spec, prefix the spec folder slug with the issue number so the canonical folder is `.specs/<issue-number>-<feature-slug>/`.
-
-- Determine the issue number before finalizing the folder. When creating a new issue, create it first (title or provisional body) to obtain its number; when editing an existing issue, the number is already known.
-- If the resolved folder (e.g. `.specs/<feature-slug>/` from the architecture stage) is not already prefixed with this issue number, rename it to `.specs/<issue-number>-<feature-slug>/`, moving every artifact with it (`proposal.md`, `critique.md`, and any others). Use `git mv` when the folder is tracked.
-- The prefixed folder name is now the canonical slug. The `Spec folder:` footer and the issue body must reference it.
-- Repositories with no GitHub issue (Bitbucket, GitLab, self-hosted, local-only) keep the plain `.specs/<feature-slug>/` slug. Do not prefix.
+- End the spec with the footer block, keeping the phase marker on the folder line: `Spec folder: <absolute path of the feature document folder>/ (phase N)` followed by the `Visual design:` line (see Spec Footer).
 
 ## Reconcile Critique Feedback
 
@@ -146,6 +126,8 @@ Design for current requirements, not imagined future ones. Start simple: boring 
 
 Avoid abstractions with only one use, abstract layers "for future flexibility," complex patterns without matching problem complexity, and optimizations without measured need.
 
+Ground the architecture in existing code: before adding a new module or helper, search for existing implementations and precedents using the available repository-search tools named in the runtime capability section — exact search for symbols or literals, and semantic search when available for behavior and precedent — and prefer reusing or extending what already exists.
+
 ### 5. Acceptance Criteria
 
 Create a numbered list (`AC-1`, `AC-2`, etc.) of observable, automatable assertions:
@@ -164,7 +146,7 @@ For each significant trade-off, state why this approach was chosen, what it give
 
 Create a flat, numbered, sequential list of deterministic engineering tasks.
 
-Number the steps with sequential integers starting at 1 (1, 2, 3, …) as one continuous list. Do not group steps under "Phase" headings and do not use tiered or decimal numbers (`1.1`, `2.3`, `3.2.1`). Even when the proposal is organized in phases, the Implementation Steps stay one flat integer sequence — the whole downstream pipeline (`spec-run`, `spec-step-run`, `spec-step-judge`, the external task-runner) addresses steps by this number. A phase *spec* (one of several `spec.md` files for a multi-phase proposal, per Phase specs above) still keeps its own flat 1..N list.
+Number the steps with sequential integers starting at 1 (1, 2, 3, …) as one continuous list. Do not group steps under "Phase" headings and do not use tiered or decimal numbers (`1.1`, `2.3`, `3.2.1`). Even when the proposal is organized in phases, the Implementation Steps stay one flat integer sequence — preparation, `spec-run`, `spec-step-run`, and the external task-runner address steps by this number. A phase *spec* (one of several `spec.md` files for a multi-phase proposal, per Phase specs above) still keeps its own flat 1..N list.
 
 For each step include:
 
@@ -238,10 +220,10 @@ The per-step flag is binary — emit exactly one per step. The footer's spec-wid
 
 ## Spec Footer
 
-End `spec.md` with a metadata footer block so downstream skills can locate the folder and route the work. The first line is the canonical folder; the second is the spec-wide Visual design roll-up (`yes-visual-design` if any step is `Visual: yes`, else `no-visual-design`). Per-step complexity and per-step visual flags are not in the footer — they live on each step (see §7). When the folder is issue-prefixed, use the prefixed slug (e.g. `Spec folder: .specs/<issue-number>-<feature-slug>/`):
+End `spec.md` with a metadata footer block so downstream skills can locate the folder and route the work. The first line is the canonical folder — the absolute path of the feature document folder; the second is the spec-wide Visual design roll-up (`yes-visual-design` if any step is `Visual: yes`, else `no-visual-design`). Per-step complexity and per-step visual flags are not in the footer — they live on each step (see §7). Never prefix the folder with an issue number:
 
 ```txt
-Spec folder: .specs/<feature-slug>/
+Spec folder: <absolute path of the feature document folder>/
 Visual design: no-visual-design
 ```
 
@@ -250,21 +232,19 @@ Visual design: no-visual-design
 For phase specs, keep the phase marker on the folder line:
 
 ```txt
-Spec folder: .specs/<feature-slug>/ (phase 2)
+Spec folder: <absolute path of the feature document folder>/ (phase 2)
 Visual design: yes-visual-design
 ```
-
-The GitHub mirror, when used, must contain the same footer block.
 
 ## Machine-Readable Step Index
 
 Alongside `spec.md`, write a machine-readable index of the implementation steps to:
 
 ```txt
-.specs/<feature-slug>/spec-steps.json
+<machineStateRoot>/spec-steps.json
 ```
 
-Use the canonical (issue-prefixed when applicable) folder, the same one named in the `Spec folder:` footer.
+`machineStateRoot` is the machine-state folder from the **# Canonical spec artifact paths** stanza — `<documentRoot>/.restory/spec/`, where `<documentRoot>` is the feature document folder named in the `Spec folder:` footer.
 
 This file is a derived index, not a second source of truth. `spec.md` stays canonical — the full step text, `Covers:` tags, `Complexity:` tag, and `Visual:` flag all live there. `spec-steps.json` exists so an external task-runner can enumerate the steps and route each one — by difficulty and by visual-design skill — without parsing markdown. It is the same routing signal §7 describes, in a parsable shape.
 
@@ -272,7 +252,7 @@ The index is a JSON object with a `steps` array — one entry per Implementation
 
 ```json
 {
-  "spec": ".specs/<feature-slug>/spec.md",
+  "spec": "/absolute/path/to/feature-document-folder/spec.md",
   "steps": [
     {
       "step": 1,
@@ -287,27 +267,20 @@ The index is a JSON object with a `steps` array — one entry per Implementation
 
 Field contract:
 
-- `spec` — the canonical (issue-prefixed when applicable) path to `spec.md`, matching the `Spec folder:` footer.
+- `spec` — the canonical absolute path of `spec.md` in the feature document folder (the `spec` path from the stanza), matching the `Spec folder:` footer.
 - `step` — the step's number in `spec.md` (integer, 1-based, matching the Implementation Steps list). Downstream skills and the external task-runner address steps by this number.
 - `name` — a terse imperative title for the step (verb + object), roughly eight words or fewer. Not the full "What to do" prose.
 - `description` — one front-loaded, plain-language sentence summarizing what the step does.
 - `difficulty` — exactly one of `easy`, `medium`, `hard`, identical to the step's `Complexity:` tag.
 - `visualDesign` — boolean; `true` when the step implements user-facing visual design, identical to the step's `Visual:` flag (`Visual: yes` → `true`, `Visual: no` → `false`).
 
-Write `spec-steps.json` only after the spec body is final, so the index matches the committed step list, numbering, complexity tags, and visual flags exactly. There must be exactly one entry per step, in the same order. The GitHub mirror carries only the spec body; do not attach the JSON to the issue.
+Write `spec-steps.json` only after the spec body is final, so the index matches the committed step list, numbering, complexity tags, and visual flags exactly. There must be exactly one entry per step, in the same order.
 
 ## Output Steps
 
-1. Resolve the GitHub mirror and issue number (see GitHub Mirror Detection). When creating a new issue, create it first to reserve its number.
-2. Apply the issue-ID folder prefix when an issue number exists (see Issue-ID Folder Prefix), so the canonical folder is `.specs/<issue-number>-<feature-slug>/`. Without an issue number, the canonical folder stays `.specs/<feature-slug>/`.
-3. Write the final markdown body — including each step's `Complexity:` tag (§7) and the footer block (`Spec folder:`, `Visual design:`), referencing the canonical folder — to `<canonical folder>/spec.md`.
-4. Write the machine-readable step index to `<canonical folder>/spec-steps.json` (see Machine-Readable Step Index), one entry per step, each `difficulty` matching that step's `Complexity:` tag and each `visualDesign` matching its `Visual:` flag.
-5. If GitHub mirroring is available, set the issue body to the same spec content. Do not attach `spec-steps.json` to the issue.
-6. Report:
-   - Spec path.
-   - Step-index path (`spec-steps.json`).
-   - GitHub issue URL or "not mirrored".
-   - Proposal and critique inputs used.
+1. Write the final markdown body — including each step's `Complexity:` tag (§7) and the footer block (`Spec folder:`, `Visual design:`) referencing the absolute feature document folder — to `spec.md` in the feature document folder (the canonical `spec` path).
+2. Write the machine-readable step index to `<machineStateRoot>/spec-steps.json` (see Machine-Readable Step Index), one entry per step, each `difficulty` matching that step's `Complexity:` tag and each `visualDesign` matching its `Visual:` flag.
+3. Report one compact routing summary: `outcome: written`; absolute spec and step-index paths; total/easy/medium/hard/visual step counts; proposal/critique inputs used; and `next: spec-prepare`.
 
 Do not implement the plan.
 

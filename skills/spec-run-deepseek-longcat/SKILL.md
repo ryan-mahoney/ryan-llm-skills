@@ -1,6 +1,6 @@
 ---
-name: spec-run-glm-mimo
-description: Use this OpenCode-specific spec-run variant for GLM 5.2 orchestration and Xiaomi MiMo-25 implementation. It consumes spec-prepare outputs exactly and never plans or rewrites subspecs at run time.
+name: spec-run-deepseek-longcat
+description: Use this OpenCode-specific spec-run variant for DeepSeek V4 Pro orchestration and LongCat-2.0-Thinking implementation. It consumes spec-prepare outputs exactly and never plans or rewrites subspecs at run time.
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -12,16 +12,17 @@ metadata:
   version: "2"
 ---
 
-# Spec Run GLM MiMo
+# Spec Run DeepSeek LongCat
 
 Read `~/.agents/skills/spec-run/SKILL.md` in full and follow it exactly. This
 variant overrides only OpenCode model routing:
 
-- Orchestrator: `spec-run-glm-mimo-orchestrator` (GLM 5.2).
-- Implementer: `spec-run-glm-mimo-implementer` (Xiaomi MiMo-25).
+- Orchestrator: `spec-run-deepseek-longcat-orchestrator` (DeepSeek V4 Pro).
+- Implementer: `spec-run-deepseek-longcat-implementer` (LongCat-2.0-Thinking).
 
-Do not invoke any `*-planner` agent. Consume the immutable subspecs and hash-bound
-manifest published by `spec-prepare`; missing or stale preparation blocks execution.
+Do not invoke `spec-run-deepseek-longcat-planner` or any other planner. Consume the
+immutable subspecs and hash-bound manifest published by `spec-prepare`; missing or
+stale preparation blocks execution.
 
 For each step, pass the canonical path stanza, exact step, manifest-bound subspec,
 prose guardrails, live invariants, prior learnings, and blockers to the implementer.

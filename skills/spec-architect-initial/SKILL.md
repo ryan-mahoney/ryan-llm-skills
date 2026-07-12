@@ -1,6 +1,6 @@
 ---
 name: spec-architect-initial
-description: "Act as the first architecture stage in the spec-driven workflow: given a problem or feature request, review the current system architecture and write .specs/<slug>/proposal.md with a compatible solution, or explain why the request does not fit. Use when the user says 'architect this', 'design a solution for', 'how should I implement', 'how would this fit into the codebase', 'propose an approach for', 'is this feasible in our architecture', or 'plan this feature'."
+description: "Act as the first architecture stage in the spec-driven workflow: given a problem or feature request, review the current system architecture and write proposal.md in the feature document folder with a compatible solution, or explain why the request does not fit. Use when the user says 'architect this', 'design a solution for', 'how should I implement', 'how would this fit into the codebase', 'propose an approach for', 'is this feasible in our architecture', or 'plan this feature'."
 mode: coding
 scope: document
 license: MIT
@@ -24,7 +24,7 @@ LLMs are bad at saying "this doesn't fit." They will cheerfully propose bolting 
 
 ## Step 1 — Intake: Qualify the Request Before Doing Any Work
 
-Before touching any code or architecture docs, make sure you understand what's actually being asked. Restate the problem in your own words, covering:
+Before touching any code or architecture docs, make sure you understand what's actually being asked. When the feature document folder contains `requirements.md`, read it first. Restate the problem in your own words, covering:
 
 - **What** needs to happen (the functional requirement)
 - **Who / what** triggers it (user action, cron job, webhook, another service)
@@ -106,7 +106,7 @@ This is the critical step. Run the problem through the constraints and ask:
    Background workers, message queues, new databases, third-party services — these are architectural changes, not feature additions. Flag them explicitly.
 
 5. **Is there precedent in the codebase?**
-   Search for analogous features. If the project already handles file uploads, notifications, or auth in a specific way, the new feature should follow the same pattern unless there's a compelling reason not to.
+   Search for existing implementations and analogous features using available repository-search tools, then read the relevant files. If the project already handles the behavior in a specific way, follow that pattern unless there is a compelling reason not to.
 
 6. **Does it violate any stated conventions?**
    Check the AGENTS.md gotchas and conventions sections. Many projects have opinions about import patterns, error handling, response shapes, or testing requirements that a new feature must follow.
@@ -310,12 +310,12 @@ the value of the feature.]
 
 ## Step 5 — Output
 
-Write the proposal or assessment as a markdown document and persist it for the downstream pipeline:
+Write the proposal in the external feature document folder:
 
-- Create a spec folder at `.specs/<feature-slug>/` in the repo root, where `<feature-slug>` is a short kebab-case name for the feature. If that folder already exists for an unrelated feature, append `-2`, `-3`, etc.
-- Write the document to `.specs/<feature-slug>/proposal.md`. Downstream skills (`spec-architect-critics`, `spec-write`) read this fixed path — do not vary the filename.
-- Announce the folder path in your response so later stages can find it.
-- If the execution environment requires writing outputs to a staging path, follow that environment's documented file-output convention.
+- Use the exact absolute `proposal` path from a **# Canonical spec artifact paths** stanza when present.
+- Otherwise resolve an explicit requirements/spec path or containing folder, or the directory containing the active working document, and write `proposal.md` there. Never create or search for a checkout-local artifact folder.
+- Write atomically. Keep required front matter first and the level-1 heading immediately after it.
+- Report `outcome: proposed` or `outcome: rejected`, the proposal path, and `next: spec-architect-critics | spec-write`.
 - Present the document to the user for review. Invite questions — the proposal is a conversation starter, not a final decree.
 
 ---

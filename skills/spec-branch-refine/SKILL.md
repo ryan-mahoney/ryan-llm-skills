@@ -14,10 +14,10 @@ metadata:
 
 # Spec Branch Refine
 
-> **`.specs/` is untracked working state — often gitignored.** Read and write spec files directly on the filesystem; do not run `git diff`/`log`/`status`/`show` on paths under `.specs/` to read, compare, or recover them — git returning nothing there is expected, not an error. This is scoped to `.specs/`; diffing the code under review is unaffected. For moves, use `git mv` only when the path is tracked, otherwise `mv`.
+> **Spec artifacts live in the feature document folder — outside the git checkout.** Read and write them directly on the filesystem at the absolute paths you are given; do not run `git diff`/`log`/`status`/`show` on artifact paths to read, compare, or recover them — they are not in any repository, so git returning nothing there is expected, not an error. This is scoped to spec artifacts; diffing the code under review is unaffected.
 
-Drive the branch correctness loop to convergence. Alternate `spec-branch-review`
-(find bugs) and `spec-branch-fix` (apply fixes), re-reviewing after each fix, until
+Drive the final branch review loop to convergence. Alternate `spec-branch-review`
+(find correctness, integration, and bounded guardrail defects) and `spec-branch-fix` (apply fixes), re-reviewing after each fix, until
 the branch is clean or a cap is reached. This is the in-process, file-backed
 equivalent of an external review daemon's refine — no daemon, just the two leaf
 skills and their file contract.
@@ -35,9 +35,10 @@ spec-branch-refine
      stop when: verdict pass · no progress · i == max
 ```
 
-The external review orchestrator runs this skill once, after the last step and
-**before** the acceptance gate, so correctness fixes land before the acceptance
-criteria are verified. It is also the right standalone entry point for "clean up this
+The external review orchestrator runs this skill once after the last step. The
+review's bounded guardrail lens consumes only spec acceptance/step obligations,
+criteria `Statement:` values, and live invariants; those findings use the same loop
+and verdict as correctness findings. It is also the right standalone entry point for "clean up this
 branch before I open a PR."
 
 ## Non-Interactive Operation
@@ -49,9 +50,14 @@ condition below is met.
 
 ## Resolve Inputs
 
-- **Spec.** `spec=<path>` / `.specs/<slug>/` folder, else the folder named in the
-  conversation, else the most recently modified `.specs/*/spec.md`. `<spec-dir>` is
-  the folder containing it. If none resolves, stop and report.
+- **Spec.** When the prompt includes a **# Canonical spec artifact paths** stanza,
+  use its exact absolute `spec` path and `artifactsRoot` — the stanza is the primary
+  path source. Otherwise: `spec=<path>` (or a feature document folder containing
+  `spec.md`), else the folder named in the conversation, else the directory
+  containing the active working document file. `<spec-dir>` is the feature document
+  folder — the folder outside the git checkout holding `spec.md` and the other
+  artifacts (the stanza's `artifactsRoot`). Never fall back to a spec folder inside
+  a git checkout. If none resolves, stop and report.
 - **Max iterations.** `max-iterations=<n>`, default **10**. This caps **total review
   iterations**: the loop runs at most `n` reviews (and therefore at most `n-1` fixes,
   since the final review is what detects the cap). Defining the cap on reviews makes
@@ -70,11 +76,7 @@ refine was interrupted — resume rather than overwrite). Then:
    parsed for control flow.
 3. **Stop on clean or cap** — these two stops apply before any fix:
    - **Clean** — `verdict: pass` (no actionable findings). Stop; the branch is clean.
-     Commit the terminal review artifact when it is tracked or not ignored (see
-     Artifact Commit Policy).
-   - **Cap** — `i == max-iterations`. Stop; report the residual actionable findings,
-     and commit the terminal review artifact when it is tracked or not ignored
-     (see Artifact Commit Policy).
+   - **Cap** — `i == max-iterations`. Stop; report the residual actionable findings.
 4. **Compute recurrence, then check stalled** — this order is what prevents both the
    premature stop and the oscillation:
    - **Recurrence set** = actionable signatures in `branch-<i>` that `branch-<i-1>-fix.md`
@@ -85,14 +87,13 @@ refine was interrupted — resume rather than overwrite). Then:
      unchanged from `branch-<i-1>`. That is a genuine dead end: fixing produced nothing
      and the same bugs remain. An identical actionable set after a fix that *did* change
      code is **not** stalled — it gets another iteration, with the recurrence set
-     terminalized (next bullet). Commit the terminal review artifact on this stop
-     when it is tracked or not ignored.
+     terminalized (next bullet).
 5. **Fix.** Run `spec-branch-fix` for iteration `i`. Pass the **recurrence set** as a
    *terminalize* instruction: each of those signatures must reach a terminal state
    this iteration — resolved by a genuinely *different* change, or **dismissed** with a
    class — and may not be marked `fixed` again with the same approach. `spec-branch-fix`
    writes `branch-<i>-fix.md` (with `material_change`), applies fixes, runs tests, and
-   commits the code and artifacts.
+   commits the code changes.
 6. **Advance.** `i = i + 1`; go to step 1.
 
 Computing recurrence *before* the stalled stop is the fix for the ordering bug: a
@@ -100,25 +101,16 @@ recurring finding always reaches the fixer with its terminalize instruction, and
 loop only declares "stalled" when a fix truly changed nothing — never while a
 different fix or an explicit dismissal is still available.
 
-## Artifact Commit Policy
+## Artifact Policy
 
 Review and fix artifacts are part of the product (iteration memory, dismissal
-memory, audit trail) and are always written. They are committed only when already
-tracked or not ignored by Git; never force-add ignored `.specs/` artifacts.
-`spec-branch-fix` commits the review+fix pair for any iteration it runs when those
-artifacts are committable. But every terminal stop — **clean**, **cap**, and
-**stalled** — happens *before* `spec-branch-fix` runs for iteration `i`, so on any of
-the three the driver owns the trailing `branch-<i>-review.md` artifact:
-
-```txt
-chore(reviews): record branch review (iter <i>)
-```
-
-Before staging it, check `git ls-files --error-unmatch <path>` and
-`git check-ignore -q <path>`. If the artifact is ignored and untracked, leave it on
-disk and report that no artifact commit was made because the repository ignores it.
-This keeps the read-only reviewer from ever committing while still guaranteeing the
-review artifact is recorded on disk.
+memory, audit trail) and are always written — to `<spec-dir>/reviews/` in the
+feature document folder (`<artifactsRoot>/reviews/branch-<k>-review.md` and
+`branch-<k>-fix.md`), outside the git checkout. Because they live outside the
+checkout, they are never committed to the repository and must never be force-added
+into it. A review pass whose only output is these artifacts produces no commit;
+the artifacts are durable on disk in the document folder. Only code changes made
+by `spec-branch-fix` are committed.
 
 ## Reporting
 
@@ -130,10 +122,11 @@ Report:
 3. Per-iteration one-liners: actionable count in, fixes applied, dismissals.
 4. Final verdict and any residual findings (actionable left at cap/stalled, plus
    advisory findings never required to fix), with their `file:symbol` and signature.
-5. The review/fix artifact paths written under `<spec-dir>/reviews/`.
-6. The commit hashes produced (fix commits, plus any `chore(reviews):` artifact
-   commit the driver made on a clean/stalled stop), or note `none` when ignored
-   local artifacts were the only changes.
+5. The review/fix artifact paths written under `<spec-dir>/reviews/` in the
+   feature document folder.
+6. The commit hashes produced (fix commits), or note `none` when review/fix
+   artifacts — which live outside the checkout and are never committed — were the
+   only changes.
 
 A first-iteration `pass` is the common, good outcome on a well-built branch: report
 "clean after 1 review, no fixes needed."
