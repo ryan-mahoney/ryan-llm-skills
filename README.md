@@ -42,11 +42,6 @@ Run the stages in order:
 | **spec-pr** | `/spec-pr [spec-path]` | Rebase, commit, push, open or update the PR, and record PR artifacts |
 | **spec-issue** | `/spec-issue [markdown-path] [issue-number]` | Standalone GitHub issue creation or update with no pipeline integration |
 
-OpenCode routing variants (`spec-run-glm`, `spec-run-glm-deepseek`,
-`spec-run-glm-mimo`, `spec-run-kimi-stepfun`, and
-`spec-run-deepseek-longcat`) inherit the same prepared-execution contract. They
-select orchestrator and implementer models only; none invokes a runtime planner.
-
 The `spec-skills` bundle also ships the Augment CLI subagent adapter `augment/agents/spec-step-implementer.md`, which `spec-run` uses to delegate one step at a time.
 
 ### design-spec: design-driven front-half

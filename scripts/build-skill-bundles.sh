@@ -798,11 +798,6 @@ spec_skills=(
   spec-branch
   spec-branch-worktree
   spec-run
-  spec-run-glm
-  spec-run-glm-deepseek
-  spec-run-glm-mimo
-  spec-run-kimi-stepfun
-  spec-run-deepseek-longcat
   spec-step-run
   spec-branch-refine
   spec-branch-review
