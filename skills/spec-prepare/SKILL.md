@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "13"
+  version: "14"
 ---
 
 # Spec Prepare
@@ -104,6 +104,19 @@ Use each `spec-steps.json` entry's existing `difficulty` as the default preparat
 
 Difficulty bounds effort; it does not require delegation. A hard but explicit propagation can still be planned directly. Deepen any card only when repository evidence exposes a missing target, new public or ownership boundary, ambiguous acceptance behavior, unavailable focused verifier, architecture conflict, concurrency or migration risk, destructive data change, security boundary, or uncertain external runtime contract.
 
+#### Bind runtime work to a reachable production path
+
+When a step's own objective or acceptance coverage promises runtime- or user-observable behavior through a controller, provider, command, service, or adapter, use the named targets and immediate integration seam already required by the difficulty budget to identify:
+
+```txt
+Production wiring: <runtime entrypoint or composition owner path/symbol>
+Concrete adapter: <production implementation path/symbol for internal injected interfaces | none — direct production call>
+```
+
+Place these lines in `Targets`. Do not add a repository survey merely to populate them. Dependency injection may replace true external boundaries such as an editor/runtime API, process spawning, filesystem, clock, or network. It does not make a test-only internal interface a production implementation. Every required internal injected interface must have an existing concrete adapter or a named adapter target in the same step.
+
+Include at least one focused verification case that traverses the real production composition through the concrete adapter to an observable result, while faking only the final external boundary. If the entrypoint, adapter, or downstream command/API contract required by this step is absent and the prepared step does not own its addition, correct the spec/step targets or return a non-ready verdict. A deliberately library-only precursor may defer wiring only when its own acceptance coverage is non-runtime and a named later step explicitly owns the integration; never use that exception for a step that itself promises reachable behavior.
+
 #### Label execution risks without deepening preparation
 
 For every medium or hard card, add these two lines to `Setup and Hazards` using only the spec, guardrails, invariants, targets, and repository context already read for that card:
@@ -145,6 +158,7 @@ After the last step, reread every final artifact. Confirm:
 - There is exactly one canonical subspec per indexed step and no unexpected canonical step number.
 - Every planning verdict is `ready`.
 - Every verification contract has concrete focused commands and observable cases.
+- Every ready card that promises runtime- or user-observable behavior names `Production wiring` and `Concrete adapter` targets and verifies one reachable production path.
 - Every medium and hard card records canonical `Risk lenses` and `Live invariants` lines in `Setup and Hazards`.
 - Criteria contain prose `Statement` properties only.
 - The report, spec, index, optional criteria/invariants, and all subspecs are final before manifest hashing begins.

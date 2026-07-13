@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "13"
+  version: "14"
 ---
 
 # Spec Step Run
@@ -69,6 +69,22 @@ them.
   improvising another design.
 - Keep changes minimal, explicit, and fail-fast.
 - Do not add compatibility behavior unless the spec requires it.
+
+## Prove Production Reachability
+
+An injected interface is not implementation evidence by itself. Fakes may replace only true external boundaries such as an editor/runtime API, child-process spawning, filesystem, clock, or network. Do not substitute a test-only internal interface for the concrete production adapter that connects the feature to the running system.
+
+For a step that promises runtime- or user-observable behavior, trace one complete path before declaring success:
+
+1. The actual runtime entrypoint or composition owner creates or registers the new behavior.
+2. Every required internal injected interface has a concrete production implementation.
+3. The downstream command, API, schema, or protocol exists and the concrete adapter uses its real contract.
+4. At least one prepared focused test traverses that production composition, faking only the final external boundary.
+5. The promised result is reachable and observable without manually constructing an otherwise-unwired internal controller, provider, service, or node.
+
+Use the card's `Production wiring` and `Concrete adapter` targets when present. If a required link is absent, fake-only, deferred to a later step, or outside the protected prepared scope, write a blocked learning and stop without committing. Green unit tests over an unreachable abstraction do not satisfy the step.
+
+A deliberately library-only precursor may omit runtime reachability only when its prepared acceptance coverage is non-runtime and a named later step explicitly owns integration. Record that bounded handoff; do not apply it to a step whose own objective promises reachable behavior.
 
 ## Expand Risk-Directed Verification During Execution
 
@@ -133,12 +149,14 @@ learning:
         outcome: <pass | fail | hung | skipped>
 ```
 
-Follow it with the step reference/Covers tags, outcome, a concise risk-audit summary
+Follow it with the step reference/Covers tags, outcome, a concise risk-audit and production-reachability summary
 covering the declared labels/invariants, at most five concrete findings for later
 steps, at most five discrepancies/risks, and the verification summary. Emit the
 learning in every terminal case, including blocked and already satisfied steps.
 
-After the authoritative commands first pass, inspect the scoped diff and tests once before committing. Confirm that every prepared case is asserted, every declared risk lens/live invariant is covered or explicitly dismissed, external callbacks are actually observed, zero-work/repeated-call/failure-boundary paths are not accidentally skipped, established ownership surfaces were reused, and acquired resources close on failure or cancellation. If this audit reveals a gap, add the smallest regression within the prepared test files, fix it, and rerun the exact command; this consumes one of the same two correction attempts. Then stage only this step's code and test files and make one conventional commit. Never stage spec artifacts. Do not begin another step.
+`outcome: as-specified` or `adapted` is invalid when the learning says a required production entrypoint, internal adapter, downstream contract, or user-observable path is absent, fake-only, deferred, or unreachable. Such a result must be `blocked` with `commit: none`, even when the focused tests pass.
+
+After the authoritative commands first pass, inspect the scoped diff and tests once before committing. Confirm that every prepared case is asserted, the production-reachability trace is complete, every declared risk lens/live invariant is covered or explicitly dismissed, external callbacks are actually observed, zero-work/repeated-call/failure-boundary paths are not accidentally skipped, established ownership surfaces were reused, and acquired resources close on failure or cancellation. If this audit reveals a gap, add the smallest regression within the prepared test files, fix it, and rerun the exact command; this consumes one of the same two correction attempts. Then stage only this step's code and test files and make one conventional commit. Never stage spec artifacts. Do not begin another step.
 
 ## Completion Report
 

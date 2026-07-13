@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "15"
+  version: "16"
 ---
 
 # Spec Run
@@ -66,6 +66,10 @@ After each step returns, verify only the execution contract:
 5. Fix attempts did not exceed the shared `spec-step-run` limit of two.
 6. The learning record and exactly one step commit exist.
 7. Risk-tagged steps include a learning risk-audit summary that covers or explicitly dismisses every declared risk lens and live invariant.
+8. Runtime-facing steps include a complete production-reachability summary: entrypoint/composition owner, concrete internal adapter, real downstream contract, and focused path observation.
+9. A successful outcome does not contradict its own discrepancies/risks by describing required production wiring, an internal adapter, a downstream contract, or the promised user-observable path as absent, fake-only, deferred, or unreachable.
+
+If item 9 fails, treat the step as blocked even when its focused tests passed or a commit was created. Do not accept `as-specified`/`adapted`, do not dispatch the next step, and do not reinterpret the missing integration as a later-step note.
 
 Do not rerun commands merely to duplicate the implementer's evidence. Rerun only when the returned record is incomplete or internally inconsistent and the exact prepared command can resolve that evidence gap without changing code. Any scope, command, preparation, or verification mismatch blocks the run; do not dispatch the next step.
 

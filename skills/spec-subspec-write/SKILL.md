@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "13"
+  version: "14"
 ---
 
 # Spec Subspec Write
@@ -38,6 +38,7 @@ Ground only the unresolved risk that caused escalation:
 
 - Read every exact target file the step names.
 - Read current definitions of modified/called symbols and only consequential immediate callers/callees.
+- For a step that promises runtime- or user-observable behavior, read the actual entrypoint/composition owner and the concrete production adapter for each internal injected interface.
 - Read the existing test file or nearest repository test precedent for the behavior.
 - Read repository `AGENTS.md` test rules and directly referenced guidance only when they affect the target verifier or setup.
 - Read applicable rule paths injected by the parent.
@@ -58,7 +59,7 @@ These are bounded lookups, not a repository survey.
 
 Choose exactly one:
 
-- `ready` — the step fits the current code and the subspec contains a complete actionable edit plan and verification contract.
+- `ready` — the step fits the current code, every required runtime path has named production wiring and a concrete adapter, and the subspec contains a complete actionable edit plan and verification contract.
 - `needs-spec-correction` — repository grounding shows that intent, acceptance coverage, prerequisites, step boundaries/order, named contracts, or target paths in the parent spec must change. State the exact correction; do not edit the parent.
 - `blocked` — a required input, decision, dependency, or verifiable runtime contract is missing and cannot be resolved locally.
 
@@ -119,6 +120,8 @@ Do not force red-first ceremony onto mechanical work. Conversely, do not choose 
 
 Every ready plan names exact commands scoped to the changed behavior: a test file, test-name filter, targeted typecheck/build command, or similarly bounded verifier. Never emit an unfiltered full-suite command such as bare `bun test` or `bun run test`. Do not replace repository-specific commands with a generic command.
 
+For a step that promises runtime- or user-observable behavior, include at least one case that starts at the actual production entrypoint/composition, crosses the concrete internal adapter, and observes the promised result. Fakes may replace the final external boundary, but a test that manually constructs the new controller/provider/service behind an interface with no production implementation is not sufficient. A deliberately library-only precursor may defer wiring only when its own acceptance coverage is non-runtime and a named later step explicitly owns integration.
+
 Do not write complete routine test bodies in the subspec. A minimal harness skeleton is allowed only when fake-timer ordering, fixture construction, or a non-obvious mock boundary is itself the key planning risk; justify that skeleton in Setup.
 
 ## Compact Human Sections
@@ -129,13 +132,22 @@ After the two machine blocks, include only:
 
 Name each file, symbol or public shape, and add/change/remove action. Include reuse-search or external-behavior evidence only when it resolved the escalated risk.
 
+For runtime-facing work, include these exact target lines:
+
+```txt
+Production wiring: <runtime entrypoint or composition owner path/symbol>
+Concrete adapter: <production implementation path/symbol for internal injected interfaces | none — direct production call>
+```
+
+If either required target is absent and the step cannot own it without changing protected scope, use `needs-spec-correction` or `blocked`; do not defer it as a later risk.
+
 ### Edit Sequence
 
 Give a short ordered sequence. Each item names a file, symbol, and operation. Inline only new or changed public shapes; reference existing code rather than transcribing it.
 
 ### Setup and Hazards
 
-Include only non-obvious fixture, dependency-injection, timer, mock, runner, migration, or external-runtime details needed by the implementor. Write `None` when no special handling applies.
+Include only non-obvious fixture, dependency-injection, timer, mock, runner, migration, or external-runtime details needed by the implementor. Write `None` when no special handling applies. State which true external boundary may be faked; an internal adapter required for production reachability must remain concrete.
 
 For medium or hard steps, end this section with the exact lines below, using only context already required to ground the step:
 
