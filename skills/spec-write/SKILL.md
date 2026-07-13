@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "14"
+  version: "15"
 ---
 
 # Spec Write
@@ -52,7 +52,10 @@ The folder contains fixed-name artifacts:
 - **`requirements.md`** - optional. What was asked for; read it when present.
 - **`proposal.md`** - the architecture proposal. This is the primary input for the Architecture and Implementation Steps sections. If there is no spec folder, no proposal, and no analysis in the current conversation, stop and tell the user there is nothing to spec from.
 - **`critique.md`** - optional. If present, reconcile it using the rules below. If absent, skip reconciliation; the critique stage is optional and its absence is not an error.
+- **Visual reference** - optional. When the proposal or conversation identifies existing visual work such as an HTML prototype, image, or mockup, resolve its exact entry-file path before writing. Treat that artifact as existing design input, not work to recreate.
 - **`spec.md`** - the output of this skill. Overwrite it only after producing the complete updated spec body.
+
+When a visual reference is outside the resolved spec folder, copy the smallest self-contained reference artifact into `.specs/<feature-slug>/visual-references/` without modifying it. For an HTML prototype, preserve the entry file and any local assets it loads with their relative layout. Reuse a byte-identical destination; stop on a same-name content conflict rather than overwriting. References already inside the feature folder, including `prototype/`, stay in place.
 
 ### Phase specs
 
@@ -120,6 +123,14 @@ Include:
 - Design decisions and rationale.
 - Dependency map covering internal modules and external packages/services.
 
+When a visual reference exists, include a standalone line with its direct checkout-relative entry-file path:
+
+```txt
+Visual reference: .specs/<feature-slug>/<prototype-or-visual-references>/<entry-file>
+```
+
+Name the file (for example, `.specs/account-settings/prototype/index.html`), not only its containing directory. State that implementation must inspect and reuse this artifact as the visual source of truth rather than recreate or redesign it. Omit the line only when no visual reference exists.
+
 Design for current requirements, not imagined future ones. Start simple: boring technology, explicit boundaries, and data flow that can be explained in under 5 minutes. Fail fast on invalid inputs; do not add defensive fallbacks unless explicitly required.
 
 Avoid abstractions with only one use, abstract layers "for future flexibility," complex patterns without matching problem complexity, and optimizations without measured need.
@@ -155,6 +166,7 @@ For each step include:
 5. Coverage: which acceptance criteria this step satisfies, as a tag line (`Covers: AC-3, AC-7`). Every criterion must be covered by at least one step; a step covering no criterion must trace to a stated architectural need instead.
 6. Complexity: how hard *this step* is, as a tag line (`Complexity: easy`). One of `easy`, `medium`, `hard` — see the rubric below. The system uses per-step tags to route each step to an appropriately strong implementation model, so score every step, not just the spec.
 7. Visual design: whether *this step* implements user-facing visual design, as a tag line (`Visual: yes` or `Visual: no`). See the Visual design rubric in Implementation Profile. The system routes `Visual: yes` steps to design-capable handling and visual verification, so flag every step, not just the spec.
+8. Visual reference: when a visual reference exists and the step is `Visual: yes`, repeat the exact `Visual reference: <checkout-relative file path>` line in that step and require parity with it. Do not tell the implementer to create a replacement prototype or derive a new visual direction.
 
 Each step's `Covers:`, `Complexity:`, and `Visual:` tag lines sit together at the end of the step. Judge complexity by *this step's own* work, applying the rubric the same way every time so the label is reproducible across runs. Anchor the choice on four signals — scope (files/modules this step touches), novelty (new abstractions vs. reusing existing patterns), domain difficulty (the Qualifications this step exercises), and integration risk (state, I/O, migrations, blast radius this step incurs):
 

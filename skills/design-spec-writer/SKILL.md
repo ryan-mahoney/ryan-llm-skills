@@ -7,7 +7,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "9"
+  version: "10"
 ---
 
 # Design Spec Writer
@@ -43,8 +43,10 @@ Read the fixed-name artifacts:
 
 - **`proposal.md`** — the design proposal. Primary input for Architecture and Approach. It carries the **Context Verdict** (posture + governing rules), **Design Direction**, **Design System Usage**, and **States**. If there is no proposal, no prototype, and no design in the conversation, stop and say there is nothing to spec from.
 - **`critique.md`** — optional. If present, reconcile per the triage table below. Absence is not an error.
-- **`prototype/`** — optional sibling folder. **An approved prototype is the visual source of truth.** Translate its concrete decisions — layout, type scale, spacing, color, component composition, states, interactions — rather than re-deriving them. Map prototype-only tokens and libraries to real project equivalents.
+- **`prototype/`** — optional sibling folder. Resolve its exact visual entry file, normally `.specs/<feature>/prototype/index.html`. **An approved prototype is the visual source of truth.** Translate its concrete decisions — layout, type scale, spacing, color, component composition, states, interactions — rather than re-deriving or recreating them. Map prototype-only tokens and libraries to real project equivalents.
 - **`spec.md`** — this skill's output. Overwrite only after producing the complete updated body.
+
+When a visual reference is outside the resolved spec folder, copy the smallest self-contained reference artifact into `.specs/<feature>/visual-references/` without modifying it. For an HTML prototype, preserve the entry file and any local assets it loads with their relative layout. Reuse a byte-identical destination; stop on a same-name content conflict rather than overwriting. References already inside the feature folder stay in place.
 
 Also read the repo's design system (tokens, component library, existing components) and `AGENTS.md`, so the spec references real, existing artifacts.
 
@@ -102,6 +104,14 @@ Include:
 - **Governing posture and rule**, and for hybrid, the zone mapping.
 - **Dependency map** — component library, icon set, motion library, fonts.
 
+When a prototype or other visual reference exists, include a standalone line with the direct checkout-relative entry-file path:
+
+```txt
+Visual reference: .specs/<feature>/<prototype-or-visual-references>/<entry-file>
+```
+
+Name the file (for example, `.specs/account-settings/prototype/index.html`), not only `prototype/`. State that implementation must inspect and reuse it as the visual source of truth instead of creating a replacement design.
+
 Design for current requirements. Reuse existing components and tokens before adding. Avoid one-use abstractions and wrapper components with no behavior.
 
 ### 5. Acceptance Criteria
@@ -123,7 +133,7 @@ Trade-offs with rationale, posture rationale, risks, what was deferred from crit
 
 ### 7. Implementation Steps
 
-A flat, numbered, sequential list of deterministic engineering tasks. For each: **What to do** (exact files/changes), **Why** (tie to architecture or an AC), **Signatures/contracts** (component prop shapes when adding/changing interfaces), **Tests** (concrete assertions and target files — Storybook stories, Playwright/visual snapshots, jest-axe, Testing Library; behavior and states, not implementation), **Coverage** (`Covers: AC-3, AC-7`), **Complexity** (`Complexity: easy`), and **Visual design** (`Visual: yes` or `Visual: no`). Every AC must be covered by at least one step; a step covering no AC must trace to a stated architectural need.
+A flat, numbered, sequential list of deterministic engineering tasks. For each: **What to do** (exact files/changes), **Why** (tie to architecture or an AC), **Signatures/contracts** (component prop shapes when adding/changing interfaces), **Tests** (concrete assertions and target files — Storybook stories, Playwright/visual snapshots, jest-axe, Testing Library; behavior and states, not implementation), **Coverage** (`Covers: AC-3, AC-7`), **Complexity** (`Complexity: easy`), and **Visual design** (`Visual: yes` or `Visual: no`). When a visual reference exists, every `Visual: yes` step also repeats `Visual reference: <exact checkout-relative file path>` and requires the implementation to inspect and match it rather than recreate the design. Every AC must be covered by at least one step; a step covering no AC must trace to a stated architectural need.
 
 Number the steps with sequential integers starting at 1 (1, 2, 3, …) as one continuous list. Do not group steps under "Phase" headings and do not use tiered or decimal numbers (`1.1`, `2.3`, `3.2.1`). Even when the design is organized in phases, the Implementation Steps stay one flat integer sequence — the external task-runner addresses steps by this number. A phase *spec* (one of several `spec.md` files for a multi-phase design, per Phase specs above) still keeps its own flat 1..N list.
 

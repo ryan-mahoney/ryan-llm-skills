@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "14"
+  version: "15"
 ---
 
 # Spec Prepare
@@ -56,7 +56,7 @@ Perform these transformations in exactly this order. They are deliberately seque
 
 ### 2. Review and correct the spec
 
-Ground the review in repository code. Read every existing file, type, function, API, pattern reference, and test named by the spec; new paths must be plausible beside verified precedent. Verify that critique Must Address recommendations landed or have explicit rationale.
+Ground the review in repository code. Read every existing file, type, function, API, pattern reference, and test named by the spec; new paths must be plausible beside verified precedent. Verify that critique Must Address recommendations landed or have explicit rationale. When the spec names a `Visual reference: <file path>`, resolve it from the checkout root, confirm that exact file exists, and keep it as the visual source of truth; do not replace it with newly invented design work.
 
 Correct only substantive defects:
 
@@ -145,6 +145,8 @@ List only live invariants that the step establishes, consumes, or can violate th
 
 Every card must contain strict `planning` and `verification` blocks matching the compact contract in `spec-subspec-write`. The parent validates hashes, step numbers, filenames, concrete targets, focused commands, and observable cases mechanically. It does not create a second prose copy of the verification contract or semantically re-judge an equivalent planner's work.
 
+When the parent spec has a visual reference, every card for a `Visual: yes` step must repeat the exact line `Visual reference: <checkout-relative file path>` in `Targets`. Its edit sequence must begin from inspecting and matching that artifact, not creating a new prototype or design direction. Non-visual cards may omit it.
+
 Correct locally resolvable problems directly. Accumulate spec corrections discovered while producing cards, update the spec/index/guardrails once, then regenerate only cards whose inputs or required behavior changed. A missing field or stale private symbol is a repair, not a blocker.
 
 Use `spec-subspec-write` only when an escalation trigger remains unresolved after the bounded grounding above. The fallback leaf must return a compact card or identify the exact genuine blocker; the parent still owns all shared artifacts. Stop without publishing only for a required product decision, unavailable dependency, or irreconcilable spec/repository contract that cannot be resolved from local evidence.
@@ -159,6 +161,7 @@ After the last step, reread every final artifact. Confirm:
 - Every planning verdict is `ready`.
 - Every verification contract has concrete focused commands and observable cases.
 - Every ready card that promises runtime- or user-observable behavior names `Production wiring` and `Concrete adapter` targets and verifies one reachable production path.
+- Every `Visual: yes` card repeats the parent spec's exact visual-reference file path when one exists.
 - Every medium and hard card records canonical `Risk lenses` and `Live invariants` lines in `Setup and Hazards`.
 - Criteria contain prose `Statement` properties only.
 - The report, spec, index, optional criteria/invariants, and all subspecs are final before manifest hashing begins.

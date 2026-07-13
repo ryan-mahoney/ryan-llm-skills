@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "14"
+  version: "15"
 ---
 
 # Spec Subspec Write
@@ -42,6 +42,7 @@ Ground only the unresolved risk that caused escalation:
 - Read the existing test file or nearest repository test precedent for the behavior.
 - Read repository `AGENTS.md` test rules and directly referenced guidance only when they affect the target verifier or setup.
 - Read applicable rule paths injected by the parent.
+- When the parent spec or assigned step names `Visual reference: <file path>`, resolve and read that exact file from the checkout root and treat it as existing design work to preserve. Do not create a replacement prototype or derive a different visual direction.
 
 Do not survey unrelated modules or re-derive architecture.
 
@@ -131,6 +132,14 @@ After the two machine blocks, include only:
 ### Targets
 
 Name each file, symbol or public shape, and add/change/remove action. Include reuse-search or external-behavior evidence only when it resolved the escalated risk.
+
+For a `Visual: yes` step with a visual reference, include this exact target line using the same checkout-relative file path as `spec.md`:
+
+```txt
+Visual reference: .specs/<feature>/<prototype-or-visual-references>/<entry-file>
+```
+
+The edit sequence must start from inspecting and matching that artifact. Never replace a concrete reference with instructions to recreate, reinterpret, or newly prototype the design.
 
 For runtime-facing work, include these exact target lines:
 

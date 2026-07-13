@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "9"
+  version: "10"
 ---
 
 # Spec Branch Worktree
@@ -75,11 +75,24 @@ Copy local environment configuration when present:
 cp "$repo_root/.env" "$dest/.env" 2>/dev/null || true
 ```
 
-When a source spec slug was resolved, copy the entire source folder into `$dest/.specs/<source-slug>/`, preserving every file and subdirectory. Do not copy only `spec.md`, do not copy unrelated feature folders, and do not rewrite paths inside artifacts. Relative artifact references remain valid because the `.specs/<feature>/` shape is unchanged.
+When a source spec slug was resolved, copy the entire source folder into `$dest/.specs/<source-slug>/`, preserving every file and subdirectory. Do not copy only `spec.md` or unrelated feature folders. Checkout-relative artifact references remain valid because the `.specs/<feature>/` shape is unchanged.
+
+### Preserve visual references
+
+Read and deduplicate every direct `Visual reference: <file path>` line in the source `spec.md` when present. A path inside the source feature folder is already included by the complete-folder copy; confirm that its destination counterpart exists byte-for-byte. This explicitly includes HTML entry files under `prototype/` or `visual-references/` and their packaged local assets. Never regenerate, rebuild, or reinterpret a visual reference during worktree creation.
+
+For a legacy spec whose visual reference is outside the source feature folder:
+
+1. Confirm the referenced file exists. Copy the smallest self-contained artifact into `$dest/.specs/<source-slug>/visual-references/`, preserving the referenced filename and any local assets required by an HTML entry file.
+2. Replace only the exact `Visual reference:` value in the destination `spec.md` and any destination `step-*-subspec.md` files with the checkout-relative copied entry-file path. Never rewrite the source checkout's artifacts.
+3. Stop on a destination name collision with different bytes; do not overwrite or invent a second design.
+4. Remove destination `preparation.json` when any path was rebased, because the copied preparation hashes are stale. Report `preparation: invalidated`; the next stage must rerun `spec-prepare`.
+
+If a named visual reference is missing, stop with `reason: missing-visual-reference` rather than creating a substitute.
 
 If the destination feature folder already exists:
 
-- Reuse it when its files are byte-identical to the source.
+- Reuse it when its files are byte-identical to the source, or when the only differences are the deterministic legacy visual-reference rebasing, copied `visual-references/` content, and invalidated `preparation.json` described above.
 - If either copy has diverged, stop with `reason: spec-folder-conflict`; never merge or overwrite silently.
 
 After a successful copy, the destination is the active spec folder for this branch. The source remains an inert handoff copy; subsequent spec skills must run from the worktree and must not write back to the source checkout.
@@ -112,6 +125,8 @@ worktree: <absolute path>
 base: <base ref>
 tracking: none
 spec: copied:<slug> | reused:<slug> | none
+visual-references: copied:<count> | packaged:<count> | none
+preparation: preserved | invalidated | none
 environment: copied | absent
 dependencies: <command and outcome | skipped>
 vscode: opened
