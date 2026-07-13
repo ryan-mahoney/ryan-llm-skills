@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "14"
+  version: "15"
 ---
 
 # Spec Run
@@ -40,7 +40,7 @@ Repeat this validation before every step dispatch. A missing, invalid, stale, in
 
 Treat every prepared subspec and its strict `planning` and `verification` blocks as immutable inputs. Neither the orchestrator nor an implementation agent may create, rewrite, patch, regenerate, replace, or supplement a subspec.
 
-Do not invoke `spec-subspec-write`, a planner, a judge, a per-step reviewer, or a per-step fix agent. Do not re-ground the spec, redesign its steps, derive new guardrails, invent tests, or replace focused commands. Let `spec-step-run` adapt private mechanical drift within its protected behavioral boundaries; drift that changes behavior, public contracts, architecture, acceptance coverage, or verification intent is a blocker requiring fresh preparation.
+Do not invoke `spec-subspec-write`, a planner, a judge, a per-step reviewer, or a per-step fix agent. Do not re-ground the spec, redesign its steps, derive new guardrails, invent new behavior, add test files or commands, or replace focused commands. `spec-step-run` may strengthen assertions and add adversarial cases inside the prepared test files and exact commands when directly entailed by prepared risk lenses, acceptance criteria, criteria statements, or live invariants. Let `spec-step-run` adapt private mechanical drift within its protected behavioral boundaries; drift that changes behavior, public contracts, architecture, acceptance coverage, or verification intent is a blocker requiring fresh preparation.
 
 ## Execute One Step At A Time
 
@@ -50,6 +50,8 @@ For each indexed step in ascending order:
 2. Provide the implementation agent with the resolved spec-folder path, exact step text, immutable subspec, preparation manifest, applicable rules, relevant prose-only criteria statements, live invariants, prior learnings, and unresolved blockers.
 3. Require the agent to read and follow `~/.agents/skills/spec-step-run/SKILL.md` in full.
 4. Wait for that step to reach a terminal result before continuing.
+
+When the card declares any risk lens, call it out explicitly in the dispatch and require the execution-time boundary expansion and pre-commit risk audit from `spec-step-run`. When the harness exposes a reasoning-effort control, prefer elevated reasoning for `persistence-integrity`, `atomic-publication`, `concurrency`, `lease-or-refcount`, `cancellation`, `cross-step-contract`, and `security-boundary`; the absence of such a control does not block execution.
 
 `spec-step-run` owns implementation, the authoritative focused verification commands, bounded fix attempts, the step learning, staging only that step's code/tests, and one conventional commit. The orchestrator must not perform a second implementation or fix pass.
 
@@ -63,6 +65,7 @@ After each step returns, verify only the execution contract:
 4. Hung commands were terminated and counted as attempts.
 5. Fix attempts did not exceed the shared `spec-step-run` limit of two.
 6. The learning record and exactly one step commit exist.
+7. Risk-tagged steps include a learning risk-audit summary that covers or explicitly dismisses every declared risk lens and live invariant.
 
 Do not rerun commands merely to duplicate the implementer's evidence. Rerun only when the returned record is incomplete or internally inconsistent and the exact prepared command can resolve that evidence gap without changing code. Any scope, command, preparation, or verification mismatch blocks the run; do not dispatch the next step.
 

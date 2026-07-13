@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "12"
+  version: "13"
 ---
 
 # Spec Step Run
@@ -70,6 +70,24 @@ them.
 - Keep changes minimal, explicit, and fail-fast.
 - Do not add compatibility behavior unless the spec requires it.
 
+## Expand Risk-Directed Verification During Execution
+
+Read the prepared card's `Risk lenses` and `Live invariants` lines. They do not authorize new behavior, test files, commands, or acceptance scope. They do authorize strengthening assertions and adding adversarial cases within the prepared `verification.test_files` and exact commands when those cases are directly entailed by the spec, prepared cases, criteria statements, or live invariants.
+
+Before implementation, privately map each applicable label to the smallest useful boundary checks:
+
+- `persistence-integrity` — corrupt-but-well-shaped input, mismatched metadata/hash/bytes, and restore/read validation.
+- `atomic-publication` — failure immediately before and after irreversible boundaries; the prior committed state remains usable.
+- `concurrency`, `lease-or-refcount`, `idempotency` — two owners/readers, stale ownership, duplicate retry/release, and repeated-call behavior.
+- `cancellation` — cancellation before work, with zero loop iterations or a full cache hit, between batches, and before irreversible commit.
+- `resource-budget` — total owned work, including cached or reused work, unless the spec explicitly defines a delta-only limit.
+- `progress-observer` — the external observer receives ordered events and exactly one terminal outcome; an internal event array alone is insufficient.
+- `filesystem-snapshot` — hashes, manifests, and derived output describe the same bytes when files may change during processing.
+- `cross-step-contract` — reuse established stores, registries, path constructors, ownership, and public shapes rather than introducing private replacements.
+- `external-runtime`, `security-boundary` — verify the prepared injected boundary, fail-closed behavior, and prohibited side effects.
+
+For each prepared verification case, ensure at least one assertion observes the promised result and, when relevant, the mutation that must not occur. For each risk label or live invariant, either add or identify a focused assertion or record in the learning why the label was inapplicable to the final diff. Do not add a broad suite or a second test harness.
+
 ## Execute The Authoritative Verification Contract
 
 The subspec's strict `verification` block is authoritative:
@@ -86,6 +104,8 @@ The subspec's strict `verification` block is authoritative:
 4. Make at most two scoped correction attempts and rerun the authoritative command
    after each. Then block. Do not weaken assertions, skip a required case, alter the
    verification intent, or broaden into another step to obtain green output.
+
+For a new test file, an initial missing-file or missing-module failure may establish the bootstrap red point, but write the risk-directed cases before production implementation and confirm the resulting red evidence represents the unimplemented behavior whenever the harness can run that skeleton.
 
 Record the red/green sequence, exact commands, outcomes, hang termination, and
 fix-attempt count in the step learning. A command that cannot run as prepared is a
@@ -113,14 +133,12 @@ learning:
         outcome: <pass | fail | hung | skipped>
 ```
 
-Follow it with the step reference/Covers tags, outcome, at most five concrete
-findings for later steps, at most five discrepancies/risks, and the verification
-summary. Emit the learning in every terminal case, including blocked and already
-satisfied steps.
+Follow it with the step reference/Covers tags, outcome, a concise risk-audit summary
+covering the declared labels/invariants, at most five concrete findings for later
+steps, at most five discrepancies/risks, and the verification summary. Emit the
+learning in every terminal case, including blocked and already satisfied steps.
 
-After all authoritative commands pass, stage only this step's code and test files
-and make one conventional commit. Never stage spec artifacts. Do not begin another
-step.
+After the authoritative commands first pass, inspect the scoped diff and tests once before committing. Confirm that every prepared case is asserted, every declared risk lens/live invariant is covered or explicitly dismissed, external callbacks are actually observed, zero-work/repeated-call/failure-boundary paths are not accidentally skipped, established ownership surfaces were reused, and acquired resources close on failure or cancellation. If this audit reveals a gap, add the smallest regression within the prepared test files, fix it, and rerun the exact command; this consumes one of the same two correction attempts. Then stage only this step's code and test files and make one conventional commit. Never stage spec artifacts. Do not begin another step.
 
 ## Completion Report
 

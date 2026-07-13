@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "12"
+  version: "13"
 ---
 
 # Spec Prepare
@@ -104,6 +104,32 @@ Use each `spec-steps.json` entry's existing `difficulty` as the default preparat
 
 Difficulty bounds effort; it does not require delegation. A hard but explicit propagation can still be planned directly. Deepen any card only when repository evidence exposes a missing target, new public or ownership boundary, ambiguous acceptance behavior, unavailable focused verifier, architecture conflict, concurrency or migration risk, destructive data change, security boundary, or uncertain external runtime contract.
 
+#### Label execution risks without deepening preparation
+
+For every medium or hard card, add these two lines to `Setup and Hazards` using only the spec, guardrails, invariants, targets, and repository context already read for that card:
+
+```txt
+Risk lenses: <comma-separated labels | none>
+Live invariants: <comma-separated invariant IDs | none>
+```
+
+Use only applicable labels from this fixed vocabulary:
+
+- `persistence-integrity`
+- `atomic-publication`
+- `concurrency`
+- `lease-or-refcount`
+- `idempotency`
+- `cancellation`
+- `resource-budget`
+- `progress-observer`
+- `filesystem-snapshot`
+- `cross-step-contract`
+- `external-runtime`
+- `security-boundary`
+
+List only live invariants that the step establishes, consumes, or can violate through its named targets. Do not perform extra repository surveying, add commands, or expand a full adversarial boundary matrix merely to populate these lines. The labels route bounded execution-time verification in `spec-step-run`; they do not enlarge the prepared behavior or acceptance scope. Use `none` when no label or invariant applies.
+
 Every card must contain strict `planning` and `verification` blocks matching the compact contract in `spec-subspec-write`. The parent validates hashes, step numbers, filenames, concrete targets, focused commands, and observable cases mechanically. It does not create a second prose copy of the verification contract or semantically re-judge an equivalent planner's work.
 
 Correct locally resolvable problems directly. Accumulate spec corrections discovered while producing cards, update the spec/index/guardrails once, then regenerate only cards whose inputs or required behavior changed. A missing field or stale private symbol is a repair, not a blocker.
@@ -119,6 +145,7 @@ After the last step, reread every final artifact. Confirm:
 - There is exactly one canonical subspec per indexed step and no unexpected canonical step number.
 - Every planning verdict is `ready`.
 - Every verification contract has concrete focused commands and observable cases.
+- Every medium and hard card records canonical `Risk lenses` and `Live invariants` lines in `Setup and Hazards`.
 - Criteria contain prose `Statement` properties only.
 - The report, spec, index, optional criteria/invariants, and all subspecs are final before manifest hashing begins.
 

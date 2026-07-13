@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "12"
+  version: "13"
 ---
 
 # Spec Subspec Write
@@ -136,6 +136,15 @@ Give a short ordered sequence. Each item names a file, symbol, and operation. In
 ### Setup and Hazards
 
 Include only non-obvious fixture, dependency-injection, timer, mock, runner, migration, or external-runtime details needed by the implementor. Write `None` when no special handling applies.
+
+For medium or hard steps, end this section with the exact lines below, using only context already required to ground the step:
+
+```txt
+Risk lenses: <comma-separated labels | none>
+Live invariants: <comma-separated invariant IDs | none>
+```
+
+Use only these risk labels: `persistence-integrity`, `atomic-publication`, `concurrency`, `lease-or-refcount`, `idempotency`, `cancellation`, `resource-budget`, `progress-observer`, `filesystem-snapshot`, `cross-step-contract`, `external-runtime`, and `security-boundary`. List only live invariants the step establishes, consumes, or can violate. Do not add repository searches or broaden the plan solely to classify risk; these labels route execution-time verification and do not create new behavior.
 
 ### Correction or Blocker
 
