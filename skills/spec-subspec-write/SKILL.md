@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "15"
+  version: "16"
 ---
 
 # Spec Subspec Write
@@ -64,7 +64,7 @@ Choose exactly one:
 - `needs-spec-correction` — repository grounding shows that intent, acceptance coverage, prerequisites, step boundaries/order, named contracts, or target paths in the parent spec must change. State the exact correction; do not edit the parent.
 - `blocked` — a required input, decision, dependency, or verifiable runtime contract is missing and cannot be resolved locally.
 
-A mechanical difference that does not alter intent or acceptance coverage may be reflected in a `ready` edit sequence. A material difference must never be silently adapted.
+Prefer `ready` whenever repository evidence supports a coherent executable interpretation. Record assumptions and the best route instead of making the implementation worker ask for permission. A material difference should become `needs-spec-correction` only when the parent must update shared intent or sequencing; use `blocked` only when no meaningful implementation artifact could be planned from the available outcome and repository.
 
 ## Strict Planning Block
 
@@ -96,7 +96,7 @@ verification:
     - <observable behavior and expected result>
 ```
 
-No extra keys are allowed. For a `ready` verdict, every list must be non-empty and each command/test path must be concrete. The shared `spec-step-run` policy owns fix-attempt limits, hang handling, and the implications of the selected strategy; do not repeat that policy in every card.
+No extra keys are allowed. For a `ready` verdict, every list must be non-empty and each command/test path must be concrete. The shared `spec-step-run` policy owns execution-time adaptation, additional verification, hang handling, and checkpoint behavior; do not turn this card into a permission whitelist.
 
 For `needs-spec-correction` or `blocked`, keep the exact block shape. Use the narrowest prospective verification known; when none can be determined, use one explanatory item in each list. The parent will not publish this result as ready.
 
@@ -133,6 +133,8 @@ After the two machine blocks, include only:
 
 Name each file, symbol or public shape, and add/change/remove action. Include reuse-search or external-behavior evidence only when it resolved the escalated risk.
 
+Treat these as the best expected starting targets, not an exhaustive list of files the implementation worker may touch.
+
 For a `Visual: yes` step with a visual reference, include this exact target line using the same checkout-relative file path as `spec.md`:
 
 ```txt
@@ -152,11 +154,13 @@ If either required target is absent and the step cannot own it without changing 
 
 ### Edit Sequence
 
-Give a short ordered sequence. Each item names a file, symbol, and operation. Inline only new or changed public shapes; reference existing code rather than transcribing it.
+Give a short ordered launch sequence. Each item names a file, symbol, and operation. Inline only new or changed public shapes; reference existing code rather than transcribing it. The implementation worker may depart from this route when repository evidence supports a more complete outcome.
 
 ### Setup and Hazards
 
 Include only non-obvious fixture, dependency-injection, timer, mock, runner, migration, or external-runtime details needed by the implementor. Write `None` when no special handling applies. State which true external boundary may be faked; an internal adapter required for production reachability must remain concrete.
+
+When criteria or cross-step ownership apply, include concise lines for `Establish now:`, `Preserve:`, and `Later/final:`. A named later owner is a handoff, not a reason for the current worker to stop or ask; the worker may satisfy it early when that produces a more coherent implementation.
 
 For medium or hard steps, end this section with the exact lines below, using only context already required to ground the step:
 

@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "15"
+  version: "16"
 ---
 
 # Spec Prepare
@@ -22,7 +22,7 @@ Preparation is one visible workflow stage owned by one capable preparation agent
 
 ## Non-Interactive Operation
 
-Run to completion without user interaction. Resolve underspecified details from the repository, existing conventions, critique, and spec intent. Record genuinely indeterminate decisions as open questions in `spec.md`; a blocking ambiguity stops preparation without publishing a manifest.
+Run to completion without user interaction. Do not ask the user questions. Resolve underspecified details from the repository, existing conventions, critique, and spec intent by choosing the most plausible coherent interpretation. Record assumptions in `spec.md`; withhold the manifest only when no executable interpretation of the requested outcome can be produced.
 
 Do not implement production code or write to GitHub issues.
 
@@ -84,9 +84,9 @@ When at least one implementation guardrail exists, atomically write `criteria.md
 - One stable heading per property.
 - A `Statement:` field containing the implementation property in prose.
 - A `Source:` field quoting or precisely locating the normative spec sentence.
-- Optional `Applies to:` paths or steps when this narrows ownership.
+- An `Applies to:` field classifying the property as `establish: step <N>`, `preserve: <steps>`, or `final completion`; combine classifications when needed.
 
-`criteria.md` is implementer guidance, not an audit program. It must contain no shell commands, grep recipes, expected search-hit sets, executable verdict instructions, audit modes, or audit result schema.
+`criteria.md` is implementer guidance, not an audit program. A final-completion property is not a demand that every intermediate step establish it; a named later step is a handoff, not a reason for the current worker to ask permission. It must contain no shell commands, grep recipes, expected search-hit sets, executable verdict instructions, audit modes, or audit result schema.
 
 When cross-step or cross-phase ownership constraints exist, atomically update `invariants.md`. Keep established live entries, append new entries with their source and establishing step/phase, and retain a superseded entry only when a later spec explicitly licenses its replacement. Preparation and final review consume only live, non-superseded entries.
 
@@ -144,6 +144,8 @@ Use only applicable labels from this fixed vocabulary:
 List only live invariants that the step establishes, consumes, or can violate through its named targets. Do not perform extra repository surveying, add commands, or expand a full adversarial boundary matrix merely to populate these lines. The labels route bounded execution-time verification in `spec-step-run`; they do not enlarge the prepared behavior or acceptance scope. Use `none` when no label or invariant applies.
 
 Every card must contain strict `planning` and `verification` blocks matching the compact contract in `spec-subspec-write`. The parent validates hashes, step numbers, filenames, concrete targets, focused commands, and observable cases mechanically. It does not create a second prose copy of the verification contract or semantically re-judge an equivalent planner's work.
+
+Write targets and the edit sequence as the best expected route, never as an exhaustive file or permission whitelist. State in `Setup and Hazards` which criteria the step should establish now, preserve for later work, or may satisfy early even when another step was expected to own them. Treat prepared verification commands as the mandatory baseline; the implementation worker may add relevant tests, files, and repository-specific commands when credible evidence requires them.
 
 When the parent spec has a visual reference, every card for a `Visual: yes` step must repeat the exact line `Visual reference: <checkout-relative file path>` in `Targets`. Its edit sequence must begin from inspecting and matching that artifact, not creating a new prototype or design direction. Non-visual cards may omit it.
 

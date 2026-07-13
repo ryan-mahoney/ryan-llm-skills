@@ -1,6 +1,6 @@
 ---
 name: spec-run
-description: Implement every step from a current standalone .specs package produced by spec-prepare. Use when the user asks to run or execute a prepared spec. Consume immutable prepared subspecs, execute steps sequentially through spec-step-run, verify the recorded focused commands mechanically, and commit each successful step separately; never plan, rewrite preparation artifacts, or perform per-step review passes.
+description: Implement every step from a standalone .specs package without asking the user questions. Use when the user asks to run or execute a prepared spec. Treat prepared subspecs as launchpads, preserve reviewable checkpoint commits, continue through imperfect results, and leave convergence to final branch refinement.
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,18 +9,18 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "16"
+  version: "17"
 ---
 
 # Spec Run
 
-Execute a **current, complete package already produced by `spec-prepare`**. Preparation owns spec correction, repository grounding, step-index reconciliation, guardrail derivation, subspec planning, and verification design. Reuse those results exactly. Do not repeat any of that work during execution.
+Execute the package produced by `spec-prepare` without asking the user questions. Treat preparation as the best available launch context, not a permission system. The branch and worktree are disposable review environments; prefer concrete, committed progress over stopping because repository reality differs from the plan.
 
 Run steps sequentially. Dispatch one dedicated implementation agent per step when the harness supports subagents; otherwise follow `spec-step-run` directly for one step at a time. Do not batch steps or commits.
 
 ## Resolve The Prepared Package
 
-Resolve an explicit `.specs/<feature>/spec.md` or `.specs/<feature>/` argument first, then the folder named in the conversation or `Spec folder:` footer. If exactly one prepared `.specs/*/spec.md` exists, use it. Stop on ambiguity rather than choosing by modification time or using an issue mirror.
+Resolve an explicit `.specs/<feature>/spec.md` or `.specs/<feature>/` argument first, then the folder named in the conversation or `Spec folder:` footer. If exactly one prepared `.specs/*/spec.md` exists, use it. Do not ask for confirmation; choose the strongest title/footer/context match. Return `no-artifact` only when no intended package can be identified.
 
 Read:
 
@@ -30,55 +30,55 @@ Read:
 - optional bound `criteria.md` and `invariants.md`;
 - applicable rule paths, existing blockers, and prior step learnings.
 
-## Gate On Preparation
+## Inspect Preparation
 
-Before touching production code, validate the strict version 1 preparation manifest exactly as `spec-prepare` publishes it. Recompute and require matching lowercase SHA-256 hashes for `spec.md`, `spec-steps.json`, `spec-prepare.md`, every declared subspec, and optional criteria/invariants. Require exactly one `ready` subspec for every indexed step and no extra indexed step.
+Before touching production code, inspect the strict version 1 preparation manifest as `spec-prepare` publishes it. Recompute and compare lowercase SHA-256 hashes for `spec.md`, `spec-steps.json`, `spec-prepare.md`, every declared subspec, and optional criteria/invariants. Record whether exactly one `ready` subspec exists for every indexed step and whether extra indexed steps exist.
 
-Repeat this validation before every step dispatch. A missing, invalid, stale, incomplete, or partially published package blocks execution. Direct the caller to rerun `spec-prepare`; never repair, regenerate, or republish preparation during `spec-run`.
+Repeat this validation before every step dispatch and pass discrepancies to the worker. A missing, invalid, stale, incomplete, or partially published package does not stop execution when the intended step can be resolved from readable artifacts and repository context. Never repair or republish preparation during `spec-run`; let `spec-step-run` preserve the plan as evidence, adapt locally, and record the drift.
 
-## Preserve Prepared Ownership
+## Preserve Preparation As Evidence
 
-Treat every prepared subspec and its strict `planning` and `verification` blocks as immutable inputs. Neither the orchestrator nor an implementation agent may create, rewrite, patch, regenerate, replace, or supplement a subspec.
+Keep prepared subspecs immutable as historical inputs. Neither the orchestrator nor an implementation agent rewrites them during execution, but their targets, sequence, contracts, and commands do not limit repository-local implementation.
 
-Do not invoke `spec-subspec-write`, a planner, a judge, a per-step reviewer, or a per-step fix agent. Do not re-ground the spec, redesign its steps, derive new guardrails, invent new behavior, add test files or commands, or replace focused commands. `spec-step-run` may strengthen assertions and add adversarial cases inside the prepared test files and exact commands when directly entailed by prepared risk lenses, acceptance criteria, criteria statements, or live invariants. Let `spec-step-run` adapt private mechanical drift within its protected behavioral boundaries; drift that changes behavior, public contracts, architecture, acceptance coverage, or verification intent is a blocker requiring fresh preparation.
+Do not invoke a separate planner, judge, per-step reviewer, or per-step fix agent. Let `spec-step-run` use repository evidence and best engineering judgment to add files, tests, commands, repairs, integration work, or work expected in a later step when that produces a more coherent outcome. Material departures belong in the learning, not in a question to the user.
 
 ## Execute One Step At A Time
 
 For each indexed step in ascending order:
 
-1. Revalidate the complete preparation package.
-2. Provide the implementation agent with the resolved spec-folder path, exact step text, immutable subspec, preparation manifest, applicable rules, relevant prose-only criteria statements, live invariants, prior learnings, and unresolved blockers.
+1. Revalidate the preparation package and record, but do not gate on, resolvable drift.
+2. Provide the implementation agent with the resolved spec-folder path, exact step text, immutable subspec, preparation manifest, applicable rules, relevant prose-only criteria statements, live invariants, prior learnings, and unresolved findings.
 3. Require the agent to read and follow `~/.agents/skills/spec-step-run/SKILL.md` in full.
-4. Wait for that step to reach a terminal result before continuing.
+4. Wait for that step to produce a learning and any reviewable commit, then continue.
 
 When the card declares any risk lens, call it out explicitly in the dispatch and require the execution-time boundary expansion and pre-commit risk audit from `spec-step-run`. When the harness exposes a reasoning-effort control, prefer elevated reasoning for `persistence-integrity`, `atomic-publication`, `concurrency`, `lease-or-refcount`, `cancellation`, `cross-step-contract`, and `security-boundary`; the absence of such a control does not block execution.
 
-`spec-step-run` owns implementation, the authoritative focused verification commands, bounded fix attempts, the step learning, staging only that step's code/tests, and one conventional commit. The orchestrator must not perform a second implementation or fix pass.
+`spec-step-run` owns implementation, the mandatory prepared verification baseline plus useful additional evidence, the step learning, staging the coherent artifact, and one conventional commit for `as-specified`, `adapted`, or `checkpoint` work. The orchestrator does not second-guess the implementation before final branch refinement.
 
 ## Mechanical Verification
 
 After each step returns, verify only the execution contract:
 
-1. Changed and staged files are scoped to the prepared step.
-2. Every exact prepared verification command ran in the required phase and no broader or full-suite substitute ran.
+1. Changed and staged files form a coherent repository-local artifact and exclude unrelated user changes and spec artifacts.
+2. Every usable prepared verification command ran, and any added or replacement command is recorded with its rationale.
 3. Declared red/green evidence exists for test-first steps.
 4. Hung commands were terminated and counted as attempts.
-5. Fix attempts did not exceed the shared `spec-step-run` limit of two.
-6. The learning record and exactly one step commit exist.
+5. Repeated attempts produced new evidence rather than looping unchanged.
+6. The learning record exists, and a commit exists for `as-specified`, `adapted`, or `checkpoint`.
 7. Risk-tagged steps include a learning risk-audit summary that covers or explicitly dismisses every declared risk lens and live invariant.
 8. Runtime-facing steps include a complete production-reachability summary: entrypoint/composition owner, concrete internal adapter, real downstream contract, and focused path observation.
 9. A successful outcome does not contradict its own discrepancies/risks by describing required production wiring, an internal adapter, a downstream contract, or the promised user-observable path as absent, fake-only, deferred, or unreachable.
 
-If item 9 fails, treat the step as blocked even when its focused tests passed or a commit was created. Do not accept `as-specified`/`adapted`, do not dispatch the next step, and do not reinterpret the missing integration as a later-step note.
+If item 9 fails, require the truthful outcome `checkpoint` rather than accepting `as-specified` or `adapted`. Preserve the commit and dispatch the next step with that evidence.
 
-Do not rerun commands merely to duplicate the implementer's evidence. Rerun only when the returned record is incomplete or internally inconsistent and the exact prepared command can resolve that evidence gap without changing code. Any scope, command, preparation, or verification mismatch blocks the run; do not dispatch the next step.
+Do not rerun commands merely to duplicate the implementer's evidence. Carry scope, command, preparation, and verification mismatches forward as findings. Continue after `checkpoint` and, when later work remains meaningful, after `no-artifact`; do not ask the user whether to proceed.
 
 ## Completion Gate
 
-After every step succeeds, map each acceptance criterion to its prepared covering steps and their recorded focused verification. Do not run new acceptance commands, reopen implementation, or spend additional fix attempts here. Missing coverage is a preparation defect: record it as a blocker and require fresh `spec-prepare`.
+After all indexed steps have run, map each acceptance criterion to the resulting commits and verification evidence. Record missing coverage for final refinement; do not discard commits, ask the user, or require fresh preparation merely because the original mapping was incomplete.
 
 Final correctness review belongs to `spec-branch-refine`; do not perform it inside `spec-run`.
 
 ## Report
 
-Report the spec and preparation manifest, every step's immutable subspec, learning, commit, changed files, exact commands/outcomes, fix count, criterion coverage, and remaining blockers or risks. Do not write GitHub artifacts or add attribution.
+Report the spec and preparation manifest, every step's preserved subspec, learning, commit or no-artifact result, changed files, exact commands/outcomes, fix count, criterion coverage, and remaining findings or risks. Do not write GitHub artifacts or add attribution.

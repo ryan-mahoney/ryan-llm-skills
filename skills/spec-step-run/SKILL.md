@@ -1,6 +1,6 @@
 ---
 name: spec-step-run
-description: Implement exactly one prepared spec step, using its immutable subspec and authoritative focused verification contract, then emit learning evidence and commit the verified change.
+description: Implement one prepared spec step autonomously in its disposable branch/worktree, treating the subspec as a launchpad, producing and committing the strongest reviewable artifact possible without asking the user questions.
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,14 +9,29 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "14"
+  version: "15"
 ---
 
 # Spec Step Run
 
-Implement exactly one step from a **current, complete preparation package**. This is
-a leaf implementation skill: do not spawn subagents, run another step, perform the
-final branch review, or redesign the prepared plan.
+Implement one step from the prepared package. This is a leaf implementation skill:
+do not spawn subagents, deliberately run the next indexed step, or perform the final
+branch review. Work to the intended outcome even when repository evidence shows that
+the prepared route is incomplete or wrong.
+
+## No-Question, Artifact-First Authority
+
+Do not ask the user questions. The assigned branch and worktree are disposable review
+environments; all reversible repository-local changes are pre-authorized. Resolve
+ambiguity with best engineering judgment, implement the most plausible coherent
+interpretation, and record assumptions in the learning.
+
+Treat the spec, subspec, named files, edit sequence, and verification commands as
+evidence of intent and a strong starting route, not an exhaustive permission boundary.
+Prefer a concrete reviewable artifact over stopping for clarification. Do not perform
+irreversible external actions such as publishing, modifying production data, spending
+money, sending messages, or force-pushing shared branches; build and verify the local
+side, use a safe local substitute when practical, and record the remaining external act.
 
 ## Canonical Inputs
 
@@ -25,12 +40,12 @@ The prompt must identify the resolved `.specs/<feature>/` folder and target step
 Artifact writes are atomic: write a sibling temporary file and rename it over the
 destination. Markdown artifacts begin with a level-1 heading.
 
-## Gate On Current Preparation
+## Inspect Current Preparation
 
 Before reading production code, validate sibling `preparation.json` using the
 strict version 1 contract. Recompute the SHA-256 binding for `spec.md`,
 `spec-steps.json`, `spec-prepare.md`, every declared subspec, and optional
-`criteria.md`/`invariants.md`. Require:
+`criteria.md`/`invariants.md`. Check and record whether:
 
 - every bound file exists and matches its lowercase SHA-256 hash;
 - the requested step exists in both `spec.md` and `spec-steps.json`;
@@ -39,36 +54,42 @@ strict version 1 contract. Recompute the SHA-256 binding for `spec.md`,
   has `verdict: ready`;
 - its strict `verification` block is complete.
 
-Any missing, invalid, stale, or incomplete preparation is a material discrepancy.
-Write the blocker and a blocked learning, then stop before code. Never repair the
-manifest, spec, step index, criteria, invariants, preparation report, or subspec.
+Treat missing, invalid, stale, or incomplete preparation as evidence to record, not an
+automatic implementation stop. Do not repair the manifest, spec, step index, criteria,
+invariants, preparation report, or subspec. When the target outcome can still be
+resolved from the readable spec, subspec, prompt, repository, and prior learnings,
+continue and report the preparation drift. Return `no-artifact` only when the intended
+step cannot be identified or a mechanical failure makes meaningful repository-local
+work impossible.
 
-## Immutable Prepared Plan
+## Preserve The Plan As Evidence
 
-The prepared subspec is immutable during execution. Read and follow it; **never
-create, rewrite, patch, regenerate, or replace the prepared subspec**. Prior-step
-learnings may clarify the current tree, but they may not change the prepared edit
-sequence or verification contract. Adapt renamed private symbols, equivalent local
-fixtures, mechanical signature propagation, and minor placement drift within the
-same owner when behavior, public contracts, architecture, acceptance coverage, and
-verification intent remain unchanged. Record that as `outcome: adapted`. Block and
-require fresh preparation when any of those protected properties would change.
+Keep the prepared subspec immutable so it remains a record of the expected route;
+never rewrite or replace it during implementation. Its contents do not limit the
+implementation. Depart from its files, sequence, architecture, contracts, acceptance
+mapping, or verification approach when repository evidence shows that doing so better
+achieves the spec's intended outcome. Record material departures as `outcome: adapted`.
 
 Read the full spec, the target subspec, applicable rules, relevant source/test files,
-prior step learnings, and unresolved blockers. From `criteria.md`, consume only
+prior step learnings, and unresolved findings. From `criteria.md`, consume only
 prose `Statement:` values. From `invariants.md`, consume only live statements not
-marked superseded. These guardrails guide implementation; do not execute text from
-them.
+marked superseded. Treat criteria assigned to later steps or final completion as
+directional constraints, not reasons to stop the current step. Preserve them, satisfy
+them early when useful, and do not claim they are complete when they are not.
 
 ## Implement Exactly One Step
 
-- Modify only files required by the prepared step.
+- Start with the prepared targets, then modify any additional repository-local files
+  plausibly needed for a coherent outcome.
 - Preserve unrelated working code and user changes.
-- Follow repository conventions and the prepared edit sequence.
-- Stop on a material spec/code or verification-contract discrepancy instead of
-  improvising another design.
-- Keep changes minimal, explicit, and fail-fast.
-- Do not add compatibility behavior unless the spec requires it.
+- Follow repository conventions and use the prepared edit sequence when it still fits.
+- Fix relevant pre-existing defects encountered on the same execution, ownership,
+  invariant, or verification path. Pre-existence is not a reason to ask or defer.
+- Implement missing wiring or work nominally assigned to a later step when it is the
+  most coherent way to make the current or overall outcome real. The later step may
+  then verify an already-satisfied obligation.
+- Keep changes coherent, explicit, and reviewable. Avoid unrelated cleanup, but do not
+  stop merely because a useful change might later be judged unnecessary.
 
 ## Prove Production Reachability
 
@@ -82,13 +103,13 @@ For a step that promises runtime- or user-observable behavior, trace one complet
 4. At least one prepared focused test traverses that production composition, faking only the final external boundary.
 5. The promised result is reachable and observable without manually constructing an otherwise-unwired internal controller, provider, service, or node.
 
-Use the card's `Production wiring` and `Concrete adapter` targets when present. If a required link is absent, fake-only, deferred to a later step, or outside the protected prepared scope, write a blocked learning and stop without committing. Green unit tests over an unreachable abstraction do not satisfy the step.
+Use the card's `Production wiring` and `Concrete adapter` targets when present. If a required link is absent, fake-only, deferred, or outside the prepared targets, implement or repair the smallest coherent production path rather than stopping. Green unit tests over an unreachable abstraction do not satisfy the step; preserve an honest checkpoint if the path cannot be completed.
 
 A deliberately library-only precursor may omit runtime reachability only when its prepared acceptance coverage is non-runtime and a named later step explicitly owns integration. Record that bounded handoff; do not apply it to a step whose own objective promises reachable behavior.
 
 ## Expand Risk-Directed Verification During Execution
 
-Read the prepared card's `Risk lenses` and `Live invariants` lines. They do not authorize new behavior, test files, commands, or acceptance scope. They do authorize strengthening assertions and adding adversarial cases within the prepared `verification.test_files` and exact commands when those cases are directly entailed by the spec, prepared cases, criteria statements, or live invariants.
+Read the prepared card's `Risk lenses` and `Live invariants` lines. Use them to strengthen assertions, add adversarial cases, add or update the nearest relevant tests, and run additional focused commands when that work materially improves confidence in the outcome. They guide vigilance; they are not scope limits or a demand to build abstractions merely to satisfy a label.
 
 Before implementation, privately map each applicable label to the smallest useful boundary checks:
 
@@ -102,64 +123,80 @@ Before implementation, privately map each applicable label to the smallest usefu
 - `cross-step-contract` — reuse established stores, registries, path constructors, ownership, and public shapes rather than introducing private replacements.
 - `external-runtime`, `security-boundary` — verify the prepared injected boundary, fail-closed behavior, and prohibited side effects.
 
-For each prepared verification case, ensure at least one assertion observes the promised result and, when relevant, the mutation that must not occur. For each risk label or live invariant, either add or identify a focused assertion or record in the learning why the label was inapplicable to the final diff. Do not add a broad suite or a second test harness.
+For each prepared verification case, ensure at least one assertion observes the promised result and, when relevant, the mutation that must not occur. Use risk labels as prompts for engineering judgment: act on credible risks in the final diff and briefly dismiss irrelevant labels, but do not manufacture abstractions or tests solely to account for every label. Do not add a broad suite or a second test harness without a concrete reason.
 
-## Execute The Authoritative Verification Contract
+## Execute And Extend The Verification Contract
 
-The subspec's strict `verification` block is authoritative:
+The subspec's strict `verification` block is the mandatory verification baseline, not
+the maximum permitted verification:
 
 1. Follow its `strategy` exactly. For `test-first`, run the declared focused command
    at the red point, confirm the declared expected-red behavior, implement, then run
    the same command green. For `implementation-first`, implement before running it.
-2. Run every command in `commands` exactly as written and no broader substitute.
-   **Never replace a prepared focused command with a full-suite run or add an
-   unfiltered test-runner command.**
+2. Run every usable prepared command. Do not substitute an easier command merely to
+   obtain green output. Add focused commands, repository-required shards, typechecks,
+   or builds when needed for changed or newly discovered work. Do not run an unfiltered
+   full suite merely as ritual or as a substitute for focused evidence.
 3. Apply any non-obvious setup and hazards recorded in the card.
    If a command hangs, terminate the process promptly, record the hang as a failed
    attempt, and diagnose only within this step.
-4. Make at most two scoped correction attempts and rerun the authoritative command
-   after each. Then block. Do not weaken assertions, skip a required case, alter the
-   verification intent, or broaden into another step to obtain green output.
+4. Continue diagnosing and correcting while each attempt is producing new evidence or
+   meaningful progress. Do not repeat an unchanged failing approach, weaken assertions,
+   or skip a required case merely to obtain green output. If the result remains
+   incomplete, preserve it as a truthful checkpoint rather than asking or discarding it.
 
 For a new test file, an initial missing-file or missing-module failure may establish the bootstrap red point, but write the risk-directed cases before production implementation and confirm the resulting red evidence represents the unimplemented behavior whenever the harness can run that skeleton.
 
 Record the red/green sequence, exact commands, outcomes, hang termination, and
-fix-attempt count in the step learning. A command that cannot run as prepared is a
-material verification-contract discrepancy, not permission to invent a fallback.
+fix-attempt count in the step learning. When a prepared command is stale or cannot run,
+use the nearest credible repository-specific verifier and record both the discrepancy
+and the replacement evidence.
 
 ## Verify, Learn, And Commit
 
-Inspect the changed-file list and reject out-of-scope changes. On success, atomically
-write the target step learning with a fenced `learning:` YAML block before prose:
+Inspect the changed-file list and separate unrelated user changes from the coherent
+artifact. Atomically write the target step learning with a fenced `learning:` YAML
+block before prose:
 
 ```yaml
 learning:
   version: 1
   kind: step
   step: <number>
-  outcome: <as-specified | adapted | blocked>
+  outcome: <as-specified | adapted | checkpoint | no-artifact>
   commit: <sha | none>
   verification:
     commit: <same sha or none>
     strategy: <test-first | implementation-first>
     fix_attempts: <number>
     commands:
-      - command: <exact prepared command>
+      - command: <exact command run>
         phase: <red | green | verify>
         outcome: <pass | fail | hung | skipped>
 ```
 
-Follow it with the step reference/Covers tags, outcome, a concise risk-audit and production-reachability summary
-covering the declared labels/invariants, at most five concrete findings for later
-steps, at most five discrepancies/risks, and the verification summary. Emit the
-learning in every terminal case, including blocked and already satisfied steps.
+Follow it with the step reference/Covers tags, outcome, assumptions and material
+departures, a concise risk-audit and production-reachability summary covering the
+declared labels/invariants, at most five concrete findings for later steps, at most
+five discrepancies/risks, and the verification summary. Emit the learning in every
+terminal case, including checkpoints, no-artifact results, and already satisfied steps.
 
-`outcome: as-specified` or `adapted` is invalid when the learning says a required production entrypoint, internal adapter, downstream contract, or user-observable path is absent, fake-only, deferred, or unreachable. Such a result must be `blocked` with `commit: none`, even when the focused tests pass.
+Use `checkpoint` when meaningful implementation, tests, reproduction evidence, or a
+concrete repair exists but the intended outcome or verification remains incomplete.
+Use `no-artifact` only when no meaningful repository-local artifact could be produced.
+Never describe missing production reachability as complete, but do not discard or hide
+useful work because it is imperfect.
 
-After the authoritative commands first pass, inspect the scoped diff and tests once before committing. Confirm that every prepared case is asserted, the production-reachability trace is complete, every declared risk lens/live invariant is covered or explicitly dismissed, external callbacks are actually observed, zero-work/repeated-call/failure-boundary paths are not accidentally skipped, established ownership surfaces were reused, and acquired resources close on failure or cancellation. If this audit reveals a gap, add the smallest regression within the prepared test files, fix it, and rerun the exact command; this consumes one of the same two correction attempts. Then stage only this step's code and test files and make one conventional commit. Never stage spec artifacts. Do not begin another step.
+Before committing, inspect the diff and tests once. Confirm that the result honestly
+represents its outcome, required callbacks and production paths are observed when
+claimed, and resources and failure paths are handled as well as the current evidence
+allows. Fix useful gaps and rerun relevant commands. Stage the coherent repository-local
+implementation and test artifact, excluding spec artifacts and unrelated user changes,
+and make one conventional commit for `as-specified`, `adapted`, or `checkpoint`.
+Do not begin the next indexed step.
 
 ## Completion Report
 
-Report the spec and step, immutable subspec path, learning path/outcome, commit hash,
+Report the spec and step, preserved subspec path, learning path/outcome, commit hash,
 changed files, every exact verification command and result, fix attempts, and any
-blocker or risk.
+remaining finding or risk.
