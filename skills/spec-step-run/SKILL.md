@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "15"
+  version: "17"
 ---
 
 # Spec Step Run
@@ -37,6 +37,12 @@ side, use a safe local substitute when practical, and record the remaining exter
 
 The prompt must identify the resolved `.specs/<feature>/` folder and target step. Read `spec.md`, `spec-steps.json`, `spec-prepare.md`, `preparation.json`, optional criteria/invariants/blockers, the target `step-<NNN>-subspec.md`, and prior step learnings from that folder. Write the target `step-<NNN>-learning.md` there.
 
+Resolve the target step's `visualDesign` value from its matching entry in
+`spec-steps.json`. A strict boolean `true` activates the mandatory visual verification
+loop below even when the subspec omits screenshot instructions. Record a disagreement
+with the step's `Visual:` tag as preparation drift, but do not let that disagreement
+disable the loop.
+
 Artifact writes are atomic: write a sibling temporary file and rename it over the
 destination. Markdown artifacts begin with a level-1 heading.
 
@@ -53,6 +59,8 @@ strict version 1 contract. Recompute the SHA-256 binding for `spec.md`,
 - that subspec's strict `planning` block has the same spec hash and step number and
   has `verdict: ready`;
 - its strict `verification` block is complete.
+- for `visualDesign: true`, the card records `Visual reference: <path | none>` and a
+  complete `Visual Implementation Brief` whose screenshot plan uses Playwright only.
 
 Treat missing, invalid, stale, or incomplete preparation as evidence to record, not an
 automatic implementation stop. Do not repair the manifest, spec, step index, criteria,
@@ -76,6 +84,12 @@ prose `Statement:` values. From `invariants.md`, consume only live statements no
 marked superseded. Treat criteria assigned to later steps or final completion as
 directional constraints, not reasons to stop the current step. Preserve them, satisfy
 them early when useful, and do not claim they are complete when they are not.
+
+For `visualDesign: true`, consume every field in the card's `Visual Implementation
+Brief`. Treat the reference as authority for the named visual details, the production
+repository as authority for components, tokens, architecture, semantics, and
+accessibility, and the spec as authority for behavior and acceptance coverage. Do not
+copy prototype-only fixtures, dependencies, shell UI, or fake data wiring.
 
 ## Implement Exactly One Step
 
@@ -124,6 +138,57 @@ Before implementation, privately map each applicable label to the smallest usefu
 - `external-runtime`, `security-boundary` — verify the prepared injected boundary, fail-closed behavior, and prohibited side effects.
 
 For each prepared verification case, ensure at least one assertion observes the promised result and, when relevant, the mutation that must not occur. Use risk labels as prompts for engineering judgment: act on credible risks in the final diff and briefly dismiss irrelevant labels, but do not manufacture abstractions or tests solely to account for every label. Do not add a broad suite or a second test harness without a concrete reason.
+
+## Render, Inspect, And Correct Visual Steps
+
+When the target entry in `spec-steps.json` has `visualDesign: true`, treat seeing the
+rendered result as required implementation work, not optional final polish:
+
+1. Before editing, inspect any named visual reference and the applicable local design
+   system and design/UX rules. For an executable reference, use Playwright to render the
+   prepared relevant page, region, states, interactions, and viewport sizes before
+   editing; open static reference images directly for inspection.
+2. After the behavioral verification is green, use Playwright to render and screenshot
+   the real changed UI with its production styles. Reuse the repository's existing
+   Playwright configuration and tests first. A local app, Storybook, or component preview
+   may serve the UI, but Playwright must drive the browser and capture the screenshots.
+   When the repository lacks Playwright, use the smallest temporary Playwright runner or
+   add durable Playwright setup only when the step's acceptance contract warrants it.
+   Do not use Cypress, a generic browser screenshot tool, or any other screenshot method
+   as a fallback. Use deterministic local data or mocks only at true external boundaries;
+   do not replace the changed component with a visual facsimile.
+3. Capture the smallest representative set that proves the visual outcome: at least the
+   primary changed view, plus any viewport, interaction, or non-ideal state materially
+   affected by the step or named acceptance criteria. Wait for fonts, data, and layout
+   to settle; reveal menus, dialogs, validation, focus, overflow, or responsive behavior
+   when those are part of the change. When the reference is executable, capture reference
+   and production with Playwright at matching states and viewport sizes.
+4. Open and inspect every screenshot with an image-viewing capability. Do not infer
+   correctness from a successful capture command, DOM assertions, or snapshot bytes.
+   Compare against the visual reference when one exists and assess hierarchy, alignment,
+   spacing, typography, color and contrast, clipping, overflow, layering, content states,
+   responsive behavior, and obvious interaction affordances under the project's design
+   posture. Confirm the image actually contains the changed UI and is not an error,
+   login, loading, blank, or stale page.
+5. Fix credible defects, rerun affected behavior checks, recapture, and inspect again.
+   Continue while an iteration yields new evidence or improvement. Capture and inspect
+   at least one final image after the last visual code change; never call an image final
+   when it predates the current implementation.
+
+Use existing Playwright visual regression assertions when they help, but do not treat
+baseline acceptance as a substitute for looking at the rendered pixels. Avoid committing
+a lasting Playwright dependency solely for one disposable observation when a temporary
+Playwright runner works. Keep ad hoc screenshots out of the commit unless the repository
+explicitly tracks Playwright visual baselines, retain the final images as worktree-local
+review evidence, and terminate any server or watcher started for capture.
+
+If Playwright cannot render the UI or the screenshots cannot be opened after practical
+local diagnosis and Playwright setup/runtime attempts, record the exact attempts and
+preserve the result as `checkpoint`; passing non-visual tests does not make a
+`visualDesign: true` step complete. Count visual correction cycles in `fix_attempts`. In
+the learning prose, record the exact Playwright commands/config/test, target route or
+harness, viewport and state coverage, screenshot paths, what the inspection found,
+corrections made, and the final visual assessment.
 
 ## Execute And Extend The Verification Contract
 
@@ -189,14 +254,17 @@ useful work because it is imperfect.
 
 Before committing, inspect the diff and tests once. Confirm that the result honestly
 represents its outcome, required callbacks and production paths are observed when
-claimed, and resources and failure paths are handled as well as the current evidence
-allows. Fix useful gaps and rerun relevant commands. Stage the coherent repository-local
-implementation and test artifact, excluding spec artifacts and unrelated user changes,
-and make one conventional commit for `as-specified`, `adapted`, or `checkpoint`.
-Do not begin the next indexed step.
+claimed, resources and failure paths are handled as well as the current evidence allows,
+and any required final visual evidence reflects the current diff. Fix useful gaps and
+rerun relevant commands. Stage the coherent repository-local implementation and test
+artifact, excluding spec artifacts, ad hoc screenshots, and unrelated user changes, and
+make one conventional commit for `as-specified`, `adapted`, or `checkpoint`. Do not
+begin the next indexed step.
 
 ## Completion Report
 
 Report the spec and step, preserved subspec path, learning path/outcome, commit hash,
 changed files, every exact verification command and result, fix attempts, and any
-remaining finding or risk.
+remaining finding or risk. For `visualDesign: true`, also report the inspected screenshot
+paths, exact Playwright commands/config/test, covered viewports/states, visual correction
+cycles, and final assessment or the reason Playwright verification remained incomplete.

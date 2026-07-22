@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "16"
+  version: "17"
 ---
 
 # Spec Prepare
@@ -56,7 +56,31 @@ Perform these transformations in exactly this order. They are deliberately seque
 
 ### 2. Review and correct the spec
 
-Ground the review in repository code. Read every existing file, type, function, API, pattern reference, and test named by the spec; new paths must be plausible beside verified precedent. Verify that critique Must Address recommendations landed or have explicit rationale. When the spec names a `Visual reference: <file path>`, resolve it from the checkout root, confirm that exact file exists, and keep it as the visual source of truth; do not replace it with newly invented design work.
+Ground the review in repository code. Read every existing file, type, function, API, pattern reference, and test named by the spec; new paths must be plausible beside verified precedent. Verify that critique Must Address recommendations landed or have explicit rationale.
+
+For every `Visual: yes` step, resolve its visual source before judging the step ready:
+
+1. Prefer an exact step-level `Visual reference: <file path>`, then a spec-wide
+   reference, then the approved or selected reference named by `proposal.md` or
+   `critique.md`.
+2. When none is named and exactly one plausible entry file exists under the resolved
+   feature's `prototype/` or `visual-references/` folder, use it and correct `spec.md`
+   to name its checkout-relative path. Never choose among multiple variants without
+   repository or proposal evidence selecting one.
+3. Confirm the entry file and its local assets exist. Inspect the source and, for HTML
+   or application prototypes, render it with Playwright to identify the relevant page,
+   component, visible heading or stable selector, states, interactions, and viewports.
+   Playwright is the only browser automation and screenshot tool for this workflow.
+4. When no prototype or reference design exists, identify an exact existing production
+   component, route, Storybook story, or page as the visual precedent when possible.
+   State honestly that no prototype exists; do not invent or silently substitute one.
+
+Keep a resolved prototype or reference as the visual source of truth. Use it for visual
+intent—composition, hierarchy, spacing, copy, states, and interactions—while using the
+repository as authority for production components, tokens, architecture, semantics, and
+accessibility, and the spec as authority for behavior and acceptance coverage. Identify
+prototype-only fixtures, dependencies, shell UI, and fake interactions that production
+must not copy.
 
 Correct only substantive defects:
 
@@ -67,6 +91,16 @@ Correct only substantive defects:
 - Steps that are not deterministic, minimal, self-contained, forward-only, or dependency ordered.
 - Non-flat step numbering, mismatched `Covers:` tags, or incorrect complexity/visual flags.
 - Steps large enough that independent concerns can be implemented and verified separately without a compatibility shim.
+
+A `Visual: yes` step description is substantive only when its single front-loaded
+sentence names the user-visible surface and outcome, the exact reference entry path and
+relevant region or states when a reference exists, and the production seam or existing
+primitives that will realize it. When no reference exists, name the exact production
+precedent and relevant design posture instead. Correct vague descriptions such as
+"implement the prototype" or "polish the page" before reconciling the step index.
+Prefer a sentence like: `Implement the journal drawer's empty and save-pending states
+shown in .specs/journal/prototype/index.html under "Journal drawer", reusing the existing
+Drawer and form primitives and wiring the real journal query and mutation.`
 
 Preserve intent and voice. Do not restyle a sound spec. Re-running preparation against unchanged inputs must converge without churn.
 
@@ -103,6 +137,12 @@ Use each `spec-steps.json` entry's existing `difficulty` as the default preparat
 | `hard` | Inspect the relevant cross-module contracts, consequential callers/callees, and test architecture. | Detailed |
 
 Difficulty bounds effort; it does not require delegation. A hard but explicit propagation can still be planned directly. Deepen any card only when repository evidence exposes a missing target, new public or ownership boundary, ambiguous acceptance behavior, unavailable focused verifier, architecture conflict, concurrency or migration risk, destructive data change, security boundary, or uncertain external runtime contract.
+
+Visual grounding is required independently of difficulty. For every `Visual: yes` card,
+inspect the resolved reference or production precedent, the actual production surface,
+applicable design rules, the design-system primitives/tokens it should reuse, and the
+existing Playwright configuration or nearest Playwright test. This is a bounded visual
+handoff, not permission for a broad UI survey.
 
 #### Bind runtime work to a reachable production path
 
@@ -147,7 +187,39 @@ Every card must contain strict `planning` and `verification` blocks matching the
 
 Write targets and the edit sequence as the best expected route, never as an exhaustive file or permission whitelist. State in `Setup and Hazards` which criteria the step should establish now, preserve for later work, or may satisfy early even when another step was expected to own them. Treat prepared verification commands as the mandatory baseline; the implementation worker may add relevant tests, files, and repository-specific commands when credible evidence requires them.
 
-When the parent spec has a visual reference, every card for a `Visual: yes` step must repeat the exact line `Visual reference: <checkout-relative file path>` in `Targets`. Its edit sequence must begin from inspecting and matching that artifact, not creating a new prototype or design direction. Non-visual cards may omit it.
+For every `Visual: yes` card, include one of these exact lines in `Targets`:
+
+```txt
+Visual reference: .specs/<feature>/<prototype-or-visual-references>/<entry-file>
+Visual reference: none
+```
+
+Use `none` only when preparation found no prototype or reference design. The edit
+sequence must begin by inspecting the reference or named production precedent, not by
+creating a new design direction.
+
+After `Targets` and before `Edit Sequence`, add this compact conditional section:
+
+```markdown
+### Visual Implementation Brief
+
+Relevant reference: <page/route plus visible heading, stable selector, states, and interactions | none>
+Reference authority: <what must match; what prototype-only shell, fixtures, or dependencies to ignore>
+Production surface: <route and component path/symbol>
+Reuse: <existing components, tokens, and closest production precedent>
+Behavior mapping: <prototype fixtures/interactions to real data, state, actions, and focus behavior>
+UX obligations: <relevant loading/empty/error/partial states, feedback, keyboard/a11y, and responsive behavior>
+Viewports: <named viewport sizes that expose the intended layout>
+Playwright plan: <existing config/test, server or Storybook target, route/fixture, selectors, and screenshot paths>
+```
+
+Make every value concrete and step-specific; use `none` only when the item genuinely does
+not apply. Storybook may provide the rendered target, but Playwright must drive it and
+capture screenshots. The Playwright plan must use the smallest representative states and
+viewports and must support rendering both the reference and production UI when the
+reference is executable. Include an exact focused Playwright command and test file in the
+strict verification block when the repository already has Playwright or the step owns the
+smallest required Playwright setup. Non-visual cards omit the section.
 
 Correct locally resolvable problems directly. Accumulate spec corrections discovered while producing cards, update the spec/index/guardrails once, then regenerate only cards whose inputs or required behavior changed. A missing field or stale private symbol is a repair, not a blocker.
 
@@ -163,7 +235,11 @@ After the last step, reread every final artifact. Confirm:
 - Every planning verdict is `ready`.
 - Every verification contract has concrete focused commands and observable cases.
 - Every ready card that promises runtime- or user-observable behavior names `Production wiring` and `Concrete adapter` targets and verifies one reachable production path.
-- Every `Visual: yes` card repeats the parent spec's exact visual-reference file path when one exists.
+- Every `Visual: yes` description names its user-visible surface and exact reference plus
+  relevant region/states, or explicitly names the production precedent when no reference
+  exists; `spec-steps.json` contains that same description.
+- Every `Visual: yes` card records `Visual reference: <path | none>`, contains a complete
+  `Visual Implementation Brief`, and names Playwright as its only screenshot mechanism.
 - Every medium and hard card records canonical `Risk lenses` and `Live invariants` lines in `Setup and Hazards`.
 - Criteria contain prose `Statement` properties only.
 - The report, spec, index, optional criteria/invariants, and all subspecs are final before manifest hashing begins.
@@ -176,7 +252,8 @@ Atomically write `spec-prepare.md` on every run. Include:
 - Review changes and rationale, or an unchanged verdict.
 - Step-index reconciliation.
 - Guardrails and invariant counts.
-- One row per step with difficulty, card depth, subspec path, verification strategy, and focused commands.
+- One row per step with difficulty, visual-reference summary, card depth, subspec path,
+  verification strategy, and focused commands.
 - Corrections/reruns and open blockers.
 - Overall outcome: `prepared` or `blocked`.
 
@@ -215,6 +292,9 @@ When an escalation trigger requires a `spec-subspec-write` leaf, its prompt must
 - Read `spec-subspec-write` fully and obey it.
 - Do not spawn or delegate to another agent.
 - Read only the named targets, immediate callers/callees, existing test precedent, AGENTS test guidance, and bounded new-code precedent allowed by the leaf skill.
+- For a visual step, receive the parent's resolved `Visual reference` path or `none`,
+  relevant reference region/states, production precedent, applicable design-rule paths,
+  and Playwright context needed to produce the complete visual brief.
 - Return one of `ready`, `needs-spec-correction`, or `blocked`; never silently improvise around a spec/code mismatch.
 - Do not implement code or modify shared preparation artifacts.
 

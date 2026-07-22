@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "16"
+  version: "17"
 ---
 
 # Spec Subspec Write
@@ -42,9 +42,21 @@ Ground only the unresolved risk that caused escalation:
 - Read the existing test file or nearest repository test precedent for the behavior.
 - Read repository `AGENTS.md` test rules and directly referenced guidance only when they affect the target verifier or setup.
 - Read applicable rule paths injected by the parent.
-- When the parent spec or assigned step names `Visual reference: <file path>`, resolve and read that exact file from the checkout root and treat it as existing design work to preserve. Do not create a replacement prototype or derive a different visual direction.
+- For a `Visual: yes` step, resolve the exact `Visual reference: <file path>` selected
+  by the parent, or its explicit `none` result. Inspect the production surface,
+  applicable design rules, design-system primitives/tokens, closest production
+  precedent, and existing Playwright configuration or nearest Playwright test.
+- When a visual reference exists, inspect its entry file and local assets. Render HTML
+  or application prototypes with Playwright to identify the relevant page, component,
+  visible heading or stable selector, states, interactions, and viewports. Playwright
+  is the only browser automation and screenshot tool for this workflow.
 
 Do not survey unrelated modules or re-derive architecture.
+
+Treat a prototype as authority for visual intent, the production repository as authority
+for components, tokens, architecture, semantics, and accessibility, and the spec as
+authority for behavior and acceptance coverage. Do not copy prototype-only fixtures,
+dependencies, shell UI, or fake data wiring into production.
 
 ### Bounded new-code checks
 
@@ -65,6 +77,11 @@ Choose exactly one:
 - `blocked` — a required input, decision, dependency, or verifiable runtime contract is missing and cannot be resolved locally.
 
 Prefer `ready` whenever repository evidence supports a coherent executable interpretation. Record assumptions and the best route instead of making the implementation worker ask for permission. A material difference should become `needs-spec-correction` only when the parent must update shared intent or sequencing; use `blocked` only when no meaningful implementation artifact could be planned from the available outcome and repository.
+
+For `Visual: yes`, use `needs-spec-correction` when the canonical step description does
+not name the user-visible surface and outcome, the exact reference and relevant region or
+states when one exists, or the production precedent when none exists. Also use it when
+multiple reference variants exist and the parent spec does not select one.
 
 ## Strict Planning Block
 
@@ -121,6 +138,11 @@ Do not force red-first ceremony onto mechanical work. Conversely, do not choose 
 
 Every ready plan names exact commands scoped to the changed behavior: a test file, test-name filter, targeted typecheck/build command, or similarly bounded verifier. Never emit an unfiltered full-suite command such as bare `bun test` or `bun run test`. Do not replace repository-specific commands with a generic command.
 
+For a `Visual: yes` step, name an exact focused Playwright command and repository-relative
+Playwright test file when Playwright already exists or the step owns the smallest required
+setup. Storybook may be the served render target, but Playwright must drive the browser and
+capture every screenshot; do not plan Cypress or another screenshot mechanism.
+
 For a step that promises runtime- or user-observable behavior, include at least one case that starts at the actual production entrypoint/composition, crosses the concrete internal adapter, and observes the promised result. Fakes may replace the final external boundary, but a test that manually constructs the new controller/provider/service behind an interface with no production implementation is not sufficient. A deliberately library-only precursor may defer wiring only when its own acceptance coverage is non-runtime and a named later step explicitly owns integration.
 
 Do not write complete routine test bodies in the subspec. A minimal harness skeleton is allowed only when fake-timer ordering, fixture construction, or a non-obvious mock boundary is itself the key planning risk; justify that skeleton in Setup.
@@ -135,13 +157,22 @@ Name each file, symbol or public shape, and add/change/remove action. Include re
 
 Treat these as the best expected starting targets, not an exhaustive list of files the implementation worker may touch.
 
-For a `Visual: yes` step with a visual reference, include this exact target line using the same checkout-relative file path as `spec.md`:
+For every `Visual: yes` step, include this exact target line using the same
+checkout-relative entry-file path as `spec.md`, or `none` when preparation found no
+prototype or reference design:
 
 ```txt
 Visual reference: .specs/<feature>/<prototype-or-visual-references>/<entry-file>
 ```
 
-The edit sequence must start from inspecting and matching that artifact. Never replace a concrete reference with instructions to recreate, reinterpret, or newly prototype the design.
+When no reference exists, use this line instead:
+
+```txt
+Visual reference: none
+```
+
+Never replace a concrete reference with instructions to recreate, reinterpret, or newly
+prototype the design.
 
 For runtime-facing work, include these exact target lines:
 
@@ -152,9 +183,33 @@ Concrete adapter: <production implementation path/symbol for internal injected i
 
 If either required target is absent and the step cannot own it without changing protected scope, use `needs-spec-correction` or `blocked`; do not defer it as a later risk.
 
+### Visual Implementation Brief
+
+Include this section only for `Visual: yes`, after `Targets` and before `Edit Sequence`,
+using these exact fields:
+
+```txt
+Relevant reference: <page/route plus visible heading, stable selector, states, and interactions | none>
+Reference authority: <what must match; what prototype-only shell, fixtures, or dependencies to ignore>
+Production surface: <route and component path/symbol>
+Reuse: <existing components, tokens, and closest production precedent>
+Behavior mapping: <prototype fixtures/interactions to real data, state, actions, and focus behavior>
+UX obligations: <relevant loading/empty/error/partial states, feedback, keyboard/a11y, and responsive behavior>
+Viewports: <named viewport sizes that expose the intended layout>
+Playwright plan: <existing config/test, server or Storybook target, route/fixture, selectors, and screenshot paths>
+```
+
+Make every value concrete and step-specific; use `none` only when genuinely inapplicable.
+The Playwright plan must cover the smallest representative set of states and viewports and
+must render both executable reference and production UI when a runnable reference exists.
+
 ### Edit Sequence
 
 Give a short ordered launch sequence. Each item names a file, symbol, and operation. Inline only new or changed public shapes; reference existing code rather than transcribing it. The implementation worker may depart from this route when repository evidence supports a more complete outcome.
+
+For `Visual: yes`, begin by opening the selected reference or production precedent and
+its relevant region, then map it to the named production components and behavior before
+editing. End with the focused Playwright capture-and-inspection loop.
 
 ### Setup and Hazards
 
@@ -187,6 +242,8 @@ Subspec: .specs/<feature>/step-<NNN>-subspec.md (step <step-number>)
 
 ## Output
 
-Write the subspec, then report its path, step, planning verdict, verification strategy/commands, and any correction or blocker. Do not implement the step.
+Write the subspec, then report its path, step, planning verdict, verification
+strategy/commands, visual-reference and Playwright-plan summary when applicable, and any
+correction or blocker. Do not implement the step.
 
 Do not add attribution footers or co-author trailers.
