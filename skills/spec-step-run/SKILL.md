@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "17"
+  version: "18"
 ---
 
 # Spec Step Run
@@ -145,50 +145,61 @@ When the target entry in `spec-steps.json` has `visualDesign: true`, treat seein
 rendered result as required implementation work, not optional final polish:
 
 1. Before editing, inspect any named visual reference and the applicable local design
-   system and design/UX rules. For an executable reference, use Playwright to render the
-   prepared relevant page, region, states, interactions, and viewport sizes before
-   editing; open static reference images directly for inspection.
-2. After the behavioral verification is green, use Playwright to render and screenshot
-   the real changed UI with its production styles. Reuse the repository's existing
-   Playwright configuration and tests first. A local app, Storybook, or component preview
-   may serve the UI, but Playwright must drive the browser and capture the screenshots.
-   When the repository lacks Playwright, use the smallest temporary Playwright runner or
-   add durable Playwright setup only when the step's acceptance contract warrants it.
-   Do not use Cypress, a generic browser screenshot tool, or any other screenshot method
-   as a fallback. Use deterministic local data or mocks only at true external boundaries;
-   do not replace the changed component with a visual facsimile.
-3. Capture the smallest representative set that proves the visual outcome: at least the
+   system and design/UX rules. Read the installed `uishot` skill completely and resolve
+   its bundled launcher before the first capture. Open static reference images directly.
+   For an executable reference or an existing production view reachable by URL, use
+   `uishot` to capture the relevant page, region, states, and viewport sizes before
+   editing so the implementation loop begins with observed pixels rather than inference.
+2. Use `uishot` as the default Playwright-backed observation runner for the real changed
+   UI, including when the repository has its own Playwright suite. A local app, Storybook,
+   or component preview may serve the production component with its real styles. Run
+   `uishot` from the worktree root, run its setup command when required, and keep its
+   browser warm throughout the correction loop. `uishot` satisfies the Playwright-only
+   screenshot requirement; do not classify it as a generic browser screenshot fallback.
+3. Use the repository's Playwright configuration and tests for capabilities that improve
+   the evidence: durable assertions, existing authentication or data fixtures, and
+   interaction-driven states that `uishot` cannot create directly, such as hover, drag,
+   form entry, or opening a transient surface. When those tests can establish a stable
+   URL or server-side state, capture the resulting view with `uishot`; otherwise capture
+   in the repository's Playwright context and inspect that image. Create a temporary raw
+   Playwright runner only when neither route can produce the required state. Do not add a
+   lasting Playwright dependency solely for disposable observation, and do not use
+   Cypress or a non-Playwright screenshot method as a fallback.
+4. Capture the smallest representative set that proves the visual outcome: at least the
    primary changed view, plus any viewport, interaction, or non-ideal state materially
-   affected by the step or named acceptance criteria. Wait for fonts, data, and layout
-   to settle; reveal menus, dialogs, validation, focus, overflow, or responsive behavior
-   when those are part of the change. When the reference is executable, capture reference
-   and production with Playwright at matching states and viewport sizes.
-4. Open and inspect every screenshot with an image-viewing capability. Do not infer
+   affected by the step or named acceptance criteria. Use `--wait-for`, `--wait-text`,
+   or `--selector` to pin `uishot` to meaningful content, and react to its readiness,
+   console-error, broken-image, and failed-request output. Reveal menus, dialogs,
+   validation, focus, overflow, or responsive behavior when those are part of the
+   change. When the reference is executable, capture reference and production at
+   matching states and viewport sizes.
+5. Open and inspect every screenshot with an image-viewing capability. Do not infer
    correctness from a successful capture command, DOM assertions, or snapshot bytes.
    Compare against the visual reference when one exists and assess hierarchy, alignment,
    spacing, typography, color and contrast, clipping, overflow, layering, content states,
    responsive behavior, and obvious interaction affordances under the project's design
    posture. Confirm the image actually contains the changed UI and is not an error,
    login, loading, blank, or stale page.
-5. Fix credible defects, rerun affected behavior checks, recapture, and inspect again.
+6. Fix credible defects, rerun affected behavior checks, recapture, and inspect again.
    Continue while an iteration yields new evidence or improvement. Capture and inspect
    at least one final image after the last visual code change; never call an image final
    when it predates the current implementation.
 
 Use existing Playwright visual regression assertions when they help, but do not treat
-baseline acceptance as a substitute for looking at the rendered pixels. Avoid committing
-a lasting Playwright dependency solely for one disposable observation when a temporary
-Playwright runner works. Keep ad hoc screenshots out of the commit unless the repository
-explicitly tracks Playwright visual baselines, retain the final images as worktree-local
-review evidence, and terminate any server or watcher started for capture.
+baseline acceptance as a substitute for looking at the rendered pixels. Keep ad hoc
+screenshots out of the commit unless the repository explicitly tracks Playwright visual
+baselines, retain the final images as worktree-local review evidence, and terminate any
+server or watcher started for capture. If the first `uishot` capture launched its warm
+browser, stop it after the final capture and confirm `uishot status` reports it stopped;
+preserve a browser that was already running. Record the cleanup commands and outcomes.
 
-If Playwright cannot render the UI or the screenshots cannot be opened after practical
-local diagnosis and Playwright setup/runtime attempts, record the exact attempts and
-preserve the result as `checkpoint`; passing non-visual tests does not make a
-`visualDesign: true` step complete. Count visual correction cycles in `fix_attempts`. In
-the learning prose, record the exact Playwright commands/config/test, target route or
-harness, viewport and state coverage, screenshot paths, what the inspection found,
-corrections made, and the final visual assessment.
+If `uishot` and the repository's Playwright path cannot render the UI, or screenshots
+cannot be opened after practical local diagnosis, record the exact attempts and preserve
+the result as `checkpoint`; passing non-visual tests does not make a `visualDesign: true`
+step complete. Count visual correction cycles in `fix_attempts`. In the learning prose,
+record the exact `uishot` and repository Playwright commands, target route or harness,
+viewport and state coverage, screenshot paths, readiness and console evidence, what the
+inspection found, corrections made, and the final visual assessment.
 
 ## Execute And Extend The Verification Contract
 
@@ -266,5 +277,6 @@ begin the next indexed step.
 Report the spec and step, preserved subspec path, learning path/outcome, commit hash,
 changed files, every exact verification command and result, fix attempts, and any
 remaining finding or risk. For `visualDesign: true`, also report the inspected screenshot
-paths, exact Playwright commands/config/test, covered viewports/states, visual correction
-cycles, and final assessment or the reason Playwright verification remained incomplete.
+paths, exact `uishot` and repository Playwright commands, covered viewports/states,
+visual correction cycles, and final assessment or the reason rendered verification
+remained incomplete.
