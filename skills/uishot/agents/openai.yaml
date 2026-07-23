@@ -1,0 +1,4 @@
+interface:
+  display_name: "UI Shot"
+  short_description: "Capture and inspect rendered web interfaces"
+  default_prompt: "Use $uishot to capture my running web app and inspect the rendered result."
