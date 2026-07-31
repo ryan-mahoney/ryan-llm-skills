@@ -16,6 +16,7 @@ Audit a top-level React component and all of its children against the FirstWho d
 ## Arguments
 
 - `component-path` — Path to the top-level React component file (e.g., `app/components/apps/jobs/jobs-list.js`). Relative to repo root.
+- `url` — Optional. A running URL, Storybook story, or harness route that renders this component. Supply it whenever one exists; it turns the audit from class-matching into a check of what the component actually looks like.
 
 ## Before Starting
 
@@ -180,9 +181,32 @@ Per agent-rules, content containers use `border-gray-400`.
 
 ---
 
-### 3. Compile findings
+### 3. Render the component when it can be reached
 
-Group all findings by category (2A–2F). For each finding, output:
+Class-matching finds token drift. It cannot find what the tokens add up to on
+screen: ragged alignment from inconsistent widths, cramped or colliding
+elements, text clipped by a fixed height, a card that reads as flat because its
+neighbor took the same surface, or real contrast at the sizes actually rendered.
+Those are design-system violations too, and Step 2 is blind to all of them.
+
+Skip this step only when no URL, Storybook story, or harness route renders the
+component. Do not stand up new infrastructure for it.
+
+1. Establish your eyes with the sibling `see` skill: `host-vision` to view
+   captures directly, `codex-relay` to route each capture through `codex-see`,
+   `source-only` to note that the audit is class-level only.
+2. Capture with the sibling `uishot` skill at the default viewport and at 320px.
+   Capture any state the component owns that a static load does not show — empty,
+   loading, error — when a route or prop can reach it.
+3. Record what the captures show as findings in the same format as Step 2, under
+   a `Rendered` category, with the capture path as evidence. Flag: misalignment
+   across a row of controls, inconsistent vertical rhythm between sibling groups,
+   clipped or overflowing text, invisible focus rings, and any text/background
+   pair that looks below AA at its rendered size.
+
+### 4. Compile findings
+
+Group all findings by category (2A–2F, plus `Rendered` when Step 3 ran). For each finding, output:
 
 ```
 ### [Category Name]
@@ -196,9 +220,11 @@ If a file has no violations, note it as compliant and skip it.
 
 At the end, output a summary count: `X findings across Y files`.
 
-### 4. Apply corrections
+### 5. Apply corrections
 
 After presenting findings, ask the user which categories or specific findings to apply. Then make the Tailwind class changes using the Edit tool. Change only the classes identified — do not restructure JSX, rename components, or alter logic.
+
+When Step 3 rendered the component, recapture after the edits and confirm the corrections landed as intended and introduced nothing new. A class change that reads correctly can still shift a layout. If a correction made something worse, fix it and capture again; report any residual issue rather than leaving it in the diff unmentioned.
 
 ## Conventions
 

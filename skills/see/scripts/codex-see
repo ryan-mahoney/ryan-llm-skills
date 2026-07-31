@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# codex-see — text-only image analysis relay for host models without vision.
+#
+# Sends one or more images plus a question to Codex CLI running a vision
+# model (Luna by default) and prints the model's final text answer to stdout.
+#
+# Usage:
+#   codex-see "<question>" <image> [<image> ...]
+#
+# Environment:
+#   CODEX_VISION_MODEL  override the vision model (default: gpt-5.6-luna)
+#
+# Exit codes:
+#   0 answer printed   2 bad arguments   3 image missing
+#   4 codex exec failed (log printed to stderr)   5 codex CLI not installed
+set -euo pipefail
+
+MODEL="${CODEX_VISION_MODEL:-gpt-5.6-luna}"
+
+if [ "$#" -lt 2 ]; then
+  echo "usage: codex-see \"<question>\" <image> [<image> ...]" >&2
+  exit 2
+fi
+
+PROMPT="$1"
+shift
+
+if ! command -v codex >/dev/null 2>&1; then
+  echo "error: codex CLI not found on PATH. Install Codex CLI and authenticate before using this skill." >&2
+  exit 5
+fi
+
+IMAGE_ARGS=()
+for img in "$@"; do
+  if [ ! -f "$img" ]; then
+    echo "error: image not found: $img" >&2
+    exit 3
+  fi
+  IMAGE_ARGS+=(-i "$img")
+done
+
+PREAMBLE='You are the remote eyes for a coding agent that cannot view images. Examine the attached image(s) and answer the question below with precise, concrete visual facts: positions, approximate pixel sizes, colors (hex or nearest common name), alignment, spacing relationships, and any visible text verbatim. When multiple images are attached, refer to them as "image 1", "image 2", ... in attachment order. Report only what is visible; if something cannot be determined from the image(s), say so explicitly. Do not run commands and do not speculate about source code.'
+
+ANSWER="$(mktemp)"
+LOG="$(mktemp)"
+trap 'rm -f "$ANSWER" "$LOG"' EXIT
+
+if ! codex exec \
+    --skip-git-repo-check \
+    --ephemeral \
+    -s read-only \
+    --color never \
+    -m "$MODEL" \
+    "${IMAGE_ARGS[@]}" \
+    -o "$ANSWER" \
+    "$PREAMBLE
+
+Question: $PROMPT" >"$LOG" 2>&1 </dev/null; then
+  echo "error: codex exec failed (model: $MODEL). Log follows:" >&2
+  cat "$LOG" >&2
+  exit 4
+fi
+
+cat "$ANSWER"

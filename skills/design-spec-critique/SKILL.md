@@ -26,7 +26,28 @@ In priority order:
 
 Never select the most recently modified spec when multiple feature folders exist. Read `proposal.md` for the intended Context Verdict even when critiquing the prototype.
 
-### 1b. Extract the core claims
+### 1b. Look at the prototype, don't just read it
+
+Hierarchy, focal order, density, rhythm, and rendered contrast are not judgeable
+from markup. A critique written off the HTML produces exactly the generic
+feedback this skill exists to avoid — and it will miss the defects that only
+appear once the browser has laid the page out.
+
+1. Establish your eyes with the sibling `see` skill. `host-vision` means view the
+   captures; `codex-relay` means every visual observation comes from a
+   `codex-see` question; `source-only` means the critique is source-based —
+   declare that in the document header and drop the claim strength accordingly.
+2. Serve the prototype if it is not already running (`design-spec-prototype`
+   reports the URL; otherwise serve the folder statically on a loopback port) and
+   capture it with the sibling `uishot` skill: the default viewport, 320px, and
+   each state and variant the proposal named. Pin toggled states with
+   `--wait-for` or `--selector`.
+3. For shipped UI the user points to, capture the live URL the same way. For a
+   `proposal.md` with no prototype, there is nothing to capture — say so.
+
+Critique the captures. Cite what you saw, not what the classes imply.
+
+### 1c. Extract the core claims
 
 Pull out what the design implicitly asserts:
 
@@ -90,6 +111,8 @@ Step out of the personas and synthesize as the design architect:
 
 > Reviewing: [prototype path + URL, proposal.md, or conversation/shipped UI]
 > Posture under review: [Functional | Expressive | Hybrid]
+> Visual evidence: [host-vision | codex-see (Luna) | source-only — not rendered]
+> Captures: [viewports and states inspected, or none]
 > Date: YYYY-MM-DD
 
 ## Design Summary
@@ -152,7 +175,7 @@ Wrong posture or direction — needs rethinking. State which and why.]
 
 - Write `critique.md` in the resolved `.specs/<feature>/` folder. For non-pipeline material, write `CRITIQUE-[name].md` beside the supplied source.
 - Write atomically and begin with the level-1 heading.
-- When you critiqued a prototype, reference specific screens, states, and elements so the findings are actionable.
+- When you critiqued a prototype, reference specific screens, states, and elements so the findings are actionable, and attribute each visual finding to a capture you inspected rather than to the markup.
 - Report `outcome: critiqued`, the critique path, confidence, and counts for Must/Should/Consider. Recommend the single next stage (`design-spec-writer` or another prototype iteration).
 
 ## Principles

@@ -276,7 +276,13 @@ fired lens because its preferred skill is absent.
   (`.tsx`/`.jsx`/`.vue`/`.svelte`/`.css`/`.scss` or component/view directories) **or**
   the spec's Applicable Rules list design rules. Looks for: design-system token
   drift, missing UX states (loading/empty/error/disabled), and accessibility
-  regressions. Delegate to `design-align` or `ux-auditor` when available.
+  regressions. Delegate to `design-align` or `ux-auditor` when available. When the
+  branch has a reachable dev server, Storybook, or component harness, render the
+  changed views before judging them: establish eyes with `see`, capture with
+  `uishot` at the default viewport and 320px, and cite what you saw. Layout
+  breakage, clipping, and contrast failures do not appear in a diff. When nothing
+  renders, review from source and record the lens as source-only rather than
+  implying the UI was seen.
 - **Deep security** — trigger: the diff touches auth, crypto, secrets, sessions,
   tokens, permissions, or access-control paths. Looks for: authz/ownership gaps,
   token/session handling, secret exposure, weak crypto/randomness — beyond the core

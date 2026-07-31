@@ -471,10 +471,30 @@ test("capture {FormName} — edit mode expanded", async ({ page }) => {
     path: join(SCREENSHOT_DIR, "{formNameKebab}-edit-expanded.png"),
   });
 });
+
+test("capture {FormName} — narrow viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 844 });
+  await page.goto(`${HARNESS_URL}?mode=edit`);
+  await page.waitForSelector('[role="dialog"]', { timeout: 5000 });
+  await page.waitForTimeout(1000);
+  const dialog = page.locator('[role="dialog"]');
+  await dialog.screenshot({
+    path: join(SCREENSHOT_DIR, "{formNameKebab}-narrow.png"),
+  });
+});
 ```
+
+Set the viewport inside the narrow test rather than adding a second Playwright
+project — two projects would run every test twice and overwrite each other's
+screenshot files.
 
 ### 6b. Capture & Review Loop
 
+0. Establish your eyes with the sibling `see` skill before the first capture.
+   `host-vision` means read the PNGs directly; `codex-relay` means every visual
+   judgement below comes from a `codex-see` question about the PNG; `source-only`
+   means you cannot verify this form visually — say so plainly in the final
+   report instead of implying the screenshots were reviewed.
 1. Start the harness: `bun app/test/screenshots/harness/serve.js &`
 2. Capture: `bunx playwright test --config playwright.screenshot.config.js`
 3. **Read every screenshot** and evaluate against the design system:
@@ -491,6 +511,10 @@ test("capture {FormName} — edit mode expanded", async ({ page }) => {
 - Input borders are `gray-400`, no shadows?
 - Help text is `text-sm text-gray-500`?
 - Single-column layout (except tightly coupled grid pairs)?
+- At 320px: no horizontal scrolling, no clipped labels or inputs, side-by-side
+  pairs stacked rather than crushed, footer actions still reachable and tappable?
+  `form-design.md` requires the form to work at 320px, so a desktop-only pass is
+  an incomplete verification.
 
 4. **Fix every issue found** — update the component, rebuild the harness, recapture, and re-review
 5. **Repeat until clean.** No iteration limit — keep going until the screenshots match the design system

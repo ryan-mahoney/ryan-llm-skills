@@ -144,6 +144,7 @@ file placement, test structure. Derived from Step 2b analysis.]
 - **Include the wiring step.** Most scaffolding tasks require registering the new thing somewhere (router config, module imports, barrel exports). This is the step people forget. Make it explicit.
 - **Include naming conventions** inline where they matter. Don't just say "follow conventions" — say "file names use kebab-case, class names use PascalCase with a `Module` suffix."
 - **Keep the skill focused.** One task, done completely. If the user's request covers multiple tasks, suggest splitting into multiple skills.
+- **Give a UI skill eyes.** If the generated skill creates or changes anything a user will look at, it must render its work and check it, not infer correctness from the code it wrote. Add a step that establishes vision mode with the sibling `see` skill (`host-vision` view directly, `codex-relay` route captures through `codex-see`, `source-only` state plainly that no visual check happened), captures with the sibling `uishot` skill at the default viewport and 320px, inspects, fixes, and recaptures until a pass finds nothing new. Write it as a bounded correction loop, not a final screenshot for the transcript. Skills that produce no visual output skip this entirely.
 - **Do not include attribution footers** in the generated skill. No "Co-Authored-By", "Generated with", or AI-related signatures.
 
 ---

@@ -38,8 +38,16 @@ write a whole interface and inspect it once at the end.
 "$UISHOT" http://localhost:3000/checkout
 ```
 
-Then use the local image-viewing tool to inspect the PNG at the printed `file:`
-path. Check `console_errors:` before changing CSS or layout.
+Then inspect the PNG at the printed `file:` path. Check `console_errors:` before
+changing CSS or layout.
+
+Capturing is not seeing. Before you draw any conclusion from an image, know
+which eyes you have — the sibling `see` skill settles that in one probe and
+returns `host-vision` (open the PNG with the local image tool), `codex-relay`
+(ask `see`'s `codex-see` about the PNG), or `source-only` (no visual evidence;
+say so rather than describing the page). Not every model behind this skill can
+view images, and the ones that cannot will happily describe a screenshot they
+never saw.
 
 ## Commands
 

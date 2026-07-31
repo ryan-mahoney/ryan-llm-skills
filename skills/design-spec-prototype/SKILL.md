@@ -67,6 +67,33 @@ Start a local static server in the background and report the URL:
 
 Tell the user the URL, what to look at, and which states are visible. For static builds, edits to the file appear on refresh — no restart needed.
 
+## Render It And Correct It
+
+A served prototype is not a verified one. This skill runs non-interactively, so
+an unstyled page, a collapsed layout, or a state that renders blank goes straight
+to the user with nobody having looked. Reading the source does not catch those:
+the Tailwind CDN is a network dependency, and a failed load produces a file that
+reads correctly and renders as raw HTML.
+
+1. Establish your eyes with the sibling `see` skill. `host-vision` means view the
+   captures directly; `codex-relay` means put every capture through `codex-see`;
+   `source-only` means you cannot verify this prototype visually — say so in the
+   output instead of implying it was checked.
+2. Capture the served URL with the sibling `uishot` skill: the default viewport,
+   then 320px, then each variant page. Use `--wait-for` or `--selector` to pin
+   states that are toggled rather than laid out inline.
+3. Inspect every capture for:
+   - styles applied at all — a CDN failure looks like unstyled markup
+   - layout intact at both widths, nothing clipped, overlapping, or off-canvas
+   - every state the proposal listed actually visible
+   - text legible against its background, at the sizes actually rendered
+   - `console_errors:` in the uishot output, before theorizing about CSS
+4. Fix what you find, recapture, and look again. Continue while a pass yields
+   improvement; stop when a pass finds nothing new. Two or three rounds is
+   normal — this is a correctness loop, not open-ended polish.
+5. If the prototype cannot be captured at all, leave the server running and
+   report `served` with the visual check recorded as not performed, and why.
+
 ## Iterate
 
 The prototype is a conversation. After the user comments:
@@ -92,6 +119,8 @@ Report this compact routing summary before optional commentary:
 - `outcome`: `served` or `blocked`.
 - Prototype folder, files, and URL when served.
 - Posture/rules and rendered states.
+- Visual check: the vision mode used, the viewports and states captured, what the
+  inspection found, and what you corrected — or that it was not performed, and why.
 - One concrete next action: review the URL, then run `design-spec-critique` or `design-spec-writer`.
 
 Do not commit the prototype unless asked. Do not add Co-Authored-By trailers, "Generated with" footers, or any AI model attribution.

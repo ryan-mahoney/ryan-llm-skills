@@ -226,6 +226,8 @@ Flag each step by whether *that step* implements user-facing visual design:
 - `Visual: yes` — the step produces or changes visual UI: component markup, layout, styling/theming, design-system implementation, or prototypes — anywhere visual fidelity and aesthetic judgment matter. Such a step usually relies on a design rule (`functionalist-design`, `expressive-design`, `form-design`, `table-row-design`, `cta-design`) from Applicable Rules.
 - `Visual: no` — backend, infrastructure, tooling, data, API, pure logic, tests, or copy-only work with no visual layout or styling output. UI *logic* with no styling, and CLI or other text-only output, are `Visual: no`.
 
+When torn between the two, choose `Visual: yes`. This flag is the switch that arms visual verification downstream: a step wrongly marked `no` is never rendered, never inspected, and never corrected, and nothing later in the pipeline reports the omission. A needless capture costs a minute; a missed one ships unseen UI.
+
 The per-step flag is binary — emit exactly one per step. The footer's spec-wide `Visual design:` line is the roll-up: `yes-visual-design` when any step is `Visual: yes`, else `no-visual-design`.
 
 ## Spec Footer

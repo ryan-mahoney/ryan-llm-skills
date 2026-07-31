@@ -147,7 +147,7 @@ Each step's `Covers:`, `Complexity:`, and `Visual:` tag lines sit together at th
 
 When torn between two tiers, choose the higher one — an under-powered model is the costlier error.
 
-Flag each step's `Visual:` by whether *that step* produces or changes visual UI — component markup, layout, styling/theming, design-system implementation (tokens included), or prototypes — `Visual: yes`. Steps with no visual output — pure config wiring, data shaping, or text-only test scaffolding — are `Visual: no`. Most steps in a design spec are `Visual: yes`; flag every step regardless. The system routes `Visual: yes` steps to design-capable handling and visual verification.
+Flag each step's `Visual:` by whether *that step* produces or changes visual UI — component markup, layout, styling/theming, design-system implementation (tokens included), or prototypes — `Visual: yes`. Steps with no visual output — pure config wiring, data shaping, or text-only test scaffolding — are `Visual: no`. Most steps in a design spec are `Visual: yes`; flag every step regardless. The system routes `Visual: yes` steps to design-capable handling and visual verification. When torn, choose `Visual: yes` — a step wrongly marked `no` is never rendered, never inspected, and never corrected, and nothing downstream reports the omission.
 
 Each step's name, one-line description, `Complexity:` value, and `Visual:` flag are also emitted to `spec-steps.json` (see Machine-Readable Step Index); the JSON `difficulty` must equal the step's `Complexity:` tag and `visualDesign` must equal its `Visual:` flag (`Visual: yes` → `true`).
 

@@ -173,8 +173,12 @@ rendered result as required implementation work, not optional final polish:
    validation, focus, overflow, or responsive behavior when those are part of the
    change. When the reference is executable, capture reference and production at
    matching states and viewport sizes.
-5. Open and inspect every screenshot with an image-viewing capability. Do not infer
-   correctness from a successful capture command, DOM assertions, or snapshot bytes.
+5. Inspect every screenshot through the eyes established by the `see` skill: view the
+   image directly under `host-vision`, or relay it through `see`'s `codex-see` under
+   `codex-relay`. Establish that mode once, before the first inspection, instead of
+   assuming the model running this step can view images — one that cannot will
+   describe a screenshot it never saw. Do not infer correctness from a successful
+   capture command, DOM assertions, or snapshot bytes.
    Compare against the visual reference when one exists and assess hierarchy, alignment,
    spacing, typography, color and contrast, clipping, overflow, layering, content states,
    responsive behavior, and obvious interaction affordances under the project's design
@@ -194,7 +198,8 @@ browser, stop it after the final capture and confirm `uishot status` reports it 
 preserve a browser that was already running. Record the cleanup commands and outcomes.
 
 If `uishot` and the repository's Playwright path cannot render the UI, or screenshots
-cannot be opened after practical local diagnosis, record the exact attempts and preserve
+can be neither viewed directly nor relayed through `see` after practical local
+diagnosis, record the exact attempts and preserve
 the result as `checkpoint`; passing non-visual tests does not make a `visualDesign: true`
 step complete. Count visual correction cycles in `fix_attempts`. In the learning prose,
 record the exact `uishot` and repository Playwright commands, target route or harness,

@@ -176,6 +176,8 @@ Standalone skills outside the two distributions.
 | **feature-list** | `/feature-list [target-scope]` | Produce a language-agnostic inventory of user- and operator-facing features grouped by capability, with entry points and supporting modules |
 | **controller-refactor-plan** | `/controller-refactor-plan [controller-file] [optional output path]` | Analyze one controller file for dead handlers and responsibility growth beyond controller boundaries |
 | **ux-auditor** | `/ux-auditor [prototype html] [component file]` | Audit UI implementation parity against an HTML prototype and produce a grouped correction checklist |
+| **see** | `/see` | Probe whether the running model can view images, and relay image analysis to a vision model when it cannot |
+| **uishot** | `/uishot [url]` | Screenshot a running page once it has finished rendering, for inspection through `see` |
 | **design-align** | `/design-align [path-to-top-level-component]` | Audit a React component tree against the FirstWho design system and recommend Tailwind CSS corrections |
 | **form-modernizer** | `/form-modernizer [FormComponentPath]` | Modernize a form via multi-phase analysis, redesign, TypeScript typing, and visual verification |
 | **angular-pr-complexity** | `/angular-pr-complexity <commit-hash>` | Score an Angular/Nx merge commit on size, spread, file types, and cognitive load |

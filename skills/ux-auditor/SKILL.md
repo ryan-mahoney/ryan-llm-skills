@@ -1,16 +1,22 @@
 ---
 name: ux-auditor
-description: Exhaustively audit a top-level UI implementation component against an HTML prototype and produce a grouped markdown checklist of corrections. Use when a user asks for UI parity review, visual QA, design implementation audit, pixel-level drift detection, or behavior/style mismatch analysis between prototype HTML and shipped component code.
+description: Exhaustively audit a top-level UI implementation component against an HTML prototype and produce a grouped markdown checklist of corrections. Use when a user asks for UI parity review, visual QA, design implementation audit, pixel-level drift detection, or behavior/style mismatch analysis between prototype HTML and shipped component code. Works on hosts with and without image viewing — it establishes which it has before making any visual claim.
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "1"
+  version: "2"
 ---
 
 # UX Auditor
 
-Audit an implemented UI against a prototype with element-by-element rigor. Produce a correction-first checklist that is grouped, actionable, and explicit about current vs expected behavior.
+Audit an implemented UI against a prototype with element-by-element rigor.
+Produce a correction-first checklist that is grouped, actionable, and explicit
+about current vs expected behavior.
+
+Read `references/audit-spec.md` in this skill directory before reporting. It
+holds the deviation taxonomy, severity scale, output format, and design-system
+uncertainty rules, and it is the canonical audit lens.
 
 ## Required Arguments
 
@@ -22,162 +28,81 @@ Use this format:
 `$ARGUMENTS="<prototype-html-path> <top-level-component-path>"`
 
 If either argument is missing or unreadable, stop and ask for the missing path.
+A running-app URL or pre-captured screenshot paths may be appended after the two
+required arguments; use them for the visual passes.
+
+## Step 0: Establish your eyes
+
+Do this before any visual claim. The model running this skill may not be able to
+view images, and a model that cannot see will usually describe a screenshot
+anyway rather than admit it.
+
+Read the sibling `see` skill and follow its Step 1 probe. It returns one mode:
+
+- `host-vision` — view screenshots directly.
+- `codex-relay` — every visual fact comes from `see`'s `codex-see` relay.
+- `source-only` — no visual evidence; audit from source and say so.
+
+Carry the mode into the `Visual evidence:` line of the output. Everything below
+that says "look at" means "look at in `host-vision`, ask `codex-see` in
+`codex-relay`, and skip with a stated gap in `source-only`."
 
 ## Audit Workflow
 
-1. Read inputs and gather rendering context.
+1. Read inputs and gather rendering context (no vision needed).
 - Read the prototype HTML.
 - Read the top-level component.
-- Read directly related style sources (for example CSS/SCSS modules, styled components, Tailwind class composition, design tokens, and immediate child components that materially affect output).
+- Read directly related style sources (CSS/SCSS modules, styled components,
+  Tailwind class composition, design tokens, and immediate child components that
+  materially affect output).
 - Identify interactive states and responsive breakpoints present in either source.
 
-2. Build a full prototype inventory before judging implementation.
-- Walk from page shell to leaf elements.
-- Inventory text, iconography, hierarchy, spacing relationships, dimensions, alignment, and behavior cues.
-- Use the `Deviation Taxonomy` section in this file as the canonical audit lens.
+2. Obtain screenshots.
+- Prototype: capture the prototype HTML via `file://<absolute-path>`.
+- Implementation: capture the running app URL if provided by the user.
+- Use the sibling `uishot` skill for capture when available; otherwise use any
+  available screenshot tooling, or ask the user for a URL or image paths.
+- If no screenshots can be obtained at all, drop to `source-only` and state in
+  the summary that visual verification was not performed.
 
-3. Compare each prototype element against implementation.
-- Evaluate every element across:
-  - Layout and geometry
-  - Spacing and rhythm
-  - Typography
-  - Color and visual styling
-  - Borders, radius, shadows, and opacity
-  - Content and icon fidelity
-  - Interaction behavior and state transitions
-  - Responsive behavior and reflow
-- Record only concrete deviations with evidence from both prototype and implementation.
+3. Build a full prototype inventory before judging implementation.
+- Walk the prototype HTML from page shell to leaf elements.
+- Run an inventory pass on the prototype screenshot and merge it with the source
+  inventory.
+- Inventory text, iconography, hierarchy, spacing relationships, dimensions,
+  alignment, and behavior cues.
 
-4. Resolve uncertainty through design-system guidance.
-- If implementation contains additions not in the prototype, consult `design-system.md` before recommending removal or change.
-- Locate `design-system.md` by checking project root first, then searching with `rg --files | rg 'design-system\\.md$'`.
-- If the design system explicitly justifies the addition, classify it as `Design-System-Allowed`.
-- If the design system contradicts the implementation or does not support it, classify as `Needs-Correction` or `Needs-Design-Decision` with rationale.
+4. Compare each prototype element against implementation.
+- Run a comparison pass over prototype screenshot vs implementation screenshot,
+  and cross-check every reported difference against the source code.
+- Evaluate every element across every taxonomy category in
+  `references/audit-spec.md`.
+- For states a static capture cannot show (hover, focus, animation), audit from
+  source code and say so in the evidence.
+- Record only concrete deviations with evidence from both prototype and
+  implementation. Use targeted follow-up questions to resolve anything the
+  comparison pass left vague.
 
-5. Produce a grouped markdown checklist framed as corrections.
+5. Resolve uncertainty through design-system guidance, per the rules in
+   `references/audit-spec.md`.
+
+6. Produce a grouped markdown checklist framed as corrections.
 - Group findings by page area first (for example Header, Hero, Form, Table, Footer).
-- Inside each area, group by deviation category (use taxonomy categories).
-- Each checklist item must be phrased as a corrective action, starting with `Correct ...`.
+- Inside each area, group by deviation category.
+- Each checklist item must be phrased as a corrective action, starting with
+  `Correct ...`.
 - Include severity and proof for every item.
 
-## Output Format
+## Correction Loop
 
-Return markdown using this exact structure:
+When the user asks you to fix the deviations, not just report them:
 
-```markdown
-# UX Deviation Checklist
+1. Apply one grouped set of corrections in source.
+2. Re-capture the implementation screenshot.
+3. Run a verification pass naming the exact properties that changed.
+4. Repeat until verification reports equivalence, or record the residual gap as
+   an unresolved item.
 
-## Inputs
-- Prototype: <path>
-- Implementation: <path>
-
-## Audit Summary
-- Areas reviewed: <count>
-- Elements reviewed: <count>
-- Total deviations: <count>
-- Severity counts: P0 <n>, P1 <n>, P2 <n>, P3 <n>
-- Design-system consultations: <count>
-
-## <Area Name>
-
-### <Category Name>
-- [ ] [P1] Correct <specific element/behavior> to match prototype.  
-  Current: <implementation reality>.  
-  Expected: <prototype requirement>.  
-  Evidence: <selector/text/node in prototype> vs <component/style reference>.  
-  Design-system: <Allowed | Not Found | Conflicts | N/A>.
-
-## Design-System Decisions
-- <Only include items where design-system affected the recommendation>
-
-## Unclear Items Needing Design Input
-- <Only include unresolved uncertainties>
-```
-
-If no deviations are found, still return the same structure and explicitly set `Total deviations: 0`.
-
-## Severity Definitions
-
-- `P0`: Breaks core task flow or accessibility-critical behavior.
-- `P1`: Strong visual/interaction mismatch likely noticeable to users.
-- `P2`: Moderate mismatch in style, spacing, or hierarchy.
-- `P3`: Minor polish issue with low UX risk.
-
-## Quality Bar
-
-- Be exhaustive, not selective. Cover every visible and interactive element.
-- Prefer measurable language over subjective language.
-- Do not praise implementation quality. Focus on deviations and corrections.
-- Do not recommend speculative redesign. Recommend parity with prototype unless design-system guidance overrides.
-
-## Deviation Taxonomy
-
-Use these categories to classify every mismatch between prototype and implementation.
-
-### 1. Layout And Geometry
-- Container width, max-width, min-height, fixed sizes
-- Positioning strategy (static, absolute, sticky, fixed)
-- Grid/flex direction, wrapping, alignment, and distribution
-- Element order and hierarchy
-
-### 2. Spacing And Rhythm
-- Margin and padding mismatches
-- Gap/stack rhythm inconsistencies
-- Section-to-section spacing and whitespace density
-- Misaligned baselines or inconsistent vertical rhythm
-
-### 3. Typography
-- Font family, size, weight, line height, letter spacing
-- Text transform and casing
-- Heading/body hierarchy differences
-- Truncation, wrapping, and overflow behavior
-
-### 4. Color And Visual Style
-- Foreground/background color mismatches
-- Gradients and overlays
-- Border color and stroke weight
-- Opacity and blend differences
-
-### 5. Surface Styling
-- Border radius
-- Shadow/elevation
-- Blur and glass effects
-- Divider and card treatment
-
-### 6. Content And Icon Fidelity
-- Text copy differences
-- Missing or extra icons/images
-- Incorrect icon size, stroke, or placement
-- Content order and grouping differences
-
-### 7. Interaction And State Behavior
-- Hover, focus, active, visited, disabled states
-- Validation and error state rendering
-- Pressed/toggled/selected states
-- Animation presence, duration, easing, sequencing
-- Keyboard and screen-reader relevant interaction parity
-
-### 8. Responsive Behavior
-- Breakpoint-specific layout shifts
-- Mobile/desktop spacing and sizing deltas
-- Element visibility rules by viewport
-- Reflow and wrapping parity
-
-### 9. Data Presentation Patterns
-- Table/list density and row styling
-- Empty/loading/error state visuals
-- Sorting/filtering affordance mismatch
-- Badge/chip/tag treatment
-
-## Uncertainty Handling With design-system.md
-
-When implementation adds elements or styling not visible in prototype:
-
-1. Read `design-system.md`.
-2. Search for matching token, component pattern, or stated rule.
-3. Classify the finding:
-- `Design-System-Allowed`: addition is supported and non-conflicting.
-- `Needs-Correction`: addition conflicts with prototype or design-system rules.
-- `Needs-Design-Decision`: no clear design-system support; flag for product/design judgment.
-
-Treat unsupported additions as deviations unless explicitly justified by `design-system.md`.
+Never declare a visual fix verified without a fresh look at a fresh capture. In
+`source-only` mode you cannot verify a visual fix at all — say that plainly
+instead of implying it was checked.

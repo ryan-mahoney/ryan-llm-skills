@@ -1,0 +1,255 @@
+#!/usr/bin/env python3
+"""see-check — determine whether the host model can actually view images.
+
+Model identity is not knowable from inside a skill: the same skill file runs
+under Claude Code, Codex, Cline, Augment and OpenCode, with a model the user
+picked at runtime. So do not ask "which model am I". Ask "can this process see
+this file", which is testable.
+
+  see-check start          write a probe PNG and print how to verify it
+  see-check verify COLORS  check the reported colors, cache the verdict
+  see-check mode           print the cached verdict, or 'unknown'
+  see-check reset          discard the cached verdict
+
+Exit codes:
+  0 ok / vision confirmed    1 vision unavailable (blind)
+  2 bad arguments            3 no probe started
+"""
+
+import hashlib
+import json
+import os
+import random
+import shutil
+import struct
+import subprocess
+import sys
+import time
+import zlib
+
+CACHE_TTL_SECONDS = 6 * 60 * 60
+
+# Colored swatches, not rendered text. A bitmap font is legible to a strong
+# vision model and ambiguous to a weaker one, which produces false blindness;
+# large saturated blocks are unambiguous to anything that can see at all.
+PALETTE = {
+    "red": (214, 31, 31),
+    "green": (26, 148, 62),
+    "blue": (28, 68, 201),
+    "yellow": (242, 201, 20),
+    "purple": (130, 40, 163),
+    "orange": (240, 130, 20),
+}
+
+# Reasonable ways a model might name each color. Anything unrecognized is
+# ignored rather than treated as a wrong answer.
+SYNONYMS = {
+    "red": "red", "crimson": "red", "scarlet": "red",
+    "green": "green", "emerald": "green",
+    "blue": "blue", "navy": "blue", "cobalt": "blue",
+    "yellow": "yellow", "gold": "yellow", "amber": "yellow",
+    "purple": "purple", "violet": "purple", "magenta": "purple",
+    "orange": "orange",
+}
+
+SWATCHES = 4
+SWATCH = 180
+GAP = 40
+MARGIN = 40
+BORDER = 3
+
+
+def state_dir():
+    base = os.environ.get("TMPDIR") or "/tmp"
+    return os.path.join(base, "agents-see-check")
+
+
+def state_path():
+    return os.path.join(state_dir(), "state.json")
+
+
+def probe_path():
+    return os.path.join(state_dir(), "probe.png")
+
+
+def host_fingerprint():
+    """Identify the host+model as far as the environment reveals it.
+
+    Only used to expire the cache when the surroundings change. It is a hint,
+    never a capability decision — the probe decides that.
+    """
+    keys = (
+        "CLAUDECODE",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "ANTHROPIC_MODEL",
+        "CODEX_SANDBOX",
+        "CODEX_MODEL",
+        "OPENCODE_MODEL",
+        "CLINE_MODEL",
+        "AUGMENT_MODEL",
+        "TERM_PROGRAM",
+    )
+    raw = "|".join(f"{k}={os.environ.get(k, '')}" for k in keys)
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def read_state():
+    try:
+        with open(state_path()) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def write_state(state):
+    os.makedirs(state_dir(), exist_ok=True)
+    with open(state_path(), "w") as fh:
+        json.dump(state, fh)
+
+
+def codex_available():
+    return shutil.which("codex") is not None
+
+
+def render_png(colors, path):
+    width = MARGIN * 2 + len(colors) * SWATCH + (len(colors) - 1) * GAP
+    height = MARGIN * 2 + SWATCH
+
+    # 8-bit RGB, white background.
+    pixels = [bytearray(b"\xff" * (width * 3)) for _ in range(height)]
+
+    def fill(x0, y0, w, h, rgb):
+        row = bytes(rgb) * w
+        for y in range(y0, y0 + h):
+            pixels[y][x0 * 3 : (x0 + w) * 3] = row
+
+    for index, name in enumerate(colors):
+        x0 = MARGIN + index * (SWATCH + GAP)
+        fill(x0, MARGIN, SWATCH, SWATCH, (40, 40, 40))
+        fill(
+            x0 + BORDER,
+            MARGIN + BORDER,
+            SWATCH - BORDER * 2,
+            SWATCH - BORDER * 2,
+            PALETTE[name],
+        )
+
+    raw = b"".join(b"\x00" + bytes(row) for row in pixels)
+
+    def chunk(tag, data):
+        body = tag + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+
+    png = b"\x89PNG\r\n\x1a\n"
+    png += chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+    png += chunk(b"IDAT", zlib.compress(raw, 9))
+    png += chunk(b"IEND", b"")
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as fh:
+        fh.write(png)
+
+
+def canonical(reported):
+    """Reduce a free-text color reading to the canonical sequence."""
+    words = "".join(ch if ch.isalpha() else " " for ch in reported.lower()).split()
+    return [SYNONYMS[w] for w in words if w in SYNONYMS][:SWATCHES]
+
+
+def cmd_start():
+    colors = random.sample(sorted(PALETTE), SWATCHES)
+    render_png(colors, probe_path())
+
+    state = read_state()
+    # Store only the hash: reading this file must not reveal the answer.
+    state.update(
+        {
+            "token_hash": hashlib.sha256(" ".join(colors).encode()).hexdigest(),
+            "fingerprint": host_fingerprint(),
+            "started": int(time.time()),
+        }
+    )
+    state.pop("mode", None)
+    write_state(state)
+
+    self_path = os.path.abspath(sys.argv[0])
+    print(f"probe_image: {probe_path()}")
+    print(f"verify_cmd: {self_path} verify <colors left to right>")
+    print(f"codex_available: {'yes' if codex_available() else 'no'}")
+    print(f"instruction: the probe shows {SWATCHES} colored squares in a row.")
+    print("instruction: view it and name their colors left to right, one word each,")
+    print(f"instruction: drawn from: {', '.join(sorted(PALETTE))}.")
+    print("instruction: do not guess and do not read state.json — a wrong answer")
+    print("instruction: is the correct outcome if you cannot see the image.")
+    return 0
+
+
+def cmd_verify(reported):
+    state = read_state()
+    if "token_hash" not in state:
+        print("error: no probe started; run 'see-check start' first", file=sys.stderr)
+        return 3
+
+    seen = " ".join(canonical(reported))
+    passed = hashlib.sha256(seen.encode()).hexdigest() == state["token_hash"]
+    mode = "host-vision" if passed else ("codex-relay" if codex_available() else "source-only")
+
+    state.update({"mode": mode, "decided": int(time.time()), "fingerprint": host_fingerprint()})
+    write_state(state)
+
+    print(f"vision: {'host-vision' if passed else 'blind'}")
+    print(f"mode: {mode}")
+    if not passed and mode == "source-only":
+        print("note: codex CLI not on PATH, so no relay is possible")
+    return 0 if passed else 1
+
+
+def cmd_mode():
+    state = read_state()
+    mode = state.get("mode")
+    fresh = (
+        mode
+        and state.get("fingerprint") == host_fingerprint()
+        and time.time() - state.get("decided", 0) < CACHE_TTL_SECONDS
+    )
+    if not fresh:
+        print("mode: unknown")
+        return 0
+    if mode == "codex-relay" and not codex_available():
+        print("mode: source-only")
+        return 0
+    print(f"mode: {mode}")
+    return 0
+
+
+def cmd_reset():
+    try:
+        os.remove(state_path())
+    except OSError:
+        pass
+    print("mode: unknown")
+    return 0
+
+
+def main(argv):
+    if len(argv) < 2:
+        print(__doc__.strip(), file=sys.stderr)
+        return 2
+    command = argv[1]
+    if command == "start":
+        return cmd_start()
+    if command == "verify":
+        if len(argv) < 3:
+            print("usage: see-check verify <colors left to right>", file=sys.stderr)
+            return 2
+        return cmd_verify(" ".join(argv[2:]))
+    if command == "mode":
+        return cmd_mode()
+    if command == "reset":
+        return cmd_reset()
+    print(f"error: unknown command: {command}", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
