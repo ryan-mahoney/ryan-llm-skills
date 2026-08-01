@@ -183,6 +183,8 @@ Standalone skills outside the two distributions.
 | **angular-pr-complexity** | `/angular-pr-complexity <commit-hash>` | Score an Angular/Nx merge commit on size, spread, file types, and cognitive load |
 | **bun-test-fix** | `/bun-test-fix <path-to-test-file>` | Bring a test file into compliance with Bun test rules from `AGENTS.md` |
 | **skill-factory** | `/skill-factory [description of task to automate]` | Create a reusable skill by extracting an existing repository workflow into a grounded `SKILL.md` |
+| **simple-english** | `/simple-english [text or file]` | Write or check technical text against ASD-STE100 Simplified Technical English — sentence limits, one word one meaning, active voice, condition before command ([upstream](https://github.com/AminBlg/SimpleEnglish), MIT) |
+| **axi-checker** | `/axi-checker [path to prompt/SKILL.md/AGENTS.md]` | Audit a prompt, skill, or agent instruction file against the 10 [AXI](https://axi.md/) principles and recommend structural and content fixes; delegates the sentence-level pass to `simple-english` |
 | **commit** | `/commit [issue]` | Conventional commit of staged files |
 | **pr-review** | `/pr-review [pr]` | Review a PR's code and submit comments |
 | **pr-feedback** | `/pr-feedback [pr]` | Address PR review comments one by one |
