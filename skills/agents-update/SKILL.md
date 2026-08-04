@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "3"
+  version: "4"
 ---
 
 # Agent — Repository Architecture Mapper
@@ -14,7 +14,7 @@ Generate or update an `AGENTS.md` file that gives coding agents and human contri
 
 ## Why AGENTS.md Exists
 
-Coding agents make assumptions. They assume Rails conventions in a Django project, guess that `src/` is the frontend when it's the backend, and hallucinate file paths. `AGENTS.md` exists to short-circuit those mistakes by giving contributors ground truth about the project up front. Every section should earn its place by preventing a real class of navigation, implementation, or maintenance error.
+Coding agents make assumptions. They assume Rails conventions in a Django project, guess that `src/` is the frontend when it's the backend, and hallucinate file paths. `AGENTS.md` exists to short-circuit those mistakes by giving contributors ground truth about the project up front.
 
 ---
 
@@ -22,7 +22,9 @@ Coding agents make assumptions. They assume Rails conventions in a Django projec
 
 Survey the repository before writing anything. Use these checks as a recommended workflow and adapt the order to the repository's structure.
 
-For large repositories (monorepos, 10+ top-level areas), fan reconnaissance out: spawn parallel Explore subagents — one per package or top-level area — and synthesize their reports in the main context instead of reading everything yourself.
+For large repositories (monorepos, 10+ top-level areas or packages), fan reconnaissance out: spawn parallel Explore subagents — one per package or top-level area — and synthesize their reports in the main context instead of reading everything yourself. Drill into a package only when its conventions differ from the root.
+
+If the target has no dependency manifest and no source tree, report `out of scope: <path> is not a code repository` and stop.
 
 ### 1a. Top-level inventory
 
@@ -36,7 +38,7 @@ List the root directory contents. Pay attention to:
 
 ### 1b. Read dependency manifests
 
-Open the dependency files. Extract:
+Read the dependency files. Extract:
 
 - **Language and runtime version** (e.g., `"engines": {"node": ">=20"}`, `python_requires`, rust-toolchain.toml).
 - **Framework and its version** (e.g., Next.js 14, Django 5.1, Rails 7.2, Spring Boot 3.x).
@@ -45,7 +47,7 @@ Open the dependency files. Extract:
 
 ### 1c. Trace the directory tree
 
-Walk the directory structure 2–3 levels deep. Identify:
+Trace the directory structure 2–3 levels deep. Identify:
 
 - Where source code lives vs. generated/build output.
 - The separation (or lack thereof) between frontend and backend.
@@ -53,7 +55,7 @@ Walk the directory structure 2–3 levels deep. Identify:
 
 ### 1d. Read key entry points and config
 
-Open the files that reveal routing and wiring:
+Read the files that reveal routing and wiring:
 
 - **Backend entry points**: `app.py`, `main.go`, `src/index.ts`, `config/routes.rb`, `urls.py`, `Program.cs`.
 - **Frontend entry points**: `app/layout.tsx`, `src/App.vue`, `src/main.tsx`, `pages/_app.tsx`.
@@ -63,7 +65,7 @@ Open the files that reveal routing and wiring:
 ### 1e. Check for existing agent instruction files
 
 - **AGENTS.md** — if one exists, read it fully. Step 4 covers how to update it.
-- **Siblings** — also read `CLAUDE.md`, `.cursorrules`, and `.github/copilot-instructions.md` if present. Do not duplicate their content in AGENTS.md; where they contradict the actual repo, flag it with `<!-- REVIEW: ... -->`.
+- **Siblings** — if `CLAUDE.md`, `.cursorrules`, or `.github/copilot-instructions.md` are present, read them. Do not duplicate their content in AGENTS.md. Where they contradict the actual repo, mark the contradiction with `<!-- REVIEW: ... -->`.
 
 ### 1f. Check for structured SpecOps agent docs
 
@@ -72,9 +74,10 @@ If `docs/specops/targets.json` exists:
 - Read the manifest summary and target list.
 - Preserve any existing generated block between `<!-- agents-docs:start -->` and
   `<!-- agents-docs:end -->`.
-- Do not copy per-target docs into AGENTS.md. The root AGENTS.md should contain only a compact
+- Do not copy per-target docs into AGENTS.md. The root AGENTS.md must contain only a compact
   index that links to `docs/specops/agents/<slug>.md` and `docs/specops/analysis/<slug>.md`.
-- If the generated block is missing or stale, run or recommend `specops-index-agents`.
+- If the generated block is missing or stale, run `specops-index-agents` (it regenerates the
+  index block). If you cannot run it, recommend it in your report.
 
 ### 1g. Mine for gotchas and ground-truth commands
 
@@ -119,7 +122,11 @@ If monorepo: identify each package/service, its role, and how they relate.
 
 ## Step 3 — Write AGENTS.md
 
-Produce the file using the template below. Every section exists because it prevents a specific category of contributor or agent mistake. Do not add fluff sections. Include sections only when they are verified and materially useful; if a section is relevant but cannot be confirmed from the repository, omit it or mark it with `<!-- REVIEW: reason -->` rather than guessing.
+Produce the file using the template below. Every section exists because it prevents a specific category of contributor or agent mistake. Do not add fluff sections. When a section is verified and materially useful, include it. If a section is relevant but not confirmed from the repository, prefer omission; when it is too useful to omit, mark it with `<!-- REVIEW: reason -->`. Do not guess. This omit-or-mark rule is the single policy for unverified content — Steps 4 and 5 reference it rather than restating it.
+
+**Finding-shaped sections have a defined zero:** if reconnaissance surfaces no verified gotchas or conventions, omit that section or write "None verified." Never invent an entry you cannot trace to a file.
+
+**Write instructions as instructions:** the generated file is read by agents. Use imperative mood, one instruction per sentence, condition before its command, and never "should" — an agent reads "should" as optional.
 
 **Length budget:** AGENTS.md is loaded into every agent's context, so size is a cost. Target under ~150 lines. When trimming, keep Key Conventions and Gotchas first; cut exhaustive directory listings and tech-stack rows that state the obvious.
 
@@ -260,13 +267,13 @@ secrets for local dev. Mention `.env.example` if it exists.]
 - **No existing AGENTS.md**: Create it fresh from the template.
 - **Existing AGENTS.md**: Read it carefully. Then:
   - **Preserve** any human-written commentary, team-specific notes, or sections not covered by this template.
-  - **Preserve** the generated SpecOps agent-docs block between `<!-- agents-docs:start -->` and `<!-- agents-docs:end -->`; update it only via `specops-index-agents`.
+  - **Preserve** the generated SpecOps agent-docs block per Step 1f.
   - **Update** sections where the repo has changed (new dependencies, moved directories, changed patterns).
   - **Append** new sections from the template that are missing.
   - **Mark** anything you're unsure about with `<!-- REVIEW: [reason] -->` so a human can verify.
   - **Refresh** the `Last updated` date in the header.
-  - Keep the existing prose style if it's good. Don't rewrite working sentences just to match the template's voice.
-  - Do not delete useful sections solely because they are not in the template if they still communicate accurate project-specific guidance.
+  - If the existing prose style is good, keep it. Do not rewrite working sentences just to match the template's voice.
+  - If a section communicates accurate project-specific guidance, keep it. The template does not limit which sections the file can have.
 
 ---
 
@@ -275,18 +282,17 @@ secrets for local dev. Mention `.env.example` if it exists.]
 Before finalizing, verify:
 
 1. **Could a contributor find every file they need?** — If someone is asked to "add a new API endpoint," does `AGENTS.md` tell them exactly where to put the route file, the model, the test, and the migration?
-2. **Are the gotchas real?** — Each gotcha should describe something a coding agent or new contributor would actually get wrong. Remove generic advice like "read the docs" or "follow best practices."
-3. **Is the tech stack table complete?** — Every version that matters for compatibility should be listed.
-4. **Are commands copy-pasteable?** — An agent should be able to run them verbatim, and each one should be traceable to a package script, Makefile target, or CI step — not reconstructed from memory.
-5. **Is anything stale?** — If you found a discrepancy between AGENTS.md and the actual repo, flag it.
-6. **Did you avoid speculation?** — Never infer versions, commands, deployment targets, or architectural labels that are not evidenced by the repository. Prefer omission or `<!-- REVIEW: ... -->`.
+2. **Are the gotchas real?** — Each gotcha must describe a mistake a coding agent or new contributor makes without it. Remove generic advice like "read the docs" or "follow best practices."
+3. **Is the tech stack table complete?** — List every version that matters for compatibility.
+4. **Are commands copy-pasteable?** — An agent must be able to run each command verbatim. Trace each command to a package script, Makefile target, or CI step per Step 1g — never reconstruct commands from memory.
+5. **Is anything stale?** — If you found a discrepancy between AGENTS.md and the actual repo, mark it with `<!-- REVIEW: ... -->`.
+6. **Did you avoid speculation?** — Never infer versions, commands, deployment targets, or architectural labels that are not evidenced by the repository. Apply the Step 3 omit-or-mark rule.
 
 ---
 
 ## Execution Notes
 
-- This skill involves reading many files. Batch your reads — don't open files one at a time when you can scan directories and read multiple files in sequence.
-- If the repo is very large (monorepo with 10+ packages), focus on the top-level structure first, then drill into packages only as needed. The root AGENTS.md should be a monorepo overview with pointers, not exhaustive docs for every sub-package.
-- For packages with their own distinct conventions, prefer nested `packages/<name>/AGENTS.md` files — the AGENTS.md convention resolves the closest file to the code being edited — over inflating the root file.
-- The output file should be written to the repository root as `AGENTS.md`.
+- This skill involves reading many files. Batch your reads — do not open files one at a time when you can scan directories and read multiple files in sequence.
+- For a monorepo, the root AGENTS.md must be an overview with pointers, not exhaustive docs for every sub-package. For packages with their own distinct conventions, prefer nested `packages/<name>/AGENTS.md` files — the AGENTS.md convention resolves the closest file to the code being edited — over inflating the root file. (Reconnaissance strategy for large repos lives in Step 1.)
+- Write `AGENTS.md` to the repository root.
 - If the execution environment requires writing outputs to a staging path, follow that environment's documented file-output convention.

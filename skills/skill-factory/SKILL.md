@@ -6,14 +6,14 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "1"
+  version: "2"
 ---
 
 # Skill Factory — Create Reusable Skills from Codebase Patterns
 
-You are a skill author. Given a description of a repeatable task, you analyze the current codebase to find how that task is already done, extract the pattern, identify what varies each time (the arguments), and produce a complete SKILL.md that any agent can execute.
+You are a skill author. Given a description of a repeatable task: analyze the codebase to find how the task is done today. Extract the pattern. Identify what varies each time (the arguments). Draft a complete SKILL.md that any agent can execute.
 
-The value is in grounding: the generated skill references real file paths, real naming conventions, and real patterns from the repo — not generic advice. A generated skill should read like it was written by someone who has done this task in this codebase twenty times.
+The value is in grounding: the generated skill references real file paths, real naming conventions, and real patterns from the repo — not generic advice. Write the generated skill so it reads like the work of someone who has done this task in this codebase twenty times.
 
 ---
 
@@ -27,6 +27,8 @@ Parse the user's description of what the skill should do. Clarify:
 - **What stays the same** each time? (e.g., "the file structure, the wiring pattern, the test setup")
 
 If the description is too vague to identify inputs and outputs, ask clarifying questions. You need enough to know what the skill's arguments will be.
+
+If the working directory is not a repository, or the task leaves no trace in a codebase, report `out of scope: no codebase precedent` and ask whether an ungrounded skill is wanted.
 
 ---
 
@@ -43,7 +45,9 @@ If no `AGENTS.md`, survey the repo yourself:
 
 ### 2b. Find precedent
 
-This is the critical step. Search the codebase for **existing examples** of the task being done. You need at least 2 examples to extract a pattern, 3+ is better.
+This is the critical step. Search the codebase for **existing examples** of the task being done. You need at least 2 examples to extract a pattern. Three or more is better. The generated skill must reflect how the codebase actually works, not how a framework's docs say it works — if the team uses a non-standard pattern, encode that pattern.
+
+If you find fewer than 2 examples, stop and report: `precedent insufficient — found <n> example(s) at <paths>`. Offer to draft from one example with a stated warning, or not at all.
 
 For example, if the skill is "add a route module in our Angular monorepo":
 - Find all existing route modules
@@ -62,25 +66,28 @@ Compare the examples to separate:
 
 The skeleton becomes the skill's step-by-step instructions. The variables become the skill's arguments.
 
+If the examples diverge on structure, present the variants with their file paths and ask which is canonical before drafting.
+
 ---
 
 ## Step 3 — Design the Skill Interface
 
 ### 3a. Define arguments
 
-From the variables identified in Step 2c, decide what the skill takes as input. Arguments should be:
+From the variables identified in Step 2c, decide what the skill takes as input. Arguments must be:
 
 - **Minimal** — don't ask for things that can be derived (e.g., if the module name is always kebab-case of the feature name, just take the feature name)
 - **Concrete** — each argument maps to something the user would know upfront (e.g., "feature-name", not "module-config-options")
 - **Ordered by importance** — required args first, optional context second
+- **Self-evident** — if the invoker has to read the SKILL.md to figure out what to pass, the argument design is wrong
 
 ### 3b. Define the trigger description
 
-Write a description that matches how a user would naturally ask for this task. Use the same language patterns as existing skills — include specific trigger phrases.
+Write a description that matches how a user would naturally ask for this task. Description formula: outcome first, then the literal phrases a user says ("Use when the user says…"), then the scope limit if one exists. Keep it under 500 characters.
 
 ### 3c. Choose a name
 
-The skill name should be:
+The skill name must be:
 - Kebab-case
 - Action-oriented (verb-noun or domain-verb)
 - Specific enough to distinguish from other skills
@@ -88,9 +95,9 @@ The skill name should be:
 
 ---
 
-## Step 4 — Write the SKILL.md
+## Step 4 — Draft the SKILL.md
 
-Produce a complete SKILL.md following this structure:
+Draft a complete SKILL.md following this structure:
 
 ```markdown
 ---
@@ -111,8 +118,8 @@ argument-hint: "[argument format hint]"
 
 ## Before Starting
 
-[Pre-flight checks: verify arguments, confirm the working directory is correct,
-check that prerequisites exist.]
+[Pre-flight checks: check the arguments. Check that the working directory is
+correct. Check that the prerequisites exist.]
 
 ## Steps
 
@@ -129,22 +136,27 @@ Reference specific files as examples.]
 
 ### N. [Final step]
 
-[Usually: run targeted tests, stage files, commit.]
+[Final step: run the targeted tests. Stage the files. Commit.]
 
 ## Conventions
 
 [Project-specific rules the skill must follow — naming, imports,
 file placement, test structure. Derived from Step 2b analysis.]
+
+## If Blocked
+
+[Failure exits: if a prerequisite is missing or a target already exists,
+report the specific error and stop. Never continue on a wrong premise.]
 ```
 
 ### Writing principles for the generated skill
 
 - **Use exact file paths** from the repo, not placeholders. If the skill creates `libs/feature-name/src/lib/feature-name.module.ts`, write that path with the argument variable substituted.
 - **Reference existing files as pattern examples.** "Structure this the same way `libs/auth/src/lib/auth.module.ts` is structured" is better than "follow the module pattern."
-- **Include the wiring step.** Most scaffolding tasks require registering the new thing somewhere (router config, module imports, barrel exports). This is the step people forget. Make it explicit.
-- **Include naming conventions** inline where they matter. Don't just say "follow conventions" — say "file names use kebab-case, class names use PascalCase with a `Module` suffix."
-- **Keep the skill focused.** One task, done completely. If the user's request covers multiple tasks, suggest splitting into multiple skills.
-- **Give a UI skill eyes.** If the generated skill creates or changes anything a user will look at, it must render its work and check it, not infer correctness from the code it wrote. Add a step that establishes vision mode with the sibling `see` skill (`host-vision` view directly, `codex-relay` route captures through `codex-see`, `source-only` state plainly that no visual check happened), captures with the sibling `uishot` skill at the default viewport and 320px, inspects, fixes, and recaptures until a pass finds nothing new. Write it as a bounded correction loop, not a final screenshot for the transcript. Skills that produce no visual output skip this entirely.
+- **Include the wiring step.** Every generated skill must include the step that connects the new thing to the existing system (router config, module imports, barrel exports). Scaffolding without registration is the #1 source of "I created the files but nothing works."
+- **Include naming conventions** inline. Where a name follows a convention, state that convention: "file names use kebab-case, class names use PascalCase with a `Module` suffix" — never just "follow conventions."
+- **Keep the skill focused.** One task, done completely. If the user's request covers multiple tasks, suggest splitting into multiple skills. Skills compose; monolithic skills rot.
+- **Give a UI skill eyes.** If the generated skill creates or changes anything a user will look at, it must render its work and check it, not infer correctness from the code it wrote. Add these sub-steps: establish vision mode with the sibling `see` skill (`host-vision` view directly, `codex-relay` route captures through `codex-see`, `source-only` state plainly that no visual check happened). Capture with the sibling `uishot` skill at the default viewport and at 320px. Inspect the captures. Fix the defects. Recapture. Repeat until a pass finds nothing new. Write it as a bounded correction loop, not a final screenshot for the transcript.
 - **Do not include attribution footers** in the generated skill. No "Co-Authored-By", "Generated with", or AI-related signatures.
 
 ---
@@ -171,17 +183,3 @@ Once approved, write the skill to:
 ```
 
 Then inform the user they can run `~/.agents/sync.sh` to distribute it to all agent tools.
-
----
-
-## Principles
-
-1. **Precedent over theory.** The generated skill must reflect how the codebase actually works, not how a framework's docs say it should work. If the team uses a non-standard pattern, the skill encodes that pattern.
-
-2. **Grounding over generality.** A skill that says "create a file at `libs/$1/src/lib/$1.routes.ts` following the pattern in `libs/dashboard/src/lib/dashboard.routes.ts`" is useful. A skill that says "create a route file following Angular conventions" is not.
-
-3. **Arguments should be obvious.** If someone invoking the skill has to read the SKILL.md to figure out what to pass, the argument design is wrong. Names should be self-evident.
-
-4. **The wiring step is mandatory.** Scaffolding without registration is the #1 source of "I created the files but nothing works." Every generated skill must include the step that connects the new thing to the existing system.
-
-5. **One skill, one task.** If the user describes a workflow with 3 distinct phases, suggest 3 skills. Skills compose; monolithic skills rot.

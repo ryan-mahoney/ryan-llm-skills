@@ -1,6 +1,6 @@
 ---
 name: spec-branch-review
-description: This skill should be used when the user or the spec-branch-refine loop asks to review the whole implemented branch. It performs correctness and integration review plus a bounded guardrail lens from the prepared spec, then writes ordinary structured findings for spec-branch-fix.
+description: Use this skill when the user or the spec-branch-refine loop asks to review the whole implemented branch. It performs correctness and integration review plus a bounded guardrail lens from the prepared spec, then writes ordinary structured findings for spec-branch-fix.
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "12"
+  version: "13"
 ---
 
 # Spec Branch Review
@@ -24,10 +24,7 @@ code.
 
 This is the single final review boundary. It is spec-aware — it has the whole spec, every subspec, and
 every learning — so it can tell an intended design from a defect far better than a
-blind diff review can. Spec-awareness, though, is not what gave the original approach its recall —
-**per-commit decomposition** did, and this skill now replicates it: it reviews each
-commit's small diff and aggregates the findings, instead of skimming the whole
-combined diff once (see Review).
+blind diff review can. Its recall comes from **per-commit decomposition** (see Review).
 
 ## Operating Context
 
@@ -47,14 +44,14 @@ branch review. Single pass per call: review once, write the file, stop.
 This skill runs to completion without user interaction. Make well-grounded
 judgement calls from the diff, the spec, and the repository; do not pause for
 confirmation. Stop only when a required input is genuinely missing and cannot be
-inferred; report what is missing and halt.
+inferred. Report `missing input: <name>`, write no review file, and stop.
 
 ## Resolve Inputs
 
 - **Spec.** Resolve `spec=<path>` or an explicit `.specs/<feature>/` folder first;
   otherwise use the folder named in the conversation or the `Spec folder:` footer.
-  If exactly one `.specs/*/spec.md` exists, use it. Stop on ambiguity rather than
-  selecting by modification time. `<spec-dir>` is that `.specs/<feature>/` folder.
+  If exactly one `.specs/*/spec.md` exists, use it. If more than one matches, stop.
+  Do not select by modification time. `<spec-dir>` is that `.specs/<feature>/` folder.
 - **Iteration.** Use `iter=<n>` when given. Standalone default: one higher than the
   highest existing `<spec-dir>/reviews/branch-<k>-review.md`, or `1` if none exist.
 - **Comparison base.** Resolve the point the branch is diffed against, in this order:
@@ -63,12 +60,12 @@ inferred; report what is missing and halt.
   - `since=<commit>` — use `<commit>` directly as the base, giving the range
     `<commit>..HEAD` (exclusive of `<commit>` itself, like any git range).
   - neither — use `merge-base(<default-branch>, HEAD)`, resolving the default branch
-    from the repo (`git symbolic-ref refs/remotes/origin/HEAD`, else the project
-    convention, else `main`/`master`).
+    from the repo (`git symbolic-ref refs/remotes/origin/HEAD`, else `main`/`master`).
 
   Call the resolved point `<base>`. **Refuse ambiguous targets:** if `HEAD` is the
   default branch and neither `base` nor `since` was given, there is no branch to diff
-  — stop and report. Never silently review the default branch against itself.
+  — report `out of scope: HEAD is the default branch (pass base= or since=)`, write no
+  review file, and stop. Never silently review the default branch against itself.
 - **Scope.** Default `scope=committed`. Review the whole range, not a single commit:
   - `scope=committed` (default) — `<base>..HEAD`. Changed files:
     `git diff --name-only <base>..HEAD`; diff: `git diff <base>..HEAD`.
@@ -77,6 +74,11 @@ inferred; report what is missing and halt.
     `git status --porcelain` (untracked files are the `??` entries) and review
     `git diff <base>` together with the contents of new untracked files. Use this for a
     standalone review of work not yet committed.
+
+  If `<base>..HEAD` contains no commits: in `committed` scope, report
+  `nothing to review: <range>`, write no review file, and stop. In `working-tree`
+  scope, review only the uncommitted and untracked changes and set
+  `commits_reviewed: 0`.
 - **Dirty-tree handling.** In `scope=committed`, if `git status --porcelain` is
   non-empty, the working tree has uncommitted or untracked changes this review does
   **not** see. Keep the `scope` field a pure enum and record the exclusion in the
@@ -92,7 +94,8 @@ Read for judgement:
 - Every `step-<NNN>-subspec.md` in `<spec-dir>` — what each step meant to do (per-step
   artifacts live flat in the spec folder, step numbers zero-padded to three digits).
 - Every `step-<NNN>-learning.md` in `<spec-dir>` — what each step discovered and any
-  recorded trade-offs. Do not flag a recorded, deliberate trade-off as a bug.
+  recorded trade-offs. A recorded, deliberate trade-off is not a bug — the canonical
+  exclusion list lives in Report Discipline.
 - `criteria.md` — consume only prose `Statement:` values.
 - `invariants.md` — consume only live invariant statements not marked superseded.
 
@@ -118,8 +121,8 @@ only the ones that mean "this is not a bug" do:
 | `false-positive` | Yes — the finding was wrong. |
 | `intentional` | Yes — the code is deliberate. |
 | `accepted-risk` | Only when the fix decision has `approved: true`; otherwise re-raise. |
-| `deferred` | No — it is a real, unaddressed defect. Keep surfacing it. |
-| `unfixable` | No — real but blocked; keep surfacing so the human sees it. |
+| `deferred` | No — a real, unaddressed defect. Re-raise it each iteration. |
+| `unfixable` | No — real but blocked. Re-raise it each iteration so the human sees it. |
 
 - Do **not** re-raise a finding whose signature matches a suppressing dismissal:
   `false-positive`, `intentional`, or an `accepted-risk` whose decision carries
@@ -133,19 +136,19 @@ only the ones that mean "this is not a bug" do:
 
 ## Review: Per-Commit Passes + Aggregation
 
-An external per-commit reviewer does not get its recall from a cleverer prompt. It gets it from **structure**. It reviews every commit individually
-as that commit lands (a small, focused diff), stores each finding, and then the
-branch/range review **aggregates those per-commit reviews and keeps the ones that
-still persist in the final tree**. A single pass over the whole combined diff — what
-this skill did before — skims a thousand-plus lines across a dozen commits and quietly
-misses the localized defects a focused per-commit read catches every time: a
-non-atomic read-modify-write race, a `catch` that swallows a post-`rename` error, one
-error type where the rest of the module raises another, an untested validation branch.
-Replicate the structure; do not just widen the lenses.
+Recall comes from **structure**, not a cleverer prompt: review every commit
+individually (a small, focused diff), store each finding, then aggregate the
+per-commit findings and keep the ones that still persist in the final tree. A single
+pass over the whole combined diff skims a thousand-plus lines across a dozen commits
+and quietly misses the localized defects a focused per-commit read catches every
+time: a non-atomic read-modify-write race, a `catch` that swallows a post-`rename`
+error, one error type where the rest of the module raises another, an untested
+validation branch. Review the small units, never only the combined blob.
 
-Run the review in subagents when the harness supports them, so the reviewer stays
-independent of the later fixer and the per-commit passes run in parallel. Merge all
-findings into one file.
+**Fan-out rule.** When the harness supports subagents, run every review pass in
+read-only subagents — the reviewer stays independent of the later fixer and the
+per-commit passes run in parallel. Merge all findings, deduped by signature, into
+the one review file. The stages and lenses below reference this rule.
 
 ### Core review (always runs) — decompose, review per commit, then aggregate
 
@@ -154,28 +157,28 @@ security, simplification, and AI-authorship), but
 in three stages instead of one combined pass:
 
 **Stage A — Decompose the range into commits.** List `git rev-list --reverse
-<base>..HEAD`; each commit is a review unit. Map commits to steps using the commit SHA
-recorded in `step-<NNN>-learning.md`, an explicit step marker in the subject, or spec
-order as a last resort. Give each reviewer that step's immutable subspec intent.
+<base>..HEAD`; each commit is a review unit. Map commits to steps using the `commit:`
+field of the `learning:` YAML block in `step-<NNN>-learning.md`, an explicit step
+marker in the commit subject (for example `step 3:` or `(step 3)`), or spec order as
+a last resort. Give each reviewer that step's immutable subspec intent. If a commit
+maps to no step, review it against `spec.md` alone and record `step: none` in its
+findings' context.
 
 **Stage B — Per-commit review pass (the recall engine).** For each commit, review
 **that commit's own diff** (`git show <sha>`), not the combined diff, applying the
 localized lenses — 1 (correctness), 3 (security), 4 (simplification), 5
 (AI-authorship) — to its small, focused change, seeded with the step's subspec intent.
-Fan out one read-only subagent per commit when the harness supports it so each stays
-focused on its unit. Every commit gets a focused pass. This is the stage that surfaces what the old whole-diff pass
-missed — review the small units, never only the combined blob. (Across refine
-iterations, a commit whose files the previous fix did not touch may reuse its prior
-per-commit result; re-review only the commits the last fix changed, then always re-run
-Stage C.)
+Fan out one subagent per commit (per the fan-out rule above) so each stays focused
+on its unit. Every commit gets a focused pass. Across refine iterations: if the
+previous fix did not touch a commit's files, you can reuse its prior per-commit
+result. Re-review only the commits the last fix changed. Always re-run Stage C.
 
 **Stage C — Aggregate + integrate (the range layer).** Over the union of fresh
 per-commit findings plus the integrated end state:
 
 - **Carry forward** each per-commit finding that **still persists in the final tree**,
   and **drop** any a later commit already fixed — a defect introduced at commit C and
-  resolved at C+3 is not a branch finding. This is the per-commit review rule: do not
-  re-raise a per-commit issue unless it persists in the final code.
+  resolved at C+3 is not a branch finding.
 - Run **lens 2 (reference & contract integrity)** here, and only here — it is
   inherently whole-branch and invisible commit-by-commit: a rename applied in one
   commit but not its mirror, a signature changed in one step and miscalled in another.
@@ -184,7 +187,7 @@ per-commit findings plus the integrated end state:
 
 **Stage D — Semantic precedent and duplication pass.** After the integrated
 end-state review, run a repository precedent search for the branch's new or changed
-behaviors. Prefer the `code_search` MCP tool when this turn exposes it: search by
+behaviors. When this turn exposes the `code_search` MCP tool, prefer it: search by
 behavior and responsibility (for example "resolve feature worktree code index
 status", "track generated review artifact", "parse branch review verdict"), not only
 by newly introduced symbol names. For each meaningful hit, switch to exact search
@@ -197,8 +200,8 @@ This pass is mandatory for the branch review because duplicated/reinvented
 functionality is often invisible in a narrow diff. Report only confirmed overlap:
 state the existing implementation, the new implementation, and the concrete harm
 (divergent behavior, stale copy, future fix needing two edits, broken single source
-of truth). Do not flag mere similarity if both implementations intentionally serve
-different contracts.
+of truth). If both implementations intentionally serve different contracts, do not
+flag the similarity.
 
 The five lenses (Stage B runs 1, 3, 4, 5 per commit; Stage C runs 2 plus the
 aggregation):
@@ -231,8 +234,7 @@ aggregation):
    of the module raises another, a caller that cannot discriminate the failure).
    Duplicated/reinvented behavior must be grounded in Stage D's repository search,
    preferably `code_search` plus exact confirmation. These are usually
-   `LOW`/advisory — but they are still **findings to emit**, never a reason to stay
-   silent.
+   `LOW`/advisory — still always emitted (see Severity, Actionability, Verdict).
 5. **AI-authorship tells** — this branch was written by an LLM (`spec-step-run`), so
    hunt the failure modes current models still produce that slip past ordinary
    review: invented methods or options on a third-party library or framework API
@@ -256,38 +258,37 @@ aggregation):
    review.
    File each under its **natural category** — a hallucinated call or swallowed error
    is `correctness`, a reinvented helper or needless rewrite is `simplification`. This
-   lens is a hunting heuristic, not a new category, and it never re-flags a trade-off
-   the learnings already record as deliberate.
+   lens is a hunting heuristic, not a new category; it honors the Report Discipline
+   exclusions.
 
 ### Conditional fan-out (fan out by risk, not by habit)
 
 After the core pass, run a specialized lens for **each risk trigger the diff fires**
 — often none, sometimes several. Fan out by what the branch actually touches, not
-by rote. When the harness supports subagents, run each fired lens as its own
-parallel read-only subagent so lenses stay independent; merge every lens's findings
-into the one review file, deduped by signature.
+by rote. Run each fired lens as its own subagent per the fan-out rule, so lenses
+stay independent.
 
-Each lens below names its trigger and what it looks for. Where an existing skill
-covers the lens, **delegate to it when available** and record which you used; if it
-is not available in this workspace, run the inline checklist instead — never skip a
-fired lens because its preferred skill is absent.
+Each lens below names its trigger and what it looks for. When a fired lens has a
+matching skill available, **delegate to it**. Record which skill you used. If the
+skill is not available in this workspace, run that lens's inline checklist. Never
+skip a fired lens because its preferred skill is absent.
 
 - **Design / UX** — trigger: the diff touches UI/component/style files
   (`.tsx`/`.jsx`/`.vue`/`.svelte`/`.css`/`.scss` or component/view directories) **or**
   the spec's Applicable Rules list design rules. Looks for: design-system token
   drift, missing UX states (loading/empty/error/disabled), and accessibility
-  regressions. Delegate to `design-align` or `ux-auditor` when available. When the
-  branch has a reachable dev server, Storybook, or component harness, render the
-  changed views before judging them: establish eyes with `see`, capture with
-  `uishot` at the default viewport and 320px, and cite what you saw. Layout
+  regressions. When `design-align` or `ux-auditor` is available, delegate to it. When
+  the branch has a reachable dev server, Storybook, or component harness, render the
+  changed views before judging them. Establish eyes with `see`. Capture with
+  `uishot` at the default viewport and at 320px. Cite what you saw. Layout
   breakage, clipping, and contrast failures do not appear in a diff. When nothing
   renders, review from source and record the lens as source-only rather than
   implying the UI was seen.
 - **Deep security** — trigger: the diff touches auth, crypto, secrets, sessions,
   tokens, permissions, or access-control paths. Looks for: authz/ownership gaps,
   token/session handling, secret exposure, weak crypto/randomness — beyond the core
-  baseline. Delegate to the `security-review` skill when available; otherwise run an
-  inline deep-security checklist covering those classes.
+  baseline. When the `security-review` skill is available, delegate to it; otherwise
+  run an inline deep-security checklist covering those classes.
 - **Data / deployment** — trigger: the diff adds or changes migrations, persistent
   schema, queues, or rollout/config. Looks for: destructive or locking migrations,
   back-compat with existing data/in-flight messages, deployment-ordering hazards,
@@ -311,8 +312,8 @@ checked, not skipped.
 
 ## Report Discipline (every lens, every finding)
 
-These rules keep the review surfacing real low-severity findings instead of
-collapsing to a silent pass. They apply to the core lenses and to every fired lens.
+These rules apply to the core lenses and to every fired lens. (The advisory
+always-emit rule lives once in Severity, Actionability, Verdict.)
 
 - **Concrete-harm mandate.** For each finding, state *what specifically goes wrong
   if it is not fixed* — a traced failure path (the interleaving, the input, the
@@ -322,7 +323,8 @@ collapsing to a silent pass. They apply to the core lenses and to every fired le
   failure. For an **internal-contract** finding — a docstring that contradicts its
   own code, an error type a caller cannot discriminate — the concrete harm *is* the
   future caller or maintainer the contract misleads: trace which wrong assumption
-  whom makes, and do **not** drop it merely because nothing crashes today. (If a
+  that caller or maintainer makes, and do **not** drop it merely because nothing
+  crashes today. (If a
   subspec, learning, or the spec sanctions the inconsistency, it is intentional, not
   a finding — see the exclusions below.)
 - **Severity by impact** (feeds the section below):
@@ -342,7 +344,7 @@ collapsing to a silent pass. They apply to the core lenses and to every fired le
   plain `Error` the spec deliberately chooses over a subclass — cite the location).
   Naming the exclusions is what frees you to report the legitimate remainder without
   fear of nitpicking.
-- **Verify, then drop.** Before emitting, re-check every finding: it references the
+- **Confirm, then drop.** Before emitting, confirm every finding: it references the
   narrowest stable location, its severity matches the harm you traced, and no two
   findings contradict. Drop any that fail. A strong drop-filter — not
   self-censorship — is what lets you surface borderline findings confidently.
@@ -384,7 +386,9 @@ Write to:
 <spec-dir>/reviews/branch-<iteration>-review.md
 ```
 
-Create `reviews/` if needed, write atomically (temp file in the destination directory, then rename), and begin the file with a level-1 `#` heading on line 1. The file leads with a fenced YAML block — the
+If `reviews/` does not exist, create it. Write the file atomically: write a temp file
+in the destination directory, then rename it. Begin the file with a level-1 `#`
+heading on line 1. The file leads with a fenced YAML block — the
 machine-readable contract that `spec-branch-fix` and `spec-branch-refine` parse —
 followed by human-readable prose that only explains the findings. Downstream skills
 read the YAML first; the prose is never parsed for control flow.
@@ -453,7 +457,9 @@ Review: <spec-dir>/reviews/branch-<iteration>-review.md (iteration <iteration>)
 A clean branch stays minimal: `verdict: pass`, `actionable: 0`, an empty `findings: []`,
 `## Findings\nNone`, and the locator line — plus a **Considered & dismissed** list when a
 per-commit pass weighed and (correctly) dropped a spec-sanctioned candidate. That list is
-what distinguishes an audited `pass` from a blind one. A `pass` verdict is the signal
+what distinguishes an audited `pass` from a blind one. When no candidates were
+dismissed, keep the `## Considered & Dismissed` section and write `None.` under it —
+an explicit zero, not an absent section. A `pass` verdict is the signal
 `spec-branch-refine` stops on.
 
 ## Completion Report
