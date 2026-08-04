@@ -2,6 +2,7 @@
 name: axi-checker
 description: Review a prompt, skill, or agent instruction file against the 10 AXI (Agent eXperience Interface) principles and recommend specific structural and content changes. Use when the user says "AXI check", "check this prompt", "review this skill", "is this SKILL.md any good", "make this prompt agent-ergonomic", "audit my agent instructions", "why does my agent ignore this", or asks whether an instruction file is well structured for an agent to follow. Reports findings as a table of principle, severity, location, and fix. It recommends changes. It does not apply them.
 argument-hint: "[path to a prompt, SKILL.md, or AGENTS.md — or pasted instruction text]"
+disable-model-invocation: true
 license: MIT
 metadata:
   author: Ryan Mahoney

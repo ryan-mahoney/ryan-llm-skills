@@ -3,6 +3,7 @@ name: spec-architect-critics
 description: "Critique a standalone spec-driven architecture proposal in .specs/<feature>/proposal.md by selecting two real practitioners with relevant expertise and evaluating the proposal through their documented perspectives. Use for architecture critiques, proposal reviews, stress tests, expert perspectives, and gap-finding after spec-architect-initial."
 mode: coding
 scope: document
+disable-model-invocation: true
 license: MIT
 metadata:
   author: Ryan Mahoney

@@ -1,6 +1,7 @@
 ---
 name: specops-spec-coherence
 description: "Audit a set of SpecOps analysis specs for cross-spec coherence: establish a dependency-ordered implementation sequence, verify pairwise integration contracts at module boundaries plus three cross-cutting dimensions (shared data models, side-effect ownership, terminology), and patch the affected specs. Use when the user mentions cross-spec consistency, conflicts or integration gaps between specs, duplicate work, implementation or dependency order, terminology drift, or shared data-model conflicts; or asks 'do my specs agree', 'what order should I implement these', or to audit a folder of specs as a set. Run once after generating a full set of analysis specs, before deriving implementation specs."
+disable-model-invocation: true
 license: MIT
 metadata:
   author: Ryan Mahoney

@@ -2,6 +2,7 @@
 name: build-screen-inventory
 description: Build a screen inventory for a product with more than one audience — a layered app, a multi-tenant product, or a monorepo. Partitions screens into separate inventories by who can actually reach them, then writes an index plus one inventory per audience. Use when the user says "build a screen inventory", "list every page", "inventory the app", "map the screens", "what pages exist", or asks to separate an existing inventory by product line, role, or layer. Precedes documenting individual screens.
 argument-hint: "[product line, area, or path to scope the inventory]"
+disable-model-invocation: true
 metadata:
   version: "1"
 ---

@@ -2,6 +2,7 @@
 name: ux-cover-critique
 description: Critique a book cover image against the book's positioning (genre, audience, author's market standing) and propose specific, prioritized design improvements. Use this skill whenever the user shares a book cover — front cover, full jacket, ebook cover, or audiobook tile — and asks for design feedback, a critique, a redesign, whether the cover "works," why it isn't getting clicks, or whether it looks self-published, even if they don't use the word "critique." Also use when the user wants to compare candidate cover directions for the same book, or to analyze a set of comparable covers to extract genre conventions and synthesize a new cover direction from the strengths of many designs.
 argument-hint: "<cover-image> <genre-and-positioning>"
+disable-model-invocation: true
 metadata:
   version: "1"
 ---

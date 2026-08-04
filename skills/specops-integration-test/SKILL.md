@@ -1,6 +1,7 @@
 ---
 name: specops-integration-test
 description: "Generate integration tests for a SpecOps migration — normative runs that cross multiple modules and traverse real seams. Discovers pathways from the analysis specs and the migrated call graph, reuses the project's existing unit-test mocks, and places tests where the target platform keeps them. Use when the user mentions integration tests, end-to-end tests, normative runs, cross-module coverage, testing the migration as a system, or verifying its seams; or asks 'what should I integration test' or 'test the system end-to-end'. Run after a round of code generation yields runnable migrated code with passing unit tests, and re-run as the migration adds pathways."
+disable-model-invocation: true
 license: MIT
 metadata:
   author: Ryan Mahoney

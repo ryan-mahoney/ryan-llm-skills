@@ -2,6 +2,7 @@
 name: form-modernizer
 description: "Modernize an existing form through multi-phase analysis, redesign, TypeScript typing, and visual verification. Use when: 'modernize this form', 'redesign this form', 'form audit', 'improve this form'."
 argument-hint: "<FormComponentPath> [--skip-screenshots] [--edit-only]"
+disable-model-invocation: true
 license: MIT
 metadata:
   author: Ryan Mahoney

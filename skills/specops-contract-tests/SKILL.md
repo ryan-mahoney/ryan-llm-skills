@@ -2,6 +2,7 @@
 name: specops-contract-tests
 description: "Generate framework-agnostic contract tests from a SpecOps analysis file. Use when: 'generate contract tests', 'spec-to-gate tests', 'create tests from analysis', 'contract tests for this analysis', 'test this spec', 'generate tests from specops'."
 argument-hint: "<path-to-analysis-file>"
+disable-model-invocation: true
 license: MIT
 metadata:
   author: Ryan Mahoney

@@ -1,6 +1,7 @@
 ---
 name: specops-spec-conformance
 description: "Audit a SpecOps implementation spec against its source analysis spec to find requirements, contracts, edge cases, error modes, invariants, defaults, side effects, or steps that the implementation dropped, weakened, contradicted, or silently changed — then patch the implementation spec to restore them. Use when the user mentions auditing, comparing, conforming, or reconciling an implementation spec against an analysis spec, finding gaps between two specs, or verifying spec derivation or traceability; or asks 'did the implementation spec lose anything', 'does it match the analysis', or to confirm one spec is faithful to another. Run before generating code from an implementation spec and after either spec is edited."
+disable-model-invocation: true
 license: MIT
 metadata:
   author: Ryan Mahoney

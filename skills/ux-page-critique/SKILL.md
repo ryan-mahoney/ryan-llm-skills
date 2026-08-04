@@ -2,6 +2,7 @@
 name: ux-page-critique
 description: Critique a screenshot of an application page against a Job To Be Done and propose specific, prioritized UX and visual design improvements. Use this skill whenever the user shares a screenshot, mockup, or screen recording of an interface and asks for design feedback, a UX review, a critique, a redesign, or wants to know why a page feels cluttered, confusing, or unpolished — even if they don't use the word "critique." Also use when the user asks how to improve conversion, clarity, hierarchy, or usability on a specific screen, or asks whether a page "works." Applies to web apps, SaaS dashboards, mobile screens, and marketing pages.
 argument-hint: "<screenshot> <job-to-be-done>"
+disable-model-invocation: true
 metadata:
   version: "1"
 ---

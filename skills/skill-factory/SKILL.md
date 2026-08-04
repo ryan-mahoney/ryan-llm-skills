@@ -2,6 +2,7 @@
 name: skill-factory
 description: "Create a new reusable skill by analyzing the current codebase to find how a task is already done, extracting the repeatable pattern, and producing a SKILL.md grounded in actual conventions. Use this skill when the user says 'create a skill for', 'make a skill that', 'I want a skill to', 'generate a skill', 'new skill for', 'skill for setting up', 'skill for adding', or 'skill for creating'. Also trigger when someone wants to codify a repeatable workflow into a reusable automation — scaffolding a module, wiring a route, adding a service, setting up a new package in a monorepo, or any task they find themselves explaining the same way each time."
 argument-hint: "[description of the task the skill should automate]"
+disable-model-invocation: true
 license: MIT
 metadata:
   author: Ryan Mahoney

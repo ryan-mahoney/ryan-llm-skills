@@ -2,6 +2,7 @@
 name: build-permission-model
 description: Derive and document a product's permission model — the roles, the capabilities each holds, the guard on every page route, and the audience predicates that follow. Produces docs/permissions/permission-model.md, the source of truth that build-screen-inventory and document-screen-behavior both read. Use when the user says "who can access what", "document the permission model", "build a role matrix", "map the roles", "audit permissions", or asks which roles reach a page. Run this before inventorying or documenting screens.
 argument-hint: "[role, area, or route to scope the derivation]"
+disable-model-invocation: true
 metadata:
   version: "1"
 ---

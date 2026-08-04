@@ -1,6 +1,7 @@
 ---
 name: ux-auditor
 description: Exhaustively audit a top-level UI implementation component against an HTML prototype and produce a grouped markdown checklist of corrections. Use when a user asks for UI parity review, visual QA, design implementation audit, pixel-level drift detection, or behavior/style mismatch analysis between prototype HTML and shipped component code. Works on hosts with and without image viewing — it establishes which it has before making any visual claim.
+disable-model-invocation: true
 license: MIT
 metadata:
   author: Ryan Mahoney

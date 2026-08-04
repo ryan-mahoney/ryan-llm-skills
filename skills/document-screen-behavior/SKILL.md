@@ -2,6 +2,7 @@
 name: document-screen-behavior
 description: Document one screen — a page, route, dialog, or surface — as a product specification that records its features, behavior rules, states, access model, inferred job stories, the journeys it belongs to, and captured screenshots of each state. Use when the user says "document this page", "document this screen", "write up the dashboard", "what does this surface do", or names a route and asks for documentation. Also use to correct or extend an existing screen page. Not for cross-screen capabilities (feature page) or end-to-end goals (journey page).
 argument-hint: "<screen, route, or existing SCRN- page>"
+disable-model-invocation: true
 metadata:
   version: "2"
 ---

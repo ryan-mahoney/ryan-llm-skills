@@ -2,6 +2,7 @@
 name: ux-information-critique
 description: Critique book pages or document spreads that convey information — trade nonfiction, textbooks, reference works, manuals, reports — against the intended reading job, and propose specific, prioritized typographic and structural improvements. Use this skill whenever the user shares an image or PDF of a book interior, page layout, spread, or information-dense document and asks for design feedback, a typography review, a layout critique, or why a page feels dense, gray, cluttered, or hard to navigate — even if they don't use the word "critique." Also use when the user asks whether a page "reads well," how to make a chapter or report clearer, how to improve tables, figures, captions, or heading structure, or wants to extract the structural strengths of several exemplary layouts to inform a new design.
 argument-hint: "<page-images-or-pdf> <reading-job>"
+disable-model-invocation: true
 metadata:
   version: "1"
 ---

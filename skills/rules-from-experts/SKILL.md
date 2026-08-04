@@ -1,6 +1,7 @@
 ---
 name: rules-from-experts
 description: Turn any craft or work-performance topic into two deliverables — a deeply-researched expert report with citations, and a plain-English agent-readable rules document. Runs a fixed six-phase pipeline (frame the topic, name the discipline, identify named experts, research their actual published guidance, synthesize and resolve their disagreements, write the rules file) with a written artifact at every phase. Use this whenever someone asks who the experts or thought leaders are on a topic, wants best practices or principles researched properly, wants guidance synthesized into rules or a standard, wants a style guide or design guide or playbook built from real sources, or says anything like "do a deep dive", "what does the research say", "turn this into rules", "build me a guide", or "make a rules doc an agent can follow" — even if they don't name the phases. Also use it when a previous conversation produced research that now needs to become an enforceable rules file.
+disable-model-invocation: true
 license: MIT
 metadata:
   author: Ryan Mahoney

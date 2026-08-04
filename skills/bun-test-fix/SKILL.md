@@ -2,6 +2,7 @@
 name: bun-test-fix
 description: "Fix a test file to comply with Bun test rules from AGENTS.md. Use when: 'fix this test', 'make this test compliant', 'bun test fix', 'audit this test file'."
 argument-hint: "<path-to-test-file>"
+disable-model-invocation: true
 license: MIT
 metadata:
   author: Ryan Mahoney
