@@ -1,0 +1,4 @@
+interface:
+  display_name: "Build Screen Inventory"
+  short_description: "Map every screen, partitioned by who can reach it"
+  default_prompt: "Use $build-screen-inventory to inventory this product's screens by audience."

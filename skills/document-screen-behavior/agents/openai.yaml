@@ -1,0 +1,4 @@
+interface:
+  display_name: "Document Screen Behavior"
+  short_description: "Document a screen: features, states, access, intent, journeys, screenshots"
+  default_prompt: "Use $document-screen-behavior to document this screen."

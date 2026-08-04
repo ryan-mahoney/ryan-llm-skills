@@ -1,0 +1,4 @@
+interface:
+  display_name: "Build Permission Model"
+  short_description: "Trace roles, capabilities, and route guards into one matrix"
+  default_prompt: "Use $build-permission-model to document who can access which pages."

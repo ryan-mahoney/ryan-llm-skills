@@ -65,6 +65,18 @@ Run the design stages, then hand off to `spec-run`:
 | **design-spec-critique** | `/design-spec-critique [feature]` | Critique the prototype or proposal and write `critique.md` |
 | **design-spec-writer** | `/design-spec-writer [feature]` | Write the design-focused `spec.md` and machine step index without GitHub side effects |
 
+### product-docs: permission model, screen inventory, screen pages
+
+Three chained skills that document a product's user-facing surfaces from the access model outward. Each writes one artifact that the next reads, so the expensive derivation happens once. Run them in order; each also runs alone and says so when an upstream file is absent. Plain-English guide: [`docs/product-documentation.md`](docs/product-documentation.md).
+
+| Skill | Command | Writes |
+|---|---|---|
+| **build-permission-model** | `/build-permission-model [scope]` | `docs/permissions/permission-model.md` — roles, capability matrix, route guards, audience predicates, findings |
+| **build-screen-inventory** | `/build-screen-inventory [scope]` | `docs/screen-inventory.md` + `docs/inventories/*.md` — screens partitioned by who can reach them |
+| **document-screen-behavior** | `/document-screen-behavior <screen>` | `docs/screens/SCRN-###-*.md` + `docs/screenshots/SCRN-###/` — one full screen specification |
+
+Handoffs: the permission model supplies `AUD-##` predicates as the inventory's partition axes, and `ROLE-##` / `CAP-##` IDs to the screen pages. The inventory supplies each screen's ID and the queue of undocumented screens. Every downstream file pins the upstream version in `derived_from`, so drift is visible rather than silent.
+
 ### specops-skills: SpecOps / agent documentation
 
 A SpecOps pipeline for migrating legacy code and maintaining structured, agent-readable system docs: decompose the source into a stable target manifest, analyze each target into implementation-agnostic specs, compress those specs into target docs optimized for coding agents, index them from `AGENTS.md`, and keep the set fresh as branches change.
