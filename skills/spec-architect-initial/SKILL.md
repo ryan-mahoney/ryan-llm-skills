@@ -7,7 +7,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "5"
+  version: "6"
 ---
 
 # Spec Architect Initial — Solution Design Against Existing Architecture
@@ -111,6 +111,17 @@ This is the critical step. Run the problem through the constraints and ask:
 6. **Does it violate any stated conventions?**
    Check the AGENTS.md gotchas and conventions sections. Many projects have opinions about import patterns, error handling, response shapes, or testing requirements that a new feature must follow.
 
+### The Necessity Check
+
+Compatibility asks "does it fit?"; necessity asks "is it needed at all?" For every component the emerging proposal introduces — module, abstraction, dependency, layer, config surface — stop at the first rung that holds (see `~/.agents/rules/minimal-implementation.md`):
+
+1. No requirement names it → leave it out.
+2. The codebase already does it → reuse that code.
+3. The stdlib, platform, or an installed dependency covers it → use that.
+4. Only then: design the minimum that meets the requirement.
+
+Anything below rung 2 must carry a stated justification in the proposal. Speculative flexibility — "in case we later need…" — is grounds for cutting a component, not for keeping it. Verification is exempt: never shrink testing or evidence plans to make the proposal smaller.
+
 ### Reaching a Verdict
 
 After running through the questions, you land in one of three zones:
@@ -205,14 +216,31 @@ schema changes explicitly. Specify the command to generate/run migrations.]
 something already in the project.]
 If none: "No new dependencies required."
 
-## Testing Strategy
+## Deliberate Omissions
+
+[What this proposal intentionally does not build — the features,
+abstractions, generalizations, and compatibility layers considered and cut,
+each with a one-line reason. This list keeps scope from silently growing
+back during spec-writing and implementation.]
+
+## Verification & Evidence
 
 [What tests to write, where they go, how they should be structured —
-following the project's existing test conventions.]
+following the project's existing test conventions. Then think contextually
+about proof of merge-readiness: beyond code review, what evidence would
+convince a skeptical reviewer that this solves the right problem, correctly
+and safely? Name the forms that fit this specific change — integration
+tests crossing the changed seam, a manual verification guide, screenshots,
+a migration dry-run, a benchmark, a rollback demonstration. `spec-write`
+turns these into a concrete Merge Evidence Plan.]
 
-## Edge Cases & Risks
+## Pre-mortem & Risks
 
-[Things that could go wrong or need special attention during implementation.]
+[Assume this change shipped and broke production: what was the most likely
+cause? List the plausible failure modes with their mechanism. Mark the
+credible ones — each must either be addressed in this design or explicitly
+handed to the spec's Pre-mortem section for disposition. Include anything
+else needing special attention during implementation.]
 ```
 
 ### Guidance for writing proposals
@@ -336,3 +364,5 @@ These guide every decision in the skill:
 5. **Name the tradeoffs.** Every proposal has them. Don't hide behind "best practice" — explain what you're optimizing for and what you're giving up.
 
 6. **Evidence over invention.** Do not fabricate file paths, versions, commands, dependencies, or architectural conventions. If a detail cannot be verified from the repository or user input, label it as an assumption or open question.
+
+7. **Necessary over complete.** Propose the least software that solves the stated problem — reuse before building, cut speculative flexibility, and list what you deliberately did not build. Rigor belongs in verification, not in extra construction.

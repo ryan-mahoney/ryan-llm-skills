@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "15"
+  version: "16"
 ---
 
 # Spec Write
@@ -94,7 +94,7 @@ Rule files are short, reusable convention guides (UX, forms, tables, copy, testi
 1. A repo-local rules folder (`rules/` or `.agents/rules/`) when one exists.
 2. The user-global rules folder `~/.agents/rules/`.
 
-Select by relevance, not completeness: form rules only when the spec builds or changes a form, table rules for tabular UI, CTA/copy rules for user-facing text, testing rules when steps add tests, broad design rules only for user-facing UI work. A backend-only spec typically selects nothing, or only the testing rule. Repo-local rules win over global rules on conflict.
+Always select the minimal-implementation rule (`~/.agents/rules/minimal-implementation.md`, or its repo-local equivalent) — it governs every implementation step. Select the rest by relevance, not completeness: form rules only when the spec builds or changes a form, table rules for tabular UI, CTA/copy rules for user-facing text, testing rules when steps add tests, broad design rules only for user-facing UI work. A backend-only spec typically selects only the minimal-implementation and testing rules. Repo-local rules win over global rules on conflict.
 
 Record the selection in the Applicable Rules section below. `spec-run` injects these paths into every step prompt, so an unselected rule is invisible at implementation time — but do not pad the list; irrelevant rules dilute the ones that matter.
 
@@ -131,9 +131,9 @@ Visual reference: .specs/<feature-slug>/<prototype-or-visual-references>/<entry-
 
 Name the file (for example, `.specs/account-settings/prototype/index.html`), not only its containing directory. State that implementation must inspect and reuse this artifact as the visual source of truth rather than recreate or redesign it. Omit the line only when no visual reference exists.
 
-Design for current requirements, not imagined future ones. Start simple: boring technology, explicit boundaries, and data flow that can be explained in under 5 minutes. Fail fast on invalid inputs; do not add defensive fallbacks unless explicitly required.
+Design for current requirements, not imagined future ones. For every module, abstraction, dependency, or layer the architecture introduces, stop at the first rung of the necessity ladder that holds (see `~/.agents/rules/minimal-implementation.md`): not needed at all → already in the codebase → stdlib → native platform → installed dependency → one line → only then, the minimum design that meets the acceptance criteria. Name what existing code each new module extends or reuses; introducing something new requires stating why nothing on a higher rung qualifies. Start simple: boring technology, explicit boundaries, and data flow that can be explained in under 5 minutes. Fail fast on invalid inputs; do not add defensive fallbacks unless explicitly required.
 
-Avoid abstractions with only one use, abstract layers "for future flexibility," complex patterns without matching problem complexity, and optimizations without measured need.
+Avoid abstractions with only one use, abstract layers "for future flexibility," speculative config or extension points, complex patterns without matching problem complexity, and optimizations without measured need. Minimality applies to construction only — never trim acceptance coverage, tests, or evidence to shrink the design.
 
 Ground the architecture in existing code: before adding a new module or helper, search for existing implementations and precedents using the available repository-search tools named in the runtime capability section — exact search for symbols or literals, and semantic search when available for behavior and precedent — and prefer reusing or extending what already exists.
 
@@ -145,13 +145,27 @@ Create a numbered list (`AC-1`, `AC-2`, etc.) of observable, automatable asserti
 - Include non-happy-path behaviors.
 - Make every criterion testable without subjective judgment.
 
-### 6. Notes
+### 6. Merge Evidence Plan
+
+Decide, contextually, what proof would convince a skeptical reviewer that this change solves the right problem, is correct, and is safe — independent of code review. Create a numbered list (`EV-1`, `EV-2`, …) where each item names:
+
+- The evidence form: integration test, manual verification guide, screenshot set, migration dry-run log, benchmark result, rollback demonstration, or another form this specific change genuinely calls for.
+- The claim it proves, tied to acceptance criteria or a pre-mortem item.
+- Where the artifact lands: committed test code in the repository, or a non-committed artifact under `.specs/<feature-slug>/evidence/`.
+
+Each EV item is owned by exactly one implementation step (see §9's `Evidence:` tag). Scale evidence to risk: a small low-risk change may legitimately need nothing beyond its acceptance-criteria tests — state that and why, rather than padding the list. Rigorous verification is a good use of effort; performative verification is not.
+
+### 7. Pre-mortem
+
+Assume this change shipped and broke production. Create a numbered list (`PM-1`, `PM-2`, …) of the most plausible causes, each with its concrete failure mechanism. Disposition every item on a `Disposition:` line: covered by an acceptance criterion (`AC-n`), handled by a named implementation step, proven absent by an evidence item (`EV-n`), or explicitly accepted as a risk with rationale. A credible concern with no disposition is a spec defect. Do not pad the list with far-fetched scenarios to look thorough — a short list of real risks, each dispositioned, beats a long performative one.
+
+### 8. Notes
 
 Cover trade-offs, risks, ambiguities, migration concerns, and sequencing dependencies.
 
 For each significant trade-off, state why this approach was chosen, what it gives up, what it gains, and which alternatives were considered.
 
-### 7. Implementation Steps
+### 9. Implementation Steps
 
 Create a flat, numbered, sequential list of deterministic engineering tasks.
 
@@ -167,8 +181,9 @@ For each step include:
 6. Complexity: how hard *this step* is, as a tag line (`Complexity: easy`). One of `easy`, `medium`, `hard` — see the rubric below. The system uses per-step tags to route each step to an appropriately strong implementation model, so score every step, not just the spec.
 7. Visual design: whether *this step* implements user-facing visual design, as a tag line (`Visual: yes` or `Visual: no`). See the Visual design rubric in Implementation Profile. The system routes `Visual: yes` steps to design-capable handling and visual verification, so flag every step, not just the spec.
 8. Visual reference: when a visual reference exists and the step is `Visual: yes`, repeat the exact `Visual reference: <checkout-relative file path>` line in that step and require parity with it. Do not tell the implementer to create a replacement prototype or derive a new visual direction.
+9. Evidence: when this step owns one or more Merge Evidence Plan items, an `Evidence:` tag line (`Evidence: EV-2` or `Evidence: EV-2, EV-5`). Producing the named artifact is part of the step's work. Steps owning no evidence omit the line.
 
-Each step's `Covers:`, `Complexity:`, and `Visual:` tag lines sit together at the end of the step. Judge complexity by *this step's own* work, applying the rubric the same way every time so the label is reproducible across runs. Anchor the choice on four signals — scope (files/modules this step touches), novelty (new abstractions vs. reusing existing patterns), domain difficulty (the Qualifications this step exercises), and integration risk (state, I/O, migrations, blast radius this step incurs):
+Each step's `Covers:`, `Complexity:`, `Visual:`, and (when the step owns evidence) `Evidence:` tag lines sit together at the end of the step. Judge complexity by *this step's own* work, applying the rubric the same way every time so the label is reproducible across runs. Anchor the choice on four signals — scope (files/modules this step touches), novelty (new abstractions vs. reusing existing patterns), domain difficulty (the Qualifications this step exercises), and integration risk (state, I/O, migrations, blast radius this step incurs):
 
 | Tier | When |
 |---|---|
@@ -183,6 +198,7 @@ Each step's terse name, one-line description, `Complexity:` value, and `Visual:`
 Step constraints:
 
 - **Deterministic:** No subjective instructions such as "improve", "clean up", or "refactor as needed".
+- **Plain procedural language:** Imperative mood, one instruction per sentence, condition before its command. Never write "should" in a step — an implementing model reads it as optional; write the bare imperative or "must".
 - **Minimal:** Smallest verifiable unit of progress.
 - **Self-contained:** Executable in isolation by a separate engineer or LLM context.
 - **Forward-only:** Target architecture only. No unnecessary compatibility layers.
@@ -196,13 +212,13 @@ Step ordering:
 
 Exclude:
 
-- Manual testing or QA checklists.
-- Documentation-only tasks.
+- Manual testing or QA checklists — unless the Merge Evidence Plan names a manual verification guide as a deliverable; writing that guide to `.specs/<feature-slug>/evidence/` is then a legitimate step.
+- Documentation-only tasks — with the same Merge Evidence Plan exception.
 - Running the entire test suite.
 - Formatting or lint-only chores.
 - Git workflow or PR process steps.
 
-### 8. Applicable Rules
+### 10. Applicable Rules
 
 List the rule files selected above as resolvable paths, each with a one-line reason:
 
@@ -215,7 +231,7 @@ If none apply, "N/A".
 
 ## Implementation Profile
 
-Both routing axes — Complexity and Visual design — are scored **per step**, not for the spec as a whole. Each step in Implementation Steps carries its own `Complexity:` and `Visual:` tag (see §7) so the system can route each step to an appropriately strong, appropriately-skilled implementation model. Do not emit a spec-level complexity.
+Both routing axes — Complexity and Visual design — are scored **per step**, not for the spec as a whole. Each step in Implementation Steps carries its own `Complexity:` and `Visual:` tag (see §9) so the system can route each step to an appropriately strong, appropriately-skilled implementation model. Do not emit a spec-level complexity.
 
 The footer carries one spec-wide roll-up, derived after writing the spec body: a Visual design flag that summarizes the per-step `Visual:` tags. The per-step tags are canonical; the footer is a convenience summary. Apply the rubric the same way every time so the labels are reproducible across runs.
 
@@ -232,7 +248,7 @@ The per-step flag is binary — emit exactly one per step. The footer's spec-wid
 
 ## Spec Footer
 
-End `spec.md` with a metadata footer block so downstream skills can locate the folder and route the work. The first line is the checkout-relative canonical folder; the second is the spec-wide Visual design roll-up (`yes-visual-design` if any step is `Visual: yes`, else `no-visual-design`). Per-step complexity and per-step visual flags are not in the footer — they live on each step (see §7):
+End `spec.md` with a metadata footer block so downstream skills can locate the folder and route the work. The first line is the checkout-relative canonical folder; the second is the spec-wide Visual design roll-up (`yes-visual-design` if any step is `Visual: yes`, else `no-visual-design`). Per-step complexity and per-step visual flags are not in the footer — they live on each step (see §9):
 
 ```txt
 Spec folder: .specs/<feature-slug>/
@@ -258,7 +274,7 @@ Alongside `spec.md`, write a machine-readable index of the implementation steps 
 
 Keep the step index beside `spec.md`. This flat, filename-based layout is the complete standalone handoff contract.
 
-This file is a derived index, not a second source of truth. `spec.md` stays canonical — the full step text, `Covers:` tags, `Complexity:` tag, and `Visual:` flag all live there. `spec-steps.json` exists so an external task-runner can enumerate the steps and route each one — by difficulty and by visual-design skill — without parsing markdown. It is the same routing signal §7 describes, in a parsable shape.
+This file is a derived index, not a second source of truth. `spec.md` stays canonical — the full step text, `Covers:` tags, `Complexity:` tag, and `Visual:` flag all live there. `spec-steps.json` exists so an external task-runner can enumerate the steps and route each one — by difficulty and by visual-design skill — without parsing markdown. It is the same routing signal §9 describes, in a parsable shape. `Evidence:` tags are not mirrored into the index — `spec.md` is the only source for evidence ownership.
 
 The index is a JSON object with a `steps` array — one entry per Implementation Step, in spec order:
 
@@ -290,9 +306,9 @@ Write `spec-steps.json` only after the spec body is final, so the index matches 
 
 ## Output Steps
 
-1. Write the final markdown body — including each step's `Complexity:` tag (§7) and the footer block (`Spec folder:`, `Visual design:`) — to `.specs/<feature-slug>/spec.md`.
+1. Write the final markdown body — including each step's `Complexity:` tag (§9) and the footer block (`Spec folder:`, `Visual design:`) — to `.specs/<feature-slug>/spec.md`.
 2. Write the machine-readable step index beside it as `spec-steps.json`, one entry per step, each `difficulty` matching that step's `Complexity:` tag and each `visualDesign` matching its `Visual:` flag.
-3. Report one compact routing summary: `outcome: written`; spec and step-index paths; total/easy/medium/hard/visual step counts; proposal/critique inputs used; and `next: spec-prepare`.
+3. Report one compact routing summary: `outcome: written`; spec and step-index paths; total/easy/medium/hard/visual step counts; EV items with owning steps and PM items with dispositions; proposal/critique inputs used; and `next: spec-prepare`.
 
 Do not implement the plan.
 

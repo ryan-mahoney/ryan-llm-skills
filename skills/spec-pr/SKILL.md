@@ -1,6 +1,6 @@
 ---
 name: spec-pr
-description: This skill should be used when the user asks to open or update a pull request for prepared spec-driven work. It rebases, commits staged changes, pushes, and drafts the PR from the spec, preparation report, guardrails, branch reviews, learnings, and blockers.
+description: This skill should be used when the user asks to open or update a pull request for prepared spec-driven work. It rebases, commits staged changes, pushes, and drafts the PR from the spec, preparation report, merge evidence, guardrails, branch reviews, learnings, and blockers. The PR body always argues merge-readiness explicitly - evidence of correctness, risk mitigations, and required or recommended manual testing.
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "4"
+  version: "5"
 ---
 
 # Spec PR
@@ -86,6 +86,8 @@ missing without comment. Use them to draft the body, not to gate the PR.
 | `critique.md` | Known concerns weighed during design — note unresolved ones. |
 | `criteria.md` / `invariants.md` | Conformance guardrails the change was held to. |
 | `spec-prepare.md` | Preparation outcome and decisions. |
+| `merge-evidence.md` | The assembled merge-readiness case — the primary source for the body's *Why this is merge-ready*, *Risks and mitigations*, and *Manual testing* sections. |
+| `evidence/` | Produced evidence artifacts (manual verification guide, screenshots, logs). `.specs/` is often gitignored, so inline what the reviewer needs — especially manual testing steps — rather than linking. |
 | `reviews/branch-<n>-review.md` | **Latest** correctness-review verdict (highest `<n>`); state pass/needs-fix and any unresolved actionable findings. |
 | `step-<NNN>-learning.md` | Notable trade-offs/decisions worth calling out (per-step learnings, flat in the folder). |
 | `blockers.md` | **Open blockers — surface prominently** so reviewers see them. |
@@ -213,7 +215,21 @@ the lease check identified as foreign.
 
 1. Draft the PR title and body — the reviewer's brief from *Gather Spec Artifacts*:
    - Title: short, imperative, under 70 characters.
-   - Body: what changed and why, how it was verified, what remains. Footer links the
+   - Body: what changed and why, how it was verified, what remains — and always these
+     three sections, which make the merge case explicitly:
+     - **Why this is merge-ready** — the evidence of correctness: acceptance-criteria
+       coverage, verification commands and outcomes, evidence artifacts produced, and
+       the latest branch-review verdict. Sourced from `merge-evidence.md` when it
+       exists; otherwise derived from the diff and the verification actually
+       performed. Never assert readiness without evidence — state plainly what was
+       not verified.
+     - **Risks and mitigations** — the pre-mortem concerns and how each was
+       mitigated, with accepted residual risks stated; unresolved concerns flagged
+       near the top, not buried.
+     - **Manual testing** — the steps a reviewer or operator should run before or
+       after merge, inlined from the manual verification guide when one exists, or
+       `None required` with the reason.
+     Footer links the
      spec folder (`Spec folder: .specs/<feature>/`). If the rebase resolved conflicts — especially any
      flagged uncertain in `pr-rebase-log.md` — call them out here so the reviewer checks
      them.

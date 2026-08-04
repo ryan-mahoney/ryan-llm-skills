@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "17"
+  version: "18"
 ---
 
 # Spec Run
@@ -47,7 +47,7 @@ Do not invoke a separate planner, judge, per-step reviewer, or per-step fix agen
 For each indexed step in ascending order:
 
 1. Revalidate the preparation package and record, but do not gate on, resolvable drift.
-2. Provide the implementation agent with the resolved spec-folder path, exact step text, immutable subspec, preparation manifest, applicable rules, relevant prose-only criteria statements, live invariants, prior learnings, and unresolved findings.
+2. Provide the implementation agent with the resolved spec-folder path, exact step text, immutable subspec, preparation manifest, applicable rules, relevant prose-only criteria statements, live invariants, the step's owned `Evidence:` obligations when present, prior learnings, and unresolved findings.
 3. Require the agent to read and follow `~/.agents/skills/spec-step-run/SKILL.md` in full.
 4. Wait for that step to produce a learning and any reviewable commit, then continue.
 
@@ -68,17 +68,28 @@ After each step returns, verify only the execution contract:
 7. Risk-tagged steps include a learning risk-audit summary that covers or explicitly dismisses every declared risk lens and live invariant.
 8. Runtime-facing steps include a complete production-reachability summary: entrypoint/composition owner, concrete internal adapter, real downstream contract, and focused path observation.
 9. A successful outcome does not contradict its own discrepancies/risks by describing required production wiring, an internal adapter, a downstream contract, or the promised user-observable path as absent, fake-only, deferred, or unreachable.
+10. Steps whose card carries `Evidence:` lines produced each named artifact — in the commit or under `.specs/<feature>/evidence/` — or truthfully recorded the gap.
 
-If item 9 fails, require the truthful outcome `checkpoint` rather than accepting `as-specified` or `adapted`. Preserve the commit and dispatch the next step with that evidence.
+If item 9 or 10 fails, require the truthful outcome `checkpoint` rather than accepting `as-specified` or `adapted`. Preserve the commit and dispatch the next step with that evidence.
 
 Do not rerun commands merely to duplicate the implementer's evidence. Carry scope, command, preparation, and verification mismatches forward as findings. Continue after `checkpoint` and, when later work remains meaningful, after `no-artifact`; do not ask the user whether to proceed.
 
 ## Completion Gate
 
-After all indexed steps have run, map each acceptance criterion to the resulting commits and verification evidence. Record missing coverage for final refinement; do not discard commits, ask the user, or require fresh preparation merely because the original mapping was incomplete.
+After all indexed steps have run, map each acceptance criterion to the resulting commits and verification evidence, each Merge Evidence Plan item (`EV-n`) to its produced artifact, and each pre-mortem item (`PM-n`) to its disposition as actually implemented. Record missing coverage for final refinement; do not discard commits, ask the user, or require fresh preparation merely because the original mapping was incomplete.
 
-Final correctness review belongs to `spec-branch-refine`; do not perform it inside `spec-run`.
+Then atomically write `.specs/<feature>/merge-evidence.md` — the assembled proof of merge-readiness, independent of code review. Level-1 heading first, then:
+
+- **What was built** — one paragraph plus the commit list.
+- **Right problem** — each acceptance criterion mapped to the requirement it serves and the commits/tests covering it.
+- **Correct** — the verification evidence: exact commands and outcomes from step learnings, test files added, red/green sequences for test-first steps.
+- **Safe** — each pre-mortem item with its implemented disposition; residual accepted risks stated plainly.
+- **Evidence index** — each EV item with its artifact path and status (`produced` | `missing`).
+- **Manual testing** — the steps a human should run before or after merge, drawn from the manual verification guide when one exists, or `none required` with the reason.
+- **Gaps** — missing coverage, unproduced evidence, and open findings carried to final refinement.
+
+State gaps honestly; this document is an argument from evidence, not a promotion. Final correctness review belongs to `spec-branch-refine`; do not perform it inside `spec-run`.
 
 ## Report
 
-Report the spec and preparation manifest, every step's preserved subspec, learning, commit or no-artifact result, changed files, exact commands/outcomes, fix count, criterion coverage, and remaining findings or risks. Do not write GitHub artifacts or add attribution.
+Report the spec and preparation manifest, every step's preserved subspec, learning, commit or no-artifact result, changed files, exact commands/outcomes, fix count, criterion coverage, the `merge-evidence.md` path with its EV/PM coverage, and remaining findings or risks. Do not write GitHub artifacts or add attribution.

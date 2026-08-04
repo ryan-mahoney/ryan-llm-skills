@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "18"
+  version: "19"
 ---
 
 # Spec Step Run
@@ -97,6 +97,11 @@ copy prototype-only fixtures, dependencies, shell UI, or fake data wiring.
   plausibly needed for a coherent outcome.
 - Preserve unrelated working code and user changes.
 - Follow repository conventions and use the prepared edit sequence when it still fits.
+- Reuse before writing: stop at the highest rung of the necessity ladder that holds
+  (`~/.agents/rules/minimal-implementation.md`). Prefer the shortest working diff
+  consistent with the spec; add no abstraction the spec does not require. Record
+  deliberate simplifications and their known ceiling in the learning. Never trim
+  verification, evidence, or safety-floor code to shrink the diff.
 - Fix relevant pre-existing defects encountered on the same execution, ownership,
   invariant, or verification path. Pre-existence is not a reason to ask or defer.
 - Implement missing wiring or work nominally assigned to a later step when it is the
@@ -138,6 +143,21 @@ Before implementation, privately map each applicable label to the smallest usefu
 - `external-runtime`, `security-boundary` — verify the prepared injected boundary, fail-closed behavior, and prohibited side effects.
 
 For each prepared verification case, ensure at least one assertion observes the promised result and, when relevant, the mutation that must not occur. Use risk labels as prompts for engineering judgment: act on credible risks in the final diff and briefly dismiss irrelevant labels, but do not manufacture abstractions or tests solely to account for every label. Do not add a broad suite or a second test harness without a concrete reason.
+
+## Produce Owned Evidence
+
+When the card's `Targets` carry `Evidence:` lines, producing each named artifact is part
+of this step's work, not optional extra. Committed evidence such as integration tests
+ships in the step's commit. Non-committed artifacts — a manual verification guide,
+screenshots, dry-run logs, benchmark output — are written atomically to
+`.specs/<feature>/evidence/` under the prepared filename, with markdown artifacts
+beginning with a level-1 heading. Make each artifact honest and specific: a manual
+verification guide names exact preconditions, steps, and expected observations, written
+as plain procedural language — imperative mood, one instruction per sentence, condition
+before its command, no "should"; captured output names the command and context that
+produced it. Record every produced
+evidence path in the learning prose. A step whose owned evidence remains unproduced is
+not `as-specified` — preserve it as a truthful `checkpoint` with the gap recorded.
 
 ## Render, Inspect, And Correct Visual Steps
 
@@ -192,8 +212,8 @@ rendered result as required implementation work, not optional final polish:
 Use existing Playwright visual regression assertions when they help, but do not treat
 baseline acceptance as a substitute for looking at the rendered pixels. Keep ad hoc
 screenshots out of the commit unless the repository explicitly tracks Playwright visual
-baselines, retain the final images as worktree-local review evidence, and terminate any
-server or watcher started for capture. If the first `uishot` capture launched its warm
+baselines, retain the final inspected images under `.specs/<feature>/evidence/` so they
+survive as merge evidence, and terminate any server or watcher started for capture. If the first `uishot` capture launched its warm
 browser, stop it after the final capture and confirm `uishot status` reports it stopped;
 preserve a browser that was already running. Record the cleanup commands and outcomes.
 
@@ -280,8 +300,8 @@ begin the next indexed step.
 ## Completion Report
 
 Report the spec and step, preserved subspec path, learning path/outcome, commit hash,
-changed files, every exact verification command and result, fix attempts, and any
-remaining finding or risk. For `visualDesign: true`, also report the inspected screenshot
+changed files, every exact verification command and result, fix attempts, produced
+evidence paths for any owned `Evidence:` lines, and any remaining finding or risk. For `visualDesign: true`, also report the inspected screenshot
 paths, exact `uishot` and repository Playwright commands, covered viewports/states,
 visual correction cycles, and final assessment or the reason rendered verification
 remained incomplete.

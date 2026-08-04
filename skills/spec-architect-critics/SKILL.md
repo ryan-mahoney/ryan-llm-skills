@@ -7,7 +7,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "4"
+  version: "5"
 ---
 
 # Spec Architect Critics — Expert-Perspective Design Review
@@ -40,6 +40,8 @@ Every proposal makes implicit and explicit claims. Pull them out:
 - **"This dependency is necessary"** — Is it? Or is there a simpler path?
 - **"This will scale / perform / be maintainable"** — Based on what evidence?
 - **"These are the only tradeoffs"** — Are they? What's been left unsaid?
+- **"Every component is necessary"** — Would something already in the codebase, the stdlib, the platform, or a smaller design cover it?
+- **"This evidence would prove it works"** — Would the proposal's Verification & Evidence plan actually convince a skeptical reviewer, or is it ritual?
 
 Write these claims down explicitly. They become the targets for critique.
 
@@ -126,7 +128,14 @@ Where the experts disagree, don't pick a winner arbitrarily. Explain the tension
 
 Identify anything neither expert would catch because it falls outside both their domains. Operational concerns that a pure-architecture expert might miss. Developer experience issues that a systems expert might not prioritize. Business constraints that purely technical thinkers might ignore.
 
-### 4d. Priority ranking
+### 4d. Standing lenses
+
+Apply these two lenses on every critique, regardless of which experts were selected:
+
+- **Over-engineering scan.** Walk the proposal's components — modules, abstractions, dependencies, layers, config surfaces — and flag any with no stated requirement behind it, any that duplicates existing code, stdlib, or platform behavior, and any built for a hypothetical future (see `~/.agents/rules/minimal-implementation.md`). "Remove X" is a first-class recommendation, ranked like any other. Check the Deliberate Omissions list for scope that crept back in elsewhere in the proposal.
+- **Evidence sufficiency.** Judge the proposal's Verification & Evidence and Pre-mortem sections as a skeptical reviewer: does the planned evidence prove the right problem is solved, correctly and safely — or only that tests pass? Is the pre-mortem credible or perfunctory? Name the missing evidence concretely (an integration test crossing the changed seam, a screenshot set, a migration dry-run, a rollback story).
+
+### 4e. Priority ranking
 
 Rank the recommendations:
 
@@ -208,6 +217,17 @@ on the actual project context, not in the abstract.]
 
 [Anything the two expert lenses would miss — operational, business,
 team-capacity, or domain-specific concerns.]
+
+### Over-Engineering Scan
+
+[Components that fail the necessity check, each with the rung it should
+have stopped at (reuse, stdlib, platform, installed dependency) and the
+concrete removal or reuse recommendation.]
+
+### Evidence Sufficiency
+
+[Whether the planned verification evidence and pre-mortem would convince a
+skeptical reviewer; the specific missing evidence if not.]
 
 ## Recommendations
 

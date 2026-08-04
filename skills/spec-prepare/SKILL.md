@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "17"
+  version: "18"
 ---
 
 # Spec Prepare
@@ -88,6 +88,8 @@ Correct only substantive defects:
 - Ambiguous behavior, shapes, defaults, ordering, error handling, or side effects.
 - Architecture that conflicts with real repository patterns.
 - Missing acceptance coverage or non-automatable criteria.
+- Merge Evidence Plan defects: a missing plan, an EV item owned by no step or by more than one step, or evidence forms that do not fit the change's actual risk.
+- Pre-mortem defects: a missing pre-mortem, or a credible concern with no disposition (AC, step, EV item, or explicitly accepted risk).
 - Steps that are not deterministic, minimal, self-contained, forward-only, or dependency ordered.
 - Non-flat step numbering, mismatched `Covers:` tags, or incorrect complexity/visual flags.
 - Steps large enough that independent concerns can be implemented and verified separately without a compatibility shim.
@@ -185,6 +187,14 @@ List only live invariants that the step establishes, consumes, or can violate th
 
 Every card must contain strict `planning` and `verification` blocks matching the compact contract in `spec-subspec-write`. The parent validates hashes, step numbers, filenames, concrete targets, focused commands, and observable cases mechanically. It does not create a second prose copy of the verification contract or semantically re-judge an equivalent planner's work.
 
+When a step carries an `Evidence:` tag in `spec.md`, add one line per owned EV item to `Targets`:
+
+```txt
+Evidence: EV-<n> — <artifact form> → <committed path | .specs/<feature>/evidence/<file>>
+```
+
+Committed evidence such as integration tests also appears as ordinary targets; non-committed artifacts (manual verification guide, screenshots, dry-run logs, benchmark output) name their destination under `.specs/<feature>/evidence/`. Do not invent evidence obligations the spec does not own.
+
 Write targets and the edit sequence as the best expected route, never as an exhaustive file or permission whitelist. State in `Setup and Hazards` which criteria the step should establish now, preserve for later work, or may satisfy early even when another step was expected to own them. Treat prepared verification commands as the mandatory baseline; the implementation worker may add relevant tests, files, and repository-specific commands when credible evidence requires them.
 
 For every `Visual: yes` card, include one of these exact lines in `Targets`:
@@ -241,6 +251,7 @@ After the last step, reread every final artifact. Confirm:
 - Every `Visual: yes` card records `Visual reference: <path | none>`, contains a complete
   `Visual Implementation Brief`, and names Playwright as its only screenshot mechanism.
 - Every medium and hard card records canonical `Risk lenses` and `Live invariants` lines in `Setup and Hazards`.
+- Every Merge Evidence Plan item is owned by exactly one step whose card carries a matching `Evidence:` line with a concrete artifact form and destination, and every pre-mortem item carries a disposition.
 - Criteria contain prose `Statement` properties only.
 - The report, spec, index, optional criteria/invariants, and all subspecs are final before manifest hashing begins.
 
@@ -252,6 +263,7 @@ Atomically write `spec-prepare.md` on every run. Include:
 - Review changes and rationale, or an unchanged verdict.
 - Step-index reconciliation.
 - Guardrails and invariant counts.
+- Merge-evidence ownership: EV items with their owning steps, and the pre-mortem disposition summary.
 - One row per step with difficulty, visual-reference summary, card depth, subspec path,
   verification strategy, and focused commands.
 - Corrections/reruns and open blockers.
