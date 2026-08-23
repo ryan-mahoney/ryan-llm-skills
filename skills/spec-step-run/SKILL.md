@@ -1,6 +1,6 @@
 ---
 name: spec-step-run
-description: Implement one prepared spec step autonomously in its disposable branch/worktree, treating the subspec as a launchpad, producing and committing the strongest reviewable artifact possible without asking the user questions.
+description: Implement one prepared spec step autonomously, producing its code, executable evidence, QA artifacts, learning, and commit without asking questions or depending on later human review.
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,14 +9,14 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "19"
+  version: "20"
 ---
 
 # Spec Step Run
 
 Implement one step from the prepared package. This is a leaf implementation skill:
 do not spawn subagents, deliberately run the next indexed step, or perform the final
-branch review. Work to the intended outcome even when repository evidence shows that
+branch evidence audit. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Work to the intended outcome even when repository evidence shows that
 the prepared route is incomplete or wrong.
 
 ## No-Question, Artifact-First Authority
@@ -28,14 +28,14 @@ interpretation, and record assumptions in the learning.
 
 Treat the spec, subspec, named files, edit sequence, and verification commands as
 evidence of intent and a strong starting route, not an exhaustive permission boundary.
-Prefer a concrete reviewable artifact over stopping for clarification. Do not perform
+Prefer a concrete evidence-bearing artifact over stopping for clarification. Do not perform
 irreversible external actions such as publishing, modifying production data, spending
 money, sending messages, or force-pushing shared branches; build and verify the local
 side, use a safe local substitute when practical, and record the remaining external act.
 
 ## Canonical Inputs
 
-The prompt must identify the resolved `.specs/<feature>/` folder and target step. Read `spec.md`, `spec-steps.json`, `spec-prepare.md`, `preparation.json`, optional criteria/invariants/blockers, the target `step-<NNN>-subspec.md`, and prior step learnings from that folder. Write the target `step-<NNN>-learning.md` there.
+The prompt must identify the resolved `.specs/<feature>/` folder and target step. Read `spec.md`, `spec-steps.json`, `evidence-plan.json`, `spec-prepare.md`, `preparation.json`, optional criteria/invariants/blockers, the target `step-<NNN>-subspec.md`, and prior step learnings. Write the target `step-<NNN>-learning.md` there.
 
 Resolve the target step's `visualDesign` value from its matching entry in
 `spec-steps.json`. A strict boolean `true` activates the mandatory visual verification
@@ -49,8 +49,8 @@ destination. Markdown artifacts begin with a level-1 heading.
 ## Inspect Current Preparation
 
 Before reading production code, validate sibling `preparation.json` using the
-strict version 1 contract. Recompute the SHA-256 binding for `spec.md`,
-`spec-steps.json`, `spec-prepare.md`, every declared subspec, and optional
+strict version 2 contract. Recompute the SHA-256 binding for `spec.md`,
+`spec-steps.json`, `evidence-plan.json`, `spec-prepare.md`, every declared subspec, and optional
 `criteria.md`/`invariants.md`. Check and record whether:
 
 - every bound file exists and matches its lowercase SHA-256 hash;
@@ -62,13 +62,10 @@ strict version 1 contract. Recompute the SHA-256 binding for `spec.md`,
 - for `visualDesign: true`, the card records `Visual reference: <path | none>` and a
   complete `Visual Implementation Brief` whose screenshot plan uses Playwright only.
 
-Treat missing, invalid, stale, or incomplete preparation as evidence to record, not an
-automatic implementation stop. Do not repair the manifest, spec, step index, criteria,
-invariants, preparation report, or subspec. When the target outcome can still be
-resolved from the readable spec, subspec, prompt, repository, and prior learnings,
-continue and report the preparation drift. Return `no-artifact` only when the intended
-step cannot be identified or a mechanical failure makes meaningful repository-local
-work impossible.
+Missing, invalid, stale, or incomplete preparation is a provenance failure. Write a
+`no-artifact` learning naming the mismatched binding and stop this step without editing
+production code. Do not repair shared preparation artifacts here; rerun `spec-prepare`.
+This gate prevents implementation and evidence from silently targeting different intent.
 
 ## Preserve The Plan As Evidence
 
@@ -148,14 +145,16 @@ For each prepared verification case, ensure at least one assertion observes the 
 
 When the card's `Targets` carry `Evidence:` lines, producing each named artifact is part
 of this step's work, not optional extra. Committed evidence such as integration tests
-ships in the step's commit. Non-committed artifacts — a manual verification guide,
+ships in the step's commit. Non-committed artifacts — a deterministic QA walkthrough,
 screenshots, dry-run logs, benchmark output — are written atomically to
 `.specs/<feature>/evidence/` under the prepared filename, with markdown artifacts
-beginning with a level-1 heading. Make each artifact honest and specific: a manual
-verification guide names exact preconditions, steps, and expected observations, written
+beginning with a level-1 heading. Make each artifact honest and specific: a QA
+walkthrough names exact preconditions, steps, expected observations, and the EV gates
+that automate each correctness claim, written
 as plain procedural language — imperative mood, one instruction per sentence, condition
-before its command, no "should"; captured output names the command and context that
-produced it. Record every produced
+before its command, no "should". Label optional exploration questions as product
+discovery, never required verification. Captured output names the command and context
+that produced it. Record every produced
 evidence path in the learning prose. A step whose owned evidence remains unproduced is
 not `as-specified` — preserve it as a truthful `checkpoint` with the gap recorded.
 
@@ -226,6 +225,10 @@ record the exact `uishot` and repository Playwright commands, target route or ha
 viewport and state coverage, screenshot paths, readiness and console evidence, what the
 inspection found, corrections made, and the final visual assessment.
 
+The final captures and deterministic scenario/setup notes are QA-tour inputs. Preserve
+them under `.specs/<feature>/evidence/` with sensitive data removed. Rendered evidence
+does not replace behavioral, data, policy, or production-reachability gates.
+
 ## Execute And Extend The Verification Contract
 
 The subspec's strict `verification` block is the mandatory verification baseline, not
@@ -261,7 +264,7 @@ block before prose:
 
 ```yaml
 learning:
-  version: 1
+  version: 2
   kind: step
   step: <number>
   outcome: <as-specified | adapted | checkpoint | no-artifact>
@@ -274,9 +277,17 @@ learning:
       - command: <exact command run>
         phase: <red | green | verify>
         outcome: <pass | fail | hung | skipped>
+  evidence:
+    - id: <EV-n>
+      status: <passed | failed | blocked>
+      artifact: <checkout-relative path>
+      rejects: <FH-n>
+      proof_boundary: <what this result does and does not establish>
 ```
 
-Follow it with the step reference/Covers tags, outcome, assumptions and material
+Include exactly one evidence entry per EV item owned by this step; use `evidence: []`
+when none. A passed EV records its exact command in `verification.commands` and a real
+artifact. Follow the YAML with the step reference/Covers tags, outcome, assumptions and material
 departures, a concise risk-audit and production-reachability summary covering the
 declared labels/invariants, at most five concrete findings for later steps, at most
 five discrepancies/risks, and the verification summary. Emit the learning in every

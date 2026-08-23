@@ -273,7 +273,7 @@ write_spec_workflow_howto() {
 
 ## How To Use The Spec Workflow
 
-The workflow turns a clear goal into reviewed architecture, then into a deterministic implementation spec, then into execution. The most important input is the first one: give `spec-architect-initial` a concrete description of what you want to achieve, why it matters, and any constraints you already know.
+The workflow turns a clear goal into architecture, a deterministic implementation-and-evidence contract, executable proof, an independent integrated audit, and a deploy-bound HTML work tour. Human review is optional insight, not a correctness gate.
 
 Good initial input includes:
 
@@ -324,9 +324,10 @@ This converts the proposal, and optional critique, into:
 ```txt
 .specs/<feature>/spec.md
 .specs/<feature>/spec-steps.json
+.specs/<feature>/evidence-plan.json
 ```
 
-The spec is the implementation contract. It contains architecture, acceptance criteria, deterministic implementation steps, tests, and traceability tags. The writer never touches GitHub.
+The spec is the implementation contract. `evidence-plan.json` records the risk posture and AC → claim → failure → gate graph. The writer never touches GitHub.
 
 ### 4. Prepare The Implementation Package
 
@@ -368,23 +369,31 @@ The worktree command copies the complete matching `.specs/<feature>/` folder and
 /spec-run <feature-slug or path-to-spec.md>
 ```
 
-This validates `preparation.json`, consumes each immutable prepared subspec, delegates one step at a time to `spec-step-run`, verifies the recorded focused commands mechanically, and commits each successful step separately. It never replans or rewrites preparation artifacts.
+This validates the hash-bound package, implements one step per commit, produces every owned executable-evidence and QA artifact, assembles merge evidence, and drives final refinement plus the work tour.
 
-### 7. Refine The Whole Branch
+### 7. Refine The Whole Branch (Driven By `spec-run`)
 
 ```bash
 /spec-branch-refine
 ```
 
-This alternates `spec-branch-review` and `spec-branch-fix` to convergence. Review runs isolated per-commit passes, then integrated whole-branch checks and a bounded prose-guardrail lens. Guardrail mismatches are ordinary findings in the same fix lifecycle.
+`spec-run` invokes this automatically after step execution. Run it directly only to resume or re-audit. It alternates independent evidence audits and fixes to convergence, audits every claim/gate against the integrated branch, then invokes `spec-work-tour` on a proven pass.
 
-### 8. Publish The Pull Request
+### 8. Open The Work Tour
+
+```bash
+open .specs/<feature>/work-tour.html
+```
+
+The required HTML explains architecture, implementation, requirement proof, QA scenarios, evidence limits, and deployment/rollback safety. Its sibling JSON carries the machine verdict, both bound to exact HEAD.
+
+### 9. Publish The Pull Request
 
 ```bash
 /spec-pr
 ```
 
-This rebases first, commits, pushes, opens or updates the PR, and records the rebase log, PR message, and PR URL artifacts. `spec-issue` is a separate optional command and does not implicitly link the PR.
+This rebases first, re-establishes any invalidated evidence, requires a current passing audit and ready tour, then pushes and publishes an evidence index. It never relies on future PR review as a safety net.
 
 ### Quick Sequence
 
@@ -395,7 +404,6 @@ This rebases first, commits, pushes, opens or updates the PR, and records the re
 /spec-prepare
 /spec-branch-worktree <feature-slug>
 /spec-run <feature-slug>
-/spec-branch-refine
 /spec-pr
 ```
 
@@ -453,7 +461,7 @@ This critiques the prototype when present, otherwise the proposal, and writes:
 /design-spec-writer <feature-slug>
 ```
 
-The writer creates the standard implementation contract at `.specs/<feature>/spec.md`, including selected design rules, states, accessibility, responsive behavior, traceability, and deterministic steps. It writes `spec-steps.json` beside the spec and never touches GitHub.
+The writer creates the standard implementation and evidence contract, including selected design rules, states, accessibility, responsive behavior, failure hypotheses, QA-tour gates, and deterministic steps. It writes `spec-steps.json` and `evidence-plan.json` beside the spec.
 
 After that, use the normal engineering back half:
 
@@ -461,7 +469,6 @@ After that, use the normal engineering back half:
 /spec-prepare <feature-slug>
 /spec-branch <feature-slug>
 /spec-run <feature-slug>
-/spec-branch-refine <feature-slug>
 /spec-pr <feature-slug>
 ```
 
@@ -568,18 +575,15 @@ Run `specops-spec-coherence` when multiple analysis specs need to agree on share
 /specops-spec-conformance <analysis-spec> <implementation-spec>
 ```
 
-The conformance pass checks that the implementation spec did not drop, weaken, contradict, or silently change behavior from the analysis spec.
+The conformance pass checks that the implementation spec and adjacent evidence plan preserve every material behavior and have no unresolved material decision.
 
 ### 6. Execute And Test The Migration
 
 ```bash
 /specops-run-spec <spec-file>
-/specops-contract-tests <analysis-file>
-/specops-integration-test <analysis-dir> <migrated-folder>
-/specops-implementation-drift <migrated-folder> <original-analysis>
 ```
 
-Use drift audit after code generation to compare the migrated behavior back to the original analysis.
+The runner implements sequential commits, drives contract and normative integration gates, converges independent drift/conformance evidence, and emits `docs/specops/evidence/<slug>/work-tour.json` plus `work-tour.html`. The contract, integration, and drift skills remain runnable leaves for targeted regeneration or diagnosis.
 
 ### 7. Refresh Agent Docs From A Branch Or PR
 
@@ -803,6 +807,7 @@ spec_skills=(
   spec-branch-fix
   spec-pr
   spec-issue
+  spec-work-tour
   design-spec-architect
   design-spec-prototype
   design-spec-critique
@@ -813,6 +818,7 @@ specops_skills=()
 while IFS= read -r skill_dir; do
   specops_skills+=("$(basename "$skill_dir")")
 done < <(find "$ROOT/skills" -maxdepth 1 -type d -name 'specops-*' | sort)
+specops_skills+=(spec-work-tour)
 
 build_bundle \
   "spec-skills" \

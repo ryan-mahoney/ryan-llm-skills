@@ -7,12 +7,12 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "1"
+  version: "2"
 ---
 
 # SpecOps Contract Tests
 
-Generate a framework-agnostic pytest test file from a SpecOps analysis file. The tests are derived from sections 2 (interfaces), 3 (data models), 4A (policy rules), 4B (behavioral scenarios), 6 (dependencies), 8 (error handling), and 10 (edge cases). The output is a single test file that can run against any implementation of the analyzed component.
+Generate contract-test evidence from a SpecOps analysis and its implementation evidence plan. Read [the shared executable-evidence contract](../spec-work-tour/references/executable-evidence.md). Tests act as gates that reject named failure hypotheses; test count alone is not proof.
 
 If `$ARGUMENTS` is provided, treat it as the path to the analysis file.
 If `$ARGUMENTS` is not provided, ask the user which analysis file to use.
@@ -24,7 +24,7 @@ If `$ARGUMENTS` is not provided, ask the user which analysis file to use.
 ## Before Starting
 
 1. Confirm the analysis file exists at the given path. If not, stop and report.
-2. Read the analysis file completely.
+2. Read the analysis file completely. Resolve and read sibling `<target>.evidence.json` when present. An implementation-bound run without that plan is blocked; do not invent separate claim IDs.
 3. Extract the **target name** from the H1 header: `# SpecOps Analysis: {target-name}`. This becomes the test module name by replacing hyphens with underscores (e.g., `topic-subscribe` becomes `test_topic_subscribe.py`).
 4. Extract the **Primary File** path from the file header to understand what source code is under test.
 5. Determine the **surface type** by scanning Section 2:
@@ -163,7 +163,7 @@ def test_scenario_description(self, mock_fixture):
 - For Firebase response objects, construct minimal but structurally correct objects (e.g., `TopicManagementResponse` with `.errors` list, `BatchResponse` with `.responses` list).
 - If the SDK response type cannot be easily constructed, use `MagicMock` with the required attributes set.
 
-### 5. Verify Completeness
+### 5. Verify Completeness And Emit Evidence
 
 After writing the file, verify and report:
 
@@ -172,6 +172,8 @@ After writing the file, verify and report:
 3. **Section 8 coverage:** List every distinct failure mode and whether it has a test. Skip modes that duplicate 4B scenarios.
 4. **Section 10 coverage:** List every edge case and whether it has a test. Note which edge cases were skipped as non-testable.
 5. **Implementation leakage check:** Confirm no test asserts on internal state, private method calls, or framework-specific objects. Tests assert on observable behavior only (HTTP responses, return values, mock call arguments).
+6. **Failure rejection:** Map every test to CL/FH/EV IDs and state which unsafe implementation would fail it. Flag a gate that mirrors implementation logic or bypasses required production composition.
+7. **Evidence result:** Run the focused contract-test command and write a commit-bound JSON result beside the coverage report with command, environment, outcome, artifact, rejected hypotheses, and proof boundary. Generated-but-unrun tests are not passed evidence.
 
 Report the coverage summary to the user after writing the file.
 

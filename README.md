@@ -10,18 +10,19 @@ Two portable, installable bundles produce three documented workflows. Build the 
 
 ### spec-skills: spec-driven development
 
-A standalone workflow that turns a goal into reviewed architecture, a prepared immutable implementation package, sequential commits, and one convergent whole-branch review. Each feature's human and machine artifacts live together under `.specs/<feature>/`, usually as gitignored working state.
+A standalone workflow that turns a goal into architecture, an explicit evidence posture, an immutable implementation package, sequential commits with owned proof, an independent convergent branch audit, and a commit-bound HTML work tour. Human review is optional input; executable evidence is the merge authority.
 
 Run the stages in order:
 
 1. `spec-architect-initial`: write `.specs/<feature>/proposal.md`.
 2. `spec-architect-critics`: stress-test the proposal and write `critique.md` (optional).
-3. `spec-write`: write `spec.md` plus the machine step index without touching GitHub.
-4. `spec-prepare`: code-ground and correct the spec, derive prose guardrails, plan every step sequentially, and publish `preparation.json` last.
+3. `spec-write`: write `spec.md`, `spec-steps.json`, and the AC → claim → failure → gate `evidence-plan.json`.
+4. `spec-prepare`: code-ground both implementation and proof, derive guardrails, plan every step, and publish their hash-bound manifest last.
 5. `spec-branch` / `spec-branch-worktree`: create the implementation branch or copy the complete feature package into a new worktree.
-6. `spec-run`: consume the prepared package exactly and commit each verified step separately.
-7. `spec-branch-refine`: drive whole-branch review and fix passes to convergence.
-8. `spec-pr`: rebase, publish, and open or update the PR.
+6. `spec-run`: implement each step, produce its gates and QA artifacts, assemble evidence, and commit separately.
+7. `spec-branch-refine`: independently audit code and evidence, fix, converge, and invoke the work tour (normally driven by `spec-run`; also resumable standalone).
+8. `spec-work-tour`: emit required `work-tour.json` and browser-ready `work-tour.html` (normally invoked by refinement).
+9. `spec-pr`: rebase, re-prove when necessary, require a ready tour, and publish the evidence PR.
 
 `spec-issue` is an optional standalone convenience for mirroring a Markdown spec to GitHub. It writes no pipeline state and does not influence preparation, execution, review, or PR behavior.
 
@@ -29,24 +30,25 @@ Run the stages in order:
 |---|---|---|
 | **spec-architect-initial** | `/spec-architect-initial [problem-or-feature]` | Review the architecture and write `.specs/<feature>/proposal.md` |
 | **spec-architect-critics** | `/spec-architect-critics [proposal-or-file]` | Stress-test `proposal.md` and write `critique.md` |
-| **spec-write** | `/spec-write [feature-slug-or-spec-path]` | Write `spec.md` and the machine-readable step index without GitHub side effects |
+| **spec-write** | `/spec-write [feature-slug-or-spec-path]` | Write the spec, step index, evidence posture, and claim/gate graph |
 | **spec-prepare** | `/spec-prepare [feature-slug-or-spec-path]` | Correct and ground the spec, derive prose guardrails, prepare every step, and publish the hash-bound manifest |
 | **spec-subspec-write** | `/spec-subspec-write [step-number] [spec-path]` | Leaf planner used sequentially by `spec-prepare` to write one immutable step subspec |
 | **spec-branch** | `/spec-branch [description-or-feature-slug]` | Create a local branch from a spec, description, or issue/ticket reference |
 | **spec-branch-worktree** | `/spec-branch-worktree [description-or-feature-slug]` | Create a branch/worktree and hand off the matching `.specs` package |
-| **spec-run** | `/spec-run [feature-slug-or-spec-path]` | Execute immutable prepared subspecs sequentially and commit each successful step |
-| **spec-step-run** | delegated | Implement and verify exactly one prepared step without replanning |
-| **spec-branch-refine** | `/spec-branch-refine [spec-path]` | Alternate whole-branch review and fix passes until clean or capped |
-| **spec-branch-review** | delegated | Review per commit, then the integrated branch, including bounded prose guardrails |
+| **spec-run** | `/spec-run [feature-slug-or-spec-path]` | Execute prepared steps, evidence gates, integrated refinement, and the final tour |
+| **spec-step-run** | delegated | Implement one prepared step and produce its owned code/evidence/QA artifacts |
+| **spec-branch-refine** | `/spec-branch-refine [spec-path]` | Alternate integrated evidence audits and fixes until proven or blocked |
+| **spec-branch-review** | delegated | Independently falsify code and claim/gate evidence per commit and integrated branch |
 | **spec-branch-fix** | delegated | Apply or dismiss structured branch findings and commit fixes |
-| **spec-pr** | `/spec-pr [spec-path]` | Rebase, commit, push, open or update the PR, and record PR artifacts |
+| **spec-work-tour** | `/spec-work-tour [spec-path]` | Build commit-bound HTML/JSON architecture, evidence, QA, and deploy tour |
+| **spec-pr** | `/spec-pr [spec-path]` | Rebase, re-establish evidence, require ready tour, and publish the PR |
 | **spec-issue** | `/spec-issue [markdown-path] [issue-number]` | Standalone GitHub issue creation or update with no pipeline integration |
 
 The `spec-skills` bundle also ships the Augment CLI subagent adapter `augment/agents/spec-step-implementer.md`, which `spec-run` uses to delegate one step at a time.
 
 ### design-spec: design-driven front-half
 
-The same standalone pipeline, entered from design instead of architecture. It uses the same `.specs/<feature>/` package. Once `design-spec-writer` writes the spec and step index, `spec-prepare` owns all grounding, guardrail derivation, and step planning.
+The same standalone pipeline, entered from design instead of architecture. Prototypes produce rendered-state evidence; the writer emits the same evidence plan; production implementation must prove real wiring and accessibility rather than relying on prototype approval or manual QA.
 
 The architect classifies each surface on two axes. Posture picks the applicable rule: Functional uses `functionalist-design.md`, Expressive uses `expressive-design.md`. Deliverable is Prototype or Real, in-code. The writer carries the selected posture rule into the spec's Applicable Rules, so `spec-run` applies it at implementation time.
 
@@ -55,8 +57,8 @@ Run the design stages, then hand off to `spec-run`:
 1. `design-spec-architect`: classify and propose a design direction (`proposal.md`)
 2. `design-spec-prototype`: build and serve a viewable prototype (`prototype/`), optional
 3. `design-spec-critique`: critique the prototype, else the proposal (`critique.md`), optional
-4. `design-spec-writer`: write `spec.md` and its step index.
-5. Hand off to `spec-prepare`, branching, `spec-run`, and `spec-branch-refine`.
+4. `design-spec-writer`: write `spec.md`, its step index, and `evidence-plan.json`.
+5. Hand off to `spec-prepare`, branching, and `spec-run`; execution drives refinement and the final tour.
 
 | Skill | Command | Purpose |
 |---|---|---|
@@ -142,10 +144,10 @@ node scripts/commit-ledger.mjs reconcile <repo-root>
 | **specops-rework-audit** | `/specops-rework-audit [repo-root] [--since ref]` | Find rework/churn hotspots and a non-blame Context Map of who to consult, from churn metrics plus supersession density |
 | **specops-ambiguity-audit** | `/specops-ambiguity-audit [analysis-file]` | Audit a SpecOps analysis spec for ambiguities, resolve them via parallel legacy-source research, and patch the spec |
 | **specops-spec-coherence** | `/specops-spec-coherence [analysis-dir]` | Audit a set of analysis specs for cross-spec coherence (dependency order, integration contracts, shared models, terminology) and patch gaps |
-| **specops-make-spec** | `/specops-make-spec [scope]` | Convert SpecOps analysis into a generalized deterministic implementation spec |
+| **specops-make-spec** | `/specops-make-spec [scope]` | Convert analysis into an implementation spec plus executable evidence plan |
 | **specops-orchestrate-spec-create** | `/specops-orchestrate-spec-create [analysis-files-or-dir]` | Orchestrate sequential subagents that generate one spec per analysis file |
 | **specops-spec-conformance** | `/specops-spec-conformance [analysis-spec] [implementation-spec]` | Audit an implementation spec against its source analysis spec for dropped or weakened behavior and patch the implementation spec |
-| **specops-run-spec** | `/specops-run-spec [spec-file]` | Implement every step in a SpecOps implementation spec via sequential subagents, committing each independently |
+| **specops-run-spec** | `/specops-run-spec [spec-file]` | Implement sequential evidence-owning commits, converge independent gates, and emit the HTML work tour |
 | **specops-contract-tests** | `/specops-contract-tests [analysis-file]` | Generate a framework-agnostic pytest contract test file from a SpecOps analysis |
 | **specops-integration-test** | `/specops-integration-test [analysis-dir] [migrated-folder]` | Generate integration tests for normative cross-module pathways discovered from analysis specs and the migrated call graph, reusing existing unit-test mocks |
 | **specops-implementation-drift** | `/specops-implementation-drift [migrated-folder] [original-analysis]` | Re-analyze migrated code, diff against the original analysis, and produce corrective specs for each behavioral divergence |

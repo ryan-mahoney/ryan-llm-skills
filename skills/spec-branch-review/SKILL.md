@@ -1,6 +1,6 @@
 ---
 name: spec-branch-review
-description: Use this skill when the user or the spec-branch-refine loop asks to review the whole implemented branch. It performs correctness and integration review plus a bounded guardrail lens from the prepared spec, then writes ordinary structured findings for spec-branch-fix.
+description: Independently audit an implemented spec branch and its executable evidence. Use from spec-branch-refine or when asked to prove the integrated branch is correct, safe, and claim-complete before publication.
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,22 +9,23 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "13"
+  version: "14"
 ---
 
-# Spec Branch Review
+# Spec Branch Evidence Audit
 
 > **`.specs/` is standalone working state and is often gitignored.** Read and write it directly; do not depend on git history to recover it. Diffing implementation code under review is unaffected.
 
-Review the whole branch for **correctness and prepared-guardrail** defects and write the
+Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Independently audit the whole branch for correctness, integration, prepared-guardrail, and evidence-closure defects, then write the
 findings to `reviews/branch-<iteration>-review.md`. This is the read-only half of
-the branch *correctness* loop driven by `spec-branch-refine`: it finds bugs; its
+the branch evidence loop driven by `spec-branch-refine`: it finds bugs and invalid proof; its
 partner `spec-branch-fix` reads the file and applies fixes. This skill never edits
 code.
 
-This is the single final review boundary. It is spec-aware — it has the whole spec, every subspec, and
-every learning — so it can tell an intended design from a defect far better than a
-blind diff review can. Its recall comes from **per-commit decomposition** (see Review).
+This is the independent final evidence boundary before the work tour. It must not trust
+the implementer's readiness conclusion. It receives intent, implementation, and produced
+evidence so it can try to falsify claims against the integrated branch. Its recall comes
+from per-commit decomposition plus claim/failure/gate auditing.
 
 ## Operating Context
 
@@ -85,12 +86,17 @@ inferred. Report `missing input: <name>`, write no review file, and stop.
   separate `excluded_worktree_changes` count and `scope_note` string (see Emit) so a
   reader — and a parser — knows live work was excluded. This is the failure mode that
   would otherwise let the review silently miss its own untracked files.
+  When excluded changes can affect code, tests, evidence, configuration, migrations,
+  or deployment, emit an actionable evidence finding; a commit-bound pass cannot omit
+  part of the candidate state.
 
 ## Load Spec-Aware Context
 
 Read for judgement:
 
 - `spec.md` — the whole intent, plus any `## Adaptations` log.
+- `evidence-plan.json` — the posture and AC → CL → FH → EV graph.
+- `merge-evidence.json` and `merge-evidence.md` — produced gate results and proof boundaries.
 - Every `step-<NNN>-subspec.md` in `<spec-dir>` — what each step meant to do (per-step
   artifacts live flat in the spec folder, step numbers zero-padded to three digits).
 - Every `step-<NNN>-learning.md` in `<spec-dir>` — what each step discovered and any
@@ -98,6 +104,28 @@ Read for judgement:
   exclusion list lives in Report Discipline.
 - `criteria.md` — consume only prose `Statement:` values.
 - `invariants.md` — consume only live invariant statements not marked superseded.
+
+Missing required evidence artifacts are blocking findings, not optional context.
+
+### Executable-evidence lens (always runs)
+
+For every claim, independently inspect its acceptance source, changed production path,
+failure hypotheses, gate implementation, recorded execution, artifact, proof boundary,
+environment, and commit binding. Re-run focused gates when safe and useful. Try at least
+one adversarial case per material crossed boundary that the implementation's own tests
+could have missed. Confirm that:
+
+- every AC and material deployment obligation maps to a falsifiable claim;
+- every credible failure hypothesis has a gate capable of rejecting it;
+- gates exercise real production composition where the claim is runtime-facing;
+- negative policy/data/security paths and operational/rollback obligations match posture;
+- visual work has inspected states/viewports and a deterministic QA handoff;
+- gate results and artifacts describe the current HEAD and disclose proof limits;
+- no readiness conclusion depends on future human review or required manual QA.
+
+Emit a `category: evidence` finding for a missing, stale, irrelevant, circular,
+unreproducible, under-independent, or overstated gate. Evidence findings are actionable
+whenever they leave a merge-blocking claim unproven, regardless of code-change size.
 
 ### Bounded guardrail lens
 
@@ -120,9 +148,9 @@ only the ones that mean "this is not a bug" do:
 |---|---|
 | `false-positive` | Yes — the finding was wrong. |
 | `intentional` | Yes — the code is deliberate. |
-| `accepted-risk` | Only when the fix decision has `approved: true`; otherwise re-raise. |
+| `accepted-risk` | Only when `approved: true` cites an explicit prepared spec/evidence-plan risk decision; otherwise re-raise. |
 | `deferred` | No — a real, unaddressed defect. Re-raise it each iteration. |
-| `unfixable` | No — real but blocked. Re-raise it each iteration so the human sees it. |
+| `unfixable` | No — real but blocked. Re-raise it so the final verdict remains blocked. |
 
 - Do **not** re-raise a finding whose signature matches a suppressing dismissal:
   `false-positive`, `intentional`, or an `accepted-risk` whose decision carries
@@ -362,8 +390,8 @@ the defect a spec-unaware external tool would raise. Keep it to candidates with 
 ## Severity, Actionability, Verdict
 
 - **Severity** `HIGH`/`MED`/`LOW`; **Category** `correctness`/`security`/`perf`/
-  `simplification`/`design`/`guardrail`.
-- **Actionable** = `HIGH` or `MED` in `correctness`, `security`, or `guardrail`. All else is
+  `simplification`/`design`/`guardrail`/`evidence`.
+- **Actionable** = `HIGH` or `MED` in `correctness`, `security`, `guardrail`, or `evidence`. All else is
   **advisory**. The split gates only the **verdict and the loop**: advisory findings
   are recorded and never block `spec-branch-refine`, but they are **always emitted**.
   The split must never collapse to silence — a clean diff yields `findings: []`; a
@@ -394,7 +422,7 @@ followed by human-readable prose that only explains the findings. Downstream ski
 read the YAML first; the prose is never parsed for control flow.
 
 ````txt
-# Branch Review — iteration <iteration> (<feature-slug>)
+# Branch Evidence Audit — iteration <iteration> (<feature-slug>)
 
 ```yaml
 review:
@@ -406,9 +434,13 @@ review:
   excluded_worktree_changes: 0      # count of uncommitted/untracked files NOT reviewed (committed scope only)
   scope_note: ""                    # e.g. "3 uncommitted/untracked files were not reviewed"; "" when clean
   verdict: pass | needs-fix
+  commit: <full audited HEAD SHA>
+  evidence_verdict: proven | incomplete
+  claims_audited: <count>
+  gates_reexecuted: <count>
   actionable: <count>
   advisory: <count>
-  lenses: [correctness, reference-integrity, security, simplification, ai-authorship]   # plus any fired: design, deep-security, data-deploy, dependency, performance, test-quality
+  lenses: [correctness, reference-integrity, security, simplification, ai-authorship, executable-evidence]   # plus any fired: design, deep-security, data-deploy, dependency, performance, test-quality
   commits_reviewed: <n>             # informational: commits decomposed and reviewed in the per-commit pass (Stage B)
   findings:
     - id: F1
@@ -441,20 +473,11 @@ Fix:  <concrete suggested change>
 
 ## Considered & Dismissed
 
-Non-actionable; does not affect the verdict. Real code properties a per-commit pass
-raised and dropped because the spec sanctions them — recorded so the pass is auditable.
-
-- `src/config/pipeline-registry.ts:registerPipeline` — non-atomic read-modify-write
-  (lost update under concurrency). Dismissed: deferred by subspec 5 *Out of scope*
-  ("lost-update protection … explicitly deferred (spec §6)").
-- `src/config/pipeline-registry.ts:resolvePipelineSync` — throws plain `Error`, not
-  `RegistryError`. Dismissed: intentional per subspec 3 / spec §7 (missing-entry is
-  not a corrupt-registry error).
+List non-actionable candidates dropped because a cited spec artifact sanctions them; include stable locations/citations and never pad the list.
 
 Review: <spec-dir>/reviews/branch-<iteration>-review.md (iteration <iteration>)
 ````
-
-A clean branch stays minimal: `verdict: pass`, `actionable: 0`, an empty `findings: []`,
+A clean branch requires `verdict: pass`, `evidence_verdict: proven`, all required claims closed, no excluded working-tree changes capable of affecting the candidate, `actionable: 0`, and an empty `findings: []`,
 `## Findings\nNone`, and the locator line — plus a **Considered & dismissed** list when a
 per-commit pass weighed and (correctly) dropped a spec-sanctioned candidate. That list is
 what distinguishes an audited `pass` from a blind one. When no candidates were
@@ -469,8 +492,7 @@ Report:
 1. Spec path and iteration.
 2. Review file path.
 3. Verdict and actionable/advisory counts.
-4. The lenses that ran (and any delegated skill), any risk trigger that did not fire,
-   and how many commits the per-commit pass (Stage B) reviewed.
+4. The lenses that ran, claim/gate counts, re-executed gates, evidence verdict, any risk trigger that did not fire, and how many commits the per-commit pass reviewed.
 5. The scope and diff target (e.g. `committed merge-base..HEAD`), whether the working
    tree was dirty (and excluded), and how many prior dismissals were honored — by class.
 

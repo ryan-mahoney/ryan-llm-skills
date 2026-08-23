@@ -6,7 +6,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "1"
+  version: "2"
 ---
 
 # SpecOps Ambiguity Audit
@@ -18,7 +18,7 @@ This skill performs a two-phase audit on a single analysis file:
 1. **Identify** every place a reimplementation would require a judgment call not answered by the spec.
 2. **Resolve** each ambiguity by spawning a subagent that reads the actual legacy source code, then patch the spec with the concrete answer.
 
-The output is a hardened spec: every behavior either documented concretely, or explicitly flagged as truly indeterminate from the source (and therefore needing a domain expert).
+Read [the shared executable-evidence contract](../spec-work-tour/references/executable-evidence.md). The output is a hardened spec: every material behavior is concrete and evidence-backed, or the spec is explicitly blocked from code generation.
 
 ## Inputs
 
@@ -209,11 +209,11 @@ When all subagents return:
    - Behavior that depends on runtime environment (env vars, OS, file system layout) the source doesn't document.
    - Apparent contradictions in the source that encode an unstated policy decision.
 
-   Items where `still_ambiguous: true` are **deferred**, not blocked. The audit continues. The deferred items get logged with full context (see step 4) so a human can pick them up out-of-band.
+   Items where `still_ambiguous: true` remain unresolved. Continue the audit and log them fully, but set the final readiness verdict to blocked. Before accepting that result, exhaust installed/official dependency documentation, caller/default traces, configuration fixtures, and reproducible environment probes where safe.
 
 2. **Apply the spec patches.** For each resolved ambiguity, replace the original ambiguous quote with the `after` prose from the subagent. Preserve the spec's existing structure and voice — don't rewrite whole sections, just refine the specific sentences. Keep the spec implementation-language-agnostic: describe behavior, not code syntax.
 
-3. **Anchor evidence in the patch.** Where a resolution came from specific source, the patched prose should reference it briefly — e.g., "As defined in `src/core/retry.js`, the retry policy uses exponential backoff starting at 100ms with a maximum of three attempts." This makes the next audit cheaper and gives reviewers a paper trail.
+3. **Anchor evidence in the patch.** Where a resolution came from source, reference it briefly. This makes the next audit cheaper and preserves a reproducible evidence trail.
 
 4. **Update Section 11 (Open Questions & Ambiguities) with rich context.** For each deferred item, write an entry with enough information that someone picking it up later can act without re-running the audit. Use this format:
 
@@ -248,7 +248,7 @@ When all subagents return:
 - Deferred items: see Section 11 (Open Questions) for OQ-<id> entries
 ```
 
-6. **Save the ambiguity working file** alongside the spec for traceability. It records what was found, what each subagent answered, and the evidence — useful for reviewers and for diffing across audit passes.
+6. **Save the ambiguity working file** alongside the spec for traceability. Add a machine verdict with spec/source hashes, resolved/unresolved IDs, evidence references, and `ready_for_implementation`; true requires zero material ambiguity.
 
 7. **Summarize for the user.** Show:
    - How many ambiguities were found, resolved, and deferred.
@@ -261,7 +261,7 @@ When all subagents return:
 
 - **Run end-to-end without stopping.** The audit is automated. Don't pause for confirmation between phases. The user reviews the resulting report and patched spec asynchronously.
 - **Code is rarely truly ambiguous.** When source is available, almost every question has a concrete answer. Treat `still_ambiguous: true` as a real but uncommon outcome with specific causes (closed-source deps, caller-supplied config, runtime environment, unstated policy). If a subagent reports it for a different reason, that's a signal the subagent didn't dig hard enough — consider re-running it with more aggressive instructions to read transitively imported files.
-- **Deferred items don't block.** They get logged with full context (Section 11 + audit report) so a human can resolve them later without re-doing the audit. The audit completes regardless.
+- **Unresolved material items block code generation.** Preserve full context and the exact external evidence needed. Optional product rationale may be sought separately, but safety never depends on a future person noticing the gap.
 - **Don't fabricate answers.** When something genuinely depends on external context, say so concretely and move on. Don't guess.
 - **Don't introduce code into prose.** The spec is implementation-language-agnostic. Resolutions describe behavior in natural language. Source line references are fine; pasted code is not.
 - **Don't merge the audit report into the spec.** Keep `<spec>.ambiguities.md` as a separate persistent artifact. Future audits diff against it.
@@ -284,6 +284,6 @@ User: "Audit `docs/specs/analysis/core/orchestrator.md` for ambiguity."
 
 ## Related skills and workflows
 
-- This skill complements (does not replace) a normal spec review pass. Use both: review for accuracy, audit for ambiguity.
+- This skill is one independent evidence gate; coherence, conformance, executable tests, and drift cover other failure classes.
 - For batch use across many specs, run this skill once per spec rather than trying to audit them all in one pass — the subagent fan-out is per-spec and mixing specs blurs the source-file scope each subagent should read.
-- After all specs in a subsystem are audited and Open Questions are resolved by domain experts, the subsystem is ready for implementation-spec generation.
+- A subsystem is ready only when every material open question is resolved by source/official/runtime evidence or explicitly removed from implementation scope.

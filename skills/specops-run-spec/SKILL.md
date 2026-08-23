@@ -1,164 +1,118 @@
 ---
 name: specops-run-spec
-description: This skill should be used when the user asks to "run the spec", "implement the spec", or "execute the spec". Implements every step in a SpecOps implementation spec by delegating each step (or logical group of adjacent steps) to a sequential subagent and conventional-committing each one independently.
+description: Implement a SpecOps implementation spec as sequential commits with owned executable evidence, converge contract/integration/drift gates, and emit a commit-bound HTML architecture, proof, QA, and deployment tour.
 disable-model-invocation: true
 argument-hint: "[spec-file]"
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "1"
+  version: "2"
 ---
 
 # SpecOps Run Spec
 
-Implement every step from a SpecOps implementation spec. Each step (or logical group of adjacent steps) is delegated to a sequential subagent. After each subagent completes, stage the changes, write a conventional commit, and proceed to the next.
+Implement every step from a SpecOps implementation spec and establish deploy readiness without relying on human review or required manual QA. Read [the shared executable-evidence contract](../spec-work-tour/references/executable-evidence.md).
 
-Use surgical, low-risk changes. Do not add complexity, unnecessary conditions, or unnecessary backward compatibility. Do not run the entire test suite.
+Each step produces one coherent commit plus its owned EV gate results. After implementation, independently converge conformance, contract, real-seam integration, and behavioral-drift evidence. Every completed run emits a browser-ready work tour.
 
-SPEC: `$1` — path to a SpecOps implementation spec (typically under `docs/specops/specs/`).
+## Inputs And Evidence Package
 
-If `$1` is missing, ask the user.
+Resolve an explicit implementation spec path. If omitted, infer exactly one matching `docs/specops/specs/*.md`; stop on ambiguity. Require:
 
-## Before Starting
+- the implementation spec;
+- sibling `<spec-basename>.evidence.json`, valid under `validate-evidence-plan.mjs`;
+- its source analysis spec and latest conformance verdict;
+- repository standards and `AGENTS.md`.
 
-1. Read the spec file at `$1`. If the file does not exist, stop and report.
-2. Locate the **Implementation Steps** section (Section 7 of a `specops-make-spec` output). Each numbered step contains: what to do, why, signatures/contracts, and tests.
-3. Build the ordered list of every step in spec order.
-4. Optionally cluster contiguous steps into logical groups when grouping reduces churn — for example, a contracts/types step and the immediately-following pure-domain step on the same module. Do not group across architectural boundaries (contracts → I/O → wiring stay separate). When in doubt, keep steps individual.
-5. Confirm the working tree is clean. If it is not, stop and report — partial uncommitted changes will get folded into the first commit and corrupt traceability.
-6. Announce the full step list and any groupings before delegating.
+Use `docs/specops/evidence/<spec-slug>/` for run artifacts:
 
-## Execution Model: Sequential Subagent Per Step or Group
-
-Process steps (or groups) one at a time. Do not parallelize — each step's commit may modify files the next step depends on, and the working tree must be clean between subagents.
-
-For each step or group, invoke:
-
-```txt
-Agent(
-  subagent_type: "general-purpose",
-  description: "Implement spec step <step-id>",
-  prompt: "<STEP_PROMPT>"
-)
+```text
+docs/specops/evidence/<spec-slug>/
+├── run-manifest.json
+├── steps/step-<NNN>.json
+├── gates/<EV-id>.*
+├── conformance.*
+├── integration.*
+├── drift.*
+├── blockers.json
+├── work-tour.json
+└── work-tour.html
 ```
 
-### STEP_PROMPT Template
+Write atomically. Do not store secrets, production data, or sensitive captures. Confirm the working tree is clean before starting; unrelated changes would corrupt commit/evidence provenance.
 
-```txt
-You are implementing one step (or logical group of adjacent steps) from a SpecOps implementation spec.
+## Validate Intent Before Code
 
-Spec file: <spec-path>
-Step(s) to implement: <step numbers>
-Step content (verbatim from Section 7 of the spec):
-<paste exact step text — what to do, why, signatures/contracts, tests>
+1. Run the shared evidence-plan validator.
+2. Confirm every acceptance criterion and material analysis invariant maps AC → CL → FH → EV.
+3. Confirm every EV item has exactly one owner step and every step's `Evidence:` tags match.
+4. Require the latest `specops-spec-conformance` result to have no material deferred decision and to bind current spec/analysis hashes.
+5. Reassess posture against current repository reality. If risk increased, strengthen the plan through `specops-make-spec`/conformance before implementation. Never weaken it to accommodate missing tooling.
 
-# Your task
-1. Read the step(s) and evaluate whether the prescribed approach still fits the current state of the codebase. Adapt if the spec is out of date relative to what's already there; flag any adaptation in your return summary with rationale.
-2. Implement the step(s) with surgical, low-risk changes.
-3. Run only the targeted tests relevant to the changed behavior. Do NOT run the full test suite.
-4. Do NOT stage or commit. The orchestrator handles staging and commits.
+Any mismatch blocks code generation; regenerate the spec/evidence plan rather than improvising untraceable proof.
 
-# Implementation principles
-- Fail fast on invalid inputs. No defensive fallbacks or "just in case" logic unless explicitly required.
-- Prefer raising errors over silent failures, default values, or swallowing exceptions.
-- Simple over clever. Boring, maintainable code beats clever optimizations.
-- Build for today. Design for current requirements, not imagined future ones.
-- Concise and idiomatic. Write code like a senior engineer, not a tutorial.
-- Small functions under 10–15 lines. Extract helpers liberally.
-- Single responsibility per function.
-- Rule of three: do not abstract until there are three uses.
-- Contextual error messages: what failed, what was expected, how to fix.
-- Propagate errors; do not suppress.
-- Follow existing project patterns and conventions.
+## Execute Sequentially
 
-Do not:
-- Add try/catch unless explicitly required.
-- Create interfaces with only one implementation.
-- Add comments explaining what code obviously does.
-- Write defensive "safety" logic for scenarios that indicate bugs.
+Process implementation steps in order. Keep steps separate unless adjacent steps share one indivisible contract and the evidence plan already assigns the same gates to that group. Never group across contracts, I/O, production wiring, migrations, security, or deployment boundaries.
 
-# Return
-Return a concise summary:
-- Files changed (list).
-- Any adaptation from the spec's prescribed approach, with rationale.
-- Targeted tests run and their result.
-- Any blockers or follow-ups for the orchestrator.
+For each step, delegate when the harness supports it; otherwise implement directly. The worker receives exact step text, source analysis claims, CL/FH/EV obligations, prior step results, repository standards, and this contract. Require it to:
+
+1. Inspect the actual source and production composition before editing.
+2. Implement the smallest coherent outcome, adapting only when repository evidence demands it.
+3. Produce every owned gate using its exact command/environment/artifact, including real production composition and negative paths where specified.
+4. For UI work, render and inspect required states/viewports/interactions, run accessibility gates, and retain sanitized QA captures/scenarios.
+5. Record an honest proof boundary for every gate and never call an unavailable, red, or stale gate passed.
+6. Return files, adaptations, commands/outcomes, artifacts, rejected hypotheses, QA inputs, and blockers without staging or committing.
+
+Allow one evidence-directed fix pass when implementation or a required gate fails. If still incomplete, preserve useful local diagnosis but do not commit a partial deploy candidate; write the blocker and stop.
+
+Inspect the diff, stage only the coherent step, and conventional-commit:
+
+```text
+type(scope): outcome (spec: <basename> step <N>)
 ```
 
-## Per-Step Workflow
+After the commit, write `steps/step-<NNN>.json` bound to its full SHA with changed files, AC/CL/FH/EV IDs, exact commands/outcomes, artifacts, environments, proof boundaries, adaptations, and QA inputs. Confirm the tree is clean before the next step.
 
-For each step (or group), in order:
+## Converge Independent Evidence
 
-1. Confirm the working tree is clean. If it is not (e.g., the previous step left untracked changes), stop and report.
-2. Spawn the subagent with the step prompt above.
-3. When it returns, review the summary. If the subagent reports a blocker or its targeted tests fail, run one fix-up subagent (see template below). If still failing, stop and report; do not commit a partial implementation.
-4. Stage the changed files.
-5. Write a conventional commit message: `type(scope): description (spec: <spec-basename> step <N>)` where:
-   - `type` reflects the change (feat, fix, refactor, chore, test).
-   - `scope` is the module or area touched, derived from changed files or the spec's Architecture section.
-   - `description` is a short imperative summary of the step's outcome.
-   - For grouped steps, include the range: `step <N>-<M>`.
-6. Commit.
-7. Move to the next step or group.
+After all steps:
 
-Allow at most one fix-up subagent invocation per step. If still failing after the fix-up, stop and report.
+1. Run `specops-contract-tests` for contract gates in the evidence plan. Required tests must execute and pass.
+2. Run `specops-integration-test` for normative live-path gates. Missing seams/infrastructure or failures block convergence.
+3. Run `specops-implementation-drift` against the original analysis. It must bind current HEAD, have zero Critical/Important corrections, and show all required related EV gates passed. Cosmetic differences remain advisory.
+4. Re-run `specops-spec-conformance` when implementation discoveries changed spec or evidence meaning.
+5. Re-run affected gates after every correction. Repeat bounded correction/evidence cycles while each iteration makes material progress; default cap 10.
 
-## Fix-Up Subagent Template
+An implementer cannot self-approve a residual risk. Acceptance is valid only when the prepared evidence plan already records the bounded decision and the independent drift/conformance evidence confirms its boundary. At the cap or no progress, set the run blocked.
 
-```txt
-Agent(
-  subagent_type: "general-purpose",
-  description: "Fix spec step <step-id>",
-  prompt: "Previous implementation of step <N> from <spec-path> is incomplete or failing.
-Findings: <list>
-Targeted test failures or blockers: <list>
-Re-read the step and the relevant files.
-Apply only the changes needed to satisfy the step's acceptance criteria and targeted tests.
-Do NOT stage or commit.
-Return: what changed and why."
-)
+## Assemble The Work Tour
+
+Write standard version 1 `work-tour.json` in the evidence folder, using the schema in `spec-work-tour`. It must include:
+
+- exact HEAD/base and final ready/blocked verdict;
+- original behavior/problem and before/after architecture/data flow;
+- step commits and changed files;
+- every AC/CL/FH/EV result with command, environment, artifact, rejected failure, observed result, proof boundary, and SHA;
+- conformance, contract, integration, and drift verdicts as independent audit evidence;
+- deterministic QA entrypoints, fixtures, scenarios, expected results, automated coverage, and visual captures;
+- migrations, configuration, observability, compatibility, rollback/forward-fix, residual risks, and gaps.
+
+Render it:
+
+```bash
+node ~/.agents/skills/spec-work-tour/scripts/render-work-tour.mjs \
+  docs/specops/evidence/<slug>/work-tour.json \
+  docs/specops/evidence/<slug>/work-tour.html
 ```
 
-## Completion
+Open and inspect the HTML at desktop and narrow widths. Sample its claims/gates back to source artifacts. A ready verdict requires all required claims proven, all gates passed at exact HEAD, no gaps/blockers, converged drift, and a deploy-safe operational case. The renderer validates shape, not truth.
 
-After all steps complete (or the run halted on a blocker):
+Write `run-manifest.json` last with spec/analysis/evidence-plan hashes, base/HEAD, step commits, gate artifact hashes, independent verdict paths/hashes, tour hashes, and final verdict. Any later code, test, spec, config, migration, dependency, or deploy change invalidates the manifest and tour.
 
-1. Per-step status: implemented / fix-up applied / blocked.
-2. List of commits created (sha + subject).
-3. Any spec adaptations the subagents flagged for review.
-4. Any blockers that halted the run, with the failing step and the reason.
+## Report
 
-## Implementation Principles (Orchestrator)
+Report step/commit outcomes; AC/CL/FH/EV counts and gaps; contract/integration/drift/conformance verdicts; correction iterations; QA scenario/capture counts; exact work-tour HTML/JSON paths and commit; deployment verdict, blockers, and residual risks.
 
-The orchestrator follows the same principles it passes to subagents. In particular:
-
-- One commit per step or logical group. No squashing across boundaries; granularity keeps failures localizable and bisecting cheap.
-- No partial commits. If a step fails, halt — do not commit half-finished work to "save progress."
-- Do not run the full test suite between steps. Targeted tests only.
-- Do not add Co-Authored-By trailers, "Generated with" footers, or any AI model attribution to commit messages.
-
-## Quality Bar
-
-- Each commit is independently maintainable and reviewable.
-- Each commit is obvious about what it does and why (commit message + spec reference).
-- Each commit is obvious about when it breaks (targeted tests).
-- Tests verify behavior, not implementation.
-
----
-
-## Where this fits in the SpecOps pipeline
-
-This skill is the code-generation step. It runs after the implementation spec has been verified:
-
-1. Generate analysis spec from legacy source.
-2. `specops-ambiguity-audit` — harden the analysis spec.
-3. `specops-spec-coherence` — cross-spec consistency, implementation order.
-4. Domain experts verify the analysis spec set.
-5. Generate implementation specs in dependency order (`specops-make-spec`, `specops-orchestrate-spec-create`).
-6. `specops-spec-conformance` — implementation specs faithful to analysis.
-7. **`specops-run-spec`** (this skill) — implement the verified spec, one step per commit.
-8. `specops-integration-test` — add integration tests for normative pathways.
-9. `specops-implementation-drift` — re-analyze code, diff against analysis, generate corrections, iterate.
-
-Steps 7–9 alternate as the migration evolves: drift surfaces correction specs, this skill runs the corrections one step at a time, integration tests update for newly-completed pathways, drift runs again.
+Do not open or merge a PR, add attribution, or describe a blocked run as complete.

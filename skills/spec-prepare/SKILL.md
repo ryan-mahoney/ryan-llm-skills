@@ -9,14 +9,14 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "18"
+  version: "19"
 ---
 
 # Spec Prepare
 
 > **`.specs/` is standalone working state and is often gitignored.** Read and write its files directly; do not depend on git history to recover them. Diffing repository code while grounding the spec remains allowed.
 
-Prepare the complete, immutable implementation package for a spec. This is the sole stage between spec writing and implementation. It combines code-grounded spec review, step-index reconciliation, prose guardrail and invariant derivation, and per-step subspec planning.
+Prepare the complete, immutable implementation and evidence package for a spec. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). This stage code-grounds both the implementation route and the proof needed to merge and deploy without human review.
 
 Preparation is one visible workflow stage owned by one capable preparation agent. That agent writes the shared artifacts and, by default, every step subspec. A `spec-subspec-write` leaf is an exceptional deep-planning fallback, not a mandatory pass for every step; when used, it may write only its assigned subspec. Never let a fallback leaf edit shared state.
 
@@ -34,6 +34,7 @@ Keep the complete prepared package flat in that folder:
 
 - `spec.md` — canonical spec.
 - `spec-steps.json` — derived machine step index.
+- `evidence-plan.json` — evidence posture and AC → claim → failure → gate graph.
 - `spec-prepare.md` — preparation report.
 - `criteria.md` and `invariants.md` — optional prose guardrails.
 - `step-<NNN>-subspec.md` — immutable execution cards.
@@ -50,7 +51,7 @@ Perform these transformations in exactly this order. They are deliberately seque
 ### 1. Resolve and invalidate
 
 1. Resolve the spec folder and confirm `spec.md` is readable.
-2. Read sibling `proposal.md` and `critique.md` when present.
+2. Read sibling `proposal.md`, `critique.md`, and required `evidence-plan.json`.
 3. **Invalidate first:** remove `preparation.json` before editing any preparation artifact or launching a subagent. A missing manifest is already invalidated. Any other removal error stops the run.
 4. Do not restore or retain the old manifest on any failure.
 
@@ -88,7 +89,7 @@ Correct only substantive defects:
 - Ambiguous behavior, shapes, defaults, ordering, error handling, or side effects.
 - Architecture that conflicts with real repository patterns.
 - Missing acceptance coverage or non-automatable criteria.
-- Merge Evidence Plan defects: a missing plan, an EV item owned by no step or by more than one step, or evidence forms that do not fit the change's actual risk.
+- Executable Evidence Plan defects: missing or invalid posture; incomplete AC → CL → FH → EV traceability; an EV item owned by no step or by more than one step; a gate that cannot reject its failure hypothesis; human review/manual QA used as a safety gate; or evidence forms, independence, environments, and deployment proof that do not fit actual risk.
 - Pre-mortem defects: a missing pre-mortem, or a credible concern with no disposition (AC, step, EV item, or explicitly accepted risk).
 - Steps that are not deterministic, minimal, self-contained, forward-only, or dependency ordered.
 - Non-flat step numbering, mismatched `Covers:` tags, or incorrect complexity/visual flags.
@@ -108,7 +109,11 @@ Preserve intent and voice. Do not restyle a sound spec. Re-running preparation a
 
 ### 3. Reconcile the step index
 
-`spec.md` is canonical. Rewrite `spec-steps.json` to contain exactly one entry per final implementation step, in ascending order, using the current strict step-index schema. Each entry's number, name, description, difficulty, and visual-design flag must match the Markdown step. The top-level `spec` path must equal the checkout-relative path in the `Spec folder:` footer.
+`spec.md` is canonical. Rewrite `spec-steps.json` to contain exactly one entry per final implementation step, in ascending order, using the current strict step-index schema. Each entry's number, name, description, difficulty, visual-design flag, and evidence array must match the Markdown step. The top-level `spec` path must equal the checkout-relative path in the `Spec folder:` footer.
+
+Reconcile `evidence-plan.json` against the corrected spec. Preserve stable identifiers where their meaning survives. Correct posture, claim, hypothesis, gate, command, artifact, environment, independence, merge-blocking, and owner-step fields when repository evidence requires it. Never weaken the posture merely because a required harness is absent; either add the smallest evidence-producing step or block preparation with the precise automation gap.
+
+Run `node ~/.agents/skills/spec-work-tour/scripts/validate-evidence-plan.mjs <path>` after reconciliation and again immediately before manifest hashing. Any structural or traceability failure blocks publication.
 
 ### 4. Derive prose guardrails and invariants
 
@@ -193,7 +198,7 @@ When a step carries an `Evidence:` tag in `spec.md`, add one line per owned EV i
 Evidence: EV-<n> — <artifact form> → <committed path | .specs/<feature>/evidence/<file>>
 ```
 
-Committed evidence such as integration tests also appears as ordinary targets; non-committed artifacts (manual verification guide, screenshots, dry-run logs, benchmark output) name their destination under `.specs/<feature>/evidence/`. Do not invent evidence obligations the spec does not own.
+Committed evidence such as integration tests also appears as ordinary targets; non-committed artifacts (QA walkthrough, screenshots, dry-run logs, benchmark output) name their destination under `.specs/<feature>/evidence/`. Each card repeats the gate's exact command, environment, rejected failure hypothesis, and proof boundary. Do not invent evidence obligations the spec does not own.
 
 Write targets and the edit sequence as the best expected route, never as an exhaustive file or permission whitelist. State in `Setup and Hazards` which criteria the step should establish now, preserve for later work, or may satisfy early even when another step was expected to own them. Treat prepared verification commands as the mandatory baseline; the implementation worker may add relevant tests, files, and repository-specific commands when credible evidence requires them.
 
@@ -251,7 +256,9 @@ After the last step, reread every final artifact. Confirm:
 - Every `Visual: yes` card records `Visual reference: <path | none>`, contains a complete
   `Visual Implementation Brief`, and names Playwright as its only screenshot mechanism.
 - Every medium and hard card records canonical `Risk lenses` and `Live invariants` lines in `Setup and Hazards`.
-- Every Merge Evidence Plan item is owned by exactly one step whose card carries a matching `Evidence:` line with a concrete artifact form and destination, and every pre-mortem item carries a disposition.
+- Every requirement maps to a claim, every claim to at least one failure hypothesis and gate, and every failure hypothesis to a gate capable of rejecting it.
+- Every Executable Evidence Plan item is owned by exactly one step whose card and `spec-steps.json` entry carry matching evidence ownership and a concrete command, environment, artifact, independence level, rejected failure, and proof boundary.
+- The posture is at least as strong as the proposal and actual repository risk; user-visible work has QA-tour output; no required gate depends on human review or manual QA; every pre-mortem item carries a disposition.
 - Criteria contain prose `Statement` properties only.
 - The report, spec, index, optional criteria/invariants, and all subspecs are final before manifest hashing begins.
 
@@ -263,7 +270,7 @@ Atomically write `spec-prepare.md` on every run. Include:
 - Review changes and rationale, or an unchanged verdict.
 - Step-index reconciliation.
 - Guardrails and invariant counts.
-- Merge-evidence ownership: EV items with their owning steps, and the pre-mortem disposition summary.
+- Evidence posture and traceability counts; EV items with owning steps, rejected failure hypotheses, commands, artifacts, and the pre-mortem disposition summary.
 - One row per step with difficulty, visual-reference summary, card depth, subspec path,
   verification strategy, and focused commands.
 - Corrections/reruns and open blockers.
@@ -271,14 +278,15 @@ Atomically write `spec-prepare.md` on every run. Include:
 
 If blocked, stop after the report. Never publish a partial or failure manifest.
 
-Only for a completely valid package, compute SHA-256 over the final file bytes and atomically publish strict version 1 `preparation.json` **as the last write**:
+Only for a completely valid package, compute SHA-256 over the final file bytes and atomically publish strict version 2 `preparation.json` **as the last write**:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "preparedAt": "canonical ISO 8601 timestamp",
   "specSha256": "64 lowercase hex characters",
   "stepIndexSha256": "64 lowercase hex characters",
+  "evidencePlanSha256": "64 lowercase hex characters",
   "reportSha256": "64 lowercase hex characters",
   "criteriaSha256": null,
   "invariantsSha256": null,
@@ -294,7 +302,7 @@ Only for a completely valid package, compute SHA-256 over the final file bytes a
 }
 ```
 
-Use a hash string instead of `null` when the optional artifact exists. Include exactly one `steps` entry per indexed step. No keys beyond this schema are allowed. Validate all bindings immediately before rename; a changed or missing binding stops publication.
+Use a hash string instead of `null` when an optional artifact exists. Include exactly one `steps` entry per indexed step. No keys beyond this schema are allowed. Validate all bindings immediately before rename; a changed or missing binding stops publication.
 
 ## Exceptional Deep-Planning Fallback
 
@@ -314,6 +322,6 @@ Do not use fallback delegation for routine grounding, formatting, or validation 
 
 ## Output
 
-Report the canonical paths for `spec.md`, `spec-prepare.md`, `spec-steps.json`, optional `criteria.md`/`invariants.md`, each step subspec, and `preparation.json`. State whether the spec changed, which corrections were applied, which testing strategies were selected, and whether the final manifest was published.
+Report the canonical paths for `spec.md`, `spec-prepare.md`, `spec-steps.json`, `evidence-plan.json`, optional `criteria.md`/`invariants.md`, each step subspec, and `preparation.json`. State evidence posture and traceability counts, corrections, selected verification strategies, automation gaps, and whether the manifest was published.
 
 Do not add attribution footers or co-author trailers.

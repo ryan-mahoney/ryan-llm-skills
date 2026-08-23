@@ -7,12 +7,12 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "1"
+  version: "2"
 ---
 
 # SpecOps Make Spec
 
-Convert a verified SpecOps analysis into an implementation specification that explains **how** to build the target component(s) under the current project's standards.
+Convert a verified SpecOps analysis into an implementation and executable-evidence specification. Read [the shared executable-evidence contract](../spec-work-tour/references/executable-evidence.md) first.
 
 If `$ARGUMENTS` is provided, treat it as `ANALYSIS_SCOPE` (or specific analysis file if clearly file-shaped).
 If `$ARGUMENTS` is not provided, infer the analysis target from user request and repository context.
@@ -23,7 +23,7 @@ Read these sources before authoring the spec:
 - Project agent conventions (for example `AGENTS.md` when present).
 - Adjacent analysis artifacts in the same area when needed for dependencies/context.
 
-Write the resulting implementation spec as markdown to the user-requested destination. If no destination is specified, print it in the response.
+Write the implementation spec to the requested destination, else `docs/specops/specs/<target-slug>.md`. Write its machine evidence plan beside it as `<target-slug>.evidence.json` and validate it with `spec-work-tour/scripts/validate-evidence-plan.mjs`.
 
 Do not implement code while generating this spec.
 
@@ -60,10 +60,14 @@ Provide a numbered list of observable, automatable assertions:
 - Group by concern (core behavior, error handling, concurrency, integration, etc.).
 - Include edge cases and non-happy-path behaviors.
 
-### 6. Notes
+### 6. Executable Evidence Plan
+
+Set the risk posture and define stable AC/CL/FH/EV traceability using the shared contract. Every analysis contract, invariant, and failure mode maps to a claim; every claim has a credible failure hypothesis and a gate capable of rejecting it. Name commands, artifacts, environments, independence, proof boundaries, merge/deploy blocking, and a single owner step. Include contract, real-seam integration, drift/conformance, operational, rollback, and QA-tour evidence as applicable. Human review and required manual QA are not gates.
+
+### 7. Notes
 Capture trade-offs, risks, ambiguities, migration concerns, and sequencing dependencies.
 
-### 7. Implementation Steps
+### 8. Implementation Steps
 Provide a flat, numbered, sequential plan of deterministic engineering tasks.
 
 For each step include:
@@ -71,6 +75,7 @@ For each step include:
 2. Why: tie to architecture or acceptance criteria.
 3. Signatures/contracts: include public API shape when added/changed.
 4. Tests: concrete automated test assertions and target test files.
+5. Coverage: `Covers: AC-*` and exactly owned `Evidence: EV-*` tags.
 
 ## Implementation-Step Constraints
 
@@ -80,7 +85,7 @@ For each step include:
 - Forward-only: target architecture only; avoid unnecessary compatibility layers unless explicitly required.
 
 Do not include steps for:
-- Manual testing/QA checklists.
+- Manual testing as a correctness gate. Deterministic QA-tour output tied to automated gates is allowed.
 - Documentation-only tasks.
 - Running the entire test suite.
 - Formatting/lint-only chores.
@@ -106,3 +111,4 @@ Ordering principle:
 - Observable outcomes over implementation trivia.
 - No hidden assumptions.
 - Every major decision includes rationale and evidence.
+- The adjacent evidence JSON passes the shared validator and contains exactly one owner step per EV item.

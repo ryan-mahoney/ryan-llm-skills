@@ -6,14 +6,14 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "1"
+  version: "2"
 ---
 
 # SpecOps Spec Coherence Audit
 
 Each analysis spec is generated from a single module's source files in isolation. The result is a set of specs that are individually coherent but collectively under-coordinated. Two specs can each be internally correct and still disagree about the shape of a shared data structure, the owner of a shared resource, or the name of a shared concept.
 
-This skill audits the entire set of analysis specs as a system. It produces five things:
+Read [the shared executable-evidence contract](../spec-work-tour/references/executable-evidence.md). This skill audits the entire set as an independent pre-code evidence gate. It produces five things:
 
 1. An **implementation order** — a dependency-driven sequence for migration, written as a numbered checklist.
 2. **Pairwise integration checks** — for each (depender, dependee) edge in the dependency graph, verify the contracts at the module boundary agree.
@@ -249,7 +249,7 @@ You are performing a single global terminology audit across all SpecOps analysis
       ]
     }
   ],
-  "deferred": [<terms where the canonical choice needs a human decision, with context>]
+  "deferred": [<unresolved terms, evidence exhausted, and exact blocking decision/context>]
 }
 ```
 
@@ -307,7 +307,7 @@ When all subagents return:
 6. **Summarize for the user.**
    - The implementation-order.md is ready as a checklist.
    - The coherence audit found N issues across the set; M resolved, K deferred.
-   - The audit completes regardless of deferrals; the spec set is now internally coherent except for the K deferred items, which are logged with context.
+   - The audit artifact completes regardless, but implementation readiness is blocked while material deferrals or cycles remain.
 
 ---
 
@@ -317,8 +317,8 @@ When all subagents return:
 - **Pairwise is the primary axis; cross-cutting checks fill the gaps.** Most integration mismatches surface as pairwise findings. The data model, ownership, and terminology passes catch what pairwise structurally cannot see (N-way conflicts, global naming, exclusive ownership).
 - **Patches are minimal and targeted.** This skill applies many small edits across many specs, not large rewrites. Each patch has a single rationale and a single source check that produced it.
 - **Source code is the tiebreaker.** When two specs disagree about a shared structure or behavior and neither is obviously right, subagents may read the legacy source to determine the canonical answer.
-- **The glossary is a deliverable.** Even if no terminology patches are applied, the glossary in the coherence report is a reusable artifact for downstream implementation specs and code review.
-- **Deferral is uncommon but real.** Coherence issues that need a design decision (e.g., "two modules both reasonably claim to own the status directory; which is canonical?") are logged with context per the same deferral pattern as the other skills.
+- **The glossary is a deliverable.** Even if no terminology patches are applied, it is reusable evidence for downstream implementation specs and audits.
+- **Deferral is uncommon but blocking.** Exhaust source ownership, actual callers, runtime behavior, and established precedent. If a material canonical choice remains unresolved, emit a blocked machine verdict rather than assigning the decision to future review.
 - **Re-audit after material changes.** After any spec is regenerated or significantly edited, the coherence audit may need to re-run. Tracking the count over time is a useful signal: a stable, low number means the spec set is converging toward coherence.
 - **Run before deriving implementation specs.** The output of this skill is the input to the implementation-spec generation phase. Implementing from incoherent analysis specs guarantees the incoherence propagates into implementation specs and then code.
 
@@ -350,7 +350,7 @@ This skill operates on the full set of analysis specs after they're individually
 1. Generate analysis spec from each module's legacy source.
 2. **specops-ambiguity-audit** — hardens each analysis spec individually (per-spec).
 3. **specops-spec-coherence** (this skill) — audits the set as a system; produces implementation-order.md and patches cross-spec gaps.
-4. Domain experts verify the now-coherent analysis spec set.
+4. Independent coherence evidence establishes readiness; optional domain input can add intent but is not the verification gate.
 5. Generate implementation specs in dependency order (per implementation-order.md).
 6. **specops-spec-conformance** — verifies each implementation spec faithfully derives from its analysis spec.
 7. Generate code from verified implementation specs.

@@ -8,12 +8,12 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "5"
+  version: "6"
 ---
 
 # Spec Architect Critics — Expert-Perspective Design Review
 
-You are conducting an architecture review. Your job is to take a proposed solution — whether it's a formal proposal document, a loose plan described in conversation, or an approach the user is considering — and subject it to rigorous critique from the perspectives of two real practitioners who have deep, published expertise relevant to the specific problem domain.
+You are conducting an independent architecture and evidence critique. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md), then subject the proposed solution and its proof strategy to rigorous challenge from two relevant practitioner perspectives.
 
 This is not a rubber stamp. The value of this skill is in finding flaws, blind spots, over-engineering, under-engineering, and unstated assumptions _before_ code gets written. Default to rigorous challenge, but do not invent flaws just to make the review sound tough. If a proposal is strong, say so plainly and focus on the tradeoffs and open questions that still matter.
 
@@ -42,7 +42,7 @@ Every proposal makes implicit and explicit claims. Pull them out:
 - **"This will scale / perform / be maintainable"** — Based on what evidence?
 - **"These are the only tradeoffs"** — Are they? What's been left unsaid?
 - **"Every component is necessary"** — Would something already in the codebase, the stdlib, the platform, or a smaller design cover it?
-- **"This evidence would prove it works"** — Would the proposal's Verification & Evidence plan actually convince a skeptical reviewer, or is it ritual?
+- **"This evidence would prove it works"** — Can the proposed gates falsify the claims and reject the named failure hypotheses, or is the plan circular, stale-prone, or ritual?
 
 Write these claims down explicitly. They become the targets for critique.
 
@@ -134,7 +134,7 @@ Identify anything neither expert would catch because it falls outside both their
 Apply these two lenses on every critique, regardless of which experts were selected:
 
 - **Over-engineering scan.** Walk the proposal's components — modules, abstractions, dependencies, layers, config surfaces — and flag any with no stated requirement behind it, any that duplicates existing code, stdlib, or platform behavior, and any built for a hypothetical future (see `~/.agents/rules/minimal-implementation.md`). "Remove X" is a first-class recommendation, ranked like any other. Check the Deliberate Omissions list for scope that crept back in elsewhere in the proposal.
-- **Evidence sufficiency.** Judge the proposal's Verification & Evidence and Pre-mortem sections as a skeptical reviewer: does the planned evidence prove the right problem is solved, correctly and safely — or only that tests pass? Is the pre-mortem credible or perfunctory? Name the missing evidence concretely (an integration test crossing the changed seam, a screenshot set, a migration dry-run, a rollback story).
+- **Evidence sufficiency.** Independently audit the Evidence Posture, claims, failure hypotheses, and proposed gates. Check risk calibration, every crossed boundary, negative paths, production reachability, independence, commit binding, operational/rollback proof, and QA output. Name which unsafe implementation each gate rejects. A plan that relies on later human review or required manual QA is incomplete. Add concrete missing `FH-*` hypotheses and evidence forms.
 
 ### 4e. Priority ranking
 
@@ -227,8 +227,8 @@ concrete removal or reuse recommendation.]
 
 ### Evidence Sufficiency
 
-[Whether the planned verification evidence and pre-mortem would convince a
-skeptical reviewer; the specific missing evidence if not.]
+[Whether the posture and CL/FH/EV plan can independently falsify the material
+claims and establish deployment safety; the specific missing or circular gates.]
 
 ## Recommendations
 
