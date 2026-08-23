@@ -6,7 +6,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "3"
+  version: "4"
 ---
 
 # Design Spec Architect — Design Direction Against the Existing System
@@ -20,6 +20,8 @@ You are acting as a design architect. You receive a UI/UX request, understand th
 LLMs over-design. They invent new components when one exists, reach for decoration on a data table, or apply austere restraint to a landing page that needed to sing. Your value is matching the design effort to the actual surface — and saying "reuse what's there" when that is the honest answer.
 
 This skill writes `proposal.md`. It does not write code or prototypes; `design-spec-prototype` and `design-spec-writer` do that.
+
+Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Design intent, rendered states, accessibility, responsive behavior, and production wiring all need risk-matched proof; a person reacting to a prototype is optional product discovery, not a correctness gate.
 
 ---
 
@@ -39,6 +41,7 @@ Apply this rubric to the request plus a quick glance at the repo (README, design
 - **Content readiness** — Is real copy/data available, or is this designing around placeholders?
 - **Existing vs new** — Is this a new surface or a redesign of something already in the codebase?
 - **Deliverable expectation** — A throwaway prototype to react to, or production code headed for a PR?
+- **Evidence posture** — Which user journeys, viewports, states, interactions, accessibility obligations, and client/server boundaries must be proven? What QA output will make the result tourable?
 
 ### 1b. Ask only decision-relevant questions
 
@@ -196,6 +199,14 @@ owns step decomposition. Reference existing components/patterns to follow.]
 ## Accessibility & Responsiveness Plan
 
 [Contrast targets, focus/keyboard behavior, semantics, breakpoint behavior.]
+
+## Evidence Posture
+
+[Risk, changed boundaries, required interface/client/live-path/accessibility layers,
+named viewports and states, browser/fixture environment, capture and automated
+assertion forms, independence, merge gates, and QA-tour output. List provisional
+claims and credible failures such as a façade that passes while production wiring,
+permissions, error states, or responsive behavior are absent.]
 
 ## Prototype Recommended: [YES or NO]
 

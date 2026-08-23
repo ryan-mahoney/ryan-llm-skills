@@ -9,18 +9,18 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "17"
+  version: "18"
 ---
 
 # Spec Subspec Write
 
-Produce a compact, code-grounded execution card for exactly one step of a reviewed spec. The parent `spec.md` owns the objective, rationale, public contracts, and acceptance coverage; do not copy them into a second plan. This skill is normally a deep-planning fallback because `spec-prepare` writes routine cards directly.
+Produce a compact, code-grounded execution card for exactly one step of a prepared spec. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). The parent `spec.md` and `evidence-plan.json` own intent and proof obligations; do not copy them into a second plan.
 
 ## Leaf-Agent Boundary and Ownership
 
 This skill is a leaf planning task. Do not spawn, delegate to, or coordinate another subagent.
 
-Write only the assigned **step subspec**. This invocation owns exactly one canonical `step-<NNN>-subspec.md`. Never edit `spec.md`, `spec-steps.json`, `criteria.md`, `invariants.md`, `spec-prepare.md`, `preparation.json`, another step's subspec, or production/test code.
+Write only the assigned **step subspec**. This invocation owns exactly one canonical `step-<NNN>-subspec.md`. Never edit `spec.md`, `spec-steps.json`, `evidence-plan.json`, `criteria.md`, `invariants.md`, `spec-prepare.md`, `preparation.json`, another step's subspec, or production/test code.
 
 The parent `spec-prepare` agent is the only writer of shared preparation artifacts and the only authority that may correct or renumber the spec. Report a mismatch through the planning verdict; do not improvise a new design.
 
@@ -32,7 +32,7 @@ Write the complete Markdown body to a temporary file in the destination director
 
 ## Resolve and Ground the Step
 
-Read the full spec, then isolate the assigned numbered step including its objective, files, contracts, tests, `Covers:`, `Complexity:`, and `Visual:` tags. Confirm that the injected step number exists and that the current spec bytes match the injected hash.
+Read the full spec and `evidence-plan.json`, then isolate the assigned step including its objective, files, contracts, tests, `Covers:`, `Complexity:`, `Visual:`, and `Evidence:` tags. Confirm the injected step exists, the spec hash matches, and the step owns exactly the EV items recorded in both machine indexes.
 
 Ground only the unresolved risk that caused escalation:
 
@@ -156,6 +156,14 @@ After the two machine blocks, include only:
 Name each file, symbol or public shape, and add/change/remove action. Include reuse-search or external-behavior evidence only when it resolved the escalated risk.
 
 Treat these as the best expected starting targets, not an exhaustive list of files the implementation worker may touch.
+
+For each owned EV item include exactly one line:
+
+```txt
+Evidence: EV-<n> — rejects FH-<n> for CL-<n> — <exact command/procedure> — <environment> — <artifact path> — proof boundary: <honest limit>
+```
+
+The command/procedure must be capable of rejecting the named failure. Human review and required manual QA are invalid procedures. A QA walkthrough may be an artifact, but it must identify the automated gates establishing correctness.
 
 For every `Visual: yes` step, include this exact target line using the same
 checkout-relative entry-file path as `spec.md`, or `none` when preparation found no

@@ -9,12 +9,12 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "18"
+  version: "19"
 ---
 
 # Spec Run
 
-Execute the package produced by `spec-prepare` without asking the user questions. Treat preparation as the best available launch context, not a permission system. The branch and worktree are disposable review environments; prefer concrete, committed progress over stopping because repository reality differs from the plan.
+Execute the package produced by `spec-prepare` without asking questions. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Preparation is immutable intent and evidence provenance; implementation may adapt to repository reality, but it may not execute against stale or mismatched prepared inputs.
 
 Run steps sequentially. Dispatch one dedicated implementation agent per step when the harness supports subagents; otherwise follow `spec-step-run` directly for one step at a time. Do not batch steps or commits.
 
@@ -24,7 +24,7 @@ Resolve an explicit `.specs/<feature>/spec.md` or `.specs/<feature>/` argument f
 
 Read:
 
-- sibling `spec.md` and `spec-steps.json`;
+- sibling `spec.md`, `spec-steps.json`, and `evidence-plan.json`;
 - sibling `spec-prepare.md` and `preparation.json`;
 - every subspec bound by the manifest;
 - optional bound `criteria.md` and `invariants.md`;
@@ -32,9 +32,9 @@ Read:
 
 ## Inspect Preparation
 
-Before touching production code, inspect the strict version 1 preparation manifest as `spec-prepare` publishes it. Recompute and compare lowercase SHA-256 hashes for `spec.md`, `spec-steps.json`, `spec-prepare.md`, every declared subspec, and optional criteria/invariants. Record whether exactly one `ready` subspec exists for every indexed step and whether extra indexed steps exist.
+Before touching production code, inspect the strict version 2 preparation manifest. Recompute and compare lowercase SHA-256 hashes for `spec.md`, `spec-steps.json`, `evidence-plan.json`, `spec-prepare.md`, every declared subspec, and optional criteria/invariants. Confirm exactly one `ready` subspec exists for every indexed step and evidence ownership matches all three sources.
 
-Repeat this validation before every step dispatch and pass discrepancies to the worker. A missing, invalid, stale, incomplete, or partially published package does not stop execution when the intended step can be resolved from readable artifacts and repository context. Never repair or republish preparation during `spec-run`; let `spec-step-run` preserve the plan as evidence, adapt locally, and record the drift.
+Repeat validation before every step dispatch. A missing, invalid, stale, incomplete, or partially published package blocks further implementation: report the exact mismatch and require `spec-prepare` to republish. Never repair preparation during `spec-run`. Already committed step artifacts remain intact.
 
 ## Preserve Preparation As Evidence
 
@@ -76,20 +76,24 @@ Do not rerun commands merely to duplicate the implementer's evidence. Carry scop
 
 ## Completion Gate
 
-After all indexed steps have run, map each acceptance criterion to the resulting commits and verification evidence, each Merge Evidence Plan item (`EV-n`) to its produced artifact, and each pre-mortem item (`PM-n`) to its disposition as actually implemented. Record missing coverage for final refinement; do not discard commits, ask the user, or require fresh preparation merely because the original mapping was incomplete.
+After all indexed steps have run, map each acceptance criterion and claim to its commits and verification results, each Executable Evidence Plan gate (`EV-n`) to its produced artifact, and each pre-mortem item (`PM-n`) to its implemented disposition. Record missing coverage for final refinement; do not hide gaps or discard useful commits.
 
-Then atomically write `.specs/<feature>/merge-evidence.md` — the assembled proof of merge-readiness, independent of code review. Level-1 heading first, then:
+Then atomically write both `.specs/<feature>/merge-evidence.md` and strict version 1 `.specs/<feature>/merge-evidence.json`. These are the pre-audit evidence assembly bound to the exact current HEAD; final readiness still requires independent branch audit/refinement and a work tour.
+
+The Markdown begins with a level-1 heading and contains:
 
 - **What was built** — one paragraph plus the commit list.
 - **Right problem** — each acceptance criterion mapped to the requirement it serves and the commits/tests covering it.
 - **Correct** — the verification evidence: exact commands and outcomes from step learnings, test files added, red/green sequences for test-first steps.
 - **Safe** — each pre-mortem item with its implemented disposition; residual accepted risks stated plainly.
-- **Evidence index** — each EV item with its artifact path and status (`produced` | `missing`).
-- **Manual testing** — the steps a human should run before or after merge, drawn from the manual verification guide when one exists, or `none required` with the reason.
+- **Evidence index** — each EV item with claim/failure mapping, exact command, environment, artifact, status, observed result, proof boundary, and bound commit.
+- **QA tour input** — deterministic entrypoints, fixtures, scenarios, expected results, automated EV coverage, captures, and optional exploration-only questions. No required manual QA.
 - **Gaps** — missing coverage, unproduced evidence, and open findings carried to final refinement.
 
-State gaps honestly; this document is an argument from evidence, not a promotion. Final correctness review belongs to `spec-branch-refine`; do not perform it inside `spec-run`.
+`merge-evidence.json` mirrors every CL/FH/EV item from `evidence-plan.json`, adds actual statuses, commands/outcomes/artifacts/proof boundaries, step commits, QA inputs, deployment facts, gaps, and the full current `commit`. Use `readyForAudit: true` only when every planned gate was produced and passed; this is not the deploy verdict.
+
+State gaps honestly. Then run `spec-branch-refine`. After it passes, invoke `spec-work-tour` to create `work-tour.json` and `work-tour.html`. A spec execution is not complete until the final tour exists and is bound to the audited HEAD. If refinement or the tour is blocked, preserve the outputs and report the blocking evidence.
 
 ## Report
 
-Report the spec and preparation manifest, every step's preserved subspec, learning, commit or no-artifact result, changed files, exact commands/outcomes, fix count, criterion coverage, the `merge-evidence.md` path with its EV/PM coverage, and remaining findings or risks. Do not write GitHub artifacts or add attribution.
+Report the spec and preparation manifest, every step result, exact commands/outcomes, criterion/claim/failure/gate coverage, both merge-evidence paths, branch-audit verdict, both work-tour paths, deploy verdict, and remaining gaps/risks. Do not write GitHub artifacts or add attribution.

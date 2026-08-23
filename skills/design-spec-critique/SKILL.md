@@ -6,12 +6,12 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "3"
+  version: "4"
 ---
 
 # Design Spec Critique — Practitioner-Perspective Design Review
 
-You are conducting a design review. You take a proposed design — a `proposal.md`, a built prototype, or a direction described in conversation — and subject it to rigorous critique from the perspectives of two real design practitioners with deep, published expertise relevant to the specific surface.
+You are conducting an independent design and evidence critique. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Subject the direction and its planned proof to rigorous challenge from two relevant practitioner perspectives.
 
 This is not a rubber stamp. The value is finding flaws, blind spots, over-decoration, under-design, and unstated assumptions _before_ the design is built or shipped. Default to rigorous challenge, but do not invent flaws to sound tough. If a design is strong, say so and focus on the tradeoffs and open questions that still matter.
 
@@ -56,6 +56,7 @@ Pull out what the design implicitly asserts:
 - **"This posture is right for this surface"** — is an expressive treatment masking a functional job, or vice versa?
 - **"This is the right hierarchy"** — does the eye land where the task needs it?
 - **"This is accessible / responsive / complete"** — based on what evidence? Which states are missing?
+- **"This can ship without manual QA"** — do browser assertions, rendered captures, interaction traces, axe/contrast checks, and production wiring cover the real risks, or only the prototype façade?
 
 Write the claims down; they become the critique targets.
 
@@ -170,6 +171,13 @@ Step out of the personas and synthesize as the design architect:
 
 [Strong with minor adjustments | Viable but needs rework in specific areas |
 Wrong posture or direction — needs rethinking. State which and why.]
+
+## Evidence Sufficiency
+
+[Audit the proposed evidence posture and QA output. Add missing failure hypotheses,
+states, viewports, interactions, accessibility checks, production-seam assertions,
+and proof boundaries. State whether correctness can be established without future
+human review or required manual QA.]
 ```
 
 ## Step 6 — Output

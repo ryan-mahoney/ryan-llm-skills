@@ -7,12 +7,12 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "10"
+  version: "11"
 ---
 
 # Design Spec Writer
 
-Turn an approved design direction into the same deterministic eight-section contract produced by `spec-write`, specialized for design tokens, components, states, interaction, and accessibility. Keep the complete standalone package in `.specs/<feature>/`.
+Turn an approved design direction into the same deterministic implementation and executable-evidence contract produced by `spec-write`, specialized for design tokens, components, states, interaction, accessibility, and production wiring. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md).
 
 The local `spec.md` is canonical. This skill writes the local spec only and never creates, edits, or renames around GitHub issues.
 
@@ -29,6 +29,7 @@ Write the completed spec and step index to the resolved spec folder:
 ```txt
 .specs/<feature>/spec.md
 .specs/<feature>/spec-steps.json
+.specs/<feature>/evidence-plan.json
 ```
 
 Write every artifact atomically. Begin Markdown artifacts with a level-1 heading and write machine JSON with a trailing newline. `.specs/` may be gitignored; do not stage or commit it unless the repository explicitly tracks specs.
@@ -125,19 +126,29 @@ A numbered list (`AC-1`, `AC-2`, …) of observable, automatable design assertio
 - **Accessibility** — concrete contrast ratios (≥ 4.5:1 body text for AA), roles/labels, keyboard operability, focus visibility, axe-clean where a tool exists.
 - **Copy/CTA** — verb-led labels, one primary action per view, per `cta-design.md`.
 
-Make each criterion verifiable without subjective judgment. Prefer assertions checkable by the project's existing test tooling — a Storybook story, a Playwright/visual snapshot, a jest-axe assertion. When the repo has no such harness, state the criterion as a precise, observable visual check (exact value, exact breakpoint, exact state) for final branch review or a human to verify — do not invent a test framework the repo lacks. Include non-ideal states; "renders the empty state with the documented copy and CTA" is a criterion.
+Make each criterion verifiable without subjective judgment. Prefer assertions checkable by existing test tooling — Storybook, Playwright, Testing Library, axe, or deterministic computed-style/contrast checks. When the repo lacks a required harness, add the smallest justified harness step or record a blocking automation gap; do not silently make a human the verifier. Include non-ideal states.
 
-### 6. Notes
+### 6. Executable Evidence Plan
+
+Record the evidence posture and stable `CL-*`, `FH-*`, and `EV-*` graph using the
+shared contract. Every AC maps to a claim; every claim has a credible failure and a
+risk-matched gate. For UI work, distinguish prototype-intent evidence from production
+proof. Name browser fixtures, routes, states, interactions, viewports, accessibility
+assertions, screenshots, production client/server seams, QA-tour artifacts, commands,
+environments, independence, owner step, and proof boundaries. Human review and required
+manual QA are not gates.
+
+### 7. Notes
 
 Trade-offs with rationale, posture rationale, risks, what was deferred from critique and why, and any prototype→production gaps (what the prototype faked that production must do for real).
 
-### 7. Implementation Steps
+### 8. Implementation Steps
 
 A flat, numbered, sequential list of deterministic engineering tasks. For each: **What to do** (exact files/changes), **Why** (tie to architecture or an AC), **Signatures/contracts** (component prop shapes when adding/changing interfaces), **Tests** (concrete assertions and target files — Storybook stories, Playwright/visual snapshots, jest-axe, Testing Library; behavior and states, not implementation), **Coverage** (`Covers: AC-3, AC-7`), **Complexity** (`Complexity: easy`), and **Visual design** (`Visual: yes` or `Visual: no`). When a visual reference exists, every `Visual: yes` step also repeats `Visual reference: <exact checkout-relative file path>` and requires the implementation to inspect and match it rather than recreate the design. Every AC must be covered by at least one step; a step covering no AC must trace to a stated architectural need.
 
 Number the steps with sequential integers starting at 1 (1, 2, 3, …) as one continuous list. Do not group steps under "Phase" headings and do not use tiered or decimal numbers (`1.1`, `2.3`, `3.2.1`). Even when the design is organized in phases, the Implementation Steps stay one flat integer sequence — the external task-runner addresses steps by this number. A phase *spec* (one of several `spec.md` files for a multi-phase design, per Phase specs above) still keeps its own flat 1..N list.
 
-Each step's `Covers:`, `Complexity:`, and `Visual:` tag lines sit together at the end of the step. Score complexity by *this step's own* work, applying the rubric the same way every time so the label is reproducible across runs. The system uses per-step tags to route each step to an appropriately strong implementation model, so score every step. Anchor the choice on scope (files/components this step touches), novelty (new patterns vs. reusing existing components/tokens), domain difficulty (the design and a11y depth this step exercises), and integration risk (state wiring, motion, cross-component blast radius):
+Each step's `Covers:`, `Complexity:`, `Visual:`, and owned `Evidence:` tag lines sit together at the end. Every EV item has exactly one owner step; omit `Evidence:` only when the step owns none. Score complexity by *this step's own* work, applying the rubric the same way every time so the label is reproducible across runs. The system uses per-step tags to route each step to an appropriately strong implementation model, so score every step. Anchor the choice on scope (files/components this step touches), novelty (new patterns vs. reusing existing components/tokens), domain difficulty (the design and a11y depth this step exercises), and integration risk (state wiring, motion, cross-component blast radius):
 
 | Tier | When |
 |---|---|
@@ -161,9 +172,9 @@ Step ordering for design work:
 - **States & interaction** — empty/loading/error wiring, focus, motion.
 - **Accessibility & verification tests last** — a11y assertions, visual/interaction snapshots.
 
-Exclude: manual QA checklists, documentation-only tasks, running the entire test suite, formatting/lint-only chores, and git/PR process steps.
+Exclude: manual QA as a correctness gate, documentation-only tasks except required QA/evidence artifacts, running the entire suite as ritual, formatting/lint-only chores, and git/PR process steps.
 
-### 8. Applicable Rules
+### 9. Applicable Rules
 
 List the selected rule files as resolvable paths, each with a one-line reason:
 
@@ -201,7 +212,8 @@ The file is a derived index, not a second source of truth — `spec.md` stays ca
       "name": "Add color and spacing tokens",
       "description": "Define the new design tokens and Tailwind config entries in tailwind.config.ts.",
       "difficulty": "easy",
-      "visualDesign": true
+      "visualDesign": true,
+      "evidence": ["EV-1"]
     }
   ]
 }
@@ -215,6 +227,7 @@ Field contract:
 - `description` — one front-loaded, plain-language sentence summarizing what the step does.
 - `difficulty` — exactly one of `easy`, `medium`, `hard`, identical to the step's `Complexity:` tag.
 - `visualDesign` — boolean; `true` when the step implements user-facing visual design, identical to the step's `Visual:` flag (`Visual: yes` → `true`, `Visual: no` → `false`).
+- `evidence` — ordered array matching the step's `Evidence:` tag, or `[]`.
 
 Write `spec-steps.json` only after the spec body is final, so the index matches the committed step list, numbering, and complexity tags. Exactly one entry per step, in order.
 
@@ -222,6 +235,7 @@ Write `spec-steps.json` only after the spec body is final, so the index matches 
 
 1. Atomically write the final Markdown body to `.specs/<feature>/spec.md`, including the checkout-relative footer and per-step tags.
 2. Atomically write the derived sibling `spec-steps.json`, with one minimal entry per step and exact tag parity.
-3. Report one compact routing summary: `outcome: written`; spec and step-index paths; total/easy/medium/hard/visual step counts; proposal/critique/prototype inputs used; and `next: spec-prepare`.
+3. Add an **Executable Evidence Plan** section to `spec.md` with the evidence posture and stable CL/FH/EV graph. Atomically write strict version 1 sibling `evidence-plan.json`, cover every AC, and run `node ~/.agents/skills/spec-work-tour/scripts/validate-evidence-plan.mjs <path>`; include interface, client, live-path, accessibility, visual-state, and QA-tour gates as applicable.
+4. Report one compact routing summary: `outcome: written`; all three paths; posture and claim/failure/gate counts; step counts; inputs used; and `next: spec-prepare`.
 
 Do not implement the plan. Do not add Co-Authored-By trailers, "Generated with" footers, or any AI model attribution.

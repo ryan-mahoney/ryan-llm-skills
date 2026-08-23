@@ -7,12 +7,14 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "4"
+  version: "5"
 ---
 
 # Design Spec Prototype
 
 Build a fast, throwaway-OK prototype the user can open in a browser and react to, and serve it on localhost. The prototype is a **façade** — it shows the design, not a working system. An approved prototype becomes the visual source of truth that `design-spec-writer` later translates into a real spec.
+
+Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Prototype captures are evidence of visual intent and rendered-state feasibility only; they do not prove production data, permissions, integration, or deployment safety.
 
 ## Non-Interactive Operation
 
@@ -93,6 +95,12 @@ reads correctly and renders as raw HTML.
    normal — this is a correctness loop, not open-ended polish.
 5. If the prototype cannot be captured at all, leave the server running and
    report `served` with the visual check recorded as not performed, and why.
+
+Retain the final inspected captures plus a small `prototype-evidence.json` under
+`.specs/<feature>/evidence/`. Bind each capture to its prototype file hash, viewport,
+state/interaction, capture command, observed result, and proof boundary. This becomes
+input to critique, spec writing, and the final QA tour. A missing required capture is a
+prototype evidence gap, not something a later person is expected to notice manually.
 
 ## Iterate
 

@@ -6,14 +6,14 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "1"
+  version: "2"
 ---
 
 # SpecOps Integration Test Generation
 
 Unit tests verify modules in isolation. Spec-driven verification skills (ambiguity, conformance, drift) verify descriptions of behavior. Neither catches a class of bugs the migration is most exposed to: behaviors that emerge only when modules interact across real seams — file system, subprocess lifecycle, SSE streams, job state transitions, retry interactions, lock contention.
 
-This skill generates integration tests for **normative application runs** — pathways the system exercises in normal use, end-to-end across multiple modules. It does not regenerate unit-test coverage at a higher level; it tests the seams unit tests cannot reach.
+Read [the shared executable-evidence contract](../spec-work-tour/references/executable-evidence.md). This skill generates integration gates for normative live paths and names the CL/FH/EV items each path proves.
 
 The skill operates in three phases: discover pathways from specs and code, discover the project's existing test infrastructure (mocks, fixtures, conventions), and generate tests that compose existing mocks against real seams.
 
@@ -187,7 +187,7 @@ You are generating one integration test for a SpecOps migration. The test verifi
 # Your task
 1. Read the relevant spec sections to understand the normative outcome and any behavioral contracts (ordering, atomicity, idempotency) the test should verify.
 2. Read the relevant migrated code to understand the actual call interfaces.
-3. Read the existing mocks you'll be reusing — confirm they expose what this test needs. If they don't, note this as a finding rather than extending them; mock extensions need human review.
+3. Read existing mocks. If a missing capability is local and safe, add the smallest scoped fixture/mock boundary and verify it; otherwise mark the EV gate blocked. Human review is not the fallback.
 4. Write one integration test file.
 
 # Test structure requirements
@@ -207,7 +207,7 @@ Return a JSON object only:
   "test_file_content": "<complete file contents — the actual test code>",
   "mocks_used": ["<mock name>", ...],
   "fixtures_used": ["<fixture name>", ...],
-  "missing_infrastructure": "<if any mock or fixture you'd need doesn't exist, describe what's missing — do not extend mocks; flag for human>",
+  "missing_infrastructure": "<missing mock/fixture boundary and whether you added the smallest safe scoped substitute; otherwise this blocks the gate>",
   "deferred": <true | false>,
   "defer_reason": "<if deferred — usually because required infrastructure is missing>"
 }
@@ -233,7 +233,7 @@ When all subagents return:
 
 2. **Place each new test** at the path determined in Phase 1's convention discovery.
 
-3. **Log deferred items.** Tests with `deferred: true` (typically: required mock infrastructure is missing) get logged in the plan with full context — the test is *not* generated, but the gap is recorded so the human can extend infrastructure or decide to skip the pathway.
+3. **Log blocked items.** A required pathway without infrastructure is a blocked EV gate. Record the missing boundary and smallest remediation; do not downgrade it because a person could test or extend it later.
 
 4. **Update `integration-test-plan.md`** with the run results:
 
@@ -253,7 +253,7 @@ When all subagents return:
      - <DD-IT-N entries with context>
    ```
 
-5. **Run the test suite.** If the project's test command is well-known and lightweight, attempt to run only the newly-added integration tests to confirm they execute (not necessarily pass — failing tests against incomplete code are expected during migration). Capture the result. If running the suite is heavy or unclear, skip this step and tell the user to run it.
+5. **Run focused tests.** Run every newly added integration gate. A failure or unavailable required command is blocked evidence, not an expected final state. Capture commit, command, environment, outcome, artifact, rejected hypothesis, and proof boundary in a machine result for the final work tour.
 
 6. **Summarize for the user.**
    - Counts: pathways found, tests generated, tests skipped (idempotency), deferred.
@@ -268,7 +268,7 @@ When all subagents return:
 - **Run end-to-end without stopping.** Phases 1–4 chain automatically. The user reviews artifacts asynchronously.
 - **Append-only across runs.** Generated tests never get modified or deleted by re-runs of this skill. The user owns the tests once they're written. The skill only adds tests for pathways it hasn't tested before. This means tests can be hand-edited safely without losing the edits on re-run.
 - **Match project conventions exactly.** The skill discovers and matches; it does not impose. If the project uses jest with `__tests__/` colocated, the integration tests use jest with a parallel `__tests__/integration/` directory. The skill never argues with the project's choices.
-- **Reuse mocks, don't extend them.** If a pathway needs a mock that doesn't exist or doesn't expose what's needed, the test is deferred with a note about missing infrastructure. Extending mock libraries is a human decision (the new mock affects all tests using it); the skill flags but doesn't act.
+- **Reuse mocks first.** Add a minimal scoped fixture only when its behavior is clear and locally verifiable; otherwise block the gate rather than assigning safety to a human.
 - **Normative, not exhaustive.** Each pathway gets one test that exercises the typical case. Edge cases, failure modes, and parameterized variants are not the goal here — those belong in unit tests of the affected module. If a spec lists 5 distinct error modes, that's 5 unit tests, not 5 integration tests.
 - **Spec gaps and scope creep are findings, not problems.** A pathway described in specs but not in code means the migration isn't done with that pathway. A seam in code but not in specs means either the spec is incomplete or the code grew beyond intent. Both are useful surface area for review; neither blocks test generation for the other pathways.
 - **Tests are documentation.** Each test header references its pathway ID and spec sources. A new developer reading the integration test suite sees, in plain form, what the system's normative behaviors are. This is a downstream benefit of the spec-driven approach.
@@ -304,7 +304,7 @@ Updated pipeline ordering:
 3. `specops-spec-coherence` — cross-spec consistency, implementation order.
 4. `specops-dependency-survey` — profile target dependencies.
 5. `specops-dependency-graft` — apply profiles to specs.
-6. Domain experts verify the now-modernized analysis spec set.
+6. Independent ambiguity/coherence evidence establishes analysis readiness; domain input is optional context.
 7. Generate implementation specs in dependency order.
 8. `specops-spec-conformance` — implementation specs faithful to analysis.
 9. Generate code from implementation specs (with unit tests as part of the code-gen output).

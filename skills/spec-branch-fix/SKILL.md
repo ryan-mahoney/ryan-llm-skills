@@ -1,6 +1,6 @@
 ---
 name: spec-branch-fix
-description: This skill should be used when the user or the spec-branch-refine loop asks to fix, apply, or act on a branch correctness review for one iteration. It consumes .specs/<feature>/reviews/branch-<i>-review.md, fixes or dismisses each finding, writes the matching fix record, verifies the code, and commits code changes. Trigger on "fix the branch review", "apply the branch review", "address the branch findings", or "spec branch fix".
+description: Fix one iteration of branch code or executable-evidence findings, reproduce affected gates, record every decision, and commit coherent corrections for independent re-audit.
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "8"
+  version: "9"
 ---
 
 # Spec Branch Fix
@@ -24,6 +24,8 @@ fixes the actionable findings across the branch, and records its decisions in
 The two skills are coupled **only** through the review file, and this skill never
 re-reviews — `spec-branch-refine` runs the next `spec-branch-review` as the
 independent check that fixes landed.
+
+Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Evidence findings are first-class: correct the implementation, test/gate, artifact, claim mapping, or proof boundary that made the evidence invalid, then reproduce the affected gate.
 
 ## Operating Context
 
@@ -82,7 +84,7 @@ suppresses that signature:
 |---|---|---|
 | `false-positive` | The finding is wrong. | Yes |
 | `intentional` | The code is deliberate as written. | Yes |
-| `accepted-risk` | Real, but accepted for now. | Only with `approved: true` on the decision |
+| `accepted-risk` | Real, but explicitly accepted in the prepared spec/evidence plan. | Only with `approved: true` and a source citation |
 | `deferred` | Real, but out of scope this pass. | No — keeps surfacing |
 | `unfixable` | Real, but cannot fix without breaking verification. | No |
 
@@ -96,8 +98,7 @@ suppresses that signature:
 - The `findings:` list of every dismissed finding feeds the loop's anti-thrash
   memory: a *suppressing* class stops re-raise; `deferred`/`unfixable` deliberately
   do not, so genuine unresolved bugs keep surfacing instead of being buried.
-- `accepted-risk` suppresses re-raise **only** when you set `approved: true` on that
-  decision — use it only for a risk with genuine sign-off. Without `approved: true`
+- `accepted-risk` suppresses re-raise **only** when the prepared `spec.md` or `evidence-plan.json` already contains that explicit risk decision. Record its source and set `approved: true`; this fixer cannot approve its own residual risk. Without a valid source
   the next review re-raises the finding, which is the safe default.
 
 ## Apply The Fixes
@@ -120,8 +121,8 @@ If a finding's context is unclear, read the relevant source first.
 
 ## Verify
 
-Run the project's relevant tests for the changed code — targeted where possible,
-broadening to the suite the changes plausibly affect. The test run is the oracle.
+Run the project's relevant tests and every affected EV gate — targeted where possible,
+broadening to the suite the changes plausibly affect. Tests are evidence, not an infallible oracle; confirm the fixed gate can reject its named failure hypothesis and update generated evidence artifacts honestly.
 Make at most **two** fix-up attempts for a fix that breaks verification. If a
 finding cannot be resolved without breaking the build or exceeding reasonable scope,
 revert that change and dismiss it as `unfixable` (a class that does **not** suppress
@@ -165,6 +166,7 @@ fix:
       decision: dismissed
       dismissal: accepted-risk
       approved: true        # required for accepted-risk to suppress re-raise; omit/false otherwise
+      approval_source: <spec.md or evidence-plan.json location>
       signature: security:src/net.ts:fetchAll:no timeout on outbound call
       note: bounded by upstream gateway; risk accepted for this release
   material_change: true   # false when this iteration changed no code (only dismissals) — the loop's stalled signal
@@ -199,6 +201,12 @@ fix(<scope>): address branch review (iter <iteration>)
 If nothing actionable was fixed (`material_change: false`), there is no code
 change, so a review pass with no code changes produces no commit. Leave the artifacts
 on disk and report their paths.
+
+After a fix commit, reassemble `merge-evidence.json` and `merge-evidence.md` for the new
+HEAD using the original evidence plan plus reproduced affected gates. Mark untouched
+gates stale unless their result remains valid across this exact change and that judgment
+is recorded with a concrete dependency boundary. The next independent audit must never
+consume evidence still bound to the pre-fix SHA.
 
 ## Completion Report
 

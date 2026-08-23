@@ -1,77 +1,87 @@
-# Spec Branch Review
+# Integrated Evidence Audit And Work Tour
 
-The consolidated spec workflow has one correctness boundary after all prepared steps
-are implemented: `spec-branch-refine`. It alternates `spec-branch-review` and
-`spec-branch-fix` until the branch is clean, progress stalls, or the iteration cap is
-reached.
+The standalone spec workflow does not depend on human code review. Its final authority is a commit-bound chain from requirement to falsifiable claim, credible failure hypothesis, executable gate, observed result, independent integrated audit, and deployment verdict.
 
-Per-step judges, reviews, and fix passes no longer exist. `spec-run` performs only
-mechanical verification of the immutable contracts produced by `spec-prepare`.
+`spec-branch-refine` alternates `spec-branch-review` and `spec-branch-fix` until the implementation and its evidence are proven or the loop is honestly blocked. A proven pass invokes `spec-work-tour`, which emits the required machine verdict and HTML tour. A PR distributes that case; it is not where safety is expected to emerge.
 
-## Artifact Locations
-
-Spec and review artifacts live together in the standalone feature package:
+## Artifact Package
 
 ```text
 .specs/<feature>/
+├── proposal.md
+├── critique.md                         # optional challenge stage
 ├── spec.md
-├── spec-prepare.md
-├── criteria.md                 # optional prose guardrails
-├── invariants.md               # optional live invariants
-├── step-<NNN>-subspec.md       # immutable prepared plans
-├── step-<NNN>-learning.md      # execution evidence
 ├── spec-steps.json
-├── preparation.json
-└── reviews/
-    ├── branch-<i>-review.md
-    └── branch-<i>-fix.md
+├── evidence-plan.json                  # posture + AC/CL/FH/EV graph
+├── spec-prepare.md
+├── criteria.md                         # optional prose guardrails
+├── invariants.md                       # optional live invariants
+├── preparation.json                    # hashes evidence plan too
+├── step-<NNN>-subspec.md               # immutable execution card
+├── step-<NNN>-learning.md              # command/evidence outcomes
+├── evidence/                            # captures, logs, dry runs, QA inputs
+├── merge-evidence.md
+├── merge-evidence.json                 # pre-audit results bound to HEAD
+├── blockers.md                          # when applicable
+├── reviews/
+│   ├── branch-<i>-review.md             # independent evidence audit
+│   └── branch-<i>-fix.md
+├── work-tour.json                      # final deploy verdict bound to HEAD
+└── work-tour.html                      # architecture/evidence/QA tour
 ```
 
-`.specs/` is usually gitignored. A worktree handoff copies the complete feature
-folder, preserves its relative references, and makes the destination copy active.
+`.specs/` is usually gitignored. Worktree handoff copies the complete package and preserves relative evidence links.
 
-## Review Stages
+## Evidence Audit Stages
 
-`spec-branch-review` reviews the committed merge-base-to-HEAD diff in four stages:
+`spec-branch-review` is read-only and independent of the fixer. It runs:
 
-1. **Stage A — orientation:** resolve the prepared spec, branch range, commit list,
-   prior iteration state, and applicable rules.
-2. **Stage B — per-commit passes:** inspect each commit in isolation for correctness,
-   security, maintainability, and contract inconsistencies.
-3. **Stage C — integrated branch:** inspect the final branch state for producer/consumer
-   agreement, cross-commit interactions, dangling references, duplication, and risks
-   that isolated passes cannot see.
-4. **Stage D — bounded guardrail lens:** compare the branch with prose `Statement:`
-   values from `criteria.md` and live entries in `invariants.md`.
+1. **Orientation and provenance:** resolve the prepared package, exact base/HEAD, commit mapping, evidence posture, hashes, dirty-tree exclusions, and prior decisions.
+2. **Per-commit checks:** inspect each small diff against its step intent for correctness, security, reference integrity, simplification, and local evidence defects.
+3. **Integrated branch checks:** inspect final producer/consumer contracts, real production reachability, cross-step behavior, data/policy boundaries, deployment concerns, and defects hidden by isolated commits.
+4. **Executable-evidence audit:** walk every AC → CL → FH → EV chain, inspect gate relevance and independence, rerun selected gates, and try adversarial cases at crossed boundaries.
+5. **Prepared guardrails:** compare the integrated result with criteria statements and live invariants.
 
-Guardrail mismatches are ordinary structured findings. They do not create a separate
-audit verdict, executable check program, or remediation lifecycle.
-
-The review writes `reviews/branch-<i>-review.md` with a machine-readable YAML block,
-ordinary prose evidence, and either `clean` or `needs-fix`.
+The audit emits ordinary structured findings. `category: evidence` is used when a gate is missing, stale, irrelevant, circular, unreproducible, under-independent, or overclaims its proof boundary. A pass requires all merge-blocking claims proven, no actionable finding, a clean candidate scope, and an audit SHA equal to HEAD.
 
 ## Fix And Convergence
 
-`spec-branch-fix` consumes only the current branch review. For each finding it either:
+`spec-branch-fix` fixes code, tests, gates, artifacts, claim mappings, or proof boundaries and reruns affected evidence. A dismissal is typed. An `accepted-risk` dismissal suppresses recurrence only when the prepared spec/evidence plan already records that explicit decision; the fixer cannot approve its own residual risk.
 
-- applies the smallest scoped correction and verifies the affected behavior; or
-- records a typed dismissal so the refine loop can suppress settled false positives
-  without hiding deferred or unresolved defects.
+`spec-branch-refine` owns recurrence and the iteration cap. It stops:
 
-It writes `reviews/branch-<i>-fix.md` and commits code changes, never review artifacts.
+- **ready** when the audit is proven and `spec-work-tour` renders a ready tour for the same HEAD;
+- **stalled** when no material change is possible and the same required findings remain;
+- **cap** when bounded iterations are exhausted.
 
-`spec-branch-refine` owns cross-iteration state: finding identities, dismissals,
-recurrence, progress, and the cap. It stops when the review is clean, no meaningful
-progress is possible, or the bounded iteration limit is reached.
+Stalled and capped outcomes are blocked evidence cases, never “send it for human review.”
 
-## Ownership Boundaries
+## HTML Work Tour
 
-- `spec-prepare` owns spec correction, prose guardrails, step planning, and the final
-  preparation manifest.
-- `spec-run` and `spec-step-run` own prepared execution and focused verification.
-- `spec-branch-review` owns findings and never edits code.
-- `spec-branch-fix` owns corrections and never rewrites the review verdict.
-- `spec-branch-refine` owns convergence and termination.
+Every implemented spec produces `work-tour.json` and `work-tour.html`. The HTML is a navigable projection of existing evidence, not an ornamental summary. It covers:
 
-Preparation artifacts are immutable during execution and review. Drift in a prepared
-target, command, or hash is a blocker that requires a fresh `spec-prepare` run.
+- requested outcome and exact commit verdict;
+- before/after architecture, boundaries, and decisions;
+- implementation steps, commits, and files;
+- requirement-to-claim-to-gate traceability;
+- rerunnable commands, artifacts, observed results, and honest proof limits;
+- QA entrypoints, deterministic fixtures, ideal/non-ideal scenarios, visual captures, and automated coverage;
+- migrations, configuration, observability, rollback/forward-fix, and residual risks;
+- independent audit provenance and any evidence gaps.
+
+For user-visible work, the QA section makes the implementation easy to explore without making a person's attention part of the safety system. Optional taste or discovery questions are labeled separately from correctness.
+
+## Ownership
+
+- Architecture sets the initial evidence posture and provisional failure hypotheses.
+- Critique attacks solution and evidence sufficiency.
+- Spec writing owns stable AC/CL/FH/EV definitions and `evidence-plan.json`.
+- Preparation code-grounds, corrects, and hashes the implementation/evidence contract.
+- Step execution owns implementation plus assigned evidence and QA artifacts.
+- Branch audit owns independent falsification and never edits code.
+- Branch fix owns corrections and never rewrites the audit verdict.
+- Refine owns convergence and invokes the final tour.
+- Work tour owns final evidence assembly and deployment verdict.
+- PR publication verifies freshness and distributes the already-complete case.
+
+Any prepared-artifact drift blocks execution until `spec-prepare` republishes. Any code change after an audit or tour invalidates their readiness until affected gates, the integrated audit, and the tour are refreshed.

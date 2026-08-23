@@ -1,6 +1,6 @@
 ---
 name: spec-branch-refine
-description: This skill should be used when the user asks to run the end-of-process branch correctness loop — review the whole branch, fix the findings, re-review, and repeat until clean or an iteration cap is reached. The in-process, file-backed replacement for an external review daemon's refine loop. It drives spec-branch-review and spec-branch-fix in alternation, holds the cross-iteration convergence and dedup state, and stops on a clean verdict, on no progress, or at the cap. Run it once after the last implemented step, or standalone at any time. Trigger on "refine the branch", "review-fix loop the branch", "run the branch correctness loop", "iterate review and fix until clean", or "spec branch refine".
+description: Run the final independent branch evidence loop: audit the integrated implementation and claim/gate evidence, fix defects, and re-audit until proven or blocked. Use after implementation and before the required work tour and PR.
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,18 +9,14 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "7"
+  version: "8"
 ---
 
 # Spec Branch Refine
 
 > **`.specs/` is standalone working state and is often gitignored.** Read and write it directly; do not depend on git history to recover it. Diffing implementation code is unaffected.
 
-Drive the final branch review loop to convergence. Alternate `spec-branch-review`
-(find correctness, integration, and bounded guardrail defects) and `spec-branch-fix` (apply fixes), re-reviewing after each fix, until
-the branch is clean or a cap is reached. This is the in-process, file-backed
-equivalent of an external review daemon's refine — no daemon, just the two leaf
-skills and their file contract.
+Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Drive the final branch evidence loop to convergence. Alternate the independent `spec-branch-review` audit and `spec-branch-fix`, re-auditing after each fix until code and evidence are proven or the loop is honestly blocked.
 
 The leaf skills stay single-pass and stateless; this driver owns everything that
 spans iterations: counting, convergence, and the anti-thrash dedup memory (which
@@ -71,7 +67,7 @@ refine was interrupted — resume rather than overwrite). Then:
    `verdict` and the set of actionable finding `signature`s. The prose is never
    parsed for control flow.
 3. **Stop on clean or cap** — these two stops apply before any fix:
-   - **Clean** — `verdict: pass` (no actionable findings). Stop; the branch is clean.
+   - **Clean** — `verdict: pass` and `evidence_verdict: proven`, bound to current HEAD. Invoke `spec-work-tour`; stop ready only when its JSON and HTML render with `verdict: ready` for the same HEAD.
    - **Cap** — `i == max-iterations`. Stop; report the residual actionable findings.
 4. **Compute recurrence, then check stalled** — this order is what prevents both the
    premature stop and the oscillation:
@@ -109,17 +105,17 @@ no commit; only code changes made by `spec-branch-fix` are committed.
 Report:
 
 1. Spec path and `max-iterations`.
-2. How many iterations ran, and why the loop stopped: **clean** / **cap** /
+2. How many iterations ran, and why the loop stopped: **ready** / **cap** /
    **stalled**.
 3. Per-iteration one-liners: actionable count in, fixes applied, dismissals.
-4. Final verdict and any residual findings (actionable left at cap/stalled, plus
+4. Final audit and work-tour verdicts and any residual findings (actionable left at cap/stalled, plus
    advisory findings never required to fix), with their `file:symbol` and signature.
 5. The review/fix artifact paths written under `<spec-dir>/reviews/`.
 6. The commit hashes produced (fix commits), or note `none` when review/fix
    artifacts were the only changes.
+7. The final `work-tour.json` and `work-tour.html` paths, bound commit, claim/gate counts, QA scenario count, and deployment verdict.
 
-A first-iteration `pass` is the common, good outcome on a well-built branch: report
-"clean after 1 review, no fixes needed."
+A first-iteration proven pass followed by a ready tour is the common outcome on a well-built branch.
 
 Do not add Co-Authored-By trailers, "Generated with" footers, or any AI model
 attribution.

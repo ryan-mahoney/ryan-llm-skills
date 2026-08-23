@@ -8,7 +8,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "6"
+  version: "7"
 ---
 
 # Spec Architect Initial — Solution Design Against Existing Architecture
@@ -24,6 +24,8 @@ LLMs are bad at saying "this doesn't fit." They will cheerfully propose bolting 
 ---
 
 ## Step 1 — Intake: Qualify the Request Before Doing Any Work
+
+Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Architecture owns the initial evidence posture; do not choose a design first and ask how to prove it later.
 
 Before touching any code or architecture docs, make sure you understand what's actually being asked. When the resolved spec folder contains `requirements.md`, read it first. Restate the problem in your own words, covering:
 
@@ -42,6 +44,7 @@ Apply this rubric to the request text plus a quick glance at the repo (README, d
 - **Scale envelope** — Rough order of magnitude: tens of records or millions? One user or thousands concurrent?
 - **Error expectations** — When inputs are bad or a dependency fails, what should happen: fail fast, retry, queue, surface to the user?
 - **Definition of done** — What observable behavior tells us this is complete?
+- **Evidence posture** — What could make this unsafe, which boundaries does it cross, and what proof level must exist before merge and deployment?
 
 ### 1b. Ask only decision-relevant questions
 
@@ -226,14 +229,17 @@ back during spec-writing and implementation.]
 
 ## Verification & Evidence
 
-[What tests to write, where they go, how they should be structured —
-following the project's existing test conventions. Then think contextually
-about proof of merge-readiness: beyond code review, what evidence would
-convince a skeptical reviewer that this solves the right problem, correctly
-and safely? Name the forms that fit this specific change — integration
-tests crossing the changed seam, a manual verification guide, screenshots,
-a migration dry-run, a benchmark, a rollback demonstration. `spec-write`
-turns these into a concrete Merge Evidence Plan.]
+[Start with an **Evidence Posture** subsection: change types, risk and
+rationale, crossed boundaries, impacts, reversibility, uncertainty, required
+evidence layers, independence, environments/artifacts, merge/deploy gates,
+and QA mode. Then list provisional `CL-*` claims, credible `FH-*` failure
+hypotheses, and the executable or deterministic evidence capable of rejecting
+each failure. Include exact project commands and production-like seams where
+verifiable. Evidence must establish the correct problem, production
+reachability, and deployment safety without depending on future human review
+or required manual QA. User-visible work must plan browser-ready QA output;
+manual exploration may supplement but never establish the merge verdict.
+`spec-write` turns this into the canonical evidence plan.]
 
 ## Pre-mortem & Risks
 
@@ -346,7 +352,7 @@ Write the proposal to `.specs/<feature-slug>/proposal.md` in the current reposit
 - Keep every pipeline artifact for the feature in that folder. Use relative paths when one artifact references another so the folder remains valid when copied into a worktree.
 - Write atomically. Keep required front matter first and the level-1 heading immediately after it.
 - Report `outcome: proposed` or `outcome: rejected`, the proposal path, and `next: spec-architect-critics | spec-write`.
-- Present the document to the user for review. Invite questions — the proposal is a conversation starter, not a final decree.
+- Present the document for optional challenge and product-direction feedback. Its safety case must stand without a person reviewing it.
 
 ---
 

@@ -6,12 +6,12 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "1"
+  version: "2"
 ---
 
 # SpecOps Spec Conformance Audit
 
-The SpecOps method derives an implementation spec from a verified analysis spec. The implementation spec is supposed to be a faithful translation: same behaviors, same contracts, same edge cases, same error modes — just expressed in terms of a target language and stack.
+The SpecOps method derives an implementation spec from an evidence-grounded analysis spec. Read [the shared executable-evidence contract](../spec-work-tour/references/executable-evidence.md). Conformance is an executable pre-code gate, not a request for later domain-expert review.
 
 In practice, translation drops things. A behavioral contract gets weakened. An error mode is collapsed. An invariant is forgotten. A default value drifts. An open question gets silently resolved. The implementation spec adds something the analysis never asked for.
 
@@ -21,7 +21,7 @@ This skill runs a three-phase conformance audit on a pair of specs (analysis + i
 2. **Identify** items the implementation dropped, weakened, contradicted, silently resolved, or unjustifiably added.
 3. **Patch** the implementation spec — adding missing requirements, restoring weakened contracts, annotating justified design choices — with subagents verifying each gap in parallel.
 
-The output is a hardened implementation spec where every behavior in the analysis has a corresponding entry in the implementation, and any deliberate divergence is documented with rationale.
+The output is a hardened implementation spec and evidence plan where every behavior has an implementation claim, failure hypothesis, and gate; any deliberate divergence is documented with rationale.
 
 ## Inputs
 
@@ -160,7 +160,7 @@ You are auditing a single conformance gap between a SpecOps analysis spec and it
    - If the gap is real, propose a concrete patch.
 3. For "Unjustified addition" gaps, decide which case applies:
    - Legitimate translation concern (e.g., TS-specific type design that preserves observable behavior at module boundaries) — note this with justification, propose an `annotate` patch that documents the rationale in the implementation spec.
-   - Scope expansion (changes observable behavior beyond what the analysis specifies) — flag for review with a `defer` outcome.
+   - Scope expansion (changes observable behavior beyond what the analysis specifies) — block conformance unless source intent resolves it explicitly.
 4. Most gaps are mechanical — the implementation forgot or weakened something the analysis stated concretely. Resolve them with confident, specific patches. Defer only when resolution requires a real design decision that neither spec nor source can settle.
 
 # Output format
@@ -203,7 +203,7 @@ When all subagents return:
 1. **Sort results into three buckets.**
    - `gap_real: false` — false positive. The claim was already covered. Note in the audit report for traceability; no patch.
    - `gap_real: true, deferred: false` — apply the patch.
-   - `deferred: true` — log to a "Deferred Design Decisions" section of the implementation spec with full context. The audit continues; deferrals don't block.
+   - `deferred: true` — log the unresolved decision and set conformance to blocked. Code generation cannot begin with an unresolved material claim.
 
 2. **Apply patches.** For each real, non-deferred gap:
    - `add` — insert the new content into the specified implementation section.
@@ -239,7 +239,7 @@ When all subagents return:
    - Deferred items: see Deferred Design Decisions section for DD-<id> entries
    ```
 
-6. **Save the conformance report** alongside the implementation spec. It records every gap, every subagent verdict, and the evidence — useful for reviewers and for diffing across audit passes.
+6. **Save the conformance report** alongside the implementation spec. Include a machine verdict bound to both file hashes, AC/CL/FH/EV counts, patched gaps, and blockers. Revalidate sibling evidence JSON after patches.
 
 7. **Summarize for the user.** Show:
    - Counts: identified, resolved, false positives, deferred.
@@ -281,7 +281,7 @@ This skill is a pre-implementation gate. The full verification chain looks like:
 
 1. Generate analysis spec from legacy source.
 2. Run **specops-ambiguity-audit** on the analysis spec — hardens it by removing internal ambiguity.
-3. Domain experts verify the analysis spec.
+3. Independent ambiguity/coherence evidence establishes analysis readiness; domain input is optional product knowledge, not a safety gate.
 4. Generate implementation spec from the verified analysis.
 5. Run **specops-spec-conformance** (this skill) — verifies the implementation faithfully derives from the analysis.
 6. Generate code from the verified implementation spec.

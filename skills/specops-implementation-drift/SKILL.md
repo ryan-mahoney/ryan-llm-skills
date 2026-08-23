@@ -6,14 +6,14 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "1"
+  version: "2"
 ---
 
 # SpecOps Implementation Drift Audit
 
 After a round of code generation in a SpecOps migration, the question is: does the migrated code actually do what the legacy code did? Spec-level audits (ambiguity, conformance) can verify that the *specs* are sound, but they can't see what the code generator actually produced. Bugs introduced during code generation — dropped error handlers, weakened concurrency, lost edge cases — are invisible to spec audits.
 
-This skill closes the loop. It re-runs the SpecOps analysis on the migrated code (treating it as if it were itself "legacy"), then diffs that new analysis against the original analysis to find behavioral divergences. For each real divergence, it generates a corrective spec describing what needs to change so the next code-gen iteration moves toward convergence.
+This skill closes the independent code-generation evidence loop. Read [the shared executable-evidence contract](../spec-work-tour/references/executable-evidence.md). Re-analysis is one oracle, direct code inspection is another, and executable contract/integration gates must confirm material behavioral claims.
 
 The cycle is: code-gen → drift audit → corrections → code-gen → drift audit → ... until corrections become insignificant.
 
@@ -282,7 +282,7 @@ When all subagents return:
 
    Recommend:
    - Any Critical → another code-gen iteration is required.
-   - Important > 0 and Critical = 0 → another iteration is recommended; behavioral correctness is close but invariants are at risk.
+   - Important > 0 and Critical = 0 → another iteration is required unless the prepared evidence plan explicitly accepts and bounds the risk.
    - Cosmetic-only or empty → migration of this module has converged.
 
 5. **Summarize for the user.**
@@ -290,6 +290,7 @@ When all subagents return:
    - Convergence recommendation.
    - The corrections file path so the user can feed it into the next code-gen iteration.
    - If applicable, a "diff trajectory" line: how the count compares to the prior drift audit on the same module (improving, plateauing, regressing).
+6. **Write a machine verdict.** Bind original/migrated analysis hashes, migrated HEAD, divergence counts, direct code references, contract/integration EV results, accepted-risk sources, and `converged: true|false`. Convergence requires zero Critical/Important corrections and all required gates passed.
 
 ---
 
@@ -328,7 +329,7 @@ This skill is the post-implementation iteration gate. The full verification chai
 
 1. Generate analysis spec from legacy source.
 2. **specops-ambiguity-audit** — hardens the analysis spec.
-3. Domain experts verify the analysis spec.
+3. Independent ambiguity/coherence evidence establishes analysis readiness; domain input remains optional context.
 4. Generate implementation spec from the verified analysis.
 5. **specops-spec-conformance** — verifies the implementation spec faithfully derives from the analysis spec.
 6. Generate code from the verified implementation spec.

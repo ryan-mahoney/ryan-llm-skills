@@ -7,12 +7,12 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "1"
+  version: "2"
 ---
 
 # SpecOps Orchestrate Spec Create
 
-You are an orchestrator. Generate one implementation spec per analysis artifact using sequential subagents.
+Generate one implementation-and-evidence package per analysis artifact using sequential subagents.
 
 Use `specops-make-spec` behavior for each analysis file.
 Do not implement product code directly unless subagents are unavailable.
@@ -29,6 +29,7 @@ Do not implement product code directly unless subagents are unavailable.
 2. Exclude clearly non-analysis files (notes, drafts, templates) unless explicitly requested.
 3. Determine output path per analysis file:
 - Default: `docs/specops/specs/<analysis-basename>.md`
+- Evidence sibling: `docs/specops/specs/<analysis-basename>.evidence.json`
 4. Announce execution order and output mapping before delegation.
 
 ## Execution Model: One Sequential Subagent Per Analysis File
@@ -57,7 +58,7 @@ Follow skills/specops-make-spec/SKILL.md.
 Read relevant project standards/conventions.
 Write the full specification to <spec-output-file>.
 Do not implement code.
-Return: summary, file written, assumptions, risks.
+Return: summary, spec/evidence files written, posture, CL/FH/EV counts, assumptions, risks.
 ```
 
 ## Verification After Each Subagent
@@ -65,7 +66,8 @@ Return: summary, file written, assumptions, risks.
 1. Confirm output spec file exists and is non-empty.
 2. Confirm required sections from `specops-make-spec` are present.
 3. Confirm acceptance criteria are observable/automatable.
-4. If incomplete, run one fix-up subagent for that file.
+4. Confirm sibling evidence JSON exists, AC/CL/FH/EV and owner-step tags agree, and the shared validator passes.
+5. If incomplete, run one fix-up subagent for that file.
 
 Allow up to 2 fix-up attempts per file. If still failing, stop and report blockers.
 
@@ -87,5 +89,5 @@ Return: what changed and why."
 
 After all files complete:
 1. Provide per-file completion status.
-2. List spec files created.
-3. Report risks, ambiguities, and blocked files.
+2. List spec and evidence-plan files created.
+3. Report posture/traceability counts, risks, ambiguities, and blocked files.

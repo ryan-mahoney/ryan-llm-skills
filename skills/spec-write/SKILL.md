@@ -9,12 +9,12 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "16"
+  version: "17"
 ---
 
 # Spec Write
 
-Create a deterministic implementation spec from the current proposal and persist it under `.specs/<feature-slug>/`. The local file is canonical. This skill never creates, edits, or renames around GitHub issues.
+Create a deterministic implementation spec and its executable-evidence graph from the current proposal. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md) before planning. The local package is canonical; this skill never creates, edits, or renames around GitHub issues.
 
 ## Non-Interactive Operation
 
@@ -28,6 +28,8 @@ Always write the completed spec to the resolved standalone spec folder:
 
 ```txt
 .specs/<feature-slug>/spec.md
+.specs/<feature-slug>/spec-steps.json
+.specs/<feature-slug>/evidence-plan.json
 ```
 
 Write every artifact atomically: write the full content to a temporary file in the destination directory, then rename it over the final path. Every markdown artifact begins with a level-1 `#` heading on line 1. `.specs/` is standalone working state and may be gitignored; do not stage or commit it unless the repository explicitly tracks specs.
@@ -145,15 +147,24 @@ Create a numbered list (`AC-1`, `AC-2`, etc.) of observable, automatable asserti
 - Include non-happy-path behaviors.
 - Make every criterion testable without subjective judgment.
 
-### 6. Merge Evidence Plan
+### 6. Executable Evidence Plan
 
-Decide, contextually, what proof would convince a skeptical reviewer that this change solves the right problem, is correct, and is safe — independent of code review. Create a numbered list (`EV-1`, `EV-2`, …) where each item names:
+Begin with **Evidence Posture**, using the exact fields in the shared contract: change types, risk with rationale, crossed boundaries, impacts, reversibility, uncertainty, required layers, independence, environments, QA mode, and merge/deploy gates. Infer this from the request, proposal, code, and pre-mortem. Increase the proposal's posture when repository facts reveal greater risk; never weaken it silently.
 
-- The evidence form: integration test, manual verification guide, screenshot set, migration dry-run log, benchmark result, rollback demonstration, or another form this specific change genuinely calls for.
-- The claim it proves, tied to acceptance criteria or a pre-mortem item.
+Then define stable, numbered:
+
+- `CL-*` falsifiable claims mapping every acceptance criterion and material architecture/deployment obligation.
+- `FH-*` credible ways each claim could be false while superficial checks pass.
+- `EV-*` executable commands or deterministic inspections capable of rejecting those failures.
+
+For every EV item name:
+
+- The gate form: focused test, production-composition integration test, browser journey, accessibility scan, screenshot set, schema validation, migration dry-run, security check, benchmark, deploy rehearsal, rollback demonstration, or another risk-matched form.
+- The claims and failure hypotheses it covers, plus which unsafe implementation it can reject.
 - Where the artifact lands: committed test code in the repository, or a non-committed artifact under `.specs/<feature-slug>/evidence/`.
+- The exact command/procedure, environment, independence level, and whether failure blocks merge or deployment.
 
-Each EV item is owned by exactly one implementation step (see §9's `Evidence:` tag). Scale evidence to risk: a small low-risk change may legitimately need nothing beyond its acceptance-criteria tests — state that and why, rather than padding the list. Rigorous verification is a good use of effort; performative verification is not.
+Each EV item is owned by exactly one implementation step (see §9's `Evidence:` tag). Every AC maps to a claim; every claim maps to a failure hypothesis and gate; every failure hypothesis is rejected by a gate. User-visible work includes QA-tour scenarios and visual artifacts. Manual exploration may be offered as optional product discovery, but manual QA cannot be a merge-blocking gate. Scale evidence to risk; do not pad low-risk work with irrelevant ceremony.
 
 ### 7. Pre-mortem
 
@@ -181,7 +192,7 @@ For each step include:
 6. Complexity: how hard *this step* is, as a tag line (`Complexity: easy`). One of `easy`, `medium`, `hard` — see the rubric below. The system uses per-step tags to route each step to an appropriately strong implementation model, so score every step, not just the spec.
 7. Visual design: whether *this step* implements user-facing visual design, as a tag line (`Visual: yes` or `Visual: no`). See the Visual design rubric in Implementation Profile. The system routes `Visual: yes` steps to design-capable handling and visual verification, so flag every step, not just the spec.
 8. Visual reference: when a visual reference exists and the step is `Visual: yes`, repeat the exact `Visual reference: <checkout-relative file path>` line in that step and require parity with it. Do not tell the implementer to create a replacement prototype or derive a new visual direction.
-9. Evidence: when this step owns one or more Merge Evidence Plan items, an `Evidence:` tag line (`Evidence: EV-2` or `Evidence: EV-2, EV-5`). Producing the named artifact is part of the step's work. Steps owning no evidence omit the line.
+9. Evidence: when this step owns one or more Executable Evidence Plan gates, an `Evidence:` tag line (`Evidence: EV-2` or `Evidence: EV-2, EV-5`). Producing the named artifact is part of the step's work. Steps owning no evidence omit the line.
 
 Each step's `Covers:`, `Complexity:`, `Visual:`, and (when the step owns evidence) `Evidence:` tag lines sit together at the end of the step. Judge complexity by *this step's own* work, applying the rubric the same way every time so the label is reproducible across runs. Anchor the choice on four signals — scope (files/modules this step touches), novelty (new abstractions vs. reusing existing patterns), domain difficulty (the Qualifications this step exercises), and integration risk (state, I/O, migrations, blast radius this step incurs):
 
@@ -212,8 +223,8 @@ Step ordering:
 
 Exclude:
 
-- Manual testing or QA checklists — unless the Merge Evidence Plan names a manual verification guide as a deliverable; writing that guide to `.specs/<feature-slug>/evidence/` is then a legitimate step.
-- Documentation-only tasks — with the same Merge Evidence Plan exception.
+- Manual testing as a correctness or merge gate. A QA-tour artifact is legitimate only when it names deterministic setup, expected outcomes, automated coverage, and any explicitly exploration-only questions.
+- Documentation-only tasks — except evidence and QA artifacts required by the Executable Evidence Plan.
 - Running the entire test suite.
 - Formatting or lint-only chores.
 - Git workflow or PR process steps.
@@ -274,7 +285,7 @@ Alongside `spec.md`, write a machine-readable index of the implementation steps 
 
 Keep the step index beside `spec.md`. This flat, filename-based layout is the complete standalone handoff contract.
 
-This file is a derived index, not a second source of truth. `spec.md` stays canonical — the full step text, `Covers:` tags, `Complexity:` tag, and `Visual:` flag all live there. `spec-steps.json` exists so an external task-runner can enumerate the steps and route each one — by difficulty and by visual-design skill — without parsing markdown. It is the same routing signal §9 describes, in a parsable shape. `Evidence:` tags are not mirrored into the index — `spec.md` is the only source for evidence ownership.
+This file is a derived index, not a second source of truth. `spec.md` stays canonical. `spec-steps.json` lets a runner enumerate and route steps without parsing Markdown, including their evidence ownership.
 
 The index is a JSON object with a `steps` array — one entry per Implementation Step, in spec order:
 
@@ -287,7 +298,8 @@ The index is a JSON object with a `steps` array — one entry per Implementation
       "name": "Define the FooConfig type",
       "description": "Add the FooConfig interface and its defaults to src/config.ts.",
       "difficulty": "easy",
-      "visualDesign": false
+      "visualDesign": false,
+      "evidence": ["EV-1"]
     }
   ]
 }
@@ -301,14 +313,20 @@ Field contract:
 - `description` — one front-loaded, plain-language sentence summarizing what the step does.
 - `difficulty` — exactly one of `easy`, `medium`, `hard`, identical to the step's `Complexity:` tag.
 - `visualDesign` — boolean; `true` when the step implements user-facing visual design, identical to the step's `Visual:` flag (`Visual: yes` → `true`, `Visual: no` → `false`).
+- `evidence` — ordered array of owned EV identifiers, exactly matching the step's `Evidence:` tag; use `[]` when the step owns none.
 
-Write `spec-steps.json` only after the spec body is final, so the index matches the committed step list, numbering, complexity tags, and visual flags exactly. There must be exactly one entry per step, in the same order.
+Write `spec-steps.json` only after the spec body is final, so the index matches the committed step list, numbering, complexity, visual, and evidence tags exactly. There must be exactly one entry per step, in the same order.
+
+## Machine-Readable Evidence Plan
+
+Write `.specs/<feature-slug>/evidence-plan.json` as strict version 1 JSON using the schema and invariants in the shared executable-evidence contract. `spec.md` remains canonical prose; this file is its claim/gate index. Use the same identifiers, owner steps, commands, artifacts, and posture values in both. Write it after the other outputs, then run `node ~/.agents/skills/spec-work-tour/scripts/validate-evidence-plan.mjs <path>`; a validation failure blocks handoff.
 
 ## Output Steps
 
 1. Write the final markdown body — including each step's `Complexity:` tag (§9) and the footer block (`Spec folder:`, `Visual design:`) — to `.specs/<feature-slug>/spec.md`.
-2. Write the machine-readable step index beside it as `spec-steps.json`, one entry per step, each `difficulty` matching that step's `Complexity:` tag and each `visualDesign` matching its `Visual:` flag.
-3. Report one compact routing summary: `outcome: written`; spec and step-index paths; total/easy/medium/hard/visual step counts; EV items with owning steps and PM items with dispositions; proposal/critique inputs used; and `next: spec-prepare`.
+2. Write `spec-steps.json`, including exact evidence ownership.
+3. Write strict `evidence-plan.json` and validate complete AC → CL → FH → EV traceability and single-step EV ownership.
+4. Report one compact routing summary: `outcome: written`; all three paths; evidence posture; claim/failure/gate counts; step counts; PM dispositions; inputs used; and `next: spec-prepare`.
 
 Do not implement the plan.
 
