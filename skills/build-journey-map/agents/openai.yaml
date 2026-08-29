@@ -1,0 +1,4 @@
+interface:
+  display_name: "Build Journey Map"
+  short_description: "Identify cross-repo user journeys and publish a JRNY registry with seams"
+  default_prompt: "Use $build-journey-map to identify the user journeys across the related repositories."

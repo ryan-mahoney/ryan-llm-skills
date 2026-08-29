@@ -1,0 +1,4 @@
+interface:
+  display_name: "Document Journey"
+  short_description: "Write a JRNY journey page traced across repos, with seams and evidence links"
+  default_prompt: "Use $document-journey to document this journey."
