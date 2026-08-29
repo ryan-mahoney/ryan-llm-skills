@@ -1,8 +1,6 @@
 ---
 name: spec-work-tour
-description: Build or refresh the final HTML work tour and machine-readable evidence verdict for an implemented standalone spec. Use after spec-run or spec-branch-refine, before spec-pr, or when asked for an implementation walkthrough, deploy-safety case, executable-evidence report, or QA handoff.
-disable-model-invocation: true
-argument-hint: "[feature-slug-or-spec-path]"
+description: Build or refresh the final machine-readable evidence verdict and practitioner-facing HTML work tour for an implemented standalone spec. Use after spec-run or spec-branch-refine, before spec-pr, or when asked for an implementation walkthrough, deploy-safety case, executable-evidence report, proof review, or QA handoff. The tour surfaces blocking evidence, residual risk, claim-to-gate traceability, rerunnable proof, QA scenarios, and deployment recovery without presenting the manifest as a wall of cards or tables.
 license: MIT
 metadata:
   author: Ryan Mahoney
@@ -18,6 +16,32 @@ Assemble the implemented spec's evidence into two deploy-bound artifacts:
 - `.specs/<feature>/work-tour.html` — a portable browser tour of what changed and why the evidence is sufficient.
 
 The tour is not a narrative substitute for proof. It is a navigable projection of evidence that already exists and can be rerun. Read [references/executable-evidence.md](references/executable-evidence.md) before producing either artifact.
+
+## Design Posture — Evidence Review Instrument
+
+Build the HTML for an engineer, reviewer, QA practitioner, or operator who needs to:
+
+1. orient — identify the outcome, verdict, exact commit, branch, and deployment posture;
+2. decide — see blockers, stale evidence, residual risk, and optional follow-up before supporting detail;
+3. trace — follow requirement → claim → gate → observed proof → proof boundary without joining distant tables;
+4. rerun — copy the exact command and open the artifact for the selected gate;
+5. explore — execute one QA scenario with its setup, expected result, automation, and visual evidence;
+6. recover — understand migrations, configuration, observability, rollback, and post-deploy checks.
+
+Every element visible by default must support one of those tasks. Do not add ornamental hero treatment, large metadata cards, all-equal card stacks, repeated claim and gate sections, or a fully expanded implementation diary. Readiness counts are allowed only when they directly establish the merge or deployment decision; do not turn test totals into vanity metrics.
+
+Use a minimalist, functionalist composition:
+
+- white background, Inter or a system sans-serif, compact type, thin rules, and direct labels;
+- grayscale for structure;
+- green only for proven, passed, ready, or passing audit states;
+- red only for blocking, failed, or unproven states;
+- amber only for partial, stale, residual-risk, or optional non-passing states;
+- text labels in addition to every status color;
+- progressive disclosure for long rationale, architecture decisions, and implementation history;
+- one selected claim inspector and one selected QA scenario in the interactive view; expand all in print.
+
+Use this default reading order: verdict and commit → attention queue → before/after architecture → selected claim and gates → selected QA scenario → deployment and recovery → collapsed implementation log. Default the claim and QA inspectors to the first non-passing or incomplete evidence path; otherwise select the first item.
 
 ## Non-Interactive Contract
 
@@ -60,7 +84,7 @@ Write strict version 1 JSON with a trailing newline:
 {
   "version": 1,
   "feature": "feature-slug",
-  "title": "Observable outcome",
+  "title": "Concise observable outcome",
   "generatedAt": "canonical ISO 8601 timestamp",
   "repository": ".",
   "branch": "feature-branch",
@@ -122,7 +146,11 @@ Write strict version 1 JSON with a trailing newline:
 }
 ```
 
+Keep `title` short enough to act as a navigation landmark. Write `summary` as two to four front-loaded sentences: prior failure, implemented behavior, strongest integrated proof, and any audit correction that materially changed the result. Put detailed history in architecture, decisions, steps, or evidence—not in the heading.
+
 Allowed verdicts are `ready` and `blocked`. Claim statuses are `proven`, `partial`, and `unproven`. Gate statuses are `passed`, `failed`, `blocked`, and `stale`. `required` mirrors the planned merge/deploy gate; omit optional exploration artifacts from the readiness calculation but still display them. `deployment.ready` is true only when the top-level verdict is `ready`. No manual action may be necessary to establish the verdict.
+
+Never mark a claim `proven` when none of its linked gates passed. A runbook proves that a procedure exists; it does not prove that the procedure ran or that production recovered. Keep post-deploy execution `unproven` or restate the claim narrowly around the verified runbook artifact.
 
 Every acceptance criterion must appear in at least one claim. Every claim must name at least one gate. Every gate must name the failure hypothesis it rejects. Use checkout-relative artifact paths where possible. Do not embed secrets, credentials, production records, or sensitive screenshots.
 
@@ -136,17 +164,21 @@ node ~/.agents/skills/spec-work-tour/scripts/render-work-tour.mjs \
   .specs/<feature>/work-tour.html
 ```
 
-The renderer validates the structural invariants and exits nonzero on an invalid manifest. The HTML is self-contained except for checkout-relative evidence links. It must expose:
+The renderer validates the structural invariants and exits nonzero on an invalid manifest. The HTML is self-contained except for checkout-relative evidence links. Render checkout-relative, package-relative, and URL evidence as usable links when they resolve; mark unresolved local paths visibly instead of silently styling them as ordinary code.
 
-- verdict, commit, and evidence posture
-- before/after architecture and system boundaries
-- implementation steps, commits, and files
-- requirement-to-claim-to-gate traceability
-- rerunnable commands, artifacts, proof boundaries, and gaps
-- a QA walkthrough with routes, fixtures, expected states, and visual artifacts
-- migration, configuration, observability, rollback, and residual-risk facts
+The default HTML composition must expose:
 
-Open the HTML in a browser and inspect it at desktop and narrow widths. For a visual implementation, include the implementation's captured states in the QA section and inspect those images too. Correct broken links, overflow, unreadable content, missing sections, and inaccurate summaries. The renderer's success proves shape, not truth; compare sampled rows back to their source artifacts.
+- a compact verdict header with the bound commit and decision-relevant closure counts;
+- an attention queue ordered as blocking gaps and required failures, incomplete claims, audit failure, optional non-passing gates, then residual risks;
+- before/after architecture and system boundaries, with decisions collapsed by default;
+- a claim list and selected inspector that colocates requirements, gates, rerunnable commands, artifacts, observed proof, rejected hypotheses, and proof boundaries;
+- QA entrypoints plus a selected scenario with steps, expected states, automation, and visual artifacts;
+- migration, configuration, observability, rollback, audit, and residual-risk facts;
+- a collapsed implementation log with steps, commits, files, and outcomes.
+
+Do not make a reviewer scroll through every gate, scenario, and implementation step to find the evidence that qualifies the verdict. Do not hide residual risk merely because `verdict: ready`.
+
+Open the HTML in a browser and inspect it at desktop and narrow widths. For a visual implementation, include the implementation's captured states in the QA section and inspect those images too. Confirm keyboard-visible claim and scenario selection, URL-deep-link selection, copy-command feedback, local artifact links, print expansion, and that only the intended region overflows horizontally. Correct broken links, overflow, unreadable content, missing sections, and inaccurate summaries. The first wide viewport must reveal the verdict and real attention items, not a long rationale or metadata dashboard. The renderer's success proves shape, not truth; compare sampled rows back to their source artifacts.
 
 ## Freshness Rule
 

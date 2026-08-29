@@ -1,0 +1,4 @@
+interface:
+  display_name: "Visualize Journey"
+  short_description: "Build operator-ready visual journey maps"
+  default_prompt: "Use $visualize-journey to turn JRNY-124 into an operator-ready visual map."
