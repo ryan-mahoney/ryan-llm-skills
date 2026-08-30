@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "8"
+  version: "9"
 ---
 
 # Spec Branch Refine
@@ -67,7 +67,8 @@ refine was interrupted — resume rather than overwrite). Then:
    `verdict` and the set of actionable finding `signature`s. The prose is never
    parsed for control flow.
 3. **Stop on clean or cap** — these two stops apply before any fix:
-   - **Clean** — `verdict: pass` and `evidence_verdict: proven`, bound to current HEAD. Invoke `spec-work-tour`; stop ready only when its JSON and HTML render with `verdict: ready` for the same HEAD.
+   - **Clean** — `verdict: pass` and `evidence_verdict: proven`, bound to current HEAD. Stop with
+     `outcome: proven` and hand off to `spec-work-tour`.
    - **Cap** — `i == max-iterations`. Stop; report the residual actionable findings.
 4. **Compute recurrence, then check stalled** — this order is what prevents both the
    premature stop and the oscillation:
@@ -105,17 +106,18 @@ no commit; only code changes made by `spec-branch-fix` are committed.
 Report:
 
 1. Spec path and `max-iterations`.
-2. How many iterations ran, and why the loop stopped: **ready** / **cap** /
+2. How many iterations ran, and why the loop stopped: **proven** / **cap** /
    **stalled**.
 3. Per-iteration one-liners: actionable count in, fixes applied, dismissals.
-4. Final audit and work-tour verdicts and any residual findings (actionable left at cap/stalled, plus
-   advisory findings never required to fix), with their `file:symbol` and signature.
+4. Final audit verdict and any residual findings (actionable left at cap/stalled, plus advisory
+   findings never required to fix), with their `file:symbol` and signature.
 5. The review/fix artifact paths written under `<spec-dir>/reviews/`.
 6. The commit hashes produced (fix commits), or note `none` when review/fix
    artifacts were the only changes.
-7. The final `work-tour.json` and `work-tour.html` paths, bound commit, claim/gate counts, QA scenario count, and deployment verdict.
+7. On a proven pass, the exact bound commit and `next: spec-work-tour`.
 
-A first-iteration proven pass followed by a ready tour is the common outcome on a well-built branch.
+A first-iteration proven pass is the common outcome on a well-built branch. Do not invoke
+`spec-work-tour`; it is the next explicit top-level stage.
 
 Do not add Co-Authored-By trailers, "Generated with" footers, or any AI model
 attribution.

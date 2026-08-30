@@ -283,6 +283,15 @@ Good initial input includes:
 - Constraints such as timeline, compatibility, security, performance, or deployment limits.
 - Any examples of similar existing behavior in the codebase.
 
+To have one top-level agent run the complete sequence and publish the pull request, use:
+
+```bash
+/spec-end-to-end <clear goal and constraints> [workflow modifiers]
+```
+
+The orchestrator resumes from valid existing artifacts, preserves directives such as "use a
+worktree" or named delegation, and stops only at a published PR or a concrete stage blocker.
+
 After `spec-architect-initial` writes its proposal, read the recommendation before continuing. This is the key decision point. If the proposal says the request does not fit the architecture, treat that as useful signal rather than a failure: adjust the goal, choose one of the alternatives, or make the required architecture change explicit before writing an implementation spec.
 
 ### 1. Design The Approach
@@ -347,21 +356,12 @@ Preparation code-grounds and corrects the spec, reconciles the step index, deriv
 
 `criteria.md` and `invariants.md` are prose guidance, never executable audit programs. The manifest is the last write and binds every prepared artifact by SHA-256.
 
-### 5. Create A Branch Or Worktree
+### 5. Establish The Implementation Workspace
 
-Use a worktree when you want isolated implementation work:
-
-```bash
-/spec-branch-worktree <feature-slug or description>
-```
-
-Use a normal branch when you want to stay in the current checkout:
-
-```bash
-/spec-branch <feature-slug or description>
-```
-
-The worktree command copies the complete matching `.specs/<feature>/` folder and the destination copy becomes active for that branch.
+Let the top-level agent choose and create a normal feature branch or an isolated worktree using
+ordinary Git operations. When `.specs/` is gitignored and a worktree is selected, copy the complete
+matching `.specs/<feature>/` folder; the destination copy becomes canonical for later stages. Do not
+open a new editor or agent session for the handoff.
 
 ### 6. Execute The Prepared Spec
 
@@ -369,17 +369,21 @@ The worktree command copies the complete matching `.specs/<feature>/` folder and
 /spec-run <feature-slug or path-to-spec.md>
 ```
 
-This validates the hash-bound package, implements one step per commit, produces every owned executable-evidence and QA artifact, assembles merge evidence, and drives final refinement plus the work tour.
+This validates the hash-bound package, implements one step per commit, produces every owned executable-evidence and QA artifact, and assembles commit-bound pre-audit merge evidence.
 
-### 7. Refine The Whole Branch (Driven By `spec-run`)
+### 7. Refine The Whole Branch
 
 ```bash
 /spec-branch-refine
 ```
 
-`spec-run` invokes this automatically after step execution. Run it directly only to resume or re-audit. It alternates independent evidence audits and fixes to convergence, audits every claim/gate against the integrated branch, then invokes `spec-work-tour` on a proven pass.
+This alternates independent evidence audits and fixes to convergence and audits every claim/gate against the integrated branch. A proven pass hands off to the explicit work-tour stage.
 
-### 8. Open The Work Tour
+### 8. Build And Open The Work Tour
+
+```bash
+/spec-work-tour <feature-slug or path-to-spec.md>
+```
 
 ```bash
 open .specs/<feature>/work-tour.html
@@ -398,12 +402,17 @@ This rebases first, re-establishes any invalidated evidence, requires a current 
 ### Quick Sequence
 
 ```bash
+/spec-end-to-end build <clear goal and constraints> using a worktree
+
+# Equivalent manual sequence:
 /spec-architect-initial build <clear goal and constraints>
 /spec-architect-critics     # optional
 /spec-write
 /spec-prepare
-/spec-branch-worktree <feature-slug>
+# top-level agent establishes a branch or worktree
 /spec-run <feature-slug>
+/spec-branch-refine <feature-slug>
+/spec-work-tour <feature-slug>
 /spec-pr
 ```
 
@@ -467,8 +476,10 @@ After that, use the normal engineering back half:
 
 ```bash
 /spec-prepare <feature-slug>
-/spec-branch <feature-slug>
+# top-level agent establishes a branch or worktree
 /spec-run <feature-slug>
+/spec-branch-refine <feature-slug>
+/spec-work-tour <feature-slug>
 /spec-pr <feature-slug>
 ```
 
@@ -793,6 +804,7 @@ build_bundle() {
 }
 
 spec_skills=(
+  spec-end-to-end
   spec-architect-initial
   spec-architect-critics
   spec-write

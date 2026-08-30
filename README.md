@@ -12,22 +12,25 @@ Two portable, installable bundles produce three documented workflows. Build the 
 
 A standalone workflow that turns a goal into architecture, an explicit evidence posture, an immutable implementation package, sequential commits with owned proof, an independent convergent branch audit, and a commit-bound HTML work tour. Human review is optional input; executable evidence is the merge authority.
 
+Use `spec-end-to-end` when one top-level agent should orchestrate the complete sequence and publish the pull request. It composes the stages below, resumes from valid existing artifacts, and preserves run-wide directives such as worktree choice or named delegation.
+
 Run the stages in order:
 
 1. `spec-architect-initial`: write `.specs/<feature>/proposal.md`.
 2. `spec-architect-critics`: stress-test the proposal and write `critique.md` (optional).
 3. `spec-write`: write `spec.md`, `spec-steps.json`, and the AC → claim → failure → gate `evidence-plan.json`.
 4. `spec-prepare`: code-ground both implementation and proof, derive guardrails, plan every step, and publish their hash-bound manifest last.
-5. `spec-branch` / `spec-branch-worktree`: create the implementation branch or copy the complete feature package into a new worktree.
-6. `spec-run`: implement each step, produce its gates and QA artifacts, assemble evidence, and commit separately.
-7. `spec-branch-refine`: independently audit code and evidence, fix, converge, and invoke the work tour (normally driven by `spec-run`; also resumable standalone).
-8. `spec-work-tour`: emit required `work-tour.json` and browser-ready `work-tour.html` (normally invoked by refinement).
+5. Workspace handoff: the top-level agent chooses a branch or worktree and preserves the complete `.specs/<feature>/` package when needed.
+6. `spec-run`: implement each step, produce its gates and QA artifacts, assemble pre-audit evidence, and commit separately.
+7. `spec-branch-refine`: independently audit code and evidence, fix, and converge to a commit-bound proven verdict.
+8. `spec-work-tour`: emit required `work-tour.json` and browser-ready `work-tour.html` for the proven commit.
 9. `spec-pr`: rebase, re-prove when necessary, require a ready tour, and publish the evidence PR.
 
 `spec-issue` is an optional standalone convenience for mirroring a Markdown spec to GitHub. It writes no pipeline state and does not influence preparation, execution, review, or PR behavior.
 
 | Skill | Command | Purpose |
 |---|---|---|
+| **spec-end-to-end** | `/spec-end-to-end [goal-or-feature] [modifiers]` | Orchestrate the complete workflow from goal or existing spec through a published PR |
 | **spec-architect-initial** | `/spec-architect-initial [problem-or-feature]` | Review the architecture and write `.specs/<feature>/proposal.md` |
 | **spec-architect-critics** | `/spec-architect-critics [proposal-or-file]` | Stress-test `proposal.md` and write `critique.md` |
 | **spec-write** | `/spec-write [feature-slug-or-spec-path]` | Write the spec, step index, evidence posture, and claim/gate graph |
@@ -35,7 +38,7 @@ Run the stages in order:
 | **spec-subspec-write** | `/spec-subspec-write [step-number] [spec-path]` | Leaf planner used sequentially by `spec-prepare` to write one immutable step subspec |
 | **spec-branch** | `/spec-branch [description-or-feature-slug]` | Create a local branch from a spec, description, or issue/ticket reference |
 | **spec-branch-worktree** | `/spec-branch-worktree [description-or-feature-slug]` | Create a branch/worktree and hand off the matching `.specs` package |
-| **spec-run** | `/spec-run [feature-slug-or-spec-path]` | Execute prepared steps, evidence gates, integrated refinement, and the final tour |
+| **spec-run** | `/spec-run [feature-slug-or-spec-path]` | Execute prepared steps and assemble commit-bound pre-audit evidence |
 | **spec-step-run** | delegated | Implement one prepared step and produce its owned code/evidence/QA artifacts |
 | **spec-branch-refine** | `/spec-branch-refine [spec-path]` | Alternate integrated evidence audits and fixes until proven or blocked |
 | **spec-branch-review** | delegated | Independently falsify code and claim/gate evidence per commit and integrated branch |
@@ -46,19 +49,23 @@ Run the stages in order:
 
 The `spec-skills` bundle also ships the Augment CLI subagent adapter `augment/agents/spec-step-implementer.md`, which `spec-run` uses to delegate one step at a time.
 
+`spec-branch` and `spec-branch-worktree` remain available as backwards-compatible convenience
+utilities. They are not required stages of `spec-end-to-end`; the top-level agent owns workspace
+strategy directly.
+
 ### design-spec: design-driven front-half
 
 The same standalone pipeline, entered from design instead of architecture. Prototypes produce rendered-state evidence; the writer emits the same evidence plan; production implementation must prove real wiring and accessibility rather than relying on prototype approval or manual QA.
 
 The architect classifies each surface on two axes. Posture picks the applicable rule: Functional uses `functionalist-design.md`, Expressive uses `expressive-design.md`. Deliverable is Prototype or Real, in-code. The writer carries the selected posture rule into the spec's Applicable Rules, so `spec-run` applies it at implementation time.
 
-Run the design stages, then hand off to `spec-run`:
+Run the design stages, then hand off to the explicit engineering back-half:
 
 1. `design-spec-architect`: classify and propose a design direction (`proposal.md`)
 2. `design-spec-prototype`: build and serve a viewable prototype (`prototype/`), optional
 3. `design-spec-critique`: critique the prototype, else the proposal (`critique.md`), optional
 4. `design-spec-writer`: write `spec.md`, its step index, and `evidence-plan.json`.
-5. Hand off to `spec-prepare`, branching, and `spec-run`; execution drives refinement and the final tour.
+5. Hand off to `spec-prepare`, workspace setup, `spec-run`, `spec-branch-refine`, and `spec-work-tour`.
 
 | Skill | Command | Purpose |
 |---|---|---|
@@ -163,7 +170,7 @@ This produces, under `dist/skill-bundles/` (git-ignored):
 - `spec-skills-<version>.tar.gz` / `.zip`
 - `specops-skills-<version>.tar.gz` / `.zip`
 
-There is no separate `design-spec-skills` archive. The design-spec skills ship inside `spec-skills` because they write the same artifact contract and hand off to `spec-prepare`, `spec-run`, and `spec-branch-refine`.
+There is no separate `design-spec-skills` archive. The design-spec skills ship inside `spec-skills` because they write the same artifact contract and hand off to `spec-prepare`, `spec-run`, `spec-branch-refine`, and `spec-work-tour`.
 
 Extract an archive and run `./install.sh` (see `./install.sh --help` for harness-specific targets). Set `VERSION` to control the archive name and bundle metadata:
 

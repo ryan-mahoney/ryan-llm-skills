@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "6"
+  version: "7"
 ---
 
 # Spec PR
@@ -71,8 +71,10 @@ A rebase, conflict resolution, staged commit, dependency/base change, or any cod
 1. Determine which claims, gates, and operational assumptions the new base or conflict touched.
 2. Re-run affected focused gates, plus any build/integration gate whose dependency graph changed.
 3. Regenerate `merge-evidence.json`/Markdown from actual outcomes.
-4. Run `spec-branch-refine` against the final branch. It must end with a current audit pass and invoke `spec-work-tour`.
-5. Confirm the resulting `work-tour.json`, audit artifact, and every required gate bind the exact full `git rev-parse HEAD` SHA. Open `work-tour.html` and confirm it renders.
+4. Run `spec-branch-refine` against the final branch. It must end with a current audit pass and
+   `evidence_verdict: proven`.
+5. Run `spec-work-tour`, then confirm its JSON/HTML, the audit artifact, and every required gate bind
+   the exact full `git rev-parse HEAD` SHA. Open `work-tour.html` and confirm it renders.
 
 If evidence cannot be re-established, stop without pushing. A red evidence case may still be retained locally as useful diagnosis; it is not a deploy candidate.
 
