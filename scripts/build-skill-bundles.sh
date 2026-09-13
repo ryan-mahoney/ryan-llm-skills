@@ -292,6 +292,11 @@ To have one top-level agent run the complete sequence and publish the pull reque
 The orchestrator resumes from valid existing artifacts, preserves directives such as "use a
 worktree" or named delegation, and stops only at a published PR or a concrete stage blocker.
 
+See [the end-to-end guide](docs/spec-workflow.md) for goal-mode prompts, compact delegation,
+OpenCode nested workers, resume behavior, and completion criteria. The [evidence audit guide](docs/reviews.md)
+explains the required proof. These guides are included in this archive. PR merging remains a
+separate action after publication.
+
 After `spec-architect-initial` writes its proposal, read the recommendation before continuing. This is the key decision point. If the proposal says the request does not fit the architecture, treat that as useful signal rather than a failure: adjust the goal, choose one of the alternatives, or make the required architecture change explicit before writing an implementation spec.
 
 ### 1. Design The Approach
@@ -782,6 +787,8 @@ build_bundle() {
 
   if [ "$name" = "spec-skills" ]; then
     copy_file "$bundle_dir" "augment/agents/spec-step-implementer.md" "augment/agents/spec-step-implementer.md"
+    copy_file "$bundle_dir" "docs/spec-workflow.md" "docs/spec-workflow.md"
+    copy_file "$bundle_dir" "docs/reviews.md" "docs/reviews.md"
     copy_rules "$bundle_dir"
   elif [ "$name" = "specops-skills" ]; then
     copy_scripts "$bundle_dir" "decompose-skeleton.mjs" "agent-docs.mjs" "commit-ledger.mjs"

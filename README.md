@@ -6,7 +6,7 @@ Skills are slash commands defined in `skills/<name>/SKILL.md` using the Agent Sk
 
 ## Bundles And Workflows
 
-Two portable, installable bundles produce three documented workflows. Build the bundles with `scripts/build-skill-bundles.sh`; each archive contains a `skills/` directory plus `bundle.json`, `README.md`, and `install.sh`. The `spec-skills` archive also includes the shared `rules/` guides used by both spec and design-spec workflows.
+Two portable, installable bundles cover spec-driven development, its design entry point, and SpecOps. Build the bundles with `scripts/build-skill-bundles.sh`; each archive contains a `skills/` directory plus `bundle.json`, `README.md`, and `install.sh`. The `spec-skills` archive also includes the shared `rules/` guides and workflow documentation. Product-documentation skills are available separately in this repository.
 
 ### spec-skills: spec-driven development
 
@@ -14,7 +14,16 @@ A standalone workflow that turns a goal into architecture, an explicit evidence 
 
 Use `spec-end-to-end` when one top-level agent should orchestrate the complete sequence and publish the pull request. It composes the stages below, resumes from valid existing artifacts, and preserves run-wide directives such as worktree choice or named delegation.
 
-Run the stages in order:
+```text
+/spec-end-to-end add CSV export for the filtered results, using a worktree
+/spec-end-to-end resume .specs/results-export/ through PR publication
+```
+
+See the [end-to-end workflow guide](docs/spec-workflow.md) for prerequisites, goal-mode prompts,
+compact handoffs, OpenCode nested workers, recovery, and completion criteria. The workflow ends at
+a published PR with current evidence; merging the PR is a separate action.
+
+The orchestrator runs these stages, which can also be invoked separately:
 
 1. `spec-architect-initial`: write `.specs/<feature>/proposal.md`.
 2. `spec-architect-critics`: stress-test the proposal and write `critique.md` (optional).
@@ -65,7 +74,7 @@ Run the design stages, then hand off to the explicit engineering back-half:
 2. `design-spec-prototype`: build and serve a viewable prototype (`prototype/`), optional
 3. `design-spec-critique`: critique the prototype, else the proposal (`critique.md`), optional
 4. `design-spec-writer`: write `spec.md`, its step index, and `evidence-plan.json`.
-5. Hand off to `spec-prepare`, workspace setup, `spec-run`, `spec-branch-refine`, and `spec-work-tour`.
+5. Hand the existing spec to `spec-end-to-end`, or run `spec-prepare`, workspace setup, `spec-run`, `spec-branch-refine`, `spec-work-tour`, and `spec-pr` separately.
 
 | Skill | Command | Purpose |
 |---|---|---|
@@ -74,7 +83,7 @@ Run the design stages, then hand off to the explicit engineering back-half:
 | **design-spec-critique** | `/design-spec-critique [feature]` | Critique the prototype or proposal and write `critique.md` |
 | **design-spec-writer** | `/design-spec-writer [feature]` | Write the design-focused `spec.md` and machine step index without GitHub side effects |
 
-### product-docs: permission model, screen inventory, screen pages
+### product-docs: screens and journeys
 
 Three chained skills that document a product's user-facing surfaces from the access model outward. Each writes one artifact that the next reads, so the expensive derivation happens once. Run them in order; each also runs alone and says so when an upstream file is absent. Plain-English guide: [`docs/product-documentation.md`](docs/product-documentation.md).
 
@@ -85,6 +94,15 @@ Three chained skills that document a product's user-facing surfaces from the acc
 | **document-screen-behavior** | `/document-screen-behavior <screen>` | `docs/screens/SCRN-###-*.md` + `docs/screenshots/SCRN-###/` — one full screen specification |
 
 Handoffs: the permission model supplies `AUD-##` predicates as the inventory's partition axes, and `ROLE-##` / `CAP-##` IDs to the screen pages. The inventory supplies each screen's ID and the queue of undocumented screens. Every downstream file pins the upstream version in `derived_from`, so drift is visible rather than silent.
+
+Three companion skills trace a user's goal across repositories. Run `build-journey-map` to register
+journeys, `document-journey` for each registered journey, then `visualize-journey` for a visual map.
+
+| Skill | Command | Writes |
+|---|---|---|
+| **build-journey-map** | `/build-journey-map [repository-set]` | `docs/journey-registry.md` with stable journey IDs and repository seams |
+| **document-journey** | `/document-journey <JRNY-###>` | `docs/journeys/JRNY-###-<slug>.md` with stages, carried context, and evidence |
+| **visualize-journey** | `/visualize-journey <JRNY-###>` | `docs/journeys/visuals/JRNY-###/` with a manifest and HTML map, plus a portfolio index |
 
 ### specops-skills: SpecOps / agent documentation
 
@@ -206,13 +224,17 @@ Standalone skills outside the two distributions.
 | **skill-factory** | `/skill-factory [description of task to automate]` | Create a reusable skill by extracting an existing repository workflow into a grounded `SKILL.md` |
 | **simple-english** | `/simple-english [text or file]` | Write or check technical text against ASD-STE100 Simplified Technical English — sentence limits, one word one meaning, active voice, condition before command ([upstream](https://github.com/AminBlg/SimpleEnglish), MIT) |
 | **axi-checker** | `/axi-checker [path to prompt/SKILL.md/AGENTS.md]` | Audit a prompt, skill, or agent instruction file against the 10 [AXI](https://axi.md/) principles and recommend structural and content fixes; delegates the sentence-level pass to `simple-english` |
+| **rules-from-experts** | `/rules-from-experts [topic]` | Research named experts, resolve disagreements, and produce a cited report plus agent-readable rules |
+| **ux-cover-critique** | `/ux-cover-critique [cover and positioning]` | Critique a book cover against its genre, audience, and market positioning |
+| **ux-information-critique** | `/ux-information-critique [pages and reading job]` | Critique informational pages for typography, hierarchy, and reading usability |
+| **ux-page-critique** | `/ux-page-critique [screenshot and user job]` | Critique an application page and prioritize UX and visual improvements |
 | **commit** | `/commit [issue]` | Conventional commit of staged files |
 | **pr-review** | `/pr-review [pr]` | Review a PR's code and submit comments |
 | **pr-feedback** | `/pr-feedback [pr]` | Address PR review comments one by one |
 
 ## Rules
 
-Design and copy guidance applied to frontend and UX work. Files in `rules/` are symlinked into harness-specific rule/guide directories.
+Design, copy, implementation, and testing guidance. Files in `rules/` are symlinked into harness-specific rule/guide directories; apply each guide when relevant to the task.
 
 | File | Scope |
 |---|---|
@@ -222,6 +244,8 @@ Design and copy guidance applied to frontend and UX work. Files in `rules/` are 
 | `table-row-design.md` | Table layout, alignment, row interaction |
 | `cta-design.md` | Button wording, hierarchy, accessibility |
 | `ux-states.md` | Required states for data-driven views (empty, loading, error, partial, ideal) |
+| `minimal-implementation.md` | Keep implementation scope focused and avoid unnecessary abstractions |
+| `unit-testing.md` | Write useful unit tests with clear boundaries and meaningful assertions |
 
 ## Agent Instructions
 
@@ -244,7 +268,9 @@ Each agent reads a global instruction file from its own config directory. The ca
 ├── rules/         # Design and copy guidance (symlinked into each agent)
 ├── claude/        # Claude Code global instructions → ~/.claude/CLAUDE.md
 ├── codex/         # Codex global instructions → ~/.codex/AGENTS.md
-└── scripts/       # Bundle build script
+├── docs/          # Workflow, evidence review, and product-documentation guides
+├── bundles/       # Distribution contents and installation guide
+└── scripts/       # Bundle build, skill lint, and SpecOps tooling
 ```
 
 Run `sync.sh` after any change to instructions, rules, or skills:
@@ -254,6 +280,10 @@ Run `sync.sh` after any change to instructions, rules, or skills:
 ```
 
 This copies instruction files, refreshes rule symlinks, syncs skills where needed, prunes stale skill symlinks after renames, and syncs harness adapters such as Augment CLI agents. Each target directory is only updated if it already exists.
+
+OpenCode runtime settings live separately in `~/.config/opencode/opencode.jsonc` or `opencode.json`.
+`sync.sh` does not install provider credentials or edit those settings. See
+[OpenCode delegation setup](docs/spec-workflow.md#opencode-nested-delegation) for the optional second worker level.
 
 ## Augment Support
 

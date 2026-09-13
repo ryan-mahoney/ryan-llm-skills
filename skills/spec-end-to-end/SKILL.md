@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "3"
+  version: "4"
 ---
 
 # Spec End To End
@@ -38,8 +38,14 @@ the next stage may proceed.
    explicitly requested stage; do not recreate current valid artifacts merely to replay the list.
 4. Keep one canonical feature slug and spec-package path through the run. After a worktree handoff,
    the destination package is canonical.
-5. Maintain a compact stage ledger with `pending`, `running`, `complete`, or `blocked` status. Give
-   the user concise progress updates at material handoffs.
+5. Maintain one compact stage ledger with `pending`, `running`, `complete`, or `blocked` status,
+   the canonical checkout, worker/session IDs, decisions, revision-bound evidence references,
+   unresolved findings, and the next action. Update it at material handoffs and give concise
+   progress updates. Keep any harness goal objective short and stable; reference the ledger and
+   spec package instead of expanding the objective with execution history.
+
+After continuation or compaction, reconcile the ledger with current artifacts and Git state before
+resuming. Reopen settled decisions only when new evidence invalidates them.
 
 If multiple feature packages or goals match and repository evidence cannot disambiguate them, stop
 with the exact ambiguity. Do not choose by modification time.
@@ -58,6 +64,29 @@ valid output:
 Run an optional critique when the user requests it, the proposal recommends it, or the change is
 materially cross-cutting, security-sensitive, data-sensitive, dependency-heavy, irreversible, or
 architecturally novel.
+
+## Delegate With Compact Handoffs
+
+When delegation is authorized, use existing stage and prepared-step boundaries. Preserve sequential
+steps, dedicated step workers, commit boundaries, and independent reviewer separation. Before
+delegating a stage that itself requires workers, verify the harness supports the needed nesting and
+tool access; otherwise retain that stage's coordination locally.
+
+Give each worker the canonical checkout and spec paths, assigned stage or step, owning skill path,
+required constraints, and return contract. Require it to read and follow the owning skill in full.
+Reference accessible documents instead of copying them unless the dispatch contract requires exact
+text. Do not assume workers inherit the parent conversation.
+
+Keep investigation, implementation, verification, and routine repair with the assigned worker under
+the owning skill's rules. Preserve its permitted checkpoint outcomes and escalation policy. Resume
+the same worker for follow-up within that assignment when supported. Coordinate at handoffs,
+blockers, or cross-stage decisions; use completion notifications or blocking task calls when
+available instead of routine status polling or duplicating the worker's work.
+
+Keep full required reports and logs in canonical artifacts. Request a conversational handoff of
+about 200 words containing outcome, assigned unit, changed-file summary, checkout and tested
+revision, verification results and evidence paths, gaps, and decisions needed. Expand for mandatory
+report fields or material issues; brevity never hides failures or replaces required artifacts.
 
 ## Execute The Pipeline
 
@@ -82,9 +111,15 @@ excluded by the routing policy above:
    finish with `verdict: ready` bound to the same HEAD.
 9. Run `spec-pr` from the same checkout and publish the pull request.
 
-After every stage, inspect its declared outputs and outcome. Never convert `blocked` into success or
-continue past a failed gate. If a stage invalidates an earlier artifact, return to the owning stage,
-refresh it, and then resume the ordered pipeline.
+After every stage, inspect its declared outputs and outcome against the owning skill's handoff
+contract. A worker's success assertion is insufficient: check required evidence and revision
+bindings. Preserve all required reads, checks, independent audits, and integration verification;
+do not add a duplicate implementation review or rerun verification merely to repeat worker
+evidence. Expand inspection for missing, inconsistent, stale, or risk-bearing evidence.
+
+Never convert `blocked` into success or continue past a failed gate. Preserve intermediate
+checkpoint outcomes where the owning skill permits them. If a stage invalidates an earlier
+artifact, return to the owning stage, refresh it, and then resume the ordered pipeline.
 
 ## Worktree Ownership
 

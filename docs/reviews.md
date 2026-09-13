@@ -4,6 +4,10 @@ The standalone spec workflow does not depend on human code review. Its final aut
 
 `spec-branch-refine` alternates `spec-branch-review` and `spec-branch-fix` until the implementation and its evidence are proven or the loop is honestly blocked. A proven pass hands off to the explicit `spec-work-tour` stage, which emits the required machine verdict and HTML tour. A PR distributes that case; it is not where safety is expected to emerge.
 
+`spec-end-to-end` coordinates these stages after `spec-run`, checks each handoff, and invokes
+`spec-pr` after the tour is ready. See the [workflow guide](spec-workflow.md) for starting, resuming,
+and delegating a run. Compact worker reports do not replace the evidence package or this audit.
+
 ## Artifact Package
 
 ```text
@@ -73,6 +77,7 @@ For user-visible work, the QA section makes the implementation easy to explore w
 
 ## Ownership
 
+- End-to-end orchestration owns stage order, workspace selection, handoff checks, and recovery.
 - Architecture sets the initial evidence posture and provisional failure hypotheses.
 - Critique attacks solution and evidence sufficiency.
 - Spec writing owns stable AC/CL/FH/EV definitions and `evidence-plan.json`.
