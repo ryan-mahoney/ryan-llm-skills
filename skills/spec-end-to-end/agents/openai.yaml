@@ -1,0 +1,4 @@
+interface:
+  display_name: "Spec End to End"
+  short_description: "Run the complete spec workflow through PR"
+  default_prompt: "Use $spec-end-to-end to take this change from a clear goal through a published pull request."

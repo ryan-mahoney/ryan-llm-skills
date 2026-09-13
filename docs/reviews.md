@@ -2,7 +2,11 @@
 
 The standalone spec workflow does not depend on human code review. Its final authority is a commit-bound chain from requirement to falsifiable claim, credible failure hypothesis, executable gate, observed result, independent integrated audit, and deployment verdict.
 
-`spec-branch-refine` alternates `spec-branch-review` and `spec-branch-fix` until the implementation and its evidence are proven or the loop is honestly blocked. A proven pass invokes `spec-work-tour`, which emits the required machine verdict and HTML tour. A PR distributes that case; it is not where safety is expected to emerge.
+`spec-branch-refine` alternates `spec-branch-review` and `spec-branch-fix` until the implementation and its evidence are proven or the loop is honestly blocked. A proven pass hands off to the explicit `spec-work-tour` stage, which emits the required machine verdict and HTML tour. A PR distributes that case; it is not where safety is expected to emerge.
+
+`spec-end-to-end` coordinates these stages after `spec-run`, checks each handoff, and invokes
+`spec-pr` after the tour is ready. See the [workflow guide](spec-workflow.md) for starting, resuming,
+and delegating a run. Compact worker reports do not replace the evidence package or this audit.
 
 ## Artifact Package
 
@@ -50,7 +54,7 @@ The audit emits ordinary structured findings. `category: evidence` is used when 
 
 `spec-branch-refine` owns recurrence and the iteration cap. It stops:
 
-- **ready** when the audit is proven and `spec-work-tour` renders a ready tour for the same HEAD;
+- **proven** when the audit passes with proven evidence for the same HEAD;
 - **stalled** when no material change is possible and the same required findings remain;
 - **cap** when bounded iterations are exhausted.
 
@@ -73,6 +77,7 @@ For user-visible work, the QA section makes the implementation easy to explore w
 
 ## Ownership
 
+- End-to-end orchestration owns stage order, workspace selection, handoff checks, and recovery.
 - Architecture sets the initial evidence posture and provisional failure hypotheses.
 - Critique attacks solution and evidence sufficiency.
 - Spec writing owns stable AC/CL/FH/EV definitions and `evidence-plan.json`.
@@ -80,7 +85,7 @@ For user-visible work, the QA section makes the implementation easy to explore w
 - Step execution owns implementation plus assigned evidence and QA artifacts.
 - Branch audit owns independent falsification and never edits code.
 - Branch fix owns corrections and never rewrites the audit verdict.
-- Refine owns convergence and invokes the final tour.
+- Refine owns convergence and hands a proven commit to the final tour.
 - Work tour owns final evidence assembly and deployment verdict.
 - PR publication verifies freshness and distributes the already-complete case.
 

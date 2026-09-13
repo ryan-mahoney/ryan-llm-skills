@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "19"
+  version: "20"
 ---
 
 # Spec Run
@@ -92,8 +92,14 @@ The Markdown begins with a level-1 heading and contains:
 
 `merge-evidence.json` mirrors every CL/FH/EV item from `evidence-plan.json`, adds actual statuses, commands/outcomes/artifacts/proof boundaries, step commits, QA inputs, deployment facts, gaps, and the full current `commit`. Use `readyForAudit: true` only when every planned gate was produced and passed; this is not the deploy verdict.
 
-State gaps honestly. Then run `spec-branch-refine`. After it passes, invoke `spec-work-tour` to create `work-tour.json` and `work-tour.html`. A spec execution is not complete until the final tour exists and is bound to the audited HEAD. If refinement or the tour is blocked, preserve the outputs and report the blocking evidence.
+State gaps honestly. Finish this stage with `outcome: ready-for-refinement` when every indexed step
+has been dispatched and both merge-evidence files are bound to current HEAD. Do not run
+`spec-branch-refine` or `spec-work-tour`; they are separate top-level stages so their outcomes remain
+visible and independently resumable.
 
 ## Report
 
-Report the spec and preparation manifest, every step result, exact commands/outcomes, criterion/claim/failure/gate coverage, both merge-evidence paths, branch-audit verdict, both work-tour paths, deploy verdict, and remaining gaps/risks. Do not write GitHub artifacts or add attribution.
+Report the spec and preparation manifest, every step result, exact commands/outcomes,
+criterion/claim/failure/gate coverage, both merge-evidence paths, current HEAD, and remaining
+gaps/risks. End with `next: spec-branch-refine`. Do not claim an audit or deployment verdict, write
+work-tour/GitHub artifacts, or add attribution.

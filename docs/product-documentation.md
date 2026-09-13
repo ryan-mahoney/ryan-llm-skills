@@ -1,6 +1,8 @@
 # Product Documentation Skills
 
-Three skills write product documentation. Each skill writes one kind of file. The later skills read the files that the earlier skills write.
+Three skills document access and individual screens. Three companion skills register, document,
+and visualize journeys across repositories. Each skill writes one kind of artifact, and later
+skills read the relevant earlier artifacts.
 
 ## What each skill writes
 
@@ -9,8 +11,11 @@ Three skills write product documentation. Each skill writes one kind of file. Th
 | `build-permission-model` | `docs/permissions/permission-model.md` | Who can open which page? |
 | `build-screen-inventory` | `docs/screen-inventory.md` and `docs/inventories/*.md` | Which pages exist, and for whom? |
 | `document-screen-behavior` | `docs/screens/SCRN-###-*.md` | What does one page do? |
+| `build-journey-map` | `docs/journey-registry.md` | Which user goals cross these repositories? |
+| `document-journey` | `docs/journeys/JRNY-###-<slug>.md` | What happens at each stage and repository boundary? |
+| `visualize-journey` | `docs/journeys/visuals/JRNY-###/` and a portfolio index | What does the path look like, and where should we investigate? |
 
-## The order
+## Screen Documentation Order
 
 Run the skills in this order:
 
@@ -69,11 +74,14 @@ You do not always need all three.
 | A list of every page | `build-screen-inventory` |
 | A full description of one page | `document-screen-behavior` |
 
-Each skill runs alone.
+Each of these three screen-documentation skills can run alone. Journey documentation has the
+explicit prerequisites described below.
 
 ## When a file is absent
 
-Each skill looks for the files that come before it. If a file is absent, the skill does that work itself. Then it records that the file was absent, and it recommends the skill that writes the file.
+The screen-documentation skills look for the files that come before them. If a file is absent,
+they derive the needed access or screen context from source, record the missing input, and
+recommend the skill that writes it. This does not create a replacement upstream document.
 
 This behavior keeps each skill usable alone. The result is less exact than a full run.
 
@@ -89,4 +97,21 @@ Each file records the version of the code that a person read it against. The key
 
 Each file also records the commands that rebuild its raw input. Use these commands to see what changed. Then update only the parts that changed.
 
-The permission model changes least often. It changes when a person adds a role. This change is rare and quiet. Read the model again after each release.
+Refresh the permission model when roles, capabilities, route guards, or audience rules change.
+Then refresh the affected inventories, screen pages, and journeys against that version.
+
+## Journey Documentation Order
+
+1. Run `build-journey-map` with every repository the user's goal crosses. It reads available access
+   and screen docs plus existing end-to-end tests, then registers journeys with permanent `JRNY-###`
+   IDs and repository seams in `docs/journey-registry.md`.
+2. Run `document-journey <JRNY-###>` for a registered journey. It traces the stages, screens,
+   promises, carried context, and losses across repositories, and writes the journey page.
+3. Run `visualize-journey <JRNY-###>` after the page exists. It produces a manifest and HTML map
+   under `docs/journeys/visuals/JRNY-###/`, with screenshots, CTAs, evidence links, and prioritized
+   investigations. It also refreshes the portfolio index at `docs/journeys/visuals/index.html`.
+
+`document-journey` requires a registry row and does not invent journey IDs. `visualize-journey`
+requires both the registry row and journey page. The registry and page remain canonical; refresh
+the derived visual map when they change. A journey that crosses marketing, an application, email,
+and checkout is one user goal even when its implementation spans several repositories.

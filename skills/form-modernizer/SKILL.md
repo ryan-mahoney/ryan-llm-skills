@@ -7,14 +7,14 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "2"
+  version: "3"
 ---
 
 # Form Modernizer
 
 Compound, multi-step skill that fundamentally rethinks an existing React Final Form sidebar form — not surface-level polish, but structural redesign. Challenges every field's existence, mode visibility, and grouping. Produces a TypeScript contract, design-system-aligned implementation, and pixel-accurate Playwright screenshots for visual review.
 
-The skill begins by creating an isolated worktree and opening it in a new VSCode window, so all modernization work happens on a dedicated branch without touching the main working tree.
+The skill operates in the repository checkout assigned by the invoking top-level agent. Workspace isolation is an orchestration decision, not a form-modernization phase.
 
 **Operating principle:** Do the work autonomously. Do not pause for user approval at intermediate steps. Complete all phases. Then present the finished result. (This is the only statement of the autonomy rule; the phases do not restate it.)
 
@@ -28,13 +28,14 @@ The skill begins by creating an isolated worktree and opening it in a new VSCode
 
 1. **Verify the form exists.** Read the file at `formPath`. If it does not exist, report `out of scope: <formPath> not found` and stop.
 2. **Verify the form is in scope.** Grep for the form component name in `app/libraries/nodejs-manager/src/manager/SidebarSingleton.js` to verify it is wired into the sidebar system. If the component is not registered there, or does not use React Final Form, report `out of scope: <formPath>` and stop.
-3. **Derive the form name.** Extract the component name from the file (e.g., `OfferForm` from `OfferForm.js`). Derive a kebab-case slug (e.g., `offer-form`). This slug is used for branch names, screenshot filenames, and contract file names throughout all phases.
+3. **Derive the form name.** Extract the component name from the file (e.g., `OfferForm` from `OfferForm.js`). Derive a kebab-case slug (e.g., `offer-form`). This slug is used for screenshot filenames and contract file names throughout all phases.
+4. **Confirm workspace ownership.** Follow `references/worktree-setup.md`. Record the current repository root and branch, then continue in that checkout. Do not create or switch branches/worktrees, open an editor, write editor settings, install session hooks, or stop for a workspace handoff. If the invoking agent wants isolation, it must establish and assign the worktree before this skill runs.
 
 ---
 
-## Phase 1 — Branch + Worktree + VSCode
+## Phase 1 — Workspace Coordination
 
-Initial invocation only — the continuation session starts at Phase 2. Follow `references/worktree-setup.md` — 9 steps: branch name, worktree reuse-or-create, `.env` copy, VSCode teal accent, continuation hook, settings merge, open the new window, STOP report. The phase ends with a hard STOP: the new VSCode window's Claude Code session picks up from Phase 2 via the SessionStart hook.
+Confirm the assigned checkout using `references/worktree-setup.md`, then continue directly to Phase 2 in the same top-level run. The current checkout may be a main working tree or a worktree; this skill does not choose between them.
 
 ---
 
@@ -180,7 +181,7 @@ Present to the user:
 4. **Accessibility improvements** — what was fixed
 5. **Design alignment** — what was corrected
 6. **Screenshot** — reference the final screenshot location in `tmp/form-screenshots/`
-7. **Next steps** — remind the user they can commit and open a PR from the worktree branch
+7. **Workspace** — report the checkout and branch where the verified changes now live
 
 ---
 
@@ -200,14 +201,13 @@ Present to the user:
 - **Help text:** Use the `note` prop on `FieldWrapper`, not tooltips or placeholder text. Do not add notes that duplicate section headings. Avoid notes on fields in side-by-side grids (causes vertical misalignment).
 - **Accordion panels:** Use `AccordionPanel` from `app/components/common/AccordionPanel.js`. Expanded panels get `className="border border-gray-400 border-t-0 rounded-b-lg p-4 flex flex-col gap-4"` on `DisclosurePanel`. Fields inside use `padding=""` on FieldWrapper.
 - **Add mode:** Keep add mode minimal per the Phase 4a criteria. Optional/configuration fields belong in edit-only accordion sections wrapped in `{id !== "new" && (...)}`.
-- **Worktrees:** All work happens in `~/.worktrees/<repo-name>/modernize-{formNameKebab}`. Never modify the main working tree after Phase 1.
-- **Branch naming:** `modernize/{formNameKebab}` (e.g., `modernize/offer-form`).
+- **Workspace ownership:** Work only in the checkout assigned by the invoking agent. Do not create, switch, open, or hand off worktrees or editor sessions inside this skill.
 - **No new dependencies** beyond Playwright (dev only) — uses existing Final Form inputs, `FieldWrapper`, `FormSidebarHeader/Footer`, `AccordionPanel`, `DelayedFocusTrap`.
 - **No mocha/chai.** Contract tests use `bun:test`.
 
 ## References
 
-- `references/worktree-setup.md` — Phase 1's nine worktree/VSCode/hook steps. Open it on the initial invocation only.
+- `references/worktree-setup.md` — workspace ownership and worktree coordination rules. Open it before Phase 1.
 - `references/harness-setup.md` — Phase 2's Playwright config and four harness files. Open it when the harness does not exist yet.
 - `references/subagent-prompts.md` — the six sub-agent prompt patterns (A–F). Open it at Phase 3 and Phase 5.
 - `references/screenshot-tests.md` — the four-test screenshot template. Open it at Phase 6a.

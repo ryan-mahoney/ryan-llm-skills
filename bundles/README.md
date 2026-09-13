@@ -15,6 +15,7 @@ filename contract for preparation and execution.
 
 The spec-driven development workflow plus the design-spec front-half:
 
+- `spec-end-to-end`
 - `spec-architect-initial`
 - `spec-architect-critics`
 - `spec-write`
@@ -27,6 +28,7 @@ The spec-driven development workflow plus the design-spec front-half:
 - `spec-branch-refine`
 - `spec-branch-review`
 - `spec-branch-fix`
+- `spec-work-tour`
 - `spec-pr`
 - `spec-issue`
 - `design-spec-architect`
@@ -38,16 +40,28 @@ Includes the Augment CLI subagent adapter:
 
 - `augment/agents/spec-step-implementer.md`
 
-The generated `spec-skills` README includes a workflow overview covering:
+`spec-branch` and `spec-branch-worktree` ship as backwards-compatible convenience utilities; the
+end-to-end orchestrator manages ordinary branch/worktree setup directly.
+
+Use `spec-end-to-end` to have one top-level agent run this complete sequence through pull-request publication, including explicit worktree or delegation modifiers.
+
+The archive includes `docs/spec-workflow.md` and `docs/reviews.md`. The
+[workflow guide](../docs/spec-workflow.md) covers quick starts, goal-mode operation, resuming stale
+stages, compact handoffs, and OpenCode nested workers. The [audit guide](../docs/reviews.md) explains
+the required evidence and independent review. These guides remain in the extracted archive; the
+installer installs skills and supporting runtime resources, not documentation into target projects.
+
+The generated `spec-skills` README also includes a stage-by-stage overview:
 
 1. Start with `spec-architect-initial` and a clear goal.
 2. Optionally run `spec-architect-critics` to challenge the architecture.
 3. Run `spec-write` to create `spec.md` and the machine step index.
 4. Run `spec-prepare` to ground and correct the spec, derive prose guardrails, plan each step, and publish the manifest.
-5. Create a branch/worktree with `spec-branch` or `spec-branch-worktree`; worktree creation copies the matching `.specs` feature package.
+5. Let the top-level agent establish a branch or worktree and preserve the matching `.specs` feature package.
 6. Execute the immutable prepared package with `spec-run`.
 7. Run `spec-branch-refine` to review and fix the integrated branch to convergence.
-8. Publish with `spec-pr`.
+8. Run `spec-work-tour` to produce the commit-bound evidence and deployment verdict.
+9. Publish with `spec-pr`.
 
 `spec-issue` remains an optional standalone GitHub mirror and does not participate in this sequence.
 
@@ -56,7 +70,7 @@ It also includes the design-spec front-half:
 1. Run `design-spec-architect` to propose a design direction.
 2. Optionally run `design-spec-prototype` and `design-spec-critique`.
 3. Run `design-spec-writer`.
-4. Hand off to the same `spec-prepare` / `spec-run` / `spec-branch-refine` back-half.
+4. Pass the existing spec to `spec-end-to-end`, or run the same preparation, workspace, execution, refinement, tour, and PR stages separately.
 
 ### specops-skills
 

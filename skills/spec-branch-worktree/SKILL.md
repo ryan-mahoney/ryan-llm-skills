@@ -1,6 +1,6 @@
 ---
 name: spec-branch-worktree
-description: Create or reuse a named git branch and worktree for standalone spec-driven work, copy the matching .specs/<feature>/ package into it, prepare the local environment, and open it in VS Code. Use for "spec branch worktree", "new spec worktree", "worktree for", "start a worktree", or "create worktree".
+description: Create or reuse a named git branch and worktree for standalone spec-driven work, copy the matching .specs/<feature>/ package into it, prepare the local environment, and return the worktree to the invoking agent. Use for "spec branch worktree", "new spec worktree", "worktree for", "start a worktree", or "create worktree".
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "10"
+  version: "11"
 ---
 
 # Spec Branch Worktree
@@ -55,7 +55,7 @@ base_ref="origin/${default_branch:-main}"
 git rev-parse --verify "$base_ref" >/dev/null 2>&1 || base_ref="HEAD"
 ```
 
-Require a git repository and the `code` CLI before mutating anything.
+Require a git repository before mutating anything.
 
 ## Create Or Reuse
 
@@ -97,22 +97,17 @@ If the destination feature folder already exists:
 
 After a successful copy, the destination is the active spec folder for this branch. The source remains an inert handoff copy; subsequent spec skills must run from the worktree and must not write back to the source checkout.
 
-Choose a deterministic title/status-bar color from the slug using `cksum % 8`: teal `#0d7377`, purple `#6a1b9a`, orange `#e65100`, blue `#1565c0`, green `#2e7d32`, red `#b71c1c`, indigo `#283593`, or brown `#4e342e`. Merge these keys into `$dest/.vscode/settings.json` when possible:
-
-```json
-{
-  "workbench.colorCustomizations": {
-    "titleBar.activeBackground": "<hex>",
-    "titleBar.activeForeground": "#ffffff",
-    "statusBar.background": "<hex>",
-    "statusBar.foreground": "#ffffff"
-  }
-}
-```
-
 Install dependencies using the first matching repository signal: Bun lock/AGENTS guidance → `bun install --frozen-lockfile`; documented non-Bun setup → exact documented command; then pnpm, yarn, npm, Poetry, uv, pip, Bundler, Go, or Cargo lock/project files. A failed or unavailable install is non-fatal but must be reported explicitly.
 
-Open with `code --new-window "$dest"`.
+## Return Control
+
+Return the prepared worktree path to the invoking top-level agent. The invoking agent decides how
+to continue work there: for example, by setting tool working directories, continuing in the same
+session, or delegating later stages when authorized.
+
+Do not open an editor, create editor-specific settings, start a replacement agent session, install
+a continuation hook, or implement the spec. Worktree creation is a repository handoff, not a UI or
+session handoff.
 
 ## Report
 
@@ -129,7 +124,8 @@ visual-references: copied:<count> | packaged:<count> | none
 preparation: preserved | invalidated | none
 environment: copied | absent
 dependencies: <command and outcome | skipped>
-vscode: opened
+handoff: top-level-agent
+editor: unchanged
 ```
 
 On failure, return `outcome: blocked`, a stable `reason`, and the conflicting path/branch or missing prerequisite. Stop after reporting; do not implement the spec.
