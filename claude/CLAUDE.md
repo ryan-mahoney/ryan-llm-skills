@@ -31,6 +31,11 @@ When multiple rules apply:
 2. Use broader documents (e.g. `functionalist-design.md`) as tie-breakers.
 3. If still ambiguous, choose the option that is most predictable and easiest for users to complete tasks.
 
+## PR and Ticket Writing
+When drafting or editing PR titles/descriptions or Jira/GitHub tickets, load and apply
+`~/.agents/rules/pr-and-ticket-writing.md`, including its acceptance-criteria guidance.
+This applies to backend and infrastructure work as well as user-facing changes; the design-only exclusions above do not apply to this writing guidance.
+
 ## Symlinked Rules Mirror
 A mirrored rules folder exists at `~/.claude/rules/` and should contain symlinks to `~/.agents/rules/*`.
 Always resolve symlinks and read the source files.

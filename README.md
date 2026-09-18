@@ -246,6 +246,7 @@ Design, copy, implementation, and testing guidance. Files in `rules/` are symlin
 | `ux-states.md` | Required states for data-driven views (empty, loading, error, partial, ideal) |
 | `minimal-implementation.md` | Keep implementation scope focused and avoid unnecessary abstractions |
 | `unit-testing.md` | Write useful unit tests with clear boundaries and meaningful assertions |
+| `pr-and-ticket-writing.md` | Write concise PR descriptions and Jira/GitHub tickets with essential acceptance criteria |
 
 ## Agent Instructions
 

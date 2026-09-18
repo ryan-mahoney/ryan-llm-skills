@@ -1,7 +1,7 @@
 # Global Codex Instructions
 
 ## Instruction Type Clarification
-The files in `~/.agents/rules/*.md` are design and UX guidance documents.
+The files in `~/.agents/rules/*.md` are task-specific guidance documents.
 For Codex, treat them as instruction context (not `.rules` command-approval policies).
 
 Use Codex `.rules` files only for command approval behavior (for example `~/.codex/rules/*.rules`).
@@ -30,6 +30,11 @@ Do not force this guidance for:
 - tasks with no user-facing design or copy impact
 
 If guidance conflicts with correctness, security, accessibility, or maintainability, prioritize those qualities.
+
+## PR and Ticket Writing
+When drafting or editing PR titles/descriptions or Jira/GitHub tickets, load and apply
+`~/.agents/rules/pr-and-ticket-writing.md`, including its acceptance-criteria guidance.
+This applies to backend and infrastructure work as well as user-facing changes; the design-only exclusions above do not apply to this writing guidance.
 
 ## Instruction Precedence
 Follow normal Codex instruction precedence from global to local scope, with deeper project files overriding broader ones.
