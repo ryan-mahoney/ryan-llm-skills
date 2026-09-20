@@ -95,14 +95,16 @@ Three chained skills that document a product's user-facing surfaces from the acc
 
 Handoffs: the permission model supplies `AUD-##` predicates as the inventory's partition axes, and `ROLE-##` / `CAP-##` IDs to the screen pages. The inventory supplies each screen's ID and the queue of undocumented screens. Every downstream file pins the upstream version in `derived_from`, so drift is visible rather than silent.
 
-Three companion skills trace a user's goal across repositories. Run `build-journey-map` to register
-journeys, `document-journey` for each registered journey, then `visualize-journey` for a visual map.
+Four companion skills trace a user's goal across repositories. Run `build-journey-map` to register
+journeys, `document-journey` for each registered journey, `visualize-journey` for a visual map, then
+`view-journeys` to open the maps with working links.
 
 | Skill | Command | Writes |
 |---|---|---|
 | **build-journey-map** | `/build-journey-map [repository-set]` | `docs/journey-registry.md` with stable journey IDs and repository seams |
 | **document-journey** | `/document-journey <JRNY-###>` | `docs/journeys/JRNY-###-<slug>.md` with stages, carried context, and evidence |
-| **visualize-journey** | `/visualize-journey <JRNY-###>` | `docs/journeys/visuals/JRNY-###/` with a manifest and HTML map, plus a portfolio index |
+| **visualize-journey** | `/visualize-journey <JRNY-###>` | `docs/journeys/visuals/JRNY-###/` with a manifest and HTML map, plus a portfolio index and a pan-and-zoom canvas of how journeys connect |
+| **view-journeys** | `/view-journeys` | Nothing; serves an existing collection over `http://127.0.0.1` and returns the canvas URL |
 
 ### specops-skills: SpecOps / agent documentation
 

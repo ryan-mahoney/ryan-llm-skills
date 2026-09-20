@@ -118,6 +118,8 @@ Do not issue new seam IDs. Mark an unregistered crossing `provisional` and open 
 
 Encode conditional paths explicitly in `transition.branches`, including returns to an earlier step, direct-to-terminal success, retries, cancellation, and provider-owned recovery. Keep `toStep` as the default forward reading path; branches record the alternatives.
 
+When a branch or exit point hands the user into another registered journey, add `toJourney: "JRNY-###"` alongside its destination text. When completing this journey is what triggers another one — the registry trigger or the journey page says so, as with a purchase that the follow-on journey assumes — list it in `terminal.continuesIn`. Name the journey the user enters, never the current one; a target that is not visualized yet is allowed and renders as an unmapped journey. Do not declare a continuation the terminal and entry already share, and do not encode shared entry points: the canvas derives both from the repository and route.
+
 ## Step 4 — Put issues on the step where they cost the user
 
 Attach each `CTX-` finding, test gap, inventory gap, stale promise, context loss, or abandonment risk to the affected step.
@@ -141,10 +143,13 @@ Record product-analytics, timing, abandonment, error-rate, support-volume, or re
 Write:
 
 ```text
-docs/journeys/visuals/JRNY-###/
-├── manifest.json
-├── index.html
-└── captures/                 # only when journey-specific captures are needed
+docs/journeys/visuals/
+├── index.html                # portfolio list, generated
+├── canvas.html               # cross-journey canvas, generated beside the list
+└── JRNY-###/
+    ├── manifest.json
+    ├── index.html
+    └── captures/             # only when journey-specific captures are needed
 ```
 
 The manifest is a derived projection, not a new authority. Its `journey.source` points to the canonical journey page and its `verifiedAgainst` values match that page.
@@ -175,9 +180,13 @@ node ~/.agents/skills/visualize-journey/scripts/render-journey-map.mjs \
   --output docs/journeys/visuals/index.html
 ```
 
-The generated portfolio provides text search, entry-system filtering, live result counts, and a clear empty state. Link this portfolio from the registry, then link the individual operator map from its journey row and journey page.
+The same command writes `canvas.html` beside the index: a pannable, zoomable map of every journey in the folder, with repository lanes, one merged node per shared entry or terminal surface, and labelled edges for continuations, `toJourney` branches, and seams two journeys share. A continuation leaves the terminal surface it is declared on, so a journey, the surface it ends at, and the journey that surface feeds read as one flow. Each journey node opens its map; each branch or continuation edge opens the journey it leaves, at the step it leaves from. The two pages cross-link, so regenerating the index regenerates the canvas.
+
+The generated portfolio provides text search, entry-system filtering, live result counts, and a clear empty state; it remains the searchable view. Link this portfolio from the registry, then link the individual operator map from its journey row and journey page.
 
 Add the operator map to the journey page's visual/evidence links. Do not widen the registry row with visual detail; the registry remains a thin index.
+
+Every page is self-contained HTML, but evidence links point at source files across sibling repositories and `file://` cannot resolve or render them. View and verify the rendered pages — including the viewport and interactivity checks below — through `view-journeys`, which starts `~/.agents/skills/visualize-journey/scripts/serve-journeys.mjs` on the collection. Never open or hand out a `file://` path to these pages.
 
 ## Step 6 — Validate the operator map
 
@@ -205,9 +214,10 @@ Confirm:
 11. The behavioral-evidence status is visible beside the priority queue and never implies observed impact when evidence is missing.
 12. Print output preserves step order, repository ownership, CTAs, and issues.
 13. The portfolio index links every manifest exactly once and can search, filter, clear, and show an empty result at 320px and wider. Portfolio counts remain subordinate navigation aids, not performance claims.
+14. The canvas carries every journey, merges each shared entry or terminal surface into one node, labels every cross-journey edge in text as well as line style, opens each journey map, opens a branch or continuation edge at the step it leaves, and pans, zooms, and tabs through the journeys at 320px and wider. Every relationship the registry or journey pages assert between these journeys appears, as a shared surface, a continuation, a branch, or a shared seam. Collection `--check` confirms the canvas was written and names every journey.
 
-Report the map path, portfolio path, steps and repositories shown, screenshots present and missing, external and redirect-only states, issue counts by severity, seams shown, conditional branches, and evidence or test gaps.
+Report the served `http://127.0.0.1:…` URLs for the map, portfolio, and canvas (never `file://` paths — run `view-journeys` to get them), plus steps and repositories shown, screenshots present and missing, external and redirect-only states, issue counts by severity, seams shown, conditional branches, cross-journey links derived, and evidence or test gaps.
 
 ## Updating an existing map
 
-Re-read the canonical journey page and sources. Preserve the journey identity, replace stale step projections, remove resolved issues only when their source status changed, retain missing-capture placeholders until evidence exists, and regenerate both HTML files. Never hand-edit generated HTML.
+Re-read the canonical journey page and sources. Preserve the journey identity, replace stale step projections, remove resolved issues only when their source status changed, retain missing-capture placeholders until evidence exists, and regenerate the journey map and the collection. Never hand-edit generated HTML.
