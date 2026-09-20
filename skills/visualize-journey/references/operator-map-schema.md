@@ -59,6 +59,22 @@ Required:
 
 `repo` must match a repository ID. `route`, `label`, and `detail` are required.
 
+Put the real route in `route` whenever the surface has one. The collection canvas merges an entry and a terminal into one node only when `repo` matches and `route` matches after trimming whitespace and trailing slashes; it never matches prose or partial routes. Describe an inbox or other surface without a route in `label` and `detail`.
+
+The terminal block takes one optional field. `continuesIn` lists the journeys that completing this one triggers, and the canvas draws a continuation from this terminal to each of them:
+
+```json
+{
+  "repo": "app",
+  "route": "/my-kits/:shortcode",
+  "label": "Purchased JobKit viewer",
+  "detail": "The paid settlement is recorded and the complete kit opens.",
+  "continuesIn": ["JRNY-125", "JRNY-126"]
+}
+```
+
+Each ID matches `^JRNY-\d{3,}$`, appears once, and is not this journey's own ID. Use it only when the canonical journey page or the registry names the follow-on journey; omit the field when none does. A continuation that a matching terminal and entry already establish needs no declaration, and declaring it changes nothing: the pair is one relationship either way.
+
 ## Behavioral evidence
 
 Describe whether observed behavior supports the map's risk prioritization:
@@ -86,7 +102,7 @@ List repositories and external systems in visit order:
 }
 ```
 
-Use one stable, restrained color per repository. Color provides ownership wayfinding only; the rendered repository label must always remain visible. Reserve risk colors for severity and missing evidence, and do not use repository colors as large decorative fills.
+Give a repository ID the same label, host, and color in every manifest of a collection; the canvas unions repositories by ID and keeps the first spelling it reads, so a second spelling silently disappears. Use one stable, restrained color per repository. Color provides ownership wayfinding only; the rendered repository label must always remain visible. Reserve risk colors for severity and missing evidence, and do not use repository colors as large decorative fills.
 
 ## Upstream seams
 
@@ -106,6 +122,8 @@ Use `upstreamSeams` for registered boundaries that shape the entry state before 
 ```
 
 Every ID in `journey.seams` must appear in `upstreamSeams` or a step transition. Do not convert a pre-entry system operation into a fake user step.
+
+The collection canvas reads a journey's seams as the union of `journey.seams`, `upstreamSeams[].id`, and `steps[].transition.seam`, and links two journeys that carry the same ID. A seam only one journey declares draws nothing.
 
 ## Steps
 
@@ -256,6 +274,8 @@ Set `provisional: true` when the crossing has no registered seam ID. Use branche
 
 Branch targets may point backward for retry or cancellation. `toStep` remains the default forward reading path.
 
+Add `toJourney` to a branch object when taking it hands the user into another registered journey, matching `^JRNY-\d{3,}$`. Omit it when the branch stays inside this journey. A journey must not name itself. `destination` stays the human-readable free text; `toJourney` is the machine-readable link the canvas view uses to draw cross-journey edges.
+
 ### Issues
 
 ```json
@@ -296,7 +316,11 @@ Allowed `kind`: `source`, `screen`, `screenshot`, `test`, `finding`, `document`.
 }
 ```
 
-`atStep` must name a step ID. `label`, `result`, and `recovery` are required.
+`atStep` must name a step ID. `label`, `result`, and `recovery` are required. As with branches, add `toJourney` (`^JRNY-\d{3,}$`) when this exit hands the user into another registered journey; a journey must not name itself.
+
+Do not use `toJourney` for a shared entry point or a continuation (this journey's terminal is another journey's entry) — the renderer derives those by matching `repo` and `route` across `entry`/`terminal` blocks. When a completed journey triggers another one across unrelated surfaces, declare it in `terminal.continuesIn` instead.
+
+A `toJourney` or `continuesIn` target that the collection does not contain is valid: the canvas draws it as a journey that is named but not mapped. When one step records the same handoff twice, as a branch and as an exit point naming the same journey, it stays one relationship on the canvas.
 
 ## Validation rules
 
@@ -306,6 +330,8 @@ Allowed `kind`: `source`, `screen`, `screenshot`, `test`, `finding`, `document`.
 - Every declared journey seam appears in an upstream seam or step transition, and no projected seam is undeclared.
 - Every nonterminal transition with `toStep` names a later step.
 - Every conditional branch names an existing step or an external destination.
+- Every `toJourney` matches `^JRNY-\d{3,}$` and is not this journey's own ID.
+- Every `terminal.continuesIn` entry matches `^JRNY-\d{3,}$`, is not this journey's own ID, and appears once.
 - Every `seam` matches `SEAM-###`.
 - Every screen matches `SCRN-###`.
 - A surface without a screen ID has a coverage issue unless it is redirect-only or external.

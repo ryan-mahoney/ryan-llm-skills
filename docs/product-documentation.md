@@ -13,7 +13,8 @@ skills read the relevant earlier artifacts.
 | `document-screen-behavior` | `docs/screens/SCRN-###-*.md` | What does one page do? |
 | `build-journey-map` | `docs/journey-registry.md` | Which user goals cross these repositories? |
 | `document-journey` | `docs/journeys/JRNY-###-<slug>.md` | What happens at each stage and repository boundary? |
-| `visualize-journey` | `docs/journeys/visuals/JRNY-###/` and a portfolio index | What does the path look like, and where should we investigate? |
+| `visualize-journey` | `docs/journeys/visuals/JRNY-###/`, a portfolio index, and a journey canvas | What does the path look like, how do journeys connect, and where should we investigate? |
+| `view-journeys` | Nothing; serves `docs/journeys/visuals/` over `http://127.0.0.1` | Where can I open the maps with working links? |
 
 ## Screen Documentation Order
 
@@ -109,9 +110,26 @@ Then refresh the affected inventories, screen pages, and journeys against that v
    promises, carried context, and losses across repositories, and writes the journey page.
 3. Run `visualize-journey <JRNY-###>` after the page exists. It produces a manifest and HTML map
    under `docs/journeys/visuals/JRNY-###/`, with screenshots, CTAs, evidence links, and prioritized
-   investigations. It also refreshes the portfolio index at `docs/journeys/visuals/index.html`.
+   investigations. It also refreshes the portfolio index at `docs/journeys/visuals/index.html` and
+   the journey canvas at `docs/journeys/visuals/canvas.html`.
+4. Run `view-journeys` to open the results. It serves the collection locally and returns the canvas
+   URL.
 
 `document-journey` requires a registry row and does not invent journey IDs. `visualize-journey`
 requires both the registry row and journey page. The registry and page remain canonical; refresh
 the derived visual map when they change. A journey that crosses marketing, an application, email,
 and checkout is one user goal even when its implementation spans several repositories.
+
+The canvas is a pan-and-zoom map of every journey in the collection. It shows what the list cannot:
+entry surfaces that several journeys share, journeys that continue in another journey, branches
+that hand the user to another journey, and seams that more than one journey depends on. Shared
+surfaces and shared seams are derived from the manifests. A branch or exit into another journey is
+recorded as `toJourney`, and a follow-on journey as `terminal.continuesIn`, only when the journey
+page or registry names that journey. Select a journey to open its map; select a branch or
+continuation label to open the step where the user leaves.
+
+The generated pages are self-contained HTML, but their evidence links reach into sibling
+repositories, so opening them with `file://` leaves most links broken. `view-journeys` serves the
+collection from the nearest directory that contains every linked file, shows source files as text,
+and refuses dotfiles, `node_modules`, and paths outside that directory. It never creates or renders
+a journey.

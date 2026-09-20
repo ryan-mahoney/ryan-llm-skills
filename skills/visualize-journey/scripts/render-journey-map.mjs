@@ -7,7 +7,9 @@ import {
   readdirSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+
+import { buildJourneyGraph, validateCrossJourneyLinks } from "./journey-graph.mjs";
 
 const SCHEMA = "visualize-journey/v1";
 const STAGES = new Set([
@@ -277,6 +279,7 @@ const validateManifest = (manifest) => {
   ]);
   for (const seam of declaredSeams) if (!projectedSeams.has(seam)) errors.push(`journey seam ${seam} is not projected`);
   for (const seam of projectedSeams) if (!declaredSeams.has(seam)) errors.push(`projected seam ${seam} is not declared by journey.seams`);
+  errors.push(...validateCrossJourneyLinks(manifest));
   return errors;
 };
 
@@ -680,13 +683,14 @@ const findManifests = (collection) => readdirSync(collection, { withFileTypes: t
   .map((entry) => join(collection, entry.name, "manifest.json"))
   .filter(existsSync);
 
+const journeyHref = (manifestPath, collectionDir) => relative(collectionDir, join(dirname(manifestPath), "index.html")).split("\\").join("/");
+
 const renderCollection = (manifests, outputPath) => {
   const collectionDir = dirname(resolve(outputPath));
   const entryRepositories = new Map();
   const cards = manifests.map(({ manifest, path }) => {
     const counts = issueCounts(manifest);
-    const mapPath = join(dirname(path), "index.html");
-    const href = relative(collectionDir, mapPath).split("\\").join("/");
+    const href = journeyHref(path, collectionDir);
     const entryRepo = manifest.repositories.find(({ id }) => id === manifest.entry.repo);
     entryRepositories.set(entryRepo.id, entryRepo.label);
     const searchText = [manifest.journey.id, manifest.journey.title, manifest.journey.goal, manifest.journey.actor, manifest.journey.owner, entryRepo.label].join(" ").toLowerCase();
@@ -697,15 +701,471 @@ const renderCollection = (manifests, outputPath) => {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Journey operator maps</title><style>${operatorStyles}
   .portfolio-tools{display:grid;grid-template-columns:minmax(260px,2fr) minmax(190px,1fr) auto;gap:12px;align-items:end;margin-bottom:18px;padding-bottom:18px;border-bottom:1px solid var(--ink)}
+  .operator-links{margin:11px 0 0;font-size:.82rem;font-weight:650}
   .portfolio-field label{display:block;margin-bottom:5px;color:var(--muted);font-size:.7rem;font-weight:750;text-transform:uppercase;letter-spacing:.05em}.portfolio-field input,.portfolio-field select{width:100%;min-height:42px;border:1px solid #8b95a5;background:#fff;color:var(--ink);padding:8px 10px;font:inherit}.portfolio-tools button{min-height:42px;border:1px solid #8b95a5;background:#fff;padding:8px 14px;font:inherit;font-weight:650;cursor:pointer}.portfolio-count{grid-column:1/-1;margin:0;color:var(--muted);font-size:.76rem}.collection{border-top:1px solid var(--line)}.journey-row{display:grid;grid-template-columns:minmax(300px,1.35fr) minmax(300px,1fr) minmax(150px,.5fr);gap:20px;align-items:start;padding:18px 0;border-bottom:1px solid var(--line);border-left:3px solid var(--repo)}.journey-summary{padding-left:14px}.journey-summary h2{margin:0;font-size:1.15rem}.journey-summary p:last-child{margin:5px 0 0;color:var(--muted);font-size:.78rem}.journey-route{display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:center;font-size:.72rem}.journey-route span{min-width:0}.journey-route strong{display:block;font-size:.65rem;text-transform:uppercase;letter-spacing:.04em}.journey-route code{display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom;background:#eef0f2;padding:2px 4px}.journey-signals{display:flex;flex-direction:column;align-items:flex-start;gap:4px;color:var(--muted);font-size:.68rem}.journey-signals .signal-risk{color:var(--high);font-weight:750}.journey-signals a{margin-top:4px;font-weight:750}.portfolio-empty{padding:24px;border-bottom:1px solid var(--line);text-align:center}
   @media(max-width:860px){.journey-row{grid-template-columns:1fr}.journey-route{grid-template-columns:1fr}.journey-route>span[aria-hidden]{display:none}.journey-signals{flex-direction:row;flex-wrap:wrap}.portfolio-tools{grid-template-columns:1fr}.portfolio-count{grid-column:1}}
-</style></head><body><header class="operator-header"><div class="shell"><p class="operator-id">Journey operations</p><h1>Operator maps</h1><p class="operator-goal">Find a journey, understand its route, and open the evidence needed for the next investigation.</p></div></header><main class="section"><div class="shell">
+</style></head><body><header class="operator-header"><div class="shell"><p class="operator-id">Journey operations</p><h1>Operator maps</h1><p class="operator-goal">Find a journey, understand its route, and open the evidence needed for the next investigation.</p><p class="operator-links"><a href="canvas.html">View canvas</a></p></div></header><main class="section"><div class="shell">
   ${manifests.length ? `<div class="portfolio-tools" role="search"><div class="portfolio-field"><label for="journey-search">Search journeys</label><input id="journey-search" type="search" autocomplete="off" placeholder="ID, title, goal, actor, or owner"></div><div class="portfolio-field"><label for="journey-repo">Entry system</label><select id="journey-repo"><option value="all">All entry systems</option>${repoOptions}</select></div><button type="button" id="journey-clear">Clear filters</button><p class="portfolio-count" id="journey-count" aria-live="polite">Showing ${manifests.length} of ${manifests.length} journeys</p></div>` : ""}
   <div class="collection">${cards || `<p>No journey manifests found.</p>`}</div>
   <p class="portfolio-empty" id="portfolio-empty" hidden>No journeys match these filters. Clear the search or choose another entry system.</p>
 </div></main><footer class="operator-footer"><div class="shell"><p>Each map is derived from its canonical JRNY page.</p></div></footer>
 ${manifests.length ? `<script>(()=>{const search=document.querySelector('#journey-search');const repo=document.querySelector('#journey-repo');const clear=document.querySelector('#journey-clear');const count=document.querySelector('#journey-count');const empty=document.querySelector('#portfolio-empty');const cards=[...document.querySelectorAll('[data-journey-card]')];const apply=()=>{const query=search.value.trim().toLowerCase();let shown=0;for(const card of cards){const visible=(!query||card.dataset.search.includes(query))&&(repo.value==='all'||card.dataset.entryRepo===repo.value);card.hidden=!visible;if(visible)shown+=1}count.textContent='Showing '+shown+' of '+cards.length+' journeys';empty.hidden=shown!==0};search.addEventListener('input',apply);repo.addEventListener('change',apply);clear.addEventListener('click',()=>{search.value='';repo.value='all';apply();search.focus()})})();</script>` : ""}
 </body></html>`;
+};
+
+const CANVAS = { nodeW: 234, journeyH: 118, surfaceH: 86, unmappedH: 80, colGap: 108, stackGap: 18, lanePad: 14, laneHead: 26, padX: 20, padY: 14, labelW: 158, labelH: 34, world: 100000 };
+
+const canvasNodes = (graph) => [
+  ...graph.journeys.map((journey) => ({ id: journey.id, kind: "journey", repo: journey.entryRepo, h: CANVAS.journeyH, journey })),
+  ...graph.surfaces.map((surface) => ({ id: surface.id, kind: "surface", repo: surface.repo, h: CANVAS.surfaceH, surface })),
+  ...graph.unresolved.map((target) => ({ id: target.id, kind: "unmapped", repo: null, h: CANVAS.unmappedH, target })),
+];
+
+// A continuation is declared on the terminal block, so it leaves the terminal surface node: the
+// journey, the surface it ends on, and the journey that surface feeds read as one flow. Where that
+// repeats the target's own entry edge — the derived case, both journeys touching one surface — the
+// grey entry connector gives way to the continuation.
+const canvasLinks = (graph) => {
+  const terminalSurface = new Map(graph.journeys.map((journey) => [journey.id, journey.terminal]));
+  const continuations = graph.edges
+    .filter((edge) => edge.type === "continuation")
+    .map((edge) => ({ ...edge, journey: edge.from, from: terminalSurface.get(edge.from) }));
+  const replaced = new Set(continuations.map((edge) => `${edge.from}~${edge.to}`));
+  const rest = graph.edges.filter((edge) => edge.type !== "continuation" && !(edge.type === "entry" && replaced.has(`${edge.from}~${edge.to}`)));
+  return [...rest, ...continuations];
+};
+
+const layoutCanvas = (graph, links) => {
+  const nodes = canvasNodes(graph);
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const predecessors = new Map(nodes.map((node) => [node.id, []]));
+  for (const edge of links) {
+    // Columns follow the entry → journey → terminal spine. Journey-to-journey branches stay out of
+    // it so journeys that share an entry surface remain peers in one column.
+    const spine = ["entry", "terminal", "continuation"].includes(edge.type) || (edge.type === "branch" && !edge.resolved);
+    if (spine && byId.has(edge.from) && byId.has(edge.to)) predecessors.get(edge.to).push(edge.from);
+  }
+  const columns = new Map();
+  // Longest path from the left. Ceiling: a cyclic handoff is placed as if its back edge were absent;
+  // replace with a proper feedback-arc pass if journeys ever form real cycles.
+  const columnOf = (id, visiting) => {
+    if (columns.has(id)) return columns.get(id);
+    if (visiting.has(id)) return 0;
+    visiting.add(id);
+    const column = predecessors.get(id).reduce((max, from) => Math.max(max, columnOf(from, visiting) + 1), 0);
+    visiting.delete(id);
+    columns.set(id, column);
+    return column;
+  };
+  for (const node of nodes) node.column = columnOf(node.id, new Set());
+
+  const lanes = [
+    ...graph.repositories.filter((repo) => nodes.some((node) => node.repo === repo.id)),
+    ...(graph.unresolved.length ? [{ id: null, label: "Not mapped", host: "no manifest in this folder", color: "#8b95a5" }] : []),
+  ];
+  for (const node of nodes) node.lane = lanes.findIndex((lane) => lane.id === node.repo);
+
+  const relatedIds = (node) => node.kind === "surface" ? [...node.surface.entryOf, ...node.surface.terminalOf] : node.kind === "unmapped" ? node.target.referencedBy : [node.id];
+  for (const node of nodes) {
+    const related = relatedIds(node);
+    const laneValues = related.map((id) => byId.get(id)?.lane).filter((lane) => lane >= 0);
+    node.affinity = laneValues.length ? laneValues.reduce((sum, lane) => sum + lane, 0) / laneValues.length : node.lane;
+    node.order = [...related].sort()[0] || node.id;
+  }
+
+  const cells = new Map();
+  for (const node of nodes) {
+    const key = `${node.lane}|${node.column}`;
+    if (!cells.has(key)) cells.set(key, []);
+    cells.get(key).push(node);
+  }
+  for (const group of cells.values()) {
+    group.sort((a, b) => a.affinity - b.affinity || a.order.localeCompare(b.order, undefined, { numeric: true }) || a.id.localeCompare(b.id));
+  }
+
+  // Two nodes stacked in the same cell are joined by a labelled edge that needs vertical room
+  // between them; nodes with nothing to say to each other stay tight.
+  const labelled = new Map();
+  for (const edge of links) {
+    if (!["branch", "continuation", "seam"].includes(edge.type)) continue;
+    const key = [edge.from, edge.to].sort().join("~");
+    labelled.set(key, (labelled.get(key) || 0) + 1);
+  }
+  const gapBetween = (above, below) => CANVAS.stackGap + (labelled.get([above.id, below.id].sort().join("~")) || 0) * CANVAS.labelH;
+  const stackOf = (group) => group.reduce((sum, node, index) => sum + node.h + (index ? gapBetween(group[index - 1], node) : 0), 0);
+  const laneHeights = lanes.map((lane, index) => {
+    const stacks = [...cells].filter(([key]) => key.startsWith(`${index}|`)).map(([, group]) => stackOf(group));
+    return CANVAS.laneHead + CANVAS.lanePad * 2 + Math.max(0, ...stacks);
+  });
+  const laneTops = [];
+  let cursor = CANVAS.padY;
+  for (const [index, height] of laneHeights.entries()) {
+    laneTops[index] = cursor;
+    cursor += height;
+  }
+
+  for (const [key, group] of cells) {
+    const [lane, column] = key.split("|").map(Number);
+    const free = laneHeights[lane] - CANVAS.laneHead - CANVAS.lanePad * 2 - stackOf(group);
+    let offset = laneTops[lane] + CANVAS.laneHead + CANVAS.lanePad + free / 2;
+    for (const [index, node] of group.entries()) {
+      node.w = CANVAS.nodeW;
+      node.x = CANVAS.padX + column * (CANVAS.nodeW + CANVAS.colGap);
+      node.y = offset + (index ? gapBetween(group[index - 1], node) : 0);
+      node.cx = node.x + node.w / 2;
+      node.cy = node.y + node.h / 2;
+      offset = node.y + node.h;
+    }
+  }
+
+  const columnCount = Math.max(...nodes.map((node) => node.column)) + 1;
+  return {
+    nodes,
+    byId,
+    lanes,
+    laneTops,
+    laneHeights,
+    width: CANVAS.padX * 2 + columnCount * CANVAS.nodeW + (columnCount - 1) * CANVAS.colGap,
+    height: cursor + CANVAS.padY,
+  };
+};
+
+const round = (value) => Math.round(value * 10) / 10;
+
+const cubicPoint = (p0, c1, c2, p1, t) => {
+  const u = 1 - t;
+  return {
+    x: u * u * u * p0.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * p1.x,
+    y: u * u * u * p0.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * p1.y,
+  };
+};
+
+const edgeGeometry = (from, to, index, count, at) => {
+  const centred = index - (count - 1) / 2;
+  let p0;
+  let p1;
+  let c1;
+  let c2;
+  if (to.x > from.x) {
+    p0 = { x: from.x + from.w, y: from.cy };
+    p1 = { x: to.x, y: to.cy };
+    const dx = Math.max(46, (p1.x - p0.x) * 0.45);
+    c1 = { x: p0.x + dx, y: p0.y + centred * 34 };
+    c2 = { x: p1.x - dx, y: p1.y + centred * 34 };
+  } else if (to.x < from.x) {
+    p0 = { x: from.x, y: from.cy };
+    p1 = { x: to.x + to.w, y: to.cy };
+    const dx = Math.max(64, (p0.x - p1.x) * 0.4) + index * 38;
+    c1 = { x: p0.x - dx, y: p0.y };
+    c2 = { x: p1.x + dx, y: p1.y };
+  } else {
+    // Same column: leave and re-enter on the right so the curve never crosses a node.
+    const lead = to.cy >= from.cy ? 12 : -12;
+    const bulge = 76 + index * 46;
+    p0 = { x: from.x + from.w, y: from.cy };
+    p1 = { x: to.x + to.w, y: to.cy };
+    c1 = { x: p0.x + bulge, y: p0.y + lead };
+    c2 = { x: p1.x + bulge, y: p1.y - lead };
+  }
+  return {
+    d: `M${round(p0.x)} ${round(p0.y)}C${round(c1.x)} ${round(c1.y)} ${round(c2.x)} ${round(c2.y)} ${round(p1.x)} ${round(p1.y)}`,
+    anchor: cubicPoint(p0, c1, c2, p1, at),
+  };
+};
+
+const canvasEdges = (links, layout) => {
+  const pairs = new Map();
+  const drawable = links.filter((edge) => layout.byId.has(edge.from) && layout.byId.has(edge.to));
+  for (const edge of drawable) {
+    const key = [edge.from, edge.to].sort().join("~");
+    if (!pairs.has(key)) pairs.set(key, []);
+    pairs.get(key).push(edge);
+  }
+  return [...pairs.values()].flatMap((group) => group.map((edge, index) => {
+    const from = layout.byId.get(edge.from);
+    const to = layout.byId.get(edge.to);
+    // Stagger labels along the pair's shared axis, not along each edge's own direction, so a
+    // reversed edge between the same two nodes does not land its label on top of its sibling.
+    const forward = edge.from < edge.to ? 1 : -1;
+    const at = Math.min(0.84, Math.max(0.16, 0.5 + forward * (index - (group.length - 1) / 2) * 0.3));
+    const { d, anchor } = edgeGeometry(from, to, index, group.length, at);
+    const clear = from.x === to.x ? Math.max(from.x + from.w, to.x + to.w) + 12 : 0;
+    return { ...edge, d, anchor, box: { x: Math.max(anchor.x - CANVAS.labelW / 2, clear), y: anchor.y - CANVAS.labelH / 2 } };
+  }));
+};
+
+const overlaps = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
+// Nudges each edge label off the nodes and off labels already placed, smallest move first, and
+// leaves it on its curve when nothing clears.
+const placeCanvasLabels = (labelled, nodes) => {
+  const blocked = nodes.map((node) => ({ x: node.x - 5, y: node.y - 5, w: node.w + 10, h: node.h + 10 }));
+  const placed = [];
+  for (const edge of labelled) {
+    const options = [
+      edge.box,
+      ...[1, 2, 3].flatMap((step) => [-1, 1].map((side) => ({ x: edge.box.x, y: edge.box.y + side * step * (CANVAS.labelH + 8) }))),
+      ...[1, 2].flatMap((step) => [-1, 1].map((side) => ({ x: edge.box.x + side * step * CANVAS.labelW * 0.6, y: edge.box.y }))),
+    ];
+    const clear = options.find((option) => {
+      const rect = { ...option, w: CANVAS.labelW, h: CANVAS.labelH };
+      return !blocked.some((node) => overlaps(rect, node)) && !placed.some((other) => overlaps(rect, other));
+    });
+    edge.box = clear || edge.box;
+    placed.push({ ...edge.box, w: CANVAS.labelW, h: CANVAS.labelH });
+  }
+};
+
+const canvasJourneyCard = (node, manifest, href, repo) => {
+  const counts = issueCounts(manifest);
+  const major = counts.critical + counts.high;
+  const captures = `${capturedCount(manifest)}/${manifest.steps.length}`;
+  const label = `${manifest.journey.id}, ${manifest.journey.title}. Begins in ${repo.label}. ${major} critical or high issues, ${captures} steps captured, end-to-end coverage ${manifest.journey.e2e.status}. Opens the journey map.`;
+  return `<a class="cnode cnode--journey" id="node-${attr(manifest.journey.id)}" href="${attr(href)}" aria-label="${attr(label)}" style="--repo:${attr(repo.color)}" xmlns="http://www.w3.org/1999/xhtml">
+    <span class="cnode__id">${escapeHtml(manifest.journey.id)} · ${escapeHtml(repo.label)}</span>
+    <strong class="cnode__title">${escapeHtml(manifest.journey.title)}</strong>
+    <span class="cnode__path">${escapeHtml(node.journey.repoPath.join(" → "))}</span>
+    <span class="cnode__signals"><b class="${major ? "signal-risk" : ""}">${major} critical/high</b><span>${escapeHtml(captures)} captures</span><span>E2E ${escapeHtml(manifest.journey.e2e.status)}</span></span>
+  </a>`;
+};
+
+const canvasSurfaceCard = (node, repo) => {
+  const { entryOf, terminalOf } = node.surface;
+  const role = entryOf.length && terminalOf.length ? "Entry and terminal" : entryOf.length ? "Entry" : "Terminal";
+  const shared = entryOf.length + terminalOf.length > 1;
+  const relation = [terminalOf.length ? `Ends ${terminalOf.join(", ")}` : "", entryOf.length ? `Begins ${entryOf.join(", ")}` : ""].filter(Boolean).join(" · ");
+  return `<div class="cnode cnode--surface${shared ? " cnode--shared" : ""}" style="--repo:${attr(repo.color)}" xmlns="http://www.w3.org/1999/xhtml">
+    <span class="cnode__id">${escapeHtml(role)} · ${escapeHtml(repo.label)}</span>
+    <strong class="cnode__title">${escapeHtml(node.surface.label)}</strong>
+    <code class="cnode__route">${escapeHtml(node.surface.route)}</code>
+    <span class="cnode__rel">${escapeHtml(relation)}</span>
+  </div>`;
+};
+
+const canvasUnmappedCard = (node) => `<div class="cnode cnode--unmapped" xmlns="http://www.w3.org/1999/xhtml">
+    <span class="cnode__id">Not mapped</span>
+    <strong class="cnode__title">${escapeHtml(node.id)}</strong>
+    <span class="cnode__rel">Named by ${escapeHtml(node.target.referencedBy.join(", "))}</span>
+  </div>`;
+
+const canvasEdgeLabel = (edge, journeyLinks) => {
+  if (edge.type === "entry" || edge.type === "terminal") return "";
+  const x = round(edge.box.x);
+  const y = round(edge.box.y);
+  const open = (body) => `<foreignObject x="${x}" y="${y}" width="${CANVAS.labelW}" height="${CANVAS.labelH}">${body}</foreignObject>`;
+  if (edge.type === "branch") {
+    const from = journeyLinks.get(edge.from);
+    const href = `${from.href}#step=${encodeURIComponent(edge.fromStep)}`;
+    const label = `Branch from ${edge.from} to ${edge.to}: ${edge.label}. Opens ${edge.from} at step ${edge.fromStep}.`;
+    return open(`<a class="clabel clabel--branch" href="${attr(href)}" aria-label="${attr(label)}" xmlns="http://www.w3.org/1999/xhtml">Branch · ${escapeHtml(edge.label)}</a>`);
+  }
+  if (edge.type === "continuation") {
+    const href = `${journeyLinks.get(edge.journey).href}#step=${encodeURIComponent(edge.fromStep)}`;
+    const label = `Completing ${edge.journey} continues in ${edge.to}. Opens ${edge.journey} at its final step ${edge.fromStep}.`;
+    return open(`<a class="clabel clabel--continuation" href="${attr(href)}" aria-label="${attr(label)}" xmlns="http://www.w3.org/1999/xhtml">${escapeHtml(edge.journey)} continues in ${escapeHtml(edge.to)}</a>`);
+  }
+  return open(`<span class="clabel clabel--seam" xmlns="http://www.w3.org/1999/xhtml">Shared seam ${escapeHtml(edge.seam)}</span>`);
+};
+
+const canvasStyles = `
+  .operator-links{margin:11px 0 0;font-size:.82rem;font-weight:650}
+  .canvas-app{height:100vh;height:100dvh;overflow:hidden}
+  .stage{position:fixed;inset:0;background:#fff}
+  .stage svg{display:block;width:100%;height:100%;touch-action:none;cursor:grab;user-select:none}
+  .stage svg.is-panning{cursor:grabbing}
+  .hud{position:fixed;z-index:4;border:1px solid var(--ink);background:#fff}
+  .hud--id{top:12px;left:12px;max-width:min(35rem,calc(100vw - 24px));padding:8px 11px}
+  .hud--id h1{display:inline;margin:0;font-size:1rem;letter-spacing:-.02em}
+  .hud--id .operator-links{display:inline;margin:0 0 0 10px;font-size:.76rem}
+  .canvas-counts{display:flex;flex-wrap:wrap;gap:1px 12px;margin:5px 0 0;color:var(--muted);font-size:.71rem;font-variant-numeric:tabular-nums}
+  .hud--controls{top:12px;right:12px;display:flex;align-items:center;gap:6px;padding:6px}
+  .hud--controls button{min-height:44px;border:1px solid #8b95a5;background:#fff;padding:8px 12px;font:inherit;font-weight:650;cursor:pointer}
+  .hud--controls button:hover{border-color:var(--ink)}
+  .canvas-zoom{padding:0 6px;color:var(--muted);font-size:.74rem;font-variant-numeric:tabular-nums}
+  .hud--legend{bottom:12px;left:12px;max-width:calc(100vw - 24px)}
+  .hud--legend summary{display:flex;align-items:center;min-height:38px;padding:6px 11px;font-size:.74rem;font-weight:700;cursor:pointer}
+  .hud--legend[open] summary{border-bottom:1px solid var(--line)}
+  .legend-body{padding:10px 11px}
+  .legend-body p{margin:0;max-width:64ch;color:var(--muted);font-size:.7rem;line-height:1.45}
+  .legend-body p+p{margin-top:7px}
+  .lane-pin{position:fixed;left:0;top:0;z-index:2;display:none;align-items:baseline;gap:7px;padding:4px 9px;border:1px solid var(--line);border-left:4px solid var(--repo);background:#fff;font-size:.72rem;white-space:nowrap;pointer-events:none}
+  .lane-pin strong{font-weight:750}
+  .lane-pin span{color:var(--muted);font-size:.66rem}
+  .lane-band{fill:#fafbfc}.lane-band--odd{fill:#fff}
+  .edge{fill:none}
+  .edge--entry,.edge--terminal{stroke:#a9b1bd;stroke-width:1.5}
+  .edge--continuation{stroke:var(--ink);stroke-width:3}
+  .edge--branch{stroke:var(--ink);stroke-width:2;stroke-dasharray:7 4}
+  .label-leader{stroke:#9aa3b0;stroke-width:1}
+  .edge--seam{stroke:#5b6472;stroke-width:2.5;stroke-dasharray:0.1 6;stroke-linecap:round}
+  .cnode{display:flex;flex-direction:column;height:100%;padding:8px 10px;border:1px solid var(--line);border-left:4px solid var(--repo,#8b95a5);background:#fff;color:var(--ink);text-decoration:none;overflow:hidden}
+  a.cnode:hover{border-color:var(--ink)}
+  a.cnode:focus-visible{outline:3px solid #175cd3;outline-offset:2px}
+  .cnode__id{font:750 .62rem/1.25 ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--muted)}
+  .cnode__title{margin-top:3px;font-size:.84rem;line-height:1.2;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+  a.cnode .cnode__title{text-decoration:underline;text-underline-offset:2px}
+  .cnode__route{align-self:flex-start;max-width:100%;margin-top:4px;padding:2px 4px;background:#eef0f2;font:.62rem/1.3 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cnode__path,.cnode__rel{margin-top:auto;padding-top:5px;color:var(--muted);font-size:.65rem;line-height:1.25;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+  .cnode__signals{display:flex;flex-wrap:wrap;gap:1px 9px;margin-top:5px;color:var(--muted);font-size:.65rem;font-variant-numeric:tabular-nums}
+  .cnode__signals .signal-risk{color:var(--high);font-weight:750}
+  .cnode--shared{border-color:var(--ink)}
+  .cnode--unmapped{border-style:dashed;border-left-style:dashed;background:#fbfcfd}
+  .clabel{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;padding:3px 6px;border:1px solid var(--line);background:#fff;color:var(--ink);font-size:.65rem;line-height:1.25;text-align:center}
+  a.clabel:focus-visible{outline:3px solid #175cd3;outline-offset:2px}
+  .clabel--continuation{font-weight:650}
+  .clabel--seam{color:var(--muted);font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+  .canvas-key{display:flex;flex-wrap:wrap;gap:6px 22px;margin:0 0 9px;padding:0;list-style:none;color:var(--muted);font-size:.72rem}
+  .canvas-key li{display:flex;align-items:center;gap:7px}
+  .canvas-empty{padding:26px;border:1px solid var(--line);background:#fafbfc}
+  .canvas-empty h2{margin:0 0 6px;font-size:1.05rem}
+  .canvas-empty p{margin:0 0 10px;max-width:640px;color:var(--muted);font-size:.84rem}
+  .canvas-empty code{padding:1px 4px;background:#eef0f2;font-size:.76rem}
+  .canvas-command{display:block;margin-top:2px;padding:9px 10px;overflow-x:auto;font-size:.72rem}
+  @media(max-width:820px){
+    .canvas-counts{display:none}
+    .hud--id{padding:6px 10px}
+    .hud--id h1{font-size:.92rem}
+    .hud--controls{top:auto;bottom:12px;right:12px;flex-direction:column;align-items:stretch;gap:5px}
+    .canvas-zoom{padding:2px 0;text-align:center}
+    .hud--legend{max-width:calc(100vw - 120px)}
+  }
+`;
+
+const canvasShell = (body, script, bodyClass = "") => `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Journey canvas</title><style>${operatorStyles}${canvasStyles}</style></head><body${bodyClass ? ` class="${bodyClass}"` : ""}>${body}${script}</body></html>`;
+
+const renderCanvas = (graph, manifests, outputPath) => {
+  const collectionDir = dirname(resolve(outputPath));
+  const listHref = basename(resolve(outputPath));
+  if (!graph.journeys.length) {
+    const header = `<header class="operator-header"><div class="shell"><p class="operator-id">Journey operations</p><h1>Journey canvas</h1><p class="operator-goal">Where the mapped journeys meet: the surfaces they share, the journeys they hand users to, and the seams they both depend on.</p><p class="operator-links"><a href="${attr(listHref)}">View list</a></p></div></header>`;
+    return canvasShell(`${header}<main class="section"><div class="shell"><div class="canvas-empty"><h2>No journeys to connect yet</h2><p>This folder holds one directory per journey, each with a <code>manifest.json</code> rendered from its canonical JRNY page. Add the first one, then regenerate the list and this canvas with a single command.</p><code class="canvas-command">node ~/.agents/skills/visualize-journey/scripts/render-journey-map.mjs --collection ${escapeHtml(relative(process.cwd(), collectionDir) || ".")} --output ${escapeHtml(relative(process.cwd(), resolve(outputPath)) || listHref)}</code></div></div></main>`, "");
+  }
+
+  const journeyLinks = new Map(manifests.map(({ manifest, path }) => [manifest.journey.id, { manifest, href: journeyHref(path, collectionDir) }]));
+  const repoById = new Map(graph.repositories.map((repo) => [repo.id, repo]));
+  const links = canvasLinks(graph);
+  const layout = layoutCanvas(graph, links);
+  const edges = canvasEdges(links, layout);
+  const labelled = edges.filter((edge) => !["entry", "terminal"].includes(edge.type));
+  placeCanvasLabels(labelled, layout.nodes);
+  layout.width = Math.max(layout.width, ...labelled.map((edge) => edge.box.x + CANVAS.labelW + CANVAS.padX));
+  const counts = {
+    continuation: edges.filter((edge) => edge.type === "continuation").length,
+    branch: edges.filter((edge) => edge.type === "branch").length,
+    seam: edges.filter((edge) => edge.type === "seam").length,
+    shared: graph.surfaces.filter((surface) => surface.entryOf.length + surface.terminalOf.length > 1).length,
+  };
+  const plural = (count, singular, many) => `${count} ${count === 1 ? singular : many}`;
+  const summary = `<p class="canvas-counts"><span>${plural(graph.journeys.length, "journey", "journeys")}</span><span>${plural(layout.lanes.length, "system lane", "system lanes")}</span><span>${plural(counts.shared, "shared surface", "shared surfaces")}</span><span>${plural(counts.continuation, "continuation", "continuations")}</span><span>${plural(counts.branch, "branch", "branches")}</span><span>${plural(counts.seam, "shared seam", "shared seams")}</span>${graph.unresolved.length ? `<span>${plural(graph.unresolved.length, "journey named but not mapped", "journeys named but not mapped")}</span>` : ""}</p>`;
+
+  // The lane bands run far past the content so panning never reaches an edge of the world.
+  const lanes = layout.lanes.map((lane, index) => `<g><rect class="lane-band${index % 2 ? " lane-band--odd" : ""}" x="${-CANVAS.world}" y="${round(layout.laneTops[index])}" width="${CANVAS.world * 2}" height="${round(layout.laneHeights[index])}"></rect><line x1="${-CANVAS.world}" y1="${round(layout.laneTops[index])}" x2="${CANVAS.world}" y2="${round(layout.laneTops[index])}" stroke="${attr(lane.color)}" stroke-width="2"></line></g>`).join("");
+  // Lane names are pinned to the left of the viewport instead, so they stay readable at any pan.
+  const pins = layout.lanes.map((lane, index) => `<div class="lane-pin" aria-hidden="true" style="--repo:${attr(lane.color)}" data-top="${round(layout.laneTops[index])}" data-bottom="${round(layout.laneTops[index] + layout.laneHeights[index])}"><strong>${escapeHtml(lane.label)}</strong><span>${escapeHtml(lane.host)}</span></div>`).join("");
+
+  const order = { entry: 0, terminal: 0, seam: 1, continuation: 2, branch: 3 };
+  const lines = [...edges].sort((a, b) => order[a.type] - order[b.type]).map((edge) => `<path class="edge edge--${attr(edge.type)}" d="${edge.d}" marker-end="${edge.type === "seam" ? "" : edge.type === "entry" || edge.type === "terminal" ? "url(#arrow-soft)" : "url(#arrow)"}"></path>`).join("");
+
+  const cards = layout.nodes.map((node) => {
+    const card = node.kind === "journey"
+      ? canvasJourneyCard(node, journeyLinks.get(node.id).manifest, journeyLinks.get(node.id).href, repoById.get(node.repo))
+      : node.kind === "surface" ? canvasSurfaceCard(node, repoById.get(node.repo)) : canvasUnmappedCard(node);
+    return `<foreignObject x="${round(node.x)}" y="${round(node.y)}" width="${node.w}" height="${node.h}">${card}</foreignObject>`;
+  }).join("");
+
+  // A label the declutter pass had to move keeps a hairline back to the point on its own edge.
+  const leaders = labelled.filter((edge) => Math.hypot(edge.box.x + CANVAS.labelW / 2 - edge.anchor.x, edge.box.y + CANVAS.labelH / 2 - edge.anchor.y) > 26)
+    .map((edge) => `<line class="label-leader" x1="${round(edge.anchor.x)}" y1="${round(edge.anchor.y)}" x2="${round(edge.box.x + CANVAS.labelW / 2)}" y2="${round(edge.box.y + CANVAS.labelH / 2)}"></line>`).join("");
+  const labels = edges.map((edge) => canvasEdgeLabel(edge, journeyLinks)).join("");
+
+  const key = `<ul class="canvas-key"><li><svg width="34" height="8" aria-hidden="true"><line class="edge edge--entry" x1="0" y1="4" x2="34" y2="4"></line></svg>Begins or ends at a surface</li><li><svg width="34" height="8" aria-hidden="true"><line class="edge edge--continuation" x1="0" y1="4" x2="34" y2="4"></line></svg>Continuation</li><li><svg width="34" height="8" aria-hidden="true"><line class="edge edge--branch" x1="0" y1="4" x2="34" y2="4"></line></svg>Branch into another journey</li><li><svg width="34" height="8" aria-hidden="true"><line class="edge edge--seam" x1="0" y1="4" x2="34" y2="4"></line></svg>Shared seam</li></ul>`;
+
+  // Overlay chrome comes before the canvas so the keyboard reaches the list link and the controls first.
+  const body = `<a class="skip" data-skip href="#node-${attr(graph.journeys[0].id)}">Skip to the first journey</a>
+  <header class="hud hud--id"><h1>Journey canvas</h1><span class="operator-links"><a href="${attr(listHref)}">View list</a></span>${summary}</header>
+  <div class="hud hud--controls"><button type="button" data-zoom="in">Zoom in</button><button type="button" data-zoom="out">Zoom out</button><button type="button" data-zoom="fit">Fit to view</button><span class="canvas-zoom" id="canvas-zoom">100%</span></div>
+  <details class="hud hud--legend"><summary>Map key</summary><div class="legend-body">${key}<p>Where the mapped journeys meet: the surfaces they share, the journeys they hand users to, and the seams they both depend on.</p><p>Continuations are declared in <code>terminal.continuesIn</code> or derived where one journey's terminal surface is another journey's entry. Shared surfaces match on repository and route. Branches come from <code>toJourney</code> on a step branch or exit point. Each map is derived from its canonical JRNY page.</p><p>Drag or two-finger scroll to pan, pinch or hold Ctrl while scrolling to zoom. With the canvas focused, arrow keys pan, plus and minus zoom, and 0 fits.</p></div></details>
+  <div class="stage">${pins}<svg id="journey-canvas" data-content="0 0 ${round(layout.width)} ${round(layout.height)}" viewBox="0 0 ${round(layout.width)} ${round(layout.height)}" preserveAspectRatio="xMidYMid meet" aria-label="Journey canvas: ${graph.journeys.length} journeys laid out in ${layout.lanes.length} system lanes, with the surfaces they share and the journeys they hand users to."><defs><marker id="arrow" viewBox="0 0 8 8" refX="8" refY="4" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" orient="auto"><path d="M0 0 L8 4 L0 8 Z" fill="#17191d"></path></marker><marker id="arrow-soft" viewBox="0 0 8 8" refX="8" refY="4" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 L8 4 L0 8 Z" fill="#a9b1bd"></path></marker></defs><g>${lanes}</g><g>${lines}</g><g>${cards}</g><g>${leaders}${labels}</g></svg></div>`;
+
+  const script = `<script>(()=>{
+    const svg=document.querySelector('#journey-canvas');const stage=svg.parentElement;const readout=document.querySelector('#canvas-zoom');
+    const pins=[...document.querySelectorAll('.lane-pin')];const huds=[...document.querySelectorAll('.hud')];const legend=document.querySelector('.hud--legend');
+    const content=svg.dataset.content.split(' ').map(Number);const MIN=0.1,MAX=4;
+    let scale=1,cx=content[0]+content[2]/2,cy=content[1]+content[3]/2,drag=null,suppressClick=false;
+    const vw=()=>stage.clientWidth;const vh=()=>stage.clientHeight;
+    // The overlay panels are measured once per layout change, not per frame.
+    let chrome={top:12,bottom:12};
+    const measure=()=>{const h=vh();let top=0,bottom=0;for(const hud of huds){const r=hud.getBoundingClientRect();if(!r.width)continue;if(r.top<h/2)top=Math.max(top,r.bottom);else bottom=Math.max(bottom,h-r.top)}chrome={top:top+12,bottom:bottom+12}};
+    const screenY=(userY)=>(userY-(cy-vh()/(2*scale)))*scale;
+    const apply=()=>{
+      const w=vw()/scale,h=vh()/scale;
+      svg.setAttribute('viewBox',(cx-w/2)+' '+(cy-h/2)+' '+w+' '+h);
+      readout.textContent=Math.round(scale*100)+'%';
+      for(const pin of pins){
+        const top=screenY(+pin.dataset.top),bottom=screenY(+pin.dataset.bottom),lower=chrome.top;
+        if(bottom<lower+12||top>vh()-10){pin.style.display='none';continue}
+        pin.style.display='flex';
+        pin.style.transform='translateY('+Math.round(Math.min(Math.max(top+6,lower),Math.max(lower,Math.min(vh()-36,bottom-36))))+'px)';
+      }
+    };
+    const toUser=(clientX,clientY)=>{const r=stage.getBoundingClientRect();return{x:cx+(clientX-r.left-vw()/2)/scale,y:cy+(clientY-r.top-vh()/2)/scale}};
+    const zoomTo=(next,px,py)=>{const clamped=Math.min(MAX,Math.max(MIN,next));const k=scale/clamped;cx=px-(px-cx)*k;cy=py-(py-cy)*k;scale=clamped;apply()};
+    const fit=()=>{
+      const pad=20;
+      const free={w:Math.max(80,vw()-pad*2),h:Math.max(80,vh()-chrome.top-chrome.bottom)};
+      scale=Math.max(MIN,Math.min(1,free.w/content[2],free.h/content[3]));
+      cx=content[0]+content[2]/2-(pad+free.w/2-vw()/2)/scale;
+      cy=content[1]+content[3]/2-(chrome.top+free.h/2-vh()/2)/scale;
+      apply();
+    };
+    // Two-finger scroll pans and pinch or Ctrl/Cmd with the wheel zooms, the convention for a
+    // canvas that owns the whole viewport. The buttons and keys cover plain single-wheel mice.
+    stage.addEventListener('wheel',(event)=>{
+      event.preventDefault();
+      const unit=event.deltaMode===1?16:event.deltaMode===2?vh():1;
+      if(event.ctrlKey||event.metaKey){const p=toUser(event.clientX,event.clientY);const step=Math.min(1.6,Math.max(0.625,Math.exp(-event.deltaY*unit*0.0035)));zoomTo(scale*step,p.x,p.y);return}
+      cx+=event.deltaX*unit/scale;cy+=event.deltaY*unit/scale;apply();
+    },{passive:false});
+    const move=(event)=>{if(!drag)return;const dx=event.clientX-drag.x,dy=event.clientY-drag.y;drag.moved+=Math.abs(dx)+Math.abs(dy);drag.x=event.clientX;drag.y=event.clientY;cx-=dx/scale;cy-=dy/scale;apply()};
+    const stop=()=>{if(!drag)return;svg.classList.remove('is-panning');suppressClick=drag.moved>6;drag=null;document.removeEventListener('pointermove',move);document.removeEventListener('pointerup',stop);document.removeEventListener('pointercancel',stop)};
+    // Pointer capture would retarget the click and stop the node links working, so the drag is
+    // tracked on the document instead.
+    svg.addEventListener('pointerdown',(event)=>{if(event.button!==0)return;suppressClick=false;drag={x:event.clientX,y:event.clientY,moved:0};svg.classList.add('is-panning');document.addEventListener('pointermove',move);document.addEventListener('pointerup',stop);document.addEventListener('pointercancel',stop)});
+    svg.addEventListener('click',(event)=>{if(!suppressClick)return;suppressClick=false;event.preventDefault();event.stopPropagation()},true);
+    svg.addEventListener('focusin',(event)=>{
+      const host=event.target.closest('foreignObject');if(!host)return;
+      const pad=20;
+      const x=+host.getAttribute('x'),y=+host.getAttribute('y'),w=+host.getAttribute('width'),h=+host.getAttribute('height');
+      const left=(x-(cx-vw()/(2*scale)))*scale,top=screenY(y),right=left+w*scale,bottom=top+h*scale;
+      let dx=0,dy=0;
+      if(left<pad)dx=left-pad;else if(right>vw()-pad)dx=right-(vw()-pad);
+      if(top<chrome.top)dy=top-chrome.top;else if(bottom>vh()-chrome.bottom)dy=bottom-(vh()-chrome.bottom);
+      if(dx||dy){cx+=dx/scale;cy+=dy/scale;apply()}
+    });
+    for(const button of document.querySelectorAll('[data-zoom]'))button.addEventListener('click',()=>{const action=button.dataset.zoom;if(action==='fit'){fit();return}zoomTo(scale*(action==='in'?1.25:0.8),cx,cy)});
+    const skip=document.querySelector('[data-skip]');
+    skip.addEventListener('click',(event)=>{const target=document.querySelector(skip.getAttribute('href'));if(!target)return;event.preventDefault();target.focus()});
+    addEventListener('keydown',(event)=>{
+      if(event.metaKey||event.ctrlKey||event.altKey)return;
+      if(event.target.closest&&event.target.closest('a,button,summary,input,select,textarea'))return;
+      const step=90/scale;let handled=true;
+      if(event.key==='ArrowLeft')cx-=step;else if(event.key==='ArrowRight')cx+=step;
+      else if(event.key==='ArrowUp')cy-=step;else if(event.key==='ArrowDown')cy+=step;
+      else if(event.key==='+'||event.key==='=')zoomTo(scale*1.25,cx,cy);
+      else if(event.key==='-'||event.key==='_')zoomTo(scale*0.8,cx,cy);
+      else if(event.key==='0')fit();
+      else handled=false;
+      if(handled){event.preventDefault();apply()}
+    });
+    addEventListener('resize',()=>{measure();apply()});
+    legend.addEventListener('toggle',()=>{measure();apply()});
+    // Fitting a wide canvas into a phone screen leaves the node text unreadable, so the first view
+    // stops at 60% and starts at the top left of the free area. Fit to view still shows everything.
+    measure();fit();
+    if(innerWidth<700&&scale<0.6){scale=0.6;cx=content[0]+(vw()/2-20)/scale;cy=content[1]+(vh()/2-chrome.top)/scale;apply()}
+  })();</script>`;
+  return canvasShell(body, script, "canvas-app");
 };
 
 const args = parseArgs(process.argv.slice(2));
@@ -734,10 +1194,19 @@ if (args.manifest) {
   const duplicateIds = manifests.map(({ manifest }) => manifest.journey.id).filter((id, index, ids) => ids.indexOf(id) !== index);
   if (duplicateIds.length) fail(`duplicate journey IDs in collection: ${[...new Set(duplicateIds)].join(", ")}`);
   manifests.sort((a, b) => a.manifest.journey.id.localeCompare(b.manifest.journey.id, undefined, { numeric: true }));
+  const graph = buildJourneyGraph(manifests.map(({ manifest }) => manifest));
+  const canvasPath = join(dirname(outputPath), "canvas.html");
   writeFileSync(outputPath, renderCollection(manifests, outputPath), "utf8");
+  writeFileSync(canvasPath, renderCanvas(graph, manifests, outputPath), "utf8");
   if (args.check) {
     const missingMaps = manifests.filter(({ path }) => !existsSync(join(dirname(path), "index.html"))).map(({ path }) => path);
     if (missingMaps.length) fail(`collection maps missing for:\n- ${missingMaps.join("\n- ")}`);
+    if (!existsSync(canvasPath)) fail(`journey canvas was not written: ${canvasPath}`);
+    const canvasHtml = readFileSync(canvasPath, "utf8");
+    const missingOnCanvas = manifests.map(({ manifest }) => manifest.journey.id).filter((id) => !canvasHtml.includes(id));
+    if (missingOnCanvas.length) fail(`journey canvas is missing:\n- ${missingOnCanvas.join("\n- ")}`);
   }
+  const crossLinks = graph.edges.filter(({ type }) => ["continuation", "branch", "seam"].includes(type)).length;
   console.log(`Rendered collection with ${manifests.length} journey maps: ${outputPath}`);
+  console.log(`Rendered canvas with ${graph.journeys.length} journeys, ${graph.surfaces.length} surfaces, and ${crossLinks} cross-journey links: ${canvasPath}`);
 }

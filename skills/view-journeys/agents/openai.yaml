@@ -1,0 +1,4 @@
+interface:
+  display_name: "View Journeys"
+  short_description: "Serve rendered journey maps locally and hand back the URL"
+  default_prompt: "Use $view-journeys to open the journey canvas for this repository."
