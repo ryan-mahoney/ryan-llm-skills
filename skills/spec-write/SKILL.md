@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "19"
+  version: "20"
 ---
 
 # Spec Write
@@ -137,7 +137,7 @@ Include:
 - Design decisions and rationale.
 - Dependency map covering internal modules and external packages/services.
 
-When a visual reference exists, include a standalone line with its direct checkout-relative entry-file path:
+When a visual reference exists, include a standalone line with its direct repository-relative entry-file path:
 
 ```txt
 Visual reference: .specs/<feature-slug>/<prototype-or-visual-references>/<entry-file>
@@ -223,7 +223,7 @@ For each step include:
 5. Coverage: which acceptance criteria this step satisfies, as a tag line (`Covers: AC-3, AC-7`). Every criterion must be covered by at least one step; a step covering no criterion must trace to a stated architectural need instead.
 6. Complexity: how hard *this step* is, as a tag line (`Complexity: easy`). One of `easy`, `medium`, `hard` — see the rubric below. The system uses per-step tags to route each step to an appropriately strong implementation model, so score every step, not just the spec.
 7. Visual design: whether *this step* implements user-facing visual design, as a tag line (`Visual: yes` or `Visual: no`). See the Visual design rubric in Implementation Profile. The system routes `Visual: yes` steps to design-capable handling and visual verification, so flag every step, not just the spec.
-8. Visual reference: when a visual reference exists and the step is `Visual: yes`, repeat the exact `Visual reference: <checkout-relative file path>` line in that step and require parity with it. Do not tell the implementer to create a replacement prototype or derive a new visual direction.
+8. Visual reference: when a visual reference exists and the step is `Visual: yes`, repeat the exact `Visual reference: <repository-relative file path>` line in that step and require parity with it. Do not tell the implementer to create a replacement prototype or derive a new visual direction.
 9. Evidence: when this step owns one or more Executable Evidence Plan gates, an `Evidence:` tag line (`Evidence: EV-2` or `Evidence: EV-2, EV-5`). Producing merge evidence is part of the step's work. For later gates it owns the procedure and
 handoff, not premature execution; record the runtime result as pending until authorized and run. Steps owning no evidence omit the line.
 
@@ -291,7 +291,7 @@ The per-step flag is binary — emit exactly one per step. The footer's spec-wid
 
 ## Spec Footer
 
-End `spec.md` with a metadata footer block so downstream skills can locate the folder and route the work. The first line is the checkout-relative canonical folder; the second is the spec-wide Visual design roll-up (`yes-visual-design` if any step is `Visual: yes`, else `no-visual-design`). Per-step complexity and per-step visual flags are not in the footer — they live on each step (see §9):
+End `spec.md` with a metadata footer block so downstream skills can locate the folder and route the work. The first line is the repository-relative canonical folder; the second is the spec-wide Visual design roll-up (`yes-visual-design` if any step is `Visual: yes`, else `no-visual-design`). Per-step complexity and per-step visual flags are not in the footer — they live on each step (see §9):
 
 ```txt
 Spec folder: .specs/<feature-slug>/
@@ -339,7 +339,7 @@ The index is a JSON object with a `steps` array — one entry per Implementation
 
 Field contract:
 
-- `spec` — the checkout-relative path to `spec.md`, matching the `Spec folder:` footer.
+- `spec` — the repository-relative path to `spec.md`, matching the `Spec folder:` footer.
 - `step` — the step's number in `spec.md` (integer, 1-based, matching the Implementation Steps list). Downstream skills and the external task-runner address steps by this number.
 - `name` — a terse imperative title for the step (verb + object), roughly eight words or fewer. Not the full "What to do" prose.
 - `description` — one front-loaded, plain-language sentence summarizing what the step does.

@@ -1,6 +1,6 @@
 ---
 name: spec-branch-worktree
-description: "Create or reuse a named git branch and worktree for standalone spec-driven work, copy the matching .specs/<feature>/ package into it, prepare the local environment, and return the worktree to the invoking agent. Use for \"spec branch worktree\", \"new spec worktree\", \"worktree for\", \"start a worktree\", or \"create worktree\"."
+description: "Create or reuse a named git branch and worktree for standalone spec-driven work, keep the matching .specs/<feature>/ package in the primary repository, prepare the local environment, and return the worktree to the invoking agent. Use for \"spec branch worktree\", \"new spec worktree\", \"worktree for\", \"start a worktree\", or \"create worktree\"."
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,14 +9,18 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "12"
+  version: "13"
 ---
 
 # Spec Branch Worktree
 
-Create or reuse one branch worktree under `~/.worktrees/<repo-name>/<slug>`. When the work is driven by `.specs/<feature>/`, copy that complete package into the worktree and treat the destination copy as canonical for all subsequent stages on the branch.
+Create or reuse one branch worktree under `~/.worktrees/<repo-name>/<slug>`. The primary repository retains the canonical `.specs/<feature>/` package for every stage; the worktree holds the code checkout.
 
 ## Resolve Input
+
+Read [Workspace Handoff](../spec-end-to-end/references/workspace-handoff.md). Resolve the primary
+repository and code checkout separately before locating `.specs/`. Map explicit worktree spec
+paths to their primary-repository counterparts using the shared path resolver.
 
 Resolve the work description in this order:
 
@@ -77,34 +81,24 @@ connection merely because `.env` exists. Use an existing safe local example when
 unknown targets and defer commands with external effects until resolved. Do not invent flags or
 new configuration mechanisms as a substitute for identifying the target.
 
-When a source spec slug was resolved, copy the entire source folder into `$dest/.specs/<source-slug>/`, preserving every file and subdirectory. Do not copy only `spec.md` or unrelated feature folders. Checkout-relative artifact references remain valid because the `.specs/<feature>/` shape is unchanged.
+Keep the spec package in the primary repository. Do not copy, move, or symlink `.specs/` into
+`dest`. If Git checks out a tracked copy, or an older run left one there, leave it untouched and
+ignore it for all spec reads and writes. Return the canonical absolute spec-folder path along
+with the worktree path. All subsequent plans, updates, learnings, logs, reviews, and tours go to
+that canonical folder.
 
-### Preserve visual references
-
-Read and deduplicate every direct `Visual reference: <file path>` line in the source `spec.md` when present. A path inside the source feature folder is already included by the complete-folder copy; confirm that its destination counterpart exists byte-for-byte. This explicitly includes HTML entry files under `prototype/` or `visual-references/` and their packaged local assets. Never regenerate, rebuild, or reinterpret a visual reference during worktree creation.
-
-For a legacy spec whose visual reference is outside the source feature folder:
-
-1. Confirm the referenced file exists. Copy the smallest self-contained artifact into `$dest/.specs/<source-slug>/visual-references/`, preserving the referenced filename and any local assets required by an HTML entry file.
-2. Replace only the exact `Visual reference:` value in the destination `spec.md` and any destination `step-*-subspec.md` files with the checkout-relative copied entry-file path. Never rewrite the source checkout's artifacts.
-3. Stop on a destination name collision with different bytes; do not overwrite or invent a second design.
-4. Remove destination `preparation.json` when any path was rebased, because the copied preparation hashes are stale. Report `preparation: invalidated`; the next stage must rerun `spec-prepare`.
-
-If a named visual reference is missing, stop with `reason: missing-visual-reference` rather than creating a substitute.
-
-If the destination feature folder already exists:
-
-- Reuse it when its files are byte-identical to the source, or when the only differences are the deterministic legacy visual-reference rebasing, copied `visual-references/` content, and invalidated `preparation.json` described above.
-- If either copy has diverged, stop with `reason: spec-folder-conflict`; never merge or overwrite silently.
-
-After a successful copy, the destination is the active spec folder for this branch. The source remains an inert handoff copy; subsequent spec skills must run from the worktree and must not write back to the source checkout.
+Read visual references from their canonical source locations. Confirm required files exist;
+worktree creation does not rebase reference paths, rewrite specs, or invalidate preparation.
+For a missing visual reference, stop with `reason: missing-visual-reference`. Any needed legacy
+reference packaging belongs to preparation in the primary repository under the shared handoff
+rules. Never regenerate a design during worktree setup.
 
 Check install/startup hooks for external effects and respect resolved authority. Install dependencies
 using the first matching repository signal: Bun lock/AGENTS guidance → `bun install --frozen-lockfile`; documented non-Bun setup → exact documented command; then pnpm, yarn, npm, Poetry, uv, pip, Bundler, Go, or Cargo lock/project files. A failed or unavailable install is non-fatal but must be reported explicitly.
 
 ## Return Control
 
-Return the prepared worktree path to the invoking top-level agent. The invoking agent decides how
+Return the prepared worktree path and canonical spec-folder path to the invoking top-level agent. The invoking agent decides how
 to continue work there: for example, by setting tool working directories, continuing in the same
 session, or delegating later stages when authorized.
 
@@ -122,9 +116,9 @@ branch: <slug>
 worktree: <absolute path>
 base: <base ref>
 tracking: none
-spec: copied:<slug> | reused:<slug> | none
-visual-references: copied:<count> | packaged:<count> | none
-preparation: preserved | invalidated | none
+spec-folder: <absolute primary-repository feature path | none>
+visual-references: verified:<count> | none
+preparation: preserved | none
 environment: copied | absent
 dependencies: <command and outcome | skipped>
 handoff: top-level-agent

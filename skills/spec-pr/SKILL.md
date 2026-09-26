@@ -1,6 +1,6 @@
 ---
 name: spec-pr
-description: "Publish evidence-complete spec-driven work as a pull request. Rebase first, re-establish commit-bound evidence after any change, require a passing independent audit and ready HTML work tour, push safely, and make the PR an evidence index rather than a request for human review."
+description: "Publish verified spec-driven work as a pull request with a concise explanation of the problem and resulting change. Rebase, refresh evidence after changes, require a passing independent audit and ready work tour, and push safely."
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,13 +9,13 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "9"
+  version: "10"
 ---
 
 # Spec PR
 
 Publish a merge candidate whose applicable merge evidence is complete and whose deployment
-readiness, authorization and post-deployment observations are stated separately. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). The PR distributes intent, proof, QA output, and deployment facts; neither opening the PR nor a future human review creates merge safety.
+readiness, authorization and post-deployment observations are recorded separately. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). The PR explains the problem and resulting change to a teammate. The supporting artifacts retain the full verification record; neither opening the PR nor a future human review creates merge safety.
 
 This skill opens or updates PRs and never merges them. It may change repository and remote Git state only as required for rebase, commit, and push. It never publishes a red or stale evidence case as merge-ready.
 
@@ -67,6 +67,7 @@ post-deployment observations remain separate and do not require live operations 
 ## Commit Coherent Staged Changes
 
 Create a conventional commit for coherent staged work only. Preserve unrelated user changes. If nothing is staged, do not invent a commit.
+Apply the commit section of [Engineering Writing](../../rules/engineering-writing.md); name the actual change, not the publication stage.
 
 ## Re-Establish Evidence After Git Changes
 
@@ -89,54 +90,41 @@ Push the branch. After a rebase, use `--force-with-lease`, never bare `--force`.
 After pushing, compare the remote branch SHA to the tour's commit. They must match exactly.
 
 Apply the Assembly, Tour, And Publication section of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
-In the existing PR sections summarize consequential behavior rules, the ordinary-entry observation
-and proof limits, and accepted follow-up destinations. Reproduce actionable local briefs when
-there is no externally accessible issue; do not create issues implicitly. Describe only the
-slice actually delivered, and never hide an unmet merge claim as future work.
+Include consequential behavior rules, observations, proof limits, and follow-up destinations
+when they affect review of this change. Keep full local follow-up briefs in internal records; if a brief
+is inaccessible and its contents are needed to assess the PR, summarize the limitation and next
+action in the body. Do not create issues implicitly. Describe only the slice actually delivered,
+and never hide an unmet merge claim as future work.
 
-## Write The Evidence PR
+## Write The PR
 
-Create an imperative title under 70 characters. Write the body to `pr-message.md` first, then submit that file unchanged. Apply the repository/user PR-writing guidance. The body contains:
+Read [PR and Ticket Writing](../../rules/pr-and-ticket-writing.md) and apply repository/user
+writing guidance. Create a specific title under 70 characters using the repository's convention.
+Write `pr-message.md` with the title and exact body before submission; submit its body unchanged.
 
-```markdown
-## Outcome
+For a small change, start with one or two short paragraphs explaining the trigger, consequence,
+and resulting behavior. Add a small example or the reason for a non-obvious choice when useful.
+Use headings for a larger change or a required template, not as a fixed six-section report.
 
-[Requested and implemented observable outcome.]
+Include dependencies, limitations, review navigation, or deployment instructions only when they
+change how someone should assess or use this work. Link actual predecessor PRs in a stack.
+Describe meaningful verification as scenario and observed result; omit routine success reports.
+Keep full SHAs, audit iterations, AC/CL/EV tables, command inventories, and phase bookkeeping in
+the tour/evidence artifacts unless the repository explicitly requires them in the PR.
 
-## Architecture and implementation
+Link the tour or other evidence only when accessible to the intended reader. Verify file links
+refer to committed content in the relevant revision. Do not cite `.specs/`, uncommitted files,
+temporary reports, or paths outside the repository. If no shared artifact location exists, retain the
+local tour and include only essential findings or instructions in the PR. Do not expand the
+whole evidence record into the body or invent a hosting service.
 
-[Before/after data flow, important decisions, step commits, and affected boundaries.]
+Before submission, read the body without the spec or conversation. Check that it explains the
+actual final diff, bounds every material claim, and contains no workflow narration, stale scope,
+or invented rollout requirements. A short description does not excuse omitting a consequential
+defect or limitation.
 
-## Executable evidence verdict
-
-- **Commit:** `<full SHA>`
-- **Merge evidence:** ready
-- **Independent audit:** pass, iteration N, `<artifact>`
-- **Claims:** N/N proven
-- **Gates:** N/N passed
-
-[Compact AC → CL → EV table. Name exact commands, artifacts, and proof limits for material gates.]
-
-## QA tour
-
-- **HTML:** `.specs/<feature>/work-tour.html`
-- **Machine manifest:** `.specs/<feature>/work-tour.json`
-
-[Entrypoints, fixtures, automated scenarios, and visual captures. Optional exploratory product questions are clearly labeled and are not merge gates.]
-
-## Context and deployment
-
-[Consequential context and sourced decisions; deliberate omissions; new maintenance or operational
-burden. Separate deployment readiness, authorization/source, and post-deployment observations.
-Name applicable migrations, configuration, recovery, residual risks and pending later gates.
-An evidence-ready PR does not authorize deployment.]
-
-## Evidence provenance
-
-[Spec folder, evidence posture, exact base/HEAD, rebase outcome, and rerun facts.]
-```
-
-Do not include “please review,” required manual testing, or claims that future review will catch mistakes. Do not copy secrets or sensitive evidence into the PR. If the platform cannot serve the local HTML, inline the essential verdict and QA steps in the body and report where the portable artifact can be published by the repository's existing artifact mechanism; do not invent a hosting service.
+Do not make future human review or required manual testing a substitute for the evidence gate.
+Do not copy secrets or sensitive evidence into the PR.
 
 Use `gh pr view --json number,url,state` to find an existing PR for the branch. Create one when absent; otherwise update its body and title. Write `pr-url.json` after the platform returns the URL.
 
@@ -154,6 +142,9 @@ or establish deployment. Keep this platform state distinct from the local merge 
 
 ## Report
 
-Report the PR URL and create/update result; base and rebase outcome; exact local/remote/tour SHA; audit and evidence verdicts; claim/gate counts; HTML/JSON tour paths; QA scenario/capture counts; separate deployment readiness/authorization/observations; platform mergeability/check state; and all written artifact paths.
+Report the PR URL and whether it was created or updated, plus pending checks or material
+limitations. Link the local tour and publication records for detailed SHAs, rebase history,
+evidence counts, and separate release states. Expand those details only when requested or needed
+to explain a blocker. Do not equate local verification with passing remote checks or deployment.
 
 Do not add model attribution or co-author trailers.

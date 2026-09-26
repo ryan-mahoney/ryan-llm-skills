@@ -59,8 +59,8 @@ Direct `spec-run` requires a current prepared package and reports stale preparat
 
 ## Context, Scope, And Operational Authority
 
-The standalone workflow reads the project context linked by `AGENTS.md`, otherwise root
-`project-context.md`, and writes a sourced `.specs/<feature>/context.md` snapshot. On first use,
+The standalone workflow reads `.specs/project-context.md` in the primary repository and
+AGENTS-linked policy sources, then writes a `.specs/<feature>/context.md` snapshot there. On first use,
 it establishes only the consequential missing facts with the user and records decisions for reuse.
 See the [shared context contract and template](../skills/spec-end-to-end/references/project-context.md).
 A maturity label alone is insufficient: identify users, valuable/disposable data, compatibility,
@@ -134,8 +134,18 @@ Temporary duplication also needs a removal condition. A permanent omission needs
 An unmet current acceptance criterion remains a blocker. A follow-up issue does not satisfy it.
 
 The workflow does not create external issues without authorization.
-For local briefs, the tour and PR include the actionable text because `.specs/` is often inaccessible to readers.
+For local briefs, the tour explains the consequential limitation and next action directly.
+The PR includes them only when needed to assess the change; it does not copy the full brief or cite local spec paths.
 Workers report new scope decisions through their learnings. Changes to accepted scope return to preparation before dependent work continues.
+
+## Writing For Reviewers
+
+Follow [Engineering Writing](../rules/engineering-writing.md) for PRs, commits, and tours.
+Explain the problem and resulting behavior in plain engineering language. Keep workflow IDs,
+audit history, and command inventories in supporting records. Link only material readers can
+access. Tours use ordinary headings such as “What changed,” “Verification,” and “Deployment,”
+with the summary visible at the top. Proposals and specs keep accurate implementation detail;
+they do not inherit the brevity expected of a small PR description.
 
 ## Transition Existing Unimplemented Specs
 
@@ -171,8 +181,10 @@ and evidence revisions must still match their inputs and the implemented commit.
 Equivalent existing prose and evidence satisfy the engineering decision contract.
 Missing headings alone do not require a rewrite. Missing or contradicted behavior and proof return to the owning stage for correction.
 
-If work moves to a worktree, the complete destination `.specs/<feature>/` package becomes canonical.
-Keep logs, captures, and other referenced files with it. The source copy is an inert handoff copy.
+If code moves to a worktree, `.specs/<feature>/` stays in the primary repository. All spec reads
+and writes, including logs, captures, reviews, and tours, use that canonical folder. Never copy it
+into the worktree or use a tracked worktree copy. Run code, Git, builds, and tests in the worktree,
+passing the canonical output paths explicitly. The shared workspace handoff includes a path resolver.
 
 An implementation step may return a truthful checkpoint with unresolved findings when its skill
 permits that outcome. Final refinement must resolve blocking evidence before publication. A failed

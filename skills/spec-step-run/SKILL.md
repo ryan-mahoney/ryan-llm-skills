@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "22"
+  version: "23"
 ---
 
 # Spec Step Run
@@ -37,7 +37,12 @@ necessary later procedure, and record pending execution. A spec gate never grant
 
 ## Canonical Inputs
 
-The prompt must identify the resolved `.specs/<feature>/` folder and target step. Read `context.md`, `spec.md`, `spec-steps.json`, `evidence-plan.json`, `spec-prepare.md`, `preparation.json`, optional criteria/invariants/blockers, the target `step-<NNN>-subspec.md`, and prior step learnings. Write the target `step-<NNN>-learning.md` there.
+The prompt must identify the code checkout, canonical `.specs/<feature>/` folder in the primary
+repository, and target step. Resolve them with the shared workspace handoff even on direct
+invocation; never use a worktree spec copy. Read `context.md`, `spec.md`, `spec-steps.json`,
+`evidence-plan.json`, `spec-prepare.md`, `preparation.json`, optional criteria/invariants/blockers,
+the target `step-<NNN>-subspec.md`, and prior step learnings from the canonical folder. Write
+learnings and non-committed evidence there using explicit output paths; execute tests in the code checkout.
 
 Resolve the target step's `visualDesign` value from its matching entry in
 `spec-steps.json`. A strict boolean `true` activates the mandatory visual verification
@@ -342,6 +347,11 @@ policy requires generated output in a separate commit. In that case keep the sam
 list all step commits in learning prose, and bind the existing scalar `commit` and verification
 fields to the final step HEAD. Do not
 begin the next indexed step.
+
+Apply the commit guidance in [Engineering Writing](../../rules/engineering-writing.md).
+Name the behavior or technical purpose actually implemented. Keep spec/step IDs in
+the learning record. A checkpoint message must describe the partial result and any
+material limitation without claiming the feature is complete.
 
 ## Completion Report
 

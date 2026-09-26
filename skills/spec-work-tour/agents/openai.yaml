@@ -1,4 +1,4 @@
 interface:
   display_name: "Spec Work Tour"
-  short_description: "Review context, proof, and separate release states"
-  default_prompt: "Use $spec-work-tour to build the final executable-evidence tour for this implemented spec."
+  short_description: "Explain changes, verification, and deployment"
+  default_prompt: "Use $spec-work-tour to create a readable walkthrough of this implementation, its verification results, and any remaining deployment work."

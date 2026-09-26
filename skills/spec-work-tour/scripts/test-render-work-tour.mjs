@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -46,7 +46,7 @@ async function check(name, mutate, error) {
   return error ? "" : readFile(output, "utf8");
 }
 const html = await check("merge ready with unauthorized pending release", () => {});
-for (const text of ["Merge evidence · ready", "Deployment authorization:", "not-requested", "post-deploy", "pending", "Project context and decisions", "No new release flag", "QA walkthrough", 'data-claim-panel="CL-1"', "Copy command", 'href="context.md"']) assert.ok(html.includes(text), `missing ${text}`);
+for (const text of ["Pre-merge verification · ready", "Deployment approval:", "not requested", "after deployment", "pending", "Background", "No new release flag", "Test scenarios", 'data-claim-panel="CL-1"', "Copy command", 'href="route-result.txt"']) assert.ok(html.includes(text), `missing ${text}`);
 assert.ok(!html.includes('attention-item attention-item--blocking'), "later work was rendered as a merge blocker");
 await check("merge ready despite deployment gap", (m) => { m.deployment.readiness = "blocked"; m.deployment.gaps = ["Awaiting an isolated release rehearsal."]; });
 await check("deployment not assessed", (m) => { m.deployment.readiness = "not-assessed"; });
@@ -79,16 +79,59 @@ const legacyHtml = await check("existing version 1 callers retain a labeled rend
   }
   m.deployment = { ready: true, migrations: "none", configuration: "none", observability: [], rollback: "existing path", residualRisks: [] };
 });
-assert.ok(legacyHtml.includes("Legacy reported verdict · ready"));
-assert.ok(legacyHtml.includes("Context and authority are unrecorded"));
-assert.ok(!legacyHtml.includes("Merge evidence · ready"));
+assert.ok(legacyHtml.includes("Earlier report · ready"));
+assert.ok(legacyHtml.includes("Project context and deployment permission were not recorded"));
+assert.ok(!legacyHtml.includes("Pre-merge verification · ready"));
 await writeFile(path.join(dir, "legacy.html"), legacyHtml);
 await check("missing context rejected", (m) => { delete m.context; }, /context is required/);
 await check("bad context hash rejected", (m) => { m.context.sha256 = "missing"; }, /SHA-256/);
 await check("missing execution effects rejected", (m) => { delete m.gates[0].effects; }, /effects is required/);
 const blockedHtml = await check("honest blocked tour", (m) => { m.verdict = "blocked"; m.claims[0].status = "unproven"; m.gates[0].status = "failed"; m.deployment.readiness = "blocked"; m.gaps = ["Save did not persist."]; });
-assert.ok(blockedHtml.includes("Merge evidence · blocked"));
+assert.ok(blockedHtml.includes("Pre-merge verification · blocked"));
 assert.ok(blockedHtml.includes('attention-item attention-item--blocking'));
 await writeFile(path.join(dir, "blocked.html"), blockedHtml);
+// Internal files can exist and still be unsuitable references for readers.
+await mkdir(path.join(dir, ".specs"), { recursive: true });
+await writeFile(path.join(dir, ".specs", "private.txt"), "Internal provenance");
+const privateHtml = await check("internal references stay out of HTML", (m) => {
+  m.gates[0].artifact = ".specs/private.txt";
+  m.audit.artifact = path.join(dir, "audit.md");
+  m.architecture.decisions = [{ decision: "Keep normalized values", reason: "Readers expect one format.", source: ".specs/private.txt" }];
+  m.qa.scenarios[0].artifacts = [path.join(dir, "route-result.txt"), ".specs/private.txt"];
+});
+assert.ok(!privateHtml.includes(".specs/private.txt"));
+assert.ok(!privateHtml.includes(dir));
+assert.ok(privateHtml.includes("Supporting file not shared."));
+const externalDir = await mkdtemp(path.join(tmpdir(), "unshared-tour-evidence-"));
+await writeFile(path.join(externalDir, "private.txt"), "Not included or committed");
+const externalPath = path.relative(dir, path.join(externalDir, "private.txt"));
+const externalHtml = await check("outside uncommitted files are not linked", (m) => { m.gates[0].artifact = externalPath; });
+assert.ok(!externalHtml.includes(externalPath));
+assert.ok(externalHtml.includes("Supporting file not shared."));
+const repo = await mkdtemp(path.join(tmpdir(), "tour-reference-repo-"));
+function git(...args) {
+  const result = spawnSync("git", ["-C", repo, ...args], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.trim();
+}
+git("init", "-q");
+await writeFile(path.join(repo, "shared.txt"), "Committed supporting detail");
+await writeFile(path.join(repo, "untracked.txt"), "Local-only detail");
+git("add", "shared.txt");
+git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "Add fixture");
+const repoCommit = git("rev-parse", "HEAD");
+const sharedPath = path.relative(dir, path.join(repo, "shared.txt"));
+const committedHtml = await check("repository references exist at the reviewed commit", (m) => {
+  m.commit = repoCommit;
+  m.audit.commit = repoCommit;
+  for (const gate of m.gates) gate.commit = repoCommit;
+  m.gates[0].artifact = sharedPath;
+});
+assert.ok(committedHtml.includes(`href="${sharedPath}"`));
+const untrackedPath = path.relative(dir, path.join(repo, "untracked.txt"));
+const untrackedHtml = await check("untracked repository files are not shared references", (m) => { m.gates[0].artifact = untrackedPath; });
+assert.ok(!untrackedHtml.includes(untrackedPath));
+const wrongRevisionHtml = await check("a file committed elsewhere is not a reference for this revision", (m) => { m.gates[0].artifact = sharedPath; });
+assert.ok(!wrongRevisionHtml.includes(sharedPath));
 await check("restore ready fixture for browser inspection", () => {});
 console.log(`work-tour renderer: ${checks} checks passed; browser fixtures: ${dir}`);

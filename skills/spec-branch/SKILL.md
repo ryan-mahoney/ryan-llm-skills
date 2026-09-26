@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "7"
+  version: "8"
 ---
 
 # Spec Branch
@@ -24,7 +24,7 @@ Resolve in this order:
 2. An explicit `.specs/<feature>/`, `spec.md`, or `proposal.md` path.
 3. The feature/work named in the conversation.
 
-When an explicit `.specs/<feature>/` folder or file exists, use its slug and `spec.md` or `proposal.md` title as context. If no explicit path is supplied, use a matching folder named in the conversation; stop on ambiguous matches.
+Resolve `.specs/` in the primary repository using [Workspace Handoff](../spec-end-to-end/references/workspace-handoff.md), even when invoked from a linked worktree. When the canonical folder or file exists, use its slug and `spec.md` or `proposal.md` title as context. If no explicit path is supplied, use a matching folder named in the conversation; stop on ambiguous matches.
 
 A number is a GitHub issue only when the current repository has a GitHub remote and `gh issue view <number> --json title --jq .title` succeeds. A non-GitHub ticket needs accompanying descriptive text.
 

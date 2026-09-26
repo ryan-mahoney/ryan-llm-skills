@@ -64,9 +64,10 @@ obligation, or required merge claim remains a blocker; attaching an issue does n
 Narrowing accepted scope requires a sourced decision and re-preparation, not an implementer note.
 
 Local follow-ups are sufficient when external issue creation is not authorized. Do not create
-or comment on issues as a side effect of this contract. Because `.specs/` may be ignored, the
-tour and authorized PR must reproduce actionable local follow-up briefs rather than expose only
-an inaccessible file path. Never claim a local brief is already tracked in an external system.
+or comment on issues as a side effect of this contract. Preserve full briefs in internal records.
+In the tour, explain the consequential limitation and next action directly. Include them in the
+PR only when needed to assess the change; do not copy the entire brief or cite `.specs/` paths.
+Never claim a local brief is already tracked in an external system.
 
 ## Preparation: Put Proof At The Owning Boundary
 
@@ -146,8 +147,10 @@ for rationale, and context omissions for accepted scope limits. Do not add schem
 The tour exposes these through `architecture.decisions`, `qa`, gate `proof`/`boundary`, and
 `context.omissions`. Put deferred outcome, current limitation, destination, revisit condition,
 and acceptance source in the omission text. Keep unmet merge obligations in `gaps`.
-The PR summarizes consequential rules and observed evidence and reproduces follow-up destinations
-or briefs. Neither artifact may promote an internal-only slice or placeholder into a broader
+The PR explains the problem and resulting behavior, including a consequential rule, observation,
+or follow-up only when it affects review. Use accessible shared references and explain needed
+facts inline; do not narrate the workflow or cite uncommitted/local files. Neither artifact may
+promote an internal-only slice or placeholder into a broader
 completion claim. Publication remains subject to the existing authority and evidence gates.
 
 ## Resume And Upgrade

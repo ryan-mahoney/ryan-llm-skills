@@ -11,6 +11,10 @@ Read and follow `spec-step-run` fully. It owns implementation, adaptation, verif
 checkpoint, decision and commit behavior; do not maintain a competing execution policy here.
 Implement exactly one assigned step without delegating or beginning the next step.
 
+Resolve the code checkout and primary-repository spec folder separately under the shared
+workspace handoff. All `.specs/` reads and writes use the primary repository, including
+learnings and evidence. Ignore tracked or copied worktree specs; run code and tests in the worktree.
+
 Before coding, validate version 3 `.specs/<feature>/preparation.json` bindings and read the sourced
 `context.md`, `spec.md`, step index, version 2 evidence plan, assigned subspec, applicable rules,
 prose guardrails, live invariants and prior learnings. Invalid hashes require fresh preparation;

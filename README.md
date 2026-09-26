@@ -23,12 +23,15 @@ See the [end-to-end workflow guide](docs/spec-workflow.md) for prerequisites, go
 compact handoffs, OpenCode nested workers, recovery, and completion criteria. The workflow ends at
 a published PR with current merge evidence; merging, deployment authorization, and post-deployment
 observations remain separate. The [context contract and template](skills/spec-end-to-end/references/project-context.md)
-records users, data value, compatibility, release process and permitted operations for reuse across specs.
+records users, data value, compatibility, release process and permitted operations in
+`.specs/project-context.md` in the primary repository. Each feature keeps its own snapshot in
+`.specs/<feature>/context.md`.
 
 The [engineering decision contract](skills/spec-work-tour/references/standalone-engineering-decisions.md)
 carries domain rules, concrete counterexamples, and accepted scope limits through the standalone stages.
 Evidence covers the behavior at its owning boundary and normal execution without test-only prerequisites.
-Deferred work has a concrete destination and appears in the tour and PR.
+Deferred work has a concrete destination. Include its limitation and next action in the tour,
+and in the PR when needed to assess the change.
 
 For existing unimplemented specs, use `spec-upgrade` before implementation:
 
@@ -47,11 +50,15 @@ The orchestrator runs these stages, which can also be invoked separately:
 2. `spec-architect-critics`: stress-test the proposal and write `critique.md` (optional).
 3. `spec-write`: write `spec.md`, `spec-steps.json`, and the AC → claim → failure → gate `evidence-plan.json`.
 4. `spec-prepare`: code-ground both implementation and proof, derive guardrails, plan every step, and publish their hash-bound manifest last.
-5. Workspace handoff: the top-level agent chooses a branch or worktree and preserves the complete `.specs/<feature>/` package when needed.
+5. Workspace handoff: the top-level agent chooses a code branch or worktree. All `.specs/<feature>/` reads and writes stay in the primary repository, even when a worktree contains a tracked copy.
 6. `spec-run`: implement each step, produce its merge gates, later-phase procedures and QA artifacts, assemble pre-audit evidence, and commit separately.
 7. `spec-branch-refine`: independently audit code and evidence, fix, and converge to a commit-bound proven verdict.
 8. `spec-work-tour`: emit required `work-tour.json` and browser-ready `work-tour.html` for the proven commit.
-9. `spec-pr`: rebase, re-prove when necessary, require a ready tour, and publish the evidence PR.
+9. `spec-pr`: rebase, refresh verification when necessary, require a ready tour, and publish a concise PR explaining the resulting change.
+
+PRs, commits, and work tours follow [Engineering Writing](rules/engineering-writing.md).
+They explain the software without workflow narration or inaccessible local references.
+Proposals and specs retain the detail agents need to implement and verify the work.
 
 `spec-issue` is an optional standalone convenience for mirroring a Markdown spec to GitHub. It writes no pipeline state and does not influence preparation, execution, review, or PR behavior.
 
@@ -65,7 +72,7 @@ The orchestrator runs these stages, which can also be invoked separately:
 | **spec-prepare** | `/spec-prepare [feature-slug-or-spec-path]` | Correct and ground the spec, derive prose guardrails, prepare every step, and publish the hash-bound manifest |
 | **spec-subspec-write** | `/spec-subspec-write [step-number] [spec-path]` | Optional leaf planner for a step whose uncertainty requires deeper preparation |
 | **spec-branch** | `/spec-branch [description-or-feature-slug]` | Create a local branch from a spec, description, or issue/ticket reference |
-| **spec-branch-worktree** | `/spec-branch-worktree [description-or-feature-slug]` | Create a branch/worktree and hand off the matching `.specs` package |
+| **spec-branch-worktree** | `/spec-branch-worktree [description-or-feature-slug]` | Create a code branch/worktree while keeping specs in the primary repository |
 | **spec-run** | `/spec-run [feature-slug-or-spec-path]` | Execute prepared steps and assemble commit-bound pre-audit evidence |
 | **spec-step-run** | delegated | Implement one prepared step and produce its owned code/evidence/QA artifacts |
 | **spec-branch-refine** | `/spec-branch-refine [spec-path]` | Alternate integrated evidence audits and fixes until proven or blocked |
@@ -267,6 +274,7 @@ Design, copy, implementation, and testing guidance. Files in `rules/` are symlin
 | `ux-states.md` | Required states for data-driven views (empty, loading, error, partial, ideal) |
 | `minimal-implementation.md` | Keep implementation scope focused and avoid unnecessary abstractions |
 | `unit-testing.md` | Write useful unit tests with clear boundaries and meaningful assertions |
+| `engineering-writing.md` | Write clear PRs, commits, and work tours; preserve useful detail in agent-facing specs |
 | `pr-and-ticket-writing.md` | Write concise PR descriptions and Jira/GitHub tickets with essential acceptance criteria |
 
 ## Agent Instructions

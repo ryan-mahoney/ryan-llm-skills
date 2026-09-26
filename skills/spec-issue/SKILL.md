@@ -7,7 +7,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "3"
+  version: "4"
 ---
 
 # Spec Issue
@@ -23,6 +23,10 @@ Resolve the Markdown source in this order:
 3. `spec.md` in the current directory.
 
 The source must be an existing readable file. Do not infer a source from modification time or hidden machine state. If no file resolves, stop and report the missing input.
+
+For a source under `.specs/`, resolve its canonical primary-repository location using
+[Workspace Handoff](../spec-end-to-end/references/workspace-handoff.md). Never publish a
+worktree copy in place of the canonical file, even when that copy is tracked.
 
 Treat an integer in `$ARGUMENTS` as the issue number to update. Without an explicit issue number, create a new issue. Do not discover an issue number from filenames, folder names, branch names, footers, sidecars, or pipeline artifacts.
 

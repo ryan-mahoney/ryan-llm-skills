@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "4"
+  version: "5"
 ---
 
 # Spec Work Tour
@@ -18,7 +18,13 @@ deployment-readiness, authorization and post-deployment states:
 
 The tour is not a narrative substitute for proof. It is a navigable projection of evidence that already exists and can be rerun. Read [references/executable-evidence.md](references/executable-evidence.md) before producing either artifact.
 
-## Design Posture — Evidence Review Instrument
+Apply the work-tour section of [Engineering Writing](../../rules/engineering-writing.md).
+Write for an experienced engineer unfamiliar with this change. Describe the software and observed
+results directly; keep workflow provenance in machine fields. Before sharing the HTML, include
+needed supporting material with it or use accessible shared links. Do not make readers follow
+`.specs/`, uncommitted files, temporary reports, or paths outside the repository.
+
+## Reader and layout
 
 Build the HTML for an engineer, reviewer, QA practitioner, or operator who needs to:
 
@@ -44,6 +50,13 @@ Use a minimalist, functionalist composition:
 - one selected claim inspector and one selected QA scenario in the interactive view; expand all in print.
 
 Use this default reading order: verdict and commit → attention queue → sourced context and decisions → before/after architecture → selected claim and gates → selected QA scenario → deployment and recovery → collapsed implementation log. Default the claim and QA inspectors to the first non-passing or incomplete evidence path; otherwise select the first item.
+
+Use ordinary section labels: **Outstanding issues**, **Background**, **What changed**,
+**Verification**, **Test scenarios**, **Deployment**, and **Commits**. In the HTML, call a
+gate a check, describe a claim as behavior, and label a proof boundary **Limits**. Keep
+the exact machine terms in JSON and identifiers in optional reference details. Do not
+add slogans such as “evidence that closes the work,” labels such as “sourced context,”
+or a footer explaining the workflow. Show the change summary directly below the title.
 
 ## Evidence Assembly Boundary
 
@@ -181,7 +194,12 @@ Write version 2 JSON with a trailing newline:
 }
 ```
 
-Keep `title` short enough to act as a navigation landmark. Write `summary` as two to four front-loaded sentences: prior failure, implemented behavior, strongest integrated proof, and any audit correction that materially changed the result. Put detailed history in architecture, decisions, steps, or evidence—not in the heading.
+Keep `title` specific to the changed behavior. Write `summary` as a short explanation of the
+problem and resulting behavior; include an observation or limitation only when needed to assess
+the result. Do not require a sentence about audit corrections or the implementation process.
+Use before/after fields for the relevant data flow and evidence fields for scenario, observed
+result, and limits. Each field should add information, not repeat the summary in different jargon.
+Keep all required IDs, statuses, provenance, and commands in their designated machine fields.
 
 The top-level `verdict` is **merge evidence**: `ready` or `blocked`. `gaps` contains merge gaps only.
 Include at least one merge claim. Claims have `phase: merge | deploy | post-deploy` and status `proven | partial | unproven`. Gates
@@ -210,7 +228,7 @@ may still decide whether an independently evidenced operation is authorized.
 
 Never mark a claim `proven` on an optional gate while a required gate is unpassed. A runbook proves that a procedure exists; it does not prove that the procedure ran or that production recovered. Keep post-deploy execution `unproven` or restate the claim narrowly around the verified runbook artifact.
 
-Every acceptance criterion must appear in at least one claim. Every claim must name at least one gate. Every gate must name the failure hypothesis it rejects. Use checkout-relative artifact paths where possible. Do not embed secrets, credentials, production records, or sensitive screenshots.
+Every acceptance criterion must appear in at least one claim. Every claim must name at least one gate. Every gate must name the failure hypothesis it rejects. Use portable artifact paths: resolve `.specs/` from the primary repository and code/test paths from the execution checkout. Pass canonical absolute input/output paths to the renderer while running it in the code checkout. Do not embed secrets, credentials, production records, or sensitive screenshots.
 
 ## Render And Inspect The HTML
 
@@ -226,7 +244,13 @@ The renderer retains version 1 reading for existing Design/SpecOps callers and l
 outputs as legacy reported statuses. A legacy render is not a valid result of this standalone
 skill and cannot satisfy its version 2 publication contract.
 
-The renderer validates the structural invariants and exits nonzero on an invalid manifest. The HTML is self-contained except for checkout-relative evidence links. Render checkout-relative, package-relative, and URL evidence as usable links when they resolve; mark unresolved local paths visibly instead of silently styling them as ordinary code.
+The renderer validates the structural invariants and exits nonzero on an invalid manifest.
+Supporting files beside the output HTML must travel with it when shared. Other local links
+must reference committed content available in the reviewed revision; URLs must be accessible
+to the intended reader. The renderer omits explicit `.specs/` and absolute local references
+and marks unavailable supporting files without printing their paths. Explain essential results
+inline; do not make readers reconstruct them from local provenance. Check links in the form
+actually shared, not only in the author's checkout.
 
 The default HTML composition must expose:
 
@@ -250,14 +274,9 @@ Any material context/authority change or code, test, migration, configuration, l
 
 ## Output
 
-Report:
-
-- `outcome: ready` or `outcome: blocked`
-- tour JSON and HTML paths
-- exact bound commit
-- proven/partial/unproven claim counts
-- passed/failed/blocked/stale gate counts
-- QA scenario and visual-artifact counts
-- separate deployment readiness, authorization/source, post-deployment observations, phase gaps and residual risks
+For an agent handoff, return `outcome: ready` or `outcome: blocked`, JSON/HTML paths, exact bound
+commit, evidence counts, and separate deployment readiness/authorization/observations and gaps.
+For the user, report the result, the tour location, and any material blocker, limitation, or next
+action. Keep the full bookkeeping in the manifest rather than reciting it in the response.
 
 Do not commit `.specs/` unless the repository explicitly tracks it. Do not describe a blocked tour as merge-ready.

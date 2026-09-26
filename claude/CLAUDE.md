@@ -31,6 +31,19 @@ When multiple rules apply:
 2. Use broader documents (e.g. `functionalist-design.md`) as tie-breakers.
 3. If still ambiguous, choose the option that is most predictable and easiest for users to complete tasks.
 
+## Spec Artifacts and Worktrees
+Keep all `.specs/` reads and writes in the primary repository checkout. Never copy
+the folder into a worktree or use a worktree copy, even when Git tracked it.
+Run code, Git, and tests in the selected worktree; pass canonical spec paths to tools.
+Use `~/.agents/skills/spec-end-to-end/references/workspace-handoff.md` for path resolution.
+Shared project context belongs at `.specs/project-context.md` in the primary repository,
+not at the repo root. Feature snapshots remain at `.specs/<feature>/context.md`.
+
+## Engineering Writing
+When writing PRs, commit messages, work tours, proposals, critiques, or specs, load
+`~/.agents/rules/engineering-writing.md` and apply the relevant audience guidance.
+Keep human-facing summaries concise and preserve useful detail in agent-facing specs.
+
 ## PR and Ticket Writing
 When drafting or editing PR titles/descriptions or Jira/GitHub tickets, load and apply
 `~/.agents/rules/pr-and-ticket-writing.md`, including its acceptance-criteria guidance.

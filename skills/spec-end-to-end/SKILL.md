@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "6"
+  version: "7"
 ---
 
 # Spec End To End
@@ -50,10 +50,11 @@ the next stage may proceed.
    worktree from the request and repository state.
 4. Inspect existing pipeline artifacts. Resume at the earliest incomplete, stale, invalid, or
    explicitly requested stage; do not recreate current valid artifacts merely to replay the list.
-5. Keep one canonical feature slug and spec-package path through the run. After a worktree handoff,
-   the destination package is canonical.
+5. Keep one canonical feature slug and spec-package path in the primary repository through the
+   run. Apply [Workspace Handoff](references/workspace-handoff.md) before resolving paths. A
+   worktree changes the code execution root, never the location of `.specs/`.
 6. Maintain one compact stage ledger with `pending`, `running`, `complete`, or `blocked` status,
-   the canonical checkout, worker/session IDs, decisions, revision-bound evidence references,
+   the code checkout and primary-repository spec path, worker/session IDs, decisions, revision-bound evidence references,
    unresolved findings, consequential decisions/authority sources, and the next action. Update it at material handoffs and give concise
    progress updates. Keep any harness goal objective short and stable; reference the ledger and
    spec package instead of expanding the objective with execution history.
@@ -152,9 +153,10 @@ directories explicitly, continue locally, or delegate later stages when authoriz
 editor, create a new editor window, start a replacement agent session, or install a continuation
 hook as part of worktree setup.
 
-Treat the selected worktree as the execution root for every later stage. Re-read checkout-local
-instructions there and never write subsequent artifacts back to the source checkout's inert
-handoff copy.
+Treat the selected worktree as the execution root for code, Git, builds, and tests. Re-read
+checkout-local instructions there. Read and write every `.specs/` artifact in the primary
+repository, including logs and tour outputs. Pass both absolute roots to every worker. Ignore
+any `.specs/` copy in the worktree, including one created by checking out tracked files.
 
 ## Completion
 
@@ -166,6 +168,7 @@ outcome: published | blocked
 start: goal | proposal | spec | prepared
 feature: <slug>
 checkout: <absolute repository or worktree path>
+spec-folder: <absolute feature path in the primary repository>
 stages: <completed stages>
 pr: <url | none>
 blocker: <none | exact stage and reason>

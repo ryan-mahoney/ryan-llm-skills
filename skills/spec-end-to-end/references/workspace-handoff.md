@@ -14,21 +14,51 @@ instead of forcing every run through a branch-management skill.
 5. Stop on branch/path ownership conflicts. Never force-remove an unrelated worktree or overwrite
    foreign changes.
 
-## Hand Off A Spec Package
+## Keep Specs In The Primary Repository
 
-`.specs/` is often gitignored, so creating a worktree may not carry the prepared package with it.
-When the package is absent from the destination:
+Every `.specs/` read and write uses the primary repository checkout, including direct skill
+invocations and resumed work. Never copy, move, or symlink the spec folder into a worktree.
+A tracked or previously copied worktree `.specs/` folder is not authoritative: leave it alone
+and use the primary repository's version. Do not merge its differences back automatically.
 
-1. Copy the complete `.specs/<feature>/` folder, preserving all files, subdirectories, evidence,
-   packaged references, and checkout-relative paths. Never copy only `spec.md`.
-2. Treat the destination copy as canonical. The source copy becomes an inert handoff artifact.
-3. If the destination package already exists, reuse it only when it is byte-identical. Stop on
-   divergence instead of merging or overwriting silently.
-4. Confirm every direct `Visual reference:` inside the feature folder still resolves byte-for-byte.
-5. For a legacy visual reference outside the package, copy the smallest self-contained artifact
-   into `visual-references/`, update only the destination reference values, remove destination
-   `preparation.json`, and rerun `spec-prepare` because its hashes are stale.
-6. Stop when a named visual reference is missing or a destination collision has different bytes.
+Resolve both roots before locating or creating a package. Run this helper from the code checkout:
+
+```bash
+node ~/.agents/skills/spec-end-to-end/scripts/resolve-spec-path.mjs .specs/<feature>/spec.md
+```
+
+It uses Git's worktree registry to return `executionRoot`, `repositoryRoot`, `specRoot`, and
+`specPath`. It maps an explicit path inside a registered worktree's `.specs/` back to the primary
+repository, even when the canonical file does not exist yet. With no argument it returns the
+roots for discovery. Do not use `git rev-parse --show-toplevel` alone to identify the primary
+repository: in a linked worktree it identifies the code checkout. If the primary checkout is
+unavailable, report the missing location; never fall back to the worktree copy.
+
+Carry the absolute execution root and canonical feature-folder path in every stage/worker
+handoff. These are runtime locations, not new spec schema fields. Keep serialized paths portable:
+
+- `.specs/<feature>/...` resolves from `repositoryRoot` for all reads, writes, hashes, logs,
+  captures, prototypes, reviews, preparation, evidence, tours, and publication records.
+- Shared project context is `repositoryRoot/.specs/project-context.md`; feature snapshots
+  remain in `.specs/<feature>/context.md`.
+- A filename relative to the feature package resolves from its canonical folder.
+- Source files, tests, repository instructions, Git commands, and build/test commands resolve
+  from `executionRoot`. Their commit bindings refer to the implementation branch.
+
+Pass resolved absolute paths to tools while keeping commands in the code checkout. For a command
+that writes evidence, resolve its output destination explicitly; a relative shell redirect or
+screenshot output under `.specs/` would otherwise write to the worktree. Do not change to the
+primary checkout to run implementation tests just because that is where the records live.
+
+Visual references inside `.specs/` stay at their canonical paths. Worktree creation does not
+rewrite them, invalidate preparation, or regenerate designs. Resolve legacy references outside
+the package at their source; if packaging is needed, the owning preparation stage updates the
+canonical package and refreshes affected hashes. Report a missing reference rather than
+creating a substitute. If the canonical package is missing but a worktree copy exists, report
+that recovery is needed; do not silently adopt or overwrite either location.
+
+Concurrent work on one canonical feature package needs one coordinator. Do not run competing
+writers for the same artifacts; use separate feature folders for independent work.
 
 Apply the [project context operational boundary](project-context.md#operational-boundary).
 Identify actual targets/effects before copying or activating environment files, installing dependencies

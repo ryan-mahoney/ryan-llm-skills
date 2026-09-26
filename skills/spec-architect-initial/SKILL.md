@@ -8,7 +8,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "9"
+  version: "10"
 ---
 
 # Spec Architect Initial — Solution Design Against Existing Architecture
@@ -40,7 +40,7 @@ Before detailed architecture work, make sure you understand what's actually bein
 
 Apply this rubric to the request text plus a quick glance at the repo (README, dependency manifest — minutes, not the full Step 2 analysis). The point is to catch missing decisions *before* any architecture work is sunk. For each category, decide whether it is answered by the request, answerable from the repo, or missing:
 
-- **Project context and authority** — Read the AGENTS-linked context or root `project-context.md`.
+- **Project context and authority** — Read `.specs/project-context.md` in the primary repository and AGENTS-linked policy sources.
   Resolve users, data value/reset boundaries, compatibility, scale, release process, configuration
   policy, verification targets, and permitted operations independently. Unknown is not disposable.
 - **Compatibility posture** — Are there existing users, stored data, or API clients that must keep working? Or is this pre-launch / greenfield, where forward-only changes are cheaper and migration shims are waste?
@@ -376,7 +376,7 @@ Write the proposal to `.specs/<feature-slug>/proposal.md` in the current reposit
 
 - If the user supplies an existing `.specs/<feature-slug>/` folder or a file inside it, use that folder.
 - Otherwise derive a short kebab-case slug from the request and create `.specs/<feature-slug>/`.
-- Keep every pipeline artifact for the feature in that folder. Use relative paths when one artifact references another so the folder remains valid when copied into a worktree.
+- Keep every pipeline artifact for the feature in that folder. Use package-relative paths between artifacts. Keep the folder in the primary repository when code runs in a worktree.
 - Write atomically. Keep required front matter first and the level-1 heading immediately after it.
 - Report `outcome: proposed | rejected | decision-required | blocked`. For a completed proposal,
   give its path and `next: spec-architect-critics | spec-write`. For an unresolved consequential

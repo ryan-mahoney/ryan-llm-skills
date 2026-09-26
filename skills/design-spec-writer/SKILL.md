@@ -7,7 +7,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "11"
+  version: "12"
 ---
 
 # Design Spec Writer
@@ -53,7 +53,7 @@ Also read the repo's design system (tokens, component library, existing componen
 
 ### Phase specs
 
-A large design may split into phases. All phase specs share the spec folder. State the phase in the Problem Statement, reconcile only in-scope critique items, and keep the phase marker in the checkout-relative footer.
+A large design may split into phases. All phase specs share the spec folder. State the phase in the Problem Statement, reconcile only in-scope critique items, and keep the phase marker in the repository-relative footer.
 
 ## Reconcile Critique Feedback
 
@@ -105,7 +105,7 @@ Include:
 - **Governing posture and rule**, and for hybrid, the zone mapping.
 - **Dependency map** — component library, icon set, motion library, fonts.
 
-When a prototype or other visual reference exists, include a standalone line with the direct checkout-relative entry-file path:
+When a prototype or other visual reference exists, include a standalone line with the direct repository-relative entry-file path:
 
 ```txt
 Visual reference: .specs/<feature>/<prototype-or-visual-references>/<entry-file>
@@ -144,7 +144,7 @@ Trade-offs with rationale, posture rationale, risks, what was deferred from crit
 
 ### 8. Implementation Steps
 
-A flat, numbered, sequential list of deterministic engineering tasks. For each: **What to do** (exact files/changes), **Why** (tie to architecture or an AC), **Signatures/contracts** (component prop shapes when adding/changing interfaces), **Tests** (concrete assertions and target files — Storybook stories, Playwright/visual snapshots, jest-axe, Testing Library; behavior and states, not implementation), **Coverage** (`Covers: AC-3, AC-7`), **Complexity** (`Complexity: easy`), and **Visual design** (`Visual: yes` or `Visual: no`). When a visual reference exists, every `Visual: yes` step also repeats `Visual reference: <exact checkout-relative file path>` and requires the implementation to inspect and match it rather than recreate the design. Every AC must be covered by at least one step; a step covering no AC must trace to a stated architectural need.
+A flat, numbered, sequential list of deterministic engineering tasks. For each: **What to do** (exact files/changes), **Why** (tie to architecture or an AC), **Signatures/contracts** (component prop shapes when adding/changing interfaces), **Tests** (concrete assertions and target files — Storybook stories, Playwright/visual snapshots, jest-axe, Testing Library; behavior and states, not implementation), **Coverage** (`Covers: AC-3, AC-7`), **Complexity** (`Complexity: easy`), and **Visual design** (`Visual: yes` or `Visual: no`). When a visual reference exists, every `Visual: yes` step also repeats `Visual reference: <exact repository-relative file path>` and requires the implementation to inspect and match it rather than recreate the design. Every AC must be covered by at least one step; a step covering no AC must trace to a stated architectural need.
 
 Number the steps with sequential integers starting at 1 (1, 2, 3, …) as one continuous list. Do not group steps under "Phase" headings and do not use tiered or decimal numbers (`1.1`, `2.3`, `3.2.1`). Even when the design is organized in phases, the Implementation Steps stay one flat integer sequence — the external task-runner addresses steps by this number. A phase *spec* (one of several `spec.md` files for a multi-phase design, per Phase specs above) still keeps its own flat 1..N list.
 
@@ -188,7 +188,7 @@ If none apply, "N/A".
 
 ## Spec Footer
 
-End `spec.md` with the checkout-relative spec folder plus the spec-wide Visual design roll-up. The roll-up is `yes-visual-design` when any step is `Visual: yes`, else `no-visual-design`:
+End `spec.md` with the repository-relative spec folder plus the spec-wide Visual design roll-up. The roll-up is `yes-visual-design` when any step is `Visual: yes`, else `no-visual-design`:
 
 ```txt
 Spec folder: .specs/<feature>/
@@ -221,7 +221,7 @@ The file is a derived index, not a second source of truth — `spec.md` stays ca
 
 Field contract:
 
-- `spec` — the checkout-relative path to `spec.md`, matching the footer.
+- `spec` — the repository-relative path to `spec.md`, matching the footer.
 - `step` — the step's number in `spec.md` (integer, 1-based). Downstream skills and the external task-runner address steps by this number.
 - `name` — a terse imperative title (verb + object), roughly eight words or fewer. Not the full "What to do" prose.
 - `description` — one front-loaded, plain-language sentence summarizing what the step does.
@@ -233,7 +233,7 @@ Write `spec-steps.json` only after the spec body is final, so the index matches 
 
 ## Output Steps
 
-1. Atomically write the final Markdown body to `.specs/<feature>/spec.md`, including the checkout-relative footer and per-step tags.
+1. Atomically write the final Markdown body to `.specs/<feature>/spec.md`, including the repository-relative footer and per-step tags.
 2. Atomically write the derived sibling `spec-steps.json`, with one minimal entry per step and exact tag parity.
 3. Add an **Executable Evidence Plan** section to `spec.md` with the evidence posture and stable CL/FH/EV graph. Atomically write strict version 1 sibling `evidence-plan.json`, cover every AC, and run `node ~/.agents/skills/spec-work-tour/scripts/validate-evidence-plan.mjs <path>`; include interface, client, live-path, accessibility, visual-state, and QA-tour gates as applicable.
 4. Report one compact routing summary: `outcome: written`; all three paths; posture and claim/failure/gate counts; step counts; inputs used; and `next: spec-prepare`.

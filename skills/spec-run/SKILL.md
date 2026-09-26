@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "22"
+  version: "23"
 ---
 
 # Spec Run
@@ -56,7 +56,7 @@ contract before dependent work and re-prepare when intent or proof changes.
 For each indexed step in ascending order:
 
 1. Revalidate the preparation package and record, but do not gate on, resolvable drift.
-2. Provide the implementation agent with the resolved spec-folder path, exact step text, sourced context/authority, immutable subspec, preparation manifest, applicable rules, relevant prose-only criteria statements, live invariants, the step's owned `Evidence:` obligations when present, prior learnings, and unresolved findings.
+2. Provide the implementation agent with both the absolute code checkout and the canonical spec-folder path in the primary repository, exact step text, sourced context/authority, immutable subspec, preparation manifest, applicable rules, relevant prose-only criteria statements, live invariants, the step's owned `Evidence:` obligations when present, prior learnings, and unresolved findings.
 3. Require the agent to read and follow `~/.agents/skills/spec-step-run/SKILL.md` in full.
 4. Wait for that step to produce a learning and any reviewable commit, then continue.
 

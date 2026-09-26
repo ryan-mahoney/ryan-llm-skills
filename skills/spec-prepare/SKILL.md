@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "21"
+  version: "22"
 ---
 
 # Spec Prepare
@@ -45,7 +45,10 @@ Keep the complete prepared package flat in that folder:
 - `step-<NNN>-subspec.md` — immutable execution cards.
 - `preparation.json` — validity manifest, published last.
 
-Use relative filenames and checkout-relative `.specs/<feature>/...` paths inside artifacts. Do not persist machine-specific absolute paths. Step numbers are zero-padded to at least three digits.
+Use relative filenames and portable `.specs/<feature>/...` paths inside artifacts. Resolve
+`.specs/` from the primary repository, and code/test paths from the execution checkout, as
+defined in the shared workspace handoff. Pass absolute resolved paths to tools without
+persisting them in spec schemas. Step numbers are zero-padded to at least three digits.
 
 Write every Markdown artifact atomically and begin it with a level-1 heading. Write machine JSON atomically with a trailing newline. A temporary file must be in the destination directory and renamed over the final destination.
 
@@ -74,7 +77,7 @@ For every `Visual: yes` step, resolve its visual source before judging the step 
    `critique.md`.
 2. When none is named and exactly one plausible entry file exists under the resolved
    feature's `prototype/` or `visual-references/` folder, use it and correct `spec.md`
-   to name its checkout-relative path. Never choose among multiple variants without
+   to name its repository-relative path. Never choose among multiple variants without
    repository or proposal evidence selecting one.
 3. Confirm the entry file and its local assets exist. Inspect the source and, for HTML
    or application prototypes, render it with Playwright to identify the relevant page,
@@ -130,7 +133,7 @@ Reuse the production-composition gate when it already covers ordinary entry.
 
 ### 3. Reconcile the step index
 
-`spec.md` is canonical. Rewrite `spec-steps.json` to contain exactly one entry per final implementation step, in ascending order, using the current strict step-index schema. Each entry's number, name, description, difficulty, visual-design flag, and evidence array must match the Markdown step. The top-level `spec` path must equal the checkout-relative path in the `Spec folder:` footer.
+`spec.md` is canonical. Rewrite `spec-steps.json` to contain exactly one entry per final implementation step, in ascending order, using the current strict step-index schema. Each entry's number, name, description, difficulty, visual-design flag, and evidence array must match the Markdown step. The top-level `spec` path must equal the repository-relative path in the `Spec folder:` footer.
 
 Reconcile `evidence-plan.json` against the corrected spec. Preserve stable identifiers where their meaning survives. Correct posture, context binding, claim/hypothesis/gate mappings, phase, required flag, command,
 artifact, environment, effects, authority, independence and owner-step fields. Recalibrate in either

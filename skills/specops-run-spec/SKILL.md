@@ -7,7 +7,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "2"
+  version: "3"
 ---
 
 # SpecOps Run Spec
@@ -70,8 +70,12 @@ Allow one evidence-directed fix pass when implementation or a required gate fail
 Inspect the diff, stage only the coherent step, and conventional-commit:
 
 ```text
-type(scope): outcome (spec: <basename> step <N>)
+type(scope): <changed behavior or technical purpose>
 ```
+
+Apply the commit guidance in [Engineering Writing](../../rules/engineering-writing.md).
+Keep the spec basename and step number in the step record; add a commit body only
+when useful rationale or a material limitation needs explanation.
 
 After the commit, write `steps/step-<NNN>.json` bound to its full SHA with changed files, AC/CL/FH/EV IDs, exact commands/outcomes, artifacts, environments, proof boundaries, adaptations, and QA inputs. Confirm the tree is clean before the next step.
 
@@ -88,6 +92,9 @@ After all steps:
 An implementer cannot self-approve a residual risk. Acceptance is valid only when the prepared evidence plan already records the bounded decision and the independent drift/conformance evidence confirms its boundary. At the cap or no progress, set the run blocked.
 
 ## Assemble The Work Tour
+
+Apply the work-tour guidance in [Engineering Writing](../../rules/engineering-writing.md)
+to titles, summaries, and explanations. Preserve the complete evidence fields below.
 
 Write standard version 1 `work-tour.json` in the evidence folder, using the schema in `spec-work-tour`. It must include:
 

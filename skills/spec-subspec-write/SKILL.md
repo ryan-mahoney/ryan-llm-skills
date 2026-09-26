@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "20"
+  version: "21"
 ---
 
 # Spec Subspec Write
@@ -181,7 +181,7 @@ required manual QA are invalid correctness procedures. A later-phase gate is a p
 while live operations awaiting release or authority remain pending. A QA walkthrough may be an artifact, but it must identify the automated gates establishing correctness.
 
 For every `Visual: yes` step, include this exact target line using the same
-checkout-relative entry-file path as `spec.md`, or `none` when preparation found no
+repository-relative entry-file path as `spec.md`, or `none` when preparation found no
 prototype or reference design:
 
 ```txt

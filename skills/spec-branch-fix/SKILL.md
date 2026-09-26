@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "11"
+  version: "12"
 ---
 
 # Spec Branch Fix
@@ -209,8 +209,12 @@ unless the repository explicitly tracks it. After
 verification passes, stage the changed code/tests and commit:
 
 ```txt
-fix(<scope>): address branch review (iter <iteration>)
+fix(<scope>): <concrete correction>
 ```
+
+Apply the commit guidance in [Engineering Writing](../../rules/engineering-writing.md).
+For example, `fix(cache): release the lock after refresh failure`. Keep the review
+iteration and finding IDs in the fix artifact; use a body for non-obvious rationale.
 
 If nothing actionable was fixed (`material_change: false`), there is no code
 change, so a review pass with no code changes produces no commit. Leave the artifacts

@@ -2,6 +2,8 @@
 
 Apply when drafting or editing PR titles/descriptions and Jira or GitHub tickets, including acceptance criteria. These are writing guidelines, not permission to publish. Preserve explicit requirements and required repository templates. Keep detailed specifications and test plans in their supporting artifacts; this guide does not reduce their required coverage.
 
+Read the audience guidance and relevant artifact section in [Engineering Writing](engineering-writing.md).
+
 ## Shared guidance
 
 - Write for a teammate who needs to understand the work and act. Include information that changes their understanding or next action. Remove prose that merely makes the document look thorough.
@@ -9,7 +11,7 @@ Apply when drafting or editing PR titles/descriptions and Jira or GitHub tickets
 - Give the title a specific behavior or outcome. Follow the repository's title conventions. Avoid vague titles such as “Improve reliability.”
 - Use plain English, concrete nouns, and direct verbs. Omit ceremonial openings (“This ticket aims to”), inflated urgency, jargon that compresses away meaning, and repeated conclusions. Do not imitate someone's typos or personal mannerisms to sound human.
 - Distinguish observed facts, suspected causes, proposed approaches, and completed changes. Do not invent requirements, code identifiers, impact, or evidence. State consequential uncertainty plainly.
-- Make the body understandable without the originating conversation. Link relevant issues, predecessors, evidence, or follow-ups and explain their relevance. Avoid internal tracking codes and references to inaccessible local files.
+- Make the body understandable without the originating conversation or workflow. Link relevant issues, predecessors, evidence, or follow-ups and explain their relevance. File references must be committed in the relevant revision and accessible to the reader. Do not cite `.specs/`, ignored or uncommitted files, temporary reports, or paths outside the repo. Explain needed facts inline when no shared source exists.
 - Scale structure to the work. A small change may need only two paragraphs. Use headings and lists when they help scanning, not to fill a template. Do not repeat the same point under summary, problem, impact, and requirements.
 - Include limitations, dependencies, operational instructions, and unresolved questions only when they affect implementation, review, or completion. Match them to the actual environment; avoid speculative risks and unrelated scope disclaimers.
 

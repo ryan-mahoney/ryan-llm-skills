@@ -297,8 +297,8 @@ OpenCode nested workers, resume behavior, and completion criteria. The [evidence
 explains the required proof. These guides are included in this archive. PR merging remains a
 separate action after publication, as do deployment authorization and post-deployment observation.
 
-The agent resolves the AGENTS-linked project context or root `project-context.md` before design and
-writes a sourced `.specs/<feature>/context.md` snapshot. Only unresolved consequential decisions
+The agent reads `.specs/project-context.md` in the primary repository and AGENTS-linked policy
+sources before design, then writes a `.specs/<feature>/context.md` snapshot there. Only unresolved consequential decisions
 need a check-in. Routine implementation remains autonomous; nobody is expected to review proposals
 or code. See the context contract in `skills/spec-end-to-end/references/project-context.md`.
 
@@ -391,9 +391,10 @@ Preparation code-grounds and corrects the spec, reconciles the step index, deriv
 ### 5. Establish The Implementation Workspace
 
 Let the top-level agent choose and create a normal feature branch or an isolated worktree using
-ordinary Git operations. When `.specs/` is gitignored and a worktree is selected, copy the complete
-matching `.specs/<feature>/` folder; the destination copy becomes canonical for later stages. Do not
-open a new editor or agent session for the handoff.
+ordinary Git operations. Keep `.specs/<feature>/` in the primary repository for all reads and
+writes; never copy it into the worktree or use a tracked worktree copy. Pass the code checkout
+and canonical spec-folder paths separately to every stage. Follow the shared workspace handoff
+and its path resolver. Do not open a new editor or agent session for the handoff.
 
 ### 6. Execute The Prepared Spec
 
@@ -420,11 +421,11 @@ This alternates independent evidence audits and fixes to convergence and audits 
 ```
 
 ```bash
-open .specs/<feature>/work-tour.html
+open "<primary-repository>/.specs/<feature>/work-tour.html"
 ```
 
-The required HTML exposes sourced context, consequential decisions, omissions, new maintenance
-burden, architecture, requirement proof, QA scenarios and evidence limits. Its version 2 JSON
+The HTML explains what changed, why, the verification results, test scenarios, and remaining
+deployment work. Use plain headings and show the summary immediately. Its version 2 JSON
 separates merge readiness, deployment readiness, authorization and post-deployment observations.
 Both bind exact HEAD. Pending later-phase checks do not force live execution or block a supported
 merge claim; known failures that invalidate merge claims must still block them.
@@ -435,7 +436,10 @@ merge claim; known failures that invalidate merge claims must still block them.
 /spec-pr
 ```
 
-This rebases first, re-establishes any invalidated evidence, requires a current passing audit and ready tour, then pushes and publishes an evidence index. It never relies on future PR review as a safety net.
+This rebases first, refreshes any invalidated verification, requires a current passing audit and
+ready tour, then pushes and publishes a concise PR explaining the problem and resulting change.
+Follow the bundled engineering-writing guide. Keep workflow metadata and inaccessible local
+references out of the PR; preserve the full verification record in supporting artifacts.
 
 ### Quick Sequence
 
@@ -825,6 +829,7 @@ build_bundle() {
     copy_rules "$bundle_dir"
   elif [ "$name" = "specops-skills" ]; then
     copy_scripts "$bundle_dir" "decompose-skeleton.mjs" "agent-docs.mjs" "commit-ledger.mjs"
+    copy_rules "$bundle_dir"
   fi
 
   write_install_script "$bundle_dir"

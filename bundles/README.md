@@ -66,7 +66,7 @@ The generated `spec-skills` README also includes a stage-by-stage overview:
 2. Optionally run `spec-architect-critics` to challenge the architecture.
 3. Run `spec-write` to create `spec.md` and the machine step index.
 4. Run `spec-prepare` to ground and correct the spec, derive prose guardrails, plan each step, and publish the manifest.
-5. Let the top-level agent establish a branch or worktree and preserve the matching `.specs` feature package.
+5. Let the top-level agent establish a code branch or worktree. Keep all `.specs` reads and writes in the primary repository; ignore any worktree copy.
 6. Execute the immutable prepared package with `spec-run`.
 7. Run `spec-branch-refine` to review and fix the integrated branch to convergence.
 8. Run `spec-work-tour` to produce commit-bound context, merge evidence, and separate deployment/authority/observation states.

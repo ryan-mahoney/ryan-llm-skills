@@ -7,10 +7,15 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "1"
+  version: "2"
 ---
 
 # Commit
+
+Read the audience and commit guidance in [Engineering Writing](../../rules/engineering-writing.md).
+Write the subject from the staged diff: the changed behavior or concrete technical purpose.
+Use a body only for useful rationale, constraints, breaking changes, or material limitations.
+Keep workflow step numbers and audit iterations out of the subject unless the repository requires them.
 
 Determine the GitHub issue number: use $ARGUMENTS if provided, otherwise extract the issue number from the current branch name (the trailing number after the last hyphen, or a standalone numeric path segment).
 

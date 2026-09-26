@@ -5,6 +5,12 @@ This contract governs the standalone spec lifecycle. Read the shared
 at every entry point. Agents consume specs; people review evidence artifacts and supply product
 and authority decisions. Correctness must not depend on a person noticing a defect in a diff.
 
+For written output, read the relevant sections of [Engineering Writing](../../../rules/engineering-writing.md).
+Preserve the full evidence contracts in agent/machine artifacts. Human-facing PRs,
+commits, and tour explanations select and explain the facts their readers need;
+they do not need to reproduce the evidence ledger. This changes presentation, not
+the required checks, authority, or readiness verdicts.
+
 ## Evidence And Authority
 
 Every material, applicable obligation follows one traceable chain:
@@ -139,12 +145,13 @@ and keep execution pending. Do not run commands merely because they appear in an
 - **Audit/refine:** independently falsify claims, enforce context constraints, and close material
   merge findings. Verify later-phase status honestly without forcing premature execution.
 - **Tour:** expose context, choices, omissions, proof, burden, and separate readiness/authority states.
-- **PR:** publish the current merge-ready evidence case. Publication does not deploy or authorize it.
+- **PR:** explain the resulting change and material limits, linking accessible evidence when useful.
+  Require the current merge-ready evidence case before publication; publication does not deploy or authorize it.
 
 ## Required Artifacts
 
 ```text
-project-context.md                      # or the existing AGENTS-linked equivalent
+.specs/project-context.md               # shared project context in the primary repository
 .specs/<feature>/
 ├── context.md                          # relevant sourced snapshot and decisions
 ├── proposal.md
