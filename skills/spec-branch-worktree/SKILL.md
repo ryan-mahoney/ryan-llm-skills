@@ -1,6 +1,6 @@
 ---
 name: spec-branch-worktree
-description: Create or reuse a named git branch and worktree for standalone spec-driven work, copy the matching .specs/<feature>/ package into it, prepare the local environment, and return the worktree to the invoking agent. Use for "spec branch worktree", "new spec worktree", "worktree for", "start a worktree", or "create worktree".
+description: "Create or reuse a named git branch and worktree for standalone spec-driven work, copy the matching .specs/<feature>/ package into it, prepare the local environment, and return the worktree to the invoking agent. Use for \"spec branch worktree\", \"new spec worktree\", \"worktree for\", \"start a worktree\", or \"create worktree\"."
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "11"
+  version: "12"
 ---
 
 # Spec Branch Worktree
@@ -69,11 +69,13 @@ Verify `git -C "$dest" rev-parse --abbrev-ref HEAD` equals `<slug>`, then remove
 
 ## Prepare The Worktree
 
-Copy local environment configuration when present:
-
-```bash
-cp "$repo_root/.env" "$dest/.env" 2>/dev/null || true
-```
+Read the [Project Context And Authority](../spec-end-to-end/references/project-context.md)
+operational boundary before environment setup. A worktree isolates files, not database or service
+connections. Inspect configuration target names without exposing secrets. Copy only configuration
+appropriate for an isolated local target under repository instructions; never activate a production
+connection merely because `.env` exists. Use an existing safe local example when available. Record
+unknown targets and defer commands with external effects until resolved. Do not invent flags or
+new configuration mechanisms as a substitute for identifying the target.
 
 When a source spec slug was resolved, copy the entire source folder into `$dest/.specs/<source-slug>/`, preserving every file and subdirectory. Do not copy only `spec.md` or unrelated feature folders. Checkout-relative artifact references remain valid because the `.specs/<feature>/` shape is unchanged.
 
@@ -97,7 +99,8 @@ If the destination feature folder already exists:
 
 After a successful copy, the destination is the active spec folder for this branch. The source remains an inert handoff copy; subsequent spec skills must run from the worktree and must not write back to the source checkout.
 
-Install dependencies using the first matching repository signal: Bun lock/AGENTS guidance → `bun install --frozen-lockfile`; documented non-Bun setup → exact documented command; then pnpm, yarn, npm, Poetry, uv, pip, Bundler, Go, or Cargo lock/project files. A failed or unavailable install is non-fatal but must be reported explicitly.
+Check install/startup hooks for external effects and respect resolved authority. Install dependencies
+using the first matching repository signal: Bun lock/AGENTS guidance → `bun install --frozen-lockfile`; documented non-Bun setup → exact documented command; then pnpm, yarn, npm, Poetry, uv, pip, Bundler, Go, or Cargo lock/project files. A failed or unavailable install is non-fatal but must be reported explicitly.
 
 ## Return Control
 

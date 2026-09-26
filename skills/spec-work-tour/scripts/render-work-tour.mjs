@@ -41,60 +41,115 @@ const renderList = (items, empty = "None recorded.") => items.length
   : `<p class="muted">${escapeHtml(empty)}</p>`;
 
 const manifest = JSON.parse(await readFile(inputPath, "utf8"));
-if (manifest.version !== 1) throw new Error("version must equal 1");
+const legacy = manifest.version === 1;
+if (!legacy && manifest.version !== 2) throw new Error("version must equal 1 or 2");
+// Version 1 remains readable for existing Design/SpecOps callers. This projection cannot qualify
+// a standalone spec for publication: it supplies no context, authority, or later-phase evidence.
+if (legacy) {
+  if (!manifest.deployment || manifest.deployment.ready !== (manifest.verdict === "ready")) throw new Error("legacy deployment.ready must match verdict");
+  manifest.context = { artifact: "not recorded", summary: "Legacy artifact: project context and operational authority were not recorded. Resolve context and re-prepare before standalone publication.", decisions: [], omissions: [], burden: [] };
+  for (const claim of manifest.claims || []) claim.phase = "merge";
+  for (const gate of manifest.gates || []) {
+    gate.phase = "merge";
+    gate.required = gate.required !== false;
+    gate.effects ||= "Not recorded in version 1.";
+    gate.authorization ||= "Not recorded; this artifact grants no authority.";
+  }
+  const { ready, ...recorded } = manifest.deployment;
+  manifest.deployment = { ...recorded, readiness: ready ? "ready" : "blocked", authorization: "not-recorded", authorizationSource: "not recorded", postDeploy: "not-recorded", gaps: [] };
+  console.warn("Legacy version 1 tour: reported statuses only, not context-qualified standalone readiness.");
+}
 for (const key of ["feature", "title", "generatedAt", "branch", "base", "commit", "verdict", "summary"]) required(manifest[key], key);
 if (!["ready", "blocked"].includes(manifest.verdict)) throw new Error("verdict must be ready or blocked");
+const context = required(manifest.context, "context");
+for (const key of ["artifact", "summary"]) required(context[key], `context.${key}`);
+if (!legacy && !/^[0-9a-f]{64}$/.test(context.sha256 || "")) throw new Error("context.sha256 must be a SHA-256 binding");
+for (const key of ["decisions", "omissions", "burden"]) array(context[key], `context.${key}`);
 const claims = array(manifest.claims, "claims");
 const gates = array(manifest.gates, "gates");
-const gaps = array(manifest.gaps, "gaps");
+const gaps = array(manifest.gaps, "gaps"); // Merge gaps only; later gaps live under deployment.
+if (!claims.length || !gates.length) throw new Error("claims and gates must be non-empty");
 const claimIds = new Set(claims.map((claim) => required(claim.id, "claim.id")));
 const gateIds = new Set(gates.map((gate) => required(gate.id, "gate.id")));
 if (claimIds.size !== claims.length) throw new Error("claim ids must be unique");
 if (gateIds.size !== gates.length) throw new Error("gate ids must be unique");
 if (!/^[0-9a-f]{40,64}$/.test(manifest.commit)) throw new Error("commit must be a full lowercase git SHA");
+const phases = new Set(["merge", "deploy", "post-deploy"]);
+const gateById = Object.fromEntries(gates.map((gate) => [gate.id, gate]));
+const claimById = Object.fromEntries(claims.map((claim) => [claim.id, claim]));
 for (const claim of claims) {
+  required(claim.statement, `${claim.id}.statement`);
+  if (!phases.has(claim.phase)) throw new Error(`${claim.id}.phase is invalid`);
   if (!["proven", "partial", "unproven"].includes(claim.status)) throw new Error(`${claim.id}.status is invalid`);
   if (!array(claim.requirements, `${claim.id}.requirements`).length) throw new Error(`${claim.id} has no requirements`);
   if (!array(claim.gates, `${claim.id}.gates`).length) throw new Error(`${claim.id} has no gates`);
   for (const id of claim.gates) if (!gateIds.has(id)) throw new Error(`${claim.id} references unknown gate ${id}`);
 }
 for (const gate of gates) {
-  if (!["passed", "failed", "blocked", "stale"].includes(gate.status)) throw new Error(`${gate.id}.status is invalid`);
-  if (gate.required !== undefined && typeof gate.required !== "boolean") throw new Error(`${gate.id}.required must be boolean`);
+  if (!phases.has(gate.phase)) throw new Error(`${gate.id}.phase is invalid`);
+  if (!["passed", "failed", "blocked", "stale", "pending"].includes(gate.status)) throw new Error(`${gate.id}.status is invalid`);
+  if (typeof gate.required !== "boolean") throw new Error(`${gate.id}.required must be boolean`);
   if (!array(gate.claims, `${gate.id}.claims`).length) throw new Error(`${gate.id} has no claims`);
   if (!array(gate.rejects, `${gate.id}.rejects`).length) throw new Error(`${gate.id} rejects no failure hypothesis`);
-  required(gate.boundary, `${gate.id}.boundary`);
-  required(gate.commit, `${gate.id}.commit`);
-  if (gate.required !== false && gate.commit !== manifest.commit) throw new Error(`${gate.id} is not bound to the tour commit`);
-  for (const id of gate.claims) if (!claimIds.has(id)) throw new Error(`${gate.id} references unknown claim ${id}`);
-}
-for (const claim of claims) {
-  if (claim.status === "proven" && !claim.gates.some((id) => gates.find((gate) => gate.id === id)?.status === "passed")) {
-    throw new Error(`${claim.id} is proven but has no passed gate`);
+  for (const key of legacy ? ["boundary", "commit"] : ["kind", "command", "environment", "effects", "authorization", "artifact", "boundary", "commit"]) required(gate[key], `${gate.id}.${key}`);
+  if (!legacy && gate.status === "passed") required(gate.proof, `${gate.id}.proof`);
+  // Pending procedures bind to the candidate too; their commit is not a claim of execution.
+  if ((!legacy || gate.required) && gate.commit !== manifest.commit && gate.status !== "stale") throw new Error(`${gate.id} is not bound to the tour commit; mark stale evidence honestly`);
+  for (const id of gate.claims) {
+    if (!claimIds.has(id)) throw new Error(`${gate.id} references unknown claim ${id}`);
+    if (!legacy && !claimById[id].gates.includes(gate.id)) throw new Error(`${gate.id}/${id} mapping is not reciprocal`);
   }
 }
-if (!manifest.deployment || manifest.deployment.ready !== (manifest.verdict === "ready")) throw new Error("deployment.ready must match verdict");
-if (manifest.verdict === "ready" && (!manifest.audit || manifest.audit.verdict !== "pass" || manifest.audit.commit !== manifest.commit)) {
-  throw new Error("ready verdict requires a passing audit bound to the tour commit");
+for (const claim of claims) {
+  const linked = claim.gates.map((id) => gateById[id]);
+  for (const gate of linked) {
+    if (!legacy && !gate.claims.includes(claim.id)) throw new Error(`${claim.id}/${gate.id} mapping is not reciprocal`);
+    if (gate.phase !== claim.phase) throw new Error(`${claim.id}/${gate.id} crosses decision phases`);
+  }
+  const proofGates = linked.filter((gate) => gate.required);
+  if (!legacy && !proofGates.length) throw new Error(`${claim.id} has no required proof gate`);
+  if (claim.status === "proven" && (legacy ? !linked.some((gate) => gate.status === "passed") : proofGates.some((gate) => gate.status !== "passed" || gate.commit !== manifest.commit))) {
+    throw new Error(`${claim.id} is proven with an unpassed or stale required gate`);
+  }
 }
-if (manifest.verdict === "ready" && (gaps.length || claims.some((claim) => claim.status !== "proven") || gates.some((gate) => gate.required !== false && gate.status !== "passed"))) {
-  throw new Error("ready verdict requires no gaps, all claims proven, and all required gates passed");
-}
+if (!claims.some((claim) => claim.phase === "merge")) throw new Error("an implementation tour needs at least one merge claim");
+const deployment = required(manifest.deployment, "deployment");
+if ("ready" in deployment) throw new Error("use separate deployment.readiness and authorization, not deployment.ready");
+if (!["ready", "blocked", "not-assessed", "not-applicable"].includes(deployment.readiness)) throw new Error("deployment.readiness is invalid");
+if (!["not-requested", "required", "granted", "not-applicable", ...(legacy ? ["not-recorded"] : [])].includes(deployment.authorization)) throw new Error("deployment.authorization is invalid");
+if (!["not-run", "passed", "failed", "not-applicable", ...(legacy ? ["not-recorded"] : [])].includes(deployment.postDeploy)) throw new Error("deployment.postDeploy is invalid");
+required(deployment.authorizationSource, "deployment.authorizationSource");
+if (deployment.authorization === "granted" && /^(none|unknown|not granted)$/i.test(deployment.authorizationSource.trim())) throw new Error("granted authorization requires a source");
+const deploymentGaps = array(deployment.gaps, "deployment.gaps");
+const audit = manifest.audit || {};
+const phaseComplete = (phase) => claims.filter((claim) => claim.phase === phase).every((claim) => claim.status === "proven")
+  && gates.filter((gate) => gate.phase === phase && gate.required).every((gate) => gate.status === "passed");
+if (manifest.verdict === "ready" && (audit.verdict !== "pass" || audit.commit !== manifest.commit)) throw new Error("ready verdict requires a passing audit bound to the tour commit");
+if (manifest.verdict === "ready" && (gaps.length || !phaseComplete("merge"))) throw new Error("ready verdict requires no merge gaps, merge claims proven, and required merge gates passed");
+if (deployment.readiness === "ready" && (manifest.verdict !== "ready" || deploymentGaps.length || !phaseComplete("deploy"))) throw new Error("deployment readiness requires merge readiness and complete deploy evidence without gaps");
+if (deployment.readiness === "not-applicable" && (claims.some((claim) => claim.phase !== "merge") || gates.some((gate) => gate.phase !== "merge"))) throw new Error("deployment is not-applicable but release claims/gates exist");
+if (deployment.readiness === "not-applicable" && (deployment.authorization !== "not-applicable" || deployment.postDeploy !== "not-applicable")) throw new Error("absent deployment requires not-applicable authorization and observations");
+if (deployment.authorization === "not-applicable" && deployment.readiness !== "not-applicable") throw new Error("authorization not-applicable requires deployment not-applicable");
+const postGates = gates.filter((gate) => gate.phase === "post-deploy" && gate.required);
+if (deployment.postDeploy === "passed" && (!postGates.length || !phaseComplete("post-deploy"))) throw new Error("postDeploy passed requires observed post-deploy proof");
+if (postGates.some((gate) => gate.status === "failed") && deployment.postDeploy !== "failed") throw new Error("failed post-deploy evidence must be surfaced");
+if (deployment.postDeploy === "failed" && !postGates.some((gate) => gate.status === "failed")) throw new Error("postDeploy failed needs a failed gate");
+if (deployment.postDeploy === "not-applicable" && (postGates.length || claims.some((claim) => claim.phase === "post-deploy"))) throw new Error("postDeploy not-applicable conflicts with post-deploy obligations");
 
 const architecture = manifest.architecture || {};
 const implementation = manifest.implementation || { steps: [] };
 const qa = manifest.qa || { mode: "unspecified", entrypoints: [], scenarios: [] };
-const deployment = manifest.deployment;
-const audit = manifest.audit || {};
-const gateById = Object.fromEntries(gates.map((gate) => [gate.id, gate]));
-const requiredGates = gates.filter((gate) => gate.required !== false);
-const optionalGates = gates.filter((gate) => gate.required === false);
+const requiredGates = gates.filter((gate) => gate.required && gate.phase === "merge");
+const laterGates = gates.filter((gate) => gate.required && gate.phase !== "merge");
+const optionalGates = gates.filter((gate) => !gate.required);
+const mergeClaims = claims.filter((claim) => claim.phase === "merge");
 const residualRisks = deployment.residualRisks || [];
 const nonPassingRequired = requiredGates.filter((gate) => gate.status !== "passed");
 const nonPassingOptional = optionalGates.filter((gate) => gate.status !== "passed");
 const nonProvenClaims = claims.filter((claim) => claim.status !== "proven");
-const provenCount = claims.filter((claim) => claim.status === "proven").length;
+const provenCount = mergeClaims.filter((claim) => claim.status === "proven").length;
 const passedRequiredCount = requiredGates.filter((gate) => gate.status === "passed").length;
+const deploymentStatusClass = deployment.readiness === "ready" ? "status--passed" : deployment.readiness === "blocked" ? "status--blocked" : "status--stale";
 
 const resolveArtifact = (rawValue) => {
   if (!rawValue) return { label: "none", href: null, exists: false, image: false };
@@ -136,9 +191,12 @@ const renderArtifactSet = (artifacts, scenarioTitle) => {
 const attentionItems = [
   ...gaps.map((gap) => ({ level: "blocking", kind: "Evidence gap", title: gap })),
   ...nonPassingRequired.map((gate) => ({ level: "blocking", kind: `${gate.id} · required ${gate.kind}`, title: `${gate.status}: ${gate.boundary}`, claim: gate.claims[0] })),
-  ...nonProvenClaims.map((claim) => ({ level: "blocking", kind: `${claim.id} · claim`, title: `${claim.status}: ${claim.statement}`, claim: claim.id })),
+  ...nonProvenClaims.map((claim) => ({ level: claim.phase === "merge" ? "blocking" : "follow-up", kind: `${claim.id} · ${claim.phase} claim`, title: `${claim.status}: ${claim.statement}`, claim: claim.id })),
   ...(audit.verdict === "pass" && audit.commit === manifest.commit ? [] : [{ level: "blocking", kind: "Independent audit", title: "The audit is missing, not passing, or not bound to this commit." }]),
   ...nonPassingOptional.filter((gate) => !nonProvenClaims.some((claim) => claim.gates.includes(gate.id))).map((gate) => ({ level: "follow-up", kind: `${gate.id} · optional ${gate.kind}`, title: `${gate.status}: ${gate.boundary}`, claim: gate.claims[0] })),
+  ...laterGates.filter((gate) => gate.status !== "passed" && !nonProvenClaims.some((claim) => claim.gates.includes(gate.id))).map((gate) => ({ level: "follow-up", kind: `${gate.id} · ${gate.phase}`, title: `${gate.status}: ${gate.boundary}`, claim: gate.claims[0] })),
+  ...deploymentGaps.map((gap) => ({ level: "follow-up", kind: "Deployment gap", title: gap })),
+  ...(deployment.authorization === "required" ? [{ level: "follow-up", kind: "Authorization required", title: "Deployment needs a sourced decision for its target and effects." }] : []),
   ...residualRisks.map((risk) => ({ level: "follow-up", kind: "Residual risk", title: risk })),
 ];
 
@@ -147,18 +205,20 @@ const attentionHtml = attentionItems.length
   : '<p class="clear-state"><strong>No open attention items.</strong> Required evidence is closed and no residual risk is recorded.</p>';
 
 const claimHasAttention = (claim) => claim.status !== "proven" || claim.gates.some((id) => gateById[id]?.status !== "passed");
-const initialClaim = claims.find(claimHasAttention) || claims[0];
+const initialClaim = mergeClaims.find((claim) => claim.status !== "proven") || nonProvenClaims[0] || claims.find(claimHasAttention) || claims[0];
 const initialScenario = (qa.scenarios || []).find((scenario) => (scenario.automatedBy || []).some((id) => gateById[id]?.status !== "passed")) || (qa.scenarios || [])[0];
 
 const renderGate = (gate) => {
-  const gateStatusClass = gate.required === false && gate.status !== "passed" ? "status--stale" : statusClass(gate.status);
+  const gateStatusClass = (gate.required === false || gate.phase !== "merge") && gate.status !== "passed" ? "status--stale" : statusClass(gate.status);
   const copyLabel = /^(follow|inspect|review)\b/i.test(gate.command || "") ? "Copy instruction" : "Copy command";
-  return `<section class="gate-proof" id="gate-${attr(gate.id)}"><header class="gate-head"><div><span class="evidence-id">${escapeHtml(gate.id)} · ${escapeHtml(gate.kind)}</span><strong class="${gateStatusClass}">${escapeHtml(gate.status)}</strong></div><span class="gate-posture">${gate.required === false ? "Optional exploration" : "Required gate"}</span></header>${gate.command ? `<div class="command"><code>${escapeHtml(gate.command)}</code><button type="button" data-copy-command="${attr(gate.command)}">${copyLabel}</button></div>` : '<p class="muted">Deterministic inspection; no command recorded.</p>'}<dl class="proof-facts"><div><dt>Observed</dt><dd>${escapeHtml(gate.proof || "No proof summary recorded.")}</dd></div><div><dt>Can reject</dt><dd>${escapeHtml(gate.rejects.join(", "))}</dd></div><div><dt>Does not prove</dt><dd>${escapeHtml(gate.boundary)}</dd></div><div><dt>Environment</dt><dd>${escapeHtml(gate.environment || "Unspecified")}</dd></div><div><dt>Commit</dt><dd><code>${escapeHtml(gate.commit)}</code></dd></div><div><dt>Artifact</dt><dd>${artifactLink(gate.artifact || "")}</dd></div></dl></section>`;
+  return `<section class="gate-proof" id="gate-${attr(gate.id)}"><header class="gate-head"><div><span class="evidence-id">${escapeHtml(gate.id)} · ${escapeHtml(gate.kind)}</span><strong class="${gateStatusClass}">${escapeHtml(gate.status)}</strong></div><span class="gate-posture">${escapeHtml(gate.phase)} · ${gate.required === false ? "Optional exploration" : "Required gate"}</span></header>${gate.command ? `<div class="command"><code>${escapeHtml(gate.command)}</code><button type="button" data-copy-command="${attr(gate.command)}">${copyLabel}</button></div>` : '<p class="muted">Deterministic inspection; no command recorded.</p>'}<dl class="proof-facts"><div><dt>Observed</dt><dd>${escapeHtml(gate.proof || "No proof summary recorded.")}</dd></div><div><dt>Can reject</dt><dd>${escapeHtml(gate.rejects.join(", "))}</dd></div><div><dt>Does not prove</dt><dd>${escapeHtml(gate.boundary)}</dd></div><div><dt>Environment</dt><dd>${escapeHtml(gate.environment || "Unspecified")}</dd></div><div><dt>Effects</dt><dd>${escapeHtml(gate.effects)}</dd></div><div><dt>Authority</dt><dd>${escapeHtml(gate.authorization)}</dd></div><div><dt>Commit</dt><dd><code>${escapeHtml(gate.commit)}</code></dd></div><div><dt>Artifact</dt><dd>${artifactLink(gate.artifact || "")}</dd></div></dl></section>`;
 };
 
-const claimButtons = claims.map((claim) => `<button type="button" class="claim-select" data-claim-select="${attr(claim.id)}" aria-controls="claim-${attr(claim.id)}" aria-pressed="${claim.id === initialClaim?.id}"><span><strong>${escapeHtml(claim.id)}</strong><span class="${statusClass(claim.status)}">${escapeHtml(claim.status)}</span></span><span>${escapeHtml(claim.statement)}</span><small>${escapeHtml(claim.requirements.join(", "))} · ${escapeHtml(claim.gates.join(", "))}</small></button>`).join("");
+const claimStatusClass = (claim) => claim.phase !== "merge" && claim.status !== "proven" ? "status--stale" : statusClass(claim.status);
 
-const claimPanels = claims.map((claim) => `<article id="claim-${attr(claim.id)}" class="claim-panel" data-claim-panel="${attr(claim.id)}" ${claim.id === initialClaim?.id ? "" : "hidden"}><header class="claim-head"><p class="section-kicker">${escapeHtml(claim.id)} · ${escapeHtml(claim.requirements.join(", "))}</p><h3>${escapeHtml(claim.statement)}</h3><p><span class="${statusClass(claim.status)}">${escapeHtml(claim.status)}</span>${claim.explanation ? ` · ${escapeHtml(claim.explanation)}` : ""}</p></header><div class="gate-stack">${claim.gates.map((id) => renderGate(gateById[id])).join("")}</div></article>`).join("");
+const claimButtons = claims.map((claim) => `<button type="button" class="claim-select" data-claim-select="${attr(claim.id)}" aria-controls="claim-${attr(claim.id)}" aria-pressed="${claim.id === initialClaim?.id}"><span><strong>${escapeHtml(claim.id)}</strong><span class="${claimStatusClass(claim)}">${escapeHtml(claim.status)}</span></span><span>${escapeHtml(claim.statement)}</span><small>${escapeHtml(claim.requirements.join(", "))} · ${escapeHtml(claim.gates.join(", "))}</small></button>`).join("");
+
+const claimPanels = claims.map((claim) => `<article id="claim-${attr(claim.id)}" class="claim-panel" data-claim-panel="${attr(claim.id)}" ${claim.id === initialClaim?.id ? "" : "hidden"}><header class="claim-head"><p class="section-kicker">${escapeHtml(claim.id)} · ${escapeHtml(claim.phase)} · ${escapeHtml(claim.requirements.join(", "))}</p><h3>${escapeHtml(claim.statement)}</h3><p><span class="${claimStatusClass(claim)}">${escapeHtml(claim.status)}</span>${claim.explanation ? ` · ${escapeHtml(claim.explanation)}` : ""}</p></header><div class="gate-stack">${claim.gates.map((id) => renderGate(gateById[id])).join("")}</div></article>`).join("");
 
 const qaButtons = (qa.scenarios || []).map((scenario) => `<button type="button" class="scenario-select" data-scenario-select="${attr(scenario.id)}" aria-controls="scenario-${attr(scenario.id)}" aria-pressed="${scenario.id === initialScenario?.id}"><strong>${escapeHtml(scenario.id)}</strong><span>${escapeHtml(scenario.title)}</span><small>${escapeHtml((scenario.automatedBy || []).join(", ") || "No automated gate")}</small></button>`).join("");
 
@@ -178,15 +238,16 @@ const styles = `
 const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,">
 <title>${escapeHtml(manifest.title)} — Work Tour</title><style>${styles}</style></head><body onbeforeprint="document.querySelectorAll('details').forEach(function(d){d.dataset.printWasOpen=d.open?'1':'0';d.open=true})" onafterprint="document.querySelectorAll('details').forEach(function(d){d.open=d.dataset.printWasOpen==='1';delete d.dataset.printWasOpen})"><a class="skip" href="#attention">Skip to attention items</a>
-<header class="tour-header"><div class="shell"><p class="section-kicker">${escapeHtml(manifest.feature)} · executable-evidence work tour</p><h1>${escapeHtml(manifest.title)}</h1><div class="verdict-row"><span class="verdict verdict--${attr(manifest.verdict)}">Evidence verdict · ${escapeHtml(manifest.verdict)}</span><span class="commit-line">Bound to <code>${escapeHtml(manifest.commit)}</code></span></div><details class="rationale"><summary>Why this changed</summary><p>${escapeHtml(manifest.summary)}</p></details><div class="meta-line"><span>${escapeHtml(manifest.branch)} → ${escapeHtml(manifest.base)}</span><span>Generated ${escapeHtml(manifest.generatedAt)}</span><span>Repository ${escapeHtml(manifest.repository || ".")}</span></div><dl class="status-ledger"><div><dt>Required gates</dt><dd class="${passedRequiredCount === requiredGates.length ? "status--passed" : "status--failed"}">${passedRequiredCount}/${requiredGates.length} passed</dd></div><div><dt>Claims</dt><dd class="${provenCount === claims.length ? "status--proven" : "status--partial"}">${provenCount}/${claims.length} proven</dd></div><div><dt>Independent audit</dt><dd class="${audit.verdict === "pass" ? "status--passed" : "status--failed"}">${escapeHtml(audit.verdict || "missing")}</dd></div><div><dt>Deployment</dt><dd class="${deployment.ready ? "status--passed" : "status--blocked"}">${deployment.ready ? "ready" : "not ready"}</dd></div><div><dt>Attention</dt><dd class="${attentionItems.length ? "status--stale" : "status--passed"}">${attentionItems.length} item${attentionItems.length === 1 ? "" : "s"}</dd></div></dl></div></header>
-<nav class="tour-nav" aria-label="Work tour sections"><div class="shell"><a href="#attention">Attention</a><a href="#architecture">What changed</a><a href="#proof">Proof</a><a href="#qa">QA</a><a href="#deployment">Deployment</a><a href="#implementation">Implementation log</a></div></nav>
-<main><section id="attention" class="tour-section"><div class="shell"><div class="section-heading"><h2>What still needs attention</h2><p>Blocking evidence first, then residual risk and optional follow-up. These items qualify the verdict.</p></div>${attentionHtml}</div></section>
+<header class="tour-header"><div class="shell"><p class="section-kicker">${escapeHtml(manifest.feature)} · executable-evidence work tour</p><h1>${escapeHtml(manifest.title)}</h1><div class="verdict-row"><span class="verdict verdict--${attr(manifest.verdict)}">${legacy ? "Legacy reported verdict" : "Merge evidence"} · ${escapeHtml(manifest.verdict)}</span><span class="commit-line">Bound to <code>${escapeHtml(manifest.commit)}</code></span></div><p class="commit-line">Deployment authorization: <strong>${escapeHtml(deployment.authorization)}</strong> · Post-deployment: <strong>${escapeHtml(deployment.postDeploy)}</strong></p>${legacy ? '<p role="note"><strong>Legacy version 1.</strong> Reported statuses only. Context and authority are unrecorded; re-prepare before standalone publication.</p>' : ""}<details class="rationale"><summary>Why this changed</summary><p>${escapeHtml(manifest.summary)}</p></details><div class="meta-line"><span>${escapeHtml(manifest.branch)} → ${escapeHtml(manifest.base)}</span><span>Generated ${escapeHtml(manifest.generatedAt)}</span><span>Repository ${escapeHtml(manifest.repository || ".")}</span></div><dl class="status-ledger"><div><dt>Merge gates</dt><dd class="${passedRequiredCount === requiredGates.length ? "status--passed" : "status--failed"}">${passedRequiredCount}/${requiredGates.length} passed</dd></div><div><dt>Merge claims</dt><dd class="${provenCount === mergeClaims.length ? "status--proven" : "status--partial"}">${provenCount}/${mergeClaims.length} proven</dd></div><div><dt>Independent audit</dt><dd class="${audit.verdict === "pass" ? "status--passed" : "status--failed"}">${escapeHtml(audit.verdict || "missing")}</dd></div><div><dt>Deployment</dt><dd class="${deploymentStatusClass}">${escapeHtml(deployment.readiness)}</dd></div><div><dt>Attention</dt><dd class="${attentionItems.length ? "status--stale" : "status--passed"}">${attentionItems.length} item${attentionItems.length === 1 ? "" : "s"}</dd></div></dl></div></header>
+<nav class="tour-nav" aria-label="Work tour sections"><div class="shell"><a href="#attention">Attention</a><a href="#context">Context</a><a href="#architecture">What changed</a><a href="#proof">Proof</a><a href="#qa">QA</a><a href="#deployment">Deployment</a><a href="#implementation">Implementation log</a></div></nav>
+<main><section id="attention" class="tour-section"><div class="shell"><div class="section-heading"><h2>What still needs attention</h2><p>Merge blockers first. Later release work, residual risk, and optional follow-up remain separate.</p></div>${attentionHtml}</div></section>
+<section id="context" class="tour-section"><div class="shell"><div class="section-heading"><h2>Project context and decisions</h2><p>${artifactLink(context.artifact, "Open sourced context")}</p></div><p>${escapeHtml(context.summary)}</p><div class="operations-grid"><section><h3>Consequential decisions</h3>${renderList(context.decisions)}</section><section><h3>Deliberate omissions</h3>${renderList(context.omissions)}</section></div><div class="secondary-details"><h3>New maintenance or operational burden</h3>${renderList(context.burden)}</div></div></section>
 <section id="architecture" class="tour-section"><div class="shell"><div class="section-heading"><h2>What changed</h2><p>The smallest useful before-and-after view of the implemented path.</p></div><div class="before-after"><article class="architecture-cell"><h3>Before</h3><p>${escapeHtml(architecture.before || "Not recorded.")}</p></article><article class="architecture-cell"><h3>After</h3><p>${escapeHtml(architecture.after || "Not recorded.")}</p></article></div>${(architecture.boundaries || []).map((boundary) => `<div class="boundary-line"><strong>System boundary</strong><code>${escapeHtml(boundary)}</code></div>`).join("")}${(architecture.decisions || []).length ? `<details class="secondary-details"><summary>${architecture.decisions.length} architecture decision${architecture.decisions.length === 1 ? "" : "s"}</summary>${architecture.decisions.map((decision) => `<article class="decision-row"><strong>${escapeHtml(decision.decision)}</strong><p>${escapeHtml(decision.reason)}</p><span>${artifactLink(decision.source, decision.source)}</span></article>`).join("")}</details>` : ""}</div></section>
 <section id="proof" class="tour-section"><div class="shell"><div class="section-heading"><h2>Evidence that closes the work</h2><p>Select a claim to see the requirement, rerunnable gates, observed proof, and exact proof boundary together.</p></div><div class="proof-layout"><div class="claim-list" aria-label="Claims">${claimButtons}</div><div class="claim-inspector" aria-live="polite">${claimPanels}</div></div></div></section>
 <section id="qa" class="tour-section"><div class="shell"><div class="section-heading"><h2>QA walkthrough</h2><p>${escapeHtml(qa.mode)}. Scenarios are exploration output; automated gates establish the verdict.</p></div><div class="entrypoints">${(qa.entrypoints || []).map((entry) => `<article class="entrypoint"><strong>${escapeHtml(entry.label)}</strong><p>${escapeHtml(entry.location)}</p><p class="muted">${escapeHtml(entry.setup)}</p></article>`).join("") || '<p class="muted">No entrypoints recorded.</p>'}</div>${(qa.scenarios || []).length ? `<div class="qa-layout"><div class="scenario-list" aria-label="QA scenarios">${qaButtons}</div><div class="scenario-inspector" aria-live="polite">${qaPanels}</div></div>` : '<p class="muted">No QA scenarios recorded.</p>'}</div></section>
-<section id="deployment" class="tour-section"><div class="shell"><div class="section-heading"><h2>Deployment and recovery</h2><p><span class="${deployment.ready ? "status--passed" : "status--blocked"}">${deployment.ready ? "Ready" : "Not ready"}</span> at <code>${escapeHtml(shortCommit(manifest.commit))}</code>.</p></div><div class="deployment-grid"><article class="deployment-fact"><h3>Migrations</h3><p>${escapeHtml(deployment.migrations)}</p></article><article class="deployment-fact"><h3>Configuration</h3><p>${escapeHtml(deployment.configuration)}</p></article><article class="deployment-fact"><h3>Rollback or forward fix</h3><p>${escapeHtml(deployment.rollback)}</p></article></div><div class="operations-grid"><section><h3>Observe after deploy</h3>${renderList(deployment.observability || [], "No observability signal recorded.")}</section><section><h3>Residual risk</h3><p>${residualRisks.length ? `${residualRisks.length} item${residualRisks.length === 1 ? "" : "s"} surfaced in the attention queue above.` : "None recorded."}</p></section></div><div class="audit-line"><strong>Independent audit · ${escapeHtml(audit.verdict || "missing")}</strong><span>Iteration ${escapeHtml(audit.iteration ?? "n/a")} · <code>${escapeHtml(shortCommit(audit.commit || "unbound"))}</code></span>${artifactLink(audit.artifact || "", "Open audit")}</div></div></section>
+<section id="deployment" class="tour-section"><div class="shell"><div class="section-heading"><h2>Deployment and recovery</h2><p><span class="${deploymentStatusClass}">${escapeHtml(deployment.readiness)}</span> at <code>${escapeHtml(shortCommit(manifest.commit))}</code>.</p></div><p>Authorization: <strong>${escapeHtml(deployment.authorization)}</strong> · Source: ${escapeHtml(deployment.authorizationSource)}. Post-deployment observations: <strong>${escapeHtml(deployment.postDeploy)}</strong>.</p><div class="deployment-grid"><article class="deployment-fact"><h3>Migrations</h3><p>${escapeHtml(deployment.migrations)}</p></article><article class="deployment-fact"><h3>Configuration</h3><p>${escapeHtml(deployment.configuration)}</p></article><article class="deployment-fact"><h3>Rollback or forward fix</h3><p>${escapeHtml(deployment.rollback)}</p></article></div><div class="operations-grid"><section><h3>Observe after deploy</h3>${renderList(deployment.observability || [], "No observability signal recorded.")}</section><section><h3>Residual risk</h3><p>${residualRisks.length ? `${residualRisks.length} item${residualRisks.length === 1 ? "" : "s"} surfaced in the attention queue above.` : "None recorded."}</p></section></div><div class="audit-line"><strong>Independent audit · ${escapeHtml(audit.verdict || "missing")}</strong><span>Iteration ${escapeHtml(audit.iteration ?? "n/a")} · <code>${escapeHtml(shortCommit(audit.commit || "unbound"))}</code></span>${artifactLink(audit.artifact || "", "Open audit")}</div></div></section>
 <section id="implementation" class="tour-section"><div class="shell"><details class="secondary-details"><summary>Implementation log · ${(implementation.steps || []).length} step${(implementation.steps || []).length === 1 ? "" : "s"}</summary>${implementationRows || '<p class="muted">No implementation steps recorded.</p>'}</details></div></section></main>
-<footer class="tour-footer"><div class="shell"><p>Commit-bound executable evidence. The HTML projects <code>work-tour.json</code>; it does not replace the underlying artifacts.</p></div></footer>
+<footer class="tour-footer"><div class="shell"><p>Commit-bound executable evidence. The HTML projects <code>work-tour.json</code>; it does not replace the underlying artifacts or authorize operations.</p></div></footer>
 <script>(()=>{const claimControls=[...document.querySelectorAll('[data-claim-select]')];const claimPanels=[...document.querySelectorAll('[data-claim-panel]')];const scenarioControls=[...document.querySelectorAll('[data-scenario-select]')];const scenarioPanels=[...document.querySelectorAll('[data-scenario-panel]')];const selectClaim=(id,move)=>{for(const panel of claimPanels)panel.hidden=panel.dataset.claimPanel!==id;for(const control of claimControls)if(control.hasAttribute('aria-pressed'))control.setAttribute('aria-pressed',String(control.dataset.claimSelect===id));history.replaceState(null,'','#claim='+encodeURIComponent(id));if(move)document.querySelector('#proof').scrollIntoView({block:'start'})};const selectScenario=(id,move)=>{for(const panel of scenarioPanels)panel.hidden=panel.dataset.scenarioPanel!==id;for(const control of scenarioControls)control.setAttribute('aria-pressed',String(control.dataset.scenarioSelect===id));history.replaceState(null,'','#qa='+encodeURIComponent(id));if(move)document.querySelector('#qa').scrollIntoView({block:'start'})};for(const control of claimControls)control.addEventListener('click',()=>selectClaim(control.dataset.claimSelect,true));for(const control of scenarioControls)control.addEventListener('click',()=>selectScenario(control.dataset.scenarioSelect,true));for(const button of document.querySelectorAll('[data-copy-command]'))button.addEventListener('click',async()=>{const original=button.textContent;try{await navigator.clipboard.writeText(button.dataset.copyCommand);button.textContent='Copied';setTimeout(()=>button.textContent=original,1200)}catch{button.textContent='Copy failed';setTimeout(()=>button.textContent=original,1600)}});const claimMatch=location.hash.match(/^#claim=(.+)$/);const qaMatch=location.hash.match(/^#qa=(.+)$/);if(claimMatch&&claimPanels.some((panel)=>panel.dataset.claimPanel===decodeURIComponent(claimMatch[1])))selectClaim(decodeURIComponent(claimMatch[1]),false);if(qaMatch&&scenarioPanels.some((panel)=>panel.dataset.scenarioPanel===decodeURIComponent(qaMatch[1])))selectScenario(decodeURIComponent(qaMatch[1]),false)})();</script></body></html>`;
 
 await writeFile(outputPath, html, "utf8");

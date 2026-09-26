@@ -1,18 +1,19 @@
 ---
 name: spec-end-to-end
-description: Run the complete standalone spec-driven workflow from a feature goal or existing .specs package through architecture, specification, preparation, branch or worktree setup, implementation, evidence refinement, work tour, and a published pull request. Use when the user says "do the spec workflow end to end", "take this from idea to PR", "run the whole spec process", "finish this spec and open a PR", or asks for the full workflow with modifiers such as a named subagent or worktree.
+description: "Run the complete standalone spec-driven workflow from a feature goal or existing .specs package through architecture, specification, preparation, branch or worktree setup, implementation, evidence refinement, work tour, and a published pull request. Use when the user says \"do the spec workflow end to end\", \"take this from idea to PR\", \"run the whole spec process\", \"finish this spec and open a PR\", or asks for the full workflow with modifiers such as a named subagent or worktree."
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "4"
+  version: "5"
 ---
 
 # Spec End To End
 
 Own one continuous run from the user's goal to a published pull request. Compose the sibling spec
 skills; do not reimplement their stage logic. Continue autonomously until `spec-pr` returns a PR URL
-or a stage produces a concrete blocker.
+or a stage produces a concrete blocker. This workflow ends at publication; merge, deployment,
+and production verification remain separate actions under existing authority.
 
 ## Preserve User Directives
 
@@ -32,15 +33,19 @@ the next stage may proceed.
 ## Resolve The Run
 
 1. Resolve the repository root and read all applicable `AGENTS.md` files.
-2. Resolve the goal, existing `.specs/<feature>/` package, and any implementation branch or
+2. Read [Project Context And Authority](references/project-context.md). Resolve the project context
+   and write or validate the feature's sourced `context.md` snapshot before architecture. Ask only
+   unresolved consequential questions; continue independent local work. Existing packages must
+   acquire this context before resuming. Record user decisions once for reuse across specs.
+3. Resolve the goal, existing `.specs/<feature>/` package, and any implementation branch or
    worktree from the request and repository state.
-3. Inspect existing pipeline artifacts. Resume at the earliest incomplete, stale, invalid, or
+4. Inspect existing pipeline artifacts. Resume at the earliest incomplete, stale, invalid, or
    explicitly requested stage; do not recreate current valid artifacts merely to replay the list.
-4. Keep one canonical feature slug and spec-package path through the run. After a worktree handoff,
+5. Keep one canonical feature slug and spec-package path through the run. After a worktree handoff,
    the destination package is canonical.
-5. Maintain one compact stage ledger with `pending`, `running`, `complete`, or `blocked` status,
+6. Maintain one compact stage ledger with `pending`, `running`, `complete`, or `blocked` status,
    the canonical checkout, worker/session IDs, decisions, revision-bound evidence references,
-   unresolved findings, and the next action. Update it at material handoffs and give concise
+   unresolved findings, consequential decisions/authority sources, and the next action. Update it at material handoffs and give concise
    progress updates. Keep any harness goal objective short and stable; reference the ledger and
    spec package instead of expanding the objective with execution history.
 
@@ -58,12 +63,16 @@ valid output:
 - **Feature goal:** run `spec-architect-initial`, optionally `spec-architect-critics`, then
   `spec-write`.
 - **Existing proposal:** begin with the optional critique decision, then run `spec-write`.
-- **Existing spec:** when current `spec.md`, `spec-steps.json`, and `evidence-plan.json` exist,
+- **Existing spec:** when current `context.md`, `spec.md`, `spec-steps.json`, and version 2 `evidence-plan.json` exist,
   begin with their earliest invalid or incomplete downstream stage.
+
+For a legacy package, preserve its accepted behavior, resolve the sourced context, and use
+`spec-write` to upgrade the existing spec/evidence contract before `spec-prepare`. Do not replay
+architecture solely because artifact versions changed; revisit only decisions invalidated by facts.
 
 Run an optional critique when the user requests it, the proposal recommends it, or the change is
 materially cross-cutting, security-sensitive, data-sensitive, dependency-heavy, irreversible, or
-architecturally novel.
+architecturally novel in the resolved context. A file type or maturity label alone is not a trigger.
 
 ## Delegate With Compact Handoffs
 
@@ -73,14 +82,14 @@ delegating a stage that itself requires workers, verify the harness supports the
 tool access; otherwise retain that stage's coordination locally.
 
 Give each worker the canonical checkout and spec paths, assigned stage or step, owning skill path,
-required constraints, and return contract. Require it to read and follow the owning skill in full.
+required constraints, sourced `context.md`, operational authority, and return contract. Require it to read and follow the owning skill in full.
 Reference accessible documents instead of copying them unless the dispatch contract requires exact
 text. Do not assume workers inherit the parent conversation.
 
 Keep investigation, implementation, verification, and routine repair with the assigned worker under
 the owning skill's rules. Preserve its permitted checkpoint outcomes and escalation policy. Resume
 the same worker for follow-up within that assignment when supported. Coordinate at handoffs,
-blockers, or cross-stage decisions; use completion notifications or blocking task calls when
+blockers, consequential check-ins, or cross-stage decisions; use completion notifications or blocking task calls when
 available instead of routine status polling or duplicating the worker's work.
 
 Keep full required reports and logs in canonical artifacts. Request a conversational handoff of
@@ -106,9 +115,10 @@ excluded by the routing policy above:
 6. Run `spec-run` from the implementation checkout. It owns prepared step implementation,
    per-step commits, evidence production, and pre-audit merge-evidence assembly.
 7. Run `spec-branch-refine`. It owns the independent review/fix loop and must finish with an audit
-   pass plus `evidence_verdict: proven` bound to current HEAD.
-8. Run `spec-work-tour`. It owns the final JSON/HTML evidence and deployment verdict and must
-   finish with `verdict: ready` bound to the same HEAD.
+   pass plus `evidence_verdict: proven` for merge claims bound to current HEAD.
+8. Run `spec-work-tour`. It owns the final JSON/HTML evidence and separate release states and must
+   finish with merge `verdict: ready` bound to the same HEAD. Deployment readiness, authority,
+   and post-deployment observations are separate; pending later-phase gates do not force execution.
 9. Run `spec-pr` from the same checkout and publish the pull request.
 
 After every stage, inspect its declared outputs and outcome against the owning skill's handoff
@@ -117,7 +127,12 @@ bindings. Preserve all required reads, checks, independent audits, and integrati
 do not add a duplicate implementation review or rerun verification merely to repeat worker
 evidence. Expand inspection for missing, inconsistent, stale, or risk-bearing evidence.
 
-Never convert `blocked` into success or continue past a failed gate. Preserve intermediate
+Resolve worker `decision-required` outcomes at the top level using the shared context contract.
+Do not ask users to review specs or code. Surface the concrete consequential choice and preserve
+already-authorized work. Never infer permission from a gate or broaden a release process to pass it.
+
+Never convert `blocked` into success or continue past a failed required gate for the current phase. A later-phase failure that disproves
+a merge claim is also a merge blocker; merely pending authorized release work is not. Preserve intermediate
 checkpoint outcomes where the owning skill permits them. If a stage invalidates an earlier
 artifact, return to the owning stage, refresh it, and then resume the ordered pipeline.
 
@@ -145,6 +160,9 @@ checkout: <absolute repository or worktree path>
 stages: <completed stages>
 pr: <url | none>
 blocker: <none | exact stage and reason>
+deployment: <ready | blocked | not-assessed | not-applicable>
+authorization: <not-requested | required | granted | not-applicable>
+post-deploy: <not-run | passed | failed | not-applicable>
 ```
 
 Do not treat local implementation, passing tests, a ready work tour, a pushed branch, or a draft PR

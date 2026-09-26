@@ -1,6 +1,6 @@
 ---
 name: spec-subspec-write
-description: This skill should be used when the user asks to "write a subspec", "plan this step", "write a step plan", or "detail step N" for one implementation step in a prepared spec, or when spec-prepare escalates a genuinely uncertain step. Produces a compact, code-grounded execution card with strict planning and verification contracts.
+description: "This skill should be used when the user asks to \"write a subspec\", \"plan this step\", \"write a step plan\", or \"detail step N\" for one implementation step in a prepared spec, or when spec-prepare escalates a genuinely uncertain step. Produces a compact, code-grounded execution card with strict planning and verification contracts."
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "18"
+  version: "19"
 ---
 
 # Spec Subspec Write
@@ -32,7 +32,7 @@ Write the complete Markdown body to a temporary file in the destination director
 
 ## Resolve and Ground the Step
 
-Read the full spec and `evidence-plan.json`, then isolate the assigned step including its objective, files, contracts, tests, `Covers:`, `Complexity:`, `Visual:`, and `Evidence:` tags. Confirm the injected step exists, the spec hash matches, and the step owns exactly the EV items recorded in both machine indexes.
+Read `context.md`, the full spec and `evidence-plan.json`, then isolate the assigned step including its objective, files, contracts, tests, `Covers:`, `Complexity:`, `Visual:`, and `Evidence:` tags. Confirm the injected step exists, the spec hash matches, and the step owns exactly the EV items recorded in both machine indexes.
 
 Ground only the unresolved risk that caused escalation:
 
@@ -66,7 +66,9 @@ When the step creates a function, helper, file, or new test harness:
 2. Read one model file of the same kind only when the new shape is not already fixed by the spec or an adjacent target.
 3. For runtime behavior of a third-party/platform API, confirm semantics from installed source/types or official documentation. If it cannot be confirmed, name the assumption and return `blocked` when correctness depends on it.
 
-These are bounded lookups, not a repository survey.
+These are bounded lookups, not a repository survey. Reject new configuration, compatibility, or release mechanisms without
+a sourced context requirement, even when the parent spec mistakenly mandates them; return
+`needs-spec-correction` with the smallest equivalent implementation/proof.
 
 ## Planning Verdicts
 
@@ -76,7 +78,10 @@ Choose exactly one:
 - `needs-spec-correction` — repository grounding shows that intent, acceptance coverage, prerequisites, step boundaries/order, named contracts, or target paths in the parent spec must change. State the exact correction; do not edit the parent.
 - `blocked` — a required input, decision, dependency, or verifiable runtime contract is missing and cannot be resolved locally.
 
-Prefer `ready` whenever repository evidence supports a coherent executable interpretation. Record assumptions and the best route instead of making the implementation worker ask for permission. A material difference should become `needs-spec-correction` only when the parent must update shared intent or sequencing; use `blocked` only when no meaningful implementation artifact could be planned from the available outcome and repository.
+Prefer `ready` whenever repository evidence supports a coherent executable interpretation. Record ordinary engineering assumptions and the best route. For a consequential unresolved fact,
+return `blocked` with `decision-required` and the concrete choice for the coordinator; do not infer
+external authority, data disposability, or acceptance of material risk. A material difference should become `needs-spec-correction` only when the parent must update shared intent or sequencing; use `blocked` when a required consequential decision/input prevents a ready plan. Preserve
+independent planning even when dependent work cannot be finalized.
 
 For `Visual: yes`, use `needs-spec-correction` when the canonical step description does
 not name the user-visible surface and outcome, the exact reference and relevant region or
@@ -113,7 +118,9 @@ verification:
     - <observable behavior and expected result>
 ```
 
-No extra keys are allowed. For a `ready` verdict, every list must be non-empty and each command/test path must be concrete. The shared `spec-step-run` policy owns execution-time adaptation, additional verification, hang handling, and checkpoint behavior; do not turn this card into a permission whitelist.
+No extra keys are allowed. For a `ready` verdict, commands and cases must be non-empty and concrete. `test_files` may be
+empty for a sufficient deterministic inspection or disposable verifier; name its reproducible
+source, inputs and result artifact in Targets. Do not create a test file to satisfy the schema. The shared `spec-step-run` policy owns execution-time adaptation, additional verification, hang handling, and checkpoint behavior; do not turn this card into a permission whitelist.
 
 For `needs-spec-correction` or `blocked`, keep the exact block shape. Use the narrowest prospective verification known; when none can be determined, use one explanatory item in each list. The parent will not publish this result as ready.
 
@@ -147,7 +154,7 @@ For a step that promises runtime- or user-observable behavior, include at least 
 
 Do not write complete routine test bodies in the subspec. A minimal harness skeleton is allowed only when fake-timer ordering, fixture construction, or a non-obvious mock boundary is itself the key planning risk; justify that skeleton in Setup.
 
-## Compact Human Sections
+## Compact Agent Instructions
 
 After the two machine blocks, include only:
 
@@ -163,7 +170,9 @@ For each owned EV item include exactly one line:
 Evidence: EV-<n> — rejects FH-<n> for CL-<n> — <exact command/procedure> — <environment> — <artifact path> — proof boundary: <honest limit>
 ```
 
-The command/procedure must be capable of rejecting the named failure. Human review and required manual QA are invalid procedures. A QA walkthrough may be an artifact, but it must identify the automated gates establishing correctness.
+The command/procedure must be capable of rejecting the named failure. Record phase, actual target, effects and authority beside each EV line. Human code review and
+required manual QA are invalid correctness procedures. A later-phase gate is a prepared handoff; safe isolated pre-deploy proof may run within scope,
+while live operations awaiting release or authority remain pending. A QA walkthrough may be an artifact, but it must identify the automated gates establishing correctness.
 
 For every `Visual: yes` step, include this exact target line using the same
 checkout-relative entry-file path as `spec.md`, or `none` when preparation found no

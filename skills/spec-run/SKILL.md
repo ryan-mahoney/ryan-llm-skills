@@ -1,6 +1,6 @@
 ---
 name: spec-run
-description: Implement every step from a standalone .specs package without asking the user questions. Use when the user asks to run or execute a prepared spec. Treat prepared subspecs as launchpads, preserve reviewable checkpoint commits, continue through imperfect results, and leave convergence to final branch refinement.
+description: "Implement every step from a standalone .specs package while escalating only unresolved consequential decisions. Use when the user asks to run or execute a prepared spec. Treat prepared subspecs as launchpads, preserve reviewable checkpoint commits, continue through imperfect results, and leave convergence to final branch refinement."
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,12 +9,12 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "20"
+  version: "21"
 ---
 
 # Spec Run
 
-Execute the package produced by `spec-prepare` without asking questions. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Preparation is immutable intent and evidence provenance; implementation may adapt to repository reality, but it may not execute against stale or mismatched prepared inputs.
+Execute the package produced by `spec-prepare` within its sourced context and authority. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Preparation is immutable intent and evidence provenance; implementation may adapt to repository reality, but it may not execute against stale or mismatched prepared inputs.
 
 Run steps sequentially. Dispatch one dedicated implementation agent per step when the harness supports subagents; otherwise follow `spec-step-run` directly for one step at a time. Do not batch steps or commits.
 
@@ -24,7 +24,7 @@ Resolve an explicit `.specs/<feature>/spec.md` or `.specs/<feature>/` argument f
 
 Read:
 
-- sibling `spec.md`, `spec-steps.json`, and `evidence-plan.json`;
+- sibling `context.md`, current project context, `spec.md`, `spec-steps.json`, and `evidence-plan.json`;
 - sibling `spec-prepare.md` and `preparation.json`;
 - every subspec bound by the manifest;
 - optional bound `criteria.md` and `invariants.md`;
@@ -32,22 +32,26 @@ Read:
 
 ## Inspect Preparation
 
-Before touching production code, inspect the strict version 2 preparation manifest. Recompute and compare lowercase SHA-256 hashes for `spec.md`, `spec-steps.json`, `evidence-plan.json`, `spec-prepare.md`, every declared subspec, and optional criteria/invariants. Confirm exactly one `ready` subspec exists for every indexed step and evidence ownership matches all three sources.
+Before touching production code, inspect the strict version 3 preparation manifest. Recompute and compare lowercase SHA-256 hashes for `context.md`, `spec.md`, `spec-steps.json`, `evidence-plan.json`, `spec-prepare.md`, every declared subspec, and optional criteria/invariants. Require evidence-plan version 2, then confirm its context path/hash matches this package's context and manifest.
+Confirm exactly one `ready` subspec exists for every indexed step and evidence ownership matches all three sources.
 
 Repeat validation before every step dispatch. A missing, invalid, stale, incomplete, or partially published package blocks further implementation: report the exact mismatch and require `spec-prepare` to republish. Never repair preparation during `spec-run`. Already committed step artifacts remain intact.
 
 ## Preserve Preparation As Evidence
 
-Keep prepared subspecs immutable as historical inputs. Neither the orchestrator nor an implementation agent rewrites them during execution, but their targets, sequence, contracts, and commands do not limit repository-local implementation.
+Keep prepared subspecs immutable as historical inputs. Neither the orchestrator nor an implementation agent rewrites them during execution, but expected targets and edit sequence may adapt within the sourced context and applicable
+acceptance obligations. Changed intent or proof requires correction and re-preparation.
 
-Do not invoke a separate planner, judge, per-step reviewer, or per-step fix agent. Let `spec-step-run` use repository evidence and best engineering judgment to add files, tests, commands, repairs, integration work, or work expected in a later step when that produces a more coherent outcome. Material departures belong in the learning, not in a question to the user.
+Do not invoke a separate planner, judge, per-step reviewer, or per-step fix agent. Let `spec-step-run` use repository evidence and best engineering judgment to add files, tests, commands, repairs, integration work, or work expected in a later step when that produces a more coherent outcome. Ordinary implementation departures belong in the learning. Consequential context, authority,
+or risk changes return to the coordinator as `decision-required`; resolve them under the shared
+contract before dependent work and re-prepare when intent or proof changes.
 
 ## Execute One Step At A Time
 
 For each indexed step in ascending order:
 
 1. Revalidate the preparation package and record, but do not gate on, resolvable drift.
-2. Provide the implementation agent with the resolved spec-folder path, exact step text, immutable subspec, preparation manifest, applicable rules, relevant prose-only criteria statements, live invariants, the step's owned `Evidence:` obligations when present, prior learnings, and unresolved findings.
+2. Provide the implementation agent with the resolved spec-folder path, exact step text, sourced context/authority, immutable subspec, preparation manifest, applicable rules, relevant prose-only criteria statements, live invariants, the step's owned `Evidence:` obligations when present, prior learnings, and unresolved findings.
 3. Require the agent to read and follow `~/.agents/skills/spec-step-run/SKILL.md` in full.
 4. Wait for that step to produce a learning and any reviewable commit, then continue.
 
@@ -60,7 +64,7 @@ When the card declares any risk lens, call it out explicitly in the dispatch and
 After each step returns, verify only the execution contract:
 
 1. Changed and staged files form a coherent repository-local artifact and exclude unrelated user changes and spec artifacts.
-2. Every usable prepared verification command ran, and any added or replacement command is recorded with its rationale.
+2. Every applicable, safe and authorized merge verification command ran, and any added or replacement command is recorded with its rationale.
 3. Declared red/green evidence exists for test-first steps.
 4. Hung commands were terminated and counted as attempts.
 5. Repeated attempts produced new evidence rather than looping unchanged.
@@ -68,17 +72,22 @@ After each step returns, verify only the execution contract:
 7. Risk-tagged steps include a learning risk-audit summary that covers or explicitly dismisses every declared risk lens and live invariant.
 8. Runtime-facing steps include a complete production-reachability summary: entrypoint/composition owner, concrete internal adapter, real downstream contract, and focused path observation.
 9. A successful outcome does not contradict its own discrepancies/risks by describing required production wiring, an internal adapter, a downstream contract, or the promised user-observable path as absent, fake-only, deferred, or unreachable.
-10. Steps whose card carries `Evidence:` lines produced each named artifact — in the commit or under `.specs/<feature>/evidence/` — or truthfully recorded the gap.
+10. Steps whose card carries `Evidence:` lines produced each merge artifact — in the commit or under `.specs/<feature>/evidence/` — or truthfully
+   recorded the gap. Later-phase gates have concrete procedures/handoffs and honest statuses. Safe isolated
+   pre-deploy checks may run; live operations awaiting a release or authority stay `pending`.
 
-If item 9 or 10 fails, require the truthful outcome `checkpoint` rather than accepting `as-specified` or `adapted`. Preserve the commit and dispatch the next step with that evidence.
+For an unresolved consequential decision or required spec correction, preserve that outcome and
+route it before dependent work. Otherwise, if item 9 or 10 fails, require the truthful outcome `checkpoint` rather than accepting `as-specified` or `adapted`. Preserve the commit and dispatch the next step with that evidence.
 
-Do not rerun commands merely to duplicate the implementer's evidence. Carry scope, command, preparation, and verification mismatches forward as findings. Continue after `checkpoint` and, when later work remains meaningful, after `no-artifact`; do not ask the user whether to proceed.
+Do not rerun commands merely to duplicate the implementer's evidence. Carry scope, command, preparation, and verification mismatches forward as findings. Continue after `checkpoint` and, when later work remains meaningful, after `no-artifact`; do not ask the user whether to proceed with already-authorized work. Route a
+`decision-required` result to the coordinator and `needs-spec-correction` to its owning planner; never count affected work complete while its
+consequential decision remains unresolved.
 
 ## Completion Gate
 
 After all indexed steps have run, map each acceptance criterion and claim to its commits and verification results, each Executable Evidence Plan gate (`EV-n`) to its produced artifact, and each pre-mortem item (`PM-n`) to its implemented disposition. Record missing coverage for final refinement; do not hide gaps or discard useful commits.
 
-Then atomically write both `.specs/<feature>/merge-evidence.md` and strict version 1 `.specs/<feature>/merge-evidence.json`. These are the pre-audit evidence assembly bound to the exact current HEAD; final readiness still requires independent branch audit/refinement and a work tour.
+Then atomically write both `.specs/<feature>/merge-evidence.md` and version 2 `.specs/<feature>/merge-evidence.json`. These are the pre-audit evidence assembly bound to the exact current HEAD; final readiness still requires independent branch audit/refinement and a work tour.
 
 The Markdown begins with a level-1 heading and contains:
 
@@ -90,7 +99,7 @@ The Markdown begins with a level-1 heading and contains:
 - **QA tour input** — deterministic entrypoints, fixtures, scenarios, expected results, automated EV coverage, captures, and optional exploration-only questions. No required manual QA.
 - **Gaps** — missing coverage, unproduced evidence, and open findings carried to final refinement.
 
-`merge-evidence.json` mirrors every CL/FH/EV item from `evidence-plan.json`, adds actual statuses, commands/outcomes/artifacts/proof boundaries, step commits, QA inputs, deployment facts, gaps, and the full current `commit`. Use `readyForAudit: true` only when every planned gate was produced and passed; this is not the deploy verdict.
+`merge-evidence.json` binds `context.md` by path/hash, mirrors every CL/FH/EV item and its phase from `evidence-plan.json`, adds actual statuses, commands/outcomes/artifacts/proof boundaries, step commits, QA inputs, separate deployment readiness/authority/observations, merge gaps and later-phase gaps, and the full current `commit`. Use `readyForAudit: true` only when every required merge gate passed and later-phase procedures are honestly recorded; this is not the deploy verdict.
 
 State gaps honestly. Finish this stage with `outcome: ready-for-refinement` when every indexed step
 has been dispatched and both merge-evidence files are bound to current HEAD. Do not run

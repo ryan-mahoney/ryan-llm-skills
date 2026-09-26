@@ -16,6 +16,7 @@ filename contract for preparation and execution.
 The spec-driven development workflow plus the design-spec front-half:
 
 - `spec-end-to-end`
+- `spec-upgrade`
 - `spec-architect-initial`
 - `spec-architect-critics`
 - `spec-write`
@@ -45,6 +46,10 @@ end-to-end orchestrator manages ordinary branch/worktree setup directly.
 
 Use `spec-end-to-end` to have one top-level agent run this complete sequence through pull-request publication, including explicit worktree or delegation modifiers.
 
+Use `spec-upgrade` to transition one or several existing, unimplemented specs before starting that
+sequence. It resolves shared context, removes unjustified complexity, and refreshes preparation
+without implementing code. It is an optional backlog transition, not a new mandatory stage.
+
 The archive includes `docs/spec-workflow.md` and `docs/reviews.md`. The
 [workflow guide](../docs/spec-workflow.md) covers quick starts, goal-mode operation, resuming stale
 stages, compact handoffs, and OpenCode nested workers. The [audit guide](../docs/reviews.md) explains
@@ -53,14 +58,14 @@ installer installs skills and supporting runtime resources, not documentation in
 
 The generated `spec-skills` README also includes a stage-by-stage overview:
 
-1. Start with `spec-architect-initial` and a clear goal.
+1. Resolve project context and consequential decisions with `spec-architect-initial`, then propose the approach.
 2. Optionally run `spec-architect-critics` to challenge the architecture.
 3. Run `spec-write` to create `spec.md` and the machine step index.
 4. Run `spec-prepare` to ground and correct the spec, derive prose guardrails, plan each step, and publish the manifest.
 5. Let the top-level agent establish a branch or worktree and preserve the matching `.specs` feature package.
 6. Execute the immutable prepared package with `spec-run`.
 7. Run `spec-branch-refine` to review and fix the integrated branch to convergence.
-8. Run `spec-work-tour` to produce the commit-bound evidence and deployment verdict.
+8. Run `spec-work-tour` to produce commit-bound context, merge evidence, and separate deployment/authority/observation states.
 9. Publish with `spec-pr`.
 
 `spec-issue` remains an optional standalone GitHub mirror and does not participate in this sequence.

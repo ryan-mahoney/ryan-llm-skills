@@ -30,6 +30,9 @@ When the package is absent from the destination:
    `preparation.json`, and rerun `spec-prepare` because its hashes are stale.
 6. Stop when a named visual reference is missing or a destination collision has different bytes.
 
-Copy local environment configuration and install dependencies only when repository instructions
-make that appropriate. Report non-fatal setup failures. Do not open an editor, write editor
+Apply the [project context operational boundary](project-context.md#operational-boundary).
+Identify actual targets/effects before copying or activating environment files, installing dependencies
+with hooks, or starting applications. A worktree does not isolate external systems. Copy only
+configuration appropriate for isolated local execution under repository instructions; never blindly
+copy `.env` or add speculative flags to compensate for unknown targets. Report non-fatal setup failures. Do not open an editor, write editor
 settings, create a continuation hook, or start a replacement agent session.

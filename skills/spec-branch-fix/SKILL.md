@@ -1,6 +1,6 @@
 ---
 name: spec-branch-fix
-description: Fix one iteration of branch code or executable-evidence findings, reproduce affected gates, record every decision, and commit coherent corrections for independent re-audit.
+description: "Fix one iteration of branch code or executable-evidence findings, reproduce affected gates, record every decision, and commit coherent corrections for independent re-audit."
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "9"
+  version: "10"
 ---
 
 # Spec Branch Fix
@@ -39,11 +39,13 @@ spec-branch-refine (loop) → spec-branch-review → spec-branch-fix → re-revi
 Single pass per call: decide, fix the actionable findings, verify, commit, stop.
 The loop driver decides whether another iteration runs.
 
-## Non-Interactive Operation
+## Autonomous Repair
 
-This skill runs to completion without user interaction. Decide each finding from the
-review text, the diff, and the code. Stop only when a required input is genuinely
-missing and cannot be inferred; report what is missing and halt.
+Read the sourced `context.md` and current project policy. Decide ordinary repairs from the
+review, diff and evidence. Route unresolved consequential choices as `decision-required` to the
+coordinator (or handle the check-in when standalone); continue safe independent repairs. Do not
+change project constraints or perform external operations merely to close a finding. Stop dependent work for a consequential decision or required input that cannot be resolved;
+report the exact gap without discarding independent repairs.
 
 ## Resolve Inputs
 
@@ -83,8 +85,8 @@ suppresses that signature:
 | Class | Meaning | Suppresses re-raise? |
 |---|---|---|
 | `false-positive` | The finding is wrong. | Yes |
-| `intentional` | The code is deliberate as written. | Yes |
-| `accepted-risk` | Real, but explicitly accepted in the prepared spec/evidence plan. | Only with `approved: true` and a source citation |
+| `intentional` | Behavior is deliberate and justified by sourced requirements/context; no applicable defect is accepted implicitly. | Yes |
+| `accepted-risk` | Real, but accepted by current user instructions or project policy, cited in the prepared context/spec. | Only with `approved: true` and a source citation |
 | `deferred` | Real, but out of scope this pass. | No — keeps surfacing |
 | `unfixable` | Real, but cannot fix without breaking verification. | No |
 
@@ -98,10 +100,15 @@ suppresses that signature:
 - The `findings:` list of every dismissed finding feeds the loop's anti-thrash
   memory: a *suppressing* class stops re-raise; `deferred`/`unfixable` deliberately
   do not, so genuine unresolved bugs keep surfacing instead of being buried.
-- `accepted-risk` suppresses re-raise **only** when the prepared `spec.md` or `evidence-plan.json` already contains that explicit risk decision. Record its source and set `approved: true`; this fixer cannot approve its own residual risk. Without a valid source
+- `accepted-risk` suppresses re-raise only when the prepared decision cites actual user authorization or established project policy.
+  A generated spec sentence, assumption, or prior learning is not an approval source. Record its source and set `approved: true`; this fixer cannot approve its own residual risk. Without a valid source
   the next review re-raises the finding, which is the safe default.
 
 ## Apply The Fixes
+
+Correct unnecessary machinery as well as missing behavior. If the evidence plan itself contains
+an inapplicable obligation, return it to intake/spec preparation for a sourced correction and
+rebind affected artifacts; do not silently edit intent or weaken an assertion to pass.
 
 Use one subagent to apply the fixes when the harness supports subagents; otherwise
 apply directly and note the limitation.
@@ -121,7 +128,8 @@ If a finding's context is unclear, read the relevant source first.
 
 ## Verify
 
-Run the project's relevant tests and every affected EV gate — targeted where possible,
+Confirm actual targets/effects and authority. Run the project's relevant tests and affected
+applicable merge EV gates — targeted where possible,
 broadening to the suite the changes plausibly affect. Tests are evidence, not an infallible oracle; confirm the fixed gate can reject its named failure hypothesis and update generated evidence artifacts honestly.
 Make at most **two** fix-up attempts for a fix that breaks verification. If a
 finding cannot be resolved without breaking the build or exceeding reasonable scope,
@@ -166,7 +174,7 @@ fix:
       decision: dismissed
       dismissal: accepted-risk
       approved: true        # required for accepted-risk to suppress re-raise; omit/false otherwise
-      approval_source: <spec.md or evidence-plan.json location>
+      approval_source: <context/spec location citing actual user decision or project policy>
       signature: security:src/net.ts:fetchAll:no timeout on outbound call
       note: bounded by upstream gateway; risk accepted for this release
   material_change: true   # false when this iteration changed no code (only dismissals) — the loop's stalled signal
@@ -203,7 +211,8 @@ change, so a review pass with no code changes produces no commit. Leave the arti
 on disk and report their paths.
 
 After a fix commit, reassemble `merge-evidence.json` and `merge-evidence.md` for the new
-HEAD using the original evidence plan plus reproduced affected gates. Mark untouched
+HEAD using the current re-prepared evidence plan plus reproduced affected merge gates and honest
+later-phase statuses. Keep deployment readiness, authority and observations separate. Mark untouched
 gates stale unless their result remains valid across this exact change and that judgment
 is recorded with a concrete dependency boundary. The next independent audit must never
 consume evidence still bound to the pre-fix SHA.

@@ -8,7 +8,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "6"
+  version: "7"
 ---
 
 # Spec Architect Critics — Expert-Perspective Design Review
@@ -30,7 +30,7 @@ Look for the material to critique:
 - A plan described in the current conversation
 - Code or PRs the user wants reviewed at the architectural level
 
-Read it fully. Also read `AGENTS.md` and validate relevant codebase claims against real repository files.
+Read it fully. Also read `AGENTS.md`, sourced `context.md`, and the current project context. Validate relevant codebase claims against real repository files.
 
 ### 1b. Extract the core claims
 
@@ -117,9 +117,15 @@ Each critique point must be grounded in something real — a known principle, a 
 
 After both critiques, step out of the expert personas and synthesize. You are now the architect again, informed by two strong perspectives.
 
+Reject invented preservation, compatibility, scale, configuration, and rollout commitments.
+A concern must name actual exposure and concrete harm under the resolved context. Recommend
+removing inapplicable claims or replacing expensive gates with equivalent safer proof. Unknown
+consequential facts go to the coordinator as `decision-required`, not into a new architecture.
+
 ### 4a. Agreement points
 
-Where both experts raised the same concern, it's almost certainly a real problem. Elevate these to top-priority recommendations.
+Agreement is not evidence. Elevate a concern only when its concrete failure and applicability
+are established from project facts; two perspectives can share the same unsupported assumption.
 
 ### 4b. Tension points
 
@@ -134,7 +140,8 @@ Identify anything neither expert would catch because it falls outside both their
 Apply these two lenses on every critique, regardless of which experts were selected:
 
 - **Over-engineering scan.** Walk the proposal's components — modules, abstractions, dependencies, layers, config surfaces — and flag any with no stated requirement behind it, any that duplicates existing code, stdlib, or platform behavior, and any built for a hypothetical future (see `~/.agents/rules/minimal-implementation.md`). "Remove X" is a first-class recommendation, ranked like any other. Check the Deliberate Omissions list for scope that crept back in elsewhere in the proposal.
-- **Evidence sufficiency.** Independently audit the Evidence Posture, claims, failure hypotheses, and proposed gates. Check risk calibration, every crossed boundary, negative paths, production reachability, independence, commit binding, operational/rollback proof, and QA output. Name which unsafe implementation each gate rejects. A plan that relies on later human review or required manual QA is incomplete. Add concrete missing `FH-*` hypotheses and evidence forms.
+- **Evidence sufficiency.** Independently audit the Evidence Posture, claims, failure hypotheses, and proposed gates. Check risk calibration, every crossed boundary, negative paths, production reachability, independence, commit binding, applicable operational/recovery proof, phase placement, authority, and QA output. Name which unsafe implementation each gate rejects. A plan that relies on later human review or required manual QA is incomplete. Add only credible missing `FH-*` hypotheses and the least invasive sufficient evidence. Remove
+redundant gates and distinguish application composition from a live deployment.
 
 ### 4e. Priority ranking
 
@@ -276,7 +283,8 @@ claims and establish deployment safety; the specific missing or circular gates.]
 
 3. **Experts are lenses, not authorities.** You're using their perspectives as analytical tools, not arguing from authority. "Martin Fowler wouldn't like this" is a bad critique. "This violates the principle of keeping aggregate boundaries small, which Fowler argues prevents cascading updates in domain-driven systems — and that matters here because..." is a good one.
 
-4. **Context beats dogma.** An expert's general principle may not apply in a specific context. A scrappy prototype doesn't need the same rigor as a payments system. A solo developer's project doesn't need the same decomposition as a platform team's. Always weigh recommendations against the actual situation.
+4. **Context beats dogma.** An expert's general principle may not apply in a specific context. A prototype needs proof matched to its actual data, credentials, users, and effects; its label
+does not waive protection of valuable data or security. A solo developer's project doesn't need the same decomposition as a platform team's. Always weigh recommendations against the actual situation.
 
 5. **The goal is a better design, not a perfect one.** Perfection is the enemy of shipping. Recommendations should make the proposal concretely better, not chase theoretical ideals. If the proposal is 80% right, say so and focus energy on the 20% that matters.
 

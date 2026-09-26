@@ -1,6 +1,6 @@
 ---
 name: spec-branch-refine
-description: Run the final independent branch evidence loop: audit the integrated implementation and claim/gate evidence, fix defects, and re-audit until proven or blocked. Use after implementation and before the required work tour and PR.
+description: "Run the final independent branch evidence loop: audit the integrated implementation and claim/gate evidence, fix defects, and re-audit until proven or blocked. Use after implementation and before the required work tour and PR."
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,14 +9,14 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "9"
+  version: "10"
 ---
 
 # Spec Branch Refine
 
 > **`.specs/` is standalone working state and is often gitignored.** Read and write it directly; do not depend on git history to recover it. Diffing implementation code is unaffected.
 
-Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Drive the final branch evidence loop to convergence. Alternate the independent `spec-branch-review` audit and `spec-branch-fix`, re-auditing after each fix until code and evidence are proven or the loop is honestly blocked.
+Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Drive the final branch evidence loop to convergence. Alternate the independent `spec-branch-review` audit and `spec-branch-fix`, re-auditing after each fix until merge claims and evidence are proven or the loop is honestly blocked.
 
 The leaf skills stay single-pass and stateless; this driver owns everything that
 spans iterations: counting, convergence, and the anti-thrash dedup memory (which
@@ -37,12 +37,13 @@ criteria `Statement:` values, and live invariants; those findings use the same l
 and verdict as correctness findings. It is also the right standalone entry point for "clean up this
 branch before I open a PR."
 
-## Non-Interactive Operation
+## Autonomous Convergence
 
-This skill runs to completion without user interaction. Drive the loop, make
-well-grounded decisions, and report at the end. Stop only when a required input is
-genuinely missing and cannot be inferred (no resolvable spec), or when a stop
-condition below is met.
+Drive the loop within sourced project context and operational authority. Resolve ordinary repair
+decisions autonomously. Route a consequential `decision-required` result to the top-level
+coordinator, or handle the check-in directly when standalone. Continue independent work without
+repeating unresolved reviews. Pending later-phase authorization is not a merge blocker. Stop dependent work for a consequential decision, a required missing input, a necessary
+spec correction, or a convergence stop condition below.
 
 ## Resolve Inputs
 
@@ -66,8 +67,11 @@ refine was interrupted — resume rather than overwrite). Then:
 2. **Read the verdict.** Parse the review file's leading `review:` YAML block — the
    `verdict` and the set of actionable finding `signature`s. The prose is never
    parsed for control flow.
+   If the review or preceding fix reports an unresolved consequential decision or required spec
+   correction, preserve its findings and return `decision-required` or `needs-spec-correction` to
+   the coordinator. Do not burn review iterations waiting for the same missing decision.
 3. **Stop on clean or cap** — these two stops apply before any fix:
-   - **Clean** — `verdict: pass` and `evidence_verdict: proven`, bound to current HEAD. Stop with
+   - **Clean** — `verdict: pass` and `evidence_verdict: proven`, for applicable merge claims, bound to current HEAD. Stop with
      `outcome: proven` and hand off to `spec-work-tour`.
    - **Cap** — `i == max-iterations`. Stop; report the residual actionable findings.
 4. **Compute recurrence, then check stalled** — this order is what prevents both the
@@ -87,6 +91,9 @@ refine was interrupted — resume rather than overwrite). Then:
    class — and may not be marked `fixed` again with the same approach. `spec-branch-fix`
    writes `branch-<i>-fix.md` (with `material_change`), applies fixes, runs tests, and
    commits the code changes.
+   If correction changes a sourced obligation or evidence plan, return to its owning planner,
+   re-prepare, and rerun only affected proof before the next audit. Do not escalate verification
+   without a named remaining failure or use the loop to authorize live operations.
 6. **Advance.** `i = i + 1`; go to step 1.
 
 Computing recurrence *before* the stalled stop is the fix for the ordering bug: a
@@ -107,7 +114,7 @@ Report:
 
 1. Spec path and `max-iterations`.
 2. How many iterations ran, and why the loop stopped: **proven** / **cap** /
-   **stalled**.
+   **stalled** / **decision-required** / **needs-spec-correction**.
 3. Per-iteration one-liners: actionable count in, fixes applied, dismissals.
 4. Final audit verdict and any residual findings (actionable left at cap/stalled, plus advisory
    findings never required to fix), with their `file:symbol` and signature.

@@ -24,7 +24,7 @@ throughout the run.
 The sequence is:
 
 ```text
-architecture → optional critique → spec → preparation → workspace setup
+project context and consequential decisions → architecture → optional critique → spec → preparation → workspace setup
 → step implementation → independent branch refinement → work tour → PR publication
 ```
 
@@ -33,8 +33,82 @@ a proven audit. `spec-work-tour` produces the final JSON/HTML verdict. The orche
 each stage separately; callers using the individual skills must make those handoffs themselves.
 See [the evidence audit guide](reviews.md) for artifact paths and proof requirements.
 
+## Run Planning Skills Individually
+
+The individual skills remain valid entry points. No separate context skill is required for new specs.
+
+```text
+/spec-architect-initial describe the feature
+/spec-architect-critics .specs/results-export/proposal.md
+/spec-write .specs/results-export/
+/spec-prepare .specs/results-export/
+```
+
+The critique is optional. `spec-architect-initial` establishes project context before architecture.
+Later stages reuse that context and ask only about unresolved consequential decisions.
+
+After preparation, start implementation with this request:
+
+```text
+Use spec-end-to-end for .specs/results-export/. Planning and preparation are complete;
+resume from implementation through PR publication.
+```
+
+The orchestrator checks the package and reuses valid planning artifacts. It refreshes only stale or incomplete stages.
+Direct `spec-run` requires a current prepared package and reports stale preparation instead of repairing it.
+
+## Context, Scope, And Operational Authority
+
+The standalone workflow reads the project context linked by `AGENTS.md`, otherwise root
+`project-context.md`, and writes a sourced `.specs/<feature>/context.md` snapshot. On first use,
+it establishes only the consequential missing facts with the user and records decisions for reuse.
+See the [shared context contract and template](../skills/spec-end-to-end/references/project-context.md).
+A maturity label alone is insufficient: identify users, valuable/disposable data, compatibility,
+scale, release process, configuration policy, safe verification targets and authority separately.
+
+Specs are agent instructions. People review evidence tours and make consequential product or
+operational decisions; nobody is expected to catch assumptions in a spec or bugs in a diff.
+Routine implementation choices stay autonomous. Missing data-preservation, compatibility, release,
+cost, authority or material-risk decisions return to the coordinator as `decision-required`.
+Headless runs preserve the decision and complete independent work; they do not assume permission.
+
+Prefer the minimum sustainable implementation and least invasive sufficient proof. Existing tests,
+shared gates, disposable verifiers and deterministic inspections are legitimate when they reject
+credible failures. Remove inapplicable obligations with sourced rationale and re-prepare. Do not
+weaken a real assertion to obtain a pass or expand verification after its material gaps are closed.
+Flags, environment variables, historical migration machinery and release facilities need a present
+project requirement. Confirmed disposable fixtures can use fresh-setup proof; valuable data still
+needs preservation even in a developer-only project.
+
+Merge readiness, deployment readiness, deployment authorization and post-deployment observations
+are separate. The workflow ends at PR publication. Pending later-phase checks do not force live
+execution, and a passing verdict does not authorize it. Stopping services or changing traffic can
+be reversible and still require explicit authority. A local app/worktree may connect to production;
+inspect targets and setup/teardown effects before running commands or copying environment files.
+
 For a design-led change, run the design-spec authoring skills first, then pass the resulting spec
 package to `spec-end-to-end`. A proposal alone uses the architecture entry route.
+
+## Transition Existing Unimplemented Specs
+
+Use `spec-upgrade` when you have specs written under an older workflow and want to update them
+before starting implementation. Select one, several, or all pending specs explicitly:
+
+```text
+/spec-upgrade .specs/results-export/
+/spec-upgrade .specs/results-export/ .specs/saved-searches/
+/spec-upgrade all pending specs in this repository
+```
+
+It establishes shared project context once, checks each selected plan for unjustified complexity,
+preserves requested behavior, and runs the writing/preparation stages needed to produce current
+packages. It preserves original planning files before replacement. Consequential unknowns prompt
+a check-in; partially implemented packages are flagged rather than reset. Its final report explains
+material changes and identifies which packages are ready to implement. It does not implement,
+commit, or publish anything.
+
+Then invoke `spec-end-to-end` for a ready package when you want implementation to begin. This is
+an optional transition skill; new specs use the ordinary sequence above.
 
 ## Resume And Completion
 
@@ -43,7 +117,7 @@ package to `spec-end-to-end`. A proposal alone uses the architecture entry route
 ```
 
 The agent resumes at the earliest incomplete, stale, or invalid stage. A current artifact is reused;
-a filename's existence alone does not prove that it is current. Preparation hashes, audit verdicts,
+a filename's existence alone does not prove that it is current. Context source freshness, preparation hashes, audit verdicts,
 and evidence revisions must still match their inputs and the implemented commit.
 
 If work moves to a worktree, the complete destination `.specs/<feature>/` package becomes canonical.
@@ -55,8 +129,8 @@ required gate cannot be converted into a successful stage to keep the run moving
 
 Completion means a published PR URL with evidence bound to the published HEAD. Local commits,
 passing tests, a ready tour, or a pushed branch alone do not complete the run. `spec-pr` does not
-merge the PR. Pending remote checks can leave a published PR not yet deployable; failed required
-checks invalidate readiness and must be addressed.
+merge the PR. Pending remote checks leave platform merge readiness pending; failed required
+merge checks invalidate merge readiness and must be addressed.
 
 ## Goal Mode And Compact Delegation
 

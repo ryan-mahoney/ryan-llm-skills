@@ -1,6 +1,6 @@
 ---
 name: spec-prepare
-description: This skill should be used when the user asks to "prepare a spec", "review and prepare the implementation plan", "make this spec implementation-ready", or "prepare spec". Reviews and corrects spec.md, derives prose guardrails and live invariants, writes difficulty-routed execution cards, and atomically publishes preparation.json only when the complete package is current.
+description: "This skill should be used when the user asks to \"prepare a spec\", \"review and prepare the implementation plan\", \"make this spec implementation-ready\", or \"prepare spec\". Reviews and corrects spec.md, derives prose guardrails and live invariants, writes difficulty-routed execution cards, and atomically publishes preparation.json only when the complete package is current."
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "19"
+  version: "20"
 ---
 
 # Spec Prepare
@@ -20,9 +20,13 @@ Prepare the complete, immutable implementation and evidence package for a spec. 
 
 Preparation is one visible workflow stage owned by one capable preparation agent. That agent writes the shared artifacts and, by default, every step subspec. A `spec-subspec-write` leaf is an exceptional deep-planning fallback, not a mandatory pass for every step; when used, it may write only its assigned subspec. Never let a fallback leaf edit shared state.
 
-## Non-Interactive Operation
+## Autonomous Preparation
 
-Run to completion without user interaction. Do not ask the user questions. Resolve underspecified details from the repository, existing conventions, critique, and spec intent by choosing the most plausible coherent interpretation. Record assumptions in `spec.md`; withhold the manifest only when no executable interpretation of the requested outcome can be produced.
+Resolve ordinary engineering choices autonomously within sourced `context.md`. Follow the shared
+context contract for consequential gaps: return `decision-required` to the coordinator (or handle
+the check-in directly when standalone), continue independent preparation, and withhold the manifest
+for unresolved decisions that affect merge scope or proof. Later deployment authorization may remain
+pending when isolated merge evidence is sufficient. Never infer authorization or data disposability.
 
 Do not implement production code or write to GitHub issues.
 
@@ -32,6 +36,7 @@ Resolve the spec folder from an explicit `.specs/<feature>/spec.md` or `.specs/<
 
 Keep the complete prepared package flat in that folder:
 
+- `context.md` — sourced project snapshot, decisions, authority and omissions.
 - `spec.md` — canonical spec.
 - `spec-steps.json` — derived machine step index.
 - `evidence-plan.json` — evidence posture and AC → claim → failure → gate graph.
@@ -51,7 +56,10 @@ Perform these transformations in exactly this order. They are deliberately seque
 ### 1. Resolve and invalidate
 
 1. Resolve the spec folder and confirm `spec.md` is readable.
-2. Read sibling `proposal.md`, `critique.md`, and required `evidence-plan.json`.
+2. Read sibling `context.md`, `proposal.md`, `critique.md`, and required version 2
+   `evidence-plan.json`. Check context against current sources; route material changes through intake
+   and resolve consequential decisions before dependent planning. Legacy packages need sourced
+   context and phase classification, not inferred authority.
 3. **Invalidate first:** remove `preparation.json` before editing any preparation artifact or launching a subagent. A missing manifest is already invalidated. Any other removal error stops the run.
 4. Do not restore or retain the old manifest on any failure.
 
@@ -87,7 +95,11 @@ Correct only substantive defects:
 
 - Missing or non-substantive required sections.
 - Ambiguous behavior, shapes, defaults, ordering, error handling, or side effects.
-- Architecture that conflicts with real repository patterns.
+- Architecture that conflicts with real repository patterns or sourced project constraints.
+- Unjustified flags, environment variables, compatibility layers, release mechanisms, or proof
+  tooling. Remove obligations unsupported by actual users, retained data, scale, or release policy.
+  Record the source and affected claim/gate mapping for each correction; do not accept real risks
+  without a user or project-policy decision.
 - Missing acceptance coverage or non-automatable criteria.
 - Executable Evidence Plan defects: missing or invalid posture; incomplete AC → CL → FH → EV traceability; an EV item owned by no step or by more than one step; a gate that cannot reject its failure hypothesis; human review/manual QA used as a safety gate; or evidence forms, independence, environments, and deployment proof that do not fit actual risk.
 - Pre-mortem defects: a missing pre-mortem, or a credible concern with no disposition (AC, step, EV item, or explicitly accepted risk).
@@ -111,7 +123,12 @@ Preserve intent and voice. Do not restyle a sound spec. Re-running preparation a
 
 `spec.md` is canonical. Rewrite `spec-steps.json` to contain exactly one entry per final implementation step, in ascending order, using the current strict step-index schema. Each entry's number, name, description, difficulty, visual-design flag, and evidence array must match the Markdown step. The top-level `spec` path must equal the checkout-relative path in the `Spec folder:` footer.
 
-Reconcile `evidence-plan.json` against the corrected spec. Preserve stable identifiers where their meaning survives. Correct posture, claim, hypothesis, gate, command, artifact, environment, independence, merge-blocking, and owner-step fields when repository evidence requires it. Never weaken the posture merely because a required harness is absent; either add the smallest evidence-producing step or block preparation with the precise automation gap.
+Reconcile `evidence-plan.json` against the corrected spec. Preserve stable identifiers where their meaning survives. Correct posture, context binding, claim/hypothesis/gate mappings, phase, required flag, command,
+artifact, environment, effects, authority, independence and owner-step fields. Recalibrate in either
+direction from sourced facts. Replace costly gates with equivalent safe proof or remove demonstrably
+inapplicable obligations, recording why coverage remains sufficient. A genuine missing verifier
+requires the smallest sufficient local solution or an explicit phase-specific gap, never invented
+production operations. A prepared later-phase procedure may remain pending without blocking merge.
 
 Run `node ~/.agents/skills/spec-work-tour/scripts/validate-evidence-plan.mjs <path>` after reconciliation and again immediately before manifest hashing. Any structural or traceability failure blocks publication.
 
@@ -151,7 +168,10 @@ applicable design rules, the design-system primitives/tokens it should reuse, an
 existing Playwright configuration or nearest Playwright test. This is a bounded visual
 handoff, not permission for a broad UI survey.
 
-#### Bind runtime work to a reachable production path
+#### Bind runtime work to the requested composition boundary
+
+For a library-only deliverable, its public exported entrypoint is the runtime composition; do not
+require an unrelated consuming application. Apply the shared deliverable-boundary rule.
 
 When a step's own objective or acceptance coverage promises runtime- or user-observable behavior through a controller, provider, command, service, or adapter, use the named targets and immediate integration seam already required by the difficulty budget to identify:
 
@@ -198,9 +218,13 @@ When a step carries an `Evidence:` tag in `spec.md`, add one line per owned EV i
 Evidence: EV-<n> — <artifact form> → <committed path | .specs/<feature>/evidence/<file>>
 ```
 
-Committed evidence such as integration tests also appears as ordinary targets; non-committed artifacts (QA walkthrough, screenshots, dry-run logs, benchmark output) name their destination under `.specs/<feature>/evidence/`. Each card repeats the gate's exact command, environment, rejected failure hypothesis, and proof boundary. Do not invent evidence obligations the spec does not own.
+Committed evidence such as integration tests also appears as ordinary targets; non-committed artifacts (QA walkthrough, screenshots, dry-run logs, benchmark output) name their destination under `.specs/<feature>/evidence/`. Each card repeats the gate's phase, required flag, command, actual target/environment, effects,
+authority source, rejected failure and proof boundary. Later-phase gates require a procedure and
+handoff. Identify safe isolated pre-deploy checks separately from operations awaiting release or
+authority; keep only unexecuted gates pending. Verify merge commands cannot accidentally target live
+resources through environment files, setup/teardown or app startup. Do not invent evidence obligations the spec does not own.
 
-Write targets and the edit sequence as the best expected route, never as an exhaustive file or permission whitelist. State in `Setup and Hazards` which criteria the step should establish now, preserve for later work, or may satisfy early even when another step was expected to own them. Treat prepared verification commands as the mandatory baseline; the implementation worker may add relevant tests, files, and repository-specific commands when credible evidence requires them.
+Write targets and the edit sequence as the best expected route, never as an exhaustive file or permission whitelist. State in `Setup and Hazards` which criteria the step should establish now, preserve for later work, or may satisfy early even when another step was expected to own them. Treat applicable, authorized prepared verification commands as the baseline; the implementation worker may add relevant tests, files, and repository-specific commands when credible evidence requires them.
 
 For every `Visual: yes` card, include one of these exact lines in `Targets`:
 
@@ -258,9 +282,12 @@ After the last step, reread every final artifact. Confirm:
 - Every medium and hard card records canonical `Risk lenses` and `Live invariants` lines in `Setup and Hazards`.
 - Every requirement maps to a claim, every claim to at least one failure hypothesis and gate, and every failure hypothesis to a gate capable of rejecting it.
 - Every Executable Evidence Plan item is owned by exactly one step whose card and `spec-steps.json` entry carry matching evidence ownership and a concrete command, environment, artifact, independence level, rejected failure, and proof boundary.
-- The posture is at least as strong as the proposal and actual repository risk; user-visible work has QA-tour output; no required gate depends on human review or manual QA; every pre-mortem item carries a disposition.
+- `evidence-plan.json.context.path` resolves to this package's `context.md` and its `sha256`
+  equals the context digest used by the preparation manifest.
+- Context sources remain current; `evidence-plan.json` binds the exact `context.md` bytes, and
+  posture fits actual exposure with every increase or reduction justified; user-visible work has QA-tour output; no required gate depends on human review or manual QA; every pre-mortem item carries a disposition.
 - Criteria contain prose `Statement` properties only.
-- The report, spec, index, optional criteria/invariants, and all subspecs are final before manifest hashing begins.
+- The context, report, spec, index, optional criteria/invariants, and all subspecs are final before manifest hashing begins.
 
 ### 7. Write the report and publish last
 
@@ -274,17 +301,18 @@ Atomically write `spec-prepare.md` on every run. Include:
 - One row per step with difficulty, visual-reference summary, card depth, subspec path,
   verification strategy, and focused commands.
 - Corrections/reruns and open blockers.
-- Overall outcome: `prepared` or `blocked`.
+- Overall outcome: `prepared`, `decision-required`, or `blocked`.
 
-If blocked, stop after the report. Never publish a partial or failure manifest.
+If blocked or awaiting a merge-relevant decision, stop after the report. Never publish a partial or failure manifest.
 
-Only for a completely valid package, compute SHA-256 over the final file bytes and atomically publish strict version 2 `preparation.json` **as the last write**:
+Only for a completely valid package, compute SHA-256 over the final file bytes and atomically publish strict version 3 `preparation.json` **as the last write**:
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "preparedAt": "canonical ISO 8601 timestamp",
   "specSha256": "64 lowercase hex characters",
+  "contextSha256": "64 lowercase hex characters",
   "stepIndexSha256": "64 lowercase hex characters",
   "evidencePlanSha256": "64 lowercase hex characters",
   "reportSha256": "64 lowercase hex characters",
@@ -311,6 +339,7 @@ When an escalation trigger requires a `spec-subspec-write` leaf, its prompt must
 - Plan only the assigned step and write only the assigned subspec.
 - Read `spec-subspec-write` fully and obey it.
 - Do not spawn or delegate to another agent.
+- Receive and honor the sourced context snapshot and operational boundaries.
 - Read only the named targets, immediate callers/callees, existing test precedent, AGENTS test guidance, and bounded new-code precedent allowed by the leaf skill.
 - For a visual step, receive the parent's resolved `Visual reference` path or `none`,
   relevant reference region/states, production precedent, applicable design-rule paths,
@@ -322,6 +351,6 @@ Do not use fallback delegation for routine grounding, formatting, or validation 
 
 ## Output
 
-Report the canonical paths for `spec.md`, `spec-prepare.md`, `spec-steps.json`, `evidence-plan.json`, optional `criteria.md`/`invariants.md`, each step subspec, and `preparation.json`. State evidence posture and traceability counts, corrections, selected verification strategies, automation gaps, and whether the manifest was published.
+Report the canonical paths for `context.md`, `spec.md`, `spec-prepare.md`, `spec-steps.json`, `evidence-plan.json`, optional `criteria.md`/`invariants.md`, each step subspec, and `preparation.json`. State evidence posture and traceability counts, corrections, selected verification strategies, automation gaps, and whether the manifest was published.
 
 Do not add attribution footers or co-author trailers.

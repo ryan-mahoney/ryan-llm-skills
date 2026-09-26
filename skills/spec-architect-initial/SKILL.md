@@ -8,7 +8,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "7"
+  version: "8"
 ---
 
 # Spec Architect Initial — Solution Design Against Existing Architecture
@@ -25,9 +25,11 @@ LLMs are bad at saying "this doesn't fit." They will cheerfully propose bolting 
 
 ## Step 1 — Intake: Qualify the Request Before Doing Any Work
 
-Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Architecture owns the initial evidence posture; do not choose a design first and ask how to prove it later.
+Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Architecture owns the initial evidence posture. Resolve the shared project context and write the
+feature's sourced `context.md` before design; choose the smallest sustainable implementation and
+proportionate evidence together. Distinguish actual deployment from isolated application wiring.
 
-Before touching any code or architecture docs, make sure you understand what's actually being asked. When the resolved spec folder contains `requirements.md`, read it first. Restate the problem in your own words, covering:
+Before detailed architecture work, make sure you understand what's actually being asked. When the resolved spec folder contains `requirements.md`, read it first. Restate the problem in your own words, covering:
 
 - **What** needs to happen (the functional requirement)
 - **Who / what** triggers it (user action, cron job, webhook, another service)
@@ -38,6 +40,9 @@ Before touching any code or architecture docs, make sure you understand what's a
 
 Apply this rubric to the request text plus a quick glance at the repo (README, dependency manifest — minutes, not the full Step 2 analysis). The point is to catch missing decisions *before* any architecture work is sunk. For each category, decide whether it is answered by the request, answerable from the repo, or missing:
 
+- **Project context and authority** — Read the AGENTS-linked context or root `project-context.md`.
+  Resolve users, data value/reset boundaries, compatibility, scale, release process, configuration
+  policy, verification targets, and permitted operations independently. Unknown is not disposable.
 - **Compatibility posture** — Are there existing users, stored data, or API clients that must keep working? Or is this pre-launch / greenfield, where forward-only changes are cheaper and migration shims are waste?
 - **Scope boundaries** — What is explicitly out of scope? Is this the whole feature or one slice of it?
 - **Interface surface** — Where does this manifest: UI, HTTP API, CLI, background job, library function?
@@ -50,15 +55,26 @@ Apply this rubric to the request text plus a quick glance at the repo (README, d
 
 A missing rubric answer earns a question only if it passes the decision-relevance test: **would different answers produce materially different proposals?** If every plausible answer leads to the same architecture, don't ask — assume and declare.
 
-Ask at most one round of 3–5 questions, and ask them now, before starting Step 2. If the environment is non-interactive (headless or autonomous run), skip questions entirely and convert every gap to a declared assumption.
+Batch only consequential unanswered questions before dependent design. Reuse existing sourced
+answers; do not impose a questionnaire or ask about ordinary implementation details. Later discoveries
+may require a new consequential check-in. In headless runs, report `decision-required` and stop only
+dependent work; never assume data disposability, operational authority, or material risk acceptance.
 
-### 1c. Declare the rest as vetoable assumptions
+### 1c. Record sources and bounded assumptions
 
-Every rubric gap you did not ask about becomes a one-line declared assumption. These go in the **Constraints & Assumptions** section at the top of the output document (Step 4a/4b) so the user can veto any of them with one word at proposal review instead of discovering them in generated code. A wrong assumption caught at review costs a sentence; the same assumption caught during testing costs rework.
+Record non-consequential assumptions in `context.md` and reference them in the proposal. Mark
+source and confidence separately from decisions. Nobody is expected to review the proposal: surface
+consequential questions directly and carry resolved decisions into the final evidence tour. An
+assumption may guide local investigation but cannot authorize data loss or external effects.
 
 Don't guess silently — wrong assumptions here cascade into wrong architecture.
 
 ---
+
+When a consequential answer is unavailable, write the resolved `context.md` and a compact
+`decision-required` report with the unresolved choice, consequence, recommendation, and safe work
+completed. Do not emit a compatible proposal for dependent work or misclassify the gap as an
+architecture incompatibility. Resume the same package after the decision is sourced.
 
 ## Step 2 — Load the Architecture Context
 
@@ -66,7 +82,8 @@ Don't guess silently — wrong assumptions here cascade into wrong architecture.
 
 Check for `AGENTS.md` in the repository root. If it exists, read it fully — it is your primary source of truth for the system's architecture, conventions, tech stack, directory layout, routing patterns, and known gotchas.
 
-If there is no `AGENTS.md`, you need to build the context yourself. Perform the reconnaissance steps from the `agent` skill (scan root directory, read dependency manifests, trace the directory tree, read key entry points). You don't need to write an AGENTS.md — just internalize the same information.
+If there is no `AGENTS.md`, you need to build the context yourself. Inspect the root files and dependency manifests, then trace the relevant entrypoints and adjacent
+contracts directly; no separate reconnaissance skill is required. You don't need to write an AGENTS.md — just internalize the same information.
 
 ### 2b. Verify against the actual repo
 
@@ -124,7 +141,8 @@ Compatibility asks "does it fit?"; necessity asks "is it needed at all?" For eve
 3. The stdlib, platform, or an installed dependency covers it → use that.
 4. Only then: design the minimum that meets the requirement.
 
-Anything below rung 2 must carry a stated justification in the proposal. Speculative flexibility — "in case we later need…" — is grounds for cutting a component, not for keeping it. Verification is exempt: never shrink testing or evidence plans to make the proposal smaller.
+Anything below rung 2 must carry a stated justification in the proposal. Speculative flexibility — "in case we later need…" — is grounds for cutting a component, not for keeping it. Apply necessity to proof tooling too. Preserve applicable coverage while preferring existing,
+isolated checks over new harnesses, flags, infrastructure, or release mechanisms.
 
 ### Reaching a Verdict
 
@@ -138,7 +156,7 @@ After running through the questions, you land in one of three zones:
 
 ## Step 4a — Compatible Proposal
 
-When the solution fits, produce a concrete implementation plan. This is not a hand-wavy "you could do X" — it's a document precise enough that an implementing agent (or junior developer) can follow it. Be specific only where the repository supports that level of certainty; if a detail cannot be verified, mark it as an assumption or open question instead of inventing it.
+When the solution fits, produce a concrete implementation plan. This is not a hand-wavy "you could do X" — it's a document precise enough for an implementing agent to execute without human spec review. Be specific only where the repository supports that level of certainty; if a detail cannot be verified, mark it as an assumption or open question instead of inventing it.
 
 ### Proposal Structure
 
@@ -159,12 +177,12 @@ critique_recommended: true | false
 ## Constraints & Assumptions
 
 [Intake answers and declared assumptions from Step 1, one line each. Mark
-each as user-confirmed or assumed — assumed lines are open to a one-word
-veto. Downstream stages read only spec artifacts, so anything decided in
+each with its source category from `context.md`; unresolved consequential choices require a
+check-in, not a buried assumption. Downstream stages read only spec artifacts, so decisions in
 conversation must be restated here to survive.]
 
-- Compatibility: pre-launch, no existing users — forward-only changes, no
-  migration shims (assumed)
+- Compatibility: user-confirmed disposable fixtures and no existing consumers — direct changes, no
+  migration shims (source: dated user decision in context.md)
 - Interface: ships as a new REST endpoint, no UI in this slice (user-confirmed)
 
 ## Verdict: COMPATIBLE [or COMPATIBLE WITH CAVEATS]
@@ -211,8 +229,10 @@ for service structure.
 
 ## Data Changes
 
-[New tables, columns, indexes, seeds. Include the migration content or
-schema changes explicitly. Specify the command to generate/run migrations.]
+[Name the affected data and preservation/compatibility commitments from context. Include only
+necessary schema changes or migrations. With confirmed disposable fixtures, prefer fresh setup
+and direct changes; do not invent historical compatibility. Identify the isolated verification
+target and effects of any command. Describing a live migration does not authorize running it.]
 
 ## New Dependencies
 
@@ -235,15 +255,16 @@ evidence layers, independence, environments/artifacts, merge/deploy gates,
 and QA mode. Then list provisional `CL-*` claims, credible `FH-*` failure
 hypotheses, and the executable or deterministic evidence capable of rejecting
 each failure. Include exact project commands and production-like seams where
-verifiable. Evidence must establish the correct problem, production
-reachability, and deployment safety without depending on future human review
-or required manual QA. User-visible work must plan browser-ready QA output;
-manual exploration may supplement but never establish the merge verdict.
+verifiable. Evidence must establish the correct problem and real composition at the requested deliverable
+boundary (public exports for a library, application wiring for an integrated feature), with separate merge/deploy/post-deploy claims without depending on future human review
+or required manual QA. For user-visible work, plan reproducible scenarios in the final HTML tour. Browser automation and
+screenshots apply only to changed visual surfaces; a library or CLI does not need an invented UI.
+Optional exploration may supplement but never establish the merge verdict.
 `spec-write` turns this into the canonical evidence plan.]
 
 ## Pre-mortem & Risks
 
-[Assume this change shipped and broke production: what was the most likely
+[Assume this change failed in its intended environment under resolved project context: what was the most likely
 cause? List the plausible failure modes with their mechanism. Mark the
 credible ones — each must either be addressed in this design or explicitly
 handed to the spec's Pre-mortem section for disposition. Include anything
@@ -351,7 +372,10 @@ Write the proposal to `.specs/<feature-slug>/proposal.md` in the current reposit
 - Otherwise derive a short kebab-case slug from the request and create `.specs/<feature-slug>/`.
 - Keep every pipeline artifact for the feature in that folder. Use relative paths when one artifact references another so the folder remains valid when copied into a worktree.
 - Write atomically. Keep required front matter first and the level-1 heading immediately after it.
-- Report `outcome: proposed` or `outcome: rejected`, the proposal path, and `next: spec-architect-critics | spec-write`.
+- Report `outcome: proposed | rejected | decision-required | blocked`. For a completed proposal,
+  give its path and `next: spec-architect-critics | spec-write`. For an unresolved consequential
+  choice, report the context/decision artifact and exact next decision; for essential unavailable
+  source, report the missing input. Do not emit a false compatible or incompatible verdict.
 - Present the document for optional challenge and product-direction feedback. Its safety case must stand without a person reviewing it.
 
 ---
@@ -372,4 +396,5 @@ These guide every decision in the skill:
 
 6. **Evidence over invention.** Do not fabricate file paths, versions, commands, dependencies, or architectural conventions. If a detail cannot be verified from the repository or user input, label it as an assumption or open question.
 
-7. **Necessary over complete.** Propose the least software that solves the stated problem — reuse before building, cut speculative flexibility, and list what you deliberately did not build. Rigor belongs in verification, not in extra construction.
+7. **Necessary over complete.** Propose the least software that solves the stated problem — reuse before building, cut speculative flexibility, and list what you deliberately did not build. Use enough proof to reject credible failures; verification tooling and operational effects also
+need justification under project context.

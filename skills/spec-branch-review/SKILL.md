@@ -1,6 +1,6 @@
 ---
 name: spec-branch-review
-description: Independently audit an implemented spec branch and its executable evidence. Use from spec-branch-refine or when asked to prove the integrated branch is correct, safe, and claim-complete before publication.
+description: "Independently audit an implemented spec branch and its executable evidence. Use from spec-branch-refine or when asked to prove the integrated branch is correct, safe, and claim-complete before publication."
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "14"
+  version: "15"
 ---
 
 # Spec Branch Evidence Audit
@@ -40,12 +40,14 @@ spec-branch-refine (loop) → spec-branch-review → spec-branch-fix → re-revi
 when this skill returns `pass`. The skill is also runnable standalone for a one-off
 branch review. Single pass per call: review once, write the file, stop.
 
-## Non-Interactive Operation
+## Autonomous Audit
 
-This skill runs to completion without user interaction. Make well-grounded
-judgement calls from the diff, the spec, and the repository; do not pause for
-confirmation. Stop only when a required input is genuinely missing and cannot be
-inferred. Report `missing input: <name>`, write no review file, and stop.
+Make ordinary audit judgments from sourced context, the diff and observed evidence. Route an
+unresolved consequential decision to the coordinator under the shared context contract; do not
+infer acceptance or authority. Continue independent audit work and report affected merge claims
+as incomplete. A pending later-phase authorization does not itself invalidate merge evidence. When an essential audit input is genuinely unavailable, report `missing input: <name>` and stop.
+For consequential decisions discovered during an otherwise possible audit, write the findings
+and incomplete affected merge claims, then return `decision-required` with the exact decision.
 
 ## Resolve Inputs
 
@@ -94,13 +96,16 @@ inferred. Report `missing input: <name>`, write no review file, and stop.
 
 Read for judgement:
 
+- `context.md` and current project sources — users/data/compatibility, release model, authority,
+  decision provenance, and deliberate omissions; check snapshot hashes and material changes.
 - `spec.md` — the whole intent, plus any `## Adaptations` log.
 - `evidence-plan.json` — the posture and AC → CL → FH → EV graph.
 - `merge-evidence.json` and `merge-evidence.md` — produced gate results and proof boundaries.
 - Every `step-<NNN>-subspec.md` in `<spec-dir>` — what each step meant to do (per-step
   artifacts live flat in the spec folder, step numbers zero-padded to three digits).
 - Every `step-<NNN>-learning.md` in `<spec-dir>` — what each step discovered and any
-  recorded trade-offs. A recorded, deliberate trade-off is not a bug — the canonical
+  recorded trade-offs. A sourced, applicable deliberate trade-off is not a bug; a learning alone
+  cannot accept material risk — the canonical
   exclusion list lives in Report Discipline.
 - `criteria.md` — consume only prose `Statement:` values.
 - `invariants.md` — consume only live invariant statements not marked superseded.
@@ -109,16 +114,20 @@ Missing required evidence artifacts are blocking findings, not optional context.
 
 ### Executable-evidence lens (always runs)
 
-For every claim, independently inspect its acceptance source, changed production path,
+For every claim, independently inspect its sourced necessity and phase, acceptance source, changed production path,
 failure hypotheses, gate implementation, recorded execution, artifact, proof boundary,
-environment, and commit binding. Re-run focused gates when safe and useful. Try at least
-one adversarial case per material crossed boundary that the implementation's own tests
-could have missed. Confirm that:
+environment, and commit binding. Re-run focused gates only when safe, authorized and useful. Select adversarial cases for
+credible remaining failures at material boundaries; do not add a case solely to meet a quota.
+Reuse sufficient evidence and record why it rejects the failure. Later-phase pending gates are
+honest handoffs, not instructions to perform live verification. Confirm that:
 
 - every AC and material deployment obligation maps to a falsifiable claim;
 - every credible failure hypothesis has a gate capable of rejecting it;
 - gates exercise real production composition where the claim is runtime-facing;
-- negative policy/data/security paths and operational/rollback obligations match posture;
+- negative policy/data/security paths and applicable recovery obligations fit actual exposure;
+- new flags, environment variables, compatibility paths, release machinery and maintained proof
+  tooling each have a sourced need; explicit context constraints and deliberate omissions hold;
+- merge, deploy and post-deploy claims/gates are separate and no gate grants operational authority;
 - visual work has inspected states/viewports and a deterministic QA handoff;
 - gate results and artifacts describe the current HEAD and disclose proof limits;
 - no readiness conclusion depends on future human review or required manual QA.
@@ -129,9 +138,8 @@ whenever they leave a merge-blocking claim unproven, regardless of code-change s
 
 ### Bounded guardrail lens
 
-After correctness/integration review, check only three sources: observable
-acceptance criteria and step obligations in `spec.md`, criteria `Statement:` values,
-and live invariants. Do not execute embedded commands, invent checks, inspect retired
+After correctness/integration review, check the sourced constraints and deliberate omissions in `context.md`, observable acceptance
+criteria and step obligations in `spec.md`, criteria `Statement:` values, and live invariants. Do not execute embedded commands, invent checks, inspect retired
 audit artifacts, or expand into a second conformance program. A concrete mismatch is
 an ordinary finding with `category: guardrail`, the same evidence, signature,
 severity, actionability, dismissal, fix, and re-review lifecycle as every other
@@ -142,19 +150,20 @@ finding. Do not create a separate verdict or report.
 Read every earlier `<spec-dir>/reviews/branch-<k>-fix.md` (`k < iter`) and collect
 the **signatures** of `dismissed` findings **with their dismissal class**. This is
 the loop's anti-thrash memory, but not every dismissal class suppresses re-raise —
-only the ones that mean "this is not a bug" do:
+only the ones that establish no unresolved applicable defect do. An agent-generated
+assumption, spec sentence, or learning does not authorize material risk acceptance:
 
 | Dismissal class | Suppress re-raise? |
 |---|---|
 | `false-positive` | Yes — the finding was wrong. |
-| `intentional` | Yes — the code is deliberate. |
-| `accepted-risk` | Only when `approved: true` cites an explicit prepared spec/evidence-plan risk decision; otherwise re-raise. |
+| `intentional` | Only for behavior justified by sourced requirements/context, not merely deliberate defects. |
+| `accepted-risk` | Only when `approved: true` cites a prepared decision grounded in current user authorization or project policy; otherwise re-raise. |
 | `deferred` | No — a real, unaddressed defect. Re-raise it each iteration. |
 | `unfixable` | No — real but blocked. Re-raise it so the final verdict remains blocked. |
 
 - Do **not** re-raise a finding whose signature matches a suppressing dismissal:
   `false-positive`, `intentional`, or an `accepted-risk` whose decision carries
-  `approved: true`.
+  `approved: true`, after verifying the source meets the table's conditions.
 - Re-raise `deferred` and `unfixable` signatures normally; they are unresolved bugs,
   not settled disagreements.
 - If you believe a *suppressing* dismissal was itself wrong, you may re-raise it —
@@ -317,9 +326,10 @@ skip a fired lens because its preferred skill is absent.
   token/session handling, secret exposure, weak crypto/randomness — beyond the core
   baseline. When the `security-review` skill is available, delegate to it; otherwise
   run an inline deep-security checklist covering those classes.
-- **Data / deployment** — trigger: the diff adds or changes migrations, persistent
+- **Data / deployment** — under the resolved data value, compatibility commitments and established
+  release process; schema changes over disposable fixtures do not imply live migration machinery. Trigger: the diff adds or changes migrations, persistent
   schema, queues, or rollout/config. Looks for: destructive or locking migrations,
-  back-compat with existing data/in-flight messages, deployment-ordering hazards,
+  required compatibility with retained data/in-flight messages, deployment-ordering hazards,
   and unsafe rollback.
 - **Dependency** — trigger: package manifests, lockfiles, or new third-party imports
   changed. Looks for: unjustified or duplicate dependencies, known-vulnerable or
@@ -353,10 +363,10 @@ always-emit rule lives once in Severity, Actionability, Verdict.)
   future caller or maintainer the contract misleads: trace which wrong assumption
   that caller or maintainer makes, and do **not** drop it merely because nothing
   crashes today. (If a
-  subspec, learning, or the spec sanctions the inconsistency, it is intentional, not
-  a finding — see the exclusions below.)
+  sourced requirement or authorized risk decision supports the recorded trade-off, it is
+  intentional rather than an unaccepted defect — see the exclusions below.)
 - **Severity by impact** (feeds the section below):
-  - `HIGH` — data loss, security breach, crash, or incorrect results in production.
+  - `HIGH` — data loss, security breach, crash, or incorrect results in the actual intended environment.
   - `MED` — degraded behavior under specific conditions, **or blocks future
     maintainability** (internal-contract drift, an error a caller cannot
     discriminate, a docstring that lies about behavior).
@@ -367,8 +377,8 @@ always-emit rule lives once in Severity, Actionability, Verdict.)
   patterns consistent with visible codebase conventions — *unless* this change
   introduces a docstring or contract claim its own code contradicts, which a matching
   sibling-module shape does **not** license; a deliberate trade-off or deferral
-  recorded in a learning, a **subspec**, or the spec's *Out of scope* / *Adaptations*
-  section (e.g. concurrency lost-update protection deferred to a later step, or a
+  grounded in sourced project context or an authorized risk decision and recorded in a learning,
+  **subspec**, or the spec's *Out of scope* / *Adaptations* section (e.g. concurrency lost-update protection deferred to a later step, or a
   plain `Error` the spec deliberately chooses over a subclass — cite the location).
   Naming the exclusions is what frees you to report the legitimate remainder without
   fear of nitpicking.
@@ -378,7 +388,7 @@ always-emit rule lives once in Severity, Actionability, Verdict.)
   self-censorship — is what lets you surface borderline findings confidently.
 - **Record considered-and-dismissed candidates.** When a per-commit pass raises a
   *real* code property and you drop it because a subspec, learning, or the spec
-  explicitly defers or sanctions it (not because it was vague), note it in a short
+  records a deferral grounded in context or an authorized risk decision (not because it was vague), note it in a short
   **Considered & dismissed** list in the prose, each with its citation. This is
   non-actionable and never affects the verdict — but it turns a silent `pass` into an
   auditable one: a reader sees the candidate was weighed and why it is not a bug,
@@ -392,7 +402,9 @@ the defect a spec-unaware external tool would raise. Keep it to candidates with 
 - **Severity** `HIGH`/`MED`/`LOW`; **Category** `correctness`/`security`/`perf`/
   `simplification`/`design`/`guardrail`/`evidence`.
 - **Actionable** = `HIGH` or `MED` in `correctness`, `security`, `guardrail`, or `evidence`. All else is
-  **advisory**. The split gates only the **verdict and the loop**: advisory findings
+  **advisory**. A violation of an explicit context constraint or sourced omission is `guardrail`, even when
+  removing unnecessary machinery is the fix. Ordinary simplification stays advisory. The split
+  gates only the **verdict and the loop**: advisory findings
   are recorded and never block `spec-branch-refine`, but they are **always emitted**.
   The split must never collapse to silence — a clean diff yields `findings: []`; a
   diff with only `LOW` issues yields a `pass` verdict **with those findings listed**.
@@ -473,16 +485,17 @@ Fix:  <concrete suggested change>
 
 ## Considered & Dismissed
 
-List non-actionable candidates dropped because a cited spec artifact sanctions them; include stable locations/citations and never pad the list.
+List non-actionable candidates dropped because a cited artifact records a sourced requirement or authorized risk decision; include stable locations/citations and never pad the list.
 
 Review: <spec-dir>/reviews/branch-<iteration>-review.md (iteration <iteration>)
 ````
-A clean branch requires `verdict: pass`, `evidence_verdict: proven`, all required claims closed, no excluded working-tree changes capable of affecting the candidate, `actionable: 0`, and an empty `findings: []`,
+A clean branch requires `verdict: pass`, `evidence_verdict: proven`, all required merge claims closed, no excluded working-tree changes capable of affecting the candidate, `actionable: 0`, and an empty `findings: []`,
 `## Findings\nNone`, and the locator line — plus a **Considered & dismissed** list when a
-per-commit pass weighed and (correctly) dropped a spec-sanctioned candidate. That list is
+per-commit pass weighed and (correctly) dropped a context-justified candidate. That list is
 what distinguishes an audited `pass` from a blind one. When no candidates were
 dismissed, keep the `## Considered & Dismissed` section and write `None.` under it —
-an explicit zero, not an absent section. A `pass` verdict is the signal
+an explicit zero, not an absent section. A pending deploy/post-deploy claim does not block a merge pass. A known later-phase failure
+that also disproves a merge claim does block it; document the dependency. A `pass` verdict is the signal
 `spec-branch-refine` stops on.
 
 ## Completion Report

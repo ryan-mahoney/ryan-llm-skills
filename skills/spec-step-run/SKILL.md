@@ -1,6 +1,6 @@
 ---
 name: spec-step-run
-description: Implement one prepared spec step autonomously, producing its code, executable evidence, QA artifacts, learning, and commit without asking questions or depending on later human review.
+description: "Implement one prepared spec step autonomously, producing its code, executable evidence, QA artifacts, learning, and commit within sourced project context, escalating consequential decisions and producing independent-review inputs."
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "20"
+  version: "21"
 ---
 
 # Spec Step Run
@@ -19,23 +19,25 @@ do not spawn subagents, deliberately run the next indexed step, or perform the f
 branch evidence audit. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Work to the intended outcome even when repository evidence shows that
 the prepared route is incomplete or wrong.
 
-## No-Question, Artifact-First Authority
+## Local Implementation Authority And Check-ins
 
-Do not ask the user questions. The assigned branch and worktree are disposable review
-environments; all reversible repository-local changes are pre-authorized. Resolve
-ambiguity with best engineering judgment, implement the most plausible coherent
-interpretation, and record assumptions in the learning.
+Resolve ordinary implementation choices autonomously within the assigned repository and sourced
+`context.md`. A branch isolates files, not external services: credentials, startup hooks and test
+setup can still affect live systems. Confirm the actual targets/effects before running commands.
+Report unresolved consequential choices as `decision-required` to the coordinator, with safe local
+work completed and a concrete recommended decision. A standalone invocation handles that check-in
+itself. Do not assume data disposability, operational authority, or material risk acceptance.
 
 Treat the spec, subspec, named files, edit sequence, and verification commands as
 evidence of intent and a strong starting route, not an exhaustive permission boundary.
-Prefer a concrete evidence-bearing artifact over stopping for clarification. Do not perform
-irreversible external actions such as publishing, modifying production data, spending
-money, sending messages, or force-pushing shared branches; build and verify the local
-side, use a safe local substitute when practical, and record the remaining external act.
+Prefer a concrete evidence-bearing artifact over stopping for clarification. Follow the shared context contract for all external effects, including reversible disruption.
+Stopping services, changing traffic, live migrations/resets/restores, production writes and fault
+injection need explicit target/action authority. Build and verify the isolated side, prepare any
+necessary later procedure, and record pending execution. A spec gate never grants permission.
 
 ## Canonical Inputs
 
-The prompt must identify the resolved `.specs/<feature>/` folder and target step. Read `spec.md`, `spec-steps.json`, `evidence-plan.json`, `spec-prepare.md`, `preparation.json`, optional criteria/invariants/blockers, the target `step-<NNN>-subspec.md`, and prior step learnings. Write the target `step-<NNN>-learning.md` there.
+The prompt must identify the resolved `.specs/<feature>/` folder and target step. Read `context.md`, `spec.md`, `spec-steps.json`, `evidence-plan.json`, `spec-prepare.md`, `preparation.json`, optional criteria/invariants/blockers, the target `step-<NNN>-subspec.md`, and prior step learnings. Write the target `step-<NNN>-learning.md` there.
 
 Resolve the target step's `visualDesign` value from its matching entry in
 `spec-steps.json`. A strict boolean `true` activates the mandatory visual verification
@@ -49,11 +51,12 @@ destination. Markdown artifacts begin with a level-1 heading.
 ## Inspect Current Preparation
 
 Before reading production code, validate sibling `preparation.json` using the
-strict version 2 contract. Recompute the SHA-256 binding for `spec.md`,
+strict version 3 contract. Recompute the SHA-256 binding for `context.md`, `spec.md`,
 `spec-steps.json`, `evidence-plan.json`, `spec-prepare.md`, every declared subspec, and optional
 `criteria.md`/`invariants.md`. Check and record whether:
 
 - every bound file exists and matches its lowercase SHA-256 hash;
+- the evidence plan is version 2 and its context path/hash names this package's snapshot and matches `contextSha256`;
 - the requested step exists in both `spec.md` and `spec-steps.json`;
 - the manifest binds exactly one subspec for the requested step;
 - that subspec's strict `planning` block has the same spec hash and step number and
@@ -69,9 +72,10 @@ This gate prevents implementation and evidence from silently targeting different
 
 ## Preserve The Plan As Evidence
 
-Keep the prepared subspec immutable so it remains a record of the expected route;
-never rewrite or replace it during implementation. Its contents do not limit the
-implementation. Depart from its files, sequence, architecture, contracts, acceptance
+Check material context changes against current project sources and return them for re-preparation.
+Keep the prepared context and subspec immutable so it remains a record of the expected route;
+never rewrite or replace them during implementation. Context, acceptance obligations and authority
+remain binding; expected edit targets and implementation routes may adapt. Depart from its files, sequence, architecture, contracts, acceptance
 mapping, or verification approach when repository evidence shows that doing so better
 achieves the spec's intended outcome. Record material departures as `outcome: adapted`.
 
@@ -97,8 +101,11 @@ copy prototype-only fixtures, dependencies, shell UI, or fake data wiring.
 - Reuse before writing: stop at the highest rung of the necessity ladder that holds
   (`~/.agents/rules/minimal-implementation.md`). Prefer the shortest working diff
   consistent with the spec; add no abstraction the spec does not require. Record
-  deliberate simplifications and their known ceiling in the learning. Never trim
-  verification, evidence, or safety-floor code to shrink the diff.
+  deliberate simplifications and their known ceiling in the learning. Preserve applicable correctness coverage and safety-floor code. Reuse proof tooling; new tests,
+  flags, variables, compatibility paths, and release facilities need a named present requirement.
+  Return inapplicable obligations as `needs-spec-correction` in the learning and report for sourced
+  correction and re-preparation rather than building
+  unnecessary machinery or silently weakening a gate.
 - Fix relevant pre-existing defects encountered on the same execution, ownership,
   invariant, or verification path. Pre-existence is not a reason to ask or defer.
 - Implement missing wiring or work nominally assigned to a later step when it is the
@@ -107,8 +114,12 @@ copy prototype-only fixtures, dependencies, shell UI, or fake data wiring.
 - Keep changes coherent, explicit, and reviewable. Avoid unrelated cleanup, but do not
   stop merely because a useful change might later be judged unnecessary.
 
-## Prove Production Reachability
+## Prove Application Reachability In Isolation
 
+Here, production wiring means actual application composition, not the live deployment. For a
+library-only deliverable, exercise its public exported entrypoint and real implementation; an
+unrequested consuming application is not a required proof target. Preserve promised application
+integration when it is actually part of the requested outcome.
 An injected interface is not implementation evidence by itself. Fakes may replace only true external boundaries such as an editor/runtime API, child-process spawning, filesystem, clock, or network. Do not substitute a test-only internal interface for the concrete production adapter that connects the feature to the running system.
 
 For a step that promises runtime- or user-observable behavior, trace one complete path before declaring success:
@@ -143,8 +154,10 @@ For each prepared verification case, ensure at least one assertion observes the 
 
 ## Produce Owned Evidence
 
-When the card's `Targets` carry `Evidence:` lines, producing each named artifact is part
-of this step's work, not optional extra. Committed evidence such as integration tests
+When the card's `Targets` carry `Evidence:` lines, produce each applicable merge artifact.
+For deploy/post-deploy gates, produce the named procedure and handoff. Safe isolated pre-deploy
+checks may run within existing scope/authority; operations awaiting a release or authorization
+remain `pending`. Do not perform live operations to make this step pass. Committed evidence such as integration tests
 ships in the step's commit. Non-committed artifacts — a deterministic QA walkthrough,
 screenshots, dry-run logs, benchmark output — are written atomically to
 `.specs/<feature>/evidence/` under the prepared filename, with markdown artifacts
@@ -155,7 +168,7 @@ as plain procedural language — imperative mood, one instruction per sentence, 
 before its command, no "should". Label optional exploration questions as product
 discovery, never required verification. Captured output names the command and context
 that produced it. Record every produced
-evidence path in the learning prose. A step whose owned evidence remains unproduced is
+evidence path in the learning prose. A step whose required merge evidence remains unproduced is
 not `as-specified` — preserve it as a truthful `checkpoint` with the gap recorded.
 
 ## Render, Inspect, And Correct Visual Steps
@@ -231,13 +244,14 @@ does not replace behavioral, data, policy, or production-reachability gates.
 
 ## Execute And Extend The Verification Contract
 
-The subspec's strict `verification` block is the mandatory verification baseline, not
-the maximum permitted verification:
+The subspec's strict `verification` block is the applicable merge verification baseline. Verify
+targets, effects and authority before execution. Add checks only for a named material uncertainty;
+stop when applicable claims are supported. Pending later-phase gates are not missing merge proof:
 
 1. Follow its `strategy` exactly. For `test-first`, run the declared focused command
    at the red point, confirm the declared expected-red behavior, implement, then run
    the same command green. For `implementation-first`, implement before running it.
-2. Run every usable prepared command. Do not substitute an easier command merely to
+2. Run every applicable, safe and authorized merge command. Do not substitute an easier command merely to
    obtain green output. Add focused commands, repository-required shards, typechecks,
    or builds when needed for changed or newly discovered work. Do not run an unfiltered
    full suite merely as ritual or as a substitute for focused evidence.
@@ -267,7 +281,7 @@ learning:
   version: 2
   kind: step
   step: <number>
-  outcome: <as-specified | adapted | checkpoint | no-artifact>
+  outcome: <as-specified | adapted | checkpoint | no-artifact | decision-required | needs-spec-correction>
   commit: <sha | none>
   verification:
     commit: <same sha or none>
@@ -279,7 +293,8 @@ learning:
         outcome: <pass | fail | hung | skipped>
   evidence:
     - id: <EV-n>
-      status: <passed | failed | blocked>
+      status: <passed | failed | blocked | pending>
+      phase: <merge | deploy | post-deploy>
       artifact: <checkout-relative path>
       rejects: <FH-n>
       proof_boundary: <what this result does and does not establish>
@@ -291,7 +306,13 @@ artifact. Follow the YAML with the step reference/Covers tags, outcome, assumpti
 departures, a concise risk-audit and production-reachability summary covering the
 declared labels/invariants, at most five concrete findings for later steps, at most
 five discrepancies/risks, and the verification summary. Emit the learning in every
-terminal case, including checkpoints, no-artifact results, and already satisfied steps.
+terminal case, including checkpoints, consequential decisions, no-artifact results, and already satisfied steps.
+A later-phase `pending` entry records its prepared procedure and authority limit, not an observed
+result. Include context decisions, deliberate omissions and any new maintained/operational burden.
+
+Use `needs-spec-correction` when a sourced correction to intent or proof is required; return to
+the owning planner before dependent work. Use `decision-required` for unresolved consequential choices; preserve a coherent local checkpoint
+commit when useful and authorized, but do not claim dependent obligations complete.
 
 Use `checkpoint` when meaningful implementation, tests, reproduction evidence, or a
 concrete repair exists but the intended outcome or verification remains incomplete.

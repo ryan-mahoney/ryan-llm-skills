@@ -273,7 +273,7 @@ write_spec_workflow_howto() {
 
 ## How To Use The Spec Workflow
 
-The workflow turns a clear goal into architecture, a deterministic implementation-and-evidence contract, executable proof, an independent integrated audit, and a deploy-bound HTML work tour. Human review is optional insight, not a correctness gate.
+The workflow turns a clear goal into architecture, a deterministic implementation-and-evidence contract, executable proof, an independent integrated audit, and a commit-bound HTML work tour. Specs and code are agent-facing; people review evidence and supply consequential product/authority decisions.
 
 Good initial input includes:
 
@@ -295,9 +295,29 @@ worktree" or named delegation, and stops only at a published PR or a concrete st
 See [the end-to-end guide](docs/spec-workflow.md) for goal-mode prompts, compact delegation,
 OpenCode nested workers, resume behavior, and completion criteria. The [evidence audit guide](docs/reviews.md)
 explains the required proof. These guides are included in this archive. PR merging remains a
-separate action after publication.
+separate action after publication, as do deployment authorization and post-deployment observation.
 
-After `spec-architect-initial` writes its proposal, read the recommendation before continuing. This is the key decision point. If the proposal says the request does not fit the architecture, treat that as useful signal rather than a failure: adjust the goal, choose one of the alternatives, or make the required architecture change explicit before writing an implementation spec.
+The agent resolves the AGENTS-linked project context or root `project-context.md` before design and
+writes a sourced `.specs/<feature>/context.md` snapshot. Only unresolved consequential decisions
+need a check-in. Routine implementation remains autonomous; nobody is expected to review proposals
+or code. See the context contract in `skills/spec-end-to-end/references/project-context.md`.
+
+Verification uses the least invasive sufficient evidence for actual users, data, compatibility and
+release commitments. New flags, variables, migration machinery or release facilities need a sourced
+requirement. A worktree does not isolate external systems, and evidence requirements never authorize
+production writes, service disruption or deployment. Inapplicable obligations may be corrected with
+source-backed rationale and fresh preparation; real failures cannot be relabeled away.
+
+### Transition Existing Pending Specs
+
+```text
+/spec-upgrade .specs/feature-a/ .specs/feature-b/
+/spec-upgrade all pending specs in this repository
+```
+
+This optional entry point resolves shared project context, reassesses unnecessary complexity,
+and refreshes each selected unimplemented spec through preparation. It preserves original planning
+files and stops before implementation. Then use `spec-end-to-end` for a ready package.
 
 ### 1. Design The Approach
 
@@ -308,6 +328,7 @@ After `spec-architect-initial` writes its proposal, read the recommendation befo
 This inspects the current repository and writes the standalone proposal to:
 
 ```txt
+.specs/<feature>/context.md
 .specs/<feature>/proposal.md
 ```
 
@@ -341,7 +362,7 @@ This converts the proposal, and optional critique, into:
 .specs/<feature>/evidence-plan.json
 ```
 
-The spec is the implementation contract. `evidence-plan.json` records the risk posture and AC → claim → failure → gate graph. The writer never touches GitHub.
+The spec is the implementation contract. `evidence-plan.json` version 2 records the context binding, risk posture and phase-aware AC → claim → failure → gate graph. The writer never touches GitHub.
 
 ### 4. Prepare The Implementation Package
 
@@ -359,7 +380,7 @@ Preparation code-grounds and corrects the spec, reconciles the step index, deriv
 .specs/<feature>/preparation.json
 ```
 
-`criteria.md` and `invariants.md` are prose guidance, never executable audit programs. The manifest is the last write and binds every prepared artifact by SHA-256.
+`criteria.md` and `invariants.md` are prose guidance, never executable audit programs. The version 3 manifest is the last write and binds context and every prepared artifact by SHA-256.
 
 ### 5. Establish The Implementation Workspace
 
@@ -374,7 +395,7 @@ open a new editor or agent session for the handoff.
 /spec-run <feature-slug or path-to-spec.md>
 ```
 
-This validates the hash-bound package, implements one step per commit, produces every owned executable-evidence and QA artifact, and assembles commit-bound pre-audit merge evidence.
+This validates the hash-bound package, implements one step per commit, produces applicable merge evidence, prepares pending later-phase procedures and QA artifacts, and assembles commit-bound pre-audit merge evidence.
 
 ### 7. Refine The Whole Branch
 
@@ -394,7 +415,11 @@ This alternates independent evidence audits and fixes to convergence and audits 
 open .specs/<feature>/work-tour.html
 ```
 
-The required HTML explains architecture, implementation, requirement proof, QA scenarios, evidence limits, and deployment/rollback safety. Its sibling JSON carries the machine verdict, both bound to exact HEAD.
+The required HTML exposes sourced context, consequential decisions, omissions, new maintenance
+burden, architecture, requirement proof, QA scenarios and evidence limits. Its version 2 JSON
+separates merge readiness, deployment readiness, authorization and post-deployment observations.
+Both bind exact HEAD. Pending later-phase checks do not force live execution or block a supported
+merge claim; known failures that invalidate merge claims must still block them.
 
 ### 9. Publish The Pull Request
 
@@ -812,6 +837,7 @@ build_bundle() {
 
 spec_skills=(
   spec-end-to-end
+  spec-upgrade
   spec-architect-initial
   spec-architect-critics
   spec-write

@@ -1,4 +1,4 @@
 interface:
   display_name: "Spec Work Tour"
-  short_description: "Build deploy-bound executable evidence tours"
+  short_description: "Review context, proof, and separate release states"
   default_prompt: "Use $spec-work-tour to build the final executable-evidence tour for this implemented spec."

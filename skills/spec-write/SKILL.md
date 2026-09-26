@@ -1,6 +1,6 @@
 ---
 name: spec-write
-description: This skill should be used when the user asks to "write a spec", "create a spec", "spec this out", "plan this feature", or "write an implementation plan" for a feature or change. Creates a structured implementation spec at .specs/<feature>/spec.md without interacting with GitHub issues.
+description: "This skill should be used when the user asks to \"write a spec\", \"create a spec\", \"spec this out\", \"plan this feature\", or \"write an implementation plan\" for a feature or change. Creates a structured implementation spec at .specs/<feature>/spec.md without interacting with GitHub issues."
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,18 +9,22 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "17"
+  version: "18"
 ---
 
 # Spec Write
 
 Create a deterministic implementation spec and its executable-evidence graph from the current proposal. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md) before planning. The local package is canonical; this skill never creates, edits, or renames around GitHub issues.
 
-## Non-Interactive Operation
+## Autonomous Work And Consequential Decisions
 
-This skill runs to completion without user interaction. Do not pause to ask clarifying questions, request confirmation, or wait for input mid-run. When something is unclear or underspecified, make a reasonable, well-grounded decision from the available context — the conversation, the repository, existing conventions, and the spec's own intent — then proceed. Summarize every such judgement call and its rationale in the final report so the user can review what was decided and why.
-
-Stop only when a required input is genuinely missing and cannot be inferred (for example, no proposal or analysis to spec from). In that case, report what is missing and halt — do not ask for it interactively.
+Resolve ordinary engineering choices from sourced context and repository facts. Read `context.md`
+and current project policy before writing. If missing, resolve them through the shared context
+contract. Escalate unresolved data preservation, compatibility, release, cost, authority, or
+material risk decisions to the coordinator as `decision-required`; a direct invocation handles
+that check-in itself. Complete independent work while waiting. Do not turn unknown consequences
+into assumed requirements. Outside an existing-spec upgrade, a missing proposal/analysis remains
+a named input blocker; an upgrade can use the existing spec as its intent source.
 
 ## Output Contract
 
@@ -40,6 +44,11 @@ This skill writes the local spec only. It does **not** create, edit, comment on,
 
 Before writing the spec, locate the `.specs/<feature-slug>/` folder for this feature.
 
+When upgrading a legacy package, the existing `spec.md` is a valid intent source even without a
+proposal. Preserve its accepted behavior while resolving context, necessity, phases and proof.
+Correct unsupported obligations with sourced rationale; do not treat prior generated assumptions
+as user decisions or relabel old statuses as new evidence.
+
 Resolve the folder in this order:
 
 1. If `$ARGUMENTS` names an existing `.specs/<feature-slug>/` folder or a file inside it, use that folder.
@@ -51,8 +60,9 @@ Stop on ambiguous matches rather than selecting the most recently modified folde
 
 The folder contains fixed-name artifacts:
 
+- **`context.md`** — required sourced snapshot of project facts, decisions, authority and omissions.
 - **`requirements.md`** - optional. What was asked for; read it when present.
-- **`proposal.md`** - the architecture proposal. This is the primary input for the Architecture and Implementation Steps sections. If there is no spec folder, no proposal, and no analysis in the current conversation, stop and tell the user there is nothing to spec from.
+- **`proposal.md`** - the architecture proposal. This is the primary input for the Architecture and Implementation Steps sections. Outside a legacy upgrade, if there is no spec folder, no proposal, and no analysis in the current conversation, stop and tell the user there is nothing to spec from.
 - **`critique.md`** - optional. If present, reconcile it using the rules below. If absent, skip reconciliation; the critique stage is optional and its absence is not an error.
 - **Visual reference** - optional. When the proposal or conversation identifies existing visual work such as an HTML prototype, image, or mockup, resolve its exact entry-file path before writing. Treat that artifact as existing design input, not work to recreate.
 - **`spec.md`** - the output of this skill. Overwrite it only after producing the complete updated spec body.
@@ -102,7 +112,9 @@ Record the selection in the Applicable Rules section below. `spec-run` injects t
 
 ## Required Sections
 
-Every section is required. If not applicable, include the heading with "N/A".
+Keep agent instructions compact. Include the substantive behavior, constraints, acceptance,
+evidence and step contracts; omit inapplicable narrative sections instead of filling templates.
+Reference `context.md` for shared facts rather than duplicating them.
 
 ### 1. Qualifications
 
@@ -135,7 +147,9 @@ Name the file (for example, `.specs/account-settings/prototype/index.html`), not
 
 Design for current requirements, not imagined future ones. For every module, abstraction, dependency, or layer the architecture introduces, stop at the first rung of the necessity ladder that holds (see `~/.agents/rules/minimal-implementation.md`): not needed at all → already in the codebase → stdlib → native platform → installed dependency → one line → only then, the minimum design that meets the acceptance criteria. Name what existing code each new module extends or reuses; introducing something new requires stating why nothing on a higher rung qualifies. Start simple: boring technology, explicit boundaries, and data flow that can be explained in under 5 minutes. Fail fast on invalid inputs; do not add defensive fallbacks unless explicitly required.
 
-Avoid abstractions with only one use, abstract layers "for future flexibility," speculative config or extension points, complex patterns without matching problem complexity, and optimizations without measured need. Minimality applies to construction only — never trim acceptance coverage, tests, or evidence to shrink the design.
+Avoid abstractions with only one use, abstract layers "for future flexibility," speculative config or extension points, complex patterns without matching problem complexity, and optimizations without measured need. Proof tooling has maintenance cost too. Preserve applicable coverage, but remove redundant or
+inapplicable obligations with sourced rationale. Every new flag, environment variable, compatibility
+path, or release mechanism needs a concrete context fact and requirement; otherwise omit it.
 
 Ground the architecture in existing code: before adding a new module or helper, search for existing implementations and precedents using the available repository-search tools named in the runtime capability section — exact search for symbols or literals, and semantic search when available for behavior and precedent — and prefer reusing or extending what already exists.
 
@@ -149,11 +163,13 @@ Create a numbered list (`AC-1`, `AC-2`, etc.) of observable, automatable asserti
 
 ### 6. Executable Evidence Plan
 
-Begin with **Evidence Posture**, using the exact fields in the shared contract: change types, risk with rationale, crossed boundaries, impacts, reversibility, uncertainty, required layers, independence, environments, QA mode, and merge/deploy gates. Infer this from the request, proposal, code, and pre-mortem. Increase the proposal's posture when repository facts reveal greater risk; never weaken it silently.
+Begin with **Evidence Posture**, using the exact fields in the shared contract: change types, risk with rationale, crossed boundaries, impacts, reversibility, uncertainty, required layers, independence, environments, QA mode, and merge/deploy gates. Infer this from the request, proposal, code, and pre-mortem. Recalibrate upward or downward when sourced facts change applicability or risk. Record the
+reason and preserved coverage; unresolved real failures cannot be relabeled as unnecessary.
 
 Then define stable, numbered:
 
-- `CL-*` falsifiable claims mapping every acceptance criterion and material architecture/deployment obligation.
+- `CL-*` falsifiable claims mapping every applicable acceptance criterion and sourced material
+  architecture/deployment obligation, each with `phase: merge | deploy | post-deploy`.
 - `FH-*` credible ways each claim could be false while superficial checks pass.
 - `EV-*` executable commands or deterministic inspections capable of rejecting those failures.
 
@@ -162,13 +178,18 @@ For every EV item name:
 - The gate form: focused test, production-composition integration test, browser journey, accessibility scan, screenshot set, schema validation, migration dry-run, security check, benchmark, deploy rehearsal, rollback demonstration, or another risk-matched form.
 - The claims and failure hypotheses it covers, plus which unsafe implementation it can reject.
 - Where the artifact lands: committed test code in the repository, or a non-committed artifact under `.specs/<feature-slug>/evidence/`.
-- The exact command/procedure, environment, independence level, and whether failure blocks merge or deployment.
+- The exact command/procedure, actual target/environment, effects including setup/teardown,
+  authority source, independence, phase, and whether it is required in that phase.
 
-Each EV item is owned by exactly one implementation step (see §9's `Evidence:` tag). Every AC maps to a claim; every claim maps to a failure hypothesis and gate; every failure hypothesis is rejected by a gate. User-visible work includes QA-tour scenarios and visual artifacts. Manual exploration may be offered as optional product discovery, but manual QA cannot be a merge-blocking gate. Scale evidence to risk; do not pad low-risk work with irrelevant ceremony.
+Each EV item is owned by exactly one implementation step (see §9's `Evidence:` tag). Every AC maps to a claim; every claim maps to a failure hypothesis and gate; every failure hypothesis is rejected by a gate. User-visible work includes QA-tour scenarios; visual artifacts apply only to changed visual
+surfaces. Library/CLI work does not require an invented UI or screenshot harness. Manual exploration may be offered as optional product discovery, but manual QA cannot be a merge-blocking gate. Scale evidence to actual exposure and credible failures. Reuse gates across claims; existing
+tests, disposable verifiers, or deterministic inspections can suffice. State a stopping condition
+and why any new maintained harness is necessary. Never make production operations a pre-merge
+ritual or treat future human code review as proof.
 
 ### 7. Pre-mortem
 
-Assume this change shipped and broke production. Create a numbered list (`PM-1`, `PM-2`, …) of the most plausible causes, each with its concrete failure mechanism. Disposition every item on a `Disposition:` line: covered by an acceptance criterion (`AC-n`), handled by a named implementation step, proven absent by an evidence item (`EV-n`), or explicitly accepted as a risk with rationale. A credible concern with no disposition is a spec defect. Do not pad the list with far-fetched scenarios to look thorough — a short list of real risks, each dispositioned, beats a long performative one.
+Assume this change failed in its intended environment under the resolved project context. Create a numbered list (`PM-1`, `PM-2`, …) of the most plausible causes, each with its concrete failure mechanism. Disposition every item on a `Disposition:` line: covered by an acceptance criterion (`AC-n`), handled by a named implementation step, proven absent by an evidence item (`EV-n`), or explicitly accepted as a risk with rationale. A credible concern with no disposition is a spec defect. Do not pad the list with far-fetched scenarios to look thorough — a short list of real risks, each dispositioned, beats a long performative one.
 
 ### 8. Notes
 
@@ -187,12 +208,14 @@ For each step include:
 1. What to do: exact files and changes required.
 2. Why: tie to architecture or acceptance criteria.
 3. Signatures/contracts: public API shape when adding or changing interfaces.
-4. Tests: concrete automated test assertions and target test files. Test behavior, not implementation. Focus on edge cases and failure modes.
+4. Verification: concrete observable assertions and existing tests, focused scripts, or
+   deterministic inspections with exact artifacts; new test files only when warranted. Test behavior, not implementation. Focus on edge cases and failure modes.
 5. Coverage: which acceptance criteria this step satisfies, as a tag line (`Covers: AC-3, AC-7`). Every criterion must be covered by at least one step; a step covering no criterion must trace to a stated architectural need instead.
 6. Complexity: how hard *this step* is, as a tag line (`Complexity: easy`). One of `easy`, `medium`, `hard` — see the rubric below. The system uses per-step tags to route each step to an appropriately strong implementation model, so score every step, not just the spec.
 7. Visual design: whether *this step* implements user-facing visual design, as a tag line (`Visual: yes` or `Visual: no`). See the Visual design rubric in Implementation Profile. The system routes `Visual: yes` steps to design-capable handling and visual verification, so flag every step, not just the spec.
 8. Visual reference: when a visual reference exists and the step is `Visual: yes`, repeat the exact `Visual reference: <checkout-relative file path>` line in that step and require parity with it. Do not tell the implementer to create a replacement prototype or derive a new visual direction.
-9. Evidence: when this step owns one or more Executable Evidence Plan gates, an `Evidence:` tag line (`Evidence: EV-2` or `Evidence: EV-2, EV-5`). Producing the named artifact is part of the step's work. Steps owning no evidence omit the line.
+9. Evidence: when this step owns one or more Executable Evidence Plan gates, an `Evidence:` tag line (`Evidence: EV-2` or `Evidence: EV-2, EV-5`). Producing merge evidence is part of the step's work. For later gates it owns the procedure and
+handoff, not premature execution; record the runtime result as pending until authorized and run. Steps owning no evidence omit the line.
 
 Each step's `Covers:`, `Complexity:`, `Visual:`, and (when the step owns evidence) `Evidence:` tag lines sit together at the end of the step. Judge complexity by *this step's own* work, applying the rubric the same way every time so the label is reproducible across runs. Anchor the choice on four signals — scope (files/modules this step touches), novelty (new abstractions vs. reusing existing patterns), domain difficulty (the Qualifications this step exercises), and integration risk (state, I/O, migrations, blast radius this step incurs):
 
@@ -216,10 +239,9 @@ Step constraints:
 
 Step ordering:
 
-- Types and contracts first.
-- Pure/domain logic next.
-- Stateful and I/O modules after.
-- Integration wiring and verification tests last.
+- Prefer a small complete behavior slice with its real wiring and proof.
+- Split contracts, pure logic, stateful work, and final integration only when actual dependencies
+  or complexity warrant separate steps. Do not manufacture layers or steps to fill this sequence.
 
 Exclude:
 
@@ -319,14 +341,18 @@ Write `spec-steps.json` only after the spec body is final, so the index matches 
 
 ## Machine-Readable Evidence Plan
 
-Write `.specs/<feature-slug>/evidence-plan.json` as strict version 1 JSON using the schema and invariants in the shared executable-evidence contract. `spec.md` remains canonical prose; this file is its claim/gate index. Use the same identifiers, owner steps, commands, artifacts, and posture values in both. Write it after the other outputs, then run `node ~/.agents/skills/spec-work-tour/scripts/validate-evidence-plan.mjs <path>`; a validation failure blocks handoff.
+Write `.specs/<feature-slug>/evidence-plan.json` as version 2 JSON using the schema and invariants in the shared executable-evidence contract. `spec.md` remains canonical prose; this file is its claim/gate index. Use the same identifiers, owner steps, commands, artifacts, and posture values in both. Write it after the other outputs, then run `node ~/.agents/skills/spec-work-tour/scripts/validate-evidence-plan.mjs <path>`; a validation failure blocks handoff.
 
 ## Output Steps
 
 1. Write the final markdown body — including each step's `Complexity:` tag (§9) and the footer block (`Spec folder:`, `Visual design:`) — to `.specs/<feature-slug>/spec.md`.
 2. Write `spec-steps.json`, including exact evidence ownership.
 3. Write strict `evidence-plan.json` and validate complete AC → CL → FH → EV traceability and single-step EV ownership.
-4. Report one compact routing summary: `outcome: written`; all three paths; evidence posture; claim/failure/gate counts; step counts; PM dispositions; inputs used; and `next: spec-prepare`.
+4. For a completed spec, report one compact routing summary: `outcome: written`; all three paths; evidence posture; claim/failure/gate counts; step counts; PM dispositions; inputs used; and `next: spec-prepare`.
+
+For an unresolved consequential choice, report `outcome: decision-required`, the exact choice,
+its consequence and safe work completed. Do not hand off a written spec whose merge scope depends
+on an assumed consequential answer.
 
 Do not implement the plan.
 

@@ -1,179 +1,231 @@
 # Executable Evidence Contract
 
-This contract governs the standalone spec lifecycle. Evidence, not human approval, is the merge authority. A person may supply product judgment, explore the QA tour, or challenge assumptions, but correctness and deployment safety cannot depend on a person noticing a defect in a diff.
+This contract governs the standalone spec lifecycle. Read the shared
+[Project Context And Authority](../../spec-end-to-end/references/project-context.md) contract
+at every entry point. Agents consume specs; people review evidence artifacts and supply product
+and authority decisions. Correctness must not depend on a person noticing a defect in a diff.
 
-## The Evidence Chain
+## Evidence And Authority
 
-Every material obligation follows one traceable chain:
+Every material, applicable obligation follows one traceable chain:
 
 ```text
-requirement -> claim -> failure hypothesis -> evidence gate -> result -> deploy verdict
+sourced requirement/context -> claim -> credible failure -> gate -> observed result -> phase verdict
 ```
 
-- A **requirement** is an acceptance criterion, architecture invariant, or deployment obligation.
-- A **claim** is a falsifiable statement asserted by the proposed or implemented system.
-- A **failure hypothesis** names a credible way the claim could be false while superficial checks still pass.
-- An **evidence gate** is an executable command or deterministic inspection capable of rejecting that failure.
-- A **result** is a commit-bound outcome with an artifact and an honest proof boundary.
-- The **deploy verdict** is derived from required gate closure, never confidence language.
+- A **requirement** comes from requested behavior, a justified architecture invariant, or an actual
+  project/deployment commitment. An agent-written requirement does not establish its own necessity.
+- A **claim** is a falsifiable statement with an honest scope and a decision phase.
+- A **failure hypothesis** names a credible way that claim could be false while superficial checks pass.
+- An **evidence gate** is an executable check or reproducible deterministic inspection that can reject it.
+- A **result** records the code revision, environment, observed outcome, artifact, and proof limit.
+- A **phase verdict** follows the applicable required gates, never confidence language or test counts.
 
-Evidence is strong when it is relevant, falsifiable, reproducible, sufficiently independent, bound to the code under decision, and explicit about what it does not prove. Test volume, green badges, screenshots, and review prose are not inherently strong evidence.
+Relevance, independence, reproducibility, and proof limits matter more than volume. A second agent
+is useful but is not by itself an independent oracle: expected results must come from sourced
+requirements, real contracts, or independently derived properties, not copied implementation logic.
+A validator proves artifact structure; the independent audit judges evidence truth and sufficiency.
 
-## Evidence Posture At Intake
+## Context And Proportionality At Intake
 
-Set the posture before architecture or implementation planning. It may become stricter when discoveries increase risk. It may become weaker only through an explicit, recorded risk decision; convenience, schedule pressure, or missing tooling is not a justification.
+Resolve `context.md` before choosing architecture or evidence. Record:
 
-Record:
+- **Change types:** UI, client state, API, domain logic, data/query, schema/migration, auth/security,
+  external integration, infrastructure/deploy, documentation/tooling.
+- **Risk:** low, medium, high, or critical, with actual exposure, data value, and credible harm.
+- **Boundaries:** the relevant browser/server, process/database, external API, permission/tenant,
+  build/runtime, or retained-data transitions; an inapplicable boundary creates no obligation.
+- **Impact, reversibility, uncertainty:** what can be harmed, how recovery works in this project,
+  and the specific unknowns that affect the decision.
+- **Evidence layers and independence:** the smallest set that can reject the material failures.
+- **Environments:** actual isolated targets, representative fixtures, and required artifacts.
+- **Decision phases:** `merge`, `deploy`, or `post-deploy` for each claim and gate.
+- **QA mode:** automated, automated-with-exploration-output, or blocked-automation-gap.
 
-- **Change types:** UI, client state, API, domain logic, data/query, schema/migration, auth/security, external integration, infrastructure/deploy, documentation/tooling.
-- **Risk level:** low, medium, high, or critical, with rationale.
-- **Boundaries crossed:** browser/server, controller/context, context/model, process/database, service/external API, build/runtime, migration/production data, permission/tenant.
-- **Impact:** user-visible behavior, stored data, money, access, privacy, availability, irreversible side effects.
-- **Reversibility:** easy, moderate, hard, or irreversible.
-- **Uncertainty:** low, medium, or high; name novel or poorly understood parts.
-- **Required evidence layers:** select from intent, structural, policy, data, server contract, client contract, interface, live path, security/privacy, operational, teardown.
-- **Independence:** implementation assertion, separate oracle, adversarial audit, production-like environment, or another justified level.
-- **Environments and artifacts:** exact runtime, fixtures, browsers/viewports, logs, screenshots, traces, migration copies, or deploy checks.
-- **Merge and deploy gates:** which failures block merge, block deployment, or only reduce optional exploratory confidence.
-- **QA mode:** automated, automated-with-exploration-output, or explicitly blocked by a missing automation boundary. Manual QA is never the hidden merge gate.
+Recalibrate in either direction when facts change. Removing a gate requires a recorded explanation
+that its obligation is inapplicable, superseded, or covered by equivalent proof, with source and
+claim mapping. The owning planner updates and re-prepares the package; the independent audit
+checks that no applicable requirement disappeared. A real residual risk needs acceptance from
+current user instructions or sourced project policy. An agent's assumption, missing harness,
+failed check, schedule, or desire for green output is not acceptance.
 
-### Minimum posture by risk
+### Risk-matched evidence
 
-| Risk | Minimum evidence |
+| Risk | Evidence emphasis |
 |---|---|
-| Low | Focused automated assertion at the changed boundary; static checks where relevant; clean integrated audit. |
-| Medium | AC-level tests plus at least one real seam/live composition check; negative-path coverage; integrated audit; QA output for user-visible behavior. |
-| High | Independent oracle or adversarial check; production-like data/runtime evidence; rollback and observability proof; clean integrated audit bound to HEAD. |
-| Critical | High-risk requirements plus rehearsal or canary/gradual-deploy evidence, explicit fail-closed checks, recovery exercise, and no unresolved uncertainty in irreversible paths. |
+| Low | Focused assertion or deterministic inspection at the changed boundary; relevant static checks; independent integrated audit. |
+| Medium | Observable acceptance coverage, a real composition/seam check where crossed, credible negative paths, and independent audit. |
+| High | Independent oracle or adversarial evidence for the high-consequence failure; representative isolated data/runtime; recovery proof when retained state or availability is actually at risk. |
+| Critical | High-risk proof plus isolated rehearsal and recovery/fail-closed checks for consequential irreversible paths; unresolved material uncertainty blocks the affected phase. |
 
-The table is a floor, not an exhaustive recipe. A one-line permission change may be small in code and critical in impact.
+These are decision criteria, not infrastructure recipes. A one-line permission change may be
+high-risk; a schema edit over disposable fixtures does not demand a historical-data migration
+program. No risk tier mandates production access, canaries, flags, or a new release mechanism.
+Reuse the established release process; any required live observation belongs to its later phase.
+Security, privacy, relevant accessibility, and protection of valuable data still apply to prototypes.
 
-## Full-Stack Evidence Layers
+### Select enough proof, then stop
 
-Use only applicable layers, but never omit a crossed boundary merely because another layer is green.
+1. Name the credible failure and the observation that would reject it.
+2. Reuse an existing focused test, fixture, real-composition check, or deterministic inspection.
+3. Let one gate cover multiple claims/failures when it actually observes them.
+4. Use a disposable script or isolated harness when sufficient; retain its source, inputs, and
+   results for reproducibility. Add maintained regression tests when recurrence warrants them.
+5. Add tooling or another verification layer only for a named material gap the existing evidence
+   cannot close. Account for setup, maintenance, cost, and external effects.
+6. Stop when applicable claims are supported and independent audit finds no material gap. Do not
+   rerun unchanged checks or invent hypothetical failures to make the package look complete.
 
-1. **Intent** — acceptance criteria and claim map prove the right problem is being solved.
-2. **Structural** — imports, types, schemas, route registration, build graph, and static contracts are valid.
-3. **Policy** — permissions, tenancy, validation, feature flags, and business invariants are enforced, including denied paths.
-4. **Data** — queries, transactions, ordering, nulls, concurrency, migrations, rollback/forward-fix, and representative data shapes behave correctly.
-5. **Server contract** — real route/handler/composition reaches the domain and persistence boundary and returns the promised contract.
-6. **Client contract** — the production client calls the real contract and handles success, empty, loading, partial, error, stale, and permission states.
-7. **Interface** — rendered UI is visually inspected at required viewports/states; accessibility and interaction assertions run where supported.
-8. **Live path** — a normative journey crosses the actual production seams. Fakes may replace only the final external boundary.
-9. **Security/privacy** — prohibited access, unsafe inputs, secret/PII leakage, and fail-closed behavior are exercised.
-10. **Operational** — configuration, build, deploy, monitoring, performance, compatibility, and rollout behavior are demonstrated.
-11. **Teardown** — cleanup, rollback, cancellation, retry/idempotency, and partial-failure recovery are demonstrated where relevant.
+A missing safe verifier for an applicable claim remains a gap; it does not justify unsafe testing
+or a weaker assertion. Escalate only the unresolved decision, while completing independent work.
+
+## Applicable Evidence Layers
+
+Select layers for actual obligations; do not turn this list into required feature construction:
+
+- **Intent/structure:** sourced acceptance, imports, types, schemas, registration, and build contracts.
+- **Policy/security:** relevant validation, permissions, tenant boundaries, prohibited effects,
+  secret/privacy handling, and denied paths. Test flags only when justified flags exist.
+- **Data:** actual queries, transactions, ordering, concurrency, and preservation commitments.
+  Fresh setup can be sufficient for disposable fixtures; retained data may need migration evidence.
+- **Server/client/live path:** exercise real application composition through concrete internal
+  adapters. Fakes may replace the final external boundary. This is an isolated runtime check,
+  not a call to a live production service.
+- **Interface:** inspect representative changed states/viewports; run relevant interaction and
+  accessibility assertions. Screenshots do not prove domain or persistence correctness.
+- **Operations/recovery:** verify the existing configuration/release/recovery paths affected by
+  this change. Do not invent zero-downtime, rollback, or monitoring requirements for an absent system.
+
+### Bind proof to the requested deliverable
+
+For a library/package change, the public exported entrypoint and its real implementation can be
+its complete composition boundary. Do not require an unavailable consuming application, invent an
+adapter, or add infrastructure to prove behavior outside the requested deliverable. If the request
+promises an application-integrated outcome, that wiring must be evidenced; do not silently narrow
+it to library tests. Record explicit scope and proof limits in either case. Missing essential
+source is an input blocker, not permission to invent it; a proposal may identify a discovery step
+when the source is locally obtainable, but preparation cannot mark an essential unknown ready.
+
+## Decision Phases
+
+- **Merge:** implementation and evidence are sufficient for integration under the resolved context.
+  Required merge gates and claims must pass; the independent audit must pass at current HEAD.
+- **Deploy:** the candidate meets the established deployment process's preconditions. Separate
+  readiness (`ready`, `blocked`, `not-assessed`, `not-applicable`) from authorization. A deploy gap
+  can coexist with merge readiness unless it also invalidates a merge claim; explain that dependency.
+- **Post-deploy:** observations after an authorized release. Before release, record `pending` gates
+  and unproven claims, not passed checks or merge failures. A later failure that also disproves an
+  implementation claim invalidates that merge evidence; phase labels cannot conceal a known defect.
+
+An implementation package has at least one merge claim. Every gate has `phase` and `required`. A claim's proof gates belong to the same phase; split a
+compound claim spanning phases. Optional exploration cannot be the sole proof of a required claim.
+A deployment procedure inspected before merge proves the procedure's content, not that deployment
+or recovery occurred. Separate those claims. No phase verdict authorizes execution.
+
+Every gate records its environment, effects (including setup/teardown), and authority source or
+`isolated local execution`. For later unauthorized operations, record `not granted; decision required`
+and keep execution pending. Do not run commands merely because they appear in an evidence plan.
 
 ## Stage Responsibilities
 
-- **Architecture:** sets the initial evidence posture, claims, failure hypotheses, and feasible proof strategy before selecting the design.
-- **Architecture critique:** attacks both the solution and proof plan; adds failure hypotheses and rejects circular or irrelevant evidence.
-- **Spec writing:** converts requirements into stable `CL-*`, `FH-*`, and `EV-*` identifiers and writes `evidence-plan.json`.
-- **Preparation:** code-grounds the plan, checks ownership and feasibility, strengthens posture when reality demands it, and binds the evidence plan hash in `preparation.json`.
-- **Step execution:** produces owned evidence, records exact commands/outcomes/artifacts/proof boundaries, and never claims more than observed.
-- **Branch audit/refine:** independently evaluates every claim against the integrated diff, exercises cross-step and adversarial risks, and converges until no required gate or actionable finding is open.
-- **Work tour:** assembles the claim ledger, evidence, QA walkthrough, architecture, and deployment case into commit-bound JSON and HTML.
-- **PR publication:** verifies the pushed commit exactly matches a ready tour and passing final audit. The PR distributes evidence; it does not create safety through future review.
+- **Intake/architecture:** resolve sourced context and consequential questions, choose minimal design
+  and proportional proof together, and state justified omissions.
+- **Critique:** challenge necessity, risk calibration, invented commitments, circular evidence, and
+  whether a cheaper/safer gate proves the same claim.
+- **Spec/preparation:** write and code-ground stable CL/FH/EV mappings, phase ownership and context
+  bindings; correct excess as well as gaps. Preserve unresolved authority as a decision.
+- **Execution:** produce owned merge evidence; prepare procedures for later gates without executing
+  them outside authority. Record exact outcomes and limits; return consequential decisions upstream.
+- **Audit/refine:** independently falsify claims, enforce context constraints, and close material
+  merge findings. Verify later-phase status honestly without forcing premature execution.
+- **Tour:** expose context, choices, omissions, proof, burden, and separate readiness/authority states.
+- **PR:** publish the current merge-ready evidence case. Publication does not deploy or authorize it.
 
 ## Required Artifacts
 
 ```text
+project-context.md                      # or the existing AGENTS-linked equivalent
 .specs/<feature>/
+├── context.md                          # relevant sourced snapshot and decisions
 ├── proposal.md
-├── critique.md                         # when critique runs
-├── spec.md
-├── spec-steps.json
-├── evidence-plan.json                  # posture + CL/FH/EV graph
-├── spec-prepare.md
-├── preparation.json                    # includes evidence-plan hash
-├── criteria.md / invariants.md          # when applicable
-├── step-<NNN>-subspec.md
-├── step-<NNN>-learning.md               # command and evidence outcomes
-├── evidence/                            # logs, captures, dry runs, reports
-├── merge-evidence.md
-├── merge-evidence.json                 # final claim/gate status bound to HEAD
-├── reviews/branch-<i>-review.md         # independent integrated evidence audit
-├── reviews/branch-<i>-fix.md
-├── work-tour.json                      # final deploy verdict bound to HEAD
-└── work-tour.html                      # architecture/evidence/QA tour
+├── critique.md                         # only when warranted
+├── spec.md / spec-steps.json
+├── evidence-plan.json                  # version 2: context + phase-aware CL/FH/EV graph
+├── spec-prepare.md / preparation.json   # version 3 manifest binds context too
+├── criteria.md / invariants.md          # only when applicable
+├── step-<NNN>-subspec.md / step-<NNN>-learning.md
+├── evidence/                            # source/inputs/results, captures and checks
+├── merge-evidence.md / merge-evidence.json
+├── reviews/branch-<i>-review.md / branch-<i>-fix.md
+└── work-tour.json / work-tour.html      # version 2: separate decision states
 ```
 
-Specs created before this contract must be upgraded before they can produce a `ready` verdict. Do not invent evidence retrospectively from prose.
+Keep agent inputs compact; avoid re-explaining the same decision in every file. Machine indexes
+are projections, not competing sources. Old packages must resolve context, classify phases, and
+re-prepare before resuming implementation or publishing readiness. Reuse still-valid observations
+with recorded provenance; do not invent missing facts or merely relabel a legacy deploy verdict.
+The shared validator/renderer still accept version 1 for existing Design/SpecOps callers, with
+legacy notices. That compatibility does not satisfy standalone version 2 input contracts or
+authorize publication: preparation, execution and PR stages must check their required versions.
 
-## `evidence-plan.json` Version 1
+## `evidence-plan.json` Version 2
 
-`spec.md` remains canonical for full prose. This sibling file is the strict traceability and routing index:
+`spec.md` owns behavior and requirements; this file owns traceability and execution routing:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "spec": ".specs/feature/spec.md",
+  "context": {"path": ".specs/feature/context.md", "sha256": "<64 lowercase hex characters>"},
   "posture": {
     "risk": "medium",
-    "rationale": "Crosses browser/server and changes stored state.",
-    "changeTypes": ["UI", "API", "data/query"],
-    "boundaries": ["browser/server", "context/model", "process/database"],
-    "impacts": ["user-visible behavior", "stored data"],
-    "reversibility": "moderate",
+    "rationale": "Changes saved state in an isolated test of the existing runtime.",
+    "changeTypes": ["API", "data/query"],
+    "boundaries": ["process/database"],
+    "impacts": ["stored data"],
+    "reversibility": "easy",
     "uncertainty": "low",
-    "requiredLayers": ["intent", "data", "server contract", "client contract", "interface", "live path"],
-    "independence": ["separate oracle", "integrated adversarial audit"],
-    "environments": ["Bun test + test PostgreSQL", "browser at 1440px and 320px"],
-    "qaMode": "automated-with-exploration-output"
+    "requiredLayers": ["data", "server contract"],
+    "independence": ["independent integrated audit"],
+    "environments": ["local test database with disposable fixtures"],
+    "qaMode": "automated"
   },
   "claims": [{
-    "id": "CL-1",
-    "statement": "Saving the form persists and redisplays the normalized value.",
-    "requirements": ["AC-1", "AC-3"],
-    "failureHypotheses": ["FH-1"],
-    "gates": ["EV-1", "EV-2"]
+    "id": "CL-1", "phase": "merge",
+    "statement": "Saving persists and redisplays the normalized value.",
+    "requirements": ["AC-1"], "failureHypotheses": ["FH-1"], "gates": ["EV-1"]
   }],
   "failureHypotheses": [{
-    "id": "FH-1",
-    "statement": "The component test passes while the production route never reaches persistence.",
-    "claims": ["CL-1"],
-    "gates": ["EV-2"]
+    "id": "FH-1", "statement": "The real route never reaches persistence.",
+    "claims": ["CL-1"], "gates": ["EV-1"]
   }],
   "gates": [{
-    "id": "EV-2",
-    "kind": "live-path-test",
-    "description": "Exercise the production route through the concrete model adapter.",
-    "claims": ["CL-1"],
-    "rejects": ["FH-1"],
-    "ownerStep": 3,
+    "id": "EV-1", "phase": "merge", "required": true,
+    "kind": "integration-test", "description": "Reject an unwired save route.",
+    "claims": ["CL-1"], "rejects": ["FH-1"], "ownerStep": 1,
     "command": "bun test app/test/integration/feature.test.js",
-    "artifact": "app/test/integration/feature.test.js",
-    "environment": "Bun test + test PostgreSQL",
-    "independence": "real composition; final external boundary only may be faked",
-    "mergeBlocking": true
+    "artifact": ".specs/feature/evidence/save-result.txt",
+    "environment": "local test database with disposable fixtures",
+    "effects": "Creates and removes isolated test records; no external calls.",
+    "authorization": "isolated local execution",
+    "independence": "real composition and expected value from AC-1"
   }]
 }
 ```
 
-Every requirement maps to a claim; every claim maps to a failure hypothesis and gate; every failure hypothesis is rejected by a gate; every gate has exactly one owner step. A gate description must say what unsafe implementation it can reject.
+Every applicable requirement maps to a claim; every claim maps to a credible failure and required
+same-phase gate; every failure has a rejecting gate. Links are reciprocal. Every gate has one owner
+step. For a later-phase gate, that step owns the procedure, handoff, and any safe isolated pre-deploy
+proof in its existing scope. It gains no authority for live operations. A gate can cover several claims; no one-test-per-identifier rule applies. Gate artifacts
+contain actual observations when run, not only the test source. Keep unexecuted later operations `pending`; phase names route verdicts, not permission.
 
-## QA Without A Manual Safety Gate
+## QA And Human Review
 
-For user-visible work, produce QA output even when automation is complete:
+For user-visible work, provide a compact tour: entrypoint, deterministic setup, representative
+scenarios, expected outcomes, automated coverage, and inspected captures when visual. Optional
+exploration concerns product discovery or taste, not an unlabelled correctness gate. Surface
+consequential context and decisions in the tour because nobody is expected to read the spec.
 
-- exact route or entrypoint and minimal setup
-- deterministic fixtures or seeded state
-- scenarios for ideal and non-ideal states
-- expected observable results
-- links to automated gates covering each scenario
-- desktop/narrow captures and interaction/accessibility reports when visual
-- known exploration-only questions that concern taste or product discovery, clearly separated from correctness
-
-This lets a person tour the work without making their attention part of the safety system. When a behavior cannot yet be automated, the correct output is a blocking automation gap or a deliberately scoped QA artifact with an explicit risk decision—not an unlabeled “please test this” merge instruction.
-
-## Anti-Patterns
-
-- “Tests pass” with no requirement or failure mapping.
-- Unit tests that manually construct an internal object which production never wires.
-- Snapshots or screenshots used as the sole proof of domain/data correctness.
-- An implementer grading its own ambiguous behavior with no separate oracle.
-- A PR opened red because a human reviewer might catch the issue.
-- Manual QA listed as required while the merge verdict says ready.
-- Evidence generated before the final rebase or bound to a different SHA.
-- Prose claiming rollback, security, accessibility, or deploy safety without an executable check or deterministic inspection.
-- A work tour that hides failed commands, blockers, proof limits, or residual risk.
+Do not claim absolute proof beyond the recorded environment and observations. Missing material
+coverage is a gap for its phase. Human authorization is a legitimate separate decision; human
+code review or required manual testing is not a substitute for evidence.

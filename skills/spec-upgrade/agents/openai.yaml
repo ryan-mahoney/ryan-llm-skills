@@ -1,0 +1,4 @@
+interface:
+  display_name: "Spec Upgrade"
+  short_description: "Update pending specs before implementation"
+  default_prompt: "Use $spec-upgrade to update these unimplemented specs for the current project context and prepare them for implementation."

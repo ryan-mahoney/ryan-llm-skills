@@ -12,8 +12,14 @@ const plan = JSON.parse(await readFile(file, "utf8"));
 const fail = (message) => { throw new Error(message); };
 const arr = (value, name) => Array.isArray(value) ? value : fail(`${name} must be an array`);
 const text = (value, name) => typeof value === "string" && value.trim() ? value : fail(`${name} is required`);
-if (plan.version !== 1) fail("version must equal 1");
+const legacy = plan.version === 1;
+if (!legacy && plan.version !== 2) fail("version must equal 1 or 2");
 text(plan.spec, "spec");
+if (!legacy) {
+  text(plan.context?.path, "context.path");
+  if (!/^[0-9a-f]{64}$/.test(plan.context?.sha256 || "")) fail("context.sha256 must be a SHA-256 binding");
+}
+const phases = new Set(["merge", "deploy", "post-deploy"]);
 const posture = plan.posture || fail("posture is required");
 if (!["low", "medium", "high", "critical"].includes(posture.risk)) fail("posture.risk is invalid");
 text(posture.rationale, "posture.rationale");
@@ -45,6 +51,7 @@ const requirements = new Set();
 
 for (const claim of claims) {
   text(claim.statement, `${claim.id}.statement`);
+  if (!legacy && !phases.has(claim.phase)) fail(`${claim.id}.phase is invalid`);
   for (const id of arr(claim.requirements, `${claim.id}.requirements`)) requirements.add(text(id, `${claim.id}.requirement`));
   if (!claim.requirements.length) fail(`${claim.id} has no requirements`);
   if (!arr(claim.failureHypotheses, `${claim.id}.failureHypotheses`).length) fail(`${claim.id} has no failure hypotheses`);
@@ -61,9 +68,15 @@ for (const hypothesis of hypotheses) {
 }
 const owners = new Map();
 for (const gate of gates) {
-  for (const key of ["kind", "description", "command", "artifact", "environment", "independence"]) text(gate[key], `${gate.id}.${key}`);
+  for (const key of ["kind", "description", "command", "artifact", "environment", "independence", ...(legacy ? [] : ["effects", "authorization"])]) text(gate[key], `${gate.id}.${key}`);
   if (!Number.isInteger(gate.ownerStep) || gate.ownerStep < 1) fail(`${gate.id}.ownerStep must be a positive integer`);
-  if (typeof gate.mergeBlocking !== "boolean") fail(`${gate.id}.mergeBlocking must be boolean`);
+  if (legacy) {
+    if (typeof gate.mergeBlocking !== "boolean") fail(`${gate.id}.mergeBlocking must be boolean for version 1`);
+  } else {
+    if (!phases.has(gate.phase)) fail(`${gate.id}.phase is invalid`);
+    if (typeof gate.required !== "boolean") fail(`${gate.id}.required must be boolean`);
+    if ("mergeBlocking" in gate) fail(`${gate.id}: use phase and required, not legacy mergeBlocking`);
+  }
   if (!arr(gate.claims, `${gate.id}.claims`).length || !arr(gate.rejects, `${gate.id}.rejects`).length) fail(`${gate.id} must name claims and rejected hypotheses`);
   for (const id of gate.claims) if (!claimMap.has(id)) fail(`${gate.id} references unknown claim ${id}`);
   for (const id of gate.rejects) if (!hypothesisMap.has(id)) fail(`${gate.id} rejects unknown hypothesis ${id}`);
@@ -72,5 +85,37 @@ for (const gate of gates) {
   if (owners.has(gate.id)) fail(`${gate.id} has multiple owners`);
   owners.set(gate.id, gate.ownerStep);
 }
+if (!legacy) {
+  // Validate both directions: an orphaned link must not appear to establish coverage.
+  for (const claim of claims) {
+    for (const id of claim.failureHypotheses) {
+      if (!hypothesisMap.get(id).claims.includes(claim.id)) fail(`${claim.id}/${id} mapping is not reciprocal`);
+    }
+    for (const id of claim.gates) {
+      const gate = gateMap.get(id);
+      if (!gate.claims.includes(claim.id)) fail(`${claim.id}/${id} mapping is not reciprocal`);
+      if (gate.phase !== claim.phase) fail(`${claim.id}/${id} crosses decision phases; split the claim`);
+      if (!gate.rejects.some((failure) => claim.failureHypotheses.includes(failure))) fail(`${id} rejects no failure of ${claim.id}`);
+    }
+    if (!claim.gates.some((id) => gateMap.get(id).required)) fail(`${claim.id} needs a required proof gate`);
+    for (const id of claim.failureHypotheses) {
+      if (!claim.gates.some((gate) => gateMap.get(gate).required && gateMap.get(gate).rejects.includes(id))) {
+        fail(`${claim.id}/${id} has no required rejecting gate`);
+      }
+    }
+  }
+  for (const hypothesis of hypotheses) {
+    for (const id of hypothesis.claims) {
+      if (!claimMap.get(id).failureHypotheses.includes(hypothesis.id)) fail(`${hypothesis.id}/${id} mapping is not reciprocal`);
+    }
+    for (const id of hypothesis.gates) {
+      const gate = gateMap.get(id);
+      if (!gate.rejects.includes(hypothesis.id)) fail(`${hypothesis.id}/${id} rejection is not reciprocal`);
+      if (!gate.claims.some((claim) => hypothesis.claims.includes(claim))) fail(`${id} rejects an unrelated hypothesis ${hypothesis.id}`);
+    }
+  }
+  if (!claims.some((claim) => claim.phase === "merge")) fail("an implementation plan needs at least one merge claim");
+}
 if (!requirements.size) fail("no requirements are covered");
-console.log(`valid evidence plan: ${claims.length} claims, ${hypotheses.length} hypotheses, ${gates.length} gates, ${requirements.size} requirements`);
+if (legacy) console.warn("Legacy version 1: structural validation only; standalone specs must resolve context and re-prepare as version 2.");
+console.log(`valid ${legacy ? "legacy " : ""}evidence plan: ${claims.length} claims, ${hypotheses.length} hypotheses, ${gates.length} gates, ${requirements.size} requirements`);

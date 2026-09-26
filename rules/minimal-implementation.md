@@ -1,6 +1,7 @@
 # Minimal Implementation Guide (v1.0)
 
-**Core rule:** Build the least software that solves the stated problem. Verify it without limit.
+**Core rule:** Build the least sustainable software that solves the stated problem. Use the least
+costly, least invasive evidence that rejects credible failures in the actual project context.
 
 This rule applies to all implementation work — frontend, backend, infrastructure, tooling.
 
@@ -35,15 +36,25 @@ Climb the ladder after understanding the problem, not instead of it: read the ta
 - Input validation at trust boundaries.
 - Error handling that prevents data loss.
 - Security and accessibility.
-- Anything the spec explicitly requires.
+- Applicable acceptance criteria and sourced project constraints. Correct an invented or
+  inapplicable obligation through the owning planner; a generated spec cannot authorize itself.
 
-## 4. Verification Is Exempt
+## 4. Proportionate Verification
 
-Minimality applies to construction, never to proof. Effort spent proving correctness — tests, adversarial cases, evidence artifacts — is well spent; effort spent building unrequested software is not. Do not trim tests, assertions, or evidence to make a diff smaller.
+Preserve applicable correctness coverage; do not weaken assertions to obtain a pass. Match proof
+to credible failures, actual exposure, data value, reversibility, and uncertainty. Reuse existing
+tests and fixtures; one well-chosen gate can cover several claims. Prefer a focused check or
+disposable verifier to new maintained infrastructure when it establishes the same evidence.
+
+Tests, harnesses, flags, environments, and release machinery have maintenance and operational
+costs too. Name the remaining uncertainty before adding one. Stop when applicable claims are
+supported and the required independent audit finds no material gap. Correct an overestimated
+obligation using sourced project facts; do not disguise unresolved failures as scope reductions.
+Verification never grants permission to affect shared or production systems.
 
 ## 5. Final Test
 
 1. Can I name the requirement behind every module, dependency, and abstraction?
 2. Did I reuse before writing?
 3. Would deleting anything leave behavior intact? Then delete it.
-4. Is verification as strong as if the code were complex?
+4. Does the evidence reject the credible failures without unnecessary cost or external effects?

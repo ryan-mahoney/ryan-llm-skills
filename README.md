@@ -10,7 +10,7 @@ Two portable, installable bundles cover spec-driven development, its design entr
 
 ### spec-skills: spec-driven development
 
-A standalone workflow that turns a goal into architecture, an explicit evidence posture, an immutable implementation package, sequential commits with owned proof, an independent convergent branch audit, and a commit-bound HTML work tour. Human review is optional input; executable evidence is the merge authority.
+A standalone workflow that turns a goal into architecture, an explicit evidence posture, an immutable implementation package, sequential commits with owned proof, an independent convergent branch audit, and a commit-bound HTML work tour. People review evidence artifacts and supply consequential product/authority decisions; specs and code are agent-facing. Proof is matched to actual project context.
 
 Use `spec-end-to-end` when one top-level agent should orchestrate the complete sequence and publish the pull request. It composes the stages below, resumes from valid existing artifacts, and preserves run-wide directives such as worktree choice or named delegation.
 
@@ -21,16 +21,29 @@ Use `spec-end-to-end` when one top-level agent should orchestrate the complete s
 
 See the [end-to-end workflow guide](docs/spec-workflow.md) for prerequisites, goal-mode prompts,
 compact handoffs, OpenCode nested workers, recovery, and completion criteria. The workflow ends at
-a published PR with current evidence; merging the PR is a separate action.
+a published PR with current merge evidence; merging, deployment authorization, and post-deployment
+observations remain separate. The [context contract and template](skills/spec-end-to-end/references/project-context.md)
+records users, data value, compatibility, release process and permitted operations for reuse across specs.
+
+For existing unimplemented specs, use `spec-upgrade` before implementation:
+
+```text
+/spec-upgrade .specs/feature-a/ .specs/feature-b/
+/spec-upgrade all pending specs in this repository
+```
+
+It resolves shared context, reassesses complexity, and refreshes preparation. It stops before implementation.
+The [workflow guide](docs/spec-workflow.md) also explains how to run planning skills individually and resume with `spec-end-to-end`.
 
 The orchestrator runs these stages, which can also be invoked separately:
 
-1. `spec-architect-initial`: write `.specs/<feature>/proposal.md`.
+1. `spec-architect-initial`: resolve project context and consequential decisions, then write
+   `.specs/<feature>/context.md` and `proposal.md`.
 2. `spec-architect-critics`: stress-test the proposal and write `critique.md` (optional).
 3. `spec-write`: write `spec.md`, `spec-steps.json`, and the AC → claim → failure → gate `evidence-plan.json`.
 4. `spec-prepare`: code-ground both implementation and proof, derive guardrails, plan every step, and publish their hash-bound manifest last.
 5. Workspace handoff: the top-level agent chooses a branch or worktree and preserves the complete `.specs/<feature>/` package when needed.
-6. `spec-run`: implement each step, produce its gates and QA artifacts, assemble pre-audit evidence, and commit separately.
+6. `spec-run`: implement each step, produce its merge gates, later-phase procedures and QA artifacts, assemble pre-audit evidence, and commit separately.
 7. `spec-branch-refine`: independently audit code and evidence, fix, and converge to a commit-bound proven verdict.
 8. `spec-work-tour`: emit required `work-tour.json` and browser-ready `work-tour.html` for the proven commit.
 9. `spec-pr`: rebase, re-prove when necessary, require a ready tour, and publish the evidence PR.
@@ -40,6 +53,7 @@ The orchestrator runs these stages, which can also be invoked separately:
 | Skill | Command | Purpose |
 |---|---|---|
 | **spec-end-to-end** | `/spec-end-to-end [goal-or-feature] [modifiers]` | Orchestrate the complete workflow from goal or existing spec through a published PR |
+| **spec-upgrade** | `/spec-upgrade [spec-paths or all pending specs]` | Update existing unimplemented specs for project context and proportional proof; stop after preparation |
 | **spec-architect-initial** | `/spec-architect-initial [problem-or-feature]` | Review the architecture and write `.specs/<feature>/proposal.md` |
 | **spec-architect-critics** | `/spec-architect-critics [proposal-or-file]` | Stress-test `proposal.md` and write `critique.md` |
 | **spec-write** | `/spec-write [feature-slug-or-spec-path]` | Write the spec, step index, evidence posture, and claim/gate graph |
