@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "20"
+  version: "21"
 ---
 
 # Spec Prepare
@@ -118,6 +118,15 @@ shown in .specs/journal/prototype/index.html under "Journal drawer", reusing the
 Drawer and form primitives and wiring the real journal query and mutation.`
 
 Preserve intent and voice. Do not restyle a sound spec. Re-running preparation against unchanged inputs must converge without churn.
+
+Apply the Preparation section of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
+Verify material domain rules have sourced examples/counterexamples and AC/CL/FH/EV coverage;
+verify deferrals preserve current acceptance and have concrete destinations. Existing equivalent
+prose suffices. Correct missing behavior or proof, not headings. Ground database-derived behavior
+at the database and boundary fixes at the exact boundary. Compare fixture setup with ordinary
+invocation and include a default-path case for new test hooks/overrides or relevant discrepancies.
+Put cases in the existing strict verification block and setup/proof limits in the owning card.
+Reuse the production-composition gate when it already covers ordinary entry.
 
 ### 3. Reconcile the step index
 
@@ -272,7 +281,9 @@ After the last step, reread every final artifact. Confirm:
 - Step numbers are exactly the ascending `spec-steps.json` numbers.
 - There is exactly one canonical subspec per indexed step and no unexpected canonical step number.
 - Every planning verdict is `ready`.
-- Every verification contract has concrete focused commands and observable cases.
+- Every verification contract has concrete focused commands and observable cases, including
+  applicable domain counterexamples, owning-boundary proof, and ordinary-entry behavior from
+  the Engineering Decisions contract; accepted deferrals have a concrete handoff.
 - Every ready card that promises runtime- or user-observable behavior names `Production wiring` and `Concrete adapter` targets and verifies one reachable production path.
 - Every `Visual: yes` description names its user-visible surface and exact reference plus
   relevant region/states, or explicitly names the production precedent when no reference

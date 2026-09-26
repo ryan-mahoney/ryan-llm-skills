@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "1"
+  version: "2"
 ---
 
 # Spec Upgrade
@@ -20,6 +20,11 @@ Read [Project Context And Authority](../spec-end-to-end/references/project-conte
 [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Use
 [spec-write](../spec-write/SKILL.md) and [spec-prepare](../spec-prepare/SKILL.md) for their owned
 transformations and current schemas; do not invent a second upgrade schema or copy their templates.
+
+Apply the Resume And Upgrade section of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
+Check material domain-rule, ordinary-entry, and deferral coverage through `spec-write` and
+`spec-prepare`. Reuse equivalent existing prose and evidence. Do not manufacture sections, new
+schemas, or extra implementation steps merely to adopt this guidance.
 
 ## Select Existing Work
 

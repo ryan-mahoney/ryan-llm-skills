@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "21"
+  version: "22"
 ---
 
 # Spec Step Run
@@ -114,6 +114,13 @@ copy prototype-only fixtures, dependencies, shell UI, or fake data wiring.
 - Keep changes coherent, explicit, and reviewable. Avoid unrelated cleanup, but do not
   stop merely because a useful change might later be judged unnecessary.
 
+Read and apply the Implementation section of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
+Inspect generator/bulk-transformation defaults against the sourced domain rules when applicable;
+record the command and meaningful corrections in the learning. Keep mechanical and deliberate
+changes distinguishable. Evaluate defensive branches against reachable states and preserve
+required fallback/security behavior. Record new follow-ups in learning prose, routing any change
+to accepted scope through the planner rather than silently deferring a current obligation.
+
 ## Prove Application Reachability In Isolation
 
 Here, production wiring means actual application composition, not the live deployment. For a
@@ -129,6 +136,10 @@ For a step that promises runtime- or user-observable behavior, trace one complet
 3. The downstream command, API, schema, or protocol exists and the concrete adapter uses its real contract.
 4. At least one prepared focused test traverses that production composition, faking only the final external boundary.
 5. The promised result is reachable and observable without manually constructing an otherwise-unwired internal controller, provider, service, or node.
+6. The path works with ordinary startup/invocation prerequisites. Exercise the default path of
+   new test hooks/overrides and remove relevant test-only private assigns, preloads, registrations,
+   or initialization absent in normal use. Retain safe fixtures/external substitutes; never target
+   live services for this check. Reuse the same gate when it already establishes this behavior.
 
 Use the card's `Production wiring` and `Concrete adapter` targets when present. If a required link is absent, fake-only, deferred, or outside the prepared targets, implement or repair the smallest coherent production path rather than stopping. Green unit tests over an unreachable abstraction do not satisfy the step; preserve an honest checkpoint if the path cannot be completed.
 
@@ -326,7 +337,10 @@ claimed, resources and failure paths are handled as well as the current evidence
 and any required final visual evidence reflects the current diff. Fix useful gaps and
 rerun relevant commands. Stage the coherent repository-local implementation and test
 artifact, excluding spec artifacts, ad hoc screenshots, and unrelated user changes, and
-make one conventional commit for `as-specified`, `adapted`, or `checkpoint`. Do not
+make one conventional commit for `as-specified`, `adapted`, or `checkpoint`, except when repository
+policy requires generated output in a separate commit. In that case keep the same assigned step,
+list all step commits in learning prose, and bind the existing scalar `commit` and verification
+fields to the final step HEAD. Do not
 begin the next indexed step.
 
 ## Completion Report

@@ -308,6 +308,12 @@ requirement. A worktree does not isolate external systems, and evidence requirem
 production writes, service disruption or deployment. Inapplicable obligations may be corrected with
 source-backed rationale and fresh preparation; real failures cannot be relabeled away.
 
+The [engineering decision contract](skills/spec-work-tour/references/standalone-engineering-decisions.md)
+carries domain rules, counterexamples, and enforcement owners into acceptance criteria and evidence.
+Proof covers the owning boundary and ordinary execution without test-only prerequisites.
+Accepted deferrals have concrete destinations and appear in the tour and PR.
+These requirements use the existing stages and schemas.
+
 ### Transition Existing Pending Specs
 
 ```text
@@ -395,7 +401,9 @@ open a new editor or agent session for the handoff.
 /spec-run <feature-slug or path-to-spec.md>
 ```
 
-This validates the hash-bound package, implements one step per commit, produces applicable merge evidence, prepares pending later-phase procedures and QA artifacts, and assembles commit-bound pre-audit merge evidence.
+This checks the package hashes and implements steps sequentially with their evidence and QA artifacts.
+Each step produces a coherent commit. When repository policy requires separate generated output, the step records both commits and binds evidence to its final HEAD.
+The runner also prepares later-phase procedures and assembles evidence for the independent audit.
 
 ### 7. Refine The Whole Branch
 

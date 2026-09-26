@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "21"
+  version: "22"
 ---
 
 # Spec Run
@@ -17,6 +17,11 @@ metadata:
 Execute the package produced by `spec-prepare` within its sourced context and authority. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Preparation is immutable intent and evidence provenance; implementation may adapt to repository reality, but it may not execute against stale or mismatched prepared inputs.
 
 Run steps sequentially. Dispatch one dedicated implementation agent per step when the harness supports subagents; otherwise follow `spec-step-run` directly for one step at a time. Do not batch steps or commits.
+
+Read the Assembly, Tour, And Publication section of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
+Carry rule-to-proof links, ordinary-entry observations, and accepted deferred-work briefs from
+step learnings into merge evidence. Keep current unmet obligations in Gaps. Do not edit immutable
+prepared scope; route consequential changes for correction and re-preparation.
 
 ## Resolve The Prepared Package
 
@@ -57,7 +62,12 @@ For each indexed step in ascending order:
 
 When the card declares any risk lens, call it out explicitly in the dispatch and require the execution-time boundary expansion and pre-commit risk audit from `spec-step-run`. When the harness exposes a reasoning-effort control, prefer elevated reasoning for `persistence-integrity`, `atomic-publication`, `concurrency`, `lease-or-refcount`, `cancellation`, `cross-step-contract`, and `security-boundary`; the absence of such a control does not block execution.
 
-`spec-step-run` owns implementation, the mandatory prepared verification baseline plus useful additional evidence, the step learning, staging the coherent artifact, and one conventional commit for `as-specified`, `adapted`, or `checkpoint` work. The orchestrator does not second-guess the implementation before final branch refinement.
+`spec-step-run` owns implementation, the mandatory prepared verification baseline plus useful
+additional evidence, the step learning, staging the coherent artifact, and the conventional step
+commit for `as-specified`, `adapted`, or `checkpoint` work. When repository policy requires generated
+output separately, preserve that commit and the deliberate change commit within the same step;
+the learning lists both and binds evidence to final step HEAD. The orchestrator does not
+second-guess the implementation before final branch refinement.
 
 ## Mechanical Verification
 
@@ -70,7 +80,7 @@ After each step returns, verify only the execution contract:
 5. Repeated attempts produced new evidence rather than looping unchanged.
 6. The learning record exists, and a commit exists for `as-specified`, `adapted`, or `checkpoint`.
 7. Risk-tagged steps include a learning risk-audit summary that covers or explicitly dismisses every declared risk lens and live invariant.
-8. Runtime-facing steps include a complete production-reachability summary: entrypoint/composition owner, concrete internal adapter, real downstream contract, and focused path observation.
+8. Runtime-facing steps include a complete production-reachability summary: entrypoint/composition owner, concrete internal adapter, real downstream contract, and focused path observation, including applicable ordinary-entry evidence without test-only prerequisites.
 9. A successful outcome does not contradict its own discrepancies/risks by describing required production wiring, an internal adapter, a downstream contract, or the promised user-observable path as absent, fake-only, deferred, or unreachable.
 10. Steps whose card carries `Evidence:` lines produced each merge artifact — in the commit or under `.specs/<feature>/evidence/` — or truthfully
    recorded the gap. Later-phase gates have concrete procedures/handoffs and honest statuses. Safe isolated

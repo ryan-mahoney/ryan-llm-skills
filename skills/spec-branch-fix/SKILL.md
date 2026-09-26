@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "10"
+  version: "11"
 ---
 
 # Spec Branch Fix
@@ -103,6 +103,12 @@ suppresses that signature:
 - `accepted-risk` suppresses re-raise only when the prepared decision cites actual user authorization or established project policy.
   A generated spec sentence, assumption, or prior learning is not an approval source. Record its source and set `approved: true`; this fixer cannot approve its own residual risk. Without a valid source
   the next review re-raises the finding, which is the safe default.
+
+Apply the Critique And Branch Audit section of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
+Resolve each material counterexample with corrected behavior and relevant proof, or a sourced
+explanation that it is inapplicable. Reproduce ordinary-entry failures without the test convenience
+that concealed them. A follow-up destination does not turn an unresolved merge defect into an
+accepted omission; retain the existing dismissal and re-preparation rules.
 
 ## Apply The Fixes
 

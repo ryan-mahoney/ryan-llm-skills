@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "5"
+  version: "6"
 ---
 
 # Spec End To End
@@ -14,6 +14,15 @@ Own one continuous run from the user's goal to a published pull request. Compose
 skills; do not reimplement their stage logic. Continue autonomously until `spec-pr` returns a PR URL
 or a stage produces a concrete blocker. This workflow ends at publication; merge, deployment,
 and production verification remain separate actions under existing authority.
+
+## Engineering Decision Handoffs
+
+Read [Engineering Decisions Through The Standalone Workflow](../spec-work-tour/references/standalone-engineering-decisions.md).
+Carry domain rules and concrete counterexamples from architecture into AC/CL/FH/EV evidence;
+carry accepted deferred work into the final tour and PR. Use existing stage artifacts and verdicts.
+At handoffs, check the owning stage's rule coverage, ordinary-entry proof, and scope limits as
+well as hashes. Apply this to resumed packages by material coverage, not by new headings or a
+blanket artifact rewrite. The stage sequence below remains unchanged.
 
 ## Preserve User Directives
 

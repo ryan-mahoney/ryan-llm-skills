@@ -25,6 +25,11 @@ a published PR with current merge evidence; merging, deployment authorization, a
 observations remain separate. The [context contract and template](skills/spec-end-to-end/references/project-context.md)
 records users, data value, compatibility, release process and permitted operations for reuse across specs.
 
+The [engineering decision contract](skills/spec-work-tour/references/standalone-engineering-decisions.md)
+carries domain rules, concrete counterexamples, and accepted scope limits through the standalone stages.
+Evidence covers the behavior at its owning boundary and normal execution without test-only prerequisites.
+Deferred work has a concrete destination and appears in the tour and PR.
+
 For existing unimplemented specs, use `spec-upgrade` before implementation:
 
 ```text
@@ -58,7 +63,7 @@ The orchestrator runs these stages, which can also be invoked separately:
 | **spec-architect-critics** | `/spec-architect-critics [proposal-or-file]` | Stress-test `proposal.md` and write `critique.md` |
 | **spec-write** | `/spec-write [feature-slug-or-spec-path]` | Write the spec, step index, evidence posture, and claim/gate graph |
 | **spec-prepare** | `/spec-prepare [feature-slug-or-spec-path]` | Correct and ground the spec, derive prose guardrails, prepare every step, and publish the hash-bound manifest |
-| **spec-subspec-write** | `/spec-subspec-write [step-number] [spec-path]` | Leaf planner used sequentially by `spec-prepare` to write one immutable step subspec |
+| **spec-subspec-write** | `/spec-subspec-write [step-number] [spec-path]` | Optional leaf planner for a step whose uncertainty requires deeper preparation |
 | **spec-branch** | `/spec-branch [description-or-feature-slug]` | Create a local branch from a spec, description, or issue/ticket reference |
 | **spec-branch-worktree** | `/spec-branch-worktree [description-or-feature-slug]` | Create a branch/worktree and hand off the matching `.specs` package |
 | **spec-run** | `/spec-run [feature-slug-or-spec-path]` | Execute prepared steps and assemble commit-bound pre-audit evidence |

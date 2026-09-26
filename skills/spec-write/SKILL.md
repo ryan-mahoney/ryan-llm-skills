@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "18"
+  version: "19"
 ---
 
 # Spec Write
@@ -153,6 +153,12 @@ path, or release mechanism needs a concrete context fact and requirement; otherw
 
 Ground the architecture in existing code: before adding a new module or helper, search for existing implementations and precedents using the available repository-search tools named in the runtime capability section — exact search for symbols or literals, and semantic search when available for behavior and precedent — and prefer reusing or extending what already exists.
 
+Read the Specification and Preparation sections of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
+In Architecture, carry each material domain rule with its source, concrete example/counterexample,
+enforcement owner, and AC/CL references. Preserve justified error/fallback behavior; do not apply
+fail-fast as a blanket replacement for a sourced contract. Use existing acceptance and evidence
+identifiers, not a parallel invariant schema.
+
 ### 5. Acceptance Criteria
 
 Create a numbered list (`AC-1`, `AC-2`, etc.) of observable, automatable assertions:
@@ -196,6 +202,10 @@ Assume this change failed in its intended environment under the resolved project
 Cover trade-offs, risks, ambiguities, migration concerns, and sequencing dependencies.
 
 For each significant trade-off, state why this approach was chosen, what it gives up, what it gains, and which alternatives were considered.
+
+When work is deferred, add a compact **Deferred work** subsection to Notes using the shared
+contract: current limitation, scope/risk source, destination or actionable local brief, and revisit
+condition. A current unmet AC or merge claim cannot be discharged by creating a follow-up.
 
 ### 9. Implementation Steps
 

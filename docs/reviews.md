@@ -52,6 +52,17 @@ and delegating a run. Compact worker reports do not replace the evidence package
 
 The audit emits ordinary structured findings. `category: evidence` is used when a gate is missing, stale, irrelevant, circular, unreproducible, under-independent, or overclaims its proof boundary. A pass requires all merge-blocking claims proven, no actionable finding, a clean candidate scope, and an audit SHA equal to HEAD.
 
+The audit challenges domain assumptions even when the implementation and tests agree with the spec.
+Each material challenge identifies a concrete input, state transition, caller, or interleaving that breaks a promise.
+The report records the evidence and resolution. A sourced explanation can close a question without a code change.
+
+Reviewers examine ordinary startup and invocation for prerequisites that exist only in test setup.
+They also check database evidence for actual persistence behavior and deferred work for concrete destinations.
+Test-style improvements remain advisory. Missing or circular proof that leaves a required merge claim unsupported produces an actionable evidence finding.
+
+See the [engineering decision contract](../skills/spec-work-tour/references/standalone-engineering-decisions.md)
+for the stage-specific rules. These checks use the existing findings and verdicts.
+
 ## Fix And Convergence
 
 `spec-branch-fix` fixes code, tests, gates, artifacts, claim mappings, or proof boundaries and reruns affected evidence. A dismissal is typed. An `accepted-risk` dismissal suppresses recurrence only when the prepared decision cites actual user authorization or established project policy; the fixer cannot approve its own residual risk.
@@ -80,6 +91,11 @@ Every implemented spec produces `work-tour.json` and `work-tour.html`. The HTML 
 - independent audit provenance and any evidence gaps.
 
 For user-visible work, the QA section makes the implementation easy to explore without making a person's attention part of the safety system. Optional taste or discovery questions are labeled separately from correctness.
+
+Domain rules and resolved challenges appear in `architecture.decisions`.
+QA scenarios and gate results carry ordinary-entry observations and proof limits.
+Accepted follow-ups appear in `context.omissions`, including the current limitation, destination, completion criteria, and revisit condition.
+Local briefs include their actionable text in both the tour and PR. Unmet merge obligations remain in `gaps`.
 
 ## Ownership
 

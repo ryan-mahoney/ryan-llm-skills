@@ -89,6 +89,54 @@ inspect targets and setup/teardown effects before running commands or copying en
 For a design-led change, run the design-spec authoring skills first, then pass the resulting spec
 package to `spec-end-to-end`. A proposal alone uses the architecture entry route.
 
+## Engineering Decisions Across Stages
+
+The [engineering decision contract](../skills/spec-work-tour/references/standalone-engineering-decisions.md)
+adds specific requirements to the existing standalone stages. It uses the current artifacts and schemas.
+
+| Stage | Required result |
+|---|---|
+| Architecture | Material domain rules with sources, examples or counterexamples, and enforcement owners. |
+| Specification | Rules linked to acceptance criteria and evidence. Explicit limits for the delivered slice. |
+| Preparation | Concrete cases at the owning boundary, including exact endpoints and relevant default paths. |
+| Implementation | Generated choices checked against domain rules. Observed results without test-only prerequisites. |
+| Independent review | Concrete challenges to assumptions, with evidence and a recorded resolution. |
+| Tour and PR | Important decisions, proof limits, and actionable follow-up destinations. |
+
+Architecture resolves questions about identity, absence, ordering, ownership, and failure visibility from the request and repository.
+Only unresolved choices that materially affect the result require user input. These questions do not form a mandatory questionnaire.
+
+For example, adjacent report windows can require an exclusive end timestamp.
+An event at the shared endpoint must belong to exactly one window.
+The spec records that rule, and a focused regression observes the endpoint behavior.
+The size of the code change does not determine the evidence needed.
+
+Preparation places proof at the boundary that owns the behavior.
+A database-generated value needs a database assertion. A mocked repository cannot establish that calculation.
+Runtime evidence also covers ordinary startup or invocation.
+New test overrides need a default-path case, and fixtures cannot supply internal wiring that normal execution lacks.
+An existing composition test can cover this case without another harness or a live deployment.
+
+Implementation checks generated defaults, required fields, identifiers, relationships, query scope, and public operations against the domain rules.
+When repository policy requires separate generated commits, the same step owns both generated and deliberate changes.
+The learning lists every step commit and binds its scalar commit fields to the final step HEAD.
+
+### Deferred Work
+
+The spec Notes record each deferred item with:
+
+- The unsupported behavior and its current observable result.
+- The source that permits this scope limit or accepts the residual risk.
+- A later step, package, existing issue, or local brief with completion criteria.
+- A revisit condition and responsible role, when known.
+
+Temporary duplication also needs a removal condition. A permanent omission needs a reason, not a fictitious follow-up.
+An unmet current acceptance criterion remains a blocker. A follow-up issue does not satisfy it.
+
+The workflow does not create external issues without authorization.
+For local briefs, the tour and PR include the actionable text because `.specs/` is often inaccessible to readers.
+Workers report new scope decisions through their learnings. Changes to accepted scope return to preparation before dependent work continues.
+
 ## Transition Existing Unimplemented Specs
 
 Use `spec-upgrade` when you have specs written under an older workflow and want to update them
@@ -119,6 +167,9 @@ an optional transition skill; new specs use the ordinary sequence above.
 The agent resumes at the earliest incomplete, stale, or invalid stage. A current artifact is reused;
 a filename's existence alone does not prove that it is current. Context source freshness, preparation hashes, audit verdicts,
 and evidence revisions must still match their inputs and the implemented commit.
+
+Equivalent existing prose and evidence satisfy the engineering decision contract.
+Missing headings alone do not require a rewrite. Missing or contradicted behavior and proof return to the owning stage for correction.
 
 If work moves to a worktree, the complete destination `.specs/<feature>/` package becomes canonical.
 Keep logs, captures, and other referenced files with it. The source copy is an inert handoff copy.

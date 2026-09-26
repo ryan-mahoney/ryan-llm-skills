@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "3"
+  version: "4"
 ---
 
 # Spec Work Tour
@@ -87,6 +87,13 @@ Validate all artifact hashes and commit bindings that their schemas provide. The
    separately; a known defect that also disproves a merge claim remains a merge blocker.
 
 Record honest limits. A unit test proves the unit behavior it observes; it does not prove production reachability. A screenshot proves the rendered state shown; it does not prove data integrity. A migration dry-run proves the tested fixture and environment; it does not prove an untested production dataset.
+
+For standalone version 2 packages, apply the Assembly, Tour, And Publication section of [Engineering Decisions](references/standalone-engineering-decisions.md).
+Expose consequential domain rules and resolved challenges in `architecture.decisions`, ordinary
+entry observations in existing QA/gate fields, and accepted follow-ups in `context.omissions`.
+For a local follow-up, include the actionable brief and revisit condition, not just an ignored
+`.specs` path. Preserve the distinction between a bounded completed slice and an unmet merge
+claim. Use the existing schema and renderer; do not add keys or a new readiness calculation.
 
 ## Build `work-tour.json`
 

@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "15"
+  version: "16"
 ---
 
 # Spec Branch Evidence Audit
@@ -136,6 +136,13 @@ Emit a `category: evidence` finding for a missing, stale, irrelevant, circular,
 unreproducible, under-independent, or overstated gate. Evidence findings are actionable
 whenever they leave a merge-blocking claim unproven, regardless of code-change size.
 
+Apply the Critique And Branch Audit section of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
+Challenge consequential domain assumptions with concrete counterexamples, even when spec and
+implementation agree. Inspect ordinary-entry prerequisites, the actual owner of derived behavior,
+and deferral destinations. Keep material challenges and sourced resolutions in existing report
+prose; convert concrete unresolved defects or proof gaps into normal machine-readable findings.
+A justified response can close a question without a code change. No separate verdict is added.
+
 ### Bounded guardrail lens
 
 After correctness/integration review, check the sourced constraints and deliberate omissions in `context.md`, observable acceptance
@@ -195,7 +202,8 @@ in three stages instead of one combined pass:
 
 **Stage A — Decompose the range into commits.** List `git rev-list --reverse
 <base>..HEAD`; each commit is a review unit. Map commits to steps using the `commit:`
-field of the `learning:` YAML block in `step-<NNN>-learning.md`, an explicit step
+field of the `learning:` YAML block in `step-<NNN>-learning.md`, the learning's explicit
+additional commit list when generated output was committed separately, an explicit step
 marker in the commit subject (for example `step 3:` or `(step 3)`), or spec order as
 a last resort. Give each reviewer that step's immutable subspec intent. If a commit
 maps to no step, review it against `spec.md` alone and record `step: none` in its
@@ -342,7 +350,8 @@ skip a fired lens because its preferred skill is absent.
   behavior (auth, money, data integrity) with thin or absent test evidence. Looks
   for: tests that assert implementation detail over behavior, brittle/flaky timing
   or order dependence, over-mocking that verifies nothing, and untested critical
-  paths. This lens stays advisory — it never blocks the loop.
+  paths. Test-style improvements stay advisory. Missing or circular coverage that leaves a material
+  merge claim unsupported is an actionable `evidence` finding under the always-on evidence lens.
 
 Record the lenses that ran on the `lenses:` field (and any delegated skill). A lens
 that finds nothing still counts as run — list it so the record shows the risk was

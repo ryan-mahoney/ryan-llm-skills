@@ -8,7 +8,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "8"
+  version: "9"
 ---
 
 # Spec Architect Initial — Solution Design Against Existing Architecture
@@ -50,6 +50,12 @@ Apply this rubric to the request text plus a quick glance at the repo (README, d
 - **Error expectations** — When inputs are bad or a dependency fails, what should happen: fail fast, retry, queue, surface to the user?
 - **Definition of done** — What observable behavior tells us this is complete?
 - **Evidence posture** — What could make this unsafe, which boundaries does it cross, and what proof level must exist before merge and deployment?
+
+Read the Architecture section of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
+Resolve relevant identity, absence/lifecycle, exact-boundary, ownership, and failure-visibility
+questions before choosing mechanisms. Put material rules, sources, concrete examples or
+counterexamples, and enforcement owners in the proposal's Constraints & Assumptions. Record
+intentional slice limits and concrete follow-up destinations under Deliberate Omissions.
 
 ### 1b. Ask only decision-relevant questions
 

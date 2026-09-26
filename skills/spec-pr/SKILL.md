@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "8"
+  version: "9"
 ---
 
 # Spec PR
@@ -87,6 +87,12 @@ If evidence cannot be re-established, stop without pushing. A red evidence case 
 Push the branch. After a rebase, use `--force-with-lease`, never bare `--force`. If the lease fails, fetch and inspect remote divergence. Rebase/integrate the remote work and repeat the full affected-evidence and audit/tour sequence, or stop. Never overwrite commits the lease identified as foreign.
 
 After pushing, compare the remote branch SHA to the tour's commit. They must match exactly.
+
+Apply the Assembly, Tour, And Publication section of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
+In the existing PR sections summarize consequential behavior rules, the ordinary-entry observation
+and proof limits, and accepted follow-up destinations. Reproduce actionable local briefs when
+there is no externally accessible issue; do not create issues implicitly. Describe only the
+slice actually delivered, and never hide an unmet merge claim as future work.
 
 ## Write The Evidence PR
 

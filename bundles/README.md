@@ -56,6 +56,10 @@ stages, compact handoffs, and OpenCode nested workers. The [audit guide](../docs
 the required evidence and independent review. These guides remain in the extracted archive; the
 installer installs skills and supporting runtime resources, not documentation into target projects.
 
+The bundle also includes the [standalone engineering decision contract](../skills/spec-work-tour/references/standalone-engineering-decisions.md).
+It connects domain rules to counterexamples and evidence, requires ordinary-entry proof, and carries accepted follow-ups into the tour and PR.
+It uses the existing stage sequence and artifact schemas.
+
 The generated `spec-skills` README also includes a stage-by-stage overview:
 
 1. Resolve project context and consequential decisions with `spec-architect-initial`, then propose the approach.

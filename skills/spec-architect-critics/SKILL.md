@@ -8,7 +8,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "7"
+  version: "8"
 ---
 
 # Spec Architect Critics — Expert-Perspective Design Review
@@ -31,6 +31,12 @@ Look for the material to critique:
 - Code or PRs the user wants reviewed at the architectural level
 
 Read it fully. Also read `AGENTS.md`, sourced `context.md`, and the current project context. Validate relevant codebase claims against real repository files.
+
+Read the Critique And Branch Audit section of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
+Challenge material domain assumptions with concrete counterexamples, including relevant identity,
+absence, boundary, ownership, and failure-visibility semantics. Test whether the promised slice
+and its follow-up destinations are coherent. Record consequential questions and sourced answers
+in the existing critique; do not create another approval stage or require an objection quota.
 
 ### 1b. Extract the core claims
 

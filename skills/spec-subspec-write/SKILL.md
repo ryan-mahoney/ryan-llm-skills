@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "19"
+  version: "20"
 ---
 
 # Spec Subspec Write
@@ -69,6 +69,12 @@ When the step creates a function, helper, file, or new test harness:
 These are bounded lookups, not a repository survey. Reject new configuration, compatibility, or release mechanisms without
 a sourced context requirement, even when the parent spec mistakenly mandates them; return
 `needs-spec-correction` with the smallest equivalent implementation/proof.
+
+Apply the Preparation section of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md)
+within this step's assigned scope. Preserve material domain examples in `verification.cases`;
+name ordinary setup and permitted substitutions in Setup and Hazards. A database calculation
+needs database evidence, and new test overrides need their ordinary default path exercised.
+Return `needs-spec-correction` for missing parent obligations; never edit shared artifacts here.
 
 ## Planning Verdicts
 
