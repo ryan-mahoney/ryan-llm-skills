@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "6"
+  version: "7"
 ---
 
 # Spec Work Tour
@@ -66,15 +66,13 @@ evidence produces `verdict: blocked`. Pending deploy/post-deploy evidence stays 
 Route unresolved consequential context decisions to the coordinator under the shared contract.
 Human operational authorization is a separate legitimate decision, not a correctness gate.
 
-## Selected Review Mode
+## Bounded Review Completion
 
-Apply the shared Executable Evidence Contract's **Explicit One-Pass Review Mode**
-when the user selected `codex-review-fix`. Its current complete report replaces this
-skill's independent-audit input and pass requirements; do not launch refinement or
-another review automatically. All required executable evidence must still pass. Carry
-the selected mode and its limits honestly into the artifacts. If later Git/code changes
-invalidate the report, return the stale-evidence gap without restarting the review loop.
-The independent-audit requirements below remain the default for other runs.
+Apply the shared **Bounded Refinement Completion** policy when refinement returns
+`verified-at-cap`. Its current completion record replaces the final independent-audit
+pass requirement below. Check actual fixes and executable evidence, retain the stated
+absence of independent post-fix review, and do not launch an extra review or reset the
+round budget. A stale completion remains a blocker.
 
 ## Resolve The Package And Commit
 

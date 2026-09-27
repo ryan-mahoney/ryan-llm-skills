@@ -8,22 +8,13 @@ The standalone spec workflow does not depend on human code review. Its final aut
 `spec-pr` after the tour is ready. See the [workflow guide](spec-workflow.md) for starting, resuming,
 and delegating a run. Compact worker reports do not replace the evidence package or this audit.
 
-## Test Execution And Review Modes
+## Test Execution
 
 Steps write tests and perform bounded local smoke/visual checks. They defer all automated
 test execution to review, recording unrun gates as pending. The reviewer executes those
 gates once against the integrated branch and retains commands, outcomes, elapsed times,
 and logs. Deduplicate suites and focused commands that cover the same cases. After a
 fix, rerun affected checks; the coordinator does not repeat passing commands.
-
-Independent refinement is the default. In pi, an explicit request for
-[codex-review-fix](../skills/codex-review-fix/SKILL.md) replaces it with one Astra session:
-review, fix findings, run required checks, commit, and report. There is no second review
-or automatic redispatch. A successful report at `reviews/one-pass-review-fix.md` replaces
-the branch audit input for the tour and PR. Record the user's choice and absence of
-independent post-fix review; do not fabricate a branch-audit pass. Required gates still
-have to pass. A later material change invalidates the handoff without automatically
-starting another review. Resolve known rebases before the pass where possible.
 
 ## Artifact Package
 
@@ -90,9 +81,17 @@ for the stage-specific rules. These checks use the existing findings and verdict
 
 - **proven** when the audit passes with proven evidence for the same HEAD;
 - **stalled** when no material change is possible and the same required findings remain;
-- **cap** when bounded iterations are exhausted.
+- **verified-at-cap** after the last fix when all actionable findings are resolved and
+  required checks pass, without independently re-reviewing the final fixes;
+- **cap** when the last fix leaves unresolved findings or incomplete required evidence.
 
-Stalled and capped outcomes are blocked evidence cases, never “send it for human review.”
+`max-iterations` counts review → fix rounds, including the final fix. A limit of two
+means review → fix → review → fix, with early exit for a clean review. Direct invocation
+still defaults to ten; `spec-end-to-end` explicitly defaults to two. Resume finishes an
+interrupted round without resetting the budget. The completion record at
+`reviews/refinement-completion.md` distinguishes a clean independent audit from verified
+final fixes. Both successful outcomes can proceed to the tour and PR; neither permits
+an automatic extra review. Stalled or unresolved capped outcomes remain blocked.
 
 ## HTML Work Tour
 

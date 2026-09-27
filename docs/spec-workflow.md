@@ -28,12 +28,14 @@ project context and consequential decisions → architecture → optional critiq
 → step implementation → independent branch refinement → work tour → PR publication
 ```
 
-`spec-run` ends after step execution and pre-audit evidence assembly. `spec-branch-refine` ends with
-a proven audit. `spec-work-tour` produces the final JSON/HTML verdict. The orchestrator invokes
+`spec-run` ends after step execution and pre-audit evidence assembly. The orchestrator
+runs `spec-branch-refine max-iterations=2`: review → fix → review → fix, stopping early
+when a review is clean. Resolved findings and passing checks at the cap complete the
+stage with an explicit record that final fixes were not independently re-reviewed. `spec-work-tour` produces the final JSON/HTML verdict. The orchestrator invokes
 each stage separately; callers using the individual skills must make those handoffs themselves.
 See [the evidence audit guide](reviews.md) for artifact paths and proof requirements.
 
-## Test Scheduling And One-Pass Review
+## Test Scheduling
 
 Implementation steps write regression tests without running automated tests, including
 focused tests. They start the isolated local app, check readiness and the changed path,
@@ -44,21 +46,6 @@ Review runs the required tests against the integrated branch, combining overlapp
 commands and reusing valid results after fixes. Commands have finite wall-clock limits:
 120 seconds by default for focused checks, with a justified longer limit chosen before
 known slower suites or builds. A polling interval is not a timeout.
-
-In pi, explicitly replace refinement with the configured Astra delegate:
-
-```text
-Continue spec-end-to-end for .specs/results-export/. Replace refinement with
-codex-review-fix: one Codex Astra review and fix, then continue to the tour and PR.
-```
-
-This selects one combined review/fix session, including required test execution. Pi
-checks its report and commits without rerunning tests or dispatching a second review.
-The report records that fixes did not receive a separate independent review. Failed
-checks or unresolved defects block the handoff; they do not trigger an automatic loop.
-Naming Astra alone retains the standard refinement policy. The delegate must already
-be configured in pi; [the adapter](../codex-astra-reviewer.md) uses the operator's
-unsandboxed execution settings. Syncing skills does not install that pi agent.
 
 ## Run Planning Skills Individually
 

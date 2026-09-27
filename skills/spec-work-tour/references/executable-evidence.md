@@ -85,29 +85,27 @@ Security, privacy, relevant accessibility, and protection of valuable data still
 A missing safe verifier for an applicable claim remains a gap; it does not justify unsafe testing
 or a weaker assertion. Escalate only the unresolved decision, while completing independent work.
 
-## Explicit One-Pass Review Mode
+## Bounded Refinement Completion
 
-Independent branch refinement is the default. When the user explicitly selects
-`codex-review-fix` instead, its one review/fix session replaces that stage. Record the
-request and `review-mode: one-pass` in the existing run ledger and downstream handoffs.
-This exception applies to review independence and iteration only: required merge gates,
-authority boundaries, truthful evidence, and final-commit bindings still apply. The
-replacement worker owns tests deferred by implementation; the coordinator does not
-repeat them. Do not run `spec-branch-refine` afterward to satisfy the default language.
+`spec-branch-refine` counts review → fix rounds, including the last fix pass. The
+end-to-end default is two rounds. A clean review may finish earlier. At the cap, resolved
+findings and passing required merge gates allow `verified-at-cap`, without a further
+independent review of the last fixes. This is distinct from an independent audit pass.
 
-For this mode, `reviews/one-pass-review-fix.md` with `outcome: complete`,
-`evidence_verdict: proven`, no unresolved actionable findings, and the current commit
-satisfies the review input to `spec-work-tour` and `spec-pr`. It replaces the normal
-`branch-<n>-review.md` requirement. Do not fabricate an independent-audit artifact.
-Map the successful selected review to the tour's existing `audit` fields (`verdict: pass`,
-final `commit`, and this report's `artifact`); record the one-pass choice and absence of
-independent post-fix review in `context.decisions` and `residualRisks`. Label it simply
-Review in human-facing output. Failed checks or unresolved findings still block readiness.
+For `spec-work-tour` and `spec-pr`, a current `reviews/refinement-completion.md` with
+`outcome: verified-at-cap`, `evidence_verdict: proven`, and no unresolved findings replaces
+the final independent-audit pass requirement. Validate its links to actual review/fix
+records, terminal decisions, and final-commit gate results. Map completion to the tour's
+existing `audit` fields (`verdict: pass`, final `commit`, completion `artifact`) as the
+selected review process's completion, not independent post-fix review. Record the limit
+and absence of that final review in `context.decisions` and `residualRisks`; use the
+human-facing label Review. Preserve the earlier audit's real verdict and SHA.
 
-A subsequent material code/base change makes the report stale. Do not automatically
-restart review or refinement. Preserve the one-pass budget and report the stale handoff;
-a further review needs a new user directive. Resolve known rebases before dispatch when
-possible. Ordinary downstream operations on the unchanged reviewed revision can proceed.
+Do not add a third review through a coordinator, tour, publisher, or resume. Later
+material changes invalidate the completion record; report stale evidence rather than
+resetting an exhausted budget. A new review budget needs a new user directive. Resolve
+known rebases before refinement when possible. Unresolved defects, missing decisions,
+failed required checks, and stale results remain blockers regardless of the round cap.
 
 ## Verification Scheduling And Deadlines
 

@@ -274,10 +274,6 @@ write_spec_workflow_howto() {
 ## How To Use The Spec Workflow
 
 Implementation steps write tests and smoke-check the local app; automated tests run in review.
-In pi, explicitly select `codex-review-fix` to replace refinement with one Astra review/fix
-session, including required verification. See `docs/reviews.md` and the included
-`codex-astra-reviewer.md` configuration example. Pi agent registration is separate from
-skill installation; the example runner bypasses approvals and sandboxing.
 
 The workflow turns a clear goal into architecture, a deterministic implementation-and-evidence contract, executable proof, an independent integrated audit, and a commit-bound HTML work tour. Specs and code are agent-facing; people review evidence and supply consequential product/authority decisions.
 
@@ -418,7 +414,10 @@ The runner also prepares later-phase procedures and assembles evidence for the i
 /spec-branch-refine
 ```
 
-This alternates independent evidence audits and fixes to convergence and audits every claim/gate against the integrated branch. A proven pass hands off to the explicit work-tour stage.
+Each iteration includes review and fixes. Direct invocation defaults to ten rounds;
+`spec-end-to-end` passes `max-iterations=2`. Stop early on a clean review, or after
+verified final fixes at the cap. The completion record states whether the final fixes
+were independently re-reviewed; unresolved findings or failed checks block the tour.
 
 ### 8. Build And Open The Work Tour
 
@@ -832,7 +831,6 @@ build_bundle() {
     copy_file "$bundle_dir" "augment/agents/spec-step-implementer.md" "augment/agents/spec-step-implementer.md"
     copy_file "$bundle_dir" "docs/spec-workflow.md" "docs/spec-workflow.md"
     copy_file "$bundle_dir" "docs/reviews.md" "docs/reviews.md"
-    copy_file "$bundle_dir" "codex-astra-reviewer.md" "codex-astra-reviewer.md"
     copy_rules "$bundle_dir"
   elif [ "$name" = "specops-skills" ]; then
     copy_scripts "$bundle_dir" "decompose-skeleton.mjs" "agent-docs.mjs" "commit-ledger.mjs"
@@ -868,7 +866,6 @@ spec_skills=(
   spec-run
   spec-step-run
   spec-branch-refine
-  codex-review-fix
   spec-branch-review
   spec-branch-fix
   spec-pr

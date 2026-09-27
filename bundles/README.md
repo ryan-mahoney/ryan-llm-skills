@@ -27,7 +27,6 @@ The spec-driven development workflow plus the design-spec front-half:
 - `spec-run`
 - `spec-step-run`
 - `spec-branch-refine`
-- `codex-review-fix`
 - `spec-branch-review`
 - `spec-branch-fix`
 - `spec-work-tour`
@@ -37,9 +36,6 @@ The spec-driven development workflow plus the design-spec front-half:
 - `design-spec-prototype`
 - `design-spec-critique`
 - `design-spec-writer`
-
-Includes `codex-astra-reviewer.md` as a pi agent configuration example for the optional
-one-pass replacement. The installer does not register pi agents.
 
 Includes the Augment CLI subagent adapter:
 
@@ -72,7 +68,8 @@ The generated `spec-skills` README also includes a stage-by-stage overview:
 4. Run `spec-prepare` to ground and correct the spec, derive prose guardrails, plan each step, and publish the manifest.
 5. Let the top-level agent establish a code branch or worktree. Keep all `.specs` reads and writes in the primary repository; ignore any worktree copy.
 6. Execute the immutable prepared package with `spec-run`.
-7. Run `spec-branch-refine` to review and fix the integrated branch to convergence.
+7. Run `spec-branch-refine max-iterations=2` for at most two review → fix rounds,
+   including the final fixes; record whether those fixes received an independent review.
 8. Run `spec-work-tour` to produce commit-bound context, merge evidence, and separate deployment/authority/observation states.
 9. Publish with `spec-pr`.
 

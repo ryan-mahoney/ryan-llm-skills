@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "11"
+  version: "12"
 ---
 
 # Spec PR
@@ -19,15 +19,13 @@ readiness, authorization and post-deployment observations are recorded separatel
 
 This skill opens or updates PRs and never merges them. It may change repository and remote Git state only as required for rebase, commit, and push. It never publishes a red or stale evidence case as merge-ready.
 
-## Selected Review Mode
+## Bounded Review Completion
 
-Apply the shared Executable Evidence Contract's **Explicit One-Pass Review Mode**
-when the user selected `codex-review-fix`. Its current complete report replaces this
-skill's independent-audit input and pass requirements; do not launch refinement or
-another review automatically. All required executable evidence must still pass. Carry
-the selected mode and its limits honestly into the artifacts. If later Git/code changes
-invalidate the report, return the stale-evidence gap without restarting the review loop.
-The independent-audit requirements below remain the default for other runs.
+Apply the shared **Bounded Refinement Completion** policy when refinement returns
+`verified-at-cap`. Its current completion record replaces the final independent-audit
+pass requirement below. Check actual fixes and executable evidence, retain the stated
+absence of independent post-fix review, and do not launch an extra review or reset the
+round budget. A stale completion remains a blocker.
 
 ## Required Inputs
 

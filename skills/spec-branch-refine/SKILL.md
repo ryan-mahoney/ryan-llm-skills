@@ -1,6 +1,6 @@
 ---
 name: spec-branch-refine
-description: "Run the final independent branch evidence loop: audit the integrated implementation and claim/gate evidence, fix defects, and re-audit until proven or blocked. Use after implementation and before the required work tour and PR."
+description: "Run the final independent branch evidence loop: audit the integrated implementation and claim/gate evidence, fix defects, and repeat within a bounded number of review/fix rounds. Use after implementation and before the required work tour and PR."
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,14 +9,15 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "11"
+  version: "12"
 ---
 
 # Spec Branch Refine
 
 > **`.specs/` is standalone working state and is often gitignored.** Read and write it directly; do not depend on git history to recover it. Diffing implementation code is unaffected.
 
-Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Drive the final branch evidence loop to convergence. Alternate the independent `spec-branch-review` audit and `spec-branch-fix`, re-auditing after each fix until merge claims and evidence are proven or the loop is honestly blocked.
+Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Drive the final branch evidence loop to convergence. Alternate the independent `spec-branch-review` audit and `spec-branch-fix`, re-auditing while rounds remain. Each iteration includes its fix pass; stop after the final
+fix and verification without requiring an extra review.
 
 The leaf skills stay single-pass and stateless; this driver owns everything that
 spans iterations: counting, convergence, and the anti-thrash dedup memory (which
@@ -28,7 +29,7 @@ reads on the next pass).
 ```txt
 spec-branch-refine
   └─ iter i: spec-branch-review (iter i) → [if needs-fix] spec-branch-fix (iter i) → i+1
-     stop when: verdict pass · no progress · i == max
+     stop when: verdict pass · no progress · final fix completed
 ```
 
 Run this skill once after the last implemented step. The
@@ -51,15 +52,20 @@ spec correction, or a convergence stop condition below.
   folder named in the conversation or `Spec folder:` footer. If exactly one
   `.specs/*/spec.md` exists, use it. Stop on ambiguity. `<spec-dir>` is the resolved
   `.specs/<feature>/` folder.
-- **Max iterations.** `max-iterations=<n>`, default **10**. This caps **total review
-  iterations**: the loop runs at most `n` reviews (and therefore at most `n-1` fixes,
-  since the final review is what detects the cap). Defining the cap on reviews makes
-  the `i == max-iterations` check below exact.
+- **Max iterations.** `max-iterations=<n>`, a positive integer, default **10** for
+  direct invocation. Each iteration is one review followed by its fix pass when needed:
+  at most `n` reviews and `n` fixes. `max-iterations=2` means review → fix → review → fix.
+  A clean review stops early without an unnecessary fix. `spec-end-to-end` supplies **2**
+  unless the user explicitly chooses another limit.
 
 ## The Loop
 
-Start at `i = 1` (or one past the highest existing `branch-<k>` artifacts if a prior
-refine was interrupted — resume rather than overwrite). Then:
+Start at `i = 1`. On resume, reconcile the latest review/fix artifacts and HEAD:
+finish an interrupted iteration's pending fix before advancing; never skip its fix or
+repeat a completed review. The cap applies to the whole run, not each resumption. If
+completed iterations already meet or exceed the cap, assemble the completion record
+without launching another review. A stale review after unrelated code changes is a
+handoff gap, not permission to silently reset the budget. Then:
 
 1. **Review.** Run `spec-branch-review` for iteration `i` per its contract. The first
    review owns automated tests deferred by implementation steps; pending gates and
@@ -73,10 +79,9 @@ refine was interrupted — resume rather than overwrite). Then:
    If the review or preceding fix reports an unresolved consequential decision or required spec
    correction, preserve its findings and return `decision-required` or `needs-spec-correction` to
    the coordinator. Do not burn review iterations waiting for the same missing decision.
-3. **Stop on clean or cap** — these two stops apply before any fix:
-   - **Clean** — `verdict: pass` and `evidence_verdict: proven`, for applicable merge claims, bound to current HEAD. Stop with
-     `outcome: proven` and hand off to `spec-work-tour`.
-   - **Cap** — `i == max-iterations`. Stop; report the residual actionable findings.
+3. **Stop on clean** — when `verdict: pass` and `evidence_verdict: proven` cover
+   applicable merge claims at current HEAD, write the completion record with
+   `outcome: proven` and hand off to `spec-work-tour`.
 4. **Compute recurrence, then check stalled** — this order is what prevents both the
    premature stop and the oscillation:
    - **Recurrence set** = actionable signatures in `branch-<i>` that `branch-<i-1>-fix.md`
@@ -97,12 +102,49 @@ refine was interrupted — resume rather than overwrite). Then:
    If correction changes a sourced obligation or evidence plan, return to its owning planner,
    re-prepare, and rerun only affected proof before the next audit. Do not escalate verification
    without a named remaining failure or use the loop to authorize live operations.
-6. **Advance.** `i = i + 1`; go to step 1.
+6. **Check the cap after fixing.** If `i >= max-iterations`, inspect the fix decisions
+   and existing verification evidence. Every actionable finding must be fixed or have
+   a supported terminal dismissal; `unfixable`, missing decisions, unauthorized risk
+   acceptance, failed/pending required merge gates, and stale evidence remain blockers.
+   If those checks pass, return `outcome: verified-at-cap`; otherwise return
+   `outcome: cap` with the remaining gaps. Do not run a final review, restart refinement, or rerun
+   passing tests just to assemble the handoff.
+7. **Advance.** Otherwise, `i = i + 1`; go to step 1.
 
 Computing recurrence *before* the stalled stop is the fix for the ordering bug: a
 recurring finding always reaches the fixer with its terminalize instruction, and the
 loop only declares "stalled" when a fix truly changed nothing — never while a
 different fix or an explicit dismissal is still available.
+
+## Completion Handoff
+
+Always write canonical `reviews/refinement-completion.md` atomically, with a heading,
+a fenced YAML record, and concise per-round findings/decisions/evidence references:
+
+```yaml
+refinement:
+  outcome: verified-at-cap # proven | verified-at-cap | cap | stalled | decision-required | needs-spec-correction
+  max_iterations: 2
+  iterations_completed: 2
+  commit: <full final HEAD>
+  review: <latest review artifact path>
+  fix: <latest fix artifact path or none>
+  independent_post_fix_review: false
+  evidence_verdict: proven # proven | incomplete
+  unresolved: []
+```
+
+Use `proven` and `independent_post_fix_review: true` only for a passing independent
+review bound to final HEAD. `verified-at-cap` means findings were resolved and required
+executable gates pass at final HEAD, but the final fixes were not independently
+re-reviewed. Preserve the original review's SHA and verdict; never rewrite it into a
+post-fix pass. Any unresolved current or earlier actionable finding blocks completion.
+A `commit: none` in a no-code fix record does not remove the requirement to bind this
+completion record and valid evidence to actual HEAD.
+
+Both successful outcomes hand off to `spec-work-tour` under the shared contract's
+Bounded Refinement Completion policy. Other outcomes preserve useful work and report
+the blocker. Finishing the iteration budget does not make an unresolved defect pass.
 
 ## Artifact Policy
 
@@ -116,15 +158,16 @@ no commit; only code changes made by `spec-branch-fix` are committed.
 Report:
 
 1. Spec path and `max-iterations`.
-2. How many iterations ran, and why the loop stopped: **proven** / **cap** /
+2. How many iterations ran, and why the loop stopped: **proven** / **verified-at-cap** / **cap** /
    **stalled** / **decision-required** / **needs-spec-correction**.
 3. Per-iteration one-liners: actionable count in, fixes applied, dismissals.
-4. Final audit verdict and any residual findings (actionable left at cap/stalled, plus advisory
+4. Latest audit verdict and its SHA, whether final fixes were independently re-reviewed, and any residual findings (actionable left at cap/stalled, plus advisory
    findings never required to fix), with their `file:symbol` and signature.
 5. The review/fix artifact paths written under `<spec-dir>/reviews/`.
 6. The commit hashes produced (fix commits), or note `none` when review/fix
    artifacts were the only changes.
-7. On a proven pass, the exact bound commit and `next: spec-work-tour`.
+7. On `proven` or `verified-at-cap`, the completion record, exact bound commit, and
+   `next: spec-work-tour`.
 
 A first-iteration proven pass is the common outcome on a well-built branch. Do not invoke
 `spec-work-tour`; it is the next explicit top-level stage.
