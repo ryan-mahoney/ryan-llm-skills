@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "22"
+  version: "23"
 ---
 
 # Spec Prepare
@@ -221,6 +221,13 @@ Use only applicable labels from this fixed vocabulary:
 - `security-boundary`
 
 List only live invariants that the step establishes, consumes, or can violate through its named targets. Do not perform extra repository surveying, add commands, or expand a full adversarial boundary matrix merely to populate these lines. The labels route bounded execution-time verification in `spec-step-run`; they do not enlarge the prepared behavior or acceptance scope. Use `none` when no label or invariant applies.
+
+Apply the shared Verification Scheduling And Deadlines policy when assigning commands.
+Use implementation-first and separate test writing from execution. Cards retain exact
+focused automated commands and cases for branch review, plus a bounded local app startup
+and changed-path smoke procedure in Setup. Record any required broad suite once for
+branch review; do not create an implementation step to run tests. EV owner steps own test
+sources and handoffs; branch review owns deferred execution and result artifacts.
 
 Every card must contain strict `planning` and `verification` blocks matching the compact contract in `spec-subspec-write`. The parent validates hashes, step numbers, filenames, concrete targets, focused commands, and observable cases mechanically. It does not create a second prose copy of the verification contract or semantically re-judge an equivalent planner's work.
 

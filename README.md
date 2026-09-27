@@ -51,10 +51,17 @@ The orchestrator runs these stages, which can also be invoked separately:
 3. `spec-write`: write `spec.md`, `spec-steps.json`, and the AC → claim → failure → gate `evidence-plan.json`.
 4. `spec-prepare`: code-ground both implementation and proof, derive guardrails, plan every step, and publish their hash-bound manifest last.
 5. Workspace handoff: the top-level agent chooses a code branch or worktree. All `.specs/<feature>/` reads and writes stay in the primary repository, even when a worktree contains a tracked copy.
-6. `spec-run`: implement each step, produce its merge gates, later-phase procedures and QA artifacts, assemble pre-audit evidence, and commit separately.
+6. `spec-run`: implement each step, write tests, smoke-check the local app, assemble pending test handoffs and QA evidence, and commit separately. Automated tests run in review.
 7. `spec-branch-refine`: independently audit code and evidence, fix, and converge to a commit-bound proven verdict.
 8. `spec-work-tour`: emit required `work-tour.json` and browser-ready `work-tour.html` for the proven commit.
 9. `spec-pr`: rebase, refresh verification when necessary, require a ready tour, and publish a concise PR explaining the resulting change.
+
+To replace refinement in pi, ask: “Use Codex Astra for one review and fix, no refinement
+loop.” The [codex-review-fix](skills/codex-review-fix/SKILL.md) skill delegates one session,
+including required tests, then continues to the tour and PR without another review or
+routine duplicate testing. Pi must have a configured `codex-astra-reviewer` agent; the
+[adapter](codex-astra-reviewer.md) specifies the runner and its execution permissions.
+See [review modes and test scheduling](docs/reviews.md).
 
 PRs, commits, and work tours follow [Engineering Writing](rules/engineering-writing.md).
 They explain the software without workflow narration or inaccessible local references.
@@ -76,6 +83,7 @@ Proposals and specs retain the detail agents need to implement and verify the wo
 | **spec-run** | `/spec-run [feature-slug-or-spec-path]` | Execute prepared steps and assemble commit-bound pre-audit evidence |
 | **spec-step-run** | delegated | Implement one prepared step and produce its owned code/evidence/QA artifacts |
 | **spec-branch-refine** | `/spec-branch-refine [spec-path]` | Alternate integrated evidence audits and fixes until proven or blocked |
+| **codex-review-fix** | `/codex-review-fix` | Explicit pi alternative: one Astra review, fix, and verification pass replacing refinement |
 | **spec-branch-review** | delegated | Independently falsify code and claim/gate evidence per commit and integrated branch |
 | **spec-branch-fix** | delegated | Apply or dismiss structured branch findings and commit fixes |
 | **spec-work-tour** | `/spec-work-tour [spec-path]` | Build commit-bound HTML/JSON architecture, evidence, QA, and deploy tour |

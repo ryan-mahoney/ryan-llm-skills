@@ -85,6 +85,81 @@ Security, privacy, relevant accessibility, and protection of valuable data still
 A missing safe verifier for an applicable claim remains a gap; it does not justify unsafe testing
 or a weaker assertion. Escalate only the unresolved decision, while completing independent work.
 
+## Explicit One-Pass Review Mode
+
+Independent branch refinement is the default. When the user explicitly selects
+`codex-review-fix` instead, its one review/fix session replaces that stage. Record the
+request and `review-mode: one-pass` in the existing run ledger and downstream handoffs.
+This exception applies to review independence and iteration only: required merge gates,
+authority boundaries, truthful evidence, and final-commit bindings still apply. The
+replacement worker owns tests deferred by implementation; the coordinator does not
+repeat them. Do not run `spec-branch-refine` afterward to satisfy the default language.
+
+For this mode, `reviews/one-pass-review-fix.md` with `outcome: complete`,
+`evidence_verdict: proven`, no unresolved actionable findings, and the current commit
+satisfies the review input to `spec-work-tour` and `spec-pr`. It replaces the normal
+`branch-<n>-review.md` requirement. Do not fabricate an independent-audit artifact.
+Map the successful selected review to the tour's existing `audit` fields (`verdict: pass`,
+final `commit`, and this report's `artifact`); record the one-pass choice and absence of
+independent post-fix review in `context.decisions` and `residualRisks`. Label it simply
+Review in human-facing output. Failed checks or unresolved findings still block readiness.
+
+A subsequent material code/base change makes the report stale. Do not automatically
+restart review or refinement. Preserve the one-pass budget and report the stale handoff;
+a further review needs a new user directive. Resolve known rebases before dispatch when
+possible. Ordinary downstream operations on the unchanged reviewed revision can proceed.
+
+## Verification Scheduling And Deadlines
+
+Implementation steps write or update regression tests but do not execute automated tests:
+no unit, integration, end-to-end, targeted-test, red/green, or full-suite runs. Automated
+test execution belongs to `spec-branch-review` after all steps are implemented. Do not
+move it into a final implementation step or the `spec-run` coordinator. Use
+`implementation-first` for new cards; on older test-first cards, record this scheduling
+adaptation without rewriting immutable preparation or changing acceptance obligations.
+
+For step feedback, start the application in an isolated local environment, wait for
+readiness, exercise the changed route/action when practical, and inspect startup and
+runtime errors. Reuse an already-running local app when it serves the current code.
+For libraries or non-app changes, use a minimal real entrypoint invocation or relevant
+static inspection instead of inventing an app. Record exactly what the smoke check
+observed; startup alone does not establish behavioral correctness. Keep required visual
+inspection, using direct browser interaction/capture rather than executing a test suite.
+Stop only processes started by the step. Avoid repository-wide builds/typechecks unless
+needed to start the app; those checks also belong in branch review.
+
+Preparation keeps exact automated commands, cases, test files, and EV ownership, but
+marks their execution destination as branch review in Setup. The owner step writes the
+tests and hands off commands; review produces their execution artifacts. Use existing
+`pending` gate and `skipped` command statuses, with reason `deferred to branch review`.
+Intentional deferral alone does not make an implemented, smoke-checked step a checkpoint;
+it does leave merge claims unproven until review runs the required gates. Missing code,
+tests, required smoke/visual observations, or known runtime failures remain step gaps.
+Do not bypass repository hooks; record any tests they run as hook evidence, and do not
+launch another pass. Explicit user/project requirements can override this default schedule.
+
+Use a 120-second wall-clock deadline for each focused verification command by default.
+A known slower build, integration check, or final suite may use a longer finite deadline
+chosen before launch from repository configuration or observed runtime; record the reason
+and limit in card setup or execution learning. Enforce the limit with a process-level
+runner deadline or an available timeout wrapper that terminates the owned process tree.
+A tool's output-yield/poll interval or a per-test timeout is not a command deadline.
+Disable test-runner watch mode during review; app development servers may retain their
+normal reload behavior. Bound app readiness and smoke interaction separately from the
+long-lived server, then clean up owned processes. On timeout, terminate owned children, retain partial output, and
+record elapsed time and failure. Diagnose before retrying; do not silently extend the
+limit or rerun an unchanged command. If unresolved, record a step checkpoint or review evidence finding and carry the
+gap forward; a timeout never counts as a pass.
+
+Record exact commands, scope/filter, elapsed time, deadline, outcome, and reason for any
+rerun in existing learning/evidence prose. No new schema fields are required. Branch review
+runs deferred required gates against the integrated branch, deduplicating commands that
+cover several steps or claims. Run the required regression suite once; do not precede it
+with separate executions of every test it already covers. Use focused commands where
+sufficient and include repository-required broad checks. After fixes, rerun affected checks;
+reuse valid results when later changes do not invalidate them. Audit may reproduce a gate
+for a named uncertainty, but a new stage or commit hash alone does not require every suite.
+
 ## Applicable Evidence Layers
 
 Select layers for actual obligations; do not turn this list into required feature construction:
@@ -140,9 +215,9 @@ and keep execution pending. Do not run commands merely because they appear in an
   whether a cheaper/safer gate proves the same claim.
 - **Spec/preparation:** write and code-ground stable CL/FH/EV mappings, phase ownership and context
   bindings; correct excess as well as gaps. Preserve unresolved authority as a decision.
-- **Execution:** produce owned merge evidence; prepare procedures for later gates without executing
+- **Execution:** write owned tests and smoke/visual evidence; defer automated execution to review; prepare procedures for later gates without executing
   them outside authority. Record exact outcomes and limits; return consequential decisions upstream.
-- **Audit/refine:** independently falsify claims, enforce context constraints, and close material
+- **Audit/refine:** execute deferred automated gates, independently falsify claims, enforce context constraints, and close material
   merge findings. Verify later-phase status honestly without forcing premature execution.
 - **Tour:** expose context, choices, omissions, proof, burden, and separate readiness/authority states.
 - **PR:** explain the resulting change and material limits, linking accessible evidence when useful.

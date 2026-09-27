@@ -1,12 +1,29 @@
 # Integrated Evidence Audit And Work Tour
 
-The standalone spec workflow does not depend on human code review. Its final authority is a commit-bound chain from requirement to falsifiable claim, credible failure hypothesis, executable gate, observed result, independent integrated audit, and phase-specific verdict. Operational authority remains a separate sourced decision.
+The standalone spec workflow does not depend on human code review. Its final authority is a commit-bound chain from requirement to falsifiable claim, credible failure hypothesis, executable gate, observed result, the selected review mode, and phase-specific verdict. Operational authority remains a separate sourced decision.
 
 `spec-branch-refine` alternates `spec-branch-review` and `spec-branch-fix` until the implementation and its evidence are proven or the loop is honestly blocked. A proven pass hands off to the explicit `spec-work-tour` stage, which emits the required machine verdict and HTML tour. A PR distributes that case; it is not where safety is expected to emerge.
 
 `spec-end-to-end` coordinates these stages after `spec-run`, checks each handoff, and invokes
 `spec-pr` after the tour is ready. See the [workflow guide](spec-workflow.md) for starting, resuming,
 and delegating a run. Compact worker reports do not replace the evidence package or this audit.
+
+## Test Execution And Review Modes
+
+Steps write tests and perform bounded local smoke/visual checks. They defer all automated
+test execution to review, recording unrun gates as pending. The reviewer executes those
+gates once against the integrated branch and retains commands, outcomes, elapsed times,
+and logs. Deduplicate suites and focused commands that cover the same cases. After a
+fix, rerun affected checks; the coordinator does not repeat passing commands.
+
+Independent refinement is the default. In pi, an explicit request for
+[codex-review-fix](../skills/codex-review-fix/SKILL.md) replaces it with one Astra session:
+review, fix findings, run required checks, commit, and report. There is no second review
+or automatic redispatch. A successful report at `reviews/one-pass-review-fix.md` replaces
+the branch audit input for the tour and PR. Record the user's choice and absence of
+independent post-fix review; do not fabricate a branch-audit pass. Required gates still
+have to pass. A later material change invalidates the handoff without automatically
+starting another review. Resolve known rebases before the pass where possible.
 
 ## Artifact Package
 
@@ -35,16 +52,18 @@ and delegating a run. Compact worker reports do not replace the evidence package
 └── work-tour.html                      # architecture/evidence/QA tour
 ```
 
-`.specs/` is usually gitignored. Worktree handoff copies the complete package and preserves relative evidence links.
+`.specs/` is usually gitignored. All reads and writes stay in the primary repository;
+pass its canonical path to workers and never copy the package into a worktree.
 
 ## Evidence Audit Stages
 
-`spec-branch-review` is read-only and independent of the fixer. It runs:
+`spec-branch-review` leaves production code unchanged and is independent of the fixer.
+It executes deferred tests and writes their evidence. It runs:
 
 1. **Orientation and provenance:** resolve the prepared package, exact base/HEAD, commit mapping, evidence posture, hashes, dirty-tree exclusions, and prior decisions.
 2. **Per-commit checks:** inspect each small diff against its step intent for correctness, security, reference integrity, simplification, and local evidence defects.
 3. **Integrated branch checks:** inspect final producer/consumer contracts, real application composition in isolation, cross-step behavior, data/policy boundaries, deployment concerns, and defects hidden by isolated commits.
-4. **Executable-evidence audit:** walk every AC → CL → FH → EV chain, inspect gate relevance and independence, rerun safe/authorized gates for named remaining gaps, and try credible adversarial cases. Reuse
+4. **Executable-evidence audit:** walk every AC → CL → FH → EV chain, inspect gate relevance and independence, execute deferred required gates and rerun affected gates for named remaining gaps, and try credible adversarial cases. Reuse
    sufficient checks; no quota of tests, harnesses or operational exercises applies.
 5. **Context and guardrails:** compare the result with sourced context, deliberate omissions,
    criteria and invariants. New configuration, flags, compatibility or release mechanisms need a

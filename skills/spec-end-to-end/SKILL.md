@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "7"
+  version: "8"
 ---
 
 # Spec End To End
@@ -31,6 +31,7 @@ Treat workflow modifiers in the request as run-wide constraints. Examples includ
 - use or avoid a worktree;
 - keep work in the current checkout;
 - delegate named stages to a named subagent or agent type;
+- replace refinement with one Codex/Astra review-and-fix pass via `codex-review-fix`;
 - include or skip the optional architecture critique;
 - target a specific base branch, repository, feature package, or PR shape.
 
@@ -124,8 +125,12 @@ excluded by the routing policy above:
    commands a capable agent already knows how to run.
 6. Run `spec-run` from the implementation checkout. It owns prepared step implementation,
    per-step commits, evidence production, and pre-audit merge-evidence assembly.
-7. Run `spec-branch-refine`. It owns the independent review/fix loop and must finish with an audit
-   pass plus `evidence_verdict: proven` for merge claims bound to current HEAD.
+7. By default, run `spec-branch-refine` to an independent audit pass with
+   `evidence_verdict: proven` at current HEAD. When the user explicitly requests one
+   Codex/Astra review-and-fix pass instead, run `codex-review-fix` once. Its complete,
+   commit-bound handoff replaces this stage; do not invoke refinement afterward. Carry
+   `review-mode: one-pass`, the user decision, and its report into the remaining stages.
+   Naming a model alone does not select this alternative.
 8. Run `spec-work-tour`. It owns the final JSON/HTML evidence and separate release states and must
    finish with merge `verdict: ready` bound to the same HEAD. Deployment readiness, authority,
    and post-deployment observations are separate; pending later-phase gates do not force execution.
@@ -133,7 +138,8 @@ excluded by the routing policy above:
 
 After every stage, inspect its declared outputs and outcome against the owning skill's handoff
 contract. A worker's success assertion is insufficient: check required evidence and revision
-bindings. Preserve all required reads, checks, independent audits, and integration verification;
+bindings. Preserve required reads, checks, integration verification, and the selected review
+mode (including the explicit one-pass exception in the shared evidence contract);
 do not add a duplicate implementation review or rerun verification merely to repeat worker
 evidence. Expand inspection for missing, inconsistent, stale, or risk-bearing evidence.
 

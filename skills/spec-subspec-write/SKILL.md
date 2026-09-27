@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "21"
+  version: "22"
 ---
 
 # Spec Subspec Write
@@ -132,24 +132,16 @@ For `needs-spec-correction` or `blocked`, keep the exact block shape. Use the na
 
 ### Select the strategy deliberately
 
-Use `test-first` for:
-
-- New observable behavior or state transitions.
-- Parsers, validation, reducers, and error contracts.
-- Bug fixes that need a failing regression.
-- UI state/accessibility behavior that can be verified without brittle markup snapshots.
-
-Use `implementation-first` for:
-
-- Mechanical renames, moves, and contract propagation.
-- Deletion of retired surfaces, followed by focused absence/regression checks.
-- Wiring changes whose focused test cannot compile until the contract is propagated.
-
-Do not force red-first ceremony onto mechanical work. Conversely, do not choose implementation-first merely to avoid writing a useful behavioral test.
+Use `implementation-first`. The step writes tests and performs a local startup/changed-path
+smoke check; branch review executes automated tests. In Setup, name the app startup,
+readiness signal, smoke interaction, cleanup, and finite deadline (120 seconds by default).
+For non-app work, name the smallest real entrypoint invocation or static inspection.
+Keep automated commands in `verification.commands` and label their destination `branch
+review` in Setup. Use test-first only when explicitly required by the user or project.
 
 ### Focused commands only
 
-Every ready plan names exact commands scoped to the changed behavior: a test file, test-name filter, targeted typecheck/build command, or similarly bounded verifier. Never emit an unfiltered full-suite command such as bare `bun test` or `bun run test`. Do not replace repository-specific commands with a generic command.
+Every ready plan names exact commands scoped to the changed behavior: a test file, test-name filter, targeted typecheck/build command, or similarly bounded verifier. Keep per-step commands focused; record any required full-suite command once in the evidence plan for branch review. Do not replace repository-specific commands with a generic command. Apply the shared Verification Scheduling And Deadlines policy. Inspect script expansion and filter semantics, combine overlapping cases into one focused invocation when supported, and record the process-level deadline in Setup (120 seconds by default; justify longer limits). All automated test commands execute in branch review, not in this step.
 
 For a `Visual: yes` step, name an exact focused Playwright command and repository-relative
 Playwright test file when Playwright already exists or the step owns the smallest required

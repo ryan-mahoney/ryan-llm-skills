@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "10"
+  version: "11"
 ---
 
 # Spec Branch Refine
@@ -61,7 +61,10 @@ spec correction, or a convergence stop condition below.
 Start at `i = 1` (or one past the highest existing `branch-<k>` artifacts if a prior
 refine was interrupted — resume rather than overwrite). Then:
 
-1. **Review.** Run `spec-branch-review` for iteration `i` per its contract. It
+1. **Review.** Run `spec-branch-review` for iteration `i` per its contract. The first
+   review owns automated tests deferred by implementation steps; pending gates and
+   `readyForAudit: false` are expected on entry. Let review execute them rather than
+   dispatching implementation steps again or launching a separate test pass. It
    writes `<spec-dir>/reviews/branch-<i>-review.md` and dedupes against prior
    dismissals itself.
 2. **Read the verdict.** Parse the review file's leading `review:` YAML block — the

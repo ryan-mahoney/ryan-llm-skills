@@ -273,6 +273,12 @@ write_spec_workflow_howto() {
 
 ## How To Use The Spec Workflow
 
+Implementation steps write tests and smoke-check the local app; automated tests run in review.
+In pi, explicitly select `codex-review-fix` to replace refinement with one Astra review/fix
+session, including required verification. See `docs/reviews.md` and the included
+`codex-astra-reviewer.md` configuration example. Pi agent registration is separate from
+skill installation; the example runner bypasses approvals and sandboxing.
+
 The workflow turns a clear goal into architecture, a deterministic implementation-and-evidence contract, executable proof, an independent integrated audit, and a commit-bound HTML work tour. Specs and code are agent-facing; people review evidence and supply consequential product/authority decisions.
 
 Good initial input includes:
@@ -826,6 +832,7 @@ build_bundle() {
     copy_file "$bundle_dir" "augment/agents/spec-step-implementer.md" "augment/agents/spec-step-implementer.md"
     copy_file "$bundle_dir" "docs/spec-workflow.md" "docs/spec-workflow.md"
     copy_file "$bundle_dir" "docs/reviews.md" "docs/reviews.md"
+    copy_file "$bundle_dir" "codex-astra-reviewer.md" "codex-astra-reviewer.md"
     copy_rules "$bundle_dir"
   elif [ "$name" = "specops-skills" ]; then
     copy_scripts "$bundle_dir" "decompose-skeleton.mjs" "agent-docs.mjs" "commit-ledger.mjs"
@@ -861,6 +868,7 @@ spec_skills=(
   spec-run
   spec-step-run
   spec-branch-refine
+  codex-review-fix
   spec-branch-review
   spec-branch-fix
   spec-pr

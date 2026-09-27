@@ -27,6 +27,7 @@ The spec-driven development workflow plus the design-spec front-half:
 - `spec-run`
 - `spec-step-run`
 - `spec-branch-refine`
+- `codex-review-fix`
 - `spec-branch-review`
 - `spec-branch-fix`
 - `spec-work-tour`
@@ -36,6 +37,9 @@ The spec-driven development workflow plus the design-spec front-half:
 - `design-spec-prototype`
 - `design-spec-critique`
 - `design-spec-writer`
+
+Includes `codex-astra-reviewer.md` as a pi agent configuration example for the optional
+one-pass replacement. The installer does not register pi agents.
 
 Includes the Augment CLI subagent adapter:
 

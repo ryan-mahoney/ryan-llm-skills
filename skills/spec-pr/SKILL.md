@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "10"
+  version: "11"
 ---
 
 # Spec PR
@@ -18,6 +18,16 @@ Publish a merge candidate whose applicable merge evidence is complete and whose 
 readiness, authorization and post-deployment observations are recorded separately. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). The PR explains the problem and resulting change to a teammate. The supporting artifacts retain the full verification record; neither opening the PR nor a future human review creates merge safety.
 
 This skill opens or updates PRs and never merges them. It may change repository and remote Git state only as required for rebase, commit, and push. It never publishes a red or stale evidence case as merge-ready.
+
+## Selected Review Mode
+
+Apply the shared Executable Evidence Contract's **Explicit One-Pass Review Mode**
+when the user selected `codex-review-fix`. Its current complete report replaces this
+skill's independent-audit input and pass requirements; do not launch refinement or
+another review automatically. All required executable evidence must still pass. Carry
+the selected mode and its limits honestly into the artifacts. If later Git/code changes
+invalidate the report, return the stale-evidence gap without restarting the review loop.
+The independent-audit requirements below remain the default for other runs.
 
 ## Required Inputs
 

@@ -33,6 +33,33 @@ a proven audit. `spec-work-tour` produces the final JSON/HTML verdict. The orche
 each stage separately; callers using the individual skills must make those handoffs themselves.
 See [the evidence audit guide](reviews.md) for artifact paths and proof requirements.
 
+## Test Scheduling And One-Pass Review
+
+Implementation steps write regression tests without running automated tests, including
+focused tests. They start the isolated local app, check readiness and the changed path,
+and inspect runtime errors. Non-app work uses a minimal entrypoint or static inspection.
+Visual steps retain rendered inspection. Automated gates stay pending until review.
+
+Review runs the required tests against the integrated branch, combining overlapping
+commands and reusing valid results after fixes. Commands have finite wall-clock limits:
+120 seconds by default for focused checks, with a justified longer limit chosen before
+known slower suites or builds. A polling interval is not a timeout.
+
+In pi, explicitly replace refinement with the configured Astra delegate:
+
+```text
+Continue spec-end-to-end for .specs/results-export/. Replace refinement with
+codex-review-fix: one Codex Astra review and fix, then continue to the tour and PR.
+```
+
+This selects one combined review/fix session, including required test execution. Pi
+checks its report and commits without rerunning tests or dispatching a second review.
+The report records that fixes did not receive a separate independent review. Failed
+checks or unresolved defects block the handoff; they do not trigger an automatic loop.
+Naming Astra alone retains the standard refinement policy. The delegate must already
+be configured in pi; [the adapter](../codex-astra-reviewer.md) uses the operator's
+unsandboxed execution settings. Syncing skills does not install that pi agent.
+
 ## Run Planning Skills Individually
 
 The individual skills remain valid entry points. No separate context skill is required for new specs.
@@ -217,7 +244,7 @@ Workers keep detailed investigation, implementation, test output, and local repa
 assignments. Their conversational handoff is about 200 words, expanded when mandatory report
 fields or material issues require it. Full required reports remain in canonical artifacts. The
 parent checks the handoff contract and evidence rather than duplicating the worker's execution.
-Required independent audits and integration verification still run.
+Required integration verification still runs under the selected review mode.
 
 Reuse a worker for follow-up within its assignment. Each prepared step still gets a dedicated
 worker, and independent reviewers remain separate from implementers. The `spec-step-run` skill

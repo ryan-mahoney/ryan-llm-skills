@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "16"
+  version: "17"
 ---
 
 # Spec Branch Evidence Audit
@@ -110,7 +110,28 @@ Read for judgement:
 - `criteria.md` — consume only prose `Statement:` values.
 - `invariants.md` — consume only live invariant statements not marked superseded.
 
-Missing required evidence artifacts are blocking findings, not optional context.
+Missing required evidence artifacts are blocking findings unless they are the deferred
+automated results this review is responsible for producing below.
+
+### Execute Deferred Tests
+
+Step runs intentionally write tests without executing them. Pending automated gates and
+`readyForAudit: false` in pre-audit merge evidence are expected inputs, not missing-input
+reasons to stop. Before deciding the evidence verdict, run the deferred required merge
+gates against the integrated branch under the shared Verification Scheduling And Deadlines
+policy. Deduplicate overlapping commands: one suite may cover several steps and gates;
+do not run each covered file separately as well. Include required repository regression
+and static checks, with finite process-level deadlines selected before launch.
+
+Capture exact commands, elapsed times, outcomes, environment, output artifacts, and HEAD.
+Update `merge-evidence.md` and `merge-evidence.json` atomically with actual gate results,
+claim coverage, and remaining gaps; preserve preparation and original step learnings.
+Set `readyForAudit: true` only after all required merge gates pass and later-phase handoffs
+are recorded. Test failures or unresolved timeouts produce actionable evidence findings
+for the existing fix loop. Test-source defects also go to that loop; do not edit code here.
+On subsequent reviews, reuse valid results and rerun only affected or unresolved checks,
+unless a concrete integration risk requires a broader rerun. Never report an unrun test
+as passed or infer behavioral correctness solely from the step's startup smoke check.
 
 ### Executable-evidence lens (always runs)
 

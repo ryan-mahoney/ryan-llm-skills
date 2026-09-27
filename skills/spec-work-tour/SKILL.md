@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "5"
+  version: "6"
 ---
 
 # Spec Work Tour
@@ -65,6 +65,16 @@ an applicable gate to make the tour pass. Missing, stale, red, or non-reproducib
 evidence produces `verdict: blocked`. Pending deploy/post-deploy evidence stays in its own phase.
 Route unresolved consequential context decisions to the coordinator under the shared contract.
 Human operational authorization is a separate legitimate decision, not a correctness gate.
+
+## Selected Review Mode
+
+Apply the shared Executable Evidence Contract's **Explicit One-Pass Review Mode**
+when the user selected `codex-review-fix`. Its current complete report replaces this
+skill's independent-audit input and pass requirements; do not launch refinement or
+another review automatically. All required executable evidence must still pass. Carry
+the selected mode and its limits honestly into the artifacts. If later Git/code changes
+invalidate the report, return the stale-evidence gap without restarting the review loop.
+The independent-audit requirements below remain the default for other runs.
 
 ## Resolve The Package And Commit
 
