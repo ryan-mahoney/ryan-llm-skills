@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "2"
+  version: "3"
 ---
 
 # Spec Upgrade
@@ -18,12 +18,10 @@ not read the rewritten specs or approve routine planning edits.
 
 Read [Project Context And Authority](../spec-end-to-end/references/project-context.md) and the
 [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Use
-[spec-write](../spec-write/SKILL.md) and [spec-prepare](../spec-prepare/SKILL.md) for their owned
-transformations and current schemas; do not invent a second upgrade schema or copy their templates.
+[spec-write](../spec-write/SKILL.md) for its combined planning phases and current schemas; do not invent a second upgrade schema or copy their templates.
 
 Apply the Resume And Upgrade section of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
-Check material domain-rule, ordinary-entry, and deferral coverage through `spec-write` and
-`spec-prepare`. Reuse equivalent existing prose and evidence. Do not manufacture sections, new
+Check material domain-rule, ordinary-entry, and deferral coverage through `spec-write`. Reuse equivalent existing prose and evidence. Do not manufacture sections, new
 schemas, or extra implementation steps merely to adopt this guidance.
 
 ## Select Existing Work
@@ -57,7 +55,7 @@ Inspect all selected packages for shared decisions before binding their final co
 If a later answer materially changes shared context, revisit only the affected earlier packages
 and re-prepare them before reporting the batch ready. Report potentially stale unselected packages
 without rewriting them. Dependencies between specs do not count as already implemented code;
-use `spec-prepare`'s grounding requirements and report an unavailable prerequisite honestly.
+use `spec-write`'s grounding requirements and report an unavailable prerequisite honestly.
 
 Unanswered consequential choices block only dependent planning. Record `decision-required` and
 continue independent work. Existing explicit authority remains valid within its scope; later
@@ -89,9 +87,9 @@ For each selected, unimplemented package:
    critique merely for an artifact upgrade; revisit only decisions invalidated by new facts.
 5. Run `spec-write` in its existing-spec upgrade mode, using the original spec as an intent source
    even if no proposal exists. Pass resolved decisions and the reasons for changed obligations.
-   Then run `spec-prepare` to ground the revised plan, regenerate affected execution cards and
-   publish the complete current manifest last. Follow both skills in full; naming them in a report
-   is not execution. If a prerequisite or consequential decision prevents preparation, leave the
+   In that same invocation, ground the revised plan, split compound objectives, regenerate
+   execution cards, and publish the current manifest last. Follow both internal phases
+   in full; do not invoke the planner twice. Reuse the snapshot already taken above. If a prerequisite or consequential decision prevents preparation, leave the
    manifest absent and report that outcome rather than manufacturing readiness.
 6. Check the resulting evidence plan with its validator, recompute the preparation hashes, and
    confirm the context binding and owned-step coverage. These checks establish preparation validity,

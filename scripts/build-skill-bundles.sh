@@ -372,11 +372,8 @@ This converts the proposal, and optional critique, into:
 
 The spec is the implementation contract. `evidence-plan.json` version 2 records the context binding, risk posture and phase-aware AC → claim → failure → gate graph. The writer never touches GitHub.
 
-### 4. Prepare The Implementation Package
-
-```bash
-/spec-prepare
-```
+The same `spec-write` invocation continues into preparation; do not invoke a second
+planning stage. It splits compound objectives into granular cards with explicit contracts.
 
 Preparation code-grounds and corrects the spec, reconciles the step index, derives prose-only guardrails, plans every step sequentially, and publishes a hash-bound manifest only when the complete package is current:
 
@@ -390,7 +387,7 @@ Preparation code-grounds and corrects the spec, reconciles the step index, deriv
 
 `criteria.md` and `invariants.md` are prose guidance, never executable audit programs. The version 3 manifest is the last write and binds context and every prepared artifact by SHA-256.
 
-### 5. Establish The Implementation Workspace
+### 4. Establish The Implementation Workspace
 
 Let the top-level agent choose and create a normal feature branch or an isolated worktree using
 ordinary Git operations. Keep `.specs/<feature>/` in the primary repository for all reads and
@@ -398,7 +395,7 @@ writes; never copy it into the worktree or use a tracked worktree copy. Pass the
 and canonical spec-folder paths separately to every stage. Follow the shared workspace handoff
 and its path resolver. Do not open a new editor or agent session for the handoff.
 
-### 6. Execute The Prepared Spec
+### 5. Execute The Prepared Spec
 
 ```bash
 /spec-run <feature-slug or path-to-spec.md>
@@ -408,7 +405,7 @@ This checks the package hashes and implements steps sequentially with their evid
 Each step produces a coherent commit. When repository policy requires separate generated output, the step records both commits and binds evidence to its final HEAD.
 The runner also prepares later-phase procedures and assembles evidence for the independent audit.
 
-### 7. Refine The Whole Branch
+### 6. Refine The Whole Branch
 
 ```bash
 /spec-branch-refine
@@ -419,7 +416,7 @@ Each iteration includes review and fixes. Direct invocation defaults to ten roun
 verified final fixes at the cap. The completion record states whether the final fixes
 were independently re-reviewed; unresolved findings or failed checks block the tour.
 
-### 8. Build And Open The Work Tour
+### 7. Build And Open The Work Tour
 
 ```bash
 /spec-work-tour <feature-slug or path-to-spec.md>
@@ -435,7 +432,7 @@ separates merge readiness, deployment readiness, authorization and post-deployme
 Both bind exact HEAD. Pending later-phase checks do not force live execution or block a supported
 merge claim; known failures that invalidate merge claims must still block them.
 
-### 9. Publish The Pull Request
+### 8. Publish The Pull Request
 
 ```bash
 /spec-pr
@@ -455,7 +452,6 @@ references out of the PR; preserve the full verification record in supporting ar
 /spec-architect-initial build <clear goal and constraints>
 /spec-architect-critics     # optional
 /spec-write
-/spec-prepare
 # top-level agent establishes a branch or worktree
 /spec-run <feature-slug>
 /spec-branch-refine <feature-slug>
@@ -522,7 +518,7 @@ The writer creates the standard implementation and evidence contract, including 
 After that, use the normal engineering back half:
 
 ```bash
-/spec-prepare <feature-slug>
+/spec-write <feature-slug>
 # top-level agent establishes a branch or worktree
 /spec-run <feature-slug>
 /spec-branch-refine <feature-slug>
@@ -626,7 +622,7 @@ Use the audit skills before deriving implementation specs:
 
 Run `specops-spec-coherence` when multiple analysis specs need to agree on shared models, side effects, terminology, or implementation order.
 
-### 5. Derive And Verify Implementation Specs
+### 4. Derive And Verify Implementation Specs
 
 ```bash
 /specops-make-spec <analysis-file-or-scope>
@@ -635,7 +631,7 @@ Run `specops-spec-coherence` when multiple analysis specs need to agree on share
 
 The conformance pass checks that the implementation spec and adjacent evidence plan preserve every material behavior and have no unresolved material decision.
 
-### 6. Execute And Test The Migration
+### 5. Execute And Test The Migration
 
 ```bash
 /specops-run-spec <spec-file>
@@ -643,7 +639,7 @@ The conformance pass checks that the implementation spec and adjacent evidence p
 
 The runner implements sequential commits, drives contract and normative integration gates, converges independent drift/conformance evidence, and emits `docs/specops/evidence/<slug>/work-tour.json` plus `work-tour.html`. The contract, integration, and drift skills remain runnable leaves for targeted regeneration or diagnosis.
 
-### 7. Refresh Agent Docs From A Branch Or PR
+### 6. Refresh Agent Docs From A Branch Or PR
 
 For ongoing agent documentation, run:
 
@@ -661,7 +657,7 @@ Manual fallback for one target remains:
 /specops-update-spec <target manifest entry + branch/diff context>
 ```
 
-### 8. Track Commit Coverage And Catch Up Missed Docs
+### 7. Track Commit Coverage And Catch Up Missed Docs
 
 Doc freshness is content-based: the manifest's `source_hash` answers "is this target stale
 now?" but not "which commits were documented?". The commit-coverage ledger answers the second
@@ -684,7 +680,7 @@ records coverage. Run `--status` for a read-only report of undocumented commits.
 squash-merged before being covered, run `node scripts/commit-ledger.mjs reconcile <repo-root>` to
 re-anchor the frontier honestly.
 
-### 9. Reconstruct Product Decisions From History
+### 8. Reconstruct Product Decisions From History
 
 ```bash
 /specops-decision-ledger [repo-root]
@@ -860,7 +856,6 @@ spec_skills=(
   spec-architect-critics
   spec-write
   spec-subspec-write
-  spec-prepare
   spec-branch
   spec-branch-worktree
   spec-run

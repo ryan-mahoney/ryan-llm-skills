@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "9"
+  version: "10"
 ---
 
 # Spec End To End
@@ -22,7 +22,7 @@ Carry domain rules and concrete counterexamples from architecture into AC/CL/FH/
 carry accepted deferred work into the final tour and PR. Use existing stage artifacts and verdicts.
 At handoffs, check the owning stage's rule coverage, ordinary-entry proof, and scope limits as
 well as hashes. Apply this to resumed packages by material coverage, not by new headings or a
-blanket artifact rewrite. The stage sequence below remains unchanged.
+blanket artifact rewrite. Follow the combined planning stage below.
 
 ## Preserve User Directives
 
@@ -73,11 +73,12 @@ valid output:
 - **Feature goal:** run `spec-architect-initial`, optionally `spec-architect-critics`, then
   `spec-write`.
 - **Existing proposal:** begin with the optional critique decision, then run `spec-write`.
-- **Existing spec:** when current `context.md`, `spec.md`, `spec-steps.json`, and version 2 `evidence-plan.json` exist,
-  begin with their earliest invalid or incomplete downstream stage.
+- **Existing spec:** run `spec-write` to complete or refresh planning when cards or the
+  preparation manifest are missing, stale, or explicitly selected for re-planning. Reuse
+  a valid prepared package and begin at its earliest incomplete downstream stage.
 
 For a legacy package, preserve its accepted behavior, resolve the sourced context, and use
-`spec-write` to upgrade the existing spec/evidence contract before `spec-prepare`. Do not replay
+`spec-write` once to upgrade and prepare the existing package. Do not replay
 architecture solely because artifact versions changed; revisit only decisions invalidated by facts.
 
 Run an optional critique when the user requests it, the proposal recommends it, or the change is
@@ -115,25 +116,25 @@ excluded by the routing policy above:
 
 1. Run `spec-architect-initial` when a current proposal does not already exist.
 2. Run `spec-architect-critics` when the optional critique policy applies.
-3. Run `spec-write`.
-4. Run `spec-prepare`.
-5. Establish the implementation checkout directly as top-level orchestration work. Honor an
+3. Run `spec-write` once through both internal phases. Require `outcome: prepared`,
+   granular ready execution cards, and the current hash-bound `preparation.json`.
+4. Establish the implementation checkout directly as top-level orchestration work. Honor an
    explicit branch/worktree directive, reuse a clearly matching checkout when present, and use
    ordinary Git judgment otherwise. Read [workspace-handoff.md](references/workspace-handoff.md)
    before creating or reusing a worktree. Do not invoke a branch-management skill merely to run
    commands a capable agent already knows how to run.
-6. Run `spec-run` from the implementation checkout. It owns prepared step implementation,
+5. Run `spec-run` from the implementation checkout. It owns prepared step implementation,
    per-step commits, evidence production, and pre-audit merge-evidence assembly.
-7. By default, run `spec-branch-refine max-iterations=2`: up to two review → fix
+6. By default, run `spec-branch-refine max-iterations=2`: up to two review → fix
    rounds, with no third review. Honor an explicit user limit instead. Accept `proven`
    or `verified-at-cap` only with the completion record and passing required evidence
    bound to current HEAD; preserve the final fixes' review status honestly. Carry the
    round budget through resumption, tour, and publication; downstream stages must not
    reset it or start another refinement loop.
-8. Run `spec-work-tour`. It owns the final JSON/HTML evidence and separate release states and must
+7. Run `spec-work-tour`. It owns the final JSON/HTML evidence and separate release states and must
    finish with merge `verdict: ready` bound to the same HEAD. Deployment readiness, authority,
    and post-deployment observations are separate; pending later-phase gates do not force execution.
-9. Run `spec-pr` from the same checkout and publish the pull request.
+8. Run `spec-pr` from the same checkout and publish the pull request.
 
 After every stage, inspect its declared outputs and outcome against the owning skill's handoff
 contract. A worker's success assertion is insufficient: check required evidence and revision

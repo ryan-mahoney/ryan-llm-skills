@@ -48,13 +48,13 @@ The orchestrator runs these stages, which can also be invoked separately:
 1. `spec-architect-initial`: resolve project context and consequential decisions, then write
    `.specs/<feature>/context.md` and `proposal.md`.
 2. `spec-architect-critics`: stress-test the proposal and write `critique.md` (optional).
-3. `spec-write`: write `spec.md`, `spec-steps.json`, and the AC → claim → failure → gate `evidence-plan.json`.
-4. `spec-prepare`: code-ground both implementation and proof, derive guardrails, plan every step, and publish their hash-bound manifest last.
-5. Workspace handoff: the top-level agent chooses a code branch or worktree. All `.specs/<feature>/` reads and writes stay in the primary repository, even when a worktree contains a tracked copy.
-6. `spec-run`: implement each step, write tests, smoke-check the local app, assemble pending test handoffs and QA evidence, and commit separately. Automated tests run in review.
-7. `spec-branch-refine max-iterations=2`: run up to two review → fix rounds; stop early when clean, or finish after verified final fixes with their review limits recorded.
-8. `spec-work-tour`: emit required `work-tour.json` and browser-ready `work-tour.html` for the proven commit.
-9. `spec-pr`: rebase, refresh verification when necessary, require a ready tour, and publish a concise PR explaining the resulting change.
+3. `spec-write`: establish behavior and contracts, ground granular execution cards, and
+   publish the complete prepared package and its hash-bound manifest in one invocation.
+4. Workspace handoff: the top-level agent chooses a code branch or worktree. All `.specs/<feature>/` reads and writes stay in the primary repository, even when a worktree contains a tracked copy.
+5. `spec-run`: implement each step, write tests, smoke-check the local app, assemble pending test handoffs and QA evidence, and commit separately. Automated tests run in review.
+6. `spec-branch-refine max-iterations=2`: run up to two review → fix rounds; stop early when clean, or finish after verified final fixes with their review limits recorded.
+7. `spec-work-tour`: emit required `work-tour.json` and browser-ready `work-tour.html` for the proven commit.
+8. `spec-pr`: rebase, refresh verification when necessary, require a ready tour, and publish a concise PR explaining the resulting change.
 
 PRs, commits, and work tours follow [Engineering Writing](rules/engineering-writing.md).
 They explain the software without workflow narration or inaccessible local references.
@@ -68,8 +68,7 @@ Proposals and specs retain the detail agents need to implement and verify the wo
 | **spec-upgrade** | `/spec-upgrade [spec-paths or all pending specs]` | Update existing unimplemented specs for project context and proportional proof; stop after preparation |
 | **spec-architect-initial** | `/spec-architect-initial [problem-or-feature]` | Review the architecture and write `.specs/<feature>/proposal.md` |
 | **spec-architect-critics** | `/spec-architect-critics [proposal-or-file]` | Stress-test `proposal.md` and write `critique.md` |
-| **spec-write** | `/spec-write [feature-slug-or-spec-path]` | Write the spec, step index, evidence posture, and claim/gate graph |
-| **spec-prepare** | `/spec-prepare [feature-slug-or-spec-path]` | Correct and ground the spec, derive prose guardrails, prepare every step, and publish the hash-bound manifest |
+| **spec-write** | `/spec-write [feature-slug-or-spec-path]` | Write or re-plan the spec, ground granular execution cards, and publish the complete prepared package |
 | **spec-subspec-write** | `/spec-subspec-write [step-number] [spec-path]` | Optional leaf planner for a step whose uncertainty requires deeper preparation |
 | **spec-branch** | `/spec-branch [description-or-feature-slug]` | Create a local branch from a spec, description, or issue/ticket reference |
 | **spec-branch-worktree** | `/spec-branch-worktree [description-or-feature-slug]` | Create a code branch/worktree while keeping specs in the primary repository |
@@ -100,7 +99,7 @@ Run the design stages, then hand off to the explicit engineering back-half:
 2. `design-spec-prototype`: build and serve a viewable prototype (`prototype/`), optional
 3. `design-spec-critique`: critique the prototype, else the proposal (`critique.md`), optional
 4. `design-spec-writer`: write `spec.md`, its step index, and `evidence-plan.json`.
-5. Hand the existing spec to `spec-end-to-end`, or run `spec-prepare`, workspace setup, `spec-run`, `spec-branch-refine`, `spec-work-tour`, and `spec-pr` separately.
+5. Hand the existing spec to `spec-end-to-end`, or run `spec-write`, workspace setup, `spec-run`, `spec-branch-refine`, `spec-work-tour`, and `spec-pr` separately.
 
 | Skill | Command | Purpose |
 |---|---|---|
@@ -216,7 +215,7 @@ This produces, under `dist/skill-bundles/` (git-ignored):
 - `spec-skills-<version>.tar.gz` / `.zip`
 - `specops-skills-<version>.tar.gz` / `.zip`
 
-There is no separate `design-spec-skills` archive. The design-spec skills ship inside `spec-skills` because they write the same artifact contract and hand off to `spec-prepare`, `spec-run`, `spec-branch-refine`, and `spec-work-tour`.
+There is no separate `design-spec-skills` archive. The design-spec skills ship inside `spec-skills` because they write the same artifact contract and hand off to `spec-write`, `spec-run`, `spec-branch-refine`, and `spec-work-tour`.
 
 Extract an archive and run `./install.sh` (see `./install.sh --help` for harness-specific targets). Set `VERSION` to control the archive name and bundle metadata:
 

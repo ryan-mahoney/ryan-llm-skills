@@ -145,4 +145,4 @@ See [the transition guide](spec-workflow.md#transition-existing-unimplemented-sp
 Shared tools still accept version 1 artifacts for existing callers outside this standalone workflow.
 Their legacy output does not establish current standalone readiness.
 
-Any prepared-artifact drift blocks execution until `spec-prepare` republishes. Any code change after an audit or tour invalidates their readiness until affected gates, the integrated audit, and the tour are refreshed.
+Any prepared-artifact drift blocks execution until `spec-write` republishes. Any code change after an audit or tour invalidates their readiness until affected gates, the integrated audit, and the tour are refreshed.

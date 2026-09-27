@@ -7,7 +7,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "12"
+  version: "13"
 ---
 
 # Design Spec Writer
@@ -236,6 +236,6 @@ Write `spec-steps.json` only after the spec body is final, so the index matches 
 1. Atomically write the final Markdown body to `.specs/<feature>/spec.md`, including the repository-relative footer and per-step tags.
 2. Atomically write the derived sibling `spec-steps.json`, with one minimal entry per step and exact tag parity.
 3. Add an **Executable Evidence Plan** section to `spec.md` with the evidence posture and stable CL/FH/EV graph. Atomically write strict version 1 sibling `evidence-plan.json`, cover every AC, and run `node ~/.agents/skills/spec-work-tour/scripts/validate-evidence-plan.mjs <path>`; include interface, client, live-path, accessibility, visual-state, and QA-tour gates as applicable.
-4. Report one compact routing summary: `outcome: written`; all three paths; posture and claim/failure/gate counts; step counts; inputs used; and `next: spec-prepare`.
+4. Report one compact routing summary: `outcome: written`; all three paths; posture and claim/failure/gate counts; step counts; inputs used; and `next: spec-write`.
 
 Do not implement the plan. Do not add Co-Authored-By trailers, "Generated with" footers, or any AI model attribution.

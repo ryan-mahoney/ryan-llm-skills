@@ -1,6 +1,6 @@
 ---
 name: spec-write
-description: "This skill should be used when the user asks to \"write a spec\", \"create a spec\", \"spec this out\", \"plan this feature\", or \"write an implementation plan\" for a feature or change. Creates a structured implementation spec at .specs/<feature>/spec.md without interacting with GitHub issues."
+description: "This skill should be used when the user asks to \"write a spec\", \"create a spec\", \"spec this out\", \"plan this feature\", or \"write an implementation plan\" for a feature or change. Creates or re-plans a complete implementation-ready package with granular execution cards and a bound preparation manifest, without implementing code or interacting with GitHub issues."
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,12 +9,14 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "20"
+  version: "21"
 ---
 
 # Spec Write
 
-Create a deterministic implementation spec and its executable-evidence graph from the current proposal. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md) before planning. The local package is canonical; this skill never creates, edits, or renames around GitHub issues.
+Create a complete implementation-ready package in one planning invocation: establish
+behavior and contracts, then ground granular execution cards and publish preparation.
+Use the current proposal or an existing spec as the intent source. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md) before planning. The local package is canonical; this skill never creates, edits, or renames around GitHub issues.
 
 ## Autonomous Work And Consequential Decisions
 
@@ -23,8 +25,7 @@ and current project policy before writing. If missing, resolve them through the 
 contract. Escalate unresolved data preservation, compatibility, release, cost, authority, or
 material risk decisions to the coordinator as `decision-required`; a direct invocation handles
 that check-in itself. Complete independent work while waiting. Do not turn unknown consequences
-into assumed requirements. Outside an existing-spec upgrade, a missing proposal/analysis remains
-a named input blocker; an upgrade can use the existing spec as its intent source.
+into assumed requirements. If no proposal, existing spec, or conversation analysis is available, report a named input blocker.
 
 ## Output Contract
 
@@ -34,11 +35,18 @@ Always write the completed spec to the resolved standalone spec folder:
 .specs/<feature-slug>/spec.md
 .specs/<feature-slug>/spec-steps.json
 .specs/<feature-slug>/evidence-plan.json
+.specs/<feature-slug>/spec-prepare.md
+.specs/<feature-slug>/step-<NNN>-subspec.md
+.specs/<feature-slug>/preparation.json
 ```
 
 Write every artifact atomically: write the full content to a temporary file in the destination directory, then rename it over the final path. Every markdown artifact begins with a level-1 `#` heading on line 1. `.specs/` is standalone working state and may be gitignored; do not stage or commit it unless the repository explicitly tracks specs.
 
-This skill writes the local spec only. It does **not** create, edit, comment on, label, or close GitHub issues, and it does **not** rename the spec folder to add an issue-number prefix.
+Also write optional `criteria.md` and `invariants.md` when applicable. Preserve existing
+formats: evidence-plan version 2, preparation version 3, step/card schemas, and the
+legacy report filename `spec-prepare.md`. That filename does not imply a separate skill.
+
+This skill writes the local planning package only. It does **not** create, edit, comment on, label, or close GitHub issues, and it does **not** rename the spec folder to add an issue-number prefix.
 
 ## Pre-Step - Load Pipeline Inputs
 
@@ -62,7 +70,7 @@ The folder contains fixed-name artifacts:
 
 - **`context.md`** — required sourced snapshot of project facts, decisions, authority and omissions.
 - **`requirements.md`** - optional. What was asked for; read it when present.
-- **`proposal.md`** - the architecture proposal. This is the primary input for the Architecture and Implementation Steps sections. Outside a legacy upgrade, if there is no spec folder, no proposal, and no analysis in the current conversation, stop and tell the user there is nothing to spec from.
+- **`proposal.md`** - the architecture proposal. This is the primary input for the Architecture and Implementation Steps sections. If there is no existing spec, proposal, or analysis in the current conversation, stop and tell the user there is nothing to spec from.
 - **`critique.md`** - optional. If present, reconcile it using the rules below. If absent, skip reconciliation; the critique stage is optional and its absence is not an error.
 - **Visual reference** - optional. When the proposal or conversation identifies existing visual work such as an HTML prototype, image, or mockup, resolve its exact entry-file path before writing. Treat that artifact as existing design input, not work to recreate.
 - **`spec.md`** - the output of this skill. Overwrite it only after producing the complete updated spec body.
@@ -78,6 +86,31 @@ When writing a phase spec:
 - State which phase of the proposal this spec covers in the Problem Statement.
 - Reconcile only the critique recommendations that fall within this phase's scope. Recommendations belonging to other phases are not deferrals; note them as "covered by phase N" only if helpful.
 - End the spec with the footer block, keeping the phase marker on the folder line: `Spec folder: .specs/<feature-slug>/ (phase N)` followed by the `Visual design:` line (see Spec Footer).
+
+## One Planning Owner And Safe Re-planning
+
+One capable planning agent owns both phases in this invocation. Reuse its repository
+investigation; do not dispatch a second full planning pass. First establish intended
+behavior and concrete contracts, then follow
+[Ground Execution Cards And Publish The Package](references/prepare-package.md) in full.
+That mandatory second phase may revise the draft's step boundaries. A spec without
+ready cards and a valid manifest is not a completed output.
+
+Before changing any package input, remove an existing `preparation.json`; an error
+invalidating it stops the run. Never restore the old manifest after a failed edit.
+For an existing unimplemented package, preserve overwritten planning files in a unique
+snapshot under canonical `.specs/.planning-backups/<feature>/` before invalidation,
+unless this run already has an intact backup. Exclude credentials and runtime artifacts.
+Use the existing spec as intent even without a proposal; retain accepted behavior while
+re-grounding and splitting compound steps. No data-format migration is required.
+
+Check recorded learnings/commits before renumbering. Do not reset implemented work or
+erase its evidence. For a partially implemented package, preserve completed step IDs
+and history, and limit corrections to pending work with explicit dependency mappings;
+return a consequential scope conflict rather than silently rewriting execution history.
+Reuse a valid package when no re-plan is requested or needed. Explicit re-planning may
+change decomposition even when hashes are current. Do not search or re-plan unrelated
+feature packages without selection by the user or active workflow.
 
 ## Reconcile Critique Feedback
 
@@ -213,6 +246,33 @@ Create a flat, numbered, sequential list of deterministic engineering tasks.
 
 Number the steps with sequential integers starting at 1 (1, 2, 3, …) as one continuous list. Do not group steps under "Phase" headings and do not use tiered or decimal numbers (`1.1`, `2.3`, `3.2.1`). Even when the proposal is organized in phases, the Implementation Steps stay one flat integer sequence — preparation, `spec-run`, `spec-step-run`, and the external task-runner address steps by this number. A phase *spec* (one of several `spec.md` files for a multi-phase proposal, per Phase specs above) still keeps its own flat 1..N list.
 
+### Step granularity
+
+Prefer more narrowly scoped steps over compressed compound steps. Each worker gets one
+coherent implementation objective and explicit inputs from prior steps, not a miniature
+project to decompose. Resolve consequential architecture, behavior, ownership, error,
+and integration decisions during planning; retain ordinary local coding judgment.
+Compact wording must not remove contracts or decisions the worker needs.
+
+Split when a step combines independently implementable behaviors, separate substantial
+integration boundaries, or several design decisions. Separate useful contracts, domain
+operations, persistence changes, and UI interactions when each has a stable handoff.
+State the exact dependency, exported shape, ownership, defaults, errors, and observable
+completion condition. A prerequisite need not expose a complete user journey: give it
+a bounded contract and name the later integration owner. Keep tightly coupled edits
+together when splitting requires temporary scaffolding or an unusable intermediate state.
+
+For example, invitation creation, acceptance, authorization, and management UI are
+separate candidate objectives, not one “implement invitations” step with a long checklist.
+Do not force one file per step, fixed step counts, or artificial layers. Many mechanical
+edits preserving one contract may remain one step. Write tests alongside the behavior;
+the review stage still owns automated execution.
+
+For each proposed step, ask whether its worker must choose among materially different
+product behaviors or architectures, or coordinate several independent objectives. If
+so, settle the choice or split the step before publishing its card. “Hard” is not a
+substitute for decomposition. The goal is fewer decisions per worker, not shorter prose.
+
 For each step include:
 
 1. What to do: exact files and changes required.
@@ -244,14 +304,15 @@ Step constraints:
 - **Deterministic:** No subjective instructions such as "improve", "clean up", or "refactor as needed".
 - **Plain procedural language:** Imperative mood, one instruction per sentence, condition before its command. Never write "should" in a step — an implementing model reads it as optional; write the bare imperative or "must".
 - **Minimal:** Smallest verifiable unit of progress.
-- **Self-contained:** Executable in isolation by a separate engineer or LLM context.
+- **Self-contained:** Executable by a separate worker given the named prior-step outputs;
+  no need to infer missing contracts or independently redesign the feature.
 - **Forward-only:** Target architecture only. No unnecessary compatibility layers.
 
 Step ordering:
 
-- Prefer a small complete behavior slice with its real wiring and proof.
-- Split contracts, pure logic, stateful work, and final integration only when actual dependencies
-  or complexity warrant separate steps. Do not manufacture layers or steps to fill this sequence.
+- Order granular objectives by actual dependencies, naming each stable handoff.
+- Keep integration explicit in its owning step; do not enlarge every prerequisite into
+  an end-to-end feature merely to make it self-contained.
 
 Exclude:
 
@@ -353,17 +414,15 @@ Write `spec-steps.json` only after the spec body is final, so the index matches 
 
 Write `.specs/<feature-slug>/evidence-plan.json` as version 2 JSON using the schema and invariants in the shared executable-evidence contract. `spec.md` remains canonical prose; this file is its claim/gate index. Use the same identifiers, owner steps, commands, artifacts, and posture values in both. Write it after the other outputs, then run `node ~/.agents/skills/spec-work-tour/scripts/validate-evidence-plan.mjs <path>`; a validation failure blocks handoff.
 
-## Output Steps
+## Complete Both Planning Phases
 
-1. Write the final markdown body — including each step's `Complexity:` tag (§9) and the footer block (`Spec folder:`, `Visual design:`) — to `.specs/<feature-slug>/spec.md`.
-2. Write `spec-steps.json`, including exact evidence ownership.
-3. Write strict `evidence-plan.json` and validate complete AC → CL → FH → EV traceability and single-step EV ownership.
-4. For a completed spec, report one compact routing summary: `outcome: written`; all three paths; evidence posture; claim/failure/gate counts; step counts; PM dispositions; inputs used; and `next: spec-prepare`.
+After drafting `spec.md`, `spec-steps.json`, and version 2 `evidence-plan.json`, read and
+execute [Ground Execution Cards And Publish The Package](references/prepare-package.md)
+in full in this same invocation. Reuse known facts and refine step boundaries as the
+cards expose complexity. Publish `preparation.json` last, only after every card is ready
+and the complete package validates. Return `outcome: prepared`, canonical artifact paths,
+step counts, material decisions, validation results, and `next: spec-run`.
 
-For an unresolved consequential choice, report `outcome: decision-required`, the exact choice,
-its consequence and safe work completed. Do not hand off a written spec whose merge scope depends
-on an assumed consequential answer.
-
-Do not implement the plan.
-
-Do not add Co-Authored-By trailers, "Generated with" footers, or any AI model attribution.
+Never stop at `outcome: written` or hand off to a separate preparation skill. If a
+consequential choice remains, report `decision-required`; otherwise report a concrete
+`blocked` outcome, with the manifest absent. Do not implement the plan or add attribution.

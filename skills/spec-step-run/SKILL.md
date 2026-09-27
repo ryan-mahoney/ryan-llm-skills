@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "24"
+  version: "25"
 ---
 
 # Spec Step Run
@@ -72,7 +72,7 @@ strict version 3 contract. Recompute the SHA-256 binding for `context.md`, `spec
 
 Missing, invalid, stale, or incomplete preparation is a provenance failure. Write a
 `no-artifact` learning naming the mismatched binding and stop this step without editing
-production code. Do not repair shared preparation artifacts here; rerun `spec-prepare`.
+production code. Do not repair shared preparation artifacts here; rerun `spec-write`.
 This gate prevents implementation and evidence from silently targeting different intent.
 
 ## Preserve The Plan As Evidence

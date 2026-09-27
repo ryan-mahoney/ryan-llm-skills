@@ -9,12 +9,12 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "24"
+  version: "25"
 ---
 
 # Spec Run
 
-Execute the package produced by `spec-prepare` within its sourced context and authority. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Preparation is immutable intent and evidence provenance; implementation may adapt to repository reality, but it may not execute against stale or mismatched prepared inputs.
+Execute the package produced by `spec-write` within its sourced context and authority. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Preparation is immutable intent and evidence provenance; implementation may adapt to repository reality, but it may not execute against stale or mismatched prepared inputs.
 
 Run steps sequentially. Dispatch one dedicated implementation agent per step when the harness supports subagents; otherwise follow `spec-step-run` directly for one step at a time. Do not batch steps or commits.
 
@@ -40,7 +40,7 @@ Read:
 Before touching production code, inspect the strict version 3 preparation manifest. Recompute and compare lowercase SHA-256 hashes for `context.md`, `spec.md`, `spec-steps.json`, `evidence-plan.json`, `spec-prepare.md`, every declared subspec, and optional criteria/invariants. Require evidence-plan version 2, then confirm its context path/hash matches this package's context and manifest.
 Confirm exactly one `ready` subspec exists for every indexed step and evidence ownership matches all three sources.
 
-Repeat validation before every step dispatch. A missing, invalid, stale, incomplete, or partially published package blocks further implementation: report the exact mismatch and require `spec-prepare` to republish. Never repair preparation during `spec-run`. Already committed step artifacts remain intact.
+Repeat validation before every step dispatch. A missing, invalid, stale, incomplete, or partially published package blocks further implementation: report the exact mismatch and require `spec-write` to republish. Never repair preparation during `spec-run`. Already committed step artifacts remain intact.
 
 ## Preserve Preparation As Evidence
 

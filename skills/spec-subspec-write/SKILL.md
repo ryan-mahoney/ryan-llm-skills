@@ -1,6 +1,6 @@
 ---
 name: spec-subspec-write
-description: "This skill should be used when the user asks to \"write a subspec\", \"plan this step\", \"write a step plan\", or \"detail step N\" for one implementation step in a prepared spec, or when spec-prepare escalates a genuinely uncertain step. Produces a compact, code-grounded execution card with strict planning and verification contracts."
+description: "This skill should be used when the user asks to \"write a subspec\", \"plan this step\", \"write a step plan\", or \"detail step N\" for one implementation step in a prepared spec, or when spec-write escalates a genuinely uncertain step. Produces a compact, code-grounded execution card with strict planning and verification contracts."
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "22"
+  version: "23"
 ---
 
 # Spec Subspec Write
@@ -22,7 +22,7 @@ This skill is a leaf planning task. Do not spawn, delegate to, or coordinate ano
 
 Write only the assigned **step subspec**. This invocation owns exactly one canonical `step-<NNN>-subspec.md`. Never edit `spec.md`, `spec-steps.json`, `evidence-plan.json`, `criteria.md`, `invariants.md`, `spec-prepare.md`, `preparation.json`, another step's subspec, or production/test code.
 
-The parent `spec-prepare` agent is the only writer of shared preparation artifacts and the only authority that may correct or renumber the spec. Report a mismatch through the planning verdict; do not improvise a new design.
+The parent `spec-write` agent is the only writer of shared preparation artifacts and the only authority that may correct or renumber the spec. Report a mismatch through the planning verdict; do not improvise a new design.
 
 ## Canonical Paths and Inputs
 

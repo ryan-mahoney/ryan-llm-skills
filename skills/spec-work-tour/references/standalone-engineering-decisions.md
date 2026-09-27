@@ -42,10 +42,13 @@ restating it or assigning a new kind of ID. Every changed material rule needs an
 a credible FH, and an EV capable of rejecting the counterexample. Use ordinary prose for
 ownership constraints; preparation can derive `criteria.md` and live cross-step invariants.
 
-Choose behavior-sized steps. Separate a prerequisite change when it has its own useful contract
-and proof; do not split a feature into unconnected layers merely to produce small commits. A
-consumer transition can be one step whose tests seed the dependency boundary and preserve the
-public output contract. Substantial fixture work does not imply a large production change.
+Choose granular steps with one coherent implementation objective and resolved consequential
+decisions. Split independent behaviors and substantial integration boundaries; give each worker
+explicit prior-step contracts and observable completion conditions. A useful prerequisite may
+have its own bounded contract and a named later integration owner. Keep tightly coupled edits
+together when splitting would require temporary scaffolding. Do not compress several objectives
+into one step merely to produce a complete feature slice. Card-writing must revise boundaries
+when it reveals hidden coordination work; ordinary local coding choices remain with the worker.
 
 ### Deferred Work
 

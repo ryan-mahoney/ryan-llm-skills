@@ -1,70 +1,13 @@
----
-name: spec-prepare
-description: "This skill should be used when the user asks to \"prepare a spec\", \"review and prepare the implementation plan\", \"make this spec implementation-ready\", or \"prepare spec\". Reviews and corrects spec.md, derives prose guardrails and live invariants, writes difficulty-routed execution cards, and atomically publishes preparation.json only when the complete package is current."
-mode: coding
-scope: document
-disable-model-invocation: true
-argument-hint: "[feature-slug or spec path]"
-license: MIT
-metadata:
-  author: Ryan Mahoney
-  homepage: ryan-mahoney.net
-  version: "23"
----
-
-# Spec Prepare
-
-> **`.specs/` is standalone working state and is often gitignored.** Read and write its files directly; do not depend on git history to recover them. Diffing repository code while grounding the spec remains allowed.
-
-Prepare the complete, immutable implementation and evidence package for a spec. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). This stage code-grounds both the implementation route and the proof needed to merge and deploy without human review.
-
-Preparation is one visible workflow stage owned by one capable preparation agent. That agent writes the shared artifacts and, by default, every step subspec. A `spec-subspec-write` leaf is an exceptional deep-planning fallback, not a mandatory pass for every step; when used, it may write only its assigned subspec. Never let a fallback leaf edit shared state.
-
-## Autonomous Preparation
-
-Resolve ordinary engineering choices autonomously within sourced `context.md`. Follow the shared
-context contract for consequential gaps: return `decision-required` to the coordinator (or handle
-the check-in directly when standalone), continue independent preparation, and withhold the manifest
-for unresolved decisions that affect merge scope or proof. Later deployment authorization may remain
-pending when isolated merge evidence is sufficient. Never infer authorization or data disposability.
-
-Do not implement production code or write to GitHub issues.
-
-## Canonical Inputs and Outputs
-
-Resolve the spec folder from an explicit `.specs/<feature>/spec.md` or `.specs/<feature>/` argument, then the `Spec folder:` footer or conversation context. If exactly one candidate exists, use it; stop on ambiguity rather than choosing the most recently modified folder.
-
-Keep the complete prepared package flat in that folder:
-
-- `context.md` — sourced project snapshot, decisions, authority and omissions.
-- `spec.md` — canonical spec.
-- `spec-steps.json` — derived machine step index.
-- `evidence-plan.json` — evidence posture and AC → claim → failure → gate graph.
-- `spec-prepare.md` — preparation report.
-- `criteria.md` and `invariants.md` — optional prose guardrails.
-- `step-<NNN>-subspec.md` — immutable execution cards.
-- `preparation.json` — validity manifest, published last.
-
-Use relative filenames and portable `.specs/<feature>/...` paths inside artifacts. Resolve
-`.specs/` from the primary repository, and code/test paths from the execution checkout, as
-defined in the shared workspace handoff. Pass absolute resolved paths to tools without
-persisting them in spec schemas. Step numbers are zero-padded to at least three digits.
-
-Write every Markdown artifact atomically and begin it with a level-1 heading. Write machine JSON atomically with a trailing newline. A temporary file must be in the destination directory and renamed over the final destination.
-
-## Preparation Order
+# Ground Execution Cards And Publish The Package
 
 Perform these transformations in exactly this order. They are deliberately sequential because later outputs bind earlier decisions.
 
-### 1. Resolve and invalidate
+### 1. Continue the same planning invocation
 
-1. Resolve the spec folder and confirm `spec.md` is readable.
-2. Read sibling `context.md`, `proposal.md`, `critique.md`, and required version 2
-   `evidence-plan.json`. Check context against current sources; route material changes through intake
-   and resolve consequential decisions before dependent planning. Legacy packages need sourced
-   context and phase classification, not inferred authority.
-3. **Invalidate first:** remove `preparation.json` before editing any preparation artifact or launching a subagent. A missing manifest is already invalidated. Any other removal error stops the run.
-4. Do not restore or retain the old manifest on any failure.
+The `spec-write` entrypoint has resolved the canonical paths and invalidated preparation
+before editing. Continue with that context and the repository evidence already read;
+do not restart discovery or delegate the whole preparation phase. Resolve remaining
+unknowns at their owning boundary. Keep the current draft spec and indexes consistent.
 
 ### 2. Review and correct the spec
 
@@ -120,9 +63,10 @@ Prefer a sentence like: `Implement the journal drawer's empty and save-pending s
 shown in .specs/journal/prototype/index.html under "Journal drawer", reusing the existing
 Drawer and form primitives and wiring the real journal query and mutation.`
 
-Preserve intent and voice. Do not restyle a sound spec. Re-running preparation against unchanged inputs must converge without churn.
+Preserve intent and voice. Apply the entrypoint's step-granularity rules before writing cards. Split compound objectives rather than
+hiding them in a longer card. Do not restyle a sound spec. Re-running preparation against unchanged inputs must converge without churn.
 
-Apply the Preparation section of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
+Apply the Preparation section of [Engineering Decisions](../../spec-work-tour/references/standalone-engineering-decisions.md).
 Verify material domain rules have sourced examples/counterexamples and AC/CL/FH/EV coverage;
 verify deferrals preserve current acceptance and have concrete destinations. Existing equivalent
 prose suffices. Correct missing behavior or proof, not headings. Ground database-derived behavior
@@ -229,7 +173,10 @@ and changed-path smoke procedure in Setup. Record any required broad suite once 
 branch review; do not create an implementation step to run tests. EV owner steps own test
 sources and handoffs; branch review owns deferred execution and result artifacts.
 
-Every card must contain strict `planning` and `verification` blocks matching the compact contract in `spec-subspec-write`. The parent validates hashes, step numbers, filenames, concrete targets, focused commands, and observable cases mechanically. It does not create a second prose copy of the verification contract or semantically re-judge an equivalent planner's work.
+Read the strict card schema and strategy/command guidance in
+[spec-subspec-write](../../spec-subspec-write/SKILL.md) before writing cards; reading its
+contract does not require delegation. Every card must contain strict `planning` and
+`verification` blocks matching that contract. The parent validates hashes, step numbers, filenames, concrete targets, focused commands, and observable cases mechanically. It does not create a second prose copy of the verification contract or semantically re-judge an equivalent planner's work.
 
 When a step carries an `Evidence:` tag in `spec.md`, add one line per owned EV item to `Targets`:
 
@@ -278,6 +225,14 @@ viewports and must support rendering both the reference and production UI when t
 reference is executable. Include an exact focused Playwright command and test file in the
 strict verification block when the repository already has Playwright or the step owns the
 smallest required Playwright setup. Non-visual cards omit the section.
+
+When writing a card exposes independent objectives or unresolved consequential design
+choices, revise the step decomposition first. Update the spec, index and EV ownership,
+then regenerate cards affected by changed step boundaries or the spec hash. Preserve
+stable AC/CL/FH/EV identifiers where meaning survives. For an unimplemented re-plan,
+remove obsolete canonical `step-<NNN>-subspec.md` files only after preserving the prior
+planning snapshot; never remove execution learnings or evidence. Every retained card
+must bind the final spec hash, including otherwise unchanged cards.
 
 Correct locally resolvable problems directly. Accumulate spec corrections discovered while producing cards, update the spec/index/guardrails once, then regenerate only cards whose inputs or required behavior changed. A missing field or stale private symbol is a repair, not a blocker.
 
@@ -372,6 +327,8 @@ Do not use fallback delegation for routine grounding, formatting, or validation 
 
 ## Output
 
+Return `outcome: prepared` only after publishing the manifest, with `next: spec-run`.
+For unresolved work return `decision-required` or `blocked` and leave the manifest absent.
 Report the canonical paths for `context.md`, `spec.md`, `spec-prepare.md`, `spec-steps.json`, `evidence-plan.json`, optional `criteria.md`/`invariants.md`, each step subspec, and `preparation.json`. State evidence posture and traceability counts, corrections, selected verification strategies, automation gaps, and whether the manifest was published.
 
 Do not add attribution footers or co-author trailers.

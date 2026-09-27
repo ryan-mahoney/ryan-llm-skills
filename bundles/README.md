@@ -21,7 +21,6 @@ The spec-driven development workflow plus the design-spec front-half:
 - `spec-architect-critics`
 - `spec-write`
 - `spec-subspec-write`
-- `spec-prepare`
 - `spec-branch`
 - `spec-branch-worktree`
 - `spec-run`
@@ -64,14 +63,14 @@ The generated `spec-skills` README also includes a stage-by-stage overview:
 
 1. Resolve project context and consequential decisions with `spec-architect-initial`, then propose the approach.
 2. Optionally run `spec-architect-critics` to challenge the architecture.
-3. Run `spec-write` to create `spec.md` and the machine step index.
-4. Run `spec-prepare` to ground and correct the spec, derive prose guardrails, plan each step, and publish the manifest.
-5. Let the top-level agent establish a code branch or worktree. Keep all `.specs` reads and writes in the primary repository; ignore any worktree copy.
-6. Execute the immutable prepared package with `spec-run`.
-7. Run `spec-branch-refine max-iterations=2` for at most two review → fix rounds,
+3. Run `spec-write` once to write the spec, ground granular execution cards, and publish
+   the complete prepared package.
+4. Let the top-level agent establish a code branch or worktree. Keep all `.specs` reads and writes in the primary repository; ignore any worktree copy.
+5. Execute the immutable prepared package with `spec-run`.
+6. Run `spec-branch-refine max-iterations=2` for at most two review → fix rounds,
    including the final fixes; record whether those fixes received an independent review.
-8. Run `spec-work-tour` to produce commit-bound context, merge evidence, and separate deployment/authority/observation states.
-9. Publish with `spec-pr`.
+7. Run `spec-work-tour` to produce commit-bound context, merge evidence, and separate deployment/authority/observation states.
+8. Publish with `spec-pr`.
 
 `spec-issue` remains an optional standalone GitHub mirror and does not participate in this sequence.
 

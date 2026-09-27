@@ -24,7 +24,7 @@ throughout the run.
 The sequence is:
 
 ```text
-project context and consequential decisions → architecture → optional critique → spec → preparation → workspace setup
+project context and consequential decisions → architecture → optional critique → combined specification and preparation → workspace setup
 → step implementation → independent branch refinement → work tour → PR publication
 ```
 
@@ -55,11 +55,23 @@ The individual skills remain valid entry points. No separate context skill is re
 /spec-architect-initial describe the feature
 /spec-architect-critics .specs/results-export/proposal.md
 /spec-write .specs/results-export/
-/spec-prepare .specs/results-export/
 ```
 
 The critique is optional. `spec-architect-initial` establishes project context before architecture.
 Later stages reuse that context and ask only about unresolved consequential decisions.
+
+`spec-write` owns both phases in one invocation: decide behavior/contracts, then ground
+and decompose execution cards. Each step has one coherent objective with explicit prior
+outputs and resolved consequential decisions. Card-writing can split compound steps;
+compact prose is not a reason to omit implementation detail. The planner publishes the
+manifest only when every card is ready.
+
+For an existing unimplemented package, rerun `spec-write` with its path and request a
+re-plan. It preserves accepted behavior and snapshots prior planning files before
+revising the steps. Use `spec-upgrade` for an explicitly selected batch. Existing data
+formats are unchanged: `spec-prepare.md` remains the report filename, execution cards
+retain their schemas, and `preparation.json` remains version 3. Valid existing packages
+remain usable; re-plan compressed work when helpful, not merely to migrate a format.
 
 After preparation, start implementation with this request:
 
@@ -173,7 +185,7 @@ before starting implementation. Select one, several, or all pending specs explic
 ```
 
 It establishes shared project context once, checks each selected plan for unjustified complexity,
-preserves requested behavior, and runs the writing/preparation stages needed to produce current
+preserves requested behavior, and runs the combined planner needed to produce current
 packages. It preserves original planning files before replacement. Consequential unknowns prompt
 a check-in; partially implemented packages are flagged rather than reset. Its final report explains
 material changes and identifies which packages are ready to implement. It does not implement,
