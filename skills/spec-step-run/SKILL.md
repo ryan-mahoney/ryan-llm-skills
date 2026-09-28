@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "25"
+  version: "26"
 ---
 
 # Spec Step Run
@@ -18,6 +18,15 @@ Implement one step from the prepared package. This is a leaf implementation skil
 do not spawn subagents, deliberately run the next indexed step, or perform the final
 branch evidence audit. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Work to the intended outcome even when repository evidence shows that
 the prepared route is incomplete or wrong.
+
+## Routed Overseer Messages
+
+When assigned message paths, follow the shared
+[recipient contract](../spec-end-to-end/references/overseer-inbox.md#recipient-contract).
+Read the originals yourself, act within this skill's role and sourced authority,
+and record message outcomes in your existing report. Do not consume the inbox or
+write the coordinator's ledger. Continue without parent approval unless a relevant
+hold or consequential unresolved decision prevents dependent work.
 
 ## Local Implementation Authority And Check-ins
 
@@ -37,8 +46,9 @@ necessary later procedure, and record pending execution. A spec gate never grant
 
 ## Canonical Inputs
 
-The prompt must identify the code checkout, canonical `.specs/<feature>/` folder in the primary
-repository, and target step. Resolve them with the shared workspace handoff even on direct
+The prompt identifies the code checkout and canonical target subspec path, or the
+canonical feature folder and target step. Resolve the package and step from those
+inputs; the parent need not restate their contents. Resolve paths with the shared workspace handoff even on direct
 invocation; never use a worktree spec copy. Read `context.md`, `spec.md`, `spec-steps.json`,
 `evidence-plan.json`, `spec-prepare.md`, `preparation.json`, optional criteria/invariants/blockers,
 the target `step-<NNN>-subspec.md`, and prior step learnings from the canonical folder. Write

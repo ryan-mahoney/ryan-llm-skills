@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "10"
+  version: "13"
 ---
 
 # Spec End To End
@@ -20,9 +20,10 @@ and production verification remain separate actions under existing authority.
 Read [Engineering Decisions Through The Standalone Workflow](../spec-work-tour/references/standalone-engineering-decisions.md).
 Carry domain rules and concrete counterexamples from architecture into AC/CL/FH/EV evidence;
 carry accepted deferred work into the final tour and PR. Use existing stage artifacts and verdicts.
-At handoffs, check the owning stage's rule coverage, ordinary-entry proof, and scope limits as
-well as hashes. Apply this to resumed packages by material coverage, not by new headings or a
-blanket artifact rewrite. Follow the combined planning stage below.
+Stage owners check rule coverage, ordinary-entry proof, and scope limits. The parent
+checks the returned outcome, artifact locations, revision bindings, and unresolved decisions;
+it does not repeat the stage's substantive review. Stage owners assess resumed
+packages by material coverage, not new headings or a blanket artifact rewrite. Follow the combined planning stage below.
 
 ## Preserve User Directives
 
@@ -65,6 +66,17 @@ resuming. Reopen settled decisions only when new evidence invalidates them.
 If multiple feature packages or goals match and repository evidence cannot disambiguate them, stop
 with the exact ambiguity. Do not choose by modification time.
 
+## Receive Overseer Messages
+
+Before implementation begins, read [Overseer Inbox](references/overseer-inbox.md).
+Initialize the canonical feature's `inbox/` and `processed/` folders and record the
+run ID and paths in the ledger. Messages arrive during implementation and review,
+never during planning. The parent owns intake and routing; addressed workers own
+interpretation and action. Pass archived message paths without translating their
+technical content. Check during available waits and stage handoffs, then reconcile
+pending deliveries before publication. Do not require parent acknowledgment at each
+step or review iteration. File delivery does not wake a stopped agent.
+
 ## Resolve The Starting Stage
 
 Use the architecture workflow and resume from the earliest stage that does not already have current,
@@ -92,10 +104,32 @@ steps, dedicated step workers, commit boundaries, and independent reviewer separ
 delegating a stage that itself requires workers, verify the harness supports the needed nesting and
 tool access; otherwise retain that stage's coordination locally.
 
-Give each worker the canonical checkout and spec paths, assigned stage or step, owning skill path,
-required constraints, sourced `context.md`, operational authority, and return contract. Require it to read and follow the owning skill in full.
-Reference accessible documents instead of copying them unless the dispatch contract requires exact
-text. Do not assume workers inherit the parent conversation.
+Select agents by required capabilities before dispatch, not by names such as
+"reviewer" or "explorer". The branch-review stage owner must read the checkout and
+canonical spec package, execute required verification commands, and write review
+and evidence artifacts in the primary repository's spec folder. A restriction on
+editing implementation code does not mean the stage can use a filesystem-read-only
+agent. Check the harness's declared tools and writable roots before assignment;
+if unclear, resolve that capability gap before starting substantial review work.
+Use a capable general-purpose agent with the review role's code-edit prohibition
+when available. Analysis-only reviewers may assist with scoped findings, but cannot
+own the whole stage. If an explicitly requested agent type lacks a required capability,
+surface that mismatch rather than silently substituting it or having the parent
+transcribe its output to complete the stage.
+
+Give each stage coordinator the canonical checkout and spec-package paths, assigned
+stage, owning skill path, run-wide constraints, and completion return contract. When
+delegation is requested, delegate whole implementation and refinement stages when
+the harness supports their workers; the parent need not manage every implementation
+step or review iteration.
+
+For an implementation worker, pass the checkout, canonical subspec path, owning
+skill path, and paths to any newly routed messages. The subspec and its referenced
+package are the technical handoff. Workers load requirements, context, rules,
+evidence obligations, and prior learnings themselves. Do not copy step text or
+reconstruct those documents in prompts. Missing or contradictory prepared inputs
+return to their owner; the parent does not compensate with an improvised technical
+brief. Preserve explicit user constraints not already captured in the package.
 
 Keep investigation, implementation, verification, and routine repair with the assigned worker under
 the owning skill's rules. Preserve its permitted checkpoint outcomes and escalation policy. Resume
@@ -110,8 +144,10 @@ report fields or material issues; brevity never hides failures or replaces requi
 
 ## Execute The Pipeline
 
-Before each stage, read that sibling skill's `SKILL.md` completely and follow it as the authority
-for the stage. Execute these stages in order, skipping only current valid stages or optional stages
+For a delegated stage, require its owner to read and follow the sibling skill in full;
+the parent need not also load its implementation instructions. Read that skill in full
+when executing the stage locally. Use the routing and completion contracts below to
+coordinate delegated work. Execute these stages in order, skipping only current valid stages or optional stages
 excluded by the routing policy above:
 
 1. Run `spec-architect-initial` when a current proposal does not already exist.
@@ -136,12 +172,15 @@ excluded by the routing policy above:
    and post-deployment observations are separate; pending later-phase gates do not force execution.
 8. Run `spec-pr` from the same checkout and publish the pull request.
 
-After every stage, inspect its declared outputs and outcome against the owning skill's handoff
-contract. A worker's success assertion is insufficient: check required evidence and revision
-bindings. Preserve required reads, checks, integration verification, and the selected review
-budget and bounded-completion policy in the shared evidence contract;
-do not add a duplicate implementation review or rerun verification merely to repeat worker
-evidence. Expand inspection for missing, inconsistent, stale, or risk-bearing evidence.
+After every stage, check the returned outcome, required artifact existence, relevant
+revision bindings, unresolved decisions, and next stage. Inspect the declared
+completion record rather than relying on a conversational success assertion. Stage
+owners validate detailed preparation and evidence; the independent reviewer owns
+correctness and proof assessment. Do not reread every subspec, inspect source code,
+or rerun tests to reconstruct those judgments. Ask the same owner to repair a
+missing or contradictory handoff. Investigate further only for a concrete mismatch,
+stale record, explicit escalation, or newly identified risk. Preserve the selected
+review budget and bounded-completion policy across handoffs.
 
 Resolve worker `decision-required` outcomes at the top level using the shared context contract.
 Do not ask users to review specs or code. Surface the concrete consequential choice and preserve

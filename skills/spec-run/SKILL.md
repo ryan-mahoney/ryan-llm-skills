@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "25"
+  version: "27"
 ---
 
 # Spec Run
@@ -17,6 +17,14 @@ metadata:
 Execute the package produced by `spec-write` within its sourced context and authority. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Preparation is immutable intent and evidence provenance; implementation may adapt to repository reality, but it may not execute against stale or mismatched prepared inputs.
 
 Run steps sequentially. Dispatch one dedicated implementation agent per step when the harness supports subagents; otherwise follow `spec-step-run` directly for one step at a time. Do not batch steps or commits.
+
+When the end-to-end handoff includes an overseer mailbox, follow its
+[routing contract](../spec-end-to-end/references/overseer-inbox.md). The top-level
+coordinator owns intake; this stage routes received archived message paths to the
+active or next addressed worker. Continue ordinary steps without parent approval.
+Include unresolved message outcomes in the stage handoff. When delegated, do not
+consume inbox files or write the top-level ledger. When the top-level coordinator
+runs this stage locally, it retains its existing intake ownership. A direct invocation does not create another consumer.
 
 Read the Assembly, Tour, And Publication section of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
 Carry rule-to-proof links, ordinary-entry observations, and accepted deferred-work briefs from
@@ -31,7 +39,7 @@ Read:
 
 - sibling `context.md`, current project context, `spec.md`, `spec-steps.json`, and `evidence-plan.json`;
 - sibling `spec-prepare.md` and `preparation.json`;
-- every subspec bound by the manifest;
+- the subspec index and manifest bindings; workers read their assigned subspecs in full;
 - optional bound `criteria.md` and `invariants.md`;
 - applicable rule paths, existing blockers, and prior step learnings.
 
@@ -56,11 +64,11 @@ contract before dependent work and re-prepare when intent or proof changes.
 For each indexed step in ascending order:
 
 1. Revalidate the preparation package and record, but do not gate on, resolvable drift.
-2. Provide the implementation agent with both the absolute code checkout and the canonical spec-folder path in the primary repository, exact step text, sourced context/authority, immutable subspec, preparation manifest, applicable rules, relevant prose-only criteria statements, live invariants, the step's owned `Evidence:` obligations when present, prior learnings, and unresolved findings.
+2. Provide the absolute code checkout, canonical target subspec path, owning skill path, and any routed message paths or new run-wide constraints. The worker resolves the step and package from the subspec and reads its referenced context, manifest, rules, evidence obligations, and prior learnings itself. Do not restate the technical brief or curate a parallel copy of the requirements.
 3. Require the agent to read and follow `~/.agents/skills/spec-step-run/SKILL.md` in full.
 4. Wait for that step to produce a learning and any reviewable commit, then continue.
 
-When the card declares any risk lens, call it out explicitly in the dispatch and require the execution-time boundary expansion and pre-commit risk audit from `spec-step-run`. When the harness exposes a reasoning-effort control, prefer elevated reasoning for `persistence-integrity`, `atomic-publication`, `concurrency`, `lease-or-refcount`, `cancellation`, `cross-step-contract`, and `security-boundary`; the absence of such a control does not block execution.
+The worker reads risk lenses from the card and applies the execution-time boundary expansion and pre-commit risk audit from `spec-step-run`; do not duplicate those instructions in the dispatch. When the harness exposes a reasoning-effort control, prefer elevated reasoning for `persistence-integrity`, `atomic-publication`, `concurrency`, `lease-or-refcount`, `cancellation`, `cross-step-contract`, and `security-boundary`; the absence of such a control does not block execution.
 
 `spec-step-run` owns implementation, test writing, bounded local smoke/visual checks,
 deferred-test handoffs, the step learning, staging the coherent artifact, and the conventional step
@@ -71,7 +79,10 @@ second-guess the implementation before final branch refinement.
 
 ## Mechanical Verification
 
-After each step returns, verify only the execution contract:
+After each step returns, verify only the execution contract from its learning and
+referenced artifact/commit metadata. The following are checks of recorded outcomes,
+not a second code review or a reason to reread every subspec. Ask the worker to repair
+missing or contradictory records; leave substantive correctness to branch review:
 
 1. Changed and staged files form a coherent repository-local artifact and exclude unrelated user changes and spec artifacts.
 2. Tests were written, local smoke/visual checks ran, and automated commands were deferred to branch review with honest pending status.

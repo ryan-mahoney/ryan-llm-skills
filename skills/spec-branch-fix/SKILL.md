@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "12"
+  version: "13"
 ---
 
 # Spec Branch Fix
@@ -26,6 +26,15 @@ re-reviews — `spec-branch-refine` runs the next `spec-branch-review` as the
 independent check that fixes landed.
 
 Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Evidence findings are first-class: correct the implementation, test/gate, artifact, claim mapping, or proof boundary that made the evidence invalid, then reproduce the affected gate.
+
+## Routed Overseer Messages
+
+When assigned message paths, follow the shared
+[recipient contract](../spec-end-to-end/references/overseer-inbox.md#recipient-contract).
+Read the originals yourself, act within this skill's role and sourced authority,
+and record message outcomes in your existing report. Do not consume the inbox or
+write the coordinator's ledger. Continue without parent approval unless a relevant
+hold or consequential unresolved decision prevents dependent work.
 
 ## Operating Context
 

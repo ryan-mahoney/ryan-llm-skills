@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "17"
+  version: "19"
 ---
 
 # Spec Branch Evidence Audit
@@ -17,15 +17,29 @@ metadata:
 > **`.specs/` is standalone working state and is often gitignored.** Read and write it directly; do not depend on git history to recover it. Diffing implementation code under review is unaffected.
 
 Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Independently audit the whole branch for correctness, integration, prepared-guardrail, and evidence-closure defects, then write the
-findings to `reviews/branch-<iteration>-review.md`. This is the read-only half of
+findings to `reviews/branch-<iteration>-review.md`. This is the audit half of
 the branch evidence loop driven by `spec-branch-refine`: it finds bugs and invalid proof; its
 partner `spec-branch-fix` reads the file and applies fixes. This skill never edits
-code.
+code. Its stage owner must have command execution and write access to the canonical
+spec folder: it runs deferred verification, updates merge evidence, and writes the
+review artifact. Check those capabilities before substantive work. A harness agent
+named "reviewer" may be analysis-only and therefore unsuitable as the stage owner.
+Report a capability mismatch immediately; do not complete a long analysis expecting
+the parent to reconstruct and write the required artifacts afterward.
 
 This is the independent final evidence boundary before the work tour. It must not trust
 the implementer's readiness conclusion. It receives intent, implementation, and produced
 evidence so it can try to falsify claims against the integrated branch. Its recall comes
 from per-commit decomposition plus claim/failure/gate auditing.
+
+## Routed Overseer Messages
+
+When assigned message paths, follow the shared
+[recipient contract](../spec-end-to-end/references/overseer-inbox.md#recipient-contract).
+Read the originals yourself, act within this skill's role and sourced authority,
+and record message outcomes in your existing report. Do not consume the inbox or
+write the coordinator's ledger. Continue without parent approval unless a relevant
+hold or consequential unresolved decision prevents dependent work.
 
 ## Operating Context
 
@@ -210,10 +224,14 @@ time: a non-atomic read-modify-write race, a `catch` that swallows a post-`renam
 error, one error type where the rest of the module raises another, an untested
 validation branch. Review the small units, never only the combined blob.
 
-**Fan-out rule.** When the harness supports subagents, run every review pass in
-read-only subagents — the reviewer stays independent of the later fixer and the
-per-commit passes run in parallel. Merge all findings, deduped by signature, into
-the one review file. The stages and lenses below reference this rule.
+**Fan-out rule.** When the harness supports subagents, delegate scoped per-commit
+and lens analyses to subagents that do not edit implementation code. Analysis-only,
+filesystem-read-only agents are suitable when their assignment is to return findings
+and requires no command execution or artifact writes. The capable review stage owner
+retains verification execution, evidence updates, aggregation, and writing the final
+review file; these duties do not fall back to the top-level orchestrator. Keep review
+independent of the later fixer and run per-commit analyses in parallel. Merge findings,
+deduped by signature, into one review file. The stages and lenses below reference this rule.
 
 ### Core review (always runs) — decompose, review per commit, then aggregate
 

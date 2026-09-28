@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "12"
+  version: "14"
 ---
 
 # Spec Branch Refine
@@ -38,6 +38,20 @@ criteria `Statement:` values, and live invariants; those findings use the same l
 and verdict as correctness findings. It is also the right standalone entry point for "clean up this
 branch before I open a PR."
 
+## Routed Overseer Messages
+
+When the end-to-end coordinator forwards archived message paths, follow the
+[routing contract](../spec-end-to-end/references/overseer-inbox.md#checkpoints-and-routing).
+Pass `review` messages unchanged to the active or next reviewer and `fix` messages
+to the active or next fixer. Retain pending routes and include recipient outcomes
+in the normal handoff. If that recipient will not run, return the unresolved route
+to the parent; do not invent another round or reset the budget. Reviewers interpret
+messages independently and cannot be instructed to return a particular verdict.
+Continue iterations without parent acknowledgment unless a relevant hold or
+consequential decision blocks dependent work. A delegated stage does not consume
+inbox files or write the top-level ledger; a top-level coordinator executing this
+stage locally retains its existing intake ownership.
+
 ## Autonomous Convergence
 
 Drive the loop within sourced project context and operational authority. Resolve ordinary repair
@@ -59,6 +73,14 @@ spec correction, or a convergence stop condition below.
   unless the user explicitly chooses another limit.
 
 ## The Loop
+
+Before assigning the review stage, apply the
+[agent capability check](../spec-end-to-end/SKILL.md#delegate-with-compact-handoffs).
+Its owner needs command execution and write access to canonical review/evidence
+artifacts, even though it must not edit implementation code. Do not assign the whole
+stage to an analysis-only reviewer and then inherit its missing execution or writing
+work. Choose a capable stage owner before dispatch; scoped analysis helpers may
+remain read-only.
 
 Start at `i = 1`. On resume, reconcile the latest review/fix artifacts and HEAD:
 finish an interrupted iteration's pending fix before advancing; never skip its fix or
