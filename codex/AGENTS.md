@@ -44,6 +44,11 @@ When writing PRs, commit messages, work tours, proposals, critiques, or specs, l
 `~/.agents/rules/engineering-writing.md` and apply the relevant audience guidance.
 Keep human-facing summaries concise and preserve useful detail in agent-facing specs.
 
+Before creating or amending any commit, including commits made inside another
+workflow, apply the commit final check in that guide to the complete message.
+The subject and body must explain the change without local review numbers, job
+IDs, or conversation context. Shared references supplement the explanation.
+
 ## PR and Ticket Writing
 When drafting or editing PR titles/descriptions or Jira/GitHub tickets, load and apply
 `~/.agents/rules/pr-and-ticket-writing.md`, including its acceptance-criteria guidance.

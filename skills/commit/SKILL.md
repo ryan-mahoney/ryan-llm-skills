@@ -22,6 +22,7 @@ Determine the GitHub issue number: use $ARGUMENTS if provided, otherwise extract
 1. If an issue number was identified, read the GitHub issue with `gh issue view` to understand the context of the changes
 2. Review the staged changes with `git diff --cached`
 3. Write a conventional commit message that reflects the nature of the changes (e.g., feat, fix, refactor, chore) and references the issue number if available (e.g., `feat(scope): description (#259)`)
-4. Commit the staged files with that message
+4. Apply the commit final check in Engineering Writing to the complete proposed message against the staged diff. Replace local review/finding/job references with the concrete problem and correction; shared issue references supplement that explanation. Rewrite any passage that depends on the originating conversation or local workflow.
+5. Commit the staged files with that message
 
 Do not add Co-Authored-By trailers, "Generated with" footers, or any AI model attribution.

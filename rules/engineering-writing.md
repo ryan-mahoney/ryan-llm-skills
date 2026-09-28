@@ -82,6 +82,27 @@ result when committing a checkpoint. Do not imply the whole feature is complete.
 Keep step numbers, spec basenames, and audit iteration metadata in workflow records
 unless the repository requires them. Preserve required issue references and trailers.
 
+Apply this standard to every commit, including review fixes, checkpoints, amendments,
+and squash messages, whether written directly or by another workflow. Review feedback
+is context for understanding a defect, not the explanation to put in history. Replace
+local finding numbers, review/job IDs, and phrases such as “address feedback” with
+the actual failure condition and correction. A shared issue or review link may
+supplement that explanation; it must not replace it. Keep local tracking metadata
+in workflow records, not the commit subject or body, unless the repository requires it.
+
+For example, replace `fix: address review finding 3 (job 842)` with
+`fix(replay): exclude empty buckets when merging accuracy`. If the reason needs a
+body: “Merging inserts empty buckets and lowers the reported accuracy for sparse
+results. Retain observed buckets and calculate percentages from their combined
+counts.” Use such claims only when supported by this commit's diff.
+
+Before creating or amending a commit, read its complete proposed message against
+the exact diff being committed. Can a teammate reading `git log` understand what
+changed and why without the conversation, local reports, or review tool? Check the
+body and trailers as well as the subject for unexplained references, inaccessible
+sources, and claims beyond this diff. Rewrite any failing passage before committing.
+This is an editing check, not a requirement to add a body or request approval.
+
 ## Work tours: explain the result, then let readers inspect it
 
 Use the title and opening summary to explain the changed behavior and why it
