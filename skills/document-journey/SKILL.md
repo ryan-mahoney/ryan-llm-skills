@@ -81,7 +81,7 @@ Two or three complete runs in Given/When/Then with realistic seeded data — use
 The page is the anchor downstream evaluation reads. Link, do not copy:
 
 - E2E lane IDs and their receipt location (`tmp/e2e-journey-evidence/`, disposable — link the catalog, not the run output).
-- Screen pages and their `docs/screenshots/SCRN-###/` captures for the stages that have them.
+- Screen pages and their captures for the stages that have them. Cite each capture by its backticked ID — `SCRN-###/<name>` for a stage's screen state, `JRNY-###/<name>` for a journey-wide capture — resolved under the capture root defined in `../uishot/references/capture-root.md`. Never cite an image path.
 - `CTX-` findings in `docs/journey-context-findings.md` that name this journey's steps.
 - Marketing-side content the user was shown, by file path.
 
@@ -101,7 +101,8 @@ File: `docs/journeys/JRNY-###-<slug>.md`, following the standard's directory lay
 6. Every `inferred` story carries its label and an open question.
 7. Each example names a test or gives the reason it has none; no example uses placeholder data.
 8. The page contradicts no upstream document; any contradiction found is reported as a finding against that document, not silently corrected.
-9. Run whatever documentation or link checks the repository provides.
+9. Every cited capture ID resolves to a file under the capture root, or the page states that the resolution check was not possible in this checkout; every stage with no capture says why.
+10. Run whatever documentation or link checks the repository provides.
 
 Report the file path, validation result, registry row updated, seams referenced, ledger keys proposed, and the gaps a human must confirm.
 

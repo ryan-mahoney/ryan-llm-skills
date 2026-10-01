@@ -25,6 +25,7 @@ actor: anonymous-prospect                     # one actor; see personas.js
 roles: []                                     # ROLE-## when authenticated; empty for anonymous
 jobs: [JOB-0041]                              # primary story first (DR-106)
 screens: [SCRN-030, SCRN-031]                 # registered screens the journey visits
+captures: []                                 # capture IDs this page cites, never image paths
 features: []                                  # FEAT-## when a feature registry exists
 rules: [BR-0101]                              # BR- IDs, referenced never restated (DR-092)
 seams: [SEAM-004, SEAM-007]                   # registry seam IDs
@@ -37,7 +38,7 @@ derived_from:
 ---
 ```
 
-An empty list is valid. A missing key is not. `context_keys` uses the E2E ledger key names verbatim so the context audit consumes this page without translation.
+An empty list is valid. A missing key is not. `context_keys` uses the E2E ledger key names verbatim so the context audit consumes this page without translation. `captures` lists the backticked capture IDs §9 cites; it never holds a path or a directory.
 
 ---
 
@@ -135,7 +136,9 @@ The negative statement (`And no org exists...`) is required wherever a reader mi
 | Stage | Kind | Reference | Notes |
 |---|---|---|---|
 
-Screenshots from `docs/screenshots/SCRN-###/`, E2E receipts and storyboard locations, `CTX-` findings, marketing content files. This section feeds journey evaluation and design QA; it links, never copies. States with no capture read `Not captured — <reason>.`
+Captures are generated locally, are not committed, and resolve by ID under the capture root.
+
+Rows name captures by backticked ID — `SCRN-###/<name>` for a stage's screen state, `JRNY-###/<name>` for a capture of the journey as a whole — and never by an image path. E2E receipts and storyboard locations, `CTX-` findings, and marketing content files are listed here too, each with its own kind. This section feeds journey evaluation and design QA; it links, never copies. States with no capture read `Not captured — <reason>.`
 
 ## Open questions
 
