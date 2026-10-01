@@ -1,0 +1,4 @@
+interface:
+  display_name: "Journey QA"
+  short_description: "Explore, review, replay and deck user journeys through the ux-qa harness"
+  default_prompt: "Use $journey-qa to explore, review, replay or deck a JRNY-### journey scenario."
