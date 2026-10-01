@@ -31,7 +31,7 @@ variable can never redirect a run.
 bin/ux-qa up <JRNY-###/slug> [--headed]
 bin/ux-qa step   --run DIR <action> [target flags] [--intent T] [--expect T]
 bin/ux-qa note   --run DIR [--about N|last] --observed T [--confusion none|mild|blocked]
-bin/ux-qa finish --run DIR --claim done|gave-up [--reason T] [--eyes host-vision|codex-relay|source-only]
+bin/ux-qa finish --run DIR --claim done|gave-up [--reason T] [--eyes host-vision|relayed-vision|source-only]
 bin/ux-qa report --run DIR
 bin/ux-qa down   --run DIR [--record]
 bin/ux-qa replay [<JRNY-###[/slug>] ...] [--trail FILE] [--headed]

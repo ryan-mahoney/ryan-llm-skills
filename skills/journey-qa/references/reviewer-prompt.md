@@ -43,11 +43,11 @@ Establish your eyes before you claim anything about how a screen looks:
 
   ~/.agents/skills/see/scripts/see-check mode
 
-If that prints anything other than `unknown`, use the mode it prints. Otherwise
+If that prints anything other than `unknown`, use the mode it reports. Otherwise
 run `~/.agents/skills/see/scripts/see-check start`, open the PNG it writes, report
 the colours you actually see left to right to `see-check verify`, and use the mode
-that answer establishes. Report only what you actually saw. In the `codex-relay`
-mode every visual fact comes from `codex-see`, and every observation you write
+that answer establishes. Report only what you actually saw. In the `relayed-vision`
+mode every visual fact comes from the relay rather than from you, and every observation you write
 down that rests on an image is attributed to that relay. In the `source-only`
 mode you have no visual evidence at all: work from the recorded text and the
 accessibility snapshot in the step log, say so, and make no claim about how

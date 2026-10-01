@@ -154,7 +154,7 @@ node "$SKILL_DIR/scripts/build-deck.mjs" --summary \
 
 Inspect the result rather than trusting the command. Capture it with `uishot`
 at `--viewport 1280x800` and look at the PNG through the `see` skill's eyes
-mode; record which mode you used (`host-vision`, `codex-relay` or
+mode; record which mode you used (`host-vision`, `relayed-vision` or
 `source-only`) alongside the deck, and say so when you have no visual evidence.
 
 Decks are local files under `.specs/ux-qa/`, which is gitignored. Publishing a

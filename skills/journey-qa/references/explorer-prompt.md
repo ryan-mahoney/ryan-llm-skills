@@ -26,7 +26,7 @@ subcommands you may use are:
 
   bin/ux-qa step   --run {RUN_DIR} <action> [target flags] [--intent T] [--expect T]
   bin/ux-qa note   --run {RUN_DIR} [--about N|last] --observed T [--confusion none|mild|blocked]
-  bin/ux-qa finish --run {RUN_DIR} --claim done|gave-up [--reason T] [--eyes host-vision|codex-relay|source-only]
+  bin/ux-qa finish --run {RUN_DIR} --claim done|gave-up [--reason T] [--eyes host-vision|relayed-vision|source-only]
 
 You must not read any other file in the repository. You must not read `.specs`,
 `docs`, source files, tests, configuration or project documentation. You must not
@@ -80,15 +80,17 @@ Establish your eyes before you claim anything about how a screen looks:
 
   ~/.agents/skills/see/scripts/see-check mode
 
-If that prints anything other than `unknown`, use the mode it prints. Otherwise
+If that prints anything other than `unknown`, use the mode it reports. Otherwise
 run `~/.agents/skills/see/scripts/see-check start`, open the PNG it writes, report
 the colours you actually see left to right to `see-check verify`, and use the
 mode that answer establishes. Report only what you actually saw. In the
-`codex-relay` mode every visual fact comes from `codex-see`. In the
-`source-only` mode you have no visual evidence at all: work from the accessibility
+`relayed-vision` mode every visual fact comes from the relay rather than from
+you. In the `source-only` mode you have no visual evidence at all: work from the accessibility
 snapshot text and say so, and make no claim about how anything looks.
 
-When you finish, pass the mode you established as `--eyes` on `finish`. Stop
+When you finish, pass the mode you established as `--eyes` on `finish`, spelled
+the way this harness spells it: `host-vision`, `relayed-vision` or
+`source-only`. Stop
 conditions:
 
 - The goal in the brief is reached and the page shows it: `finish --claim done`.
