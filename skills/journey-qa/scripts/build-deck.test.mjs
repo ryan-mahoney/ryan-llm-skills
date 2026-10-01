@@ -773,6 +773,16 @@ test("a brief with no Journeys column is rejected", () => {
   assert.match(result.stderr, /brief: no table with a Journeys column/);
 });
 
+test("a brief whose earlier table mentions journeys still reads the FEAT header", () => {
+  const dir = tempDir("build-deck-summary-earlier-journeys-");
+  const { brief, runs } = fixtureCollection(dir);
+  assert.match(readFileSync(brief, "utf8"), /docs\/journeys\//, "the fixture brief cites the registry above the FEAT table");
+
+  const html = summaryDeckOf(dir, brief, runs);
+  assert.equal(figuresIn(html).get("features[0].id"), "FEAT-001");
+  assert.equal(figuresIn(html).get("counts.features"), "4");
+});
+
 test("a run file with an unknown key fails the summary build and names the file", () => {
   const dir = tempDir("build-deck-summary-strict-");
   const { brief, runs } = fixtureCollection(dir);

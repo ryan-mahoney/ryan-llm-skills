@@ -147,6 +147,10 @@ export function fixtureBrief(dir) {
 
 ## Basis
 
+| Input | Source | Status |
+| --- | --- | --- |
+| Journey registry | \`docs/journey-registry.md\`, \`docs/journeys/\` | Registry present: 58 journeys, 14 seams. |
+
 Read at commit abc1234. Not verified behavior.
 
 ## 1 What it is and who uses it

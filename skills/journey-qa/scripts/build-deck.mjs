@@ -921,10 +921,17 @@ function journeyTokens(cell) {
  * its Journeys column names. A row whose cell count disagrees with the header,
  * or a table with no Journeys column, is a malformed brief and fails here rather
  * than rendering a matrix the brief does not say.
+ *
+ * The header is the row with a cell that *is* the Journeys column, not any row
+ * mentioning journeys: a real brief's Basis table cites `docs/journeys/` in prose
+ * above the FEAT table, and taking that row as the header reads a three-cell row
+ * with no `ID` as a malformed brief.
  */
 export function briefFeatures(markdown) {
   const lines = markdown.split("\n");
-  const header = lines.findIndex((line) => /^\s*\|/.test(line) && /\bJourneys\b/i.test(line));
+  const header = lines.findIndex(
+    (line) => /^\s*\|/.test(line) && splitTableRow(line).some((cell) => /^journeys$/i.test(cell)),
+  );
   if (header === -1) throw new Error("brief: no table with a Journeys column");
   const columns = splitTableRow(lines[header]);
   const idColumn = columns.findIndex((column) => /^ID$/i.test(column));
