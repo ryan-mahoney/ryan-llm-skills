@@ -83,7 +83,8 @@ Establish your eyes before you claim anything about how a screen looks:
 If that prints anything other than `unknown`, use the mode it reports. Otherwise
 run `~/.agents/skills/see/scripts/see-check start`, open the PNG it writes, report
 the colours you actually see left to right to `see-check verify`, and use the
-mode that answer establishes. Report only what you actually saw. In the
+mode that answer establishes. `see-check` names the relay mode after the relay tool; this harness
+calls that mode `relayed-vision`. Report only what you actually saw. In the
 `relayed-vision` mode every visual fact comes from the relay rather than from
 you. In the `source-only` mode you have no visual evidence at all: work from the accessibility
 snapshot text and say so, and make no claim about how anything looks.
