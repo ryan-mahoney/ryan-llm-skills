@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "27"
+  version: "28"
 ---
 
 # Spec Run
@@ -17,6 +17,8 @@ metadata:
 Execute the package produced by `spec-write` within its sourced context and authority. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Preparation is immutable intent and evidence provenance; implementation may adapt to repository reality, but it may not execute against stale or mismatched prepared inputs.
 
 Run steps sequentially. Dispatch one dedicated implementation agent per step when the harness supports subagents; otherwise follow `spec-step-run` directly for one step at a time. Do not batch steps or commits.
+
+Set an explicit run deadline on every step-worker launch; never rely on the harness default, which can be as short as 30 minutes and interrupts larger or visual steps mid-edit. Use about 2 hours per step unless the run records a different budget. When the harness supports it, also request a checkpoint before the deadline (about 10 minutes) so the worker commits coherent work and records a `checkpoint` outcome instead of timing out with uncommitted changes. Pi `pi-subagents` launches take `timeoutMs: 7200000` and `checkpointBeforeDeadlineMs: 600000`. Record the chosen budget in the run ledger, and treat a deadline hit as an interruption to resume, not a step failure.
 
 When the end-to-end handoff includes an overseer mailbox, follow its
 [routing contract](../spec-end-to-end/references/overseer-inbox.md). The top-level
