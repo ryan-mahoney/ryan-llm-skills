@@ -13,6 +13,22 @@ The failure this skill exists to prevent is the per-repository journey list. Mar
 
 **A journey is one actor's one goal, from trigger to terminal outcome, however many repositories it crosses.** A repository is a deploy boundary, not a journey boundary.
 
+## Single-repository mode
+
+This section applies when one repository is in scope — one application whose journey automation already lives in that repository, not a set of related products. Read the steps below as they stand and apply this section's adjustments by reference; do not fork the skill or run a second copy for the single-repository case.
+
+- **Step 0.** Declare the one repository with the same table, naming it once, and add an **External parties** table below it. A repository that is not the only actor still has parties the product cannot see into: a validator service, a geocoding service, email delivery, and the consumers of exported files — record whichever the product actually uses, and none otherwise.
+
+  | Party | Direction | What crosses | How the product observes the far side | Evidence file |
+  |---|---|---|---|---|
+  | Consumer of an exported feed (illustrative) | out | the export request; the resulting file leaves the product's control and no later step of the journey returns | the export record and the download itself are the only observation; the product never learns what the consumer did with the file | the export controller and the export record row |
+
+  A party the product only calls mid-journey is a service dependency, not a repository. Record it here so the seam vocabulary in Step 5 has somewhere to point.
+- **Step 1.** `derived_from` also accepts Playwright spec files (`assets/e2e/*.spec.js`). When the repository has no `journey-catalog.js`, the E2E lanes *are* the spec files, the registry's E2E mapping table is keyed by spec path, and a spec that is not one actor's goal is recorded as `internal-lane`. `derived_from` also accepts job-story documents (`docs/requirements/*.md`), a manual test plan (`docs/manual-test-plan.md`) and an information-architecture document (`docs/information-architecture.md`).
+- **Step 2.** In seed item 1, read **navigation destinations and home tasks** instead of outbound links with intent: the destinations the primary navigation offers, the tasks on the home surface, settings sections, export and download endpoints, email templates and background jobs — each is a place a journey starts or leaves. List companion-API flows as out of page scope with the reason they are excluded. Record the E2E spec names themselves as seeds. The seed record shape is unchanged.
+
+The steps read as written; where this section names a step, the adjustment here governs it, and later revisions to this mode extend it in place.
+
 ## Step 0 — Declare the repository set
 
 Before discovery, write down the system this registry covers. For each repository record:
