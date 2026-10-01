@@ -292,7 +292,26 @@ export function briefSections(markdown) {
   return new Map([...sections].map(([name, lines]) => [name, lines.join("\n").trim()]));
 }
 
-const briefText = (sections, name) => sections.get(name) ?? "";
+// The headings a brief may carry for each tester-visible section (R5). A brief
+// is written in the tester's own words, so the harness spells these
+// "Who you are" and "What you are trying to do" where the deck prints
+// "Persona" and "Goal"; the first spelling a brief carries wins. Harness-only
+// sections are deliberately absent, so they have no deck label to look up.
+const BRIEF_SECTIONS = {
+  Persona: ["Persona", "Who you are"],
+  Goal: ["Goal", "What you are trying to do"],
+  "Start path": ["Start path", "Where you start"],
+  Files: ["Files", "Files you can upload"],
+};
+
+/** The text of a brief section, under any of the headings it may carry. */
+export function briefText(sections, name) {
+  for (const heading of BRIEF_SECTIONS[name] ?? [name]) {
+    const text = sections.get(heading);
+    if (text !== undefined && text !== "") return text;
+  }
+  return "";
+}
 
 /** The bullet names of a brief section, in the order the tester saw them. */
 const briefItems = (sections, name) =>
@@ -300,6 +319,79 @@ const briefItems = (sections, name) =>
     .split("\n")
     .map((line) => /^\s*[-*]\s+(.*)$/.exec(line)?.[1]?.trim() ?? null)
     .filter(Boolean);
+
+/**
+ * The keys that locate an element on a screen. A target object (C-5) carries
+ * one of them plus whatever the action needs besides the location, so the
+ * locator is the first of these the target carries.
+ */
+const TARGET_LOCATORS = ["name", "text", "label", "path", "key"];
+
+/** A target value as one quoted phrase, with `"` inside the value neutralised. */
+const quoted = (value) => `"${String(value).replaceAll('"', "'")}"`;
+
+/** A non-string target value, printed in the compact `key=value` form. */
+const compact = (key, value) =>
+  typeof value === "string" ? `${key} ${quoted(value)}` : `${key}=${String(value)}`;
+
+/**
+ * A step's action target in the words a reader would say it, built from the
+ * target's own fields: `button "Import feed"`, `text "Import feed"`,
+ * `label "Version name"`. A role is the kind of control and reads bare, the
+ * locator that follows it is quoted, and any remaining field the action needed
+ * (a file, a filled value, an option) reads as its own `key "value"` phrase. A
+ * target that locates nothing the vocabulary names falls back to compact
+ * `key=value` pairs, so an unfamiliar shape is still readable rather than an
+ * object literal. A target already stored as a string is that string.
+ */
+export function describeTarget(target) {
+  if (target === null || target === undefined || target === "") return null;
+  if (typeof target !== "object" || Array.isArray(target)) return String(target);
+  const keys = Object.keys(target);
+  if (keys.length === 0) return null;
+
+  const role = target.role === undefined || target.role === null ? null : String(target.role);
+  const locator = TARGET_LOCATORS.find((key) => target[key] !== undefined && target[key] !== null);
+  // A shape that names no control is not something a reader can be shown as a
+  // phrase, so every field prints compactly rather than one field being
+  // promoted to a locator the shape does not have.
+  if (role === null && locator === undefined) {
+    return keys
+      .filter((key) => target[key] !== null && target[key] !== undefined)
+      .map((key) => `${key}=${String(target[key])}`)
+      .join(" ");
+  }
+
+  const used = new Set();
+  const parts = [];
+  if (role !== null) {
+    parts.push(role);
+    used.add("role");
+  }
+  // A role already says which control it is, so the locator that follows it
+  // reads as that control's name: `button "Import feed"`, not
+  // `button name "Import feed"`. Without a role it names itself.
+  if (locator !== undefined) {
+    if (role === null) parts.push(locator);
+    parts.push(quoted(target[locator]));
+    used.add(locator);
+  }
+  for (const key of keys) {
+    if (used.has(key) || target[key] === null || target[key] === undefined) continue;
+    parts.push(compact(key, target[key]));
+  }
+  return parts.join(" ");
+}
+
+/**
+ * The check's own `observations`, which a check records as one string or as a
+ * list of sentences. Either way the deck shows every sentence it carries and
+ * never joins them into a single sentence the check did not write.
+ */
+export function observationsText(observations) {
+  if (Array.isArray(observations)) return observations.join(" ");
+  return observations ?? "none recorded";
+}
 
 /** R18: only a product attribution names the product; the others are limits. */
 export function attributionLine(attribution) {
@@ -539,15 +631,18 @@ export function renderJourneyDeck({ run, rating, siblings, second, out }) {
     ["q1", "q2", "q3", "q4"].some((question) => step[question] !== null && step[question] !== undefined),
   ).length;
 
+  const goal = briefText(sections, "Goal");
+
   const title = slide(
     1,
     9,
     `Run ${result.run}`,
-    briefText(sections, "Goal") || result.scenario,
+    result.scenario,
     `<p class="result-line">
       <span class="rating rating--${ratingClass(rating.rating)}" data-source="rating.rating">${escapeHtml(rating.rating)}</span>
       ${rating.rating === "Not completed" ? `<span class="attribution">${escapeHtml(attributionLine(rating.attribution))} — decided at step ${figure("review.journey.decidingStep", review.journey.decidingStep)}</span>` : ""}
     </p>
+    <p class="lede"><b>What the tester was trying to do:</b> ${goal ? escapeHtml(goal) : `the brief recorded no goal for this scenario, so this slide states none rather than inventing one.`}</p>
     <div class="rule"></div>
     <dl class="kv">
       <dt>Run</dt><dd>${figure("result.run", result.run)}</dd>
@@ -590,10 +685,11 @@ export function renderJourneyDeck({ run, rating, siblings, second, out }) {
       .filter(({ step }) => step.kind === "step")
       .map(({ step, index }) => {
         const rejected = typeof step.rejected === "string" && step.rejected !== "";
+        const target = describeTarget(step.target);
         return `<article class="step-card${rejected ? " step-card--rejected" : step.ok === false ? " step-card--error" : ""}">
           <p class="step-head"><span class="n">Step ${escapeHtml(step.n)}</span><span>${escapeHtml(step.action)}</span><span>${rejected ? "not executed" : step.ok ? "ok" : "not ok"}</span></p>
           ${renderCapture(run.dir, step.capture, `Capture of step ${step.n}`)}
-          <p class="step-action">${escapeHtml(step.action)}${step.target ? ` ${escapeHtml(step.target)}` : ""}</p>
+          <p class="step-action">${escapeHtml(step.action)}${target === null ? "" : ` ${escapeHtml(target)}`}</p>
           <p class="step-field"><b>Intent</b> ${step.intent ? figure(`steps[${index}].intent`, step.intent) : `<span class="muted">none stated</span>`}</p>
           <p class="step-field"><b>Expectation</b> ${step.expected ? figure(`steps[${index}].expected`, step.expected) : `<span class="muted">none stated</span>`}</p>
           ${rejected ? `<p class="flag">rejected: ${escapeHtml(step.rejected)}</p>` : ""}
@@ -734,7 +830,7 @@ export function renderJourneyDeck({ run, rating, siblings, second, out }) {
       <dt>Scenario</dt><dd>${figure("result.scenario", result.scenario)}</dd>
       <dt>App commit</dt><dd>${figure("result.commit", result.commit)} <span class="mono">(${result.dirty ? "dirty" : "clean"})</span></dd>
       <dt>Check</dt><dd>${figure("result.check.id", result.check.id)} — pass ${figure("result.check.pass", result.check.pass)}</dd>
-      <dt>Check observations</dt><dd>${escapeHtml(result.check.observations ?? "none recorded")}</dd>
+      <dt>Check observations</dt><dd>${escapeHtml(observationsText(result.check.observations))}</dd>
       <dt>Captures present</dt><dd>${figure("captures.count", captured)} of ${recorded.length} recorded steps</dd>
       <dt>Eyes mode, run</dt><dd>${escapeHtml(result.eyes ?? "none recorded")}</dd>
       <dt>Eyes mode, review</dt><dd>${escapeHtml(review.eyes ?? "none recorded")}</dd>
@@ -1097,7 +1193,7 @@ export function renderSummaryDeck({ brief, runs, out }) {
               <td>${run.result === null ? "no result recorded" : figure(`runs[${index}].status`, run.result.status)}</td>
               <td class="mono">${figure(`runs[${index}].commit`, run.result?.commit ?? "not recorded")}</td>
               <td>${escapeHtml(run.result?.eyes ?? "none recorded")}</td>
-              <td>${escapeHtml(run.result?.check?.observations ?? "none recorded")}</td>
+              <td>${escapeHtml(observationsText(run.result?.check?.observations))}</td>
             </tr>`,
             )
             .join("")}</tbody>

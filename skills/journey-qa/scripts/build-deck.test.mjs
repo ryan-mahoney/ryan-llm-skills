@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { loadRun, siblingRuns } from "./build-deck.mjs";
+import { loadRun, siblingRuns, describeTarget, observationsText } from "./build-deck.mjs";
 import { fixtureBrief, fixtureRun } from "./test-fixtures.mjs";
 
 const SCRIPT = fileURLToPath(new URL("./build-deck.mjs", import.meta.url));
@@ -369,6 +369,136 @@ test("--second-review adds the repeatability line and one deck is nine slides", 
 
   const slideIds = [...withSecond.matchAll(/<section class="slide" id="(s\d)"/g)].map((match) => match[1]);
   assert.deepEqual(slideIds, ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9"]);
+});
+
+// --- action target and goal cases (step 18 pilot repair) ---
+
+test("an action target object reads as the element it names", () => {
+  // The shapes steps.jsonl records (C-4 action vocabulary), each rendered the
+  // way a reader would say it rather than as an object literal.
+  assert.equal(describeTarget({ role: "button", name: "Import feed" }), 'button "Import feed"');
+  assert.equal(describeTarget({ text: "Import feed" }), 'text "Import feed"');
+  assert.equal(describeTarget({ label: "Version name" }), 'label "Version name"');
+  assert.equal(describeTarget({ path: "/" }), 'path "/"');
+  assert.equal(describeTarget({ key: "Enter" }), 'key "Enter"');
+  assert.equal(describeTarget({ role: "button", name: "Import feed", enabled: true }), 'button "Import feed" enabled=true');
+  assert.equal(describeTarget({ text: "Choose a .zip file", file: "sample-feed.zip" }), 'text "Choose a .zip file" file "sample-feed.zip"');
+  assert.equal(describeTarget({ label: "Version name", value: "October 2026 service" }), 'label "Version name" value "October 2026 service"');
+});
+
+test("a target shape the vocabulary does not name reads as key=value pairs", () => {
+  assert.equal(describeTarget({ locator: "import-tab", nth: 2 }), "locator=import-tab nth=2");
+  assert.equal(describeTarget({}), null);
+  assert.equal(describeTarget(null), null);
+  assert.equal(describeTarget(""), null);
+});
+
+test("a target already stored as a string is that string", () => {
+  assert.equal(describeTarget("/versions/new"), "/versions/new");
+  assert.equal(describeTarget(12), "12");
+});
+
+test("a quote inside a target value cannot close the phrase", () => {
+  assert.equal(describeTarget({ text: 'Say "Import feed"' }), 'text "Say \'Import feed\'"');
+});
+
+test("the filmstrip renders every target from its own fields", () => {
+  const dir = tempDir("build-deck-targets-");
+  const runDir = join(dir, "run");
+  fixtureRun(runDir);
+  const lines = [
+    { kind: "step", n: 1, action: "click", target: { role: "button", name: "Import feed" } },
+    { kind: "step", n: 2, action: "fill", target: { label: "Version name", value: "October 2026 service" } },
+    { kind: "step", n: 3, action: "upload", target: { text: "Choose a .zip file", file: "sample-feed.zip" } },
+    { kind: "step", n: 4, action: "goto", target: { path: "/" } },
+    { kind: "step", n: 5, action: "scroll", target: { locator: "page", dy: -400 } },
+  ].map((step) => JSON.stringify({ ...step, run: "r", t: 0, ok: true, rejected: false, error: null, capture: "captures/s001.png", intent: "i", expected: "e" }));
+  writeFileSync(join(runDir, "steps.jsonl"), `${lines.join("\n")}\n`);
+  const html = deckOf(["--run", runDir, "--out", join(dir, "deck.html")]);
+
+  for (const rendered of [
+    'click button &quot;Import feed&quot;',
+    'fill label &quot;Version name&quot; value &quot;October 2026 service&quot;',
+    'upload text &quot;Choose a .zip file&quot; file &quot;sample-feed.zip&quot;',
+    'goto path &quot;/&quot;',
+    "scroll locator=page dy=-400",
+  ]) {
+    assert.ok(html.includes(rendered), `the filmstrip is missing: ${rendered}`);
+  }
+  assert.equal(html.includes("[object Object]"), false, "no target renders as an object literal");
+});
+
+test("slide 1 states the goal in the tester's own words", () => {
+  const dir = tempDir("build-deck-goal-");
+  const runDir = join(dir, "run");
+  fixtureRun(runDir);
+  const html = deckOf(["--run", runDir, "--out", join(dir, "deck.html")]);
+  const slide1 = /<section class="slide" id="s1".*?<\/section>/s.exec(html)[0];
+
+  assert.match(slide1, /What the tester was trying to do:/);
+  assert.ok(slide1.includes("Import the sample feed and see the new version listed."), "the goal sentence is the brief's own words");
+});
+
+test("a brief whose headings are the tester's own words still fills both slides", () => {
+  const dir = tempDir("build-deck-brief-headings-");
+  const runDir = join(dir, "run");
+  fixtureRun(runDir);
+  writeFileSync(
+    join(runDir, "brief.md"),
+    `# Import a feed
+
+## Who you are
+
+An operator who publishes timetables.
+
+## What you are trying to do
+
+Import the sample feed and see the new version listed.
+
+## Where you start
+
+Open /.
+
+## Files you can upload
+
+- sample-feed.zip
+`,
+  );
+  const html = deckOf(["--run", runDir, "--out", join(dir, "deck.html")]);
+
+  assert.ok(html.includes("What the tester was trying to do: Import the sample feed and see the new version listed."), "slide 1 reads the goal under the harness's heading");
+  assert.ok(html.includes("An operator who publishes timetables."), "slide 2 reads the persona");
+  assert.ok(html.includes("Open /."), "slide 2 reads the start path");
+  assert.ok(html.includes("sample-feed.zip</li>"), "slide 2 lists the files");
+  assert.equal(/<p><\/p>/.test(html), false, "no tester-visible section renders empty");
+});
+
+test("a brief with no goal section says so instead of inventing one", () => {
+  const dir = tempDir("build-deck-no-goal-");
+  const runDir = join(dir, "run");
+  fixtureRun(runDir);
+  writeFileSync(join(runDir, "brief.md"), "# Import a feed\n\n## Who you are\n\nAn operator.\n");
+  const html = deckOf(["--run", runDir, "--out", join(dir, "deck.html")]);
+
+  assert.match(html, /the brief recorded no goal for this scenario/);
+});
+
+test("check observations render as sentences whether a check wrote one or many", () => {
+  assert.equal(observationsText("5 files imported"), "5 files imported");
+  assert.equal(observationsText(["a", "b"]), "a b");
+  assert.equal(observationsText(undefined), "none recorded");
+
+  const dir = tempDir("build-deck-observations-");
+  const runDir = join(dir, "run");
+  fixtureRun(runDir);
+  editJson(runDir, "result.json", (result) => ({
+    ...result,
+    check: { ...result.check, observations: ["routes hold", "stops hold"] },
+  }));
+  const html = deckOf(["--run", runDir, "--out", join(dir, "deck.html")]);
+
+  assert.ok(html.includes("routes hold stops hold"), "every observation sentence is shown");
+  assert.equal(html.includes("routes hold,stops hold"), false, "observations are never comma-joined");
 });
 
 test("an empty findings array reads as a state, not an empty panel", () => {

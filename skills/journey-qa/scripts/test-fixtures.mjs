@@ -89,8 +89,8 @@ const review = (run) => ({
 
 const steps = (run) => [
   { kind: "setup", run, t: 0, action: "sign-in", ok: true },
-  { kind: "step", run, n: 1, t: 4000, action: "goto", target: "/versions/new", intent: "Open the upload screen", expected: "Upload form", urlBefore: "/", urlAfter: "/versions/new", ok: true, rejected: false, error: null, ms: 380, capture: "captures/s001.png", consoleErrors: 0, httpErrors: 0, alerts: [], downloads: [] },
-  { kind: "step", run, n: 2, t: 9000, action: "upload", target: "Choose a .zip file", intent: "Upload the feed", expected: null, urlBefore: "/versions/new", urlAfter: "/versions/new", ok: true, rejected: false, error: null, ms: 4700, capture: "captures/s002.png", consoleErrors: 0, httpErrors: 0, alerts: [], downloads: [] },
+  { kind: "step", run, n: 1, t: 4000, action: "goto", target: { path: "/versions/new" }, intent: "Open the upload screen", expected: "Upload form", urlBefore: "/", urlAfter: "/versions/new", ok: true, rejected: false, error: null, ms: 380, capture: "captures/s001.png", consoleErrors: 0, httpErrors: 0, alerts: [], downloads: [] },
+  { kind: "step", run, n: 2, t: 9000, action: "upload", target: { text: "Choose a .zip file", file: "sample-feed.zip" }, intent: "Upload the feed", expected: null, urlBefore: "/versions/new", urlAfter: "/versions/new", ok: true, rejected: false, error: null, ms: 4700, capture: "captures/s002.png", consoleErrors: 0, httpErrors: 0, alerts: [], downloads: [] },
   { kind: "finish", claim: "done", reason: null, eyes: "host-vision" },
 ];
 

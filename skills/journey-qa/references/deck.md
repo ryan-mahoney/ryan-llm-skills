@@ -29,26 +29,38 @@ nothing: values come from `result.json` (C-6), `review.json` (C-9) and
 `--run <run dir> --out <file> [--second-review <review.json>]`. Nine slides, in
 this order. Slide 1 is `#s1`.
 
-1. **Title.** The scenario's `Goal` in the user's own words, the run ID, and one
-   **result line**: the rating from `rate()` — `Direct`, `Detours`, `Lost`,
+1. **Title.** The scenario ID, and the scenario's `Goal` in the user's own
+   words as the sentence **What the tester was trying to do:**, the run ID, and
+   one **result line**: the rating from `rate()` — `Direct`, `Detours`, `Lost`,
    `Not completed` or `Not rated` — and, for a run whose check did not pass, the
    attribution wording of R18 beside the deciding step: `Not completed: product`
    when `review.journey.attribution` is `product`, and `Not completed in this run
    (tester or harness limit)` for `tester` or `harness`. The app commit under
    test (`result.json` `commit`, with `dirty` when the tree was not clean) appears
-   on this slide.
+   on this slide. A brief that records no goal says so on this slide rather than
+   leaving the sentence off or filling it in.
 2. **What the tester was given.** The tester-visible content of `brief.md`: the
    persona, the goal, the start path and the file names the tester could upload.
+   A brief is written in the tester's own words, so the deck reads each of these
+   under any of the headings it may carry — `Persona` or `Who you are`, `Goal` or
+   `What you are trying to do`, `Start path` or `Where you start`, `Files` or
+   `Files you can upload` — so a brief the harness wrote under its own headings
+   renders in full rather than as empty panels.
    Nothing from the harness-only scenario fields (`Account`, `Seed`, `Success
    check`, `Reference actions`, `Entry route`) appears here, because the tester
    never saw them (R5).
 3. **Step filmstrip.** One row per executed step in `steps.jsonl` order: the
    capture, the action in the tester's vocabulary (`click`, `fill`, `select`,
    `upload`, `press`, `goto`, `back`, `scroll`, `look`, `wait`), the action
-   target, the stated `--intent` and the stated `--expect`. A step whose capture
-   file is absent renders a labelled `Not captured` placeholder; it never renders
-   as nothing, and the step keeps its row. A rejected attempt is shown with its
-   rejection reason and marked as not executed.
+   target, the stated `--intent` and the stated `--expect`. A target is an object
+   in `steps.jsonl` and is read from its own fields in the words a reader would
+   say it — `button "Import feed"`, `text "Import feed"`, `label "Version name"`,
+   with any further field the action needed after it (`file "sample-feed.zip"`,
+   `value "October 2026 service"`) — never as `[object Object]`; a shape the
+   vocabulary does not name reads as compact `key=value` pairs. A step whose
+   capture file is absent renders a labelled `Not captured` placeholder; it never
+   renders as nothing, and the step keeps its row. A rejected attempt is shown
+   with its rejection reason and marked as not executed.
 4. **Measured proxies.** The raw values of `result.json` `proxies` first —
    `actions`, `observations`, `scrolls`, `wrongTries`, `rejected`, `backtracks`,
    `errorsSeen.banners`, `errorsSeen.httpErrors`, `errorsSeen.consoleErrors`,
