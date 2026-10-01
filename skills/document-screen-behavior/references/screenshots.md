@@ -1,6 +1,6 @@
 # Capturing screen states
 
-A screen page without images asks the reader to trust prose about pixels. Capture every documented state, commit the files, and link each one where it belongs.
+A screen page without images asks the reader to trust prose about pixels. Capture every documented state, keep the files local, and cite each one by capture ID where it belongs.
 
 ## Before anything: establish your eyes
 
@@ -17,9 +17,9 @@ A model that cannot see an image will describe it fluently anyway. This probe is
 Use the sibling `uishot` skill. Resolve `UISHOT` to the absolute path of its `scripts/uishot`, and run `"$UISHOT" setup` once per machine.
 
 ```bash
-"$UISHOT" <url> --out docs/screenshots/SCRN-001/default.png
-"$UISHOT" <url> --viewport 390x844 --out docs/screenshots/SCRN-001/default-mobile.png
-"$UISHOT" <url> --full-page --out docs/screenshots/SCRN-001/default-full.png
+"$UISHOT" <url> --out <root>/screens/SCRN-001/default.png
+"$UISHOT" <url> --viewport 390x844 --out <root>/screens/SCRN-001/default-mobile.png
+"$UISHOT" <url> --full-page --out <root>/screens/SCRN-001/default-full.png
 ```
 
 Run from the project root. Use `--wait-for` on a selector that only exists in the state you want — this both pins the capture and proves you captured the right state.
@@ -33,7 +33,7 @@ Most screens worth documenting require a session.
 3. Capture with `--reuse-session` so later shots carry the cookies.
 4. Do not run `"$UISHOT" stop` until the whole set is captured — it discards the session.
 
-To capture a state that belongs to a different group, sign in as that group's seeded user and capture that set before switching back. Note the account in the manifest's data-set column.
+To capture a state that belongs to a different group, sign in as that group's seeded user and capture that set before switching back. Note the account in the page's `Visual evidence` data-set column.
 
 ## Data rules
 
@@ -41,7 +41,7 @@ To capture a state that belongs to a different group, sign in as that group's se
 
 **Realistic, not empty.** A default state captured against an empty database is an empty-state screenshot mislabeled. Seed enough records that ranking, truncation, and counts show their real behavior: more rows than the display limit, several distinct statuses, names of realistic length, dates spanning the relevant windows.
 
-**Deterministic.** Prefer fixed seed data over live data so a re-capture is comparable. Note anything time-relative in the manifest — a screenshot of "3 days overdue" ages.
+**Deterministic.** Prefer fixed seed data over live data so a re-capture is comparable. Note anything time-relative in the page's `Visual evidence` table — a screenshot of "3 days overdue" ages.
 
 ## Which states to capture
 
@@ -63,17 +63,23 @@ Capture the viewport by default. Use `--full-page` when the page is long enough 
 
 ## Naming and location
 
+The root, the safety check, the layout and the ID rule are defined once in
+`../uishot/references/capture-root.md`. Read that file and follow it; this
+protocol adds no second location convention.
+
+That reference writes a screen capture as:
+
 ```
-docs/screenshots/SCRN-###/<state>[-<group>][-<viewport>].png
+<root>/screens/SCRN-###/<state>[-<group>][-<viewport>].png
 ```
 
 Examples: `default.png`, `default-mobile.png`, `default-interviewer.png`, `error-region.png`.
 
-Lower-case, hyphenated, no dates in the file name — the manifest carries the date, so a re-capture overwrites in place and the diff shows the change. Use `--scale 1` to keep files small unless fine detail matters.
+Lower-case, hyphenated, no dates in the file name — the page's `Visual evidence` table carries the date, so a re-capture overwrites in place. Use `--scale 1` to keep files small unless fine detail matters.
 
 ## Linking
 
-Inline, inside the state it documents, immediately after that state's description:
+By ID, inside the state it documents, immediately after that state's description. Never embed the image and never write its path:
 
 ```markdown
 ### Empty
@@ -81,18 +87,20 @@ Inline, inside the state it documents, immediately after that state's descriptio
 **Trigger.** The account has no records yet.
 **Result.** Each region shows its own empty message.
 
-![SCRN-001 empty state](../screenshots/SCRN-001/empty.png)
+Capture ID: SCRN-001/empty
 ```
 
-Alt text names the screen and the state. Paths are repository-relative from the document. Every image also gets a row in `Visual evidence`:
+The ID is `<owner>/<name>` — `SCRN-001/default`, `SCRN-001/empty-mobile`. Every capture also gets a row in `Visual evidence`:
 
-| State | File | Viewport | Data set | Captured | Version |
+| State | Capture ID | Viewport | Data set | Captured | Version |
 |---|---|---|---|---|---|
-| Default | `docs/screenshots/SCRN-001/default.png` | 1280×800 | seed-org, org-admin | 2026-08-02 | v0ecacd0b767b |
+| Default | SCRN-001/default | 1280×800 | seed-org, org-admin | 2026-08-02 | v0ecacd0b767b |
+
+Say this under the table, or in the page's front-matter comment: "Captures are generated locally, are not committed, and resolve by ID under the capture root."
 
 ## When you cannot capture
 
-Write the state's row with `Not captured.` and the reason in place of the path:
+Write the state's row with `Not captured.` and the reason in place of the capture ID:
 
 | First run | Not captured — no seeded account with zero records | — | — | — | — |
 
@@ -103,4 +111,5 @@ Then open a question to get the fixture built. Never describe an uncaptured stat
 - Re-capture whenever `verified_against` changes.
 - Check `console_errors:` in the tool output before concluding the page is broken.
 - If `readiness:` reports `dom-NEVER-QUIET`, the image may be mid-render — re-run with `--wait-for` rather than accepting it.
-- Add the app's own scratch output directory (`.uishot/`) to `.gitignore`. Committed captures live under `docs/screenshots/` and are deliberate.
+- Add the app's own scratch output directory (`.uishot/`) to `.gitignore`.
+- Captures are local artefacts and are never committed; the page cites each one by capture ID.

@@ -31,7 +31,7 @@ features: [FEAT-014]              # features hosted here
 objects: [OBJ-007]
 rules: [BR-0142]
 routes: ["/dashboard"]
-screenshots: ["docs/screenshots/SCRN-001/"]
+captures: [SCRN-001/default]     # capture IDs cited by this page, never image paths
 tests:
   - <test path>
 ---
@@ -39,7 +39,7 @@ tests:
 
 An empty list is valid. A missing key is not. Keep the lists in agreement with the body — a reader and a tool both check.
 
-Add `authentication`, `roles`, `journeys`, `jobs`, and `screenshots` even when the repository standard does not list them. If its validator rejects unknown keys, drop them from the front matter, keep the content in the body, and propose the schema change.
+Add `authentication`, `roles`, `journeys`, `jobs`, and `captures` even when the repository standard does not list them. `captures` lists the backticked capture IDs this page cites; it never holds a path or a directory. If its validator rejects unknown keys, drop them from the front matter, keep the content in the body, and propose the schema change.
 
 ---
 
@@ -181,7 +181,7 @@ Cover all of these. Write `None.` and the reason where a state cannot occur.
 
 `default` · `empty` · `first-run` · `loading` · `updating` · `partial` · `error` · `permission-denied` · `offline` · `read-only`
 
-Give each state its own subsection so a screenshot can sit inside it:
+Give each state its own subsection so its capture can sit inside it:
 
 ```markdown
 ### Default
@@ -190,7 +190,7 @@ Give each state its own subsection so a screenshot can sit inside it:
 **Result.** What the user sees.
 **Recovery.** The action that leaves the state, where one applies.
 
-![SCRN-001 default state](../screenshots/SCRN-001/default.png)
+Capture ID: SCRN-001/default
 ```
 
 Distinguish first-use empty from filtered or searched empty. Distinguish a whole-page failure from one failed region beside working ones.
@@ -218,7 +218,7 @@ Every visible string in these classes, word for word: empty, failure, truncation
 <a id="13-responsive-behavior"></a>
 ## 13. Responsive behavior
 
-What changes at each breakpoint: column count, region order, table-to-card collapse, control placement, truncation. Link the mobile captures from `Visual evidence`.
+What changes at each breakpoint: column count, region order, table-to-card collapse, control placement, truncation. Link the mobile captures from `Visual evidence` by their capture IDs.
 
 <a id="14-accessibility"></a>
 ## 14. Accessibility
@@ -236,10 +236,12 @@ Every visible string, with the file it comes from. The localization and content 
 <a id="16-visual-evidence"></a>
 ## 16. Visual evidence
 
-| State | File | Viewport | Data set | Captured | Version |
+| State | Capture ID | Viewport | Data set | Captured | Version |
 |---|---|---|---|---|---|
 
-One row per capture, including uncaptured states with the reason in place of the path. Re-capture when `verified_against` changes. See `screenshots.md` for the protocol.
+Captures are generated locally, are not committed, and resolve by ID under the capture root.
+
+One row per capture, including uncaptured states with the reason in place of the ID. Re-capture when `verified_against` changes. See `screenshots.md` for the protocol.
 
 <a id="open-questions"></a>
 ## Open questions
