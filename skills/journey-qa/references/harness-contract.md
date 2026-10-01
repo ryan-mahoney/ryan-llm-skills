@@ -47,7 +47,8 @@ bin/ux-qa selfcheck [<JRNY-###[/slug>] ...]
   file directly and is accepted only with a single scenario.
 - `selfcheck` runs both legs per scenario: the no-op leg must fail the check and
   the authored reference-trail leg must pass it. No IDs means every reference
-  trail.
+  trail. The reference leg keeps its captures in its run folder, so the capture
+  root still holds the recorded exploration's captures.
 
 `assets/qa/drive.mjs` exposes the subcommands the launcher calls: `scenario`
 (print a scenario as JSON), `init`, `set-pid`, `open`, `close`, `finalize` (write
@@ -210,7 +211,9 @@ authored positive controls. Both share one shape:
 
 Replay executes the steps through the same driver code path as a live run, needs
 no `intent` or `expect` value, and writes each step's capture to the capture root
-described in `uishot/references/capture-root.md`. The first failing step ends the
+described in `uishot/references/capture-root.md`; `drive.mjs replay --local`
+writes them to `<run>/captures/` instead, which is how `selfcheck` replays a
+reference trail. The first failing step ends the
 replay with exit 1, naming the step and its error and saving a screenshot; a
 replay never silently re-explores.
 
