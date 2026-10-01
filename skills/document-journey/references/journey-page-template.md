@@ -26,6 +26,7 @@ roles: []                                     # ROLE-## when authenticated; empt
 jobs: [JOB-0041]                              # primary story first (DR-106)
 screens: [SCRN-030, SCRN-031]                 # registered screens the journey visits
 captures: []                                 # capture IDs this page cites, never image paths
+scenarios: []                               # §10 scenario slugs, empty when the repository runs no QA harness
 features: []                                  # FEAT-## when a feature registry exists
 rules: [BR-0101]                              # BR- IDs, referenced never restated (DR-092)
 seams: [SEAM-004, SEAM-007]                   # registry seam IDs
@@ -38,7 +39,7 @@ derived_from:
 ---
 ```
 
-An empty list is valid. A missing key is not. `context_keys` uses the E2E ledger key names verbatim so the context audit consumes this page without translation. `captures` lists the backticked capture IDs §9 cites; it never holds a path or a directory.
+An empty list is valid. A missing key is not. `context_keys` uses the E2E ledger key names verbatim so the context audit consumes this page without translation. `captures` lists the backticked capture IDs §9 cites; it never holds a path or a directory. `scenarios` lists the §10 `### <slug>` slugs, so a reader can resolve the scenario IDs `JRNY-###/<slug>` without reading the section.
 
 ---
 
@@ -139,6 +140,46 @@ The negative statement (`And no org exists...`) is required wherever a reader mi
 Captures are generated locally, are not committed, and resolve by ID under the capture root.
 
 Rows name captures by backticked ID — `SCRN-###/<name>` for a stage's screen state, `JRNY-###/<name>` for a capture of the journey as a whole — and never by an image path. E2E receipts and storyboard locations, `CTX-` findings, and marketing content files are listed here too, each with its own kind. This section feeds journey evaluation and design QA; it links, never copies. States with no capture read `Not captured — <reason>.`
+
+<a id="10-test-scenario"></a>
+## 10. Test scenario
+
+This section is the only source of the harness's scenarios. There is no separate scenario registry: one `### <slug>` heading per scenario, slugs lowercase letters, digits and hyphens, and a scenario ID is `JRNY-###/<slug>`. A bare `JRNY-###` selects every scenario of that journey. Write the section only when the repository runs the `journey-qa` harness; otherwise omit it, leave `scenarios: []`, and say so in `Open questions`.
+
+```markdown
+### import
+
+- **Persona:** Scheduler at a small agency with an organization editor account.
+- **Goal:** Load the feed your scheduling system exported (sample-feed.zip) so you can start editing it.
+- **Account:** editor
+- **Seed:** blank
+- **Start path:** /
+- **Files:** sample-feed.zip
+- **Success check:** import-feed — one new published version whose route, stop, trip, stop-time and calendar counts equal the zip's row counts
+- **Reference actions:** 5
+- **Entry route:** /gtfs/:version/import
+```
+
+| Key | Required | Visible to the tester |
+|---|---|---|
+| Persona | yes | yes |
+| Goal | yes | yes |
+| Account | yes | no — harness only |
+| Seed | yes | no — harness only |
+| Start path | yes | yes |
+| Files | no | yes |
+| Success check | yes | no — harness and reviewer only |
+| Reference actions | yes | no — harness and reviewer only |
+| Entry route | yes | no — harness and reviewer only |
+
+Authoring rules:
+
+- Bullets are one per line, exactly `- **Key:** value`. No YAML, no continuation lines, no extra keys.
+- **Goal** is written in the user's language with the concrete values the tester will see, and never names a control, a route, a CSS selector, or any other implementation detail.
+- **Seed** is `blank` or `sample-feed`. **Account** is a key in the harness's account file, or `none`. **Files** is a comma-separated list of file names the tester may upload.
+- **Success check** starts with the check script's ID and then says what the check observes outside the UI. A scenario with no check for its terminal outcome cannot be explored: record the open question and say the scenario cannot be explored yet rather than naming a check that does not exist.
+- **Reference actions** is an integer estimate counted from the flow — user actions after sign-in, waits excluded. It is an estimate until a reference trail has run, and the executed trail's count replaces it.
+- The harness-only keys never appear in the tester's brief, so nothing in a visible key may reveal them.
 
 ## Open questions
 
