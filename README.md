@@ -116,20 +116,31 @@ Three chained skills that document a product's user-facing surfaces from the acc
 |---|---|---|
 | **build-permission-model** | `/build-permission-model [scope]` | `docs/permissions/permission-model.md` — roles, capability matrix, route guards, audience predicates, findings |
 | **build-screen-inventory** | `/build-screen-inventory [scope]` | `docs/screen-inventory.md` + `docs/inventories/*.md` — screens partitioned by who can reach them |
-| **document-screen-behavior** | `/document-screen-behavior <screen>` | `docs/screens/SCRN-###-*.md` + `docs/screenshots/SCRN-###/` — one full screen specification |
+| **document-screen-behavior** | `/document-screen-behavior <screen>` | `docs/screens/SCRN-###-*.md` — one full screen specification, with each state's capture under the capture root (default `.specs/images/screens/`) and cited by capture ID |
 
 Handoffs: the permission model supplies `AUD-##` predicates as the inventory's partition axes, and `ROLE-##` / `CAP-##` IDs to the screen pages. The inventory supplies each screen's ID and the queue of undocumented screens. Every downstream file pins the upstream version in `derived_from`, so drift is visible rather than silent.
 
-Four companion skills trace a user's goal across repositories. Run `build-journey-map` to register
-journeys, `document-journey` for each registered journey, `visualize-journey` for a visual map, then
-`view-journeys` to open the maps with working links.
+Four companion skills trace a user's goal across repositories, or across one application. Run
+`build-journey-map` to register journeys, `document-journey` for each registered journey,
+`visualize-journey` for a visual map, then `view-journeys` to open the maps with working links.
+Captures are generated, not committed: [`skills/uishot/references/capture-root.md`](skills/uishot/references/capture-root.md)
+owns the capture root, the layout and the rule that a document cites a capture by ID.
 
 | Skill | Command | Writes |
 |---|---|---|
 | **build-journey-map** | `/build-journey-map [repository-set]` | `docs/journey-registry.md` with stable journey IDs and repository seams |
 | **document-journey** | `/document-journey <JRNY-###>` | `docs/journeys/JRNY-###-<slug>.md` with stages, carried context, and evidence |
-| **visualize-journey** | `/visualize-journey <JRNY-###>` | `docs/journeys/visuals/JRNY-###/` with a manifest and HTML map, plus a portfolio index and a pan-and-zoom canvas of how journeys connect |
-| **view-journeys** | `/view-journeys` | Nothing; serves an existing collection over `http://127.0.0.1` and returns the canvas URL |
+| **visualize-journey** | `/visualize-journey <JRNY-###>` | `.specs/ux-qa/visuals/JRNY-###/` with a manifest and HTML map, plus a portfolio index and a pan-and-zoom canvas of how journeys connect |
+| **view-journeys** | `/view-journeys` | Nothing; serves the `.specs/ux-qa/visuals/` collection over `http://127.0.0.1` and returns the canvas URL |
+
+Two more skills turn that documentation into a brief and a QA round. `build-product-brief` writes a
+brief whose every claim names a screen, journey or feature ID. `journey-qa` runs a user scenario
+through the application repository's own `bin/ux-qa` harness.
+
+| Skill | Command | Writes |
+|---|---|---|
+| **build-product-brief** | `/build-product-brief [repository path]` | `docs/product-brief.md` with a Basis statement and a cited `FEAT-###` table |
+| **journey-qa** | `/journey-qa <explore\|replay\|review\|deck> <JRNY-###[/slug]>` | Run output, replays, reference trails and decks under `.specs/ux-qa/`, never in a commit |
 
 ### specops-skills: SpecOps / agent documentation
 
