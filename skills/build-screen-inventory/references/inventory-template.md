@@ -73,6 +73,7 @@ Record every switch component that maps one route onto several products. This ta
 |---|---|
 | Routes registered | |
 | Screens inventoried | |
+| IDs issued | |
 | Shared | |
 | Excluded (with reason) | |
 | **Unassigned** | |
@@ -143,14 +144,15 @@ How someone arrives in this inventory at all — the landing route after sign-in
 | ID | Screen | Route | Reached by | Status | Purpose |
 |---|---|---|---|---|---|
 | SCRN-096 | Job list | `/opportunities/jobs` | all roles | documented | The open roles this user can act on |
-| — | <name> | `/path` | role subset | undocumented | One line |
+| SCRN-097 | <name> | `/path` | role subset | undocumented | One line |
 
 Rules for this table:
 
 - One line of purpose. Depth belongs in the screen page.
 - `Reached by` names the role subset when it is narrower than the inventory predicate; otherwise write `all`.
 - `Status` is `documented` (a screen page exists), `undocumented`, or `unverified` (registered but no confirmed navigation path).
-- Never invent a `SCRN-` ID. Write `—` for an undocumented screen; the sibling `document-screen-behavior` skill assigns the ID when the page is written.
+- Issue the ID at creation. Every row carries a `SCRN-###` you searched the whole corpus for and found unused, including a row marked `undocumented`; the next unused number, zero-padded to three digits. Never copy an ID from an example row.
+- An issued ID is permanent: it never changes and is never reused, even if the screen is retired. `Status` stays `undocumented` until a screen page exists.
 - Where a route also serves another inventory, note it and link the seam.
 
 Group rows under sub-headings when the inventory is long — by area, by object, or by journey stage. Keep the order stable across reviews so a diff is readable.
@@ -168,7 +170,7 @@ Where a user leaves this inventory or arrives from another, and what state trave
 
 ## 7. Coverage
 
-Screens in this inventory, how many are documented, and what is unverified.
+Screens in this inventory, how many are documented, and what is unverified. Count the IDs issued in this inventory, and state the next unused number for the next run.
 
 ## Open questions
 

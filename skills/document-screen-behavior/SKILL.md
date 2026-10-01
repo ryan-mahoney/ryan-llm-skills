@@ -40,7 +40,7 @@ docs/inventories/<slug>-screens.md
 
 From the permission model: `#role-registry` for the `ROLE-##` IDs, `#capability-matrix` for what each role may do, `#route-guards` for this screen's guard, and `#audience-predicates` for the `AUD-##` that admits it. Section 2 of the page references these — it does not restate them.
 
-From the inventory: which inventory owns the screen, its `AUD-##`, and whether a row already exists for it. **Take the `SCRN-###` ID from the inventory row if it has one; assign the next unused ID if the row reads `—`, and update the row.**
+From the inventory: which inventory owns the screen, its `AUD-##`, and whether a row already exists for it. **Take the `SCRN-###` ID from the inventory row — `build-screen-inventory` issues it when the row is created.** A legacy row that still reads `—` is the one exception: assign it the next unused ID, update the row, and note the repair in the handoff.
 
 When neither exists, derive access yourself in Step 2 and open a question recommending `build-permission-model`. Say in the handoff that access is unverified. When both exist, record what you read:
 
