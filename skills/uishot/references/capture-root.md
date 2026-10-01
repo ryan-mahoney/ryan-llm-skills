@@ -21,11 +21,19 @@ config file and no second convention.
 
 ## Safety
 
-Before writing any capture, prove the root is ignored:
+Before writing any capture, prove the root is ignored, and run the check in the
+checkout that owns the root — `$root/../..` for the default root:
 
 ```bash
-git check-ignore -q "$root"
+git -C "$root/../.." check-ignore -q "$root"
 ```
+
+`check-ignore` applies a repository's ignore rules only for paths inside that
+repository, so from a linked worktree the default root lies outside the
+repository and the command fails with "is outside repository" even though the
+root is ignored. Running it in the primary checkout is the check that answers
+the question. A repository that declares another root runs the check in its own
+checkout.
 
 If that command fails, stop and ask for the root to be ignored. A committed
 capture file is the failure this check exists to prevent.

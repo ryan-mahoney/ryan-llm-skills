@@ -157,7 +157,9 @@ export function computeRating(run, referenceActions = run.result.referenceAction
 /**
  * Every sibling run of the same scenario, this one included, sorted by run
  * directory name. A sibling with no result.json reads "no result recorded" and
- * is never given a rating word.
+ * is never given a rating word. A sibling whose files do not validate is listed
+ * as "not rated" with the reason naming its own directory, so one malformed
+ * sibling never aborts a deck whose own run is valid.
  */
 export function siblingRuns(runDir) {
   const dir = resolve(runDir);
@@ -168,24 +170,36 @@ export function siblingRuns(runDir) {
     .filter((path) => existsSync(path) && statSync(path).isDirectory())
     .filter((path) => existsSync(join(path, "session.json")))
     .map((path) => {
-      const session = readJson(join(path, "session.json"), "session.json");
+      const name = basenameOf(path);
+      const session = readJson(join(path, "session.json"), `${name}: session.json`);
       if (session.scenario !== own.scenario) return null;
       const resultPath = join(path, "result.json");
       if (!existsSync(resultPath)) {
-        return { name: basenameOf(path), dir: path, run: session.run, scenario: session.scenario, status: "no result recorded", claim: null, rating: null };
+        return { name, dir: path, run: session.run, scenario: session.scenario, status: "no result recorded", claim: null, rating: null, reason: null };
       }
-      const result = readJson(resultPath, "result.json");
-      const reviewPath = join(path, "review.json");
-      const review = existsSync(reviewPath) ? readJson(reviewPath, "review.json") : null;
-      return {
-        name: basenameOf(path),
+      const sibling = {
+        name,
         dir: path,
         run: session.run,
         scenario: session.scenario,
-        status: result.status,
-        claim: result.claim ?? null,
-        rating: review ? computeRating({ result, review }).rating : null,
+        status: "not rated",
+        claim: null,
+        rating: null,
+        reason: null,
       };
+      try {
+        const result = validateResult(readJson(resultPath, `${name}: result.json`), `${name}: result.json`);
+        sibling.status = result.status;
+        sibling.claim = result.claim ?? null;
+        const reviewPath = join(path, "review.json");
+        const review = existsSync(reviewPath)
+          ? validateReview(readJson(reviewPath, `${name}: review.json`), `${name}: review.json`)
+          : null;
+        if (review) sibling.rating = computeRating({ result, review }).rating;
+      } catch (error) {
+        sibling.reason = error.message;
+      }
+      return sibling;
     })
     .filter(Boolean)
     .sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
@@ -793,7 +807,7 @@ export function renderJourneyDeck({ run, rating, siblings, second, out }) {
             <td>${sibling.rating === null
               ? sibling.status === "no result recorded"
                 ? "no result recorded"
-                : "not rated"
+                : `not rated${sibling.reason ? ` \\u2014 ${escapeHtml(sibling.reason)}` : ""}`
               : `<span class="rating rating--${ratingClass(sibling.rating)}" data-source="siblings[${index}].rating">${escapeHtml(sibling.rating)}</span>`}</td>
           </tr>`,
         )
@@ -911,7 +925,7 @@ const splitTableRow = (line) =>
 /** The `JRNY-###` tokens of a brief cell; `none` and an empty cell name none. */
 function journeyTokens(cell) {
   if (cell === "" || /^(none|n\/a|—|-)$/i.test(cell)) return [];
-  const tokens = [...cell.matchAll(/JRNY-\d+/g)].map((match) => match[0]);
+  const tokens = cell.match(/JRNY-\d{3}/g) ?? [];
   if (tokens.length === 0) throw new Error(`brief: FEAT Journeys cell "${cell}" names no journey`);
   return [...new Set(tokens)];
 }
@@ -935,8 +949,9 @@ export function briefFeatures(markdown) {
   if (header === -1) throw new Error("brief: no table with a Journeys column");
   const columns = splitTableRow(lines[header]);
   const idColumn = columns.findIndex((column) => /^ID$/i.test(column));
-  const journeysColumn = columns.indexOf("Journeys");
+  const journeysColumn = columns.findIndex((column) => /^journeys$/i.test(column));
   if (idColumn === -1) throw new Error("brief: the Journeys table has no ID column");
+  if (journeysColumn === -1) throw new Error("brief: the Journeys table has no Journeys column");
   const features = [];
   for (const line of lines.slice(header + 1)) {
     if (!/^\s*\|/.test(line)) break;
@@ -1240,7 +1255,11 @@ export function main(argv = process.argv.slice(2)) {
   }
 
   const siblings = siblingRuns(runDir);
-  const second = args["second-review"] ? validateReview(readJson(args["second-review"], "review.json")) : null;
+  const secondPath = args["second-review"] ? resolve(args["second-review"]) : null;
+  if (secondPath !== null && secondPath === resolve(join(run.dir, "review.json"))) {
+    throw new Error("--second-review is the run's own review.json; pass a second reviewer's file");
+  }
+  const second = secondPath ? validateReview(readJson(secondPath, "review.json")) : null;
   renderJourneyDeck({ run, rating: computeRating(run), siblings, second, out });
 }
 

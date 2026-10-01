@@ -1,7 +1,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -148,6 +148,25 @@ test("a sibling with no result reads no result recorded and gets no rating", () 
   assert.equal(siblings[1].claim, null);
 });
 
+test("a sibling whose files do not validate is listed as not rated with its own reason", () => {
+  const runsDir = tempDir("build-deck-sibling-malformed-");
+  const first = join(runsDir, "20261001T100000Z-JRNY-001-import");
+  const second = join(runsDir, "20261002T100000Z-JRNY-001-import");
+  fixtureRun(first);
+  fixtureRun(second);
+  editJson(second, "result.json", (result) => ({ ...result, inventedKey: true }));
+
+  const siblings = siblingRuns(first);
+  assert.deepEqual(siblings.map((sibling) => sibling.status), ["completed", "not rated"]);
+  assert.equal(siblings[1].rating, null);
+  assert.match(siblings[1].reason, /20261002T100000Z-JRNY-001-import/);
+
+  // The deck still builds for the valid run, and the row carries the reason.
+  const html = deckOf(["--run", first, "--out", join(runsDir, "deck.html")]);
+  assert.match(html, /not rated/);
+  assert.match(html, /20261002T100000Z-JRNY-001-import/);
+});
+
 test("a loaded run keeps the values the deck will print", () => {
   const dir = tempDir("build-deck-load-");
   const runDir = join(dir, "run");
@@ -169,10 +188,12 @@ const deckOf = (args) => {
   return readFileSync(args[args.indexOf("--out") + 1], "utf8");
 };
 
-/** Every `data-source` element's text, as a map from the path it names. */
+// Every `data-source` element's text, as a map from the path it names. The
+// classes differ (`figure` for numbers, `severity` and `rating` for the words),
+// so the span is matched on the attribute every one of them carries.
 const figuresIn = (html) => {
   const figures = new Map();
-  for (const match of html.matchAll(/<span class="figure" data-source="([^"]+)">([^<]*)<\/span>/g)) {
+  for (const match of html.matchAll(/<span class="[^"]*" data-source="([^"]+)">([^<]*)<\/span>/g)) {
     figures.set(match[1], match[2]);
   }
   return figures;
@@ -218,7 +239,6 @@ test("every data-source figure equals the fixture value at that path", () => {
     "proxies.elapsedSeconds": run.result.proxies.elapsedSeconds,
     "captures.count": 2,
     "steps[1].intent": run.steps[1].intent,
-    "steps[2].expected": run.steps[2].expected,
     "review.findings[0].severity": run.review.findings[0].severity,
   };
   for (const [source, value] of Object.entries(expected)) {
@@ -230,6 +250,11 @@ test("every data-source figure equals the fixture value at that path", () => {
     assert.match(source, allowed, `unexpected data-source path "${source}"`);
   }
   assert.equal(figures.size >= Object.keys(expected).length, true);
+
+  // A step with no stated expectation reads "none stated", so it carries no
+  // figure: a figure would print the null as a value the run never recorded.
+  assert.equal(figures.has("steps[2].expected"), false, "a null expected has no figure");
+  assert.match(html, /none stated/);
 });
 
 test("a missing capture renders a labelled Not captured placeholder", () => {
@@ -372,8 +397,10 @@ test("--second-review adds the repeatability line and one deck is nine slides", 
 
   const withSecond = deckOf(["--run", runDir, "--out", join(dir, "deck.html"), "--second-review", secondPath]);
   assert.match(withSecond, /Repeatability, not validity/);
-  assert.match(withSecond, /agree exactly on 6 of 7 compared questions/);
-  assert.match(withSecond, /within one on 7 of 7/);
+  // The agreement figures are data-source spans inside the sentence, so the
+  // numbers are matched where the deck names them.
+  assert.match(withSecond, /agree exactly on <span class="figure" data-source="agreement.exact">6<\/span> of <span class="figure" data-source="agreement.n">7<\/span> compared questions/);
+  assert.match(withSecond, /within one on <span class="figure" data-source="agreement.withinOne">7<\/span> of <span class="figure" data-source="agreement.n">7<\/span>/);
 
   // review.json holds one finding and review-2.json holds two, so the findings
   // slide reading "(1)" is what proves the deck body is built from review.json.
@@ -382,6 +409,18 @@ test("--second-review adds the repeatability line and one deck is nine slides", 
 
   const slideIds = [...withSecond.matchAll(/<section class="slide" id="(s\d)"/g)].map((match) => match[1]);
   assert.deepEqual(slideIds, ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9"]);
+});
+
+test("--second-review rejects the run's own review.json", () => {
+  const dir = tempDir("build-deck-second-review-self-");
+  const runDir = join(dir, "run");
+  fixtureRun(runDir);
+  const out = join(dir, "deck.html");
+
+  const result = runCli(["--run", runDir, "--out", out, "--second-review", join(runDir, "review.json")]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /--second-review is the run's own review.json/);
+  assert.equal(existsSync(out), false, "a rejected second review writes no deck");
 });
 
 // --- action target and goal cases (step 18 pilot repair) ---
@@ -479,7 +518,7 @@ Open /.
   );
   const html = deckOf(["--run", runDir, "--out", join(dir, "deck.html")]);
 
-  assert.ok(html.includes("What the tester was trying to do: Import the sample feed and see the new version listed."), "slide 1 reads the goal under the harness's heading");
+  assert.match(html, /<b>What the tester was trying to do:<\/b> Import the sample feed and see the new version listed\./, "slide 1 reads the goal under the harness's heading");
   assert.ok(html.includes("An operator who publishes timetables."), "slide 2 reads the persona");
   assert.ok(html.includes("Open /."), "slide 2 reads the start path");
   assert.ok(html.includes("sample-feed.zip</li>"), "slide 2 lists the files");
@@ -545,8 +584,10 @@ test("a sibling with no recorded result is listed without a rating word", () => 
   rmSync(join(pending, "review.json"));
   const html = deckOf(["--run", runDir, "--out", join(dir, "deck.html")]);
 
+  // Rows are sorted by run directory name, so the result-less `pending`
+  // directory is the first sibling of `run`.
   assert.match(html, /no result recorded/);
-  assert.equal(/siblings\[1\]\.rating/.test(html), false, "a run with no result gets no rating element");
+  assert.equal(/siblings\[0\]\.rating/.test(html), false, "a run with no result gets no rating element");
 });
 
 // --- summary deck cases (step 19) ---
@@ -771,6 +812,18 @@ test("a brief with no Journeys column is rejected", () => {
   const result = runCli(["--summary", "--brief", brief, "--runs", runs, "--out", join(dir, "summary.html")]);
   assert.equal(result.status, 1);
   assert.match(result.stderr, /brief: no table with a Journeys column/);
+});
+
+test("a brief whose Journeys header is spelled in another case still fills the matrix", () => {
+  const dir = tempDir("build-deck-summary-lowercase-journeys-");
+  const { brief, runs } = fixtureCollection(dir);
+  writeFileSync(
+    brief,
+    readFileSync(brief, "utf8").replace("| ID | Feature | Description | Actor | Screens | Journeys |", "| ID | Feature | Description | Actor | Screens | journeys |"),
+  );
+
+  const html = summaryDeckOf(dir, brief, runs);
+  assert.match(figuresIn(html).get("features[0].coverage.JRNY-001"), /^explored/);
 });
 
 test("a brief whose earlier table mentions journeys still reads the FEAT header", () => {
