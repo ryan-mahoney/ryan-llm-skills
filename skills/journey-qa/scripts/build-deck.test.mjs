@@ -344,6 +344,10 @@ test("--second-review adds the repeatability line and one deck is nine slides", 
   const runDir = join(dir, "run");
   fixtureRun(runDir);
   const secondPath = join(dir, "review-2.json");
+  // The second review deliberately disagrees on q2 of step 2, so the repeatability
+  // figures prove the two reviews are compared against each other, and it carries
+  // two findings where review.json carries one, so the deck body proves it is built
+  // from review.json rather than from the second review.
   writeFileSync(
     secondPath,
     `${JSON.stringify(
@@ -352,6 +356,10 @@ test("--second-review adds the repeatability line and one deck is nine slides", 
         steps: [
           { n: 1, q1: 2, q2: 2, q3: 2, q4: 2, captures: ["s001.png"], note: null },
           { n: 2, q1: 2, q2: 1, q3: 1, q4: 1, captures: ["s002.png"], note: "seen a progress bar" },
+        ],
+        findings: [
+          { id: "F-1", severity: "low", kind: "labelling", step: 2, capture: "s002.png", statement: "The progress bar has no text label.", consequence: "A tester cannot tell whether the upload is progressing." },
+          { id: "F-2", severity: "info", kind: "copy", step: 2, capture: null, statement: "The screen names no file type.", consequence: "A tester may upload the wrong archive." },
         ],
       },
       null,
@@ -366,6 +374,11 @@ test("--second-review adds the repeatability line and one deck is nine slides", 
   assert.match(withSecond, /Repeatability, not validity/);
   assert.match(withSecond, /agree exactly on 6 of 7 compared questions/);
   assert.match(withSecond, /within one on 7 of 7/);
+
+  // review.json holds one finding and review-2.json holds two, so the findings
+  // slide reading "(1)" is what proves the deck body is built from review.json.
+  assert.match(withSecond, /the reviewer recorded \(1\)/);
+  assert.equal(/the reviewer recorded \(2\)/.test(withSecond), false, "the second review must not become the run's review");
 
   const slideIds = [...withSecond.matchAll(/<section class="slide" id="(s\d)"/g)].map((match) => match[1]);
   assert.deepEqual(slideIds, ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9"]);

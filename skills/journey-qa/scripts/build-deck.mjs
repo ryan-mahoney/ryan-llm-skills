@@ -126,13 +126,11 @@ function readSteps(path, where) {
  * review.json read strictly. A missing file and a malformed key are both errors
  * that name the file and the key.
  */
-export function loadRun(runDir, { reviewPath } = {}) {
+export function loadRun(runDir) {
   const dir = resolve(runDir);
   const session = readJson(join(dir, "session.json"), "session.json");
   const result = validateResult(readJson(join(dir, "result.json"), "result.json"));
-  const review = validateReview(
-    readJson(reviewPath ?? join(dir, "review.json"), reviewPath ? basenameOf(reviewPath) : "review.json"),
-  );
+  const review = validateReview(readJson(join(dir, "review.json"), "review.json"));
   const steps = readSteps(join(dir, "steps.jsonl"), "steps.jsonl");
   const brief = readText(join(dir, "brief.md"), "brief.md");
   return { dir, session, result, review, steps, brief };
@@ -1221,7 +1219,11 @@ export function main(argv = process.argv.slice(2)) {
   }
 
   const runDir = requireFlag(args, "run");
-  const run = loadRun(runDir, { reviewPath: args["second-review"] });
+  // --second-review is the second reviewer only. The run's own review.json stays
+  // the primary review, so the deck body and the rating come from it and the
+  // repeatability figure compares two independent reviews rather than the
+  // second review against itself.
+  const run = loadRun(runDir);
 
   // A harness error is not a rating. Say so, write nothing, exit 1.
   if (run.result.status === "harness-error") {
