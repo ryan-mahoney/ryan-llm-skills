@@ -80,12 +80,12 @@ Use `references/operator-map-schema.md` for the manifest contract.
 
 ## Step 2 — Treat screenshots as evidence
 
-Prefer existing versioned captures under `docs/screenshots/SCRN-###/`. Use the capture whose state matches the journey step, not merely the screen's default.
+Prefer existing versioned captures under `<root>/screens/SCRN-###/`. `<root>` is the capture root defined in `../uishot/references/capture-root.md`; use its layout, its ID rule and its safety check unchanged. Use the capture whose state matches the journey step, not merely the screen's default.
 
 When no capture exists:
 
 1. Capture the real surface when a safe local or test environment is available.
-2. Store journey-only captures under `docs/journeys/visuals/JRNY-###/captures/`.
+2. Store journey-only captures under `<root>/journeys/JRNY-###/`, named `<scenario>-s<NNN>[-<slug>].png`.
 3. Use seeded or synthetic data only; never include real customer data, tokens, or payment details.
 4. Record the viewport, state, source version, and capture date in the manifest note.
 5. For an external provider or inbox surface that the product team does not own, use `status: external` and state what evidence would be needed for a safe capture.
@@ -142,15 +142,18 @@ Record product-analytics, timing, abandonment, error-rate, support-volume, or re
 
 Write:
 
+The default collection folder is `.specs/ux-qa/visuals/` in the primary checkout, beside the capture root. The collection folder and the capture root must both be git-ignored; confirm the capture root with the check in `../uishot/references/capture-root.md` before writing, and stop if either folder would be committed.
+
 ```text
-docs/journeys/visuals/
+.specs/ux-qa/visuals/
 ├── index.html                # portfolio list, generated
 ├── canvas.html               # cross-journey canvas, generated beside the list
 └── JRNY-###/
     ├── manifest.json
-    ├── index.html
-    └── captures/             # only when journey-specific captures are needed
+    └── index.html
 ```
+
+Captures are not part of the collection: they live under the capture root, and the manifest reaches them by relative path. From `.specs/ux-qa/visuals/JRNY-###/manifest.json` a journey capture is `../../../images/journeys/JRNY-###/<file>` and a screen capture is `../../../images/screens/SCRN-###/<file>`.
 
 The manifest is a derived projection, not a new authority. Its `journey.source` points to the canonical journey page and its `verifiedAgainst` values match that page.
 
@@ -168,16 +171,16 @@ Render the individual map:
 
 ```bash
 node ~/.agents/skills/visualize-journey/scripts/render-journey-map.mjs \
-  --manifest docs/journeys/visuals/JRNY-###/manifest.json \
-  --output docs/journeys/visuals/JRNY-###/index.html
+  --manifest .specs/ux-qa/visuals/JRNY-###/manifest.json \
+  --output .specs/ux-qa/visuals/JRNY-###/index.html
 ```
 
 Regenerate the portfolio index so twenty journeys remain navigable:
 
 ```bash
 node ~/.agents/skills/visualize-journey/scripts/render-journey-map.mjs \
-  --collection docs/journeys/visuals \
-  --output docs/journeys/visuals/index.html
+  --collection .specs/ux-qa/visuals \
+  --output .specs/ux-qa/visuals/index.html
 ```
 
 The same command writes `canvas.html` beside the index: a pannable, zoomable map of every journey in the folder, with repository lanes, one merged node per shared entry or terminal surface, and labelled edges for continuations, `toJourney` branches, and seams two journeys share. A continuation leaves the terminal surface it is declared on, so a journey, the surface it ends at, and the journey that surface feeds read as one flow. Each journey node opens its map; each branch or continuation edge opens the journey it leaves, at the step it leaves from. The two pages cross-link, so regenerating the index regenerates the canvas.
@@ -194,8 +197,8 @@ Run the renderer with `--check` after rendering. This flag validates while regen
 
 ```bash
 node ~/.agents/skills/visualize-journey/scripts/render-journey-map.mjs \
-  --manifest docs/journeys/visuals/JRNY-###/manifest.json \
-  --output docs/journeys/visuals/JRNY-###/index.html \
+  --manifest .specs/ux-qa/visuals/JRNY-###/manifest.json \
+  --output .specs/ux-qa/visuals/JRNY-###/index.html \
   --check
 ```
 
