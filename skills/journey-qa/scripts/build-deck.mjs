@@ -331,9 +331,11 @@ const PROXY_ROWS = [
  * The six statements and two additional lines deck.md fixes for both decks.
  * Each `text` is trusted markup: every value interpolated into one is escaped
  * by `figure()` or by `escapeHtml` at the point of use, and the static wording
- * is this file's own.
+ * is this file's own. `explorations` names the slide that lists the runs of a
+ * deck, its count and the scope that count covers, so each deck names a slide it
+ * actually has.
  */
-export function limitsLines({ second, agreementResult, siblings, result, run }) {
+export function limitsLines({ second, agreementResult, explorations, result, run }) {
   const exclusions = (result.stubExclusions ?? []).map((prefix) => `<code>${escapeHtml(prefix)}</code>`).join(", ");
   const lines = [
     {
@@ -350,7 +352,7 @@ export function limitsLines({ second, agreementResult, siblings, result, run }) 
     },
     {
       key: "explorations",
-      text: `The Explorations slide lists ${figure("siblings.count", siblings.length)} ${siblings.length === 1 ? "exploration" : "explorations"} of this scenario, each with its status and rating.`,
+      text: `The ${escapeHtml(explorations.label)} lists ${figure(explorations.source, explorations.count)} ${explorations.count === 1 ? "exploration" : "explorations"} ${escapeHtml(explorations.scope)}, each with its status and rating.`,
     },
     {
       key: "reviewer",
@@ -390,6 +392,17 @@ const DECK_STYLES = `
   .rule{height:1px;margin:14px 0;background:var(--line)}
   .grid{display:grid;gap:0 26px;align-items:start}
   .grid--2{grid-template-columns:1fr 1fr}
+  .matrix td,.matrix th{font-size:.8rem}
+  .matrix .cell{white-space:normal}
+  .state{display:block;padding:3px 6px;border:1px solid var(--line);font-size:.76rem}
+  .state--explored{border-color:var(--direct);color:var(--direct)}
+  .state--pending{border-color:var(--detours);color:var(--detours)}
+  .state--absent{color:var(--muted);border-style:dashed}
+  .counts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:22px;margin-top:18px}
+  .count{border-top:3px solid var(--ink);padding:12px 0 0}
+  .count .value{display:block;font-size:3rem;font-weight:750;line-height:1;font-variant-numeric:tabular-nums}
+  .count .label{display:block;margin-top:8px;color:var(--muted);font-size:.85rem}
+  .counts+.lede{margin-top:30px}
   .stack>*+*{margin-top:14px}
   .strip{overflow:auto;max-height:calc(100vh - 240px)}
   table{width:100%;border-collapse:collapse;font-size:.85rem}
@@ -482,8 +495,8 @@ const DECK_SCRIPT = `
 })();
 `;
 
-const slide = (number, kicker, heading, body) => `
-  <section class="slide" id="s${number}" aria-label="Slide ${number} of 9: ${attr(heading)}">
+const slide = (number, total, kicker, heading, body) => `
+  <section class="slide" id="s${number}" aria-label="Slide ${number} of ${total}: ${attr(heading)}">
     <p class="kicker">${escapeHtml(kicker)}</p>
     <h1 tabindex="-1">${escapeHtml(heading)}</h1>
     <div class="rule"></div>
@@ -505,10 +518,10 @@ const bandCell = (bandName, bandValue) =>
 const schemeAsEntities = (html) => html.replaceAll(/(https?):\/\//g, "$1&#58;//");
 
 /**
- * Write the journey deck of references/deck.md as one self-contained HTML file:
- * inline CSS and script, every image a `data:` URI, every displayed figure an
- * element whose text is the value at its `data-source` path. The deck computes
- * nothing; the values come from the run files and from ./rating.mjs.
+ * The nine journey-deck slides of references/deck.md, handed to the shared
+ * `writeDeck` shell. Every displayed figure is an element whose text is the
+ * value at its `data-source` path; the deck computes nothing, and every rating
+ * word comes from ./rating.mjs.
  */
 export function renderJourneyDeck({ run, rating, siblings, second, out }) {
   const { result, review, steps, brief } = run;
@@ -528,6 +541,7 @@ export function renderJourneyDeck({ run, rating, siblings, second, out }) {
 
   const title = slide(
     1,
+    9,
     `Run ${result.run}`,
     briefText(sections, "Goal") || result.scenario,
     `<p class="result-line">
@@ -547,6 +561,7 @@ export function renderJourneyDeck({ run, rating, siblings, second, out }) {
 
   const given = slide(
     2,
+    9,
     "What the tester was given",
     "The brief the tester read",
     `<div class="grid grid--2">
@@ -567,6 +582,7 @@ export function renderJourneyDeck({ run, rating, siblings, second, out }) {
 
   const filmstrip = slide(
     3,
+    9,
     "Step filmstrip",
     `Every executed step, in steps.jsonl order (${recorded.length} steps)`,
     `<div class="strip"><div class="filmstrip">${steps
@@ -589,6 +605,7 @@ export function renderJourneyDeck({ run, rating, siblings, second, out }) {
 
   const proxies = slide(
     4,
+    9,
     "Measured proxies",
     "The raw numbers first, then their bands",
     `<div class="grid grid--2">
@@ -621,6 +638,7 @@ export function renderJourneyDeck({ run, rating, siblings, second, out }) {
 
   const scores = slide(
     5,
+    9,
     "Reviewer scores — reviewer-assessed",
     `Per-step questions, lowest-scoring steps first (${scored} of ${review.steps.length} steps scored)`,
     `<div class="strip"><table>
@@ -642,6 +660,7 @@ export function renderJourneyDeck({ run, rating, siblings, second, out }) {
 
   const findings = slide(
     6,
+    9,
     "Findings",
     `Every finding the reviewer recorded (${review.findings.length})`,
     review.findings.length === 0
@@ -666,6 +685,7 @@ export function renderJourneyDeck({ run, rating, siblings, second, out }) {
 
   const explorations = slide(
     7,
+    9,
     "Explorations of this scenario",
     `Completed in ${completed} of ${siblings.length} ${siblings.length === 1 ? "run" : "runs"} of ${result.scenario}`,
     `<table>
@@ -690,14 +710,22 @@ export function renderJourneyDeck({ run, rating, siblings, second, out }) {
 
   const limits = slide(
     8,
+    9,
     "Limits",
     "What this run does not establish",
-    `<ol class="limits">${limitsLines({ second, agreementResult, siblings, result, run: result.run })
+    `<ol class="limits">${limitsLines({
+      second,
+      agreementResult,
+      explorations: { label: "Explorations slide", source: "siblings.count", count: siblings.length, scope: "of this scenario" },
+      result,
+      run: result.run,
+    })
       .map((line) => `<li>${line.text}</li>`)
       .join("")}</ol>`,
   );
 
   const evidence = slide(
+    9,
     9,
     "Evidence index",
     "The run files behind every number on this deck",
@@ -714,13 +742,27 @@ export function renderJourneyDeck({ run, rating, siblings, second, out }) {
     </dl>`,
   );
 
-  const slides = [title, given, filmstrip, proxies, scores, findings, explorations, limits, evidence];
+  return writeDeck({
+    title: `Journey deck — ${result.scenario} — ${result.run}`,
+    slides: [title, given, filmstrip, proxies, scores, findings, explorations, limits, evidence],
+    out,
+  });
+}
+
+/**
+ * The shell both decks of references/deck.md share: one self-contained file
+ * with inline CSS and script, a `#s<N>` per slide, keyboard navigation, a
+ * print stylesheet that shows every slide, and a write that is whole or not at
+ * all. The deck computes nothing; the values come from the run files and from
+ * ./rating.mjs.
+ */
+export function writeDeck({ title, slides, out }) {
   const html = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Journey deck — ${escapeHtml(result.scenario)} — ${escapeHtml(result.run)}</title>
+<title>${escapeHtml(title)}</title>
 <style>${DECK_STYLES}</style>
 </head>
 <body>
@@ -753,8 +795,320 @@ function scoredMin(step) {
   return values.length === 0 ? 0 : Math.min(...values);
 }
 
-function renderSummaryDeck() {
-  throw new Error("renderSummaryDeck: not implemented");
+// The states a coverage-matrix cell may carry (deck.md slide 3), each of them
+// beside its text label rather than shown as colour alone. A journey the
+// feature's Journeys column does not name is not one of the three states: the
+// dash says the cell does not apply, and the slide says so.
+const MATRIX_STATES = {
+  none: { className: "none", text: "no registered journey" },
+  absent: { className: "absent", text: "—"},
+  pending: { className: "pending", text: "registered, not yet explored" },
+  explored: { className: "explored", text: "explored" },
+};
+
+const splitTableRow = (line) =>
+  line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+
+/** The `JRNY-###` tokens of a brief cell; `none` and an empty cell name none. */
+function journeyTokens(cell) {
+  if (cell === "" || /^(none|n\/a|—|-)$/i.test(cell)) return [];
+  const tokens = [...cell.matchAll(/JRNY-\d+/g)].map((match) => match[0]);
+  if (tokens.length === 0) throw new Error(`brief: FEAT Journeys cell "${cell}" names no journey`);
+  return [...new Set(tokens)];
+}
+
+/**
+ * The brief's FEAT table: one row per `FEAT-###` with its name and the journeys
+ * its Journeys column names. A row whose cell count disagrees with the header,
+ * or a table with no Journeys column, is a malformed brief and fails here rather
+ * than rendering a matrix the brief does not say.
+ */
+export function briefFeatures(markdown) {
+  const lines = markdown.split("\n");
+  const header = lines.findIndex((line) => /^\s*\|/.test(line) && /\bJourneys\b/i.test(line));
+  if (header === -1) throw new Error("brief: no table with a Journeys column");
+  const columns = splitTableRow(lines[header]);
+  const idColumn = columns.findIndex((column) => /^ID$/i.test(column));
+  const journeysColumn = columns.indexOf("Journeys");
+  if (idColumn === -1) throw new Error("brief: the Journeys table has no ID column");
+  const features = [];
+  for (const line of lines.slice(header + 1)) {
+    if (!/^\s*\|/.test(line)) break;
+    const cells = splitTableRow(line);
+    if (cells.every((cell) => /^:?-{2,}:?$/.test(cell))) continue;
+    const id = cells[idColumn] ?? "";
+    if (!/^FEAT-\d+$/.test(id)) continue;
+    if (cells.length !== columns.length) {
+      throw new Error(`brief: ${id} row has ${cells.length} cells, the header has ${columns.length}`);
+    }
+    features.push({
+      id,
+      name: cells[idColumn + 1] ?? "",
+      journeys: journeyTokens(cells[journeysColumn] ?? ""),
+    });
+  }
+  if (features.length === 0) throw new Error("brief: the FEAT table has no rows");
+  return features;
+}
+
+/**
+ * Every run directory under `runsDir`, newest last. `usable` is a run the deck
+ * can rate: a result.json and a review.json, both read strictly, and a status
+ * other than `harness-error`, which R18's "a harness error is not a rating"
+ * keeps out of every rating word. A directory with neither file is not an error
+ * here; it simply has nothing to show.
+ */
+export function summaryRuns(runsDir) {
+  const dir = resolve(runsDir);
+  return readdirSync(dir)
+    .map((name) => join(dir, name))
+    .filter((path) => statSync(path).isDirectory())
+    .filter((path) => existsSync(join(path, "session.json")))
+    .map((path) => {
+      const name = basenameOf(path);
+      const session = readJson(join(path, "session.json"), `${name}/session.json`);
+      const resultPath = join(path, "result.json");
+      const reviewPath = join(path, "review.json");
+      const result = existsSync(resultPath) ? validateResult(readJson(resultPath, `${name}/result.json`)) : null;
+      const review = existsSync(reviewPath) ? validateReview(readJson(reviewPath, `${name}/review.json`)) : null;
+      const usable = result !== null && review !== null && result.status !== "harness-error";
+      return {
+        name,
+        dir: path,
+        run: session.run,
+        scenario: session.scenario,
+        startedAt: session.startedAt ?? "",
+        commit: session.commit ?? "not recorded",
+        result,
+        review,
+        rating: usable ? computeRating({ result, review }).rating : null,
+        usable,
+      };
+    })
+    .sort((left, right) => {
+      if (left.startedAt !== right.startedAt) return left.startedAt < right.startedAt ? -1 : 1;
+      return left.name < right.name ? -1 : left.name > right.name ? 1 : 0;
+    });
+}
+
+const journeyOf = (scenario) => String(scenario).split("/")[0];
+const slugOf = (scenario) => String(scenario).split("/").slice(1).join("/");
+
+/**
+ * One row per scenario the runs directory holds: the latest usable run of each
+ * scenario is the one the deck reports, and the count beside it is every
+ * exploration of that scenario, so a second, worse run is never hidden.
+ */
+function scenarioRows(runs) {
+  const byScenario = new Map();
+  for (const run of runs) {
+    if (!byScenario.has(run.scenario)) byScenario.set(run.scenario, []);
+    byScenario.get(run.scenario).push(run);
+  }
+  return [...byScenario.entries()].map(([scenario, ofScenario]) => {
+    const usable = ofScenario.filter((run) => run.usable);
+    const latest = usable[usable.length - 1] ?? ofScenario[ofScenario.length - 1] ?? null;
+    const rated = latest !== null && latest.usable;
+    return {
+      scenario,
+      journey: journeyOf(scenario),
+      slug: slugOf(scenario),
+      latest,
+      explorations: ofScenario.length,
+      status: rated ? latest.result.status : "no result recorded",
+      rating: rated ? latest.rating : null,
+      attribution: rated && latest.review.journey.attribution,
+      decidingStep: rated ? latest.review.journey.decidingStep : null,
+    };
+  });
+}
+
+/**
+ * The one line the cell carries. A feature that names this journey reads
+ * `explored: <rating>` when the journey has a usable run, `registered, not yet
+ * explored` when it has none. A journey the feature does not name reads a dash:
+ * the cell does not apply, and "no registered journey" there would deny a
+ * journey the registry holds.
+ */
+function matrixCell(feature, journey, rows) {
+  if (feature.journeys.length === 0) return { state: MATRIX_STATES.none, text: MATRIX_STATES.none.text };
+  if (!feature.journeys.includes(journey)) return { state: MATRIX_STATES.absent, text: MATRIX_STATES.absent.text };
+  const ofJourney = rows.filter((row) => row.journey === journey);
+  const rated = ofJourney.filter((row) => row.rating !== null);
+  if (rated.length === 0) return { state: MATRIX_STATES.pending, text: MATRIX_STATES.pending.text };
+  const entries = ofJourney.map((row) =>
+    row.rating === null
+      ? `${row.slug} ${MATRIX_STATES.pending.text}`
+      : row.rating === "Not completed"
+        ? `${row.slug} ${attributionLine(row.attribution)}`
+        : `${row.slug} ${row.rating}`,
+  );
+  return { state: MATRIX_STATES.explored, text: `${MATRIX_STATES.explored.text}: ${entries.join("; ")}` };
+}
+
+/**
+ * The six summary slides of references/deck.md: the brief's title, the
+ * per-scenario ratings, the brief-feature to journey coverage matrix, the three
+ * counts as three numbers, the same limits wording as the journey deck, and the
+ * evidence index over every run that was read. The three counts are never merged
+ * into one figure, and a figure's text is always the value at its
+ * `data-source` path.
+ */
+export function renderSummaryDeck({ brief, runs, out }) {
+  const briefBody = readText(brief, "product-brief.md");
+  const features = briefFeatures(briefBody);
+  const briefName = briefBody.split("\n")[0].replace(/^#\s+/, "");
+  const all = summaryRuns(runs);
+  const rows = scenarioRows(all);
+  const columns = [...new Set(features.flatMap((feature) => feature.journeys))].sort();
+  const rowFor = (journey) => rows.filter((row) => row.journey === journey);
+  const latest = all[all.length - 1] ?? null;
+  const counts = {
+    features: features.length,
+    withJourney: features.filter((feature) => feature.journeys.length > 0).length,
+    explored: columns.filter((journey) => rowFor(journey).some((row) => row.rating !== null)).length,
+  };
+  const harnessErrors = all.filter((run) => run.result !== null && run.result.status === "harness-error");
+
+  const title = slide(
+    1,
+    6,
+    `Summary deck — ${basenameOf(resolve(runs))}`,
+    briefName,
+    `<dl class="kv">
+      <dt>Brief</dt><dd class="mono">${escapeHtml(basenameOf(resolve(brief)))}</dd>
+      <dt>Run collection</dt><dd class="mono">${escapeHtml(basenameOf(resolve(runs)))}</dd>
+      <dt>Runs read</dt><dd>${figure("runs.count", all.length)}</dd>
+      <dt>Most recent run</dt><dd>${latest === null ? "No runs recorded." : `${figure("runs.latest.run", latest.run)} — commit ${figure("runs.latest.commit", latest.result?.commit ?? latest.commit)}`}</dd>
+      <dt>Scenarios</dt><dd>${figure("scenarios.count", rows.length)}</dd>
+    </dl>
+    <p class="lede">${figure("counts.features", counts.features)} features in the brief, ${figure("counts.featuresWithJourney", counts.withJourney)} of them with a registered journey, and ${figure("counts.journeysExplored", counts.explored)} ${counts.explored === 1 ? "journey" : "journeys"} explored. The three numbers differ, and the Coverage matrix and Counts slides show why.</p>`,
+  );
+
+  const ratings = slide(
+    2,
+    6,
+    "Per-journey ratings",
+    `The latest usable run of each scenario that has a run directory (${rows.length})`,
+    rows.length === 0
+      ? `<p class="empty">No runs recorded.</p>`
+      : `<table>
+          <thead><tr><th>Journey</th><th>Scenario</th><th>Result</th><th>Rating</th><th>Attribution</th><th class="num">Explorations</th></tr></thead>
+          <tbody>${rows
+            .map(
+              (row, index) => `<tr>
+              <td class="mono">${escapeHtml(row.journey)}</td>
+              <td class="mono">${escapeHtml(row.scenario)}</td>
+              <td>${figure(`scenarios[${index}].status`, row.status)}</td>
+              <td>${row.rating === null
+                ? "no rating recorded"
+                : `<span class="rating rating--${ratingClass(row.rating)}" data-source="scenarios[${index}].rating">${escapeHtml(row.rating)}</span>`}</td>
+              <td>${row.rating === "Not completed"
+                ? `${escapeHtml(attributionLine(row.attribution))} — decided at step ${figure(`scenarios[${index}].decidingStep`, row.decidingStep)}`
+                : "—"}</td>
+              <td class="num">${figure(`scenarios[${index}].explorations`, row.explorations)}</td>
+            </tr>`,
+            )
+            .join("")}</tbody>
+        </table>
+        <p class="lede">The result column is the harness's own word. A run the harness could not rate lists with its status and is never given a rating word.</p>
+        ${harnessErrors.length === 0
+          ? ""
+          : `<p class="lede">Runs that ended in a harness error and are therefore not rated: ${harnessErrors
+              .map((run, index) => `${figure(`harnessErrors[${index}].run`, run.run)} (${escapeHtml(run.result.reason ?? "no reason recorded")})`)
+              .join(", ")}.</p>`}`,
+  );
+
+  const matrix = slide(
+    3,
+    6,
+    "Coverage matrix",
+    `Every feature in the brief, one column per registered journey (${columns.length})`,
+    `<div class="strip"><table class="matrix">
+      <thead><tr><th>ID</th><th>Feature</th>${columns.map((journey) => `<th class="num">${escapeHtml(journey)}</th>`).join("")}</tr></thead>
+      <tbody>${features
+        .map((feature, index) => {
+          const cells = columns
+            .map((journey) => {
+              const cell = matrixCell(feature, journey, rows);
+              return `<td class="cell"><span class="state state--${attr(cell.state.className)}" data-source="features[${index}].coverage.${attr(journey)}">${escapeHtml(cell.text)}</span></td>`;
+            })
+            .join("");
+          return `<tr><td class="mono">${figure(`features[${index}].id`, feature.id)}</td><td>${escapeHtml(feature.name)}</td>${cells}</tr>`;
+        })
+        .join("")}</tbody>
+    </table></div>
+    <p class="lede">A cell reads <span class="mono">explored: &lt;scenario&gt; &lt;rating&gt;</span> when the journey has a usable run and <span class="mono">registered, not yet explored</span> when it names a journey with none. A dash marks a journey this feature does not name; a feature whose Journeys column names no journey at all reads <span class="mono">no registered journey</span> in every column. Every rating word comes from <span class="mono">skills/journey-qa/scripts/rating.mjs</span>.</p>`,
+  );
+
+  const countsSlide = slide(
+    4,
+    6,
+    "Counts",
+    "Three numbers, deliberately not merged",
+    `<div class="counts">
+      <div class="count"><span class="value">${figure("counts.features", counts.features)}</span><span class="label">features in the brief's FEAT table</span></div>
+      <div class="count"><span class="value">${figure("counts.featuresWithJourney", counts.withJourney)}</span><span class="label">of those, features naming a registered journey</span></div>
+      <div class="count"><span class="value">${figure("counts.journeysExplored", counts.explored)}</span><span class="label">journeys explored by a usable run</span></div>
+    </div>
+    <p class="lede">These three differ whenever a feature has no journey, a journey has not been run, or both. A single combined figure would hide that, so the deck shows the three and the Coverage matrix shows which feature is in which state.</p>`,
+  );
+
+  const limits = slide(
+    5,
+    6,
+    "Limits",
+    "What this collection of runs does not establish",
+    `<ol class="limits">${limitsLines({
+      second: null,
+      agreementResult: null,
+      explorations: {
+        label: "Per-journey ratings slide",
+        source: "runs.count",
+        count: all.length,
+        scope: `across ${rows.length} ${rows.length === 1 ? "scenario" : "scenarios"}`,
+      },
+      result: latest?.result ?? { stubExclusions: [], commit: "not recorded", dirty: false },
+      run: latest?.run ?? "no run",
+    })
+      .map((line) => `<li>${line.text}</li>`)
+      .join("")}</ol>`,
+  );
+
+  const evidence = slide(
+    6,
+    6,
+    "Evidence index",
+    `Every run this summary read (${all.length})`,
+    all.length === 0
+      ? `<p class="empty">No runs recorded.</p>`
+      : `<table>
+          <thead><tr><th>Run</th><th>Scenario</th><th>Result</th><th>Commit</th><th>Eyes mode</th><th>Check observations</th></tr></thead>
+          <tbody>${all
+            .map(
+              (run, index) => `<tr>
+              <td class="mono">${figure(`runs[${index}].run`, run.run)}</td>
+              <td class="mono">${figure(`runs[${index}].scenario`, run.scenario)}</td>
+              <td>${run.result === null ? "no result recorded" : figure(`runs[${index}].status`, run.result.status)}</td>
+              <td class="mono">${figure(`runs[${index}].commit`, run.result?.commit ?? "not recorded")}</td>
+              <td>${escapeHtml(run.result?.eyes ?? "none recorded")}</td>
+              <td>${escapeHtml(run.result?.check?.observations ?? "none recorded")}</td>
+            </tr>`,
+            )
+            .join("")}</tbody>
+        </table>`,
+  );
+
+  return writeDeck({
+    title: `Summary deck — ${briefName}`,
+    slides: [title, ratings, matrix, countsSlide, limits, evidence],
+    out,
+  });
 }
 
 export function main(argv = process.argv.slice(2)) {
