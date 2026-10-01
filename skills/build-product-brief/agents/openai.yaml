@@ -1,0 +1,4 @@
+interface:
+  display_name: "Build Product Brief"
+  short_description: "Write a neutral product brief in which every claim cites a screen, journey or feature ID"
+  default_prompt: "Use $build-product-brief to write docs/product-brief.md from this repository's inventories and registry."

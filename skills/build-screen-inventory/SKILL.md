@@ -79,6 +79,13 @@ One row per screen, in exactly one inventory — or in the shared inventory with
 
 Where one route renders different screens per audience, write one row per screen, each in its own inventory, and record the switch as a seam. Note the shared route in both rows so nobody assumes a duplicate.
 
+**Issue the ID when the row is created.** Every row gets a permanent `SCRN-###` at creation, whether or not a screen page exists yet:
+
+- Search the whole corpus before issuing: screen pages, every inventory file, and prior drafts. Take the next unused number, zero-padded to three digits.
+- Never copy an ID from a template or an example row.
+- An issued ID never changes and never returns to the pool, even if the screen is retired, renamed, or split. A row that disappears leaves its ID spent.
+- `Status` stays `undocumented` until a screen page exists for that ID. The ID existing is not documentation.
+
 ## Step 5 — Reconcile
 
 The inventory is only trustworthy if it is complete. Count.
@@ -108,7 +115,7 @@ State each inventory's access predicate by its `AUD-##` ID and its expression to
 `document-screen-behavior` reads what you write. Give it what it needs:
 
 - Every row marked `undocumented` is that skill's work queue. Keep the list ordered so someone can work down it.
-- Never invent a `SCRN-` ID for an undocumented screen — write `—`. That skill assigns the ID.
+- Every row carries the `SCRN-###` issued to it in Step 4, including the `undocumented` ones. `document-screen-behavior` takes that ID from the row; it does not issue one.
 - Each inventory's `AUD-##` becomes the screen page's access predicate. Do not restate the permission model in the inventory; reference it.
 
 ## Step 7 — Validate
@@ -118,7 +125,7 @@ State each inventory's access predicate by its `AUD-##` ID and its expression to
 3. Every route reconciles: assigned, shared, or excluded with a reason.
 4. Every shared screen appears once and is cross-referenced, never duplicated.
 5. Every one-route-two-screens case is recorded as a seam in both inventories.
-6. Screen IDs match the existing corpus; new screens are marked as undocumented rather than given invented IDs.
+6. Screen IDs are unique in the corpus; new rows carry newly issued IDs, and a row whose status is `undocumented` still carries the ID issued to it.
 7. The index names any boundary you were unsure about, with the evidence on both sides.
 
 Report the partition, the coverage totals, the unassigned routes, and the boundaries that need a human ruling.

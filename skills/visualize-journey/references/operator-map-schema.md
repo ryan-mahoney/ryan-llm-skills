@@ -44,7 +44,7 @@ Required:
 }
 ```
 
-`source` and all other `href` or image paths are relative to the generated journey `index.html`.
+`source` and all other `href` or image paths are relative to the generated journey `index.html`. The default collection folder is `.specs/ux-qa/visuals/` in the primary checkout, so from `.specs/ux-qa/visuals/JRNY-###/index.html` a capture under the capture root is reached with a `../../../images/…` path. The collection folder and the capture root are git-ignored; see `../uishot/references/capture-root.md`.
 
 ## Entry and terminal
 
@@ -162,7 +162,7 @@ Captured:
 ```json
 {
   "status": "captured",
-  "src": "../../../screenshots/SCRN-030/default.png",
+  "src": "../../../images/screens/SCRN-030/default.png",
   "alt": "JobKit purchase review showing the price and payer email",
   "note": "Desktop default at 1280×800, captured 2026-08-03."
 }

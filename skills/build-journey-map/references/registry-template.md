@@ -39,6 +39,8 @@ journeys: [JRNY-001, JRNY-002]      # every registered ID, ascending
 
 An empty list is valid. A missing key is not.
 
+`repos` lists the repositories in scope. In single-repository mode (the skill's `Single-repository mode` section) it holds exactly one entry; the External parties table below carries what leaves the product.
+
 ---
 
 <a id="scope"></a>
@@ -51,8 +53,19 @@ Which repositories, which audiences, and which audiences are deliberately out. O
 
 One row per repository from Step 0: role, hosts, what it owns, instruction file. Then state, in one sentence each, the two facts that make journeys cross here: the handoff URLs users follow, and the hostname rewrites or content fetches that connect systems without sharing code.
 
+<a id="external-parties"></a>
+## External parties
+
+Who this product depends on and cannot see into. One row per party the run actually found; in single-repository mode this section is required, and in multi-repository mode it lists the parties the repositories do not cover.
+
+| Party | Direction | What crosses | How the product observes the far side | Evidence file |
+|---|---|---|---|---|
+| Consumer of an exported feed (illustrative) | out | the export request; the resulting file leaves the product's control and no later step of the journey returns | the export record and the download itself are the only observation; the product never learns what the consumer did with the file | the export controller and the export record row |
+
+Directions: `in` (the party calls the product) · `out` (the product calls or emits to the party). A service the product calls mid-journey — a validator, a geocoder — is a row here and a `third-party` seam in the ledger; an export a consumer takes away is a `handoff`.
+
 <a id="journeys"></a>
-## 3. Journey table
+## 4. Journey table
 
 One row per journey. Keep to six columns (standard DR-125).
 
@@ -69,7 +82,7 @@ Then one companion table — reach and evidence — keyed by the same IDs:
 Status values: `registered` · `documented` · `retired`.
 
 <a id="seams"></a>
-## 4. Seam ledger
+## 5. Seam ledger
 
 The shared truth `document-journey` references. One row per seam, permanent `SEAM-###` IDs.
 
@@ -82,9 +95,9 @@ Types: `handoff` · `identity` · `content-sync` · `host-rewrite` · `third-par
 The `Lost` column is the point of the section. A seam that carries everything is not worth recording. Write `Nothing observed.` only after checking.
 
 <a id="e2e-mapping"></a>
-## 5. E2E lane mapping
+## 6. E2E lane mapping
 
-Every automation journey in `app/test/e2e/fixtures/journey-catalog.js` mapped to one registry row, or exempted with a reason.
+Every automation journey in `app/test/e2e/fixtures/journey-catalog.js` mapped to one registry row, or exempted with a reason. In single-repository mode there is no journey catalog, so the lanes are the Playwright spec files and the mapping is keyed by spec path (`assets/e2e/*.spec.js`); the E2E ID column holds the spec path and the title column its `test.describe` title.
 
 | E2E ID | E2E title | JRNY | Note |
 |---|---|---|---|
@@ -92,7 +105,7 @@ Every automation journey in `app/test/e2e/fixtures/journey-catalog.js` mapped to
 | RB-001 | Role boundaries probe | — | internal-lane: not one actor's one goal |
 
 <a id="coverage"></a>
-## 6. Coverage
+## 7. Coverage
 
 | Measure | Count |
 |---|---|
@@ -100,14 +113,21 @@ Every automation journey in `app/test/e2e/fixtures/journey-catalog.js` mapped to
 | Journeys registered | N |
 | Seams recorded | N |
 | E2E lanes mapped / exempt | N / N |
-| Outbound marketing CTAs owned | N |
-| Outbound marketing CTAs unowned | N — listed below |
+| Navigation destinations owned | N |
+| Navigation destinations unowned | N — listed below |
 | Journeys documented (page exists) | N of total |
 
-List every unowned CTA with its source file. These are the registry's open front, not noise.
+The last two rows measure navigation destinations in single-repository mode. In multi-repository mode use the original labels instead:
+
+| Measure | Count |
+|---|---|
+| Outbound marketing CTAs owned | N |
+| Outbound marketing CTAs unowned | N — listed below |
+
+List every unowned destination with its source file. These are the registry's open front, not noise.
 
 <a id="ambiguous"></a>
-## 7. Ambiguous boundaries
+## 8. Ambiguous boundaries
 
 | Journey or seam | Reading A | Reading B | Placed as | Owner to rule |
 |---|---|---|---|---|
@@ -115,7 +135,7 @@ List every unowned CTA with its source file. These are the registry's open front
 Every merge or split where a reasonable person would decide otherwise. Include the evidence both sides.
 
 <a id="findings"></a>
-## 8. Findings from this run
+## 9. Findings from this run
 
 | # | Finding | Consequence |
 |---|---|---|
@@ -123,7 +143,7 @@ Every merge or split where a reasonable person would decide otherwise. Include t
 Contradictions against the permission model or the inventories, journeys that end in email silence, CTAs that land on unregistered routes.
 
 <a id="handoff"></a>
-## 9. Handoff order
+## 10. Handoff order
 
 The work queue for `document-journey`, ordered: journeys with E2E evidence first, then buying and application journeys, then internal work journeys. One line per row saying which evidence already exists.
 

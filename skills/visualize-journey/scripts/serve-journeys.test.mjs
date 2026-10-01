@@ -103,6 +103,86 @@ test("refuses a root that would climb to the home directory", () => {
   assert.throws(() => computeRoot(collectionDir), /climb to the home directory/);
 });
 
+// --- .specs root regimes (R13) -------------------------------------------------
+
+// A real `.specs/` layout: the collection under `.specs/ux-qa/visuals/`, captures in
+// `.specs/images/`, run output and a spec sentinel beside them, and a docs link that either
+// roots the server at `.specs` itself or pulls it up to the repository.
+const specsLayout = () => {
+  const repo = tempDir("serve-journeys-specs-");
+  const specs = join(repo, ".specs");
+  const collectionDir = join(specs, "ux-qa/visuals");
+  mkdirSync(join(specs, "images/journeys/JRNY-001"), { recursive: true });
+  mkdirSync(join(specs, "ux-qa/runs/JRNY-001"), { recursive: true });
+  mkdirSync(join(repo, "docs"), { recursive: true });
+  writeFileSync(join(specs, "images/journeys/JRNY-001/default.png"), "png-bytes");
+  writeFileSync(join(specs, "images/notes.txt"), "public capture notes");
+  writeFileSync(join(specs, "gmi-api-key.txt"), "SECRET");
+  writeFileSync(join(specs, "ux-qa/runs/JRNY-001/session.json"), '{"databaseUrl":"postgres://"}');
+  writeFileSync(join(repo, "docs/notes.md"), "# notes");
+  // A symlink inside a served `.specs` folder that points at a denied `.specs` file.
+  symlinkSync("../gmi-api-key.txt", join(specs, "images/key.txt"));
+  const outsideDir = tempDir("serve-journeys-specs-outside-");
+  writeFileSync(join(outsideDir, "secret.txt"), "nope");
+  symlinkSync(outsideDir, join(specs, "images/outside"));
+  mkdirSync(join(collectionDir, "JRNY-001"), { recursive: true });
+  writeFileSync(join(collectionDir, "JRNY-001/index.html"), "<html>journey</html>");
+  return { repo, collectionDir };
+};
+
+const writeSpecsManifest = (collectionDir, withDocsLink) => writeManifest(collectionDir, "JRNY-001", {
+  journey: { id: "JRNY-001", source: "../../runs/JRNY-001/JRNY-001-thing.md" },
+  steps: [{
+    id: "s1",
+    visual: { status: "captured", src: "../../../images/journeys/JRNY-001/default.png" },
+    ...(withDocsLink ? { evidence: [{ href: "../../../../docs/notes.md", kind: "document" }] } : {}),
+  }],
+});
+
+test("roots at .specs when every manifest href stays inside it, serving only images/ and ux-qa/visuals/", () => {
+  const { repo, collectionDir } = specsLayout();
+  writeSpecsManifest(collectionDir, false);
+
+  const root = computeRoot(collectionDir);
+
+  assert.equal(root, join(repo, ".specs"));
+  assert.equal(resolveRequestPath(root, "/images/journeys/JRNY-001/default.png").status, 200);
+  assert.equal(resolveRequestPath(root, "/ux-qa/visuals/JRNY-001/index.html").status, 200);
+  assert.equal(resolveRequestPath(root, "/images/notes.txt").status, 200);
+  assert.equal(resolveRequestPath(root, "/gmi-api-key.txt").status, 403);
+  assert.equal(resolveRequestPath(root, "/ux-qa/runs/JRNY-001/session.json").status, 403);
+});
+
+test("roots at the repository when a manifest links docs/, admitting the literal .specs segment", () => {
+  const { repo, collectionDir } = specsLayout();
+  writeSpecsManifest(collectionDir, true);
+
+  const root = computeRoot(collectionDir);
+
+  assert.equal(root, repo);
+  assert.equal(resolveRequestPath(root, "/.specs/images/journeys/JRNY-001/default.png").status, 200);
+  assert.equal(resolveRequestPath(root, "/.specs/ux-qa/visuals/JRNY-001/index.html").status, 200);
+  assert.equal(resolveRequestPath(root, "/.specs/gmi-api-key.txt").status, 403);
+  assert.equal(resolveRequestPath(root, "/.specs/ux-qa/runs/JRNY-001/session.json").status, 403);
+  // The repository regime still serves its own non-.specs files and still denies other dots.
+  assert.equal(resolveRequestPath(root, "/docs/notes.md").status, 200);
+  assert.equal(resolveRequestPath(root, "/.env").status, 403);
+});
+
+test("403s a symlink inside a served .specs folder that resolves to a denied path", () => {
+  const { collectionDir } = specsLayout();
+  writeSpecsManifest(collectionDir, false);
+
+  const root = computeRoot(collectionDir);
+
+  // images/key.txt -> .specs/gmi-api-key.txt and images/outside/secret.txt leaves the root.
+  assert.equal(resolveRequestPath(root, "/images/key.txt").status, 403);
+  assert.equal(resolveRequestPath(root, "/images/outside/secret.txt").status, 403);
+  // The same layout's served capture is still reachable, so the denials are the rule and not a
+  // root that denies everything.
+  assert.equal(resolveRequestPath(root, "/images/journeys/JRNY-001/default.png").status, 200);
+});
+
 // --- resolveRequestPath ------------------------------------------------------
 
 const rootWithFiles = () => {

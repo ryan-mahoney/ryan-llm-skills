@@ -76,12 +76,23 @@ The journey carries one primary job story and any number of secondary ones (DR-1
 
 Two or three complete runs in Given/When/Then with realistic seeded data — use the E2E fixtures' demo organizations, never real customer data (DR-114). One normal path, one boundary (a blocked second claim, a budget exhausted), one failure or abandonment. Name the E2E lane that proves each, or write `Test: none — <reason>` (DR-117).
 
+## Step 6b — Write the test scenario
+
+Only when the repository runs a QA harness — the `journey-qa` skill plus a `bin/ux-qa` implementing `../journey-qa/references/harness-contract.md`. In a repository without one, write no scenario section and open a question saying the journey is not explorable; do not invent a checker.
+
+Write §10 of `references/journey-page-template.md`, and let that template define the syntax — this step does not restate it.
+
+- One scenario per distinct terminal outcome. Two journeys that end the same way share a scenario shape; one journey that ends two ways is two scenarios.
+- Take each `Success check` ID from the harness's own checks folder (`assets/qa/checks/<id>.mjs` in gtfs-planner), never from memory. A terminal outcome with no check gets an open question, not an invented name.
+- Write the `Goal` in the user's language with the values the tester sees, and list each scenario's slug in the front matter.
+- The harness parses this section; how it splits tester-visible keys from harness-only keys, and every other run format, is defined in `../journey-qa/references/harness-contract.md`.
+
 ## Step 7 — Evidence links
 
 The page is the anchor downstream evaluation reads. Link, do not copy:
 
 - E2E lane IDs and their receipt location (`tmp/e2e-journey-evidence/`, disposable — link the catalog, not the run output).
-- Screen pages and their `docs/screenshots/SCRN-###/` captures for the stages that have them.
+- Screen pages and their captures for the stages that have them. Cite each capture by its backticked ID — `SCRN-###/<name>` for a stage's screen state, `JRNY-###/<name>` for a journey-wide capture — resolved under the capture root defined in `../uishot/references/capture-root.md`. Never cite an image path.
 - `CTX-` findings in `docs/journey-context-findings.md` that name this journey's steps.
 - Marketing-side content the user was shown, by file path.
 
@@ -101,7 +112,9 @@ File: `docs/journeys/JRNY-###-<slug>.md`, following the standard's directory lay
 6. Every `inferred` story carries its label and an open question.
 7. Each example names a test or gives the reason it has none; no example uses placeholder data.
 8. The page contradicts no upstream document; any contradiction found is reported as a finding against that document, not silently corrected.
-9. Run whatever documentation or link checks the repository provides.
+9. Every cited capture ID resolves to a file under the capture root, or the page states that the resolution check was not possible in this checkout; every stage with no capture says why.
+10. Every §10 scenario carries all its required keys; its `Success check` names a check that exists in the harness's checks folder or records an open question saying it cannot be explored; and its `Goal` names no control.
+11. Run whatever documentation or link checks the repository provides.
 
 Report the file path, validation result, registry row updated, seams referenced, ledger keys proposed, and the gaps a human must confirm.
 

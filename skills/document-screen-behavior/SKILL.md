@@ -40,7 +40,7 @@ docs/inventories/<slug>-screens.md
 
 From the permission model: `#role-registry` for the `ROLE-##` IDs, `#capability-matrix` for what each role may do, `#route-guards` for this screen's guard, and `#audience-predicates` for the `AUD-##` that admits it. Section 2 of the page references these — it does not restate them.
 
-From the inventory: which inventory owns the screen, its `AUD-##`, and whether a row already exists for it. **Take the `SCRN-###` ID from the inventory row if it has one; assign the next unused ID if the row reads `—`, and update the row.**
+From the inventory: which inventory owns the screen, its `AUD-##`, and whether a row already exists for it. **Take the `SCRN-###` ID from the inventory row — `build-screen-inventory` issues it when the row is created.** A legacy row that still reads `—` is the one exception: assign it the next unused ID, update the row, and note the repair in the handoff.
 
 When neither exists, derive access yourself in Step 2 and open a question recommending `build-permission-model`. Say in the handoff that access is unverified. When both exist, record what you read:
 
@@ -117,7 +117,7 @@ Document the **return loop** explicitly. When a control sends the user to anothe
 
 Screenshots are required, not optional. Read `references/screenshots.md` for the capture protocol, the authenticated-session setup, the naming scheme, and the honesty rules.
 
-In short: capture each documented state with realistic seeded data, write PNGs to `docs/screenshots/SCRN-###/`, link each one inline in the state it shows, and record every capture in the `Visual evidence` manifest.
+In short: capture each documented state with realistic seeded data, resolve the capture root from `../uishot/references/capture-root.md`, write each PNG to `<root>/screens/SCRN-###/<state>.png`, cite it by its backticked capture ID in the state it shows, and record it as a row in the `Visual evidence` table. The root and the citation rule are owned by that reference; do not restate or second-guess them here.
 
 Three rules do not flex:
 
@@ -138,11 +138,11 @@ Write the durable content first: access model, job stories, objects, behavior ru
 3. Every section exists in order. Empty sections read `None.`, never blank.
 4. Front-matter lists agree with the body.
 5. Every quoted string matches the source exactly.
-6. Every referenced ID, file, test, and screenshot path exists — including every `ROLE-##` and `AUD-##`, which must appear in the permission model.
+6. Every referenced ID, file, and test exists — including every `ROLE-##` and `AUD-##`, which must appear in the permission model.
 7. The inventory row for this screen carries its `SCRN-###` and reads `documented`.
 8. Every threshold, limit, and ordering rule in the page matches the code.
 9. Every inferred story carries its label and an open question.
-10. Each captured state links to a file that exists; each uncaptured state says why.
+10. Every cited capture ID resolves to a file under the capture root, or the page states that the resolution check was not possible in this checkout; each uncaptured state says why.
 11. Run the linked tests and any documentation or link checks the repository provides.
 
 Report the file path, validation result, capture coverage, unresolved registry gaps, any conflict with the repository standard, and any contradiction you found against the permission model or the inventory.

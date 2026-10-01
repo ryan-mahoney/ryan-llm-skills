@@ -40,6 +40,32 @@ rg -i "action=|fetch\(|axios|api/" components app --glob '!node_modules' -l
 | Email templates | `app/email_templates/`, `py_email/` | Links that return users to the product: verification, invitations, purchase confirmation. Each is an entry point and an `identity` seam. |
 | Registration path | `registerApi` in `app/controllers/authentication-controller.js` | The prospect→customer conversion, including `crmSlug`/`jobId` lead attribution. |
 
+### Single application with Playwright specs (e.g. a Phoenix or Rails application with Playwright journey specs)
+
+One application holds every journey surface, and the automation that already walks them is a directory of Playwright spec files rather than a journey catalog. Look for what the product drives, and for the parties it leaves the building for.
+
+| Evidence | Where (example paths) | What it yields |
+|---|---|---|
+| Router file | `assets/router.ex` or `config/routes.rb` or `app/routes/` | Every URL the product serves, and the pipeline each one runs. |
+| LiveView or page modules | `lib/*_web/live/`, `app/pages/`, `app/views/` | The screens a journey passes through and the tasks each one offers. |
+| Playwright spec files | `assets/e2e/*.spec.js` | The lanes that already run end to end; each spec path is one lane when no journey catalog exists, and the actor plus goal in its test titles seed the registry. |
+| Job stories | `docs/requirements/*.md` | What an actor is trying to accomplish, written before the code. |
+| Manual test plan | `docs/manual-test-plan.md` | The testers' own paths through the product, including the awkward ones. |
+| Information architecture | `docs/information-architecture.md` | The navigation destinations and settings sections a journey starts from. |
+| Email templates | `lib/*_web/*mailer*`, `app/mailers/` | Links that return a user to the product: verification, invitations, export notifications. |
+| Background jobs | `lib/*/jobs/`, `app/jobs/` | Work the product starts and finishes outside the request the actor can watch. |
+| Export and download endpoints | the export controller, its job, and its download route | Where a journey hands an artifact to someone outside the product's control. |
+| Companion API controllers | `lib/*_web/controllers/*_api*`, `app/controllers/api/` | Integrations the product serves or calls; when one is out of page scope, record the reason. |
+
+Hunt commands (run from the project root):
+
+```bash
+# one lane per spec file
+ls assets/e2e/*.spec.js
+# the actor and the goal, from the test titles
+rg -n "test\(|test\.describe\(" assets/e2e --glob '*.spec.js'
+```
+
 ### Public microsites served by the app (`jobs.*`, `info.*`)
 
 These are candidate- and reader-facing journeys owned by customer tenants. Sources: `app/routes/hiring-react-routes.js`, `app/components/hiring/`, `app/components/pub/`, and the marketing forms configured per org (`/marketing/forms`, feeding the public CTA form — see inventory finding OQ-403).

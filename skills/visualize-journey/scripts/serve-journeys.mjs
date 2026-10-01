@@ -77,6 +77,20 @@ export const computeRoot = (collectionDir) => {
 
 const withinRoot = (root, p) => p === root || p.startsWith(root + sep);
 
+// The only two directories under a `.specs` component that are captures or visuals. Everything
+// else there — `ux-qa/runs/` (session.json with the database URL, logs, downloads) and any
+// spec file — stays denied.
+const SPECS_SERVED_PREFIXES = [["images"], ["ux-qa", "visuals"]];
+
+// R13: the allow rule is decided on the real path, so a symlink inside a served folder cannot
+// reach a denied `.specs` file. Every `.specs` component must be followed by a served prefix.
+const allowedUnderSpecs = (realPath) => {
+  const parts = realPath.split(sep).filter(Boolean);
+  const specsAt = parts.flatMap((part, index) => (part === ".specs" ? [index] : []));
+  return specsAt.every((index) =>
+    SPECS_SERVED_PREFIXES.some((prefix) => prefix.every((name, offset) => parts[index + 1 + offset] === name)));
+};
+
 // realpath follows every symlink in the chain, including intermediate segments, so an escape
 // anywhere in the path 403s. Directories serve index.html or 404; there is no listing.
 const resolveFile = (root, target) => {
@@ -88,6 +102,7 @@ const resolveFile = (root, target) => {
     return { status: 404 };
   }
   if (!withinRoot(root, real)) return { status: 403 };
+  if (!allowedUnderSpecs(real)) return { status: 403 };
   const stat = statSync(real);
   if (stat.isDirectory()) return resolveFile(root, join(target, "index.html"));
   return stat.isFile() ? { status: 200, file: real, type: contentTypeFor(real) } : { status: 404 };
@@ -95,6 +110,9 @@ const resolveFile = (root, target) => {
 
 // Request path -> { status } or { status: 200, file, type }. Rejects any ".."/dot/node_modules
 // segment before touching the filesystem (covers /../, /%2e%2e/, /.env, /.git, /node_modules).
+// `.specs` is the one dotted segment admitted, and only because resolveFile then applies the
+// allow rule to the real path (see allowedUnderSpecs), so `/.specs/images/...` reaches a capture
+// when the root is the repository and nothing else under `.specs` does.
 export const resolveRequestPath = (root, rawPath) => {
   let decoded;
   try {
@@ -103,7 +121,7 @@ export const resolveRequestPath = (root, rawPath) => {
     return { status: 400 };
   }
   const parts = decoded.split("/").filter(Boolean);
-  if (parts.some((p) => p === ".." || p === "." || p.startsWith(".") || p === "node_modules")) return { status: 403 };
+  if (parts.some((p) => p === ".." || p === "." || (p.startsWith(".") && p !== ".specs") || p === "node_modules")) return { status: 403 };
   // Resolve root itself through any symlink (e.g. macOS /var -> /private/var) so it compares
   // consistently with the fully realpath'd target below.
   let realRoot;
