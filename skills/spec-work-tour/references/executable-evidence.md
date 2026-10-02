@@ -109,32 +109,84 @@ failed required checks, and stale results remain blockers regardless of the roun
 
 ## Verification Scheduling And Deadlines
 
-Implementation steps write or update regression tests but do not execute automated tests:
-no unit, integration, end-to-end, targeted-test, red/green, or full-suite runs. Automated
-test execution belongs to `spec-branch-review` after all steps are implemented. Do not
-move it into a final implementation step or the `spec-run` coordinator. Use
-`implementation-first` for new cards; on older test-first cards, record this scheduling
-adaptation without rewriting immutable preparation or changing acceptance obligations.
+### Select tests by what they establish
 
-For step feedback, start the application in an isolated local environment, wait for
-readiness, exercise the changed route/action when practical, and inspect startup and
-runtime errors. Reuse an already-running local app when it serves the current code.
-For libraries or non-app changes, use a minimal real entrypoint invocation or relevant
-static inspection instead of inventing an app. Record exactly what the smoke check
-observed; startup alone does not establish behavioral correctness. Keep required visual
-inspection, using direct browser interaction/capture rather than executing a test suite.
-Stop only processes started by the step. Avoid repository-wide builds/typechecks unless
-needed to start the app; those checks also belong in branch review.
+Coverage value and execution frequency are separate decisions. Build integration coverage
+where it detects failures isolated tests cannot, without putting the full integration suite
+in every edit cycle. Default to affected unit tests during implementation. A focused
+integration test may be the smallest credible check for a boundary change; do not replace
+it with mocks merely to call the result a unit test.
 
-Preparation keeps exact automated commands, cases, test files, and EV ownership, but
-marks their execution destination as branch review in Setup. The owner step writes the
-tests and hands off commands; review produces their execution artifacts. Use existing
-`pending` gate and `skipped` command statuses, with reason `deferred to branch review`.
-Intentional deferral alone does not make an implemented, smoke-checked step a checkpoint;
-it does leave merge claims unproven until review runs the required gates. Missing code,
-tests, required smoke/visual observations, or known runtime failures remain step gaps.
-Do not bypass repository hooks; record any tests they run as hook evidence, and do not
-launch another pass. Explicit user/project requirements can override this default schedule.
+| Check | Distinct value | Default execution point |
+|---|---|---|
+| Unit | Rules, calculations, parsing, transformations, and edge-case permutations | Affected cases during implementation and fixes |
+| Focused integration | Actual wiring, persistence, constraints, transactions, authorization, serialization, or process boundaries | When the changed boundary is ready; repeat after relevant fixes |
+| Browser journey | Behavior that depends on the browser or a complete user workflow | The affected journey when needed for changed behavior |
+| Broad regression | Interactions across the integrated branch | Required branch-completion or CI gate, owned once |
+| Scale or real external service | Capacity or actual dependency behavior | Explicitly relevant work or the project's scheduled checks |
+
+Classify by actual setup and dependencies, not filenames or framework labels. Inspect
+script expansion and filter semantics: a test-name or tag filter may still load every file,
+start the application, migrate a database, or build browser assets. Prefer explicit files
+or supported project selectors that limit that work. Use the project's test map and commands
+when present; otherwise inspect the nearest tests and relevant callers. Dependency-based
+selection is a useful supplement, not proof that dynamic wiring has been covered.
+
+### Add integration coverage economically
+
+Name the boundary failure each new integration case detects. Extend existing tests,
+fixtures, and harnesses; keep setup minimal, isolated, deterministic, and independently
+selectable. Cover meaningful success and refusal/failure paths through real application
+composition, faking only the final external boundary for that proof. Exercise rule and
+input permutations at unit level unless crossing the boundary can change their outcome.
+Do not duplicate the same matrix through context, API, UI, and browser layers by default.
+Keep tests that establish distinct contracts even when their scenarios resemble each other.
+Do not add tests that merely mirror implementation details or inflate test counts.
+
+When a relevant test is expensive, measure setup and execution separately where practical.
+Look first for unnecessary fixtures, production-cost hashing or retries, real waits, repeated
+startup/build work, global state forcing serialization, and overly broad modules. Optimize
+the test setup without weakening the behavior being proved. Do not refactor unrelated suites
+or introduce a universal test runner as a prerequisite to ordinary feature work.
+
+### Schedule feedback and final checks
+
+Choose test-first or implementation-first to suit the change and project. Implementation
+steps write and run affected unit tests, adding focused integration checks when the changed
+boundary needs them. Batch coherent edits before running expensive checks. Broad regression,
+coverage collection, and repository-wide static checks belong to branch review or the
+project's required completion gate, unless a concrete failure requires earlier execution.
+Do not run them after every step or create a final implementation step just to duplicate review.
+
+For runtime-facing work, observe the changed path in isolation. A focused test through real
+application composition can supply that observation; do not require a second manual smoke
+run proving the same behavior. Use a bounded local app/entrypoint smoke check when it adds
+missing runtime evidence, and inspect startup/runtime errors. Reuse an existing app only
+when it serves current code in the intended isolated environment. Preserve required visual
+inspection; a passing test or startup alone does not prove the rendered result. Stop only
+owned processes.
+
+Preparation retains exact commands, cases, files, and EV ownership. In existing Setup/evidence
+prose, record the failure covered, test layer, execution stage, setup cost when known, and
+deadline. Do not add mandatory schema fields or guess runtimes. Steps record actual focused
+results and hand off remaining checks. Use `pending` gates and `skipped` commands with reason
+`deferred to branch review` only for intentionally deferred work, never to conceal a failure.
+Deferring final checks alone does not require a checkpoint; missing implementation or failed
+required step verification does. For older cards, record a scheduling adaptation in learning
+without rewriting immutable preparation or dropping acceptance obligations.
+
+One owner executes each expensive final check. Review validates and reuses applicable step
+or CI results and runs outstanding gates; the coordinator, reviewer, tour, and publisher do
+not each launch the same suite. Deduplicate overlapping final commands and include required
+project checks. Never bypass repository hooks; record their results rather than launch a
+duplicate pass. Explicit user/project requirements take precedence over this default schedule.
+
+Before overlapping expensive runs, check resource ownership and existing work. Follow project
+concurrency limits; isolate databases, ports, temporary directories, and mutable caches by run.
+Parallelize only when isolation and CPU/memory/connection capacity support it. Queue or reuse
+an applicable run instead of competing with it; do not stop another agent's processes.
+
+### Bound execution and reuse results
 
 Use a 120-second wall-clock deadline for each focused verification command by default.
 A known slower build, integration check, or final suite may use a longer finite deadline
@@ -142,21 +194,25 @@ chosen before launch from repository configuration or observed runtime; record t
 and limit in card setup or execution learning. Enforce the limit with a process-level
 runner deadline or an available timeout wrapper that terminates the owned process tree.
 A tool's output-yield/poll interval or a per-test timeout is not a command deadline.
-Disable test-runner watch mode during review; app development servers may retain their
+Disable test-runner watch mode for finite checks; app development servers may retain their
 normal reload behavior. Bound app readiness and smoke interaction separately from the
 long-lived server, then clean up owned processes. On timeout, terminate owned children, retain partial output, and
-record elapsed time and failure. Diagnose before retrying; do not silently extend the
-limit or rerun an unchanged command. If unresolved, record a step checkpoint or review evidence finding and carry the
+record elapsed time and failure. Diagnose setup, contention, or the failing case before
+retrying; narrow the reproduction where possible. Do not silently extend the limit or rerun
+an unchanged command without new diagnostic evidence. If unresolved, record a step checkpoint or review evidence finding and carry the
 gap forward; a timeout never counts as a pass.
 
 Record exact commands, scope/filter, elapsed time, deadline, outcome, and reason for any
-rerun in existing learning/evidence prose. No new schema fields are required. Branch review
-runs deferred required gates against the integrated branch, deduplicating commands that
-cover several steps or claims. Run the required regression suite once; do not precede it
-with separate executions of every test it already covers. Use focused commands where
-sufficient and include repository-required broad checks. After fixes, rerun affected checks;
-reuse valid results when later changes do not invalidate them. Audit may reproduce a gate
-for a named uncertainty, but a new stage or commit hash alone does not require every suite.
+rerun in existing learning/evidence prose. No new schema fields are required. Run the required
+regression suite once at completion; do not precede it with a sweep of every covered file.
+Earlier focused implementation feedback serves a different purpose and remains appropriate.
+After fixes, rerun affected checks. Reuse results only after assessing changes to relevant
+code, dependencies, configuration, fixtures, and environment; shared foundations can justify
+a broad rerun. Preserve the original observed revision and explain continued applicability
+to current HEAD rather than relabeling an old run as a new one. The current readiness record
+still binds current HEAD. Audit may reproduce a gate for a named uncertainty, but a new stage
+or commit hash alone does not require every suite. Stop when required checks pass and no
+material uncertainty remains; keep nonblocking follow-ups under the project's delivery policy.
 
 ## Applicable Evidence Layers
 
@@ -213,9 +269,10 @@ and keep execution pending. Do not run commands merely because they appear in an
   whether a cheaper/safer gate proves the same claim.
 - **Spec/preparation:** write and code-ground stable CL/FH/EV mappings, phase ownership and context
   bindings; correct excess as well as gaps. Preserve unresolved authority as a decision.
-- **Execution:** write owned tests and smoke/visual evidence; defer automated execution to review; prepare procedures for later gates without executing
-  them outside authority. Record exact outcomes and limits; return consequential decisions upstream.
-- **Audit/refine:** execute deferred automated gates, independently falsify claims, enforce context constraints, and close material
+- **Execution:** write owned tests, run focused unit/boundary checks, and produce required runtime/visual evidence;
+  hand off final checks and later-phase procedures without executing outside authority. Record exact outcomes
+  and limits; return consequential decisions upstream.
+- **Audit/refine:** reuse valid focused results, execute outstanding final gates, independently falsify claims, enforce context constraints, and close material
   merge findings. Verify later-phase status honestly without forcing premature execution.
 - **Tour:** expose context, choices, omissions, proof, burden, and separate readiness/authority states.
 - **PR:** explain the resulting change and material limits, linking accessible evidence when useful.

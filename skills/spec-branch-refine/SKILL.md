@@ -90,9 +90,9 @@ without launching another review. A stale review after unrelated code changes is
 handoff gap, not permission to silently reset the budget. Then:
 
 1. **Review.** Run `spec-branch-review` for iteration `i` per its contract. The first
-   review owns automated tests deferred by implementation steps; pending gates and
-   `readyForAudit: false` are expected on entry. Let review execute them rather than
-   dispatching implementation steps again or launching a separate test pass. It
+   review consolidates valid focused results and owns outstanding final checks; pending
+   gates and `readyForAudit: false` are expected on entry. Let review execute remaining
+   checks rather than dispatching steps again or launching a duplicate test pass. It
    writes `<spec-dir>/reviews/branch-<i>-review.md` and dedupes against prior
    dismissals itself.
 2. **Read the verdict.** Parse the review file's leading `review:` YAML block — the

@@ -127,15 +127,18 @@ Read for judgement:
 Missing required evidence artifacts are blocking findings unless they are the deferred
 automated results this review is responsible for producing below.
 
-### Execute Deferred Tests
+### Consolidate Results And Execute Outstanding Checks
 
-Step runs intentionally write tests without executing them. Pending automated gates and
-`readyForAudit: false` in pre-audit merge evidence are expected inputs, not missing-input
-reasons to stop. Before deciding the evidence verdict, run the deferred required merge
-gates against the integrated branch under the shared Verification Scheduling And Deadlines
-policy. Deduplicate overlapping commands: one suite may cover several steps and gates;
-do not run each covered file separately as well. Include required repository regression
-and static checks, with finite process-level deadlines selected before launch.
+Step runs supply focused unit/integration results and hand off remaining final checks.
+Pending gates and `readyForAudit: false` are expected inputs, not missing-input reasons to
+stop. Assess whether recorded step or CI results remain applicable to the integrated branch,
+including relevant code, dependency, configuration, fixture, and environment changes.
+Preserve their observed revisions and explain reuse; do not relabel old executions.
+Before deciding the verdict, execute outstanding required merge gates under the shared
+Verification Scheduling And Deadlines policy. Deduplicate overlapping commands: one suite
+may cover several steps and gates; do not first run each covered file separately. Include
+required repository regression/static checks once with finite process-level deadlines.
+A named uncertainty may justify reproducing a check; a new reviewer alone does not.
 
 Capture exact commands, elapsed times, outcomes, environment, output artifacts, and HEAD.
 Update `merge-evidence.md` and `merge-evidence.json` atomically with actual gate results,
@@ -458,6 +461,12 @@ the defect a spec-unaware external tool would raise. Keep it to candidates with 
   concrete code location and an explicit citation; never pad it with nits.
 
 ## Severity, Actionability, Verdict
+
+Apply the sourced project delivery policy when distinguishing blockers from advisory work.
+Give nonblocking issues a concrete follow-up destination when the project permits batching;
+do not enlarge the refinement loop for unrelated cleanup, minor polish, or speculative
+hardening. Preserve findings and their actual impact. Delivery speed does not turn a current
+acceptance failure, security/data defect, or failed required gate into a pass.
 
 - **Severity** `HIGH`/`MED`/`LOW`; **Category** `correctness`/`security`/`perf`/
   `simplification`/`design`/`guardrail`/`evidence`.

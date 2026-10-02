@@ -148,9 +148,12 @@ If a finding's context is unclear, read the relevant source first.
 
 ## Verify
 
-Confirm actual targets/effects and authority. Run the project's relevant tests and affected
-applicable merge EV gates — targeted where possible,
-broadening to the suite the changes plausibly affect. Tests are evidence, not an infallible oracle; confirm the fixed gate can reject its named failure hypothesis and update generated evidence artifacts honestly.
+Confirm actual targets/effects and authority. Apply the shared verification scheduling policy:
+run affected unit tests and the focused integration gates for changed boundaries. Broaden only
+for a named integration risk, shared dependency change, or project-required check; record why.
+Reuse other valid results with their original revisions and applicability assessment. Tests are
+evidence, not an infallible oracle; confirm the fixed gate can reject its named failure
+hypothesis and update generated evidence artifacts honestly.
 Make at most **two** fix-up attempts for a fix that breaks verification. If a
 finding cannot be resolved without breaking the build or exceeding reasonable scope,
 revert that change and dismiss it as `unfixable` (a class that does **not** suppress

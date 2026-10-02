@@ -219,6 +219,10 @@ For every EV item name:
 - Where the artifact lands: committed test code in the repository, or a non-committed artifact under `.specs/<feature-slug>/evidence/`.
 - The exact command/procedure, actual target/environment, effects including setup/teardown,
   authority source, independence, phase, and whether it is required in that phase.
+- In existing plan prose, the test layer, distinct failure it detects, execution stage
+  (implementation feedback, boundary completion, or final review), and setup cost when known.
+  Use the shared scheduling policy; do not add schema fields or invent duration estimates.
+  Keep permutations in unit tests and integration cases focused on actual boundary contracts.
 
 Each EV item is owned by exactly one implementation step (see §9's `Evidence:` tag). Every AC maps to a claim; every claim maps to a failure hypothesis and gate; every failure hypothesis is rejected by a gate. User-visible work includes QA-tour scenarios; visual artifacts apply only to changed visual
 surfaces. Library/CLI work does not require an invented UI or screenshot harness. Manual exploration may be offered as optional product discovery, but manual QA cannot be a merge-blocking gate. Scale evidence to actual exposure and credible failures. Reuse gates across claims; existing

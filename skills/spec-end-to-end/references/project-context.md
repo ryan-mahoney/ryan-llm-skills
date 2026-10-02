@@ -56,6 +56,7 @@ Retain only useful detail; a project context is not a second architecture specif
 - Release process: <existing deployment mechanism and owner; rollout model or none>
 - Configuration: <existing conventions; reasons runtime variation or flags are permitted>
 - Verification: <isolated environments, fixtures, commands, external sandboxes available>
+- Delivery priorities: <feedback speed, required completion gates, and sourced policy for nonblocking follow-up work>
 - Operational authority: <permitted targets/actions; check-in boundaries; authorization sources>
 - Constraints: <cost, availability, security/privacy, accessibility and maintenance needs>
 - Unknowns and decisions: <unresolved consequential questions; dated sourced decisions>
@@ -63,6 +64,16 @@ Retain only useful detail; a project context is not a second architecture specif
 
 ## Decide What Is Necessary
 
+- Keep project test commands, selection examples, suite costs, isolation requirements, and
+  final-check ownership in `AGENTS.md` or its linked testing guide. This shared context records
+  product priorities and accepted tradeoffs; feature snapshots select the relevant facts.
+  Use the shared evidence contract for cross-project test selection and scheduling.
+- Apply an explicit project preference for fast delivery and batched fix-up PRs to nonblocking
+  cleanup, minor polish, and speculative hardening. Record a concrete local follow-up destination
+  and revisit trigger instead of expanding every feature. Do not infer this posture from a
+  small repository, low customer count, or absent deployment tooling. Current acceptance failures,
+  tenant/security defects, retained-data risks, and failed required gates still need resolution
+  or an explicit applicable scope/risk decision. A delivery preference is not a blanket waiver.
 - Preserve compatibility only for identified consumers, retained data, or explicit commitments.
   A developer-only app can contain valuable data; pre-launch does not authorize data loss.
 - With confirmed disposable fixtures and no compatibility commitments, prefer direct changes

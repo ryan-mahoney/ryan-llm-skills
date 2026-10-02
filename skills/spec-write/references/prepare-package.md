@@ -167,11 +167,14 @@ Use only applicable labels from this fixed vocabulary:
 List only live invariants that the step establishes, consumes, or can violate through its named targets. Do not perform extra repository surveying, add commands, or expand a full adversarial boundary matrix merely to populate these lines. The labels route bounded execution-time verification in `spec-step-run`; they do not enlarge the prepared behavior or acceptance scope. Use `none` when no label or invariant applies.
 
 Apply the shared Verification Scheduling And Deadlines policy when assigning commands.
-Use implementation-first and separate test writing from execution. Cards retain exact
-focused automated commands and cases for branch review, plus a bounded local app startup
-and changed-path smoke procedure in Setup. Record any required broad suite once for
-branch review; do not create an implementation step to run tests. EV owner steps own test
-sources and handoffs; branch review owns deferred execution and result artifacts.
+Choose the strategy to fit the change. Cards retain exact focused commands and cases,
+with execution stages in Setup: affected unit tests during implementation, focused integration
+checks when a changed boundary is ready, and required broad suites once at branch completion.
+Name each integration case's distinct boundary failure; keep rule permutations in unit tests
+unless the boundary affects them. Include smoke procedures only for missing runtime evidence
+and preserve visual observations. EV owners produce test sources, focused results, and remaining
+handoffs; branch review consolidates valid results and executes outstanding final checks.
+Do not create an implementation step solely to repeat those checks.
 
 Read the strict card schema and strategy/command guidance in
 [spec-subspec-write](../../spec-subspec-write/SKILL.md) before writing cards; reading its

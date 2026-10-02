@@ -72,8 +72,8 @@ For each indexed step in ascending order:
 
 The worker reads risk lenses from the card and applies the execution-time boundary expansion and pre-commit risk audit from `spec-step-run`; do not duplicate those instructions in the dispatch. When the harness exposes a reasoning-effort control, prefer elevated reasoning for `persistence-integrity`, `atomic-publication`, `concurrency`, `lease-or-refcount`, `cancellation`, `cross-step-contract`, and `security-boundary`; the absence of such a control does not block execution.
 
-`spec-step-run` owns implementation, test writing, bounded local smoke/visual checks,
-deferred-test handoffs, the step learning, staging the coherent artifact, and the conventional step
+`spec-step-run` owns implementation, test writing, focused unit/integration feedback,
+required runtime/visual observations, deferred final-check handoffs, the step learning, staging the coherent artifact, and the conventional step
 commit for `as-specified`, `adapted`, or `checkpoint` work. When repository policy requires generated
 output separately, preserve that commit and the deliberate change commit within the same step;
 the learning lists both and binds evidence to final step HEAD. The orchestrator does not
@@ -87,8 +87,8 @@ not a second code review or a reason to reread every subspec. Ask the worker to 
 missing or contradictory records; leave substantive correctness to branch review:
 
 1. Changed and staged files form a coherent repository-local artifact and exclude unrelated user changes and spec artifacts.
-2. Tests were written, local smoke/visual checks ran, and automated commands were deferred to branch review with honest pending status.
-3. Older test-first cards record the scheduling adaptation; no red/green evidence is fabricated.
+2. Useful tests were written, affected unit/boundary checks and required visual/runtime observations have actual results, and remaining final checks have honest pending handoffs.
+3. Scheduling adaptations to older cards are recorded; no red/green evidence is fabricated.
 4. Commands had finite enforced deadlines; timeouts terminated owned processes and were recorded with elapsed time as failed attempts.
 5. Repeated attempts name an affected change or concrete diagnostic reason; passing results were reused across step sections.
 6. The learning record exists, and a commit exists for `as-specified`, `adapted`, or `checkpoint`.
@@ -111,10 +111,11 @@ consequential decision remains unresolved.
 
 After all indexed steps have run, map each acceptance criterion and claim to its commits and verification results, each Executable Evidence Plan gate (`EV-n`) to its produced artifact, and each pre-mortem item (`PM-n`) to its implemented disposition. Record missing coverage for final refinement; do not hide gaps or discard useful commits.
 
-Assemble all deferred automated commands, test files, setup, expected results, and output
-paths for branch review, deduplicating shared commands. Do not run tests or broad static
-checks in this coordinator or dispatch a final testing step. Preserve actual smoke
-results separately from unexecuted automated gates.
+Assemble focused results and remaining automated commands, test files, setup, expected
+results, and output paths for branch review, deduplicating shared commands. Preserve the
+observed revisions and assess applicability after later changes. Do not duplicate worker
+checks in this coordinator or dispatch a final testing step; branch review owns outstanding
+final checks. Keep actual automated/smoke results distinct from unexecuted gates.
 
 Then atomically write both `.specs/<feature>/merge-evidence.md` and version 2 `.specs/<feature>/merge-evidence.json`. These are the pre-audit evidence assembly bound to the exact current HEAD; final readiness still requires independent branch audit/refinement and a work tour.
 

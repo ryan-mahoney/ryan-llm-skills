@@ -154,7 +154,7 @@ For a step that promises runtime- or user-observable behavior, trace one complet
 1. The actual runtime entrypoint or composition owner creates or registers the new behavior.
 2. Every required internal injected interface has a concrete production implementation.
 3. The downstream command, API, schema, or protocol exists and the concrete adapter uses its real contract.
-4. Write at least one prepared focused test through that production composition for branch review; during this step, observe the real path with the local smoke check.
+4. Write and run a focused integration test through that production composition when the changed boundary is ready. Reuse its result for reachability; use a local smoke check only for runtime evidence it does not establish.
 5. The promised result is reachable and observable without manually constructing an otherwise-unwired internal controller, provider, service, or node.
 6. The path works with ordinary startup/invocation prerequisites. Exercise the default path of
    new test hooks/overrides and remove relevant test-only private assigns, preloads, registrations,
@@ -167,7 +167,7 @@ A deliberately library-only precursor may omit runtime reachability only when it
 
 ## Expand Risk-Directed Verification During Execution
 
-Read the prepared card's `Risk lenses` and `Live invariants` lines. Use them to strengthen assertions, add adversarial cases, add or update the nearest relevant tests, for execution during branch review. Use the local smoke check for immediate runtime feedback. They guide vigilance; they are not scope limits or a demand to build abstractions merely to satisfy a label.
+Read the prepared card's `Risk lenses` and `Live invariants` lines. Use them to strengthen assertions and add or update the nearest relevant tests for credible failures. Run affected unit tests and focused boundary checks under the shared scheduling policy; defer broad regression checks to completion. They guide vigilance; they are not scope limits or a demand to build abstractions merely to satisfy a label.
 
 Before implementation, privately map each applicable label to the smallest useful boundary checks:
 
@@ -220,8 +220,9 @@ rendered result as required implementation work, not optional final polish:
    `uishot` from the worktree root, run its setup command when required, and keep its
    browser warm throughout the correction loop. `uishot` satisfies the Playwright-only
    screenshot requirement; do not classify it as a generic browser screenshot fallback.
-3. Reuse the repository's Playwright configuration and fixture helpers without running its
-   automated tests. Use direct browser interaction and capture for capabilities that improve
+3. Reuse the repository's Playwright configuration and fixture helpers. Run only an affected
+   automated journey when the changed behavior needs browser evidence; do not launch the full
+   suite for a capture. Use direct browser interaction and capture for capabilities that improve
    the observation: existing authentication or data fixtures, and
    interaction-driven states that `uishot` cannot create directly, such as hover, drag,
    form entry, or opening a transient surface. When those helpers can establish a stable
@@ -254,7 +255,7 @@ rendered result as required implementation work, not optional final polish:
    at least one final image after the last visual code change; never call an image final
    when it predates the current implementation.
 
-Write or update existing Playwright visual regression assertions for branch review, but do not treat
+Write or update existing Playwright visual regression assertions and schedule the affected checks under the shared policy, but do not treat
 baseline acceptance as a substitute for looking at the rendered pixels. Keep ad hoc
 screenshots out of the commit unless the repository explicitly tracks Playwright visual
 baselines, retain the final inspected images under `.specs/<feature>/evidence/` so they
@@ -275,27 +276,26 @@ The final captures and deterministic scenario/setup notes are QA-tour inputs. Pr
 them under `.specs/<feature>/evidence/` with sensitive data removed. Rendered evidence
 does not replace behavioral, data, policy, or production-reachability gates.
 
-## Write Tests And Smoke-Check The App
+## Run Focused Feedback
 
-Apply the shared Verification Scheduling And Deadlines policy. Write the prepared tests
-and useful risk-directed cases, but do not run automated tests during this step, including
-focused tests or red/green runs. Preserve their exact commands for branch review. For an
-older test-first card, record the scheduling adaptation and actual implementation-first
-strategy in the learning; do not fabricate red evidence or rewrite preparation.
+Apply the shared Verification Scheduling And Deadlines policy. Write useful regression
+coverage and run affected unit tests during implementation. Run focused integration checks
+when the changed boundary is ready; select an affected browser journey only when browser
+behavior needs proof. Preserve exact commands and real outcomes. On older cards that defer
+all automation, record this scheduling adaptation without rewriting preparation. Never
+fabricate red/green evidence or turn every edit into a full-suite run.
 
-After the edits, perform one bounded local startup and changed-path smoke check. Inspect
-runtime errors and correct relevant failures; repeat only the affected interaction after
-fixes. Reuse this observation for reachability, risk, and pre-commit summaries. Enforce a
-120-second deadline by default for readiness and smoke completion, with longer justified
-finite limits recorded before launch. A server is expected to keep running: bound the
-readiness/interaction operation, then clean up owned processes. A tool polling interval
-is not a deadline. On timeout, retain partial output and diagnose before retrying.
+Observe the real changed path through the focused test when it covers application composition.
+Add a bounded local startup/entrypoint smoke check only for missing runtime evidence; preserve
+required visual inspection. Reuse observations across reachability, risk, and pre-commit
+summaries. Follow the shared deadlines, process ownership, and timeout diagnosis rules.
 
-Record test commands as `skipped` and their EV gates as `pending`, with reason `deferred
-to branch review`, test paths, expected observations, environment/setup, and artifact
-paths for review to produce. Record actual smoke commands, elapsed times, outcomes,
-cleanup, and proof limits separately. Startup success is not a test pass. Preserve a
-checkpoint for missing implementation or failed/unavailable required smoke checks.
+Record actual commands, selection, elapsed time, results, artifacts, and proof limits.
+Intentionally deferred final checks remain `skipped`/`pending`, with reason `deferred to
+branch review`, exact paths, expected observations, setup, and artifact destinations.
+A failed focused check is a failure, not a deferred pass: fix it or preserve a checkpoint
+with the gap. Missing required implementation or visual/runtime evidence also needs a
+checkpoint. Do not rerun passing checks without an affected change or named uncertainty.
 
 ## Verify, Learn, And Commit
 
@@ -347,8 +347,8 @@ the owning planner before dependent work. Use `decision-required` for unresolved
 commit when useful and authorized, but do not claim dependent obligations complete.
 
 Use `checkpoint` when meaningful implementation, tests, reproduction evidence, or a
-concrete repair exists but implementation or required smoke/visual verification remains
-incomplete. Tests intentionally deferred to branch review alone do not require a checkpoint.
+concrete repair exists but implementation or required focused/visual/runtime verification
+remains incomplete. Final checks intentionally deferred to branch review alone do not require a checkpoint.
 Use `no-artifact` only when no meaningful repository-local artifact could be produced.
 Never describe missing production reachability as complete, but do not discard or hide
 useful work because it is imperfect.
@@ -357,8 +357,8 @@ Before committing, inspect the diff and tests once. Confirm that the result hone
 represents its outcome, required callbacks and production paths are observed when
 claimed, resources and failure paths are handled as well as the current evidence allows,
 and any required final visual evidence reflects the current diff. Fix useful gaps and
-repeat only smoke observations affected by those fixes. Reuse unchanged smoke results;
-do not execute automated tests before committing. Stage the coherent repository-local implementation and test
+repeat only checks affected by those fixes. Reuse valid focused and smoke results; keep
+broad regression checks at the required completion gate. Stage the coherent repository-local implementation and test
 artifact, excluding spec artifacts, ad hoc screenshots, and unrelated user changes, and
 make one conventional commit for `as-specified`, `adapted`, or `checkpoint`, except when repository
 policy requires generated output in a separate commit. In that case keep the same assigned step,

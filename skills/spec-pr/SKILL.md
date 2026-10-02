@@ -82,7 +82,7 @@ Apply the commit section of [Engineering Writing](../../rules/engineering-writin
 A rebase, conflict resolution, staged commit, dependency/base change, or any code/test/config/migration/deploy change invalidates prior commit-bound readiness. Do not edit SHAs in evidence files as a shortcut.
 
 1. Determine which claims, gates, and operational assumptions the new base or conflict touched.
-2. Re-run affected focused gates, plus any build/integration gate whose dependency graph changed.
+2. Re-run affected focused gates, plus any build/integration gate whose dependency graph changed. Reuse other valid results with their original observed revisions and an explicit applicability assessment; a new SHA does not require every suite. Apply the shared verification scheduling policy.
 3. Regenerate `merge-evidence.json`/Markdown from actual outcomes.
 4. Run `spec-branch-refine` against the final branch. It must end with a current audit pass and
    `evidence_verdict: proven`.
