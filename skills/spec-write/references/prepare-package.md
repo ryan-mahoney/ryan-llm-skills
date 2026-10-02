@@ -66,7 +66,7 @@ Drawer and form primitives and wiring the real journal query and mutation.`
 Preserve intent and voice. Apply the entrypoint's step-granularity rules before writing cards. Split compound objectives rather than
 hiding them in a longer card. Do not restyle a sound spec. Re-running preparation against unchanged inputs must converge without churn.
 
-Apply the Preparation section of [Engineering Decisions](../../spec-work-tour/references/standalone-engineering-decisions.md).
+Apply the Reuse and Preparation sections of [Engineering Decisions](../../spec-work-tour/references/standalone-engineering-decisions.md).
 Verify material domain rules have sourced examples/counterexamples and AC/CL/FH/EV coverage;
 verify deferrals preserve current acceptance and have concrete destinations. Existing equivalent
 prose suffices. Correct missing behavior or proof, not headings. Ground database-derived behavior
@@ -90,7 +90,7 @@ Run `node ~/.agents/skills/spec-work-tour/scripts/validate-evidence-plan.mjs <pa
 
 ### 4. Derive prose guardrails and invariants
 
-Walk Architecture, Notes, and Implementation Steps for normative statements that constrain ownership, placement, layering, negative boundaries, or licensed deviations from precedent. Do not restate acceptance criteria that tests already own and do not invent constraints.
+Walk Architecture, Notes, and Implementation Steps for normative statements that constrain ownership, placement, layering, negative boundaries, or licensed deviations from precedent. A reuse decision that names an existing symbol as the owner of a behavior is an ownership constraint. Do not restate acceptance criteria that tests already own and do not invent constraints.
 
 When at least one implementation guardrail exists, atomically write `criteria.md` with:
 
@@ -112,7 +112,7 @@ Use each `spec-steps.json` entry's existing `difficulty` as the default preparat
 
 | Difficulty | Grounding budget | Card depth |
 |---|---|---|
-| `easy` | Verify named paths, modified public shapes, and an exact focused command. Do not survey callers or search for precedent unless a target is missing. | Minimal |
+| `easy` | Verify named paths, modified public shapes, and an exact focused command. Do not survey callers or search for precedent unless a target is missing or the card adds a function or helper (run the Reuse search). | Minimal |
 | `medium` | Read named symbols, their immediate integration seam, and the existing target test or nearest test file. | Grounded |
 | `hard` | Inspect the relevant cross-module contracts, consequential callers/callees, and test architecture. | Detailed |
 

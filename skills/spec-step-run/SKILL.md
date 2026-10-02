@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "26"
+  version: "27"
 ---
 
 # Spec Step Run
@@ -115,7 +115,12 @@ copy prototype-only fixtures, dependencies, shell UI, or fake data wiring.
 - Follow repository conventions and use the prepared edit sequence when it still fits.
 - Reuse before writing: stop at the highest rung of the necessity ladder that holds
   (`~/.agents/rules/minimal-implementation.md`). Prefer the shortest working diff
-  consistent with the spec; add no abstraction the spec does not require. Record
+  consistent with the spec; add no abstraction the spec does not require. Before
+  adding any function, type, constant table, or similar helper the card does not
+  name, read the `introduced` lists in prior step learnings and run the search in the
+  Reuse section of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
+  Reuse or extend an equivalent; place a new general-purpose helper in the
+  repository's shared-helper location and export it there. Record
   deliberate simplifications and their known ceiling in the learning. Preserve applicable correctness coverage and safety-floor code. Reuse proof tooling; new tests,
   flags, variables, compatibility paths, and release facilities need a named present requirement.
   Return inapplicable obligations as `needs-spec-correction` in the learning and report for sourced
@@ -129,7 +134,7 @@ copy prototype-only fixtures, dependencies, shell UI, or fake data wiring.
 - Keep changes coherent, explicit, and reviewable. Avoid unrelated cleanup, but do not
   stop merely because a useful change might later be judged unnecessary.
 
-Read and apply the Implementation section of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
+Read and apply the Reuse and Implementation sections of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
 Inspect generator/bulk-transformation defaults against the sourced domain rules when applicable;
 record the command and meaningful corrections in the learning. Keep mechanical and deliberate
 changes distinguishable. Evaluate defensive branches against reachable states and preserve
@@ -320,10 +325,15 @@ learning:
       artifact: <checkout-relative path>
       rejects: <FH-n>
       proof_boundary: <what this result does and does not establish>
+  introduced:
+    - symbol: <new reusable function, type, or constant>
+      path: <checkout-relative path>
+      purpose: <one-line behavior it owns>
 ```
 
 Include exactly one evidence entry per EV item owned by this step; use `evidence: []`
-when none. A passed EV records its exact command in `verification.commands` and a real
+when none. List in `introduced` each new symbol another step or feature could plausibly
+reuse; omit feature-private details and use `introduced: []` when none. A passed EV records its exact command in `verification.commands` and a real
 artifact. Follow the YAML with the step reference/Covers tags, outcome, assumptions and material
 departures, a concise risk-audit and production-reachability summary covering the
 declared labels/invariants, at most five concrete findings for later steps, at most

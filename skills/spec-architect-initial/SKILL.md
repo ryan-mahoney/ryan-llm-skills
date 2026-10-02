@@ -8,7 +8,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "10"
+  version: "11"
 ---
 
 # Spec Architect Initial — Solution Design Against Existing Architecture
@@ -51,7 +51,7 @@ Apply this rubric to the request text plus a quick glance at the repo (README, d
 - **Definition of done** — What observable behavior tells us this is complete?
 - **Evidence posture** — What could make this unsafe, which boundaries does it cross, and what proof level must exist before merge and deployment?
 
-Read the Architecture section of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
+Read the Reuse and Architecture sections of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
 Resolve relevant identity, absence/lifecycle, exact-boundary, ownership, and failure-visibility
 questions before choosing mechanisms. Put material rules, sources, concrete examples or
 counterexamples, and enforcement owners in the proposal's Constraints & Assumptions. Record
@@ -110,6 +110,7 @@ From your review, extract the hard constraints that any solution must respect:
 - **Data layer** — The ORM in use, migration strategy, existing schema patterns
 - **Deployment model** — Serverless, containers, static hosting, edge — this constrains what's possible at runtime
 - **Existing patterns** — How similar problems have been solved before in this codebase (this is the strongest signal for how new problems should be solved)
+- **Shared-helper location** — Where the repository keeps general-purpose helpers (for example `src/lib/` or a `utils` module). New general-purpose helpers belong there so later work finds them instead of writing another copy
 - **Dependency policy** — Some projects are conservative about new deps; some have a preferred set of libraries
 
 ---

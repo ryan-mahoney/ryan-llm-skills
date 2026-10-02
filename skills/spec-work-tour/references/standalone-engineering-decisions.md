@@ -6,6 +6,45 @@ do not introduce a second checklist, verdict, identifier system, or mandatory re
 Read the sections for the current stage and its handoff. A small change may need only a few
 sentences and one existing gate. These are reasoning obligations, not document-size quotas.
 
+## Reuse: One Owner Per Behavior
+
+Every stage reads this section. Helpers written separately by isolated workers drift apart:
+one copy gets a fix and the others keep the old behavior. Give each behavior one owner.
+
+**Search by behavior, then confirm.** Before planning or writing a function, type, constant
+table, parser, formatter, path builder, or similar helper, search for an existing owner. When the
+turn exposes a semantic `code_search` tool, query the responsibility ("format a duration for
+display", "build the feature worktree path"), not only a likely symbol name. Otherwise use exact
+search (`rg`) for several plausible names, distinctive literals, and the API calls the helper
+would make. Read each plausible hit before deciding. This is a bounded lookup, not a survey.
+
+**A duplicate is the same responsibility under the same contract.** Textual similarity alone is
+not duplication; two helpers that serve deliberately different contracts may coexist. Copying or
+re-deriving another module's private helper is duplication, even when it matches a sibling
+module's style. When an equivalent exists, reuse it, or extend it when the new need is a small
+compatible generalization. Do not fork a second copy to avoid touching the original.
+
+**Put shared helpers where the next search finds them.** A general-purpose helper — one with no
+dependence on this feature's domain — belongs in the repository's existing shared location
+(for example `src/lib/` or the package's `utils` module), exported under a name that states its
+behavior. Keep a helper private to a feature module only when it is genuinely feature-specific.
+Do not create a new shared location when one exists.
+
+Stage obligations:
+
+- **Architecture and specification:** identify the repository's shared-helper location as a
+  constraint. State each reuse decision in Architecture prose ("format amounts with
+  `formatMoney` in `src/lib/currency.ts`") so preparation can derive it as a guardrail.
+- **Preparation:** any card that adds a function or helper runs the search above, whatever the
+  step's difficulty. Name the reuse target in `Targets` when one exists.
+- **Implementation:** run the search before adding any helper the card did not name, and read
+  the `introduced` lists in prior step learnings first. Record each new reusable symbol in this
+  step's learning so later steps find it.
+- **Branch audit and fix:** check both directions. A new helper may duplicate an existing one,
+  and a changed helper may have copies that still carry the old behavior. When a fix corrects a
+  helper's logic, search for copies with the same defect and correct or consolidate them, or
+  record why they serve a different contract.
+
 ## Architecture: Establish The Behavior Before The Mechanism
 
 In `proposal.md`, state consequential domain rules in Constraints & Assumptions before choosing

@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "19"
+  version: "20"
 ---
 
 # Spec Branch Evidence Audit
@@ -171,7 +171,7 @@ Emit a `category: evidence` finding for a missing, stale, irrelevant, circular,
 unreproducible, under-independent, or overstated gate. Evidence findings are actionable
 whenever they leave a merge-blocking claim unproven, regardless of code-change size.
 
-Apply the Critique And Branch Audit section of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
+Apply the Reuse and Critique And Branch Audit sections of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
 Challenge consequential domain assumptions with concrete counterexamples, even when spec and
 implementation agree. Inspect ordinary-entry prerequisites, the actual owner of derived behavior,
 and deferral destinations. Keep material challenges and sourced resolutions in existing report
@@ -287,6 +287,16 @@ state the existing implementation, the new implementation, and the concrete harm
 of truth). If both implementations intentionally serve different contracts, do not
 flag the similarity.
 
+Search in the other direction too. For each existing helper the branch fixes or
+changes in behavior, search for copies elsewhere in the repository that implement the
+same responsibility. Report each copy that still carries the old behavior; that copy
+is where divergence starts.
+
+Classify a confirmed duplicate or a stale copy as `MED` `simplification`; it blocks
+future maintainability because the next fix needs two edits. When the duplicate
+violates a reuse decision recorded in `criteria.md` or the spec, file it as
+`guardrail` instead.
+
 The five lenses (Stage B runs 1, 3, 4, 5 per commit; Stage C runs 2 plus the
 aggregation):
 
@@ -317,8 +327,9 @@ aggregation):
    (a docstring that contradicts the code's behavior, one error type where the rest
    of the module raises another, a caller that cannot discriminate the failure).
    Duplicated/reinvented behavior must be grounded in Stage D's repository search,
-   preferably `code_search` plus exact confirmation. These are usually
-   `LOW`/advisory — still always emitted (see Severity, Actionability, Verdict).
+   preferably `code_search` plus exact confirmation, and takes Stage D's severity.
+   Other simplification findings are usually `LOW`/advisory — still always emitted
+   (see Severity, Actionability, Verdict).
 5. **AI-authorship tells** — this branch was written by an LLM (`spec-step-run`), so
    hunt the failure modes current models still produce that slip past ordinary
    review: invented methods or options on a third-party library or framework API
@@ -424,7 +435,8 @@ always-emit rule lives once in Severity, Actionability, Verdict.)
   "missing tests" unless the change adds testable behavior with no coverage;
   patterns consistent with visible codebase conventions — *unless* this change
   introduces a docstring or contract claim its own code contradicts, which a matching
-  sibling-module shape does **not** license; a deliberate trade-off or deferral
+  sibling-module shape does **not** license, or a copy of another module's helper,
+  which is duplication rather than convention; a deliberate trade-off or deferral
   grounded in sourced project context or an authorized risk decision and recorded in a learning,
   **subspec**, or the spec's *Out of scope* / *Adaptations* section (e.g. concurrency lost-update protection deferred to a later step, or a
   plain `Error` the spec deliberately chooses over a subclass — cite the location).
@@ -449,7 +461,8 @@ the defect a spec-unaware external tool would raise. Keep it to candidates with 
 
 - **Severity** `HIGH`/`MED`/`LOW`; **Category** `correctness`/`security`/`perf`/
   `simplification`/`design`/`guardrail`/`evidence`.
-- **Actionable** = `HIGH` or `MED` in `correctness`, `security`, `guardrail`, or `evidence`. All else is
+- **Actionable** = `HIGH` or `MED` in `correctness`, `security`, `guardrail`, or `evidence`, plus a
+  `MED` `simplification` finding that Stage D confirms as duplicated behavior or a stale copy. All else is
   **advisory**. A violation of an explicit context constraint or sourced omission is `guardrail`, even when
   removing unnecessary machinery is the fix. Ordinary simplification stays advisory. The split
   gates only the **verdict and the loop**: advisory findings

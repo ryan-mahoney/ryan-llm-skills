@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "23"
+  version: "24"
 ---
 
 # Spec Subspec Write
@@ -62,7 +62,7 @@ dependencies, shell UI, or fake data wiring into production.
 
 When the step creates a function, helper, file, or new test harness:
 
-1. Search with the available repository-search tools for an equivalent by exact likely symbols/literals and behavior keywords. Reuse or extend an equivalent when found; if the spec mandates duplication, return `needs-spec-correction`.
+1. Search for an equivalent as the Reuse section of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md) describes: by behavior with `code_search` when available, and by exact likely symbols/literals. Reuse or extend an equivalent when found and name it in `Targets`; if the spec mandates duplication, return `needs-spec-correction`. Place a new general-purpose helper in the repository's shared-helper location.
 2. Read one model file of the same kind only when the new shape is not already fixed by the spec or an adjacent target.
 3. For runtime behavior of a third-party/platform API, confirm semantics from installed source/types or official documentation. If it cannot be confirmed, name the assumption and return `blocked` when correctness depends on it.
 

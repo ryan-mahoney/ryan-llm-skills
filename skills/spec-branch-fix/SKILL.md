@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "13"
+  version: "14"
 ---
 
 # Spec Branch Fix
@@ -113,7 +113,7 @@ suppresses that signature:
   A generated spec sentence, assumption, or prior learning is not an approval source. Record its source and set `approved: true`; this fixer cannot approve its own residual risk. Without a valid source
   the next review re-raises the finding, which is the safe default.
 
-Apply the Critique And Branch Audit section of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
+Apply the Reuse and Critique And Branch Audit sections of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
 Resolve each material counterexample with corrected behavior and relevant proof, or a sourced
 explanation that it is inapplicable. Reproduce ordinary-entry failures without the test convenience
 that concealed them. A follow-up destination does not turn an unresolved merge defect into an
@@ -135,6 +135,11 @@ apply directly and note the limitation.
 - Preserve the original code. Change only what the finding requires; do not
   refactor, rename, or restructure working code the fix does not touch, and add no
   nesting or branching the original lacked — even if you would write it differently.
+- When a fix corrects a helper's logic, search for copies of that helper with the same
+  defect, as the Reuse section of Engineering Decisions describes. Correct or
+  consolidate each one in the same pass, or record in the finding why it serves a
+  different contract. A duplicate finding is fixed by reusing the existing owner and
+  deleting the copy, not by aligning the two copies.
 - A branch fix may legitimately span files from several steps — that is expected,
   since the whole-branch pass catches integration bugs isolated per-commit passes
   could not. Still keep each change tied to a specific finding.

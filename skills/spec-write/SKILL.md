@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "21"
+  version: "22"
 ---
 
 # Spec Write
@@ -184,9 +184,9 @@ Avoid abstractions with only one use, abstract layers "for future flexibility," 
 inapplicable obligations with sourced rationale. Every new flag, environment variable, compatibility
 path, or release mechanism needs a concrete context fact and requirement; otherwise omit it.
 
-Ground the architecture in existing code: before adding a new module or helper, search for existing implementations and precedents using the available repository-search tools named in the runtime capability section — exact search for symbols or literals, and semantic search when available for behavior and precedent — and prefer reusing or extending what already exists.
+Ground the architecture in existing code: before adding a new module or helper, search for an existing owner as the Reuse section of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md) describes — by behavior with `code_search` when available, otherwise exact search — and reuse or extend what already exists. Name the repository's shared-helper location, and state each reuse decision as an ownership sentence naming the existing symbol and path so preparation derives it as a guardrail.
 
-Read the Specification and Preparation sections of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
+Read the Reuse, Specification, and Preparation sections of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
 In Architecture, carry each material domain rule with its source, concrete example/counterexample,
 enforcement owner, and AC/CL references. Preserve justified error/fallback behavior; do not apply
 fail-fast as a blanket replacement for a sourced contract. Use existing acceptance and evidence
