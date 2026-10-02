@@ -88,7 +88,8 @@ or a weaker assertion. Escalate only the unresolved decision, while completing i
 ## Bounded Refinement Completion
 
 `spec-branch-refine` counts review → fix rounds, including the last fix pass. The
-end-to-end default is two rounds. A clean review may finish earlier. At the cap, resolved
+end-to-end default is one round when background step reviews cover every step's
+commits, otherwise two. A clean review may finish earlier. At the cap, resolved
 findings and passing required merge gates allow `verified-at-cap`, without a further
 independent review of the last fixes. This is distinct from an independent audit pass.
 

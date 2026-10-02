@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "13"
+  version: "14"
 ---
 
 # Spec End To End
@@ -33,7 +33,14 @@ Treat workflow modifiers in the request as run-wide constraints. Examples includ
 - keep work in the current checkout;
 - delegate named stages to a named subagent or agent type;
 - include or skip the optional architecture critique;
+- assign a model or provider to a role such as step implementation, step review, step
+  fix, branch review, or branch fix;
 - target a specific base branch, repository, feature package, or PR shape.
+
+Record role model assignments in the ledger as exact `provider/id[:thinking]` values
+and pass each one on every launch for that role. In Pi, check the IDs once with
+`subagent({ action: "models" })` before implementation. Unassigned roles use Pi's
+agent and settings defaults.
 
 Honor explicit directives over the defaults below. Use delegation only when the user requests it,
 a leaf skill requires it, or the active harness instructions independently require it. The
@@ -121,7 +128,9 @@ Give each stage coordinator the canonical checkout and spec-package paths, assig
 stage, owning skill path, run-wide constraints, and completion return contract. When
 delegation is requested, delegate whole implementation and refinement stages when
 the harness supports their workers; the parent need not manage every implementation
-step or review iteration.
+step or review iteration. In Pi, run `spec-run` in the top-level agent. It launches
+step workers, background step reviewers, and step fixers, and a Pi child can launch
+subagents only when the parent grants it fanout and the `subagent` tool.
 
 For an implementation worker, pass the checkout, canonical subspec path, owning
 skill path, and paths to any newly routed messages. The subspec and its referenced
@@ -160,9 +169,13 @@ excluded by the routing policy above:
    before creating or reusing a worktree. Do not invoke a branch-management skill merely to run
    commands a capable agent already knows how to run.
 5. Run `spec-run` from the implementation checkout. It owns prepared step implementation,
-   per-step commits, evidence production, and pre-audit merge-evidence assembly.
-6. By default, run `spec-branch-refine max-iterations=2`: up to two review → fix
-   rounds, with no third review. Honor an explicit user limit instead. Accept `proven`
+   per-step commits, background step reviews and the fixes between steps, evidence
+   production, and pre-audit merge-evidence assembly.
+6. By default, run `spec-branch-refine max-iterations=1` when `spec-run` reports
+   `step-review-coverage: complete`, and `max-iterations=2` otherwise. One round is a
+   review and its fix, with no further review. The branch review reuses step reviews,
+   so that round covers unreviewed commits, cross-step integration, duplication, and the
+   full test suite and gates. Honor an explicit user limit instead. Accept `proven`
    or `verified-at-cap` only with the completion record and passing required evidence
    bound to current HEAD; preserve the final fixes' review status honestly. Carry the
    round budget through resumption, tour, and publication; downstream stages must not

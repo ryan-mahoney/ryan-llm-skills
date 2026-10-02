@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "14"
+  version: "15"
 ---
 
 # Spec Branch Refine
@@ -69,8 +69,9 @@ spec correction, or a convergence stop condition below.
 - **Max iterations.** `max-iterations=<n>`, a positive integer, default **10** for
   direct invocation. Each iteration is one review followed by its fix pass when needed:
   at most `n` reviews and `n` fixes. `max-iterations=2` means review → fix → review → fix.
-  A clean review stops early without an unnecessary fix. `spec-end-to-end` supplies **2**
-  unless the user explicitly chooses another limit.
+  A clean review stops early without an unnecessary fix. `spec-end-to-end` supplies **1**
+  when step reviews cover every step's commits and **2** otherwise, unless the user
+  explicitly chooses another limit.
 
 ## The Loop
 

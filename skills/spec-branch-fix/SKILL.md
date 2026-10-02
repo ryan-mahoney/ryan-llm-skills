@@ -4,12 +4,12 @@ description: "Fix one iteration of branch code or executable-evidence findings, 
 mode: coding
 scope: document
 disable-model-invocation: true
-argument-hint: "[spec=<path/to/spec.md>] [iter=<n>]"
+argument-hint: "[spec=<path/to/spec.md>] [iter=<n>] [review=<reviews/step-NNN-review.md>]"
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "14"
+  version: "15"
 ---
 
 # Spec Branch Fix
@@ -67,6 +67,21 @@ report the exact gap without discarding independent repairs.
   `branch-<k>-fix.md` yet.
 - **Review.** `<spec-dir>/reviews/branch-<iteration>-review.md`. If it is missing,
   there is nothing to do: report and stop. Do not invent findings.
+
+### Step Mode
+
+`review=<spec-dir>/reviews/step-<NNN>-review.md` (a `kind: step` review) selects step
+mode. `spec-run` runs it between implementation steps, with no step worker active in
+the checkout. Everything below applies, with these differences:
+
+- Write `reviews/step-<NNN>-fix.md` with `kind: step` and `step: <NNN>` in place of
+  `iteration`. Its dismissals feed the same anti-thrash memory as branch fix files.
+- The review was taken at an earlier commit. Before acting on a finding, confirm it
+  still exists at HEAD. If a later commit already resolved it, record `fixed` with a
+  note naming that commit and change nothing.
+- Apply fixes directly rather than through a subagent.
+- Skip the merge-evidence reassembly after the commit. `spec-run` assembles merge
+  evidence after the last step.
 
 ## Read The Review
 

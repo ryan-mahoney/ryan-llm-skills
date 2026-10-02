@@ -4,12 +4,12 @@ description: "Independently audit an implemented spec branch and its executable 
 mode: coding
 scope: document
 disable-model-invocation: true
-argument-hint: "[spec=<path/to/spec.md>] [iter=<n>] [scope=committed|working-tree] [base=<ref>] [since=<commit>]"
+argument-hint: "[spec=<path/to/spec.md>] [iter=<n>] [scope=committed|working-tree|step] [step=<NNN>] [base=<ref>] [since=<commit>] [head=<commit>]"
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "20"
+  version: "21"
 ---
 
 # Spec Branch Evidence Audit
@@ -53,6 +53,39 @@ spec-branch-refine (loop) → spec-branch-review → spec-branch-fix → re-revi
 `spec-branch-refine` calls this skill with the current `iter` and stops the loop
 when this skill returns `pass`. The skill is also runnable standalone for a one-off
 branch review. Single pass per call: review once, write the file, stop.
+
+## Step Scope
+
+`scope=step step=<NNN> since=<sha> head=<sha>` reviews one finished unit of work in
+the background while the next step is implemented. `spec-run` launches it at each step
+boundary for the commits `<since>..<head>`: the step's own commits plus any step-fix
+commits made since the previous unit. It runs Stage B early so the branch review can
+reuse the result; it is not a branch audit.
+
+- Read code only at fixed revisions: `git show <sha>` for each commit and
+  `git show <head>:<path>` for surrounding code. Never read the working tree; the
+  next step worker is editing it.
+- Load spec-aware context as below, except merge evidence, which does not exist yet.
+  Read the subspecs of later steps too. Behavior a later step is scheduled to add is
+  planned work, not a finding; list it under Considered & Dismissed with the subspec
+  citation.
+- Load dismissals from earlier `reviews/step-<k>-fix.md` files under the Load Prior
+  Dismissals rules.
+- Map commits to steps as in Stage A, then apply the Stage B lenses (1, 3, 4, 5),
+  Report Discipline, and Severity rules to each commit in the unit. Review the commits
+  yourself rather than fanning out.
+- Skip Stage C, Stage D, conditional fan-out, the executable-evidence and guardrail
+  lenses, test and gate execution, and merge-evidence updates. The branch review runs
+  those against the integrated branch. Skip dirty-tree handling too; uncommitted
+  changes belong to the step in progress.
+- Write `<spec-dir>/reviews/step-<NNN>-review.md` atomically in the Emit format with
+  `kind: step`, `step: <NNN>`, `target: <since>..<head>`, `commit: <head>`, and
+  `commits: [<full sha>, ...]` listing every commit reviewed. Give each finding a
+  `commit:` field naming the commit that introduced it. Omit `iteration`,
+  `evidence_verdict`, `claims_audited`, and `gates_reexecuted`.
+
+Return the verdict and actionable count in about 50 words. The coordinator reads only
+the YAML block and hands the file to `spec-branch-fix` when the verdict is `needs-fix`.
 
 ## Autonomous Audit
 
@@ -192,7 +225,8 @@ finding. Do not create a separate verdict or report.
 
 ## Load Prior Dismissals (dedup)
 
-Read every earlier `<spec-dir>/reviews/branch-<k>-fix.md` (`k < iter`) and collect
+Read every earlier `<spec-dir>/reviews/branch-<k>-fix.md` (`k < iter`) and every
+`reviews/step-<k>-fix.md`, and collect
 the **signatures** of `dismissed` findings **with their dismissal class**. This is
 the loop's anti-thrash memory, but not every dismissal class suppresses re-raise —
 only the ones that establish no unresolved applicable defect do. An agent-generated
@@ -259,6 +293,16 @@ Fan out one subagent per commit (per the fan-out rule above) so each stays focus
 on its unit. Every commit gets a focused pass. Across refine iterations: if the
 previous fix did not touch a commit's files, you can reuse its prior per-commit
 result. Re-review only the commits the last fix changed. Always re-run Stage C.
+
+**Reuse step reviews.** A commit listed in the `commits:` field of a
+`reviews/step-<NNN>-review.md` file, and still present in `<base>..HEAD` with the same
+SHA, has already had its Stage B pass. Use that review's findings for the commit
+instead of reviewing it again, minus any that the matching `step-<NNN>-fix.md`
+dismissed with a suppressing class. Review fresh only the commits that no step review
+lists: fix commits made after the last step review, commits whose step review failed,
+and rewritten history. Ingested findings go through Stage C like any other, so one
+that a later step fix resolved drops out there. Record `step_reviews_ingested`
+alongside `commits_reviewed`, which counts the fresh reviews.
 
 **Stage C — Aggregate + integrate (the range layer).** Over the union of fresh
 per-commit findings plus the integrated end state:
@@ -524,6 +568,7 @@ review:
   advisory: <count>
   lenses: [correctness, reference-integrity, security, simplification, ai-authorship, executable-evidence]   # plus any fired: design, deep-security, data-deploy, dependency, performance, test-quality
   commits_reviewed: <n>             # informational: commits decomposed and reviewed in the per-commit pass (Stage B)
+  step_reviews_ingested: <n>        # step review files whose commits Stage B reused; 0 when none exist
   findings:
     - id: F1
       severity: HIGH
@@ -575,7 +620,7 @@ Report:
 1. Spec path and iteration.
 2. Review file path.
 3. Verdict and actionable/advisory counts.
-4. The lenses that ran, claim/gate counts, re-executed gates, evidence verdict, any risk trigger that did not fire, and how many commits the per-commit pass reviewed.
+4. The lenses that ran, claim/gate counts, re-executed gates, evidence verdict, any risk trigger that did not fire, how many commits the per-commit pass reviewed, and how many step reviews it reused.
 5. The scope and diff target (e.g. `committed merge-base..HEAD`), whether the working
    tree was dirty (and excluded), and how many prior dismissals were honored — by class.
 
