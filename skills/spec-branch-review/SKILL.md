@@ -447,7 +447,10 @@ skip a fired lens because its preferred skill is absent.
   behavior (auth, money, data integrity) with thin or absent test evidence. Looks
   for: tests that assert implementation detail over behavior, brittle/flaky timing
   or order dependence, over-mocking that verifies nothing, and untested critical
-  paths. Test-style improvements stay advisory. Missing or circular coverage that leaves a material
+  paths. Apply the shared **Maintained Test Value** policy: assess added protection and oracle
+  quality, and require retained-protection evidence or a sourced retirement for deletions.
+  Do not infer redundancy from shared source lines or justify new cases by test counts.
+  Test-style improvements and optional consolidation stay advisory. Missing or circular coverage that leaves a material
   merge claim unsupported is an actionable `evidence` finding under the always-on evidence lens.
 
 Record the lenses that ran on the `lenses:` field (and any delegated skill). A lens

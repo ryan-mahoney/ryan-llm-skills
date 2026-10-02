@@ -139,7 +139,7 @@ Rule files are short, reusable convention guides (UX, forms, tables, copy, testi
 1. A repo-local rules folder (`rules/` or `.agents/rules/`) when one exists.
 2. The user-global rules folder `~/.agents/rules/`.
 
-Always select the minimal-implementation rule (`~/.agents/rules/minimal-implementation.md`, or its repo-local equivalent) — it governs every implementation step. Select the rest by relevance, not completeness: form rules only when the spec builds or changes a form, table rules for tabular UI, CTA/copy rules for user-facing text, testing rules when steps add tests, broad design rules only for user-facing UI work. A backend-only spec typically selects only the minimal-implementation and testing rules. Repo-local rules win over global rules on conflict.
+Always select the minimal-implementation rule (`~/.agents/rules/minimal-implementation.md`, or its repo-local equivalent) — it governs every implementation step. Select the rest by relevance, not completeness: form rules only when the spec builds or changes a form, table rules for tabular UI, CTA/copy rules for user-facing text, testing rules when steps plan, add, change, or remove tests, broad design rules only for user-facing UI work. A backend-only spec typically selects only the minimal-implementation and testing rules. Repo-local rules win over global rules on conflict.
 
 Record the selection in the Applicable Rules section below. `spec-run` injects these paths into every step prompt, so an unselected rule is invisible at implementation time — but do not pad the list; irrelevant rules dilute the ones that matter.
 
@@ -229,6 +229,12 @@ surfaces. Library/CLI work does not require an invented UI or screenshot harness
 tests, disposable verifiers, or deterministic inspections can suffice. State a stopping condition
 and why any new maintained harness is necessary. Never make production operations a pre-merge
 ritual or treat future human code review as proof.
+
+Apply the shared **Maintained Test Value** policy in the existing evidence rationale. Name
+reused cases and the distinct failure or diagnostic/cost improvement behind proposed additions.
+For removals, name retained protection or the sourced retirement. Existing evidence can satisfy
+a step without a new maintained test. Reuse rule sources and IDs without treating inferred
+implementation behavior as approved business intent. Do not add per-test schema fields.
 
 ### 7. Pre-mortem
 
@@ -332,7 +338,7 @@ List the rule files selected above as resolvable paths, each with a one-line rea
 
 ```markdown
 - `~/.agents/rules/form-design.md` — spec adds a settings form
-- `~/.agents/rules/unit-testing.md` — steps add unit tests
+- `~/.agents/rules/unit-testing.md` — steps plan, add, change, or remove tests
 ```
 
 If none apply, "N/A".

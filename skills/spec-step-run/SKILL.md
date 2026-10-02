@@ -183,6 +183,11 @@ Before implementation, privately map each applicable label to the smallest usefu
 
 For each prepared verification case, ensure at least one assertion observes the promised result and, when relevant, the mutation that must not occur. Use risk labels as prompts for engineering judgment: act on credible risks in the final diff and briefly dismiss irrelevant labels, but do not manufacture abstractions or tests solely to account for every label. Do not add a broad suite or a second test harness without a concrete reason.
 
+Apply the shared **Maintained Test Value** policy while changing tests. Reuse or extend existing
+cases before adding files. Reassess temporary discovery tests before retaining them. For removals,
+record retained protection or the sourced retirement in existing learning prose. Preserve required
+gates and meaningful regression cases; fewer tests is not a completion criterion.
+
 ## Produce Owned Evidence
 
 When the card's `Targets` carry `Evidence:` lines, produce each applicable merge artifact.

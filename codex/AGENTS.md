@@ -31,6 +31,12 @@ Do not force this guidance for:
 
 If guidance conflicts with correctness, security, accessibility, or maintainability, prioritize those qualities.
 
+## Test Guidance
+When creating, changing, reviewing, or removing tests, load
+`~/.agents/rules/unit-testing.md`. Apply its value rubric and preservation rules
+without requiring a separate suite audit for ordinary feature work.
+Repository-specific instructions take precedence.
+
 ## Spec Artifacts and Worktrees
 Keep all `.specs/` reads and writes in the primary repository checkout. Never copy
 the folder into a worktree or use a worktree copy, even when Git tracked it.

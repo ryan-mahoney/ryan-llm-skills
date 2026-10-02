@@ -85,6 +85,25 @@ Security, privacy, relevant accessibility, and protection of valuable data still
 A missing safe verifier for an applicable claim remains a gap; it does not justify unsafe testing
 or a weaker assertion. Escalate only the unresolved decision, while completing independent work.
 
+## Maintained Test Value
+
+When planning or changing tests, apply the [Unit Testing Guide](../../../rules/unit-testing.md).
+Before adding a maintained case, inspect existing evidence and name the distinct failure it
+detects or the concrete improvement in diagnosis or execution cost. Reuse sufficient evidence.
+For a removal, identify retained equivalent protection or a sourced reason the obligation no
+longer applies. Compare inputs, boundaries, assertions, and oracle independence. A passing
+remaining suite and reduced test counts do not establish equivalence. Preserve uncertain cases.
+
+Use existing plan, learning, and review prose. No per-test ledger, score threshold, new schema,
+or separate audit stage is required. One test can cover multiple obligations, and one obligation
+can need tests at different boundaries. Reassess temporary discovery tests before retaining them.
+
+Reuse domain rule sources and identifiers, including existing SpecOps analysis when relevant.
+Distinguish observed behavior from approved intent. Keep durable rule/evidence links in existing
+domain documentation when they serve later changes, rather than only in feature-local state.
+Do not create a parallel catalog or one-test-per-rule requirement. Loss of required protection
+or circular evidence is a material gap; optional unrelated consolidation remains follow-up work.
+
 ## Bounded Refinement Completion
 
 `spec-branch-refine` counts review → fix rounds, including the last fix pass. The
