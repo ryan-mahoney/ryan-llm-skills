@@ -66,9 +66,11 @@ The generated `spec-skills` README also includes a stage-by-stage overview:
 3. Run `spec-write` once to write the spec, ground granular execution cards, and publish
    the complete prepared package.
 4. Let the top-level agent establish a code branch or worktree. Keep all `.specs` reads and writes in the primary repository; ignore any worktree copy.
-5. Execute the immutable prepared package with `spec-run`.
-6. Run `spec-branch-refine max-iterations=2` for at most two review → fix rounds,
-   including the final fixes; record whether those fixes received an independent review.
+5. Execute the immutable prepared package with `spec-run`, which reviews each step in the
+   background and fixes its findings before the next step.
+6. Run `spec-branch-refine` for one review → fix round when step reviews cover every step,
+   otherwise two, including the final fixes; record whether those fixes received an
+   independent review.
 7. Run `spec-work-tour` to produce commit-bound context, merge evidence, and separate deployment/authority/observation states.
 8. Publish with `spec-pr`.
 

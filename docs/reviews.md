@@ -87,7 +87,8 @@ for the stage-specific rules. These checks use the existing findings and verdict
 
 `max-iterations` counts review → fix rounds, including the final fix. A limit of two
 means review → fix → review → fix, with early exit for a clean review. Direct invocation
-still defaults to ten; `spec-end-to-end` explicitly defaults to two. Resume finishes an
+still defaults to ten. `spec-end-to-end` defaults to one when background step reviews
+cover every step's commits, and two otherwise. Resume finishes an
 interrupted round without resetting the budget. The completion record at
 `reviews/refinement-completion.md` distinguishes a clean independent audit from verified
 final fixes. Both successful outcomes can proceed to the tour and PR; neither permits

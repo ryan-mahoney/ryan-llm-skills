@@ -28,22 +28,26 @@ project context and consequential decisions → architecture → optional critiq
 → step implementation → independent branch refinement → work tour → PR publication
 ```
 
-`spec-run` ends after step execution and pre-audit evidence assembly. The orchestrator
-runs `spec-branch-refine max-iterations=2`: review → fix → review → fix, stopping early
-when a review is clean. Resolved findings and passing checks at the cap complete the
+`spec-run` reviews each finished step in the background while the next step is built,
+and fixes those findings before the following step. It ends after the last step's review
+and fixes and pre-audit evidence assembly. The orchestrator then runs `spec-branch-refine`
+with one review → fix round when step reviews cover every step, or two otherwise, stopping
+early when a review is clean. The branch review reuses step reviews and covers unreviewed
+commits, cross-step contracts, duplication, and the final checks. Resolved findings and passing checks at the cap complete the
 stage with an explicit record that final fixes were not independently re-reviewed. `spec-work-tour` produces the final JSON/HTML verdict. The orchestrator invokes
 each stage separately; callers using the individual skills must make those handoffs themselves.
 See [the evidence audit guide](reviews.md) for artifact paths and proof requirements.
 
 ## Test Scheduling
 
-Implementation steps write regression tests without running automated tests, including
-focused tests. They start the isolated local app, check readiness and the changed path,
-and inspect runtime errors. Non-app work uses a minimal entrypoint or static inspection.
-Visual steps retain rendered inspection. Automated gates stay pending until review.
+Implementation steps write or update tests for the changed behavior and run the affected
+unit tests and focused integration checks. A failed focused check is a failure to fix or
+record as a checkpoint, not a deferred pass. Steps use a local smoke check only for runtime
+evidence the focused tests do not establish, and visual steps keep rendered inspection.
+Broad regression suites stay pending until review.
 
-Review runs the required tests against the integrated branch, combining overlapping
-commands and reusing valid results after fixes. Commands have finite wall-clock limits:
+Review runs the required full suites and gates against the integrated branch, combining
+overlapping commands and reusing valid results after fixes. Commands have finite wall-clock limits:
 120 seconds by default for focused checks, with a justified longer limit chosen before
 known slower suites or builds. A polling interval is not a timeout.
 
