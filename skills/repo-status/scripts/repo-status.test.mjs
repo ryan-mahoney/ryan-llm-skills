@@ -289,9 +289,21 @@ test("discovery: sibling worktrees share one outside-primary group, while clones
   assert.equal(grouped.worktrees.find((entry) => entry.path === stale).prunable, "gitdir file points to non-existent location");
   assert.equal(report.repos[1].path, clone);
   assert.equal(report.repos[2].path, submodule);
+  assert.deepEqual(report.repos[2].worktrees.map((entry) => entry.path), [submodule]);
+  const submoduleObserved = collectWorktree(report.repos[2].worktrees[0], { env });
+  assert.equal(submoduleObserved.state, "ok");
+  assert.equal(submoduleObserved.dirty, 0, "the discovered submodule path is a usable checkout");
   const calls = fs.readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
   assert.deepEqual(calls.filter((args) => args.includes("worktree")).map((args) => args[1]), [a, clone, submodule]);
   assert.equal(fs.existsSync(stale), false, "discovery never repairs a missing registered path");
+
+  const linkedSubmodule = path.join(root, "outside-submodule");
+  git(submodule, "worktree", "add", "--quiet", "-b", "linked-submodule", linkedSubmodule);
+  const linkedReport = discoverRepositories({ root: linkedSubmodule, depth: 0 }, { env });
+  assert.equal(linkedReport.incomplete, false, linkedReport.diagnostics.join("\n"));
+  assert.equal(linkedReport.repos[0].path, linkedSubmodule);
+  assert.deepEqual(linkedReport.repos[0].worktrees.map((entry) => entry.path), [linkedSubmodule, submodule],
+    "the main checkout resolves independently of the discovered linked checkout");
 });
 
 test("discovery: inspect explicit symlink and tmp roots, skip child aliases and exact excluded names", (t) => {

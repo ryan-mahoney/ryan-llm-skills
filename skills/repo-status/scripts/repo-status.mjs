@@ -228,6 +228,19 @@ export function discoverRepositories(options, { env, deadline = Infinity, readDi
         if (!path.isAbsolute(entry.path)) throw new Error("nonabsolute worktree path");
         entry.path = path.normalize(entry.path);
         if (!hasBudget(entry.path)) continue;
+        // Git can report the main submodule's metadata directory as its path.
+        // Resolve that checkout from its common directory, even when discovery
+        // found only a linked checkout; linked and bare registry paths stay intact.
+        if (entry === repo.worktrees[0] && !entry.bare && entry.path === repo.commonDir) {
+          const checkout = runGit(repo.commonDir, ["rev-parse", "--show-toplevel"], { env, deadline });
+          if (checkout.kind !== "ok") {
+            gitFailure(entry.path, "main checkout", checkout);
+            continue;
+          }
+          entry.path = checkout.stdout.replace(/\n$/, "");
+          if (!path.isAbsolute(entry.path)) throw new Error("nonabsolute main checkout path");
+          if (!hasBudget(entry.path)) continue;
+        }
         try {
           entry.path = fs.realpathSync(entry.path);
         } catch (error) {
