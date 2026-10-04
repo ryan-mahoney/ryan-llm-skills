@@ -855,3 +855,216 @@ test("local CLI: importing with a non-file argv does not accidentally invoke or 
   assert.equal(result.stdout, "");
   assert.equal(result.stderr, "");
 });
+
+function ghFixture(t) {
+  const fixture = gitFixture(t);
+  const bin = path.join(fixture.root, "bin");
+  fs.mkdirSync(bin);
+  const log = path.join(fixture.root, "gh-calls.jsonl");
+  const data = path.join(fixture.root, "gh-responses.json");
+  const marker = path.join(fixture.root, "selection-complete");
+  const keys = ["GH_REPO", "GH_DEBUG", "GH_FORCE_TTY", "GH_HOST", "GH_PROMPT_DISABLED", "GH_NO_UPDATE_NOTIFIER",
+    "GH_NO_EXTENSION_UPDATE_NOTIFIER", "NO_COLOR", "CLICOLOR", "CLICOLOR_FORCE", "GIT_DIR", "GIT_WORK_TREE",
+    "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_PREFIX",
+    "GIT_NAMESPACE", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
+    "GIT_OPTIONAL_LOCKS", "GIT_NO_LAZY_FETCH", "LC_ALL"];
+  fs.writeFileSync(path.join(bin, "gh"), `#!${process.execPath}
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+const selection = args[0] === 'repo' && args[1] === 'view';
+const list = args[0] === 'pr' && args[1] === 'list';
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({args,cwd:process.cwd(),pid:process.pid,hasToken:!!process.env.GH_TOKEN,env:Object.fromEntries(${JSON.stringify(keys)}.filter(key=>key in process.env).map(key=>[key,process.env[key]]))})+'\\n');
+if (!selection && !list) process.exit(91);
+const response = JSON.parse(fs.readFileSync(${JSON.stringify(data)},'utf8'))[process.cwd()];
+if (!response) process.exit(92);
+const phase = selection ? 'selection' : 'list';
+if (list && response.waitList) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,1000);
+if (response[phase+'Exit']) {process.stderr.write('SENSITIVE_CREDENTIAL_DEBUG_SENTINEL');process.exit(response[phase+'Exit']);}
+process.stdout.write(response[phase+'Raw'] ?? JSON.stringify(selection ? response.identity : response.items));
+if (selection) fs.writeFileSync(${JSON.stringify(marker)},'done');
+`, { mode: 0o755 });
+  return { ...fixture, bin, marker, env: { ...fixture.env, PATH: bin + path.delimiter + fixture.env.PATH,
+    GH_CONFIG_DIR: path.join(fixture.root, "gh-config"), GH_TOKEN: "OFFLINE_AUTH_SENTINEL" },
+    respond: (responses) => fs.writeFileSync(data, JSON.stringify(responses)),
+    calls: () => fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n").map(JSON.parse) : [],
+  };
+}
+
+function prFixture(number, overrides = {}) {
+  return { number, url: `https://github.example/owner/project/pull/${number}`, title: `Change ${number}`,
+    headRefName: "feature", baseRefName: "main", headRepository: { id: "repo-id", name: "fork", nameWithOwner: "contributor/fork" },
+    headRepositoryOwner: { id: "owner-id", login: "contributor", name: "Contributor" }, isDraft: false,
+    mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", ...overrides };
+}
+
+const selectedIdentity = { nameWithOwner: "owner/project", url: "https://github.example/owner/project" };
+
+test("pull requests: ordinary CLI scopes two repositories explicitly, preserves uncertainty and sanitizes selection", (t) => {
+  const { root, env, init, git, respond, calls } = ghFixture(t);
+  const first = init(path.join(root, "first"), true);
+  const linked = path.join(root, "linked");
+  git(first, "worktree", "add", "--quiet", "-b", "linked", linked);
+  const second = init(path.join(root, "second"), true);
+  const title = "Pipe|\n# forged `code` <script> [click](url)\u001b";
+  respond({
+    [first]: { identity: selectedIdentity, items: [prFixture(11, { title, isDraft: true, mergeable: "UNKNOWN", mergeStateStatus: "BLOCKED" }),
+      prFixture(2, { mergeable: null, mergeStateStatus: null, headRepository: null, headRepositoryOwner: null })] },
+    [second]: { identity: { nameWithOwner: "other/repo", url: "https://github.com/other/repo" }, items: [] },
+  });
+  const result = runCli([root, "--depth", "1", "--prs"], { cwd: root, env: { ...env,
+    GH_REPO: "github.com/wrong/repo", GH_DEBUG: "api", GH_FORCE_TTY: "100%", CLICOLOR_FORCE: "1", GH_HOST: "github.example",
+    GIT_DIR: "/missing", GIT_WORK_TREE: "/missing", GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.fsmonitor", GIT_CONFIG_VALUE_0: "missing",
+  } });
+  assert.equal(result.kind, "ok", result.stderr);
+  assert.equal(result.stderr, "");
+  const visible = visibleReport(result.stdout);
+  assert.match(visible, /GitHub-selected repository: github.example\/owner\/project/);
+  assert.match(visible, /GitHub-selected repository: github.com\/other\/repo/);
+  assert.match(visible, /optional network observations through gh/);
+  assert.match(visible, /configured\/default checkout selection/);
+  assert.match(visible, /\| feature \| main \| contributor\/fork \| contributor \| true \| UNKNOWN \| BLOCKED \|/);
+  assert.match(visible, /\| feature \| main \| unknown \/ absent \| unknown \/ absent \| false \| unknown \/ absent \| unknown \/ absent \|/);
+  assert.ok(visible.indexOf("| 2 | https:") < visible.indexOf("| 11 | https:"));
+  assert.match(visible, /No open PRs/);
+  assert.doesNotMatch(result.stdout, /<script>|\u001b|\n# forged|`code`|\[click\]/);
+  assert.equal(result.stdout.split("\n").filter((line) => /^\| (2|11) \|/.test(line)).length, 2);
+  const observations = calls();
+  assert.equal(observations.length, 4, "one selection and one list per common-directory group");
+  for (const [offset, cwd, scope] of [[0, first, "github.example/owner/project"], [2, second, "github.com/other/repo"]]) {
+    assert.deepEqual(observations[offset].args, ["repo", "view", "--json", "nameWithOwner,url"]);
+    assert.deepEqual(observations[offset + 1].args, ["pr", "list", "--repo", scope, "--state", "open", "--limit", "101", "--json",
+      "number,url,title,headRefName,baseRefName,headRepository,headRepositoryOwner,isDraft,mergeable,mergeStateStatus"]);
+    for (const call of observations.slice(offset, offset + 2)) {
+      assert.equal(call.cwd, cwd);
+      assert.equal(call.hasToken, true, "authentication remains available without logging its value");
+      assert.deepEqual(call.env, { GH_HOST: "github.example", GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1",
+        GH_NO_EXTENSION_UPDATE_NOTIFIER: "1", NO_COLOR: "1", CLICOLOR: "0", GIT_OPTIONAL_LOCKS: "0", GIT_NO_LAZY_FETCH: "1", LC_ALL: "C" });
+    }
+  }
+  assert.doesNotMatch(result.stdout + result.stderr + JSON.stringify(observations), /OFFLINE_AUTH_SENTINEL|SENSITIVE_CREDENTIAL_DEBUG_SENTINEL/);
+});
+
+test("pull requests: cap sorts numeric rows before showing 100 and keeps additional observations incomplete", (t) => {
+  const { root, env, init, respond } = ghFixture(t);
+  const primary = init(path.join(root, "primary"), true);
+  respond({ [primary]: { identity: selectedIdentity, items: Array.from({ length: 101 }, (_, i) => prFixture(101 - i)) } });
+  const result = runCli([primary, "--prs"], { cwd: root, env });
+  assert.equal(result.kind, "ok", result.stderr);
+  const visible = visibleReport(result.stdout);
+  assert.match(visible, /PR collection: incomplete/);
+  assert.match(visible, /Showing 100; additional open PRs exist/);
+  const rows = visible.split("\n").filter((line) => /^\| [0-9]+ \|/.test(line));
+  assert.equal(rows.length, 100);
+  assert.match(rows[0], /^\| 1 \|/);
+  assert.match(rows[99], /^\| 100 \|/);
+  assert.doesNotMatch(visible, /\| 101 \|/);
+  assert.doesNotMatch(visible, /No open PRs/);
+  assert.match(visible, /Local collection complete/);
+  respond({ [primary]: { identity: selectedIdentity, items: Array.from({ length: 100 }, (_, i) => prFixture(i + 1)) } });
+  const exact = runCli([primary, "--prs"], { cwd: root, env });
+  assert.equal(exact.kind, "ok", exact.stderr);
+  assert.match(exact.stdout, /PR collection: complete/);
+  assert.doesNotMatch(exact.stdout, /additional open PRs exist|PR collection is incomplete/);
+});
+
+test("pull requests: invalid or ambiguous selection never guesses scope or invokes a list", (t) => {
+  const { root, env, init, respond, calls } = ghFixture(t);
+  const primary = init(path.join(root, "primary"), true);
+  const invalid = [null, [], [selectedIdentity], {}, { nameWithOwner: "a/b/c", url: "https://github.com/a/b/c" },
+    { ...selectedIdentity, url: "https://github.example/wrong/repo" }, { ...selectedIdentity, url: "https://secret@github.example/owner/project" },
+    { ...selectedIdentity, url: "http://github.example/owner/project" }, { ...selectedIdentity, url: "https://github.example/owner/project?token=secret" },
+    { ...selectedIdentity, url: "https://github.example/owner/project#fragment" },
+    { ...selectedIdentity, url: "https://github..example/owner/project" },
+    { ...selectedIdentity, url: "https://github.example/x/../owner/project" }];
+  for (const identity of invalid) {
+    const before = calls().length;
+    respond({ [primary]: { identity, items: [] } });
+    const result = runCli([primary, "--prs"], { cwd: root, env });
+    assert.equal(result.kind, "ok", JSON.stringify(identity));
+    assert.match(visibleReport(result.stdout), /PR collection: unavailable[\s\S]*invalid repository identity JSON/);
+    assert.doesNotMatch(result.stdout, /No open PRs|secret|wrong\/repo/);
+    assert.equal(calls().length, before + 1);
+  }
+});
+
+test("pull requests: malformed list JSON or records never become a successful empty list", (t) => {
+  const { root, env, init, respond } = ghFixture(t);
+  const primary = init(path.join(root, "primary"), true);
+  const missing = prFixture(1); delete missing.headRepository;
+  for (const value of ["{", "null", "{}", JSON.stringify([null]), JSON.stringify([missing]), JSON.stringify([prFixture(1, { number: "1" })]),
+    JSON.stringify([prFixture(1, { isDraft: "false" })]), JSON.stringify([prFixture(1, { headRepositoryOwner: {} })]),
+    JSON.stringify([prFixture(1, { mergeable: false })]), JSON.stringify([prFixture(1), prFixture(1)])]) {
+    respond({ [primary]: { identity: selectedIdentity, listRaw: value } });
+    const result = runCli([primary, "--prs"], { cwd: root, env });
+    assert.equal(result.kind, "ok", value);
+    const visible = visibleReport(result.stdout);
+    assert.match(visible, /GitHub-selected repository: github.example\/owner\/project/);
+    assert.match(visible, /PR collection: unavailable[\s\S]*invalid PR list JSON or schema/);
+    assert.doesNotMatch(visible, /No open PRs|\| 1 \| https:/);
+  }
+});
+
+test("pull requests: missing binary, auth and selection failures stay visible without changing local success", (t) => {
+  const { root, env, init, respond, bin, calls } = ghFixture(t);
+  const primary = init(path.join(root, "primary"), true);
+  for (const response of [{ selectionExit: 4 }, { selectionExit: 1 }, { selectionRaw: "{" }, { identity: selectedIdentity, listExit: 4 }]) {
+    const before = calls().length;
+    respond({ [primary]: response });
+    const result = runCli([primary, "--prs"], { cwd: root, env });
+    assert.equal(result.kind, "ok", result.stderr);
+    assert.match(result.stdout, /PR collection: unavailable/);
+    assert.match(result.stdout, /Local collection complete/);
+    assert.doesNotMatch(result.stdout + result.stderr, /No open PRs|SENSITIVE_CREDENTIAL_DEBUG_SENTINEL/);
+    assert.equal(calls().length, before + (response.listExit ? 2 : 1));
+    assert.match(visibleReport(result.stdout), response.selectionRaw ? /invalid repository identity JSON/ :
+      new RegExp(`GitHub ${response.listExit ? "PR list" : "selection"} failed \\(exit ${response.listExit ?? response.selectionExit}, signal null\\)`));
+  }
+  fs.rmSync(path.join(bin, "gh"));
+  const realGit = env.PATH.split(path.delimiter).map((dir) => path.join(dir, "git")).find((candidate) => fs.existsSync(candidate));
+  fs.symlinkSync(realGit, path.join(bin, "git"));
+  const missing = runCli([primary, "--prs"], { cwd: root, env: { ...env, PATH: bin } });
+  assert.equal(missing.kind, "ok", missing.stderr);
+  assert.match(visibleReport(missing.stdout), /GitHub selection unavailable \(exit null, signal null\)/);
+  const before = calls().length;
+  const local = runCli([primary], { cwd: root, env });
+  assert.equal(local.kind, "ok", local.stderr);
+  assert.equal(calls().length, before, "default invocation performs zero gh calls");
+  assert.doesNotMatch(local.stdout, /Open pull requests|GitHub-selected repository/);
+});
+
+test("pull requests: real gh timeout and expired allowance cross the ordinary CLI adapter and report", (t) => {
+  const { root, env, init, respond, calls, marker } = ghFixture(t);
+  const primary = init(path.join(root, "primary"), true);
+  const second = init(path.join(root, "second"), true);
+  respond({ [primary]: { identity: selectedIdentity, waitList: true, items: [] },
+    [second]: { identity: { nameWithOwner: "other/repo", url: "https://github.com/other/repo" }, items: [] } });
+  // The external clock leaves about 500ms after selection. The normal allowance
+  // and production adapters remain active; the fake final list really blocks.
+  const preload = `import fs from 'node:fs'; import {performance} from 'node:perf_hooks'; const now=performance.now.bind(performance); let previous=now(),offset; performance.now=()=>{const current=now();if(offset===undefined && fs.existsSync(${JSON.stringify(marker)})) offset=previous+29500-current; previous=current;return current+(offset??0);};`;
+  const result = runCli([root, "--depth", "1", "--prs"], { cwd: root, env, preload });
+  assert.equal(result.kind, "ok", result.stderr);
+  const visible = visibleReport(result.stdout);
+  assert.match(visible, /GitHub PR list timeout/);
+  assert.match(visible, /GitHub selection budget-exhausted/);
+  assert.doesNotMatch(visible, /No open PRs/);
+  assert.equal(calls().length, 2, "expired budget schedules no subsequent gh child");
+  assert.throws(() => process.kill(calls()[1].pid, 0), { code: "ESRCH" });
+});
+
+test("pull requests: available checkout selection survives a stale registry row and preserves local failure", (t) => {
+  const { root, env, init, git, respond, calls } = ghFixture(t);
+  const primary = init(path.join(root, "z-available"), true);
+  const stale = path.join(root, "a-stale");
+  git(primary, "worktree", "add", "--quiet", "-b", "stale", stale);
+  git(primary, "worktree", "lock", stale);
+  fs.rmSync(stale, { recursive: true });
+  respond({ [primary]: { identity: selectedIdentity, items: [] } });
+  const result = runCli([primary, "--prs"], { cwd: root, env });
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /Incomplete local collection/);
+  assert.match(result.stdout, /PR collection: complete[\s\S]*No open PRs/);
+  assert.match(visibleReport(result.stdout), /a-stale.*worktree status failed/);
+  assert.equal(calls().length, 2);
+  assert.ok(calls().every((call) => call.cwd === primary));
+  assert.equal(fs.existsSync(stale), false);
+});

@@ -383,6 +383,70 @@ export function collectLocal(options, { env, deadline = Infinity } = {}) {
   return report;
 }
 
+export function collectPullRequests(repo, { env = process.env, deadline } = {}) {
+  const observed = { repository: null, state: "unavailable", items: [], diagnostics: [] };
+  const unavailable = (operation, result) => {
+    observed.diagnostics.push(`${repo.path}: ${operation} ${result.kind} (exit ${result.status}, signal ${result.signal})`);
+    return observed;
+  };
+  const ghEnv = sanitizedGitEnv(env);
+  for (const key of ["GH_REPO", "GH_DEBUG", "GH_FORCE_TTY", "CLICOLOR_FORCE"]) delete ghEnv[key];
+  Object.assign(ghEnv, {
+    GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1",
+    GH_NO_EXTENSION_UPDATE_NOTIFIER: "1", NO_COLOR: "1", CLICOLOR: "0",
+  });
+  const checkout = repo.worktrees.find((entry) => !entry.bare && entry.state !== "unavailable");
+  if (!checkout) {
+    observed.diagnostics.push(`${repo.path}: GitHub selection unavailable: no available checkout`);
+    return observed;
+  }
+  const selection = runProcess("gh", ["repo", "view", "--json", "nameWithOwner,url"], {
+    cwd: checkout.path, env: ghEnv, deadline,
+  });
+  if (selection.kind !== "ok") return unavailable("GitHub selection", selection);
+  try {
+    const identity = JSON.parse(selection.stdout);
+    if (!identity || typeof identity !== "object" || Array.isArray(identity) ||
+      !/^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(identity.nameWithOwner) ||
+      typeof identity.url !== "string") throw new Error();
+    const url = new URL(identity.url);
+    if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash ||
+      !/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?::[0-9]+)?$/.test(url.host) ||
+      identity.url !== `https://${url.host}/${identity.nameWithOwner}`) throw new Error();
+    observed.repository = `${url.host}/${identity.nameWithOwner}`;
+  } catch {
+    observed.diagnostics.push(`${repo.path}: GitHub selection unavailable: invalid repository identity JSON`);
+    return observed;
+  }
+  const list = runProcess("gh", [
+    "pr", "list", "--repo", observed.repository, "--state", "open", "--limit", "101", "--json",
+    "number,url,title,headRefName,baseRefName,headRepository,headRepositoryOwner,isDraft,mergeable,mergeStateStatus",
+  ], { cwd: checkout.path, env: ghEnv, deadline });
+  if (list.kind !== "ok") return unavailable("GitHub PR list", list);
+  try {
+    const items = JSON.parse(list.stdout);
+    const numbers = new Set();
+    if (!Array.isArray(items) || items.length > 101) throw new Error();
+    for (const item of items) {
+      if (!item || typeof item !== "object" || Array.isArray(item) ||
+        !Number.isSafeInteger(item.number) || item.number <= 0 || numbers.has(item.number) ||
+        !["url", "title", "headRefName", "baseRefName"].every((key) => typeof item[key] === "string") ||
+        typeof item.isDraft !== "boolean" ||
+        !["mergeable", "mergeStateStatus"].every((key) => item[key] === null || typeof item[key] === "string") ||
+        !(item.headRepository === null || (item.headRepository && typeof item.headRepository === "object" &&
+          ["name", "nameWithOwner"].every((key) => typeof item.headRepository[key] === "string"))) ||
+        !(item.headRepositoryOwner === null || (item.headRepositoryOwner && typeof item.headRepositoryOwner === "object" &&
+          typeof item.headRepositoryOwner.login === "string"))) throw new Error();
+      numbers.add(item.number);
+    }
+    observed.items = items.toSorted((a, b) => a.number - b.number).slice(0, 100);
+    observed.state = items.length > 100 ? "incomplete" : "complete";
+  } catch {
+    observed.diagnostics.push(`${repo.path}: GitHub PR list unavailable: invalid PR list JSON or schema`);
+  }
+  return observed;
+}
+
 // Report fields and terminal diagnostics share visible, inert representations.
 // Numeric entities retain punctuation for readers without introducing Markdown syntax.
 function escapeReportText(value) {
@@ -429,6 +493,31 @@ export function formatMarkdown(report) {
     }
     if (!repo.worktrees.length) lines.push("", "Registered worktree observations unavailable; see diagnostics.");
     lines.push("");
+    if (report.prs) {
+      const prs = repo.prs;
+      lines.push("### Open pull requests", "",
+        `GitHub-selected repository: ${display(prs?.repository)}`,
+        "Provenance: optional network observations through gh; configured/default checkout selection.",
+        `PR collection: ${display(prs?.state ?? "unavailable")}.`, "");
+      if (prs?.state === "incomplete") lines.push("Showing 100; additional open PRs exist. PR collection is incomplete.", "");
+      if (prs?.state === "complete" && !prs.items.length) lines.push("No open PRs.", "");
+      if (!prs || prs.state === "unavailable") lines.push("Pull request facts unavailable; no empty-list or merge-readiness conclusion.", "");
+      if (prs?.items.length) {
+        lines.push("Mergeability and merge state are observed values; unknown values do not establish merge readiness.", "",
+          "| PR | URL | Title | Head branch | Base branch | Head repository | Head owner | Draft | Mergeability | Merge state |",
+          "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
+        for (const item of [...prs.items].sort((a, b) => a.number - b.number)) {
+          lines.push(`| ${[
+            item.number, item.url, item.title, item.headRefName, item.baseRefName,
+            item.headRepository?.nameWithOwner, item.headRepositoryOwner?.login,
+            item.isDraft, item.mergeable, item.mergeStateStatus,
+          ].map(display).join(" | ")} |`);
+        }
+        lines.push("");
+      }
+      for (const diagnostic of [...new Set(prs?.diagnostics ?? [])].sort(ordinal)) lines.push(`- ${display(diagnostic)}`);
+      lines.push("");
+    }
   }
   if (report.diagnostics.length) {
     lines.push("## Local diagnostics", "");
@@ -464,6 +553,10 @@ export function main(argv = process.argv.slice(2)) {
   }
   const started = performance.now();
   const report = collectLocal(options, { deadline: started + 30000 });
+  if (options.prs) {
+    const deadline = Math.min(performance.now() + 30000, started + 60000);
+    for (const repo of report.repos) repo.prs = collectPullRequests(repo, { deadline });
+  }
   process.stdout.write(formatMarkdown(report));
   if (report.incomplete) {
     process.stderr.write("repo-status: Incomplete local collection. Git must be available and affected paths readable.\n");
