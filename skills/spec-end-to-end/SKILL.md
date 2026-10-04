@@ -10,9 +10,13 @@ metadata:
 
 # Spec End To End
 
+Apply [Verification and Review](../../rules/verification-and-review.md) for CI/operator ownership
+and batched Jev verification/review-triage checkpoints.
+
 Own one continuous run from the user's goal to a published pull request. Compose the sibling spec
 skills; do not reimplement their stage logic. Continue autonomously until `spec-pr` returns a PR URL
-or a stage produces a concrete blocker. This workflow ends at publication; merge, deployment,
+with the requested readiness, or a stage produces a concrete blocker. An early draft starts
+CI but does not end the run. This workflow ends at publication; merge, deployment,
 and production verification remain separate actions under existing authority.
 
 ## Engineering Decision Handoffs
@@ -171,12 +175,18 @@ excluded by the routing policy above:
    commands a capable agent already knows how to run.
 5. Run `spec-run` from the implementation checkout. It owns prepared step implementation,
    per-step commits, background step reviews and the fixes between steps, evidence
-   production, and pre-audit merge-evidence assembly.
+   production, and pre-audit merge-evidence assembly. This run's PR scope authorizes early
+   draft publication at the first meaningful coherent checkpoint and subsequent useful pushes;
+   apply `spec-pr mode=draft` without waiting for final local regression or a ready tour.
 6. By default, run `spec-branch-refine max-iterations=1` when `spec-run` reports
    `step-review-coverage: complete`, and `max-iterations=2` otherwise. One round is a
    review and its fix, with no further review. The branch review reuses step reviews,
    so that round covers unreviewed commits, cross-step integration, duplication, and the
-   full test suite and gates. Honor an explicit user limit instead. Accept `proven`
+   required gates while reusing CI-owned broad-suite results. Collect relevant CI for the
+   final pushed commit before final readiness when CI is configured. Without CI, broad
+   testing is operator-managed outside agent evidence and does not block completion.
+   Do not duplicate broad suites locally.
+   Honor an explicit user limit instead. Accept `proven`
    or `verified-at-cap` only with the completion record and passing required evidence
    bound to current HEAD; preserve the final fixes' review status honestly. Carry the
    round budget through resumption, tour, and publication; downstream stages must not
@@ -184,7 +194,11 @@ excluded by the routing policy above:
 7. Run `spec-work-tour`. It owns the final JSON/HTML evidence and separate release states and must
    finish with merge `verdict: ready` bound to the same HEAD. Deployment readiness, authority,
    and post-deployment observations are separate; pending later-phase gates do not force execution.
-8. Run `spec-pr` from the same checkout and publish the pull request.
+8. Run `spec-pr mode=ready` from the same checkout to update the draft after final-commit
+   configured required CI passes and acceptance/review gaps close. Without CI, broad
+   operator testing remains outside recorded evidence and is not a completion blocker.
+   Preserve an explicit request for draft-only
+   publication; report its remaining readiness limits honestly.
 
 After every stage, check the returned outcome, required artifact existence, relevant
 revision bindings, unresolved decisions, and next stage. Inspect the declared

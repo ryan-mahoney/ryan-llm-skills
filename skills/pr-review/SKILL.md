@@ -12,11 +12,19 @@ metadata:
 
 # PR Review
 
+Read [Verification and Review](../../rules/verification-and-review.md). Apply Jev
+review-triage once to an actionable findings set before deciding repairs, and verification
+before expensive/repeated checks. Keep focused behavioral evidence and let CI own broad suites.
+
 If a PR number is provided ($ARGUMENTS), use that PR. Otherwise, use the PR associated with the current branch.
 
 1. Use `gh pr view` and `gh pr diff` to read the pull request description and code changes
 2. Review the changes for correctness, clarity, and adherence to `docs/engineering-standards.md`
 3. Submit review comments using `gh api` or `gh pr review` for specific lines or general feedback
-4. If any changes are needed and can be made directly, make the fixes, then conventional commit and push to the branch
+4. If any changes are needed and can be made directly, batch coherent fixes, run affected
+   focused checks, then conventional commit and push to the branch. Final merge-ready claims
+   require applicable configured CI on the final pushed SHA and closed acceptance/review
+   gaps. Without CI, broad operator testing stays outside agent evidence and does not block
+   completion or require a local full suite.
 
 Do not add Co-Authored-By trailers, "Generated with" footers, or any AI model attribution.

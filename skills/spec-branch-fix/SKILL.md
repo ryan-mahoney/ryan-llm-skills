@@ -14,6 +14,9 @@ metadata:
 
 # Spec Branch Fix
 
+Apply [Verification and Review](../../rules/verification-and-review.md) for CI/operator ownership
+and batched Jev verification/review-triage checkpoints.
+
 > **`.specs/` is standalone working state and is often gitignored.** Read and write it directly; do not depend on git history to recover it. Diffing implementation code is unaffected.
 
 Apply one iteration of the final branch review. `spec-branch-review` wrote
@@ -50,8 +53,9 @@ The loop driver decides whether another iteration runs.
 
 ## Autonomous Repair
 
-Read the sourced `context.md` and current project policy. Decide ordinary repairs from the
-review, diff and evidence. Route unresolved consequential choices as `decision-required` to the
+Read the sourced `context.md` and current project policy. Run Jev review-triage once for
+the actionable findings set before deciding fixes, dismissals, or deferrals. Decide ordinary
+repairs from the review, diff and evidence. Route unresolved consequential choices as `decision-required` to the
 coordinator (or handle the check-in when standalone); continue safe independent repairs. Do not
 change project constraints or perform external operations merely to close a finding. Stop dependent work for a consequential decision or required input that cannot be resolved;
 report the exact gap without discarding independent repairs.
@@ -164,8 +168,12 @@ If a finding's context is unclear, read the relevant source first.
 ## Verify
 
 Confirm actual targets/effects and authority. Apply the shared verification scheduling policy:
-run affected unit tests and the focused integration gates for changed boundaries. Broaden only
-for a named integration risk, shared dependency change, or project-required check; record why.
+run affected unit tests and the focused integration gates for changed boundaries. Apply Jev
+verification before expensive/repeated checks. Let configured CI own broad suites on
+authorized pushed fixes; without CI, leave broad testing operator-managed outside recorded
+evidence. This does not block completion or require a broad local run. A broad local
+diagnostic requires explicit user direction. Record actual results; pending configured
+required CI cannot be called passed.
 Reuse other valid results with their original revisions and applicability assessment. Tests are
 evidence, not an infallible oracle; confirm the fixed gate can reject its named failure
 hypothesis and update generated evidence artifacts honestly.

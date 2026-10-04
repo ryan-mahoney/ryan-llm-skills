@@ -9,6 +9,31 @@ People supply product decisions and review the evidence. Specs and code are writ
 agents. Each skill is a slash command defined in `skills/<name>/SKILL.md` using the Agent
 Skills format.
 
+## Verification across harnesses
+
+The shared [verification and review policy](rules/verification-and-review.md) uses focused
+local feedback and lets available CI own broad checks. Repository instructions supply the
+commands, required gates, and whether CI is usable. Without CI, broad testing remains
+operator-managed outside the agent's recorded evidence; it does not become a local agent
+obligation. Authorized draft PRs can start CI before final review and evidence are ready.
+
+The [Jev tool](scripts/jev/README.md) advises at two checkpoints: verification planning and
+review triage. Pi, Claude CLI, and Codex CLI use the same questions through its CLI or MCP
+interface. Unavailable or uncertain judgments return control to the agent under the same
+repository policy. Install its pinned dependencies with `npm ci --prefix scripts/jev`.
+
+`node scripts/verification/ci.mjs --repo /absolute/checkout` reads required PR checks and
+verifies the remote head matches the clean checkout. When a repository has no platform-required
+checks, its guidance must identify explicit gates using `--require 'Check name'`. Missing,
+skipped, stale, or pending required checks never produce a passing receipt. This checks CI
+status, not semantic coverage or overall merge readiness.
+
+`node scripts/verification/install-warden.mjs` installs a narrow local adapter in Pi's
+installed Warden package so it recognizes Elixir wrapper results and these CI receipts.
+It preserves the previous file as `done.js.project-verification-backup` and refuses an
+unrecognized classifier. Restart Pi afterward; package updates may require reapplying the
+adapter. This is a local integration patch, not an upstream Warden release.
+
 ## Spec-driven development
 
 ### Quick start
@@ -56,11 +81,12 @@ running stages individually, recovery, and harness setup.
 5. `spec-run` implements each step with its tests and evidence and commits it. After each
    step it starts a background review and fixes earlier findings before the next step.
 6. `spec-branch-refine` reviews the integrated branch: unreviewed commits, cross-step
-   contracts, duplication, the full test suite, and every gate. It runs one review-and-fix
+   contracts, duplication, applicable test evidence, and every gate. It runs one review-and-fix
    round by default when step reviews cover every step, otherwise two.
 7. `spec-work-tour` writes `work-tour.json` and a browser-ready `work-tour.html` for the
    final commit.
-8. `spec-pr` rebases, refreshes stale evidence, requires a ready tour, and publishes the PR.
+8. `spec-pr` supports an early authorized draft and a final ready candidate. The ready path
+   rebases, refreshes affected evidence, and requires a ready tour and applicable CI results.
 
 ### Artifacts
 

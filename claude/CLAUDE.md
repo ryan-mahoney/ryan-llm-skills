@@ -12,15 +12,16 @@ When starting work:
    - repository-local instructions (e.g. `AGENTS.md`)
    - `~/.agents/rules/*`
 
-## Rule Application Policy
-These files are design/copy guidance, not hard runtime constraints.
+## Design Rule Application Policy
+The design/copy files are advisory design guidance. Engineering, testing, and verification
+guides apply to their named tasks, including backend work; repository requirements prevail.
 
-Apply `~/.agents/rules/*` by default when work includes:
+Apply the design/copy guides in `~/.agents/rules/` by default when work includes:
 - UI layout, interaction patterns, components, or visual styling
 - UX writing, labels, CTA/button text, form content, and table presentation
 - Design system or frontend implementation decisions
 
-Do not force these rules when work is primarily:
+Do not force design/copy guidance when work is primarily:
 - backend logic, infrastructure, build tooling, tests, or data migrations
 - API correctness, security, or performance work with no user-facing design/copy impact
 
@@ -30,6 +31,13 @@ When multiple rules apply:
 1. Use the most specific rule for the element (e.g. CTA guide for buttons, form guide for forms).
 2. Use broader documents (e.g. `functionalist-design.md`) as tie-breakers.
 3. If still ambiguous, choose the option that is most predictable and easiest for users to complete tasks.
+
+## Verification and Review
+When implementing, running checks, addressing review findings, or publishing a PR, load
+`~/.agents/rules/verification-and-review.md`. Apply its CI-owned broad testing policy and
+explicit Jev verification and review-triage checkpoints. Without CI, broad testing stays
+operator-managed outside agent evidence and does not block completion. Preserve acceptance
+and known-failure obligations; configured required CI gates readiness, and publication needs authority.
 
 ## Spec Artifacts and Worktrees
 Keep all `.specs/` reads and writes in the primary repository checkout. Never copy

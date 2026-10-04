@@ -168,12 +168,16 @@ List only live invariants that the step establishes, consumes, or can violate th
 
 Apply the shared Verification Scheduling And Deadlines policy when assigning commands.
 Choose the strategy to fit the change. Cards retain exact focused commands and cases,
-with execution stages in Setup: affected unit tests during implementation, focused integration
-checks when a changed boundary is ready, and required broad suites once at branch completion.
+with execution stages in Setup: useful unit feedback for concrete implementation decisions/debugging,
+focused integration
+checks when a concrete acceptance/debugging decision needs them, and broad suites in
+configured CI on authorized pushed checkpoints and final HEAD. Without CI, broad testing
+is operator-managed outside agent evidence; do not make it a local-suite or completion gate.
 Name each integration case's distinct boundary failure; keep rule permutations in unit tests
 unless the boundary affects them. Include smoke procedures only for missing runtime evidence
 and preserve visual observations. EV owners produce test sources, focused results, and remaining
-handoffs; branch review consolidates valid results and executes outstanding final checks.
+handoffs; branch review consolidates valid focused/CI results and executes outstanding
+focused checks. Preserve exact CI command ownership and final-revision binding.
 Do not create an implementation step solely to repeat those checks.
 
 Read the strict card schema and strategy/command guidance in

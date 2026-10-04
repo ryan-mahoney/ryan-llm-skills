@@ -217,6 +217,9 @@ Copy phases, required flags, target/effects and authority from the evidence plan
 failed merge work to a later phase. Claim/gate links are reciprocal and same-phase. A proven claim
 requires at least one required gate and all its required gates passed at this commit.
 
+- Operator-managed broad testing is outside the required evidence graph and readiness
+  verdict; missing CI alone is not a blocking gap or a demand for local full-suite testing.
+  State its ownership without claiming an unseen pass.
 - `verdict: ready` requires all merge claims proven, required merge gates passed, no merge gaps,
   and a current independent audit pass. Later-phase pending gates are permitted.
 - `deployment.readiness`: `ready | blocked | not-assessed | not-applicable`. `ready` requires merge
@@ -279,7 +282,7 @@ Open the HTML in a browser and inspect it at desktop and narrow widths. For a vi
 
 ## Freshness Rule
 
-Any material context/authority change or code, test, migration, configuration, lockfile, or deployment-file change after the tour's evidence was assembled invalidates the tour. Re-run affected gates, re-run the branch audit when the integrated diff changed, update `work-tour.json`, and render again. `spec-pr` must compare the tour commit to the pushed HEAD and refuse publication when they differ.
+Any material context/authority change or code, test, migration, configuration, lockfile, or deployment-file change after the tour's evidence was assembled invalidates the tour. Re-run affected gates, re-run the branch audit when the integrated diff changed, update `work-tour.json`, and render again. `spec-pr` must compare the tour commit to the pushed HEAD and refuse ready status when they differ; an authorized draft may precede the ready tour.
 
 ## Output
 

@@ -121,8 +121,14 @@ Use when the test intentionally hits a real database.
    - Missing `deps` property that the subject expects
    - Mock return values that don't match the shape the subject reads
    - Async issues — ensure mocks return promises where the subject `await`s
-3. Run the full test suite to check for cross-file leaking: `bun test`
-4. If the full suite passes, the fix is complete.
+3. Apply [Verification and Review](../../rules/verification-and-review.md). Check cross-file
+   state leakage with the smallest relevant combined invocation, including a real neighboring
+   consumer when it resolves a concrete leakage/debugging question. Apply Jev before
+   expensive/repeated verification. Configured CI owns broad `bun test`; without CI,
+   broad testing stays operator-managed outside agent evidence. Run a broad local diagnostic
+   only when explicitly requested.
+4. Report actual focused results and configured CI honestly. Missing CI alone does not block
+   completion. A single-file pass alone does not prove cross-file isolation.
 
 ## Conventions
 

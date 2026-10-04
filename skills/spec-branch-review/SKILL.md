@@ -1,6 +1,6 @@
 ---
 name: spec-branch-review
-description: "Independently audit an implemented spec branch and its executable evidence. Use from spec-branch-refine or when asked to prove the integrated branch is correct, safe, and claim-complete before publication."
+description: "Independently audit an implemented spec branch and its executable evidence. Use from spec-branch-refine or when asked to prove the integrated branch is correct, safe, and claim-complete before ready status."
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -14,6 +14,9 @@ metadata:
 
 # Spec Branch Evidence Audit
 
+Apply [Verification and Review](../../rules/verification-and-review.md) for CI/operator ownership
+and batched Jev verification/review-triage checkpoints.
+
 > **`.specs/` is standalone working state and is often gitignored.** Read and write it directly; do not depend on git history to recover it. Diffing implementation code under review is unaffected.
 
 Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Independently audit the whole branch for correctness, integration, prepared-guardrail, and evidence-closure defects, then write the
@@ -21,7 +24,7 @@ findings to `reviews/branch-<iteration>-review.md`. This is the audit half of
 the branch evidence loop driven by `spec-branch-refine`: it finds bugs and invalid proof; its
 partner `spec-branch-fix` reads the file and applies fixes. This skill never edits
 code. Its stage owner must have command execution and write access to the canonical
-spec folder: it runs deferred verification, updates merge evidence, and writes the
+spec folder: it consumes CI and runs outstanding focused verification, updates merge evidence, and writes the
 review artifact. Check those capabilities before substantive work. A harness agent
 named "reviewer" may be analysis-only and therefore unsuitable as the stage owner.
 Report a capability mismatch immediately; do not complete a long analysis expecting
@@ -168,11 +171,14 @@ Pending gates and `readyForAudit: false` are expected inputs, not missing-input 
 stop. Assess whether recorded step or CI results remain applicable to the integrated branch,
 including relevant code, dependency, configuration, fixture, and environment changes.
 Preserve their observed revisions and explain reuse; do not relabel old executions.
-Before deciding the verdict, execute outstanding required merge gates under the shared
-Verification Scheduling And Deadlines policy. Deduplicate overlapping commands: one suite
-may cover several steps and gates; do not first run each covered file separately. Include
-required repository regression/static checks once with finite process-level deadlines.
-A named uncertainty may justify reproducing a check; a new reviewer alone does not.
+Before deciding the verdict, inspect required relevant CI for the final pushed SHA when
+publication is authorized and CI is configured. Consume those results for CI-owned gates.
+Without CI, broad testing stays operator-managed outside agent evidence, not a local suite
+or completion prerequisite. Apply Jev verification before expensive/repeated checks; run
+focused gates when they resolve concrete acceptance/debugging questions or known relevant
+failures. Deduplicate overlapping commands. A broad local diagnostic requires explicit user
+direction. Pending configured required CI remains pending evidence; do not invent a code
+defect or launch another suite solely because CI is still running.
 
 Capture exact commands, elapsed times, outcomes, environment, output artifacts, and HEAD.
 Update `merge-evidence.md` and `merge-evidence.json` atomically with actual gate results,
@@ -181,7 +187,7 @@ Set `readyForAudit: true` only after all required merge gates pass and later-pha
 are recorded. Test failures or unresolved timeouts produce actionable evidence findings
 for the existing fix loop. Test-source defects also go to that loop; do not edit code here.
 On subsequent reviews, reuse valid results and rerun only affected or unresolved checks,
-unless a concrete integration risk requires a broader rerun. Never report an unrun test
+with a broad local diagnostic only when explicitly requested. Never report an unrun test
 as passed or infer behavioral correctness solely from the step's startup smoke check.
 
 ### Executable-evidence lens (always runs)

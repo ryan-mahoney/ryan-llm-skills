@@ -114,8 +114,12 @@ several boundaries. Technical invariants deserve protection without being called
 ## Execution and completion
 
 Remove unused database, server, network, and fixture setup before removing valuable cases.
-Separate execution frequency from retention value. Run affected checks after edits and the
-repository's required completion checks. Do not repeat broad suites for each audit finding.
+Separate execution frequency from retention value. Apply
+[Verification and Review](verification-and-review.md), including its Jev checkpoints. Run
+focused checks after coherent edits when they inform a concrete decision or debugging.
+Let configured CI own broad suites; otherwise defer them to operator-managed testing outside
+agent evidence without blocking completion. Preserve acceptance and known-failure obligations.
+Do not repeat broad suites for each finding or claim unseen testing passed.
 
 Measure savings with comparable commands and environments. Record observed elapsed time,
 revision, result, and limits when reporting verification or savings. Do not infer runtime

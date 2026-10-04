@@ -12,6 +12,9 @@ metadata:
 
 # SpecOps Run Spec
 
+Apply [Verification and Review](../../rules/verification-and-review.md) for CI/operator ownership
+and batched Jev verification/review-triage checkpoints.
+
 Implement every step from a SpecOps implementation spec and establish deploy readiness without relying on human review or required manual QA. Read [the shared executable-evidence contract](../spec-work-tour/references/executable-evidence.md).
 
 Each step produces one coherent commit plus its owned EV gate results. After implementation, independently converge conformance, contract, real-seam integration, and behavioral-drift evidence. Every completed run emits a browser-ready work tour.
@@ -60,12 +63,18 @@ For each step, delegate when the harness supports it; otherwise implement direct
 
 1. Inspect the actual source and production composition before editing.
 2. Implement the smallest coherent outcome, adapting only when repository evidence demands it.
-3. Produce every owned gate using its exact command/environment/artifact, including real production composition and negative paths where specified.
+3. Produce owned focused gate results using exact command/environment/artifact, including
+   real production composition and negative paths where they close concrete acceptance or
+   debugging questions. Hand off configured CI-owned broad gates as pending; without CI,
+   broad operator testing stays outside agent evidence. Do not duplicate broad suites.
 4. For UI work, render and inspect required states/viewports/interactions, run accessibility gates, and retain sanitized QA captures/scenarios.
 5. Record an honest proof boundary for every gate and never call an unavailable, red, or stale gate passed.
 6. Return files, adaptations, commands/outcomes, artifacts, rejected hypotheses, QA inputs, and blockers without staging or committing.
 
-Allow one evidence-directed fix pass when implementation or a required gate fails. If still incomplete, preserve useful local diagnosis but do not commit a partial deploy candidate; write the blocker and stop.
+Apply Jev verification before expensive/repeated checks. Allow one evidence-directed fix
+pass when implementation or a required focused gate fails. If still incomplete, preserve useful
+local diagnosis but do not describe it as a deploy candidate; write the blocker and stop.
+Pending final CI alone does not block a coherent checkpoint commit.
 
 Inspect the diff, stage only the coherent step, and conventional-commit:
 
@@ -77,17 +86,33 @@ Apply the commit guidance in [Engineering Writing](../../rules/engineering-writi
 Keep the spec basename and step number in the step record; add a commit body only
 when useful rationale or a material limitation needs explanation.
 
-After the commit, write `steps/step-<NNN>.json` bound to its full SHA with changed files, AC/CL/FH/EV IDs, exact commands/outcomes, artifacts, environments, proof boundaries, adaptations, and QA inputs. Confirm the tree is clean before the next step.
+After the commit, write `steps/step-<NNN>.json` bound to its full SHA with changed files,
+AC/CL/FH/EV IDs, exact commands/outcomes, artifacts, environments, proof boundaries,
+adaptations, and QA inputs. Confirm the tree is clean before the next step. If the user's
+scope includes publication, push meaningful checkpoints and open/update an honest draft
+PR to start CI without waiting for final local regression. This skill alone grants no
+publication authority; a SpecOps draft uses its own evidence paths, not a fabricated
+standalone `.specs/` package.
 
 ## Converge Independent Evidence
 
 After all steps:
 
-1. Run `specops-contract-tests` for contract gates in the evidence plan. Required tests must execute and pass.
-2. Run `specops-integration-test` for normative live-path gates. Missing seams/infrastructure or failures block convergence.
+1. Use `specops-contract-tests` to close missing contract evidence. Reuse sufficient valid
+   existing results; required tests must execute and pass, locally for focused feedback or
+   in CI when CI owns the broad command.
+2. Use `specops-integration-test` to close normative live-path gaps. Reuse valid focused
+   evidence and CI-owned suite results; missing required seams/infrastructure or relevant
+   failures block convergence.
 3. Run `specops-implementation-drift` against the original analysis. It must bind current HEAD, have zero Critical/Important corrections, and show all required related EV gates passed. Cosmetic differences remain advisory.
 4. Re-run `specops-spec-conformance` when implementation discoveries changed spec or evidence meaning.
-5. Re-run affected gates after every correction. Repeat bounded correction/evidence cycles while each iteration makes material progress; default cap 10.
+5. Apply Jev review-triage once when an actionable findings set arrives. Batch coherent
+   corrections and re-run affected focused gates; push authorized checkpoints for broad CI.
+   Before remote readiness, require applicable required CI passing on the final pushed SHA.
+   Without CI, broad testing remains operator-managed outside agent evidence and does not
+   block completion or require local full-suite testing. Close unresolved acceptance/known-
+   failure gaps and bind actual focused evidence to the appropriate final revision. Repeat bounded
+   correction/evidence cycles while each iteration makes material progress; default cap 10.
 
 An implementer cannot self-approve a residual risk. Acceptance is valid only when the prepared evidence plan already records the bounded decision and the independent drift/conformance evidence confirms its boundary. At the cap or no progress, set the run blocked.
 
@@ -122,4 +147,5 @@ Write `run-manifest.json` last with spec/analysis/evidence-plan hashes, base/HEA
 
 Report step/commit outcomes; AC/CL/FH/EV counts and gaps; contract/integration/drift/conformance verdicts; correction iterations; QA scenario/capture counts; exact work-tour HTML/JSON paths and commit; deployment verdict, blockers, and residual risks.
 
-Do not open or merge a PR, add attribution, or describe a blocked run as complete.
+Open/update a draft only within the user's authorized publication scope. Never merge a PR
+or deploy implicitly, add attribution, or describe a blocked run as complete.

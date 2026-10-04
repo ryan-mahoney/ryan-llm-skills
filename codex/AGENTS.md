@@ -31,6 +31,13 @@ Do not force this guidance for:
 
 If guidance conflicts with correctness, security, accessibility, or maintainability, prioritize those qualities.
 
+## Verification and Review
+When implementing, running checks, addressing review findings, or publishing a PR, load
+`~/.agents/rules/verification-and-review.md`. Apply its CI-owned broad testing policy and
+explicit Jev verification and review-triage checkpoints. Without CI, broad testing stays
+operator-managed outside agent evidence and does not block completion. Preserve acceptance
+and known-failure obligations; configured required CI gates readiness, and publication needs authority.
+
 ## Test Guidance
 When creating, changing, reviewing, or removing tests, load
 `~/.agents/rules/unit-testing.md`. Apply its value rubric and preservation rules

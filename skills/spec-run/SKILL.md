@@ -14,6 +14,9 @@ metadata:
 
 # Spec Run
 
+Apply [Verification and Review](../../rules/verification-and-review.md) for CI/operator ownership
+and batched Jev verification/review-triage checkpoints.
+
 Execute the package produced by `spec-write` within its sourced context and authority. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Preparation is immutable intent and evidence provenance; implementation may adapt to repository reality, but it may not execute against stale or mismatched prepared inputs.
 
 Run steps sequentially. Dispatch one dedicated implementation agent per step when the harness supports subagents; otherwise follow `spec-step-run` directly for one step at a time. Do not batch steps or commits.
@@ -59,7 +62,9 @@ Repeat validation before every step dispatch. A missing, invalid, stale, incompl
 Keep prepared subspecs immutable as historical inputs. Neither the orchestrator nor an implementation agent rewrites them during execution, but expected targets and edit sequence may adapt within the sourced context and applicable
 acceptance obligations. Changed intent or proof requires correction and re-preparation.
 
-Do not invoke a separate planner or judge. Step reviews and fixes run outside the step worker under [Background Step Review](#background-step-review); they do not change what a worker does. Let `spec-step-run` use repository evidence and best engineering judgment to add files, tests, commands, repairs, integration work, or work expected in a later step when that produces a more coherent outcome. Ordinary implementation departures belong in the learning. Consequential context, authority,
+Do not invoke a separate planner or implementation judge. The shared Jev checkpoints
+are advisory scheduling/triage calls and are permitted; they neither plan the step nor
+replace its independent review. Step reviews and fixes run outside the step worker under [Background Step Review](#background-step-review); they do not change what a worker does. Let `spec-step-run` use repository evidence and best engineering judgment to add files, tests, commands, repairs, integration work, or work expected in a later step when that produces a more coherent outcome. Ordinary implementation departures belong in the learning. Consequential context, authority,
 or risk changes return to the coordinator as `decision-required`; resolve them under the shared
 contract before dependent work and re-prepare when intent or proof changes.
 
@@ -71,7 +76,10 @@ For each indexed step in ascending order:
 2. Run any pending step fixes and wait for them to finish (see Background Step Review).
 3. Provide the absolute code checkout, canonical target subspec path, owning skill path, and any routed message paths or new run-wide constraints. The worker resolves the step and package from the subspec and scans prior learnings plus completed step review/fix records under `spec-step-run`. Do not restate the technical brief or curate a parallel copy of the requirements.
 4. Require the agent to read and follow `~/.agents/skills/spec-step-run/SKILL.md` in full.
-5. Wait for that step to produce a learning and any reviewable commit. Run mechanical verification, launch the background review for the new commits, and continue.
+5. Wait for that step to produce a learning and any reviewable commit. Run mechanical verification,
+   launch the background review for the new commits, and continue. When publication is already
+   authorized, push meaningful coherent checkpoints and create/update a draft through
+   `spec-pr mode=draft` so CI runs alongside the remaining work. Otherwise retain them locally.
 
 The worker reads risk lenses from the card and applies the execution-time boundary expansion and pre-commit risk audit from `spec-step-run`; do not duplicate those instructions in the dispatch. When the harness exposes a reasoning-effort control, prefer elevated reasoning for `persistence-integrity`, `atomic-publication`, `concurrency`, `lease-or-refcount`, `cancellation`, `cross-step-contract`, and `security-boundary`; the absence of such a control does not block execution.
 
@@ -99,7 +107,7 @@ missing or contradictory records; leave substantive correctness to branch review
 8. Runtime-facing steps include a complete production-reachability summary: entrypoint/composition owner, concrete internal adapter, real downstream contract, and focused path observation, including applicable ordinary-entry evidence without test-only prerequisites.
 9. An implementation-complete outcome does not contradict its own discrepancies/risks by describing required production wiring, an internal adapter, a downstream contract, or the promised user-observable path as absent, fake-only, deferred, or unreachable.
 10. Steps whose card carries `Evidence:` lines produced each merge artifact — in the commit or under `.specs/<feature>/evidence/` — or truthfully
-   recorded the gap. Automated execution artifacts deferred to branch review are expected
+   recorded the gap. Automated execution artifacts deferred to CI or branch review are expected
    pending handoffs and do not alone require checkpoint. Later-phase gates have concrete procedures/handoffs and honest statuses. Safe isolated
    pre-deploy checks may run; live operations awaiting a release or authority stay `pending`.
 
@@ -134,7 +142,9 @@ so the next step worker can edit the checkout while it runs. Reviews may overlap
 of its file: verdict, actionable count, and signatures. Do not read its prose or copy
 findings into prompts. Record the run ID, range, and verdict in the ledger.
 
-**Fix between steps.** Before dispatching the next step, take each completed step review
+**Fix between steps.** The fix owner applies Jev review-triage once to each actionable
+findings set before deciding repairs; the coordinator does not duplicate that call.
+Before dispatching the next step, take each completed step review
 with `verdict: needs-fix` and no `step-<NNN>-fix.md`, oldest first. Run
 `spec-branch-fix review=<spec-dir>/reviews/step-<NNN>-review.md` and wait for it to
 finish. Only one agent writes to the checkout at a time, so never run a fixer alongside a
@@ -169,8 +179,9 @@ After all indexed steps have run and the step reviews and fixes have finished, m
 Assemble focused results and remaining automated commands, test files, setup, expected
 results, and output paths for branch review, deduplicating shared commands. Preserve the
 observed revisions and assess applicability after later changes. Do not duplicate worker
-checks in this coordinator or dispatch a final testing step; branch review owns outstanding
-final checks. Keep actual automated/smoke results distinct from unexecuted gates.
+checks in this coordinator or dispatch a final testing step; configured CI owns broad
+checks, while absent CI leaves operator testing outside agent evidence without blocking
+completion. Branch review consumes actual results and closes focused acceptance/failure gaps. Keep actual automated/smoke results distinct from unexecuted gates.
 
 Then atomically write both `.specs/<feature>/merge-evidence.md` and version 2 `.specs/<feature>/merge-evidence.json`. These are the pre-audit evidence assembly bound to the exact current HEAD; final readiness still requires independent branch audit/refinement and a work tour.
 

@@ -14,6 +14,9 @@ metadata:
 
 # Spec Step Run
 
+Apply [Verification and Review](../../rules/verification-and-review.md) for CI/operator ownership
+and batched Jev verification/review-triage checkpoints.
+
 Implement one step from the prepared package. This is a leaf implementation skill:
 do not spawn subagents, deliberately run the next indexed step, or perform the final
 branch evidence audit. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Work to the intended outcome even when repository evidence shows that
@@ -192,7 +195,7 @@ A deliberately library-only precursor may omit runtime reachability only when it
 
 ## Expand Risk-Directed Verification During Execution
 
-Read the prepared card's `Risk lenses` and `Live invariants` lines. Use them to strengthen assertions and add or update the nearest relevant tests for credible failures. Run affected unit tests and focused boundary checks under the shared scheduling policy; defer broad regression checks to completion. They guide vigilance; they are not scope limits or a demand to build abstractions merely to satisfy a label.
+Read the prepared card's `Risk lenses` and `Live invariants` lines. Use them to strengthen assertions and add or update the nearest relevant tests for credible failures. Run affected unit tests and focused boundary checks under the shared scheduling policy; defer broad regression checks to configured CI on authorized pushed checkpoints/final HEAD, or to operator-managed testing outside agent evidence when CI is absent. They guide vigilance; they are not scope limits or a demand to build abstractions merely to satisfy a label.
 
 Before implementation, privately map each applicable label to the smallest useful boundary checks:
 
@@ -308,10 +311,11 @@ does not replace behavioral, data, policy, or production-reachability gates.
 
 ## Run Focused Feedback
 
-Apply the shared Verification Scheduling And Deadlines policy. Write useful regression
-coverage and run affected unit tests during implementation. Run focused integration checks
-when the changed boundary is ready; select an affected browser journey only when browser
-behavior needs proof. Preserve exact commands and real outcomes. On older cards that defer
+Apply Jev verification once before expensive/repeated checks for a coherent revision and
+the shared Verification Scheduling And Deadlines policy. Write useful regression
+coverage and run focused checks when they inform concrete implementation/debugging
+choices or close unresolved acceptance questions. Select focused integration/browser checks
+for the specific boundary question; reuse sufficient valid evidence. Preserve exact commands and real outcomes. On older cards that defer
 all automation, record this scheduling adaptation without rewriting preparation. Never
 fabricate red/green evidence or turn every edit into a full-suite run.
 
@@ -383,7 +387,7 @@ commit when useful and authorized, but do not claim dependent obligations comple
 
 Use `checkpoint` when meaningful implementation, tests, reproduction evidence, or a
 concrete repair exists but implementation or required focused/visual/runtime verification
-remains incomplete. Final checks intentionally deferred to branch review alone do not require a checkpoint.
+remains incomplete. Final checks intentionally deferred to CI or branch review alone do not require a checkpoint.
 Use `no-artifact` only when no meaningful repository-local artifact could be produced.
 Never describe missing production reachability as complete, but do not discard or hide
 useful work because it is imperfect.
@@ -393,7 +397,8 @@ represents its outcome, required callbacks and production paths are observed whe
 claimed, resources and failure paths are handled as well as the current evidence allows,
 and any required final visual evidence reflects the current diff. Fix useful gaps and
 repeat only checks affected by those fixes. Reuse valid focused and smoke results; keep
-broad regression checks at the required completion gate. Stage the coherent repository-local implementation and test
+broad regression checks in configured CI or operator-managed outside agent evidence
+under the shared policy. Stage the coherent repository-local implementation and test
 artifact, excluding spec artifacts, ad hoc screenshots, and unrelated user changes, and
 make one conventional commit for `as-specified`, `adapted`, or `checkpoint`, except when repository
 policy requires generated output in a separate commit. In that case keep the same assigned step,

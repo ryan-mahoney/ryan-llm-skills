@@ -1,6 +1,6 @@
 ---
 name: spec-branch-refine
-description: "Run the final independent branch evidence loop: audit the integrated implementation and claim/gate evidence, fix defects, and repeat within a bounded number of review/fix rounds. Use after implementation and before the required work tour and PR."
+description: "Run the final independent branch evidence loop: audit the integrated implementation and claim/gate evidence, fix defects, and repeat within a bounded number of review/fix rounds. Use after implementation and before the ready work tour and final PR readiness."
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -13,6 +13,9 @@ metadata:
 ---
 
 # Spec Branch Refine
+
+Apply [Verification and Review](../../rules/verification-and-review.md) for CI/operator ownership
+and batched Jev verification/review-triage checkpoints.
 
 > **`.specs/` is standalone working state and is often gitignored.** Read and write it directly; do not depend on git history to recover it. Diffing implementation code is unaffected.
 
@@ -36,7 +39,7 @@ Run this skill once after the last implemented step. The
 review's bounded guardrail lens consumes only spec acceptance/step obligations,
 criteria `Statement:` values, and live invariants; those findings use the same loop
 and verdict as correctness findings. It is also the right standalone entry point for "clean up this
-branch before I open a PR."
+branch before I mark the PR ready."
 
 ## Routed Overseer Messages
 
@@ -91,9 +94,12 @@ without launching another review. A stale review after unrelated code changes is
 handoff gap, not permission to silently reset the budget. Then:
 
 1. **Review.** Run `spec-branch-review` for iteration `i` per its contract. The first
-   review consolidates valid focused results and owns outstanding final checks; pending
-   gates and `readyForAudit: false` are expected on entry. Let review execute remaining
-   checks rather than dispatching steps again or launching a duplicate test pass. It
+   review consolidates valid focused and final-commit CI results and owns outstanding
+   focused gates; pending gates and `readyForAudit: false` are expected on entry. Push
+   coherent revisions within authorized publication scope to start CI. Collect the relevant
+   existing configured required CI results before final readiness; avoid consuming another
+   review round merely to await them. Without CI, broad testing is operator-managed outside
+   agent evidence and creates no local-suite or completion prerequisite. Let review close actual evidence gaps without a duplicate broad pass. It
    writes `<spec-dir>/reviews/branch-<i>-review.md` and dedupes against prior
    dismissals itself.
 2. **Read the verdict.** Parse the review file's leading `review:` YAML block — the
@@ -116,12 +122,14 @@ handoff gap, not permission to silently reset the budget. Then:
      and the same bugs remain. An identical actionable set after a fix that *did* change
      code is **not** stalled — it gets another iteration, with the recurrence set
      terminalized (next bullet).
-5. **Fix.** Run `spec-branch-fix` for iteration `i`. Pass the **recurrence set** as a
+5. **Fix.** Run `spec-branch-fix` for iteration `i`; its owner performs Jev review-triage
+   once for this actionable findings set before choosing repairs or dispositions. Pass the **recurrence set** as a
    *terminalize* instruction: each of those signatures must reach a terminal state
    this iteration — resolved by a genuinely *different* change, or **dismissed** with a
    class — and may not be marked `fixed` again with the same approach. `spec-branch-fix`
    writes `branch-<i>-fix.md` (with `material_change`), applies fixes, runs tests, and
-   commits the code changes.
+   commits the code changes. Push coherent fixes within authorized publication scope so
+   CI runs on the new SHA; final readiness waits for its relevant required results.
    If correction changes a sourced obligation or evidence plan, return to its owning planner,
    re-prepare, and rerun only affected proof before the next audit. Do not escalate verification
    without a named remaining failure or use the loop to authorize live operations.
