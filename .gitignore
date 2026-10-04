@@ -3,3 +3,4 @@ dist/
 tmp/
 .specs/
 research/
+node_modules/
