@@ -4,8 +4,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { fileURLToPath } from "node:url";
 
-import { parseArgs, runProcess, runGit, parseWorktrees, discoverRepositories, parseStatus, collectWorktree } from "./repo-status.mjs";
+import { parseArgs, runProcess, runGit, parseWorktrees, discoverRepositories, parseStatus, collectWorktree, collectLocal, formatMarkdown } from "./repo-status.mjs";
+
+const scriptPath = fileURLToPath(new URL("./repo-status.mjs", import.meta.url));
 
 function temporaryDirectory(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "repo-status-"));
@@ -542,4 +545,313 @@ test("facts: failed upstream reads preserve known dirtiness and never masquerade
   assert.equal(exhausted.state, "unavailable");
   assert.equal(exhausted.dirty, null);
   assert.match(exhausted.diagnostics[0], /budget-exhausted/);
+});
+
+function runCli(args, { cwd, env, preload } = {}) {
+  return runProcess(process.execPath, [
+    ...(preload ? ["--import", `data:text/javascript,${encodeURIComponent(preload)}`] : []), scriptPath, ...args,
+  ], { cwd, env, childLimitMs: 10000 });
+}
+
+// Decode only in assertion views; raw-output assertions below protect inert markup.
+function visibleReport(text) {
+  return text.replace(/&#([0-9]+);/g, (_, number) => String.fromCharCode(Number(number)));
+}
+
+test("report: deterministic ordering, nullable facts and registry reasons survive inert escaping", () => {
+  const injection = "pipe|\n# heading `code` <script>alert(1)</script> [link](url) !*_\\\u001b\t";
+  const worktree = (checkout, branch) => ({
+    path: checkout, branch, head: "a".repeat(40), upstream: "origin/main", upstreamHead: "b".repeat(40),
+    ahead: 2, behind: 1, dirty: 4, state: "ok", diagnostics: ["z reason", "a reason"],
+    registry: { branch: "refs/heads/main", head: "a".repeat(40) }, locked: injection, prunable: "missing",
+  });
+  const report = {
+    root: injection, effectiveRoot: "/physical", depth: 2, prs: false, incomplete: true,
+    diagnostics: [injection, "z diagnostic", "a diagnostic"],
+    repos: [
+      { path: "/z", commonDir: "/z/.git", worktrees: [worktree("/z/b", injection), worktree("/z/a", "topic")] },
+      { path: "/a", commonDir: "/a/.git", worktrees: [{
+        ...worktree("/a/missing", null), head: null, upstream: null, upstreamHead: null,
+        ahead: null, behind: null, dirty: null, state: "unavailable", diagnostics: ["worktree status failed"],
+      }] },
+    ],
+  };
+  const output = formatMarkdown(report);
+  const reordered = { ...report, diagnostics: report.diagnostics.toReversed(), repos: report.repos.toReversed().map((repo) => ({
+    ...repo, worktrees: repo.worktrees.toReversed().map((entry) => ({ ...entry, diagnostics: entry.diagnostics.toReversed() })),
+  })) };
+  assert.equal(formatMarkdown(reordered), output);
+  assert.ok(output.indexOf("## /a") < output.indexOf("## /z"));
+  assert.ok(output.indexOf("| /z/a") < output.indexOf("| /z/b"));
+  const rows = output.split("\n").filter((line) => line.startsWith("| ") && !line.startsWith("| ---") && !line.startsWith("| Worktree"));
+  assert.equal(rows.length, 3);
+  for (const row of rows) assert.equal(row.split("|").length, 12, "dynamic data cannot introduce a cell");
+  assert.equal(output.split("\n").filter((line) => line.startsWith("# ")).length, 1);
+  assert.doesNotMatch(output, /<script>|`|\u001b|\t|\n# heading|\[link\]/);
+  assert.match(output, /&#124;.*&#92;n.*&#96;code&#96;.*&#60;script&#62;/);
+  assert.match(output, /&#92;u001b&#92;u0009/);
+  const visible = visibleReport(output);
+  assert.match(visible, /unknown \/ absent.*unavailable.*worktree status failed/);
+  assert.match(visible, /locked: pipe\|\\n# heading/);
+  assert.match(visible, /branch: refs\/heads\/main; HEAD: aaaaaaaaaaaa/);
+  assert.match(output, /Incomplete local collection/);
+  assert.match(output, /remote freshness unknown/);
+  assert.match(output, /sequential, not an atomic snapshot/);
+  assert.match(visible, /Excluded child directories: \.git, node_modules, dist, build, target, out, coverage, tmp/);
+});
+
+test("report: expired local budget emits unknown coverage without scheduling a child", (t) => {
+  const root = temporaryDirectory(t);
+  const marker = path.join(root, "invoked");
+  fs.writeFileSync(path.join(root, "git"), `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(marker)}, 'called');\n`, { mode: 0o755 });
+  const report = collectLocal({ root, depth: 2, prs: false }, { env: { ...process.env, PATH: root }, deadline: performance.now() - 1 });
+  assert.equal(report.incomplete, true);
+  assert.equal(report.repos.length, 0);
+  assert.equal(fs.existsSync(marker), false);
+  assert.match(visibleReport(formatMarkdown(report)), /Incomplete local collection[\s\S]*budget-exhausted/);
+});
+
+test("local CLI: help and invalid options invoke neither Git nor gh", (t) => {
+  const root = temporaryDirectory(t);
+  const marker = path.join(root, "invoked");
+  for (const name of ["git", "gh"]) fs.writeFileSync(path.join(root, name), `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(marker)}, 'called'); process.exit(9);\n`, { mode: 0o755 });
+  const env = { ...process.env, PATH: root };
+  const help = runCli(["--help"], { cwd: root, env });
+  assert.equal(help.kind, "ok", help.stderr);
+  assert.match(help.stdout, /discovery depth defaults to 0/);
+  assert.match(help.stdout, /all registered worktrees, even outside/);
+  assert.match(help.stdout, /unknown remote freshness/);
+  assert.match(help.stdout, /at most 100 displayed PRs/);
+  assert.equal(help.stderr, "");
+  for (const args of [["--depth", "-1"], ["--depth"], ["--unexpected"], ["a", "b"]]) {
+    const invalid = runCli(args, { cwd: root, env });
+    assert.equal(invalid.status, 1);
+    assert.equal(invalid.stdout, "");
+    assert.match(invalid.stderr, /repo-status:.*\nRun with --help/);
+  }
+  assert.equal(fs.existsSync(marker), false);
+});
+
+test("local CLI: ordinary repo/src invocation reports authored graph, all worktrees and identical reruns", (t) => {
+  const { root, env, git, init } = gitFixture(t);
+  const primary = init(path.join(root, "primary"), true);
+  const upstream = path.join(root, "outside-upstream");
+  git(primary, "worktree", "add", "--quiet", "-b", "upstream", upstream);
+  git(primary, "commit", "--quiet", "--allow-empty", "-m", "Main one");
+  git(primary, "commit", "--quiet", "--allow-empty", "-m", "Main two");
+  const mainHead = git(primary, "rev-parse", "HEAD").trim();
+  git(upstream, "commit", "--quiet", "--allow-empty", "-m", "Upstream one");
+  const upstreamHead = git(upstream, "rev-parse", "HEAD").trim();
+  git(primary, "branch", "--set-upstream-to=upstream", "main");
+  const src = path.join(primary, "src");
+  fs.mkdirSync(src);
+  fs.writeFileSync(path.join(src, "line\nbreak"), "one");
+  fs.writeFileSync(path.join(src, "two"), "two");
+  const first = runCli([], { cwd: src, env });
+  const second = runCli([], { cwd: src, env });
+  assert.equal(first.kind, "ok", first.stderr);
+  assert.equal(second.kind, "ok", second.stderr);
+  assert.equal(first.stdout, second.stdout);
+  assert.equal(first.stderr, "");
+  const visible = visibleReport(first.stdout);
+  assert.match(visible, new RegExp(`Requested root: ${src}`));
+  assert.match(visible, new RegExp(`Effective discovery root: ${src}`));
+  assert.match(visible, /Repositories: 1/);
+  assert.ok(visible.includes(`| ${primary} | main | ${mainHead.slice(0, 12)} | upstream | ${upstreamHead.slice(0, 12)} | 2 | 1 | 2 | ok |`));
+  assert.ok(visible.includes(`| ${upstream} | upstream | ${upstreamHead.slice(0, 12)} | unknown / absent | unknown / absent | unknown / absent | unknown / absent | 0 | no-upstream;`));
+  assert.match(visible, /local refs only; remote freshness unknown/);
+});
+
+test("local CLI: normal lifecycle absences retain dirtiness and exit zero", (t) => {
+  const { root, env, git, init } = gitFixture(t);
+  const primary = init(path.join(root, "primary"), true);
+  const unborn = init(path.join(root, "unborn"));
+  fs.writeFileSync(path.join(unborn, "one"), "one");
+  const detached = path.join(root, "detached");
+  git(primary, "worktree", "add", "--quiet", "--detach", detached);
+  const missing = path.join(root, "missing-upstream");
+  git(primary, "worktree", "add", "--quiet", "-b", "missing-upstream", missing);
+  git(primary, "config", "branch.missing-upstream.remote", ".");
+  git(primary, "config", "branch.missing-upstream.merge", "refs/heads/absent");
+  fs.writeFileSync(path.join(missing, "one"), "one");
+  const result = runCli([root, "--depth", "1"], { cwd: root, env });
+  assert.equal(result.kind, "ok", result.stderr);
+  assert.equal(result.stderr, "");
+  const visible = visibleReport(result.stdout);
+  for (const state of ["no-upstream", "unborn", "detached", "upstream-unavailable"]) assert.ok(visible.includes(state), state);
+  assert.ok(visible.includes(`| ${unborn} | main | unknown / absent | unknown / absent | unknown / absent | unknown / absent | unknown / absent | 1 | unborn;`));
+  assert.ok(visible.includes(`| ${missing} | missing-upstream |`));
+  assert.match(visible, /unknown \/ absent \| unknown \/ absent \| unknown \/ absent \| 1 \| upstream-unavailable;/);
+});
+
+function metadataSnapshot(repo) {
+  const gitDir = path.join(repo, ".git");
+  const names = ["index", "HEAD", "config", "packed-refs"];
+  const pending = ["refs"];
+  while (pending.length) {
+    const relative = pending.pop();
+    const absolute = path.join(gitDir, relative);
+    if (!fs.existsSync(absolute)) continue;
+    if (fs.statSync(absolute).isDirectory()) {
+      for (const name of fs.readdirSync(absolute)) pending.push(path.join(relative, name));
+    } else names.push(relative);
+  }
+  return Object.fromEntries(names.sort().filter((name) => fs.existsSync(path.join(gitDir, name))).map((name) => {
+    const absolute = path.join(gitDir, name);
+    return [name, { bytes: fs.readFileSync(absolute).toString("hex"), mtimeNs: fs.statSync(absolute, { bigint: true }).mtimeNs }];
+  }));
+}
+
+test("local CLI: touched content leaves index, refs and config unchanged and default collection stays offline", (t) => {
+  const { root, env, git, init } = gitFixture(t);
+  const primary = init(path.join(root, "primary"));
+  const file = path.join(primary, "tracked");
+  fs.writeFileSync(file, "unchanged content\n");
+  git(primary, "add", "tracked");
+  git(primary, "commit", "--quiet", "-m", "Tracked fixture");
+  const fsmonitorMarker = path.join(root, "fsmonitor-ran");
+  const fsmonitor = path.join(root, "fsmonitor");
+  fs.writeFileSync(fsmonitor, `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(fsmonitorMarker)}, 'called');\n`, { mode: 0o755 });
+  git(primary, "config", "core.fsmonitor", fsmonitor);
+  const wrong = init(path.join(root, "wrong"), true);
+  fs.writeFileSync(path.join(wrong, "wrong-dirty"), "wrong");
+  const realGit = env.PATH.split(path.delimiter).map((dir) => path.join(dir, "git")).find((candidate) => fs.existsSync(candidate));
+  assert.ok(realGit, "Git prerequisite");
+  const bin = path.join(root, "bin");
+  fs.mkdirSync(bin);
+  const log = path.join(root, "git-calls.jsonl");
+  const ghMarker = path.join(root, "gh-ran");
+  fs.writeFileSync(path.join(bin, "gh"), `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(ghMarker)}, 'called'); process.exit(9);\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, "git"), `#!${process.execPath}\nconst fs=require('node:fs'); const args=process.argv.slice(2); fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({args,env:{GIT_OPTIONAL_LOCKS:process.env.GIT_OPTIONAL_LOCKS,GIT_NO_LAZY_FETCH:process.env.GIT_NO_LAZY_FETCH,LC_ALL:process.env.LC_ALL}})+'\\n'); if(args.some(arg => /^(fetch|push|pull|clone|ls-remote|remote-|upload-pack|receive-pack)$/.test(arg))) process.exit(91); const result=require('node:child_process').spawnSync(${JSON.stringify(realGit)},args,{stdio:'inherit'}); process.exit(result.status ?? 1);\n`, { mode: 0o755 });
+  // Capture after touching and before any status command could refresh the index.
+  const stat = fs.statSync(file);
+  fs.utimesSync(file, stat.atime, new Date(stat.mtimeMs + 60000));
+  const before = metadataSnapshot(primary);
+  const injected = {
+    ...env, PATH: bin + path.delimiter + env.PATH,
+    GIT_DIR: path.join(wrong, ".git"), GIT_WORK_TREE: wrong, GIT_COMMON_DIR: path.join(wrong, ".git"),
+    GIT_INDEX_FILE: path.join(wrong, ".git/index"), GIT_OBJECT_DIRECTORY: path.join(wrong, ".git/objects"),
+    GIT_ALTERNATE_OBJECT_DIRECTORIES: path.join(wrong, ".git/objects"), GIT_PREFIX: "wrong/", GIT_NAMESPACE: "wrong",
+    GIT_CONFIG_PARAMETERS: "'core.fsmonitor'='wrong'", GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "core.fsmonitor", GIT_CONFIG_VALUE_0: "wrong",
+  };
+  const result = runCli([primary], { cwd: root, env: injected });
+  assert.equal(result.kind, "ok", result.stderr);
+  assert.deepEqual(metadataSnapshot(primary), before);
+  const visible = visibleReport(result.stdout);
+  assert.ok(visible.includes(`| ${primary} | main |`));
+  assert.match(visible, /\| 0 \| no-upstream;/);
+  assert.ok(!visible.includes(wrong));
+  assert.equal(fs.existsSync(fsmonitorMarker), false);
+  assert.equal(fs.existsSync(ghMarker), false);
+  const calls = fs.readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  assert.ok(calls.length > 0);
+  for (const call of calls) {
+    assert.deepEqual(call.env, { GIT_OPTIONAL_LOCKS: "0", GIT_NO_LAZY_FETCH: "1", LC_ALL: "C" });
+    assert.deepEqual(call.args.slice(0, 4), ["-C", primary, "-c", "core.fsmonitor=false"]);
+    assert.ok(!call.args.some((arg) => /^(fetch|push|pull|clone|ls-remote|remote-|upload-pack|receive-pack)$/.test(arg)));
+  }
+});
+
+test("local CLI: invalid root, no repositories and missing Git produce explicit nonzero coverage", (t) => {
+  const { root, env } = gitFixture(t);
+  for (const [args, expected] of [[[path.join(root, "absent")], /invalid root/], [[root], /no repositories discovered/]]) {
+    const result = runCli(args, { cwd: root, env });
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /Incomplete local collection/);
+    assert.match(visibleReport(result.stderr), expected);
+    assert.ok(visibleReport(result.stdout).includes(args[0]));
+  }
+  const unavailable = runCli([root], { cwd: root, env: { ...env, PATH: root } });
+  assert.equal(unavailable.status, 1);
+  assert.match(unavailable.stderr, /Git must be available/);
+  assert.match(unavailable.stdout, /unavailable/);
+});
+
+test("local CLI: stale rows and traversal failure retain independent known facts and affected paths", (t) => {
+  const { root, env, git, init } = gitFixture(t);
+  const good = init(path.join(root, "good"), true);
+  const stale = path.join(root, "stale");
+  git(good, "worktree", "add", "--quiet", "-b", "stale", stale);
+  git(good, "worktree", "lock", "--reason", "retain metadata", stale);
+  fs.rmSync(stale, { recursive: true });
+  const unreadable = init(path.join(root, "unreadable"), true);
+  const preload = `import fs from 'node:fs'; const read=fs.readdirSync; fs.readdirSync=function(dir,...args){if(dir===${JSON.stringify(unreadable)}) throw Object.assign(new Error('fixture EACCES'),{code:'EACCES'}); return read.call(this,dir,...args);};`;
+  const result = runCli([root, "--depth", "1"], { cwd: root, env, preload });
+  assert.equal(result.status, 1);
+  const visible = visibleReport(result.stdout);
+  assert.ok(visible.includes(`| ${good} | main |`));
+  assert.ok(visible.includes(`| ${stale} | unknown / absent | unknown / absent |`));
+  assert.match(visible, /locked: retain metadata/);
+  assert.match(visible, /branch: refs\/heads\/stale/);
+  assert.match(visible, /unavailable.*worktree status failed/);
+  assert.match(visible, /directory traversal failed: fixture EACCES/);
+  assert.ok(visibleReport(result.stderr).includes(stale));
+  assert.ok(visibleReport(result.stderr).includes(unreadable));
+  assert.equal(fs.existsSync(stale), false);
+});
+
+test("local CLI: required Git failure and output overflow retain unrelated rows without dumping stderr", (t) => {
+  const { root, env, git, init } = gitFixture(t);
+  const primary = init(path.join(root, "primary"), true);
+  const broken = path.join(root, "broken");
+  git(primary, "worktree", "add", "--quiet", "-b", "broken", broken);
+  const realGit = env.PATH.split(path.delimiter).map((dir) => path.join(dir, "git")).find((candidate) => fs.existsSync(candidate));
+  const bin = path.join(root, "bin");
+  fs.mkdirSync(bin);
+  for (const [mode, expected] of [["failure", /worktree status failed/], ["overflow", /worktree status output-limit/]]) {
+    fs.writeFileSync(path.join(bin, "git"), `#!${process.execPath}\nconst args=process.argv.slice(2); if(args[1]===${JSON.stringify(broken)} && args.includes('status')) { ${mode === "overflow" ? "require('node:fs').writeSync(1,Buffer.alloc(9*1024*1024,'x'));" : "process.stderr.write('SENSITIVE_REMOTE_DEBUG_SENTINEL'); process.exit(7);"} } else {const result=require('node:child_process').spawnSync(${JSON.stringify(realGit)},args,{stdio:'inherit'});process.exit(result.status ?? 1);}\n`, { mode: 0o755 });
+    const result = runCli([primary], { cwd: root, env: { ...env, PATH: bin + path.delimiter + env.PATH } });
+    assert.equal(result.status, 1);
+    const visible = visibleReport(result.stdout);
+    assert.match(visible, expected);
+    assert.ok(visible.includes(`| ${primary} | main |`));
+    assert.ok(visible.includes(`| ${broken} | unknown / absent | unknown / absent |`));
+    assert.doesNotMatch(result.stdout + result.stderr, /SENSITIVE_REMOTE_DEBUG_SENTINEL|x{100}/);
+    assert.ok(visibleReport(result.stderr).includes(broken));
+  }
+});
+
+test("local CLI: actual child timeout is presented under the default budget using a controlled external clock", (t) => {
+  const root = fs.realpathSync(temporaryDirectory(t));
+  fs.writeFileSync(path.join(root, ".git"), "fixture marker");
+  fs.writeFileSync(path.join(root, "git"), `#!${process.execPath}\nAtomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,1000);\n`, { mode: 0o755 });
+  // Only the external clock is controlled: main still initializes its ordinary
+  // 30-second allowance, leaving 50ms for a genuinely blocked child.
+  const preload = "import { performance } from 'node:perf_hooks'; const now=performance.now.bind(performance); let first=true; performance.now=()=>{ const value=now(); if(first){first=false; return value-29950;} return value; };";
+  const result = runCli([root], { cwd: root, env: { ...process.env, PATH: root }, preload });
+  assert.equal(result.status, 1);
+  assert.match(visibleReport(result.stdout), /Incomplete local collection[\s\S]*timeout/);
+  assert.match(visibleReport(result.stderr), /timeout/);
+  assert.ok(visibleReport(result.stderr).includes(root));
+  assert.doesNotMatch(result.stdout, /Local collection complete/);
+});
+
+test("local CLI: a failed upstream read keeps known branch and dirty facts", (t) => {
+  const { root, env, git, init } = gitFixture(t);
+  const primary = init(path.join(root, "primary"), true);
+  git(primary, "branch", "upstream");
+  git(primary, "branch", "--set-upstream-to=upstream", "main");
+  fs.writeFileSync(path.join(primary, "dirty"), "known dirtiness");
+  const head = git(primary, "rev-parse", "HEAD").trim();
+  const realGit = env.PATH.split(path.delimiter).map((dir) => path.join(dir, "git")).find((candidate) => fs.existsSync(candidate));
+  const bin = path.join(root, "bin");
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, "git"), `#!${process.execPath}\nconst args=process.argv.slice(2); if(args.includes('@{upstream}^{commit}')) {process.stderr.write('SENSITIVE_REMOTE_DEBUG_SENTINEL');process.exit(7);} const result=require('node:child_process').spawnSync(${JSON.stringify(realGit)},args,{stdio:'inherit'});process.exit(result.status ?? 1);\n`, { mode: 0o755 });
+  const result = runCli([primary], { cwd: root, env: { ...env, PATH: bin + path.delimiter + env.PATH } });
+  assert.equal(result.status, 1);
+  const visible = visibleReport(result.stdout);
+  assert.ok(visible.includes(`| ${primary} | main | ${head.slice(0, 12)} | upstream | unknown / absent | unknown / absent | unknown / absent | 1 | unavailable;`));
+  assert.match(visible, /upstream commit failed/);
+  assert.doesNotMatch(result.stdout + result.stderr, /SENSITIVE_REMOTE_DEBUG_SENTINEL/);
+});
+
+test("local CLI: importing with a non-file argv does not accidentally invoke or throw", (t) => {
+  const root = temporaryDirectory(t);
+  const result = runProcess(process.execPath, ["--input-type=module", "-e",
+    `await import(${JSON.stringify(new URL("./repo-status.mjs", import.meta.url).href)});`, "not-a-file",
+  ], { cwd: root, env: { ...process.env, PATH: root } });
+  assert.equal(result.kind, "ok", result.stderr);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
 });

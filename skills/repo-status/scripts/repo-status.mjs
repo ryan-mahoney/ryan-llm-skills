@@ -2,6 +2,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { spawnSync } from "node:child_process";
 import { performance } from "node:perf_hooks";
+import { fileURLToPath } from "node:url";
 
 export function parseArgs(argv, cwd = process.cwd()) {
   const options = { root: path.resolve(cwd), depth: 0, prs: false, help: false };
@@ -146,7 +147,7 @@ export function discoverRepositories(options, { env, deadline = Infinity, readDi
     return false;
   };
   const gitFailure = (dir, operation, result) => fail(
-    `${dir}: ${operation} ${result.kind}: ${result.stderr.trim() || result.error?.message || `exit ${result.status}, signal ${result.signal}`}`,
+    `${dir}: ${operation} ${result.kind} (exit ${result.status}, signal ${result.signal})`,
   );
   const addCandidate = (dir) => {
     if (candidates.has(dir) || !hasBudget(dir)) return;
@@ -362,4 +363,119 @@ export function collectWorktree(entry, { env, deadline } = {}) {
     }
   }
   return observed;
+}
+
+export function collectLocal(options, { env, deadline = Infinity } = {}) {
+  const report = { ...discoverRepositories(options, { env, deadline }), prs: options.prs };
+  for (const repo of report.repos) {
+    repo.worktrees = repo.worktrees.map((entry) => collectWorktree(entry, { env, deadline }));
+    for (const entry of repo.worktrees) {
+      if (entry.state === "unavailable") {
+        report.incomplete = true;
+        report.diagnostics.push(...entry.diagnostics);
+      }
+    }
+  }
+  if (performance.now() >= deadline) {
+    report.incomplete = true;
+    report.diagnostics.push(`${report.effectiveRoot ?? report.root}: local collection budget-exhausted`);
+  }
+  return report;
+}
+
+// Report fields and terminal diagnostics share visible, inert representations.
+// Numeric entities retain punctuation for readers without introducing Markdown syntax.
+function escapeReportText(value) {
+  return String(value).replace(/\r\n|\r|\n/g, "\\n")
+    .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g,
+      (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`)
+    .replace(/[&<>"'\\`|\[\]()_*#!{}.+\-~=]/g, (character) => `&#${character.charCodeAt(0)};`);
+}
+
+export function formatMarkdown(report) {
+  const ordinal = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+  const display = (value) => value === null || value === undefined ? "unknown / absent" : escapeReportText(value);
+  const oid = (value) => display(value?.slice(0, 12));
+  const lines = [
+    "# Repository status", "",
+    `Requested root: ${display(report.root)}`,
+    `Effective discovery root: ${display(report.effectiveRoot)}`,
+    `Discovery depth: ${display(report.depth)}`,
+    `Excluded child directories: ${DISCOVERY_EXCLUSIONS.map(escapeReportText).join(", ")}`,
+    `Repositories: ${report.repos.length}`,
+    "Worktree scope: all registered worktrees, including paths outside the discovery root and depth.",
+    "Comparison: local refs only; remote freshness unknown. No fetch is performed.",
+    "Observations are sequential, not an atomic snapshot.", "",
+    report.incomplete ? "**Incomplete local collection**" : "Local collection complete.", "",
+  ];
+  for (const repo of [...report.repos].sort((a, b) => ordinal(a.commonDir, b.commonDir))) {
+    lines.push(`## ${display(repo.path)}`, "", `Common Git directory: ${display(repo.commonDir)}`, "",
+      "| Worktree | Branch | HEAD | Upstream local ref | Upstream HEAD | Ahead | Behind | Dirty entries | State / reason | Registry metadata |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
+    for (const entry of [...repo.worktrees].sort((a, b) => ordinal(a.path, b.path))) {
+      const registry = entry.registry ?? entry;
+      const metadata = [
+        `branch: ${registry.branch ?? "absent"}`, `HEAD: ${registry.head?.slice(0, 12) ?? "absent"}`,
+        ...(entry.bare ? ["bare"] : []),
+        ...(entry.locked ? [`locked: ${entry.locked === true ? "yes" : entry.locked}`] : []),
+        ...(entry.prunable ? [`prunable: ${entry.prunable === true ? "yes" : entry.prunable}`] : []),
+      ].join("; ");
+      const reason = [entry.state, ...(entry.diagnostics ?? []).toSorted(ordinal)].join("; ");
+      lines.push(`| ${[
+        display(entry.path), display(entry.branch), oid(entry.head), display(entry.upstream),
+        oid(entry.upstreamHead), display(entry.ahead), display(entry.behind), display(entry.dirty),
+        display(reason), display(metadata),
+      ].join(" | ")} |`);
+    }
+    if (!repo.worktrees.length) lines.push("", "Registered worktree observations unavailable; see diagnostics.");
+    lines.push("");
+  }
+  if (report.diagnostics.length) {
+    lines.push("## Local diagnostics", "");
+    for (const diagnostic of [...new Set(report.diagnostics)].sort(ordinal)) lines.push(`- ${display(diagnostic)}`);
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+
+export function main(argv = process.argv.slice(2)) {
+  let options;
+  try {
+    options = parseArgs(argv);
+  } catch (error) {
+    process.stderr.write(`repo-status: ${escapeReportText(error.message)}\nRun with --help for usage.\n`);
+    process.exitCode = 1;
+    return;
+  }
+  if (options.help) {
+    process.stdout.write([
+      "Usage: node repo-status.mjs [root path] [--depth N] [--prs] [--help]",
+      "Root defaults to cwd; discovery depth defaults to 0 and accepts nonnegative decimal integers.",
+      "Discover the enclosing repository and nested repositories through depth N under the supplied root.",
+      `Skip child directories: ${DISCOVERY_EXCLUSIONS.join(", ")}. Child symlinks are skipped.`,
+      "Always include all registered worktrees, even outside the root and discovery depth.",
+      "Git is required for collection. Local refs have unknown remote freshness; no fetch is performed.",
+      "Default collection is local only. --prs opts into GitHub observations (at most 100 displayed PRs).",
+      "Local collection has a 30-second budget; each child has at most 10 seconds and 8 MiB output.",
+      "Failed local reads produce partial facts and nonzero exit; normal absent tracking remains successful.", "",
+    ].join("\n"));
+    process.exitCode = 0;
+    return;
+  }
+  const started = performance.now();
+  const report = collectLocal(options, { deadline: started + 30000 });
+  process.stdout.write(formatMarkdown(report));
+  if (report.incomplete) {
+    process.stderr.write("repo-status: Incomplete local collection. Git must be available and affected paths readable.\n");
+    for (const diagnostic of [...new Set(report.diagnostics)].sort()) {
+      process.stderr.write(`${escapeReportText(diagnostic)}\n`);
+    }
+  }
+  process.exitCode = report.incomplete ? 1 : 0;
+}
+
+// Node resolves module URLs physically, while argv can retain the installed symlink.
+if (process.argv[1] && fs.existsSync(process.argv[1]) &&
+  fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url))) {
+  main();
 }
