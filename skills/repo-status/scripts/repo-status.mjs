@@ -246,3 +246,107 @@ export function discoverRepositories(options, { env, deadline = Infinity, readDi
   report.diagnostics.sort(ordinal);
   return report;
 }
+
+export function parseStatus(text) {
+  if (!text.endsWith("\0")) throw new Error("unterminated status output");
+  const observed = { branch: null, head: null, upstream: null, ahead: null, behind: null, dirty: 0 };
+  const headers = new Set();
+  const records = text.slice(0, -1).split("\0");
+  for (let i = 0; i < records.length; i++) {
+    const record = records[i];
+    if (record.startsWith("# ")) {
+      const separator = record.indexOf(" ", 2);
+      const key = record.slice(2, separator);
+      const value = record.slice(separator + 1);
+      if (!["branch.oid", "branch.head", "branch.upstream", "branch.ab"].includes(key)) continue;
+      if (headers.has(key) || separator < 0 || !value) throw new Error("invalid branch header");
+      headers.add(key);
+      if (key === "branch.oid") {
+        if (value !== "(initial)" && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value)) throw new Error("invalid branch OID");
+        observed.head = value === "(initial)" ? null : value;
+      } else if (key === "branch.head") {
+        observed.branch = value === "(detached)" ? null : value;
+      } else if (key === "branch.upstream") {
+        observed.upstream = value;
+      } else {
+        const counts = /^\+([0-9]+) -([0-9]+)$/.exec(value);
+        if (!counts || !Number.isSafeInteger(Number(counts[1])) || !Number.isSafeInteger(Number(counts[2]))) {
+          throw new Error("invalid ahead/behind counts");
+        }
+        observed.ahead = Number(counts[1]);
+        observed.behind = Number(counts[2]);
+      }
+    } else if (/^1(?: [^ ]+){7} [\s\S]+$/.test(record) || /^u(?: [^ ]+){9} [\s\S]+$/.test(record)) {
+      observed.dirty++;
+    } else if (/^2(?: [^ ]+){8} [\s\S]+$/.test(record)) {
+      // The next NUL field is the source pathname, even if it resembles a header.
+      if (!records[++i]) throw new Error("missing rename source pathname");
+      observed.dirty++;
+    } else if (/^\? [\s\S]+$/.test(record)) {
+      observed.dirty++;
+    } else if (!/^! [\s\S]+$/.test(record)) {
+      throw new Error("invalid status record");
+    }
+  }
+  if (!headers.has("branch.oid") || !headers.has("branch.head") ||
+    (observed.ahead !== null && (!observed.head || !observed.upstream))) {
+    throw new Error("incomplete branch headers");
+  }
+  return observed;
+}
+
+export function collectWorktree(entry, { env, deadline } = {}) {
+  const observed = {
+    ...entry, registry: { ...entry }, branch: null, head: null, upstream: null,
+    upstreamHead: null, ahead: null, behind: null, dirty: null,
+    state: entry.bare ? "bare" : "unavailable", diagnostics: [],
+  };
+  if (entry.bare) {
+    observed.diagnostics.push(`${entry.path}: bare repository has no working-tree observations`);
+    return observed;
+  }
+  const failed = (operation, result) => {
+    observed.state = "unavailable";
+    observed.diagnostics.push(`${entry.path}: ${operation} ${result.kind} (exit ${result.status}, signal ${result.signal})`);
+  };
+  const status = runGit(entry.path, [
+    "status", "--porcelain=v2", "--branch", "--ahead-behind", "-z",
+    "--untracked-files=all", "--ignore-submodules=none", "--renames",
+  ], { env, deadline });
+  if (status.kind !== "ok") {
+    failed("worktree status", status);
+    return observed;
+  }
+  try {
+    Object.assign(observed, parseStatus(status.stdout));
+  } catch (error) {
+    observed.diagnostics.push(`${entry.path}: invalid worktree status: ${error.message}`);
+    return observed;
+  }
+  observed.state = !observed.head ? "unborn" : !observed.branch ? "detached" :
+    !observed.upstream ? "no-upstream" : "ok";
+  if (observed.state !== "ok") observed.diagnostics.push(`${entry.path}: ${observed.state}`);
+  if (!observed.upstream) return observed;
+
+  const upstream = runGit(entry.path, ["rev-parse", "--verify", "--quiet", "@{upstream}^{commit}"], { env, deadline });
+  if (upstream.kind === "failed" && upstream.status === 1 && !upstream.signal && !upstream.error &&
+    !upstream.stdout && !upstream.stderr) {
+    observed.ahead = observed.behind = null;
+    if (observed.state === "ok") observed.state = "upstream-unavailable";
+    observed.diagnostics.push(`${entry.path}: upstream local ref unavailable: ${observed.upstream}`);
+  } else if (upstream.kind !== "ok") {
+    observed.ahead = observed.behind = null;
+    failed("upstream commit", upstream);
+  } else {
+    const oid = upstream.stdout.replace(/\n$/, "");
+    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(oid) ||
+      (observed.state === "ok" && (observed.ahead === null || observed.behind === null))) {
+      observed.ahead = observed.behind = null;
+      observed.state = "unavailable";
+      observed.diagnostics.push(`${entry.path}: invalid upstream commit or missing divergence counts`);
+    } else {
+      observed.upstreamHead = oid;
+    }
+  }
+  return observed;
+}

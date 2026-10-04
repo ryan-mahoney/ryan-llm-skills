@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 
-import { parseArgs, runProcess, runGit, parseWorktrees, discoverRepositories } from "./repo-status.mjs";
+import { parseArgs, runProcess, runGit, parseWorktrees, discoverRepositories, parseStatus, collectWorktree } from "./repo-status.mjs";
 
 function temporaryDirectory(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "repo-status-"));
@@ -361,5 +361,173 @@ test("discovery: invalid roots, empty scans, missing Git and exhausted budgets s
   });
   assert.equal(exhausted.incomplete, true);
   assert.equal(exhausted.repos.length, 0);
+  assert.match(exhausted.diagnostics[0], /budget-exhausted/);
+});
+
+test("facts: NUL records count renames, newline paths, conflicts, submodules and individual untracked files once", () => {
+  const oid = "a".repeat(40);
+  const headers = [`# branch.oid ${oid}`, "# branch.head topic", "# branch.upstream origin/topic", "# branch.ab +2 -1"];
+  const changes = [
+    `1 .M N... 100644 100644 100644 ${oid} ${oid} line\nbreak`,
+    `2 R. N... 100644 100644 100644 ${oid} ${oid} R100 destination\0# branch.ab +99 -99`,
+    `u UU N... 100644 100644 100644 100644 ${oid} ${oid} ${oid} conflict`,
+    `1 .M SCMU 160000 160000 160000 ${oid} ${oid} submodule`,
+    "? directory/one", "? directory/two", "! ignored\nfile",
+  ];
+  const expected = { branch: "topic", head: oid, upstream: "origin/topic", ahead: 2, behind: 1, dirty: 6 };
+  assert.deepEqual(parseStatus([...headers, ...changes, ""].join("\0")), expected);
+  assert.deepEqual(parseStatus([...headers.toReversed(), "# future.extension ignored", ...changes.toReversed(), ""].join("\0")), expected);
+  assert.deepEqual(parseStatus(`# branch.head sha256\0# branch.oid ${"b".repeat(64)}\0`), {
+    branch: "sha256", head: "b".repeat(64), upstream: null, ahead: null, behind: null, dirty: 0,
+  });
+});
+
+test("facts: malformed or truncated status cannot become known clean counts", () => {
+  const headers = `# branch.oid ${"a".repeat(40)}\0# branch.head main\0`;
+  for (const text of [
+    "", headers.slice(0, -1), "# branch.head main\0", "# branch.oid invalid\0# branch.head main\0",
+    `${headers}# branch.head duplicate\0`, `${headers}# branch.ab +x -1\0`,
+    `${headers}# branch.upstream origin/main\0# branch.ab +9007199254740992 -0\0`,
+    `${headers}# branch.ab +0 -0\0`, `${headers}1 incomplete\0`, `${headers}? \0`,
+    `${headers}2 R. N... 100644 100644 100644 ${"a".repeat(40)} ${"a".repeat(40)} R100 dest\0`,
+    `${headers}unknown record\0`,
+  ]) assert.throws(() => parseStatus(text), Error, JSON.stringify(text));
+});
+
+test("facts: real Git preserves each worktree upstream and authored divergence despite hidden untracked configuration", (t) => {
+  const { root, env, git, init } = gitFixture(t);
+  const primary = init(path.join(root, "primary"));
+  fs.writeFileSync(path.join(primary, "old-name"), "tracked rename contents\n");
+  fs.writeFileSync(path.join(primary, "line\nbreak"), "original\n");
+  git(primary, "add", "--all");
+  git(primary, "commit", "--quiet", "-m", "Shared base");
+  // Authored graph: main has two descendants of base; upstream has one.
+  const upstreamPath = path.join(root, "upstream");
+  git(primary, "worktree", "add", "--quiet", "-b", "upstream", upstreamPath);
+  git(primary, "commit", "--quiet", "--allow-empty", "-m", "Main one");
+  git(primary, "commit", "--quiet", "--allow-empty", "-m", "Main two");
+  const mainHead = git(primary, "rev-parse", "HEAD").trim();
+  git(upstreamPath, "commit", "--quiet", "--allow-empty", "-m", "Upstream one");
+  const upstreamHead = git(upstreamPath, "rev-parse", "HEAD").trim();
+  git(primary, "branch", "--set-upstream-to=upstream", "main");
+  const side = path.join(root, "side");
+  git(primary, "worktree", "add", "--quiet", "-b", "side", side, "main");
+  git(side, "commit", "--quiet", "--allow-empty", "-m", "Side one");
+  const sideHead = git(side, "rev-parse", "HEAD").trim();
+  git(side, "branch", "--set-upstream-to=main", "side");
+  git(primary, "config", "status.showUntrackedFiles", "no");
+  git(primary, "config", "status.renames", "false");
+  git(primary, "mv", "old-name", "new-name");
+  fs.writeFileSync(path.join(primary, "line\nbreak"), "changed\n");
+  fs.mkdirSync(path.join(primary, "untracked"));
+  fs.writeFileSync(path.join(primary, "untracked/one"), "one");
+  fs.writeFileSync(path.join(primary, "untracked/two"), "two");
+  fs.writeFileSync(path.join(primary, ".git/info/exclude"), "ignored\n");
+  fs.writeFileSync(path.join(primary, "ignored"), "ignored");
+  fs.writeFileSync(path.join(side, "side-untracked"), "side dirtiness");
+  const entries = discoverRepositories({ root: primary, depth: 0 }, { env }).repos[0].worktrees;
+
+  const main = collectWorktree(entries.find((entry) => entry.path === primary), { env });
+  assert.deepEqual({ branch: main.branch, head: main.head, upstream: main.upstream, upstreamHead: main.upstreamHead,
+    ahead: main.ahead, behind: main.behind, dirty: main.dirty, state: main.state, diagnostics: main.diagnostics }, {
+    branch: "main", head: mainHead, upstream: "upstream", upstreamHead, ahead: 2, behind: 1, dirty: 4, state: "ok", diagnostics: [],
+  });
+  assert.deepEqual(main.registry, entries.find((entry) => entry.path === primary));
+  const sideObserved = collectWorktree(entries.find((entry) => entry.path === side), { env });
+  assert.deepEqual({ branch: sideObserved.branch, head: sideObserved.head, upstream: sideObserved.upstream,
+    upstreamHead: sideObserved.upstreamHead, ahead: sideObserved.ahead, behind: sideObserved.behind,
+    dirty: sideObserved.dirty, state: sideObserved.state }, {
+    branch: "side", head: sideHead, upstream: "main", upstreamHead: mainHead,
+    ahead: 1, behind: 0, dirty: 1, state: "ok",
+  });
+});
+
+test("facts: normal no-upstream, unborn, detached and missing-upstream states retain dirtiness", (t) => {
+  const { root, env, git, init } = gitFixture(t);
+  const primary = init(path.join(root, "primary"), true);
+  fs.writeFileSync(path.join(primary, "untracked"), "primary dirtiness");
+  const unborn = init(path.join(root, "unborn"));
+  fs.writeFileSync(path.join(unborn, "one"), "one");
+  fs.writeFileSync(path.join(unborn, "two"), "two");
+  const detached = path.join(root, "detached");
+  git(primary, "worktree", "add", "--quiet", "--detach", detached);
+  fs.writeFileSync(path.join(detached, "untracked"), "detached dirtiness");
+  const missing = path.join(root, "missing-upstream");
+  git(primary, "worktree", "add", "--quiet", "-b", "missing-upstream", missing);
+  git(primary, "config", "branch.missing-upstream.remote", ".");
+  git(primary, "config", "branch.missing-upstream.merge", "refs/heads/absent");
+  fs.writeFileSync(path.join(missing, "one"), "one");
+  fs.writeFileSync(path.join(missing, "two"), "two");
+  const entries = discoverRepositories({ root: primary, depth: 0 }, { env }).repos[0].worktrees;
+  const unbornEntry = discoverRepositories({ root: unborn, depth: 0 }, { env }).repos[0].worktrees[0];
+  for (const [entry, state, dirty] of [
+    [entries.find((entry) => entry.path === primary), "no-upstream", 1],
+    [unbornEntry, "unborn", 2], [entries.find((entry) => entry.path === detached), "detached", 1],
+    [entries.find((entry) => entry.path === missing), "upstream-unavailable", 2],
+  ]) {
+    const observed = collectWorktree(entry, { env });
+    assert.equal(observed.state, state, observed.diagnostics.join("\n"));
+    assert.equal(observed.dirty, dirty, state);
+    assert.equal(observed.ahead, null, state);
+    assert.equal(observed.behind, null, state);
+    assert.equal(observed.upstreamHead, null, state);
+    assert.ok(observed.diagnostics.length > 0, `${state} has an explicit reason`);
+    assert.deepEqual(observed.registry, entry);
+    if (state === "unborn") { assert.equal(observed.head, null); assert.equal(observed.branch, "main"); }
+    if (state === "detached") { assert.equal(observed.branch, null); assert.match(observed.head, /^[a-f0-9]{40}$/); }
+    if (state === "upstream-unavailable") assert.equal(observed.upstream, "absent");
+  }
+});
+
+test("facts: stale registry paths retain metadata with unknown observations; bare entries require no status command", (t) => {
+  const { root, env, git, init } = gitFixture(t);
+  const primary = init(path.join(root, "primary"), true);
+  const stale = path.join(root, "stale");
+  git(primary, "worktree", "add", "--quiet", "-b", "stale", stale);
+  git(primary, "worktree", "lock", "--reason", "retained lock", stale);
+  fs.rmSync(stale, { recursive: true });
+  const entry = discoverRepositories({ root: primary, depth: 0 }, { env }).repos[0].worktrees.find((entry) => entry.path === stale);
+  const observed = collectWorktree(entry, { env });
+  assert.equal(observed.state, "unavailable");
+  assert.deepEqual(observed.registry, entry);
+  assert.equal(observed.registry.branch, "refs/heads/stale");
+  assert.equal(observed.locked, "retained lock");
+  for (const key of ["branch", "head", "upstream", "upstreamHead", "ahead", "behind", "dirty"]) assert.equal(observed[key], null, key);
+  assert.match(observed.diagnostics[0], /worktree status failed/);
+  assert.equal(fs.existsSync(stale), false, "collection does not repair a missing registered worktree");
+  const bare = path.join(root, "bare");
+  git(root, "clone", "--quiet", "--bare", primary, bare);
+  const bareEntry = parseWorktrees(git(bare, "worktree", "list", "--porcelain", "-z"))[0];
+  const bareObserved = collectWorktree(bareEntry, { env: { ...env, PATH: root } });
+  assert.equal(bareObserved.state, "bare", "bare metadata needs no Git executable");
+  assert.deepEqual(bareObserved.registry, bareEntry);
+  assert.equal(bareObserved.dirty, null);
+  assert.ok(bareObserved.diagnostics.length > 0);
+});
+
+test("facts: failed upstream reads preserve known dirtiness and never masquerade as expected absence", (t) => {
+  const dir = fs.realpathSync(temporaryDirectory(t));
+  const oid = "a".repeat(40);
+  const status = `# branch.oid ${oid}\0# branch.head main\0# branch.upstream origin/main\0# branch.ab +2 -1\0? dirty\0`;
+  const entry = { path: dir, branch: "refs/heads/main", head: oid, bare: false, locked: false, prunable: false };
+  fs.writeFileSync(path.join(dir, "git"), `#!${process.execPath}\nif (process.argv.includes('status')) process.stdout.write(${JSON.stringify(status)}); else { process.stderr.write('fixture read failure'); process.exit(1); }\n`, { mode: 0o755 });
+  const observed = collectWorktree(entry, { env: { ...process.env, PATH: dir } });
+  assert.equal(observed.state, "unavailable");
+  assert.equal(observed.dirty, 1);
+  assert.equal(observed.head, oid);
+  assert.equal(observed.upstream, "origin/main");
+  assert.equal(observed.upstreamHead, null);
+  assert.equal(observed.ahead, null);
+  assert.equal(observed.behind, null);
+  assert.match(observed.diagnostics[0], /upstream commit failed/);
+
+  fs.writeFileSync(path.join(dir, "git"), `#!${process.execPath}\nprocess.stdout.write('malformed\\0');\n`, { mode: 0o755 });
+  const malformed = collectWorktree(entry, { env: { ...process.env, PATH: dir } });
+  assert.equal(malformed.state, "unavailable");
+  assert.equal(malformed.dirty, null);
+  assert.match(malformed.diagnostics[0], /invalid worktree status/);
+  const exhausted = collectWorktree(entry, { deadline: performance.now() - 1 });
+  assert.equal(exhausted.state, "unavailable");
+  assert.equal(exhausted.dirty, null);
   assert.match(exhausted.diagnostics[0], /budget-exhausted/);
 });
