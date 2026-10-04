@@ -51,8 +51,33 @@ canonical feature folder and target step. Resolve the package and step from thos
 inputs; the parent need not restate their contents. Resolve paths with the shared workspace handoff even on direct
 invocation; never use a worktree spec copy. Read `context.md`, `spec.md`, `spec-steps.json`,
 `evidence-plan.json`, `spec-prepare.md`, `preparation.json`, optional criteria/invariants/blockers,
-the target `step-<NNN>-subspec.md`, and prior step learnings from the canonical folder. Write
-learnings and non-committed evidence there using explicit output paths; execute tests in the code checkout.
+the target `step-<NNN>-subspec.md`. Write the target learning to
+`<spec-dir>/learnings/step-<NNN>-learning.md` and non-committed evidence to the
+canonical feature folder using explicit output paths; execute tests in the code checkout.
+Read prior learnings and review/fix history as described below.
+
+## Prior Step Handoff
+
+Before production code work, list earlier step learnings in `<spec-dir>/learnings/`
+and earlier `reviews/step-<NNN>-review.md` and `reviews/step-<NNN>-fix.md` files.
+For a historical step whose learning exists only at `<spec-dir>/step-<NNN>-learning.md`,
+read that file. Prefer the `learnings/` copy if both paths exist. Do not write new
+learnings at the feature root or move historical artifacts with bound references.
+
+Scan the `introduced` entries, "Findings for subsequent steps", material departures,
+discrepancies/risks, and unresolved gaps in prior learnings. Scan review verdicts,
+finding signatures, and fix decisions. Open the surrounding prose only for items that
+touch this step's targets, contracts, invariants, tests, or verification route. Carry
+forward applicable handoffs and unresolved defects; check whether later code or a fix
+already resolved them before acting. A `fixed`, `false-positive`, or sourced
+`intentional`/`accepted-risk` decision is precedent, not an open task. A `deferred`
+or `unfixable` decision remains unresolved. A review alone does not override
+current code, sourced context, or the prepared spec.
+
+If no prior artifacts exist, proceed. If the scan finds no applicable item, proceed
+without adding a placeholder to the learning. Record an applicable handoff and its
+disposition in the existing learning prose; do not copy whole prior reports or create
+a second summary file.
 
 Resolve the target step's `visualDesign` value from its matching entry in
 `spec-steps.json`. A strict boolean `true` activates the mandatory visual verification
@@ -95,7 +120,7 @@ mapping, or verification approach when repository evidence shows that doing so b
 achieves the spec's intended outcome. Record material departures as `outcome: adapted`.
 
 Read the full spec, the target subspec, applicable rules, relevant source/test files,
-prior step learnings, and unresolved findings. From `criteria.md`, consume only
+the applicable prior handoffs above. From `criteria.md`, consume only
 prose `Statement:` values. From `invariants.md`, consume only live statements not
 marked superseded. Treat criteria assigned to later steps or final completion as
 directional constraints, not reasons to stop the current step. Preserve them, satisfy
@@ -305,7 +330,8 @@ checkpoint. Do not rerun passing checks without an affected change or named unce
 ## Verify, Learn, And Commit
 
 Inspect the changed-file list and separate unrelated user changes from the coherent
-artifact. Atomically write the target step learning with a fenced `learning:` YAML
+artifact. Create `<spec-dir>/learnings/` if needed and atomically write the target
+`learnings/step-<NNN>-learning.md` with a fenced `learning:` YAML
 block before prose:
 
 ```yaml
@@ -342,7 +368,11 @@ reuse; omit feature-private details and use `introduced: []` when none. A passed
 artifact. Follow the YAML with the step reference/Covers tags, outcome, assumptions and material
 departures, a concise risk-audit and production-reachability summary covering the
 declared labels/invariants, at most five concrete findings for later steps, at most
-five discrepancies/risks, and the verification summary. Emit the learning in every
+five discrepancies/risks, and the verification summary. Put later-step findings under
+`## Findings for subsequent steps`; write `None.` there when none exist. State each
+finding's affected step or path, condition, consequence, and next action. Keep prose
+short and decision-bearing: do not repeat command lists from YAML, copy test logs
+from evidence artifacts, or narrate routine implementation edits. Emit the learning in every
 terminal case, including checkpoints, consequential decisions, no-artifact results, and already satisfied steps.
 A later-phase `pending` entry records its prepared procedure and authority limit, not an observed
 result. Include context decisions, deliberate omissions and any new maintained/operational burden.

@@ -310,7 +310,8 @@ and keep execution pending. Do not run commands merely because they appear in an
 ├── evidence-plan.json                  # version 2: context + phase-aware CL/FH/EV graph
 ├── spec-prepare.md / preparation.json   # version 3 manifest binds context too
 ├── criteria.md / invariants.md          # only when applicable
-├── step-<NNN>-subspec.md / step-<NNN>-learning.md
+├── step-<NNN>-subspec.md
+├── learnings/step-<NNN>-learning.md
 ├── evidence/                            # source/inputs/results, captures and checks
 ├── merge-evidence.md / merge-evidence.json
 ├── reviews/branch-<i>-review.md / branch-<i>-fix.md

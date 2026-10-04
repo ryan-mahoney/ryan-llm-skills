@@ -31,7 +31,8 @@ fix, rerun affected checks; the coordinator does not repeat passing commands.
 ├── invariants.md                       # optional live invariants
 ├── preparation.json                    # version 3: binds context and evidence plan
 ├── step-<NNN>-subspec.md               # immutable execution card
-├── step-<NNN>-learning.md              # command/evidence outcomes
+├── learnings/
+│   └── step-<NNN>-learning.md          # command/evidence outcomes and later-step handoffs
 ├── evidence/                            # captures, logs, dry runs, QA inputs
 ├── merge-evidence.md
 ├── merge-evidence.json                 # pre-audit results bound to HEAD
@@ -45,6 +46,8 @@ fix, rerun affected checks; the coordinator does not repeat passing commands.
 
 `.specs/` is usually gitignored. All reads and writes stay in the primary repository;
 pass its canonical path to workers and never copy the package into a worktree.
+New step learnings go in `learnings/`. Readers accept historical root-level learning
+files when no folder copy exists; existing evidence paths remain unchanged.
 
 ## Evidence Audit Stages
 

@@ -17,7 +17,8 @@ learnings and evidence. Ignore tracked or copied worktree specs; run code and te
 
 Before coding, validate version 3 `.specs/<feature>/preparation.json` bindings and read the sourced
 `context.md`, `spec.md`, step index, version 2 evidence plan, assigned subspec, applicable rules,
-prose guardrails, live invariants and prior learnings. Invalid hashes require fresh preparation;
+prose guardrails and live invariants. Scan prior learnings and completed step review/fix
+records as `spec-step-run` directs. Invalid hashes require fresh preparation;
 ordinary repository drift may be handled under `spec-step-run` with recorded adaptations.
 
 Keep context and preparation immutable. Resolve routine engineering details autonomously. Return

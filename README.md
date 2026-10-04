@@ -72,7 +72,7 @@ git-ignored.
 | `context.md`, `proposal.md`, `critique.md` | Architecture stages | Context snapshot, chosen approach, and challenges to it |
 | `spec.md`, `evidence-plan.json` | `spec-write` | Behavior, acceptance criteria, pre-mortem, and the AC → CL → FH → EV graph |
 | `step-NNN-subspec.md`, `spec-steps.json`, `preparation.json` | `spec-write` | Execution cards and the hash manifest that implementation validates before each step |
-| `step-NNN-learning.md` | `spec-step-run` | What the step did, departures from the card, and its evidence |
+| `learnings/step-NNN-learning.md` | `spec-step-run` | What the step did, departures from the card, later-step handoffs, and its evidence |
 | `reviews/step-NNN-*.md`, `reviews/branch-N-*.md` | Review and fix skills | Findings with stable signatures, and the fix or dismissal for each |
 | `merge-evidence.md`, `merge-evidence.json` | `spec-run`, then review and fix | Gate results bound to the current commit |
 | `work-tour.json`, `work-tour.html` | `spec-work-tour` | Final merge verdict, residual risk, QA scenarios, and deployment states |

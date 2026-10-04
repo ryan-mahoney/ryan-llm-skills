@@ -135,7 +135,8 @@ subagents only when the parent grants it fanout and the `subagent` tool.
 For an implementation worker, pass the checkout, canonical subspec path, owning
 skill path, and paths to any newly routed messages. The subspec and its referenced
 package are the technical handoff. Workers load requirements, context, rules,
-evidence obligations, and prior learnings themselves. Do not copy step text or
+evidence obligations, and prior learnings in `learnings/` (or historical root-level
+files) themselves. Do not copy step text or
 reconstruct those documents in prompts. Missing or contradictory prepared inputs
 return to their owner; the parent does not compensate with an improvised technical
 brief. Preserve explicit user constraints not already captured in the package.

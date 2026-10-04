@@ -104,7 +104,8 @@ unless this run already has an intact backup. Exclude credentials and runtime ar
 Use the existing spec as intent even without a proposal; retain accepted behavior while
 re-grounding and splitting compound steps. No data-format migration is required.
 
-Check recorded learnings/commits before renumbering. Do not reset implemented work or
+Check recorded learnings in `learnings/` and historical root-level learning files,
+plus their commits, before renumbering. Do not reset implemented work or
 erase its evidence. For a partially implemented package, preserve completed step IDs
 and history, and limit corrections to pending work with explicit dependency mappings;
 return a consequential scope conflict rather than silently rewriting execution history.

@@ -84,7 +84,8 @@ Read, when present:
 - `proposal.md`, `critique.md`, and `prototype/`
 - `spec.md`, `spec-steps.json`, `evidence-plan.json`
 - `spec-prepare.md`, `preparation.json`, `criteria.md`, `invariants.md`
-- every `step-<NNN>-subspec.md` and `step-<NNN>-learning.md`
+- every `step-<NNN>-subspec.md` and `learnings/step-<NNN>-learning.md`
+  (read a historical root-level learning when no folder copy exists)
 - `merge-evidence.md` and `merge-evidence.json`
 - `evidence/`, `blockers.md`, and the latest branch review/fix artifacts
 - the merge-base-to-HEAD commits and diff

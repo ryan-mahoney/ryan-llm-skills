@@ -150,7 +150,8 @@ Read for judgement:
 - `merge-evidence.json` and `merge-evidence.md` — produced gate results and proof boundaries.
 - Every `step-<NNN>-subspec.md` in `<spec-dir>` — what each step meant to do (per-step
   artifacts live flat in the spec folder, step numbers zero-padded to three digits).
-- Every `step-<NNN>-learning.md` in `<spec-dir>` — what each step discovered and any
+- Every `learnings/step-<NNN>-learning.md` in `<spec-dir>` (or its historical
+  root-level location when no folder copy exists) — what each step discovered and any
   recorded trade-offs. A sourced, applicable deliberate trade-off is not a bug; a learning alone
   cannot accept material risk — the canonical
   exclusion list lives in Report Discipline.
@@ -278,7 +279,8 @@ in three stages instead of one combined pass:
 
 **Stage A — Decompose the range into commits.** List `git rev-list --reverse
 <base>..HEAD`; each commit is a review unit. Map commits to steps using the `commit:`
-field of the `learning:` YAML block in `step-<NNN>-learning.md`, the learning's explicit
+field of the `learning:` YAML block in `learnings/step-<NNN>-learning.md` (or its
+historical root-level location), the learning's explicit
 additional commit list when generated output was committed separately, an explicit step
 marker in the commit subject (for example `step 3:` or `(step 3)`), or spec order as
 a last resort. Give each reviewer that step's immutable subspec intent. If a commit

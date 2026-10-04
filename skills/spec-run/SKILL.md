@@ -43,7 +43,9 @@ Read:
 - sibling `spec-prepare.md` and `preparation.json`;
 - the subspec index and manifest bindings; workers read their assigned subspecs in full;
 - optional bound `criteria.md` and `invariants.md`;
-- applicable rule paths, existing blockers, and prior step learnings.
+- applicable rule paths, existing blockers, and prior learning paths in
+  `<spec-dir>/learnings/` (or historical root-level files). Read outcome and evidence
+  fields when scheduling or assembling evidence; leave relevance scanning to the worker.
 
 ## Inspect Preparation
 
@@ -67,7 +69,7 @@ For each indexed step in ascending order:
 
 1. Revalidate the preparation package and record, but do not gate on, resolvable drift.
 2. Run any pending step fixes and wait for them to finish (see Background Step Review).
-3. Provide the absolute code checkout, canonical target subspec path, owning skill path, and any routed message paths or new run-wide constraints. The worker resolves the step and package from the subspec and reads its referenced context, manifest, rules, evidence obligations, and prior learnings itself. Do not restate the technical brief or curate a parallel copy of the requirements.
+3. Provide the absolute code checkout, canonical target subspec path, owning skill path, and any routed message paths or new run-wide constraints. The worker resolves the step and package from the subspec and scans prior learnings plus completed step review/fix records under `spec-step-run`. Do not restate the technical brief or curate a parallel copy of the requirements.
 4. Require the agent to read and follow `~/.agents/skills/spec-step-run/SKILL.md` in full.
 5. Wait for that step to produce a learning and any reviewable commit. Run mechanical verification, launch the background review for the new commits, and continue.
 
@@ -92,7 +94,7 @@ missing or contradictory records; leave substantive correctness to branch review
 3. Scheduling adaptations to older cards are recorded; no red/green evidence is fabricated.
 4. Commands had finite enforced deadlines; timeouts terminated owned processes and were recorded with elapsed time as failed attempts.
 5. Repeated attempts name an affected change or concrete diagnostic reason; passing results were reused across step sections.
-6. The learning record exists, and a commit exists for `as-specified`, `adapted`, or `checkpoint`.
+6. The learning record exists at `<spec-dir>/learnings/step-<NNN>-learning.md`, and a commit exists for `as-specified`, `adapted`, or `checkpoint`.
 7. Risk-tagged steps include a learning risk-audit summary that covers or explicitly dismisses every declared risk lens and live invariant.
 8. Runtime-facing steps include a complete production-reachability summary: entrypoint/composition owner, concrete internal adapter, real downstream contract, and focused path observation, including applicable ordinary-entry evidence without test-only prerequisites.
 9. An implementation-complete outcome does not contradict its own discrepancies/risks by describing required production wiring, an internal adapter, a downstream contract, or the promised user-observable path as absent, fake-only, deferred, or unreachable.
