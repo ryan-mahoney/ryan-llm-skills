@@ -407,11 +407,12 @@ export function collectPullRequests(repo, { env = process.env, deadline } = {}) 
   try {
     const identity = JSON.parse(selection.stdout);
     if (!identity || typeof identity !== "object" || Array.isArray(identity) ||
-      !/^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(identity.nameWithOwner) ||
+      !/^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+$/.test(identity.nameWithOwner) ||
       typeof identity.url !== "string") throw new Error();
     const url = new URL(identity.url);
     if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash ||
       !/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?::[0-9]+)?$/.test(url.host) ||
+      url.pathname !== `/${identity.nameWithOwner}` ||
       identity.url !== `https://${url.host}/${identity.nameWithOwner}`) throw new Error();
     observed.repository = `${url.host}/${identity.nameWithOwner}`;
   } catch {

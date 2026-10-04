@@ -899,7 +899,7 @@ function prFixture(number, overrides = {}) {
 
 const selectedIdentity = { nameWithOwner: "owner/project", url: "https://github.example/owner/project" };
 
-test("pull requests: ordinary CLI scopes two repositories explicitly, preserves uncertainty and sanitizes selection", (t) => {
+test("pull requests: ordinary CLI scopes a punctuation-prefixed repository explicitly, preserves uncertainty and sanitizes selection", (t) => {
   const { root, env, init, git, respond, calls } = ghFixture(t);
   const first = init(path.join(root, "first"), true);
   const linked = path.join(root, "linked");
@@ -907,7 +907,8 @@ test("pull requests: ordinary CLI scopes two repositories explicitly, preserves 
   const second = init(path.join(root, "second"), true);
   const title = "Pipe|\n# forged `code` <script> [click](url)\u001b";
   respond({
-    [first]: { identity: selectedIdentity, items: [prFixture(11, { title, isDraft: true, mergeable: "UNKNOWN", mergeStateStatus: "BLOCKED" }),
+    [first]: { identity: { nameWithOwner: "owner/.github", url: "https://github.example/owner/.github" },
+      items: [prFixture(11, { title, isDraft: true, mergeable: "UNKNOWN", mergeStateStatus: "BLOCKED" }),
       prFixture(2, { mergeable: null, mergeStateStatus: null, headRepository: null, headRepositoryOwner: null })] },
     [second]: { identity: { nameWithOwner: "other/repo", url: "https://github.com/other/repo" }, items: [] },
   });
@@ -918,7 +919,7 @@ test("pull requests: ordinary CLI scopes two repositories explicitly, preserves 
   assert.equal(result.kind, "ok", result.stderr);
   assert.equal(result.stderr, "");
   const visible = visibleReport(result.stdout);
-  assert.match(visible, /GitHub-selected repository: github.example\/owner\/project/);
+  assert.match(visible, /GitHub-selected repository: github.example\/owner\/\.github/);
   assert.match(visible, /GitHub-selected repository: github.com\/other\/repo/);
   assert.match(visible, /optional network observations through gh/);
   assert.match(visible, /configured\/default checkout selection/);
@@ -930,7 +931,7 @@ test("pull requests: ordinary CLI scopes two repositories explicitly, preserves 
   assert.equal(result.stdout.split("\n").filter((line) => /^\| (2|11) \|/.test(line)).length, 2);
   const observations = calls();
   assert.equal(observations.length, 4, "one selection and one list per common-directory group");
-  for (const [offset, cwd, scope] of [[0, first, "github.example/owner/project"], [2, second, "github.com/other/repo"]]) {
+  for (const [offset, cwd, scope] of [[0, first, "github.example/owner/.github"], [2, second, "github.com/other/repo"]]) {
     assert.deepEqual(observations[offset].args, ["repo", "view", "--json", "nameWithOwner,url"]);
     assert.deepEqual(observations[offset + 1].args, ["pr", "list", "--repo", scope, "--state", "open", "--limit", "101", "--json",
       "number,url,title,headRefName,baseRefName,headRepository,headRepositoryOwner,isDraft,mergeable,mergeStateStatus"]);
@@ -971,6 +972,8 @@ test("pull requests: invalid or ambiguous selection never guesses scope or invok
   const { root, env, init, respond, calls } = ghFixture(t);
   const primary = init(path.join(root, "primary"), true);
   const invalid = [null, [], [selectedIdentity], {}, { nameWithOwner: "a/b/c", url: "https://github.com/a/b/c" },
+    { nameWithOwner: "owner/.", url: "https://github.example/owner/." },
+    { nameWithOwner: "owner/..", url: "https://github.example/owner/.." },
     { ...selectedIdentity, url: "https://github.example/wrong/repo" }, { ...selectedIdentity, url: "https://secret@github.example/owner/project" },
     { ...selectedIdentity, url: "http://github.example/owner/project" }, { ...selectedIdentity, url: "https://github.example/owner/project?token=secret" },
     { ...selectedIdentity, url: "https://github.example/owner/project#fragment" },
