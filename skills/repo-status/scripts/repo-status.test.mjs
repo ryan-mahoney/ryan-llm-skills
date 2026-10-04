@@ -547,9 +547,9 @@ test("facts: failed upstream reads preserve known dirtiness and never masquerade
   assert.match(exhausted.diagnostics[0], /budget-exhausted/);
 });
 
-function runCli(args, { cwd, env, preload } = {}) {
+function runCli(args, { cwd, env, preload, script = scriptPath } = {}) {
   return runProcess(process.execPath, [
-    ...(preload ? ["--import", `data:text/javascript,${encodeURIComponent(preload)}`] : []), scriptPath, ...args,
+    ...(preload ? ["--import", `data:text/javascript,${encodeURIComponent(preload)}`] : []), script, ...args,
   ], { cwd, env, childLimitMs: 10000 });
 }
 
@@ -1067,4 +1067,77 @@ test("pull requests: available checkout selection survives a stale registry row 
   assert.equal(calls().length, 2);
   assert.ok(calls().every((call) => call.cwd === primary));
   assert.equal(fs.existsSync(stale), false);
+});
+
+test("installed: documented flags, registration and fact-source authority match the consumer contract", () => {
+  const skill = fs.readFileSync(new URL("../SKILL.md", import.meta.url), "utf8");
+  const frontmatter = skill.match(/^---\n([\s\S]+?)\n---\n/);
+  assert.ok(frontmatter, "the installed instruction file has closed frontmatter");
+  assert.match(frontmatter[1], /^name: repo-status$/m);
+  assert.match(frontmatter[1], /^description: "[^"\n]+"$/m);
+  assert.match(frontmatter[1], /^  version: "1"$/m);
+  assert.match(frontmatter[1], /^license: MIT$/m);
+  assert.match(frontmatter[1], /^disable-model-invocation: false$/m);
+  assert.match(frontmatter[1], /^argument-hint: "\[root path\] \[--depth N\] \[--prs\]"$/m);
+  assert.match(skill, /node "\$repo_status_skill_dir\/scripts\/repo-status\.mjs" "\$repo_status_root" --depth 2 --prs/);
+  assert.equal(parseArgs(["/fixture", "--depth", "2", "--prs"]).depth, 2);
+  assert.equal(parseArgs(["/fixture", "--depth", "2", "--prs"]).prs, true);
+  assert.match(skill, /directory containing the loaded\s+`SKILL.md`/);
+  assert.match(skill, /Run the collector before answering/);
+  assert.match(skill, /Prefer successful current observations over historical artifacts/);
+  assert.match(skill, /Failed remote\s+reads validate nothing historical/);
+  assert.match(skill, /UNKNOWN\/null[\s\S]*do not establish readiness/);
+  assert.match(skill, /Read spec ledgers separately/);
+  assert.match(skill, /status file requires a separate user request/);
+  assert.doesNotMatch(skill, /~\/\.agents\/skills|\/Users\//);
+  const readme = fs.readFileSync(new URL("../../../README.md", import.meta.url), "utf8");
+  const standalone = readme.split("### Standalone skills\n")[1].split("\n## Rules")[0];
+  assert.match(standalone, /^\| \*\*repo-status\*\* \| .+ \|$/m);
+});
+
+test("installed: copied and symlinked whole skills report authored facts from an unrelated cwd", (t) => {
+  const { root, env, git, init } = gitFixture(t);
+  const scan = path.join(root, "scan");
+  const primary = init(path.join(scan, "primary"), true);
+  const second = init(path.join(scan, "second"), true);
+  init(path.join(scan, "deeper", "outside-depth"), true);
+  const linked = path.join(root, "outside-scan");
+  git(primary, "worktree", "add", "--quiet", "-b", "linked", linked);
+  const head = git(primary, "rev-parse", "HEAD").trim();
+  fs.writeFileSync(path.join(primary, "one"), "dirty");
+  fs.writeFileSync(path.join(linked, "one"), "dirty");
+  fs.writeFileSync(path.join(linked, "two"), "dirty");
+  const cwd = path.join(root, "unrelated-cwd");
+  fs.mkdirSync(cwd);
+  const copied = path.join(root, "portable", "skills", "repo-status");
+  fs.cpSync(fileURLToPath(new URL("..", import.meta.url)), copied, { recursive: true });
+  const linkedInstall = path.join(root, "separate-install", "repo-status");
+  fs.mkdirSync(path.dirname(linkedInstall), { recursive: true });
+  fs.symlinkSync(copied, linkedInstall);
+
+  for (const install of [copied, linkedInstall]) {
+    const skill = fs.readFileSync(path.join(install, "SKILL.md"), "utf8");
+    const documented = skill.match(/^node "\$repo_status_skill_dir(\/scripts\/repo-status\.mjs)"$/m);
+    assert.ok(documented, "resolve the documented command from the loaded instruction directory");
+    const script = install + documented[1];
+    assert.ok(!fs.realpathSync(script).startsWith(path.dirname(scriptPath)), "installed entry has no source-checkout path");
+    const single = runCli([primary], { cwd, env, script });
+    assert.equal(single.kind, "ok", `${install}: ${single.stderr}`);
+    assert.equal(single.stderr, "");
+    const visibleSingle = visibleReport(single.stdout);
+    assert.match(visibleSingle, /Discovery depth: 0/);
+    assert.match(visibleSingle, /Repositories: 1/);
+    assert.ok(visibleSingle.includes(`| ${primary} | main | ${head.slice(0, 12)} | unknown / absent | unknown / absent | unknown / absent | unknown / absent | 1 | no-upstream;`));
+    assert.ok(visibleSingle.includes(`| ${linked} | linked | ${head.slice(0, 12)} | unknown / absent | unknown / absent | unknown / absent | unknown / absent | 2 | no-upstream;`));
+    const scanned = runCli([scan, "--depth", "1"], { cwd, env, script });
+    assert.equal(scanned.kind, "ok", `${install}: ${scanned.stderr}`);
+    const visibleScan = visibleReport(scanned.stdout);
+    assert.match(visibleScan, /Discovery depth: 1/);
+    assert.match(visibleScan, /Repositories: 2/);
+    assert.ok(visibleScan.includes(`| ${second} | main |`));
+    assert.ok(visibleScan.includes(`| ${linked} | linked |`), "all registered worktrees remain in scope");
+    assert.doesNotMatch(visibleScan, /outside-depth/);
+    assert.match(visibleScan, /local refs only; remote freshness unknown/);
+    assert.doesNotMatch(visibleScan, /Open pull requests/);
+  }
 });
