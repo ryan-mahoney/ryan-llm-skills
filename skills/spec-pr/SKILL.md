@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "13"
+  version: "14"
 ---
 
 # Spec PR
@@ -40,7 +40,9 @@ final audit are not prerequisites for pushing or opening/updating this draft. Ke
 existing draft in draft status; if a formerly ready candidate becomes incomplete, restore
 draft status and explain the gap.
 
-Use `mode=ready` only for final readiness. This mode requires the complete package:
+Use `mode=ready` for final readiness. Before marking the PR ready, require the complete
+package below. Reuse current outputs at entry; establish missing or invalidated final
+evidence under the sequence below instead of demanding a tour before a planned rebase:
 
 - sourced `context.md`, `spec.md`, `spec-steps.json`, version 2 `evidence-plan.json`
 - `merge-evidence.json` and `merge-evidence.md`
@@ -78,6 +80,9 @@ ready status. Preserve the selected review budget; pending CI does not require a
 For ready mode, reconcile the current base before final evidence. An early draft can use
 its current coherent branch unless project policy requires an immediate rebase; perform the
 safe rebase and refresh affected proof before ready status.
+In an end-to-end run, the coordinator applies this procedure before final branch
+refinement and the work tour. At publication, reuse its recorded result when the
+fetched base is still an ancestor of HEAD and no relevant state has changed.
 
 1. Read current project context and validate the snapshot/decision sources before publication.
    Resolve the default branch from `refs/remotes/origin/HEAD`, then repository convention, then `main`/`master`. Stop if HEAD is that branch.
@@ -103,6 +108,14 @@ A rebase, conflict resolution, staged commit, dependency/base change, or any cod
 The steps below establish ready-mode evidence. Draft mode records pending/stale gates and
 runs needed focused feedback without requiring final audit/tour assembly before its push.
 
+For an unchanged candidate with current applicable evidence, a current passing audit or
+valid bounded-refinement completion, a ready tour, and required CI (when configured)
+passing on the published HEAD, skip evidence
+regeneration, refinement, and tour rendering. Proceed to PR metadata and publication
+verification. A stage transition alone does not invalidate those outputs. If the base,
+candidate, authority, or relevant check result changes, explain the invalidation and
+apply only the affected work below within the existing review budget.
+
 1. Determine which claims, gates, and operational assumptions the new base or conflict touched.
 2. Apply the Jev verification checkpoint before expensive/repeated checks. Re-run affected
    focused gates that inform concrete decisions or resolve relevant failures. Let configured
@@ -116,7 +129,8 @@ runs needed focused feedback without requiring final audit/tour assembly before 
    budget. Require current `evidence_verdict: proven` and the selected process's audit pass
    or valid `verified-at-cap` completion. Do not restart completed refinement merely to
    collect CI or publish; actual new defects still block readiness.
-5. Run `spec-work-tour`, then confirm its JSON/HTML, the audit artifact, and every required gate bind
+5. Reuse a current `spec-work-tour` result or run it when missing or invalidated. Confirm
+   its JSON/HTML, the audit artifact, and every required gate bind
    the exact full `git rev-parse HEAD` SHA. Open `work-tour.html` and confirm it renders.
 
 If evidence cannot be re-established, keep the authorized PR in draft status and record the

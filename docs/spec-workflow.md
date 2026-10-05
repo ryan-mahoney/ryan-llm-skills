@@ -25,7 +25,7 @@ The sequence is:
 
 ```text
 project context and consequential decisions → architecture → optional critique → combined specification and preparation → workspace setup
-→ step implementation → independent branch refinement → work tour → PR publication
+→ step implementation → base reconciliation → independent branch refinement → final push/CI → work tour → PR publication
 ```
 
 `spec-run` reviews each finished step in the background while the next step is built,
@@ -259,6 +259,12 @@ Completion means a published PR URL with evidence bound to the published HEAD. L
 passing tests, a ready tour, or a pushed branch alone do not complete the run. `spec-pr` does not
 merge the PR. Pending remote checks leave platform merge readiness pending; failed required
 merge checks invalidate merge readiness and must be addressed.
+
+Reconcile the base before final refinement and collect required CI for final fixes before
+building the tour. Publication reuses current outputs instead of restarting that work.
+If late changes invalidate them, the agent names the remaining work. The tour-stage handoff
+is progress; final delivery includes the verified PR outcome and tour link after the run's
+workers finish. Inactive retained sessions do not prevent completion.
 
 ## Goal Mode And Compact Delegation
 

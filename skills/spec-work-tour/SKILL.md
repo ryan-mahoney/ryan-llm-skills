@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "8"
+  version: "9"
 ---
 
 # Spec Work Tour
@@ -291,5 +291,11 @@ For an agent handoff, return `outcome: ready` or `outcome: blocked`, JSON/HTML p
 commit, evidence counts, and separate deployment readiness/authorization/observations and gaps.
 For the user, report the result, the tour location, and any material blocker, limitation, or next
 action. Keep the full bookkeeping in the manifest rather than reciting it in the response.
+
+Inside `spec-end-to-end`, return this as a stage handoff and continue to publication.
+Do not announce overall completion or present the tour as the final delivery while
+required CI, publication, or run-owned workers remain active. The coordinator delivers
+the final tour link with the verified PR outcome. A standalone tour request may finish
+when its own requested artifacts are ready.
 
 Do not commit `.specs/` unless the repository explicitly tracks it. Do not describe a blocked tour as merge-ready.

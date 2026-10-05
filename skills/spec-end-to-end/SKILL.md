@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "16"
+  version: "17"
 ---
 
 # Spec End To End
@@ -193,7 +193,11 @@ excluded by the routing policy above:
    production, and pre-audit merge-evidence assembly. This run's PR scope authorizes early
    draft publication at the first meaningful coherent checkpoint and subsequent useful pushes;
    apply `spec-pr mode=draft` without waiting for final local regression or a ready tour.
-6. By default, run `spec-branch-refine max-iterations=1` when `spec-run` reports
+6. Before final refinement, apply `spec-pr`'s **Rebase Safely** procedure to reconcile
+   the base, resolve conflicts, and record the result in `pr-rebase-log.md`. Refresh
+   affected evidence, push the coherent candidate within the authorized draft scope,
+   and collect applicable CI. Do this before producing the final tour. Then, by
+   default, run `spec-branch-refine max-iterations=1` when `spec-run` reports
    `step-review-coverage: complete`, and `max-iterations=2` otherwise. One round is a
    review and its fix, with no further review. The branch review reuses step reviews,
    so that round covers unreviewed commits, cross-step integration, duplication, and the
@@ -206,13 +210,18 @@ excluded by the routing policy above:
    bound to current HEAD; preserve the final fixes' review status honestly. Carry the
    round budget through resumption, tour, and publication; downstream stages must not
    reset it or start another refinement loop.
-7. Run `spec-work-tour`. It owns the final JSON/HTML evidence and separate release states and must
+7. Push any final refinement commits and collect their required CI before the tour;
+   resolve relevant failures within the existing review budget. Run `spec-work-tour`.
+   It owns the final JSON/HTML evidence and separate release states and must
    finish with merge `verdict: ready` bound to the same HEAD. Deployment readiness, authority,
    and post-deployment observations are separate; pending later-phase gates do not force execution.
 8. Run `spec-pr mode=ready` from the same checkout to update the draft after final-commit
    configured required CI passes and acceptance/review gaps close. Without CI, broad
    operator testing remains outside recorded evidence and is not a completion blocker.
-   Preserve an explicit request for draft-only
+   Reuse the current audit, evidence, and tour under `spec-pr`'s unchanged-candidate
+   path; publication is not a reason to repeat those stages. If a new base or failure
+   invalidates readiness, report the concrete remaining work and refresh affected
+   artifacts before claiming completion. Preserve an explicit request for draft-only
    publication; report its remaining readiness limits honestly.
 
 After every stage, check the returned outcome, required artifact existence, relevant
@@ -248,8 +257,17 @@ any `.specs/` copy in the worktree, including one created by checking out tracke
 
 ## Completion
 
-Complete only when `spec-pr` reports the published PR URL and the branch evidence remains bound to
-the published HEAD. Return a compact summary containing:
+Complete only when `spec-pr` reports the published PR URL at the requested readiness
+and the branch evidence remains bound to the published HEAD. Reconcile this run's
+known worker and command IDs using completion receipts or a targeted status check;
+required work must be finished and no run-owned worker or required command may still
+be active. Retained inactive sessions are fine. Do not sweep unrelated processes,
+add another code review, or rerun checks to establish this lifecycle state.
+
+During finalization, report the remaining action plainly, such as "Required CI is
+pending" or "Tour generated; publishing the PR." A tour-stage handoff is progress,
+not the user-facing completion response. Deliver the final tour link with the verified
+PR outcome after the run is quiescent. Return a compact summary containing:
 
 ```txt
 outcome: published | blocked

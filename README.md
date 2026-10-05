@@ -82,11 +82,14 @@ running stages individually, recovery, and harness setup.
    step it starts a background review and fixes earlier findings before the next step.
 6. `spec-branch-refine` reviews the integrated branch: unreviewed commits, cross-step
    contracts, duplication, applicable test evidence, and every gate. It runs one review-and-fix
-   round by default when step reviews cover every step, otherwise two.
+   round by default when step reviews cover every step, otherwise two. Reconcile the base
+   before this review; push final fixes and collect required CI before building the tour.
 7. `spec-work-tour` writes `work-tour.json` and a browser-ready `work-tour.html` for the
    final commit.
-8. `spec-pr` supports an early authorized draft and a final ready candidate. The ready path
-   rebases, refreshes affected evidence, and requires a ready tour and applicable CI results.
+8. `spec-pr` supports an early authorized draft and a final ready candidate. Publication
+   reuses current review, evidence, and tour outputs; a newly changed base or relevant
+   failure requires refreshing affected evidence. The final tour and PR links are delivered
+   after publication is verified and the run's workers have finished.
 
 ### Artifacts
 
