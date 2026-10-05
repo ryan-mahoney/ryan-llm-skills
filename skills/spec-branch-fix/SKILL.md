@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "16"
+  version: "17"
 ---
 
 # Spec Branch Fix
@@ -261,12 +261,14 @@ If nothing actionable was fixed (`material_change: false`), there is no code
 change, so a review pass with no code changes produces no commit. Leave the artifacts
 on disk and report their paths.
 
-After a fix commit, reassemble `merge-evidence.json` and `merge-evidence.md` for the new
-HEAD using the current re-prepared evidence plan plus reproduced affected merge gates and honest
-later-phase statuses. Keep deployment readiness, authority and observations separate. Mark untouched
-gates stale unless their result remains valid across this exact change and that judgment
-is recorded with a concrete dependency boundary. The next independent audit must never
-consume evidence still bound to the pre-fix SHA.
+After a branch fix commit, update the existing `merge-evidence.json` and Markdown for
+the new HEAD with affected gate results, findings, and applicability. Reuse the current
+evidence plan; re-preparation is needed only when approved intent or proof changes.
+Preserve unaffected observations and later-phase statuses. Assess reuse against the
+actual diff and dependencies, recording a shared applicability explanation for gates
+with the same unaffected boundary; leave uncertain evidence stale. Update candidate
+bindings without relabeling original execution revisions. Rebuild the full assembly
+only when missing or inconsistent. Step fixes still defer assembly to `spec-run`.
 
 ## Completion Report
 

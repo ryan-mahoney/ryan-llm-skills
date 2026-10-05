@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "29"
+  version: "30"
 ---
 
 # Spec Step Run
@@ -185,6 +185,15 @@ tests or deterministic evidence; a step need not create a test file just to comp
 Apply [Unit Testing](../../rules/unit-testing.md) when changing tests and the shared
 verification policy for deadlines, Jev scheduling, and CI/operator broad-check ownership.
 
+Apply Jev verification once before expensive/repeated checks for a coherent revision.
+On older cards that defer all automation, record this scheduling adaptation without
+rewriting preparation. Record actual commands, scope, elapsed time, outcomes, artifacts,
+and proof limits once. Intentionally deferred final checks stay `skipped`/`pending`, with
+reason `deferred to branch review`, exact paths, expected observations, setup, and artifact
+destinations. A failed focused check is a failure, not a deferred pass: resolve it or
+return a truthful checkpoint. The evidence and commit sections below consume these
+results; they are not additional verification passes.
+
 ## Produce Owned Evidence
 
 When the card's `Targets` carry `Evidence:` lines, produce each applicable merge artifact.
@@ -210,27 +219,6 @@ not `as-specified` — preserve it as a truthful `checkpoint` with the gap recor
 For `visualDesign: true`, read and apply [Visual verification](references/visual-verification.md).
 This retains the prepared visual brief, real rendered inspection, correction, and
 cleanup requirements. Other steps do not load this procedure.
-
-## Run Focused Feedback
-
-Apply Jev verification once before expensive/repeated checks for a coherent revision and
-the shared Verification Scheduling And Deadlines policy. Write useful regression
-coverage and run focused checks when they inform concrete implementation/debugging
-choices or close unresolved acceptance questions. Select focused integration/browser checks
-for the specific boundary question; reuse sufficient valid evidence. Preserve exact commands and real outcomes. On older cards that defer
-all automation, record this scheduling adaptation without rewriting preparation. Never
-fabricate red/green evidence or turn every edit into a full-suite run.
-
-Observe the real changed path through the focused test when it covers application composition.
-Add a bounded local startup/entrypoint smoke check only for missing runtime evidence; preserve
-required visual inspection. Record each observation once and reference it where needed. Follow the shared deadlines, process ownership, and timeout diagnosis rules.
-
-Record actual commands, selection, elapsed time, results, artifacts, and proof limits.
-Intentionally deferred final checks remain `skipped`/`pending`, with reason `deferred to
-branch review`, exact paths, expected observations, setup, and artifact destinations.
-A failed focused check is a failure, not a deferred pass: fix it or preserve a checkpoint
-with the gap. Missing required implementation or visual/runtime evidence also needs a
-checkpoint. Do not rerun passing checks without an affected change or named uncertainty.
 
 ## Verify, Learn, And Commit
 

@@ -327,6 +327,14 @@ and keep execution pending. Do not run commands merely because they appear in an
   merge-ready evidence case and passing final-commit CI before ready status; publication
   does not merge, deploy, or authorize either action.
 
+Each downstream stage consumes the preceding owner's current records. Validate scope,
+revision bindings, required coverage, unresolved gaps, and contradictions; do not repeat
+that owner's substantive assessment or execution merely to make a new handoff. The
+independent audit remains responsible for challenging implementation evidence. Tour and
+publication reuse that assessment, investigating original source only for a concrete
+gap, change, or discrepancy. Required checks and known failures keep their obligations.
+Use existing artifacts for this provenance; add no handoff report or verification stage.
+
 ## Required Artifacts
 
 ```text

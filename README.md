@@ -121,6 +121,12 @@ additional checks. Reviews report defects and material limitations without posit
 correctness narratives. For OpenCode's second worker level, see
 [OpenCode nested delegation](docs/spec-workflow.md#opencode-nested-delegation).
 
+Each stage consumes current upstream records: step reviews load scoped context, branch
+review assesses the integrated evidence, the tour presents that assessment, and publication
+checks freshness and remote readiness. Repeated execution needs a relevant change, failure,
+or concrete gap. Existing inspected UI captures and tour-render results are reused;
+unchanged evidence records are preserved through fixes.
+
 #### Default Pi prompt
 
 After `spec-write`, paste this into Pi with `/goal-direct` available. Replace `PACKAGE`

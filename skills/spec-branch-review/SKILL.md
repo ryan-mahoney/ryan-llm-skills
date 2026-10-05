@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "22"
+  version: "23"
 ---
 
 # Spec Branch Evidence Audit
@@ -69,10 +69,10 @@ reuse the result; it is not a branch audit.
 - Read code only at fixed revisions: `git show <sha>` for each commit and
   `git show <head>:<path>` for surrounding code. Never read the working tree; the
   next step worker is editing it.
-- Load spec-aware context as below, except merge evidence, which does not exist yet.
-  Read the subspecs of later steps too. Behavior a later step is scheduled to add is
-  planned work, not a finding. Retain a sourced dismissal only when needed to
-  prevent an already-raised issue from recurring.
+- Load context for the reviewed unit using the scoped rules below; skip merge
+  evidence, which does not exist yet. Use the step index to locate later ownership,
+  reading a later card only when needed to resolve a dependency or planned deferral.
+  Behavior assigned to a later step is planned work, not a finding.
 - Load dismissals from earlier `reviews/step-<k>-fix.md` files under the Load Prior
   Dismissals rules.
 - Map commits to steps as in Stage A, then apply the Stage B lenses (1, 3, 4, 5),
@@ -145,20 +145,25 @@ and incomplete affected merge claims, then return `decision-required` with the e
 
 ## Load Spec-Aware Context
 
-Read for judgement:
+Read shared context once per review session; later iterations load changes and unresolved
+items. In step scope, read the assigned card, its learning, applicable spec contracts,
+criteria/invariants, and referenced dependencies. Use `spec-steps.json` and the history
+index to locate related records. Do not load every other card or learning for each step.
+The index is navigation: confirm relevant decisions in their original records, and
+resolve unknown/missing entries that could affect the review.
+
+In branch scope, read for judgement:
 
 - `context.md` and current project sources — users/data/compatibility, release model, authority,
   decision provenance, and deliberate omissions; inspect material changes.
 - `spec.md` — the whole intent, plus any `## Adaptations` log.
 - `evidence-plan.json` — the posture and AC → CL → FH → EV graph.
 - `merge-evidence.json` and `merge-evidence.md` — produced gate results and proof boundaries.
-- Every `step-<NNN>-subspec.md` in `<spec-dir>` — what each step meant to do (per-step
-  artifacts live flat in the spec folder, step numbers zero-padded to three digits).
-- Every `learnings/step-<NNN>-learning.md` in `<spec-dir>` (or its historical
-  root-level location when no folder copy exists) — what each step discovered and any
-  recorded trade-offs. A sourced, applicable deliberate trade-off is not a bug; a learning alone
-  cannot accept material risk — the canonical
-  exclusion list lives in Report Discipline.
+- `spec-steps.json`, the history index, and prior review coverage; open cards and
+  learnings for uncovered commits, affected integration contracts, unresolved findings,
+  and decisions needed to judge the diff. Check original records when index coverage
+  is missing or uncertain. A learning alone cannot accept material risk; sourced
+  trade-offs follow Report Discipline. Historical root-level learnings remain usable.
 - `criteria.md` — consume only prose `Statement:` values.
 - `invariants.md` — consume only live invariant statements not marked superseded.
 
@@ -182,8 +187,9 @@ direction. Pending configured required CI remains pending evidence; do not inven
 defect or launch another suite solely because CI is still running.
 
 Capture exact commands, elapsed times, outcomes, environment, output artifacts, and HEAD.
-Update `merge-evidence.md` and `merge-evidence.json` atomically with actual gate results,
-claim coverage, and remaining gaps; preserve original step learnings.
+Update `merge-evidence.md` and `merge-evidence.json` atomically when gate results,
+claim coverage, applicability, or gaps change; preserve original step learnings and
+unchanged assembled records. An already-current assembly needs no rewrite.
 Set `readyForAudit: true` only after all required merge gates pass and later-phase handoffs
 are recorded. Test failures or unresolved timeouts produce actionable evidence findings
 for the existing fix loop. Test-source defects also go to that loop; do not edit code here.
@@ -193,7 +199,13 @@ as passed or infer behavioral correctness solely from the step's startup smoke c
 
 ### Executable-evidence lens (always runs)
 
-For every claim, independently inspect its sourced necessity and phase, acceptance source, changed production path,
+The first branch audit independently assesses every claim. On later iterations, reuse
+that assessment for unchanged, still-applicable claims and inspect changed dependencies,
+unresolved findings, and affected gates. Preserve audit provenance; a prior verdict
+without usable scope/evidence does not establish coverage. Do not retrace every
+unaffected production path merely because the iteration number changed.
+
+For each claim requiring assessment under that scope, independently inspect its sourced necessity and phase, acceptance source, changed production path,
 failure hypotheses, gate implementation, recorded execution, artifact, proof boundary,
 environment, and commit binding. Re-run focused gates only when safe, authorized and useful. Select adversarial cases for
 credible remaining failures at material boundaries; do not add a case solely to meet a quota.
@@ -233,11 +245,14 @@ finding. Do not create a separate verdict or report.
 
 ## Load Prior Dismissals (dedup)
 
-Read every earlier `<spec-dir>/reviews/branch-<k>-fix.md` (`k < iter`) and every
-`reviews/step-<k>-fix.md`, and collect
-the **signatures** of `dismissed` findings **with their dismissal class**. Also
-load exceptional `dismissals` from earlier review records under the same rules. This is
-the loop's anti-thrash memory, but not every dismissal class suppresses re-raise —
+Use the history index to locate earlier review/fix records. Read their leading YAML
+records to collect unresolved findings and the **signatures** of `dismissed` findings
+**with their dismissal class**. Also
+load exceptional `dismissals` from earlier review records under the same rules. Open
+detailed rationale and authority sources for matching or potentially applicable signatures;
+do not reread unrelated narrative. Missing or uncertain index entries require original
+record inspection, not assumed resolution. This is the loop's anti-thrash memory,
+but not every dismissal class suppresses re-raise —
 only the ones that establish no unresolved applicable defect do. An agent-generated
 assumption, spec sentence, or learning does not authorize material risk acceptance:
 
@@ -343,6 +358,10 @@ state the existing implementation, the new implementation, and the concrete harm
 of truth). If both implementations intentionally serve different contracts, do not
 flag the similarity.
 
+On later iterations, scope fresh precedent searches to responsibilities affected by
+the intervening diff, including their callers and copies. Reuse still-applicable prior
+search results rather than repeating the repository sweep for unchanged behavior.
+
 Search in the other direction too. For each existing helper the branch fixes or
 changes in behavior, search for copies elsewhere in the repository that implement the
 same responsibility. Report each copy that still carries the old behavior; that copy
@@ -414,12 +433,13 @@ aggregation):
 
 ### Conditional fan-out (fan out by risk, not by habit)
 
-After the core pass, run a specialized lens for **each risk trigger the diff fires**
-— often none, sometimes several. Fan out by what the branch actually touches, not
-by rote. Run each fired lens as its own subagent per the fan-out rule, so lenses
-stay independent.
+Assess each applicable risk below during the core pass. Delegate a specialized lens
+when a substantive question needs deeper expertise or remains uncovered by that pass;
+give it the concrete question and affected scope. File types and risk labels identify
+areas to assess, not automatic duplicate review jobs. The branch reviewer remains
+responsible for all applicable risks and records material coverage limits.
 
-Each lens below names its trigger and what it looks for. When a fired lens has a
+Each lens below names its trigger and what it looks for. When a needed lens has a
 matching skill available, **delegate to it**. Record which skill you used. If the
 skill is not available in this workspace, run that lens's inline checklist. Never
 skip a fired lens because its preferred skill is absent.
@@ -430,7 +450,10 @@ skip a fired lens because its preferred skill is absent.
   drift, missing UX states (loading/empty/error/disabled), and accessibility
   regressions. When `design-align` or `ux-auditor` is available, delegate to it. When
   the branch has a reachable dev server, Storybook, or component harness, render the
-  changed views before judging them. Establish eyes with `see`. Capture with
+  changed views before judging them if current inspected captures do not establish
+  the relevant state. Reuse applicable step captures and inspection records, checking
+  their provenance; recapture for changed UI, missing states, or concrete uncertainty.
+  Establish eyes with `see`. Capture with
   `uishot` at the default viewport and at 320px. Cite what you saw. Layout
   breakage, clipping, and contrast failures do not appear in a diff. When nothing
   renders, review from source and record the lens as source-only rather than

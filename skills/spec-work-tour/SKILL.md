@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "9"
+  version: "10"
 ---
 
 # Spec Work Tour
@@ -70,7 +70,8 @@ Human operational authorization is a separate legitimate decision, not a correct
 
 Apply the shared **Bounded Refinement Completion** policy when refinement returns
 `verified-at-cap`. Its current completion record replaces the final independent-audit
-pass requirement below. Check actual fixes and executable evidence, retain the stated
+pass requirement below. Check its links to recorded fix decisions and current evidence;
+inspect implementation again only for a concrete discrepancy. Retain the stated
 absence of independent post-fix review, and do not launch an extra review or reset the
 round budget. A stale completion remains a blocker.
 
@@ -78,23 +79,27 @@ round budget. A stale completion remains a blocker.
 
 Resolve an explicit `.specs/<feature>/` folder or contained artifact first, then the feature named in the conversation. Stop on ambiguity. Resolve the repository root, merge base, current branch, and exact `HEAD` SHA. The tour is commit-bound to that SHA.
 
-Read, when present:
-
-- sourced `context.md` and current project context; compare relevant sources for material changes
-- `proposal.md`, `critique.md`, and `prototype/`
-- `spec.md`, `spec-steps.json`, `evidence-plan.json`
-- `spec-prepare.md`, `criteria.md`, `invariants.md`
-- every `step-<NNN>-subspec.md` and `learnings/step-<NNN>-learning.md`
-  (read a historical root-level learning when no folder copy exists)
-- `merge-evidence.md` and `merge-evidence.json`
-- `evidence/`, `blockers.md`, and the latest branch review/fix artifacts
-- the merge-base-to-HEAD commits and diff
+Start with sourced `context.md`, `spec.md`, `spec-steps.json`, `evidence-plan.json`,
+the assembled `merge-evidence.json`/Markdown, blockers, and the current refinement
+completion or audit. Use the history index to locate supporting learnings and decisions.
+Confirm required records exist; read originals for missing explanation, contradictions,
+unresolved gaps, or the specific architecture/QA narrative being written. Do not reload
+every subspec, learning, proposal, critique, or full diff to reconstruct an already
+audited implementation. Historical root-level learnings remain usable.
 
 Required inputs for an implemented spec are `context.md`, `spec.md`, version 2 `evidence-plan.json`, all expected learnings, and `merge-evidence.json`. A final merge-ready tour additionally requires a current passing branch evidence audit. If an older package predates one of these contracts, report the missing artifact as a blocking evidence gap; do not silently infer a pass.
 
 ## Revalidate Provenance And Gates
 
-Validate required artifact paths and code revision bindings that their schemas provide. Then walk every claim and required gate in `evidence-plan.json`:
+The independent branch audit owns semantic evidence assessment. The tour owns faithful
+assembly and presentation. Validate required paths, coverage, statuses, and revision
+bindings against the evidence plan and current audit/completion record. For each claim
+and required gate, carry forward the audited mapping, phase, observation, authority,
+proof boundary, and limitations. Do not repeat production-source review, gate-design
+analysis, or test execution simply to produce the tour.
+
+When a missing record, contradiction, relevant change, or unresolved uncertainty makes
+that handoff insufficient, inspect the affected original evidence and apply these checks:
 
 1. Confirm the claim maps to an applicable sourced requirement, with the correct decision phase.
    Read the context snapshot and expose consequential decisions and omissions.
@@ -279,7 +284,14 @@ The default HTML composition must expose:
 
 Do not make a reviewer scroll through every gate, scenario, and implementation step to find the evidence that qualifies the verdict. Do not hide residual risk merely because `verdict: ready`.
 
-Open the HTML in a browser and inspect it at desktop and narrow widths. For a visual implementation, include the implementation's captured states in the QA section and inspect those images too. Confirm keyboard-visible claim and scenario selection, URL-deep-link selection, copy-command feedback, local artifact links, print expansion, and that only the intended region overflows horizontally. Correct broken links, overflow, unreadable content, missing sections, and inaccurate summaries. The first wide viewport must reveal the verdict and real attention items, not a long rationale or metadata dashboard. The renderer's success proves shape, not truth; compare sampled rows back to their source artifacts.
+Inspect the generated tour once at desktop and narrow widths for content, links,
+overflow, and accurate summaries; compare sampled rows with their source records.
+For visual implementations, include the existing inspected captures and their findings;
+do not repeat application QA to illustrate the tour. Check the renderer's full keyboard,
+deep-link, copy, and print behavior when its code/template changed or a concrete defect
+calls it into question, rather than retesting unchanged controls for every package.
+The first wide viewport must reveal the verdict and real attention items. Record the
+render/inspection result in the normal handoff so publication can reuse it.
 
 ## Freshness Rule
 

@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "14"
+  version: "15"
 ---
 
 # Spec PR
@@ -25,7 +25,8 @@ This skill opens or updates PRs and never merges them. It may change repository 
 
 Apply the shared **Bounded Refinement Completion** policy when refinement returns
 `verified-at-cap`. Its current completion record replaces the final independent-audit
-pass requirement below. Check actual fixes and executable evidence, retain the stated
+pass requirement below. Check its links to recorded fix decisions and current evidence;
+inspect implementation again only for a concrete discrepancy. Retain the stated
 absence of independent post-fix review, and do not launch an extra review or reset the
 round budget. A stale completion remains a blocker.
 
@@ -50,7 +51,12 @@ evidence under the sequence below instead of demanding a tour before a planned r
 - version 2 `work-tour.json` and its `work-tour.html`
 - `blockers.md` when present
 
-Also read proposal, critique, preparation report, criteria/invariants, learnings, evidence artifacts, and review/fix history for PR summarization. Missing or legacy required inputs, an unresolved merge blocker, an audit other than `pass` + `evidence_verdict: proven`, a tour other than `ready`, or any artifact bound to a different commit blocks ready status, not an honest authorized draft.
+Summarize from the current tour, merge evidence, sourced scope, and relevant diff.
+Open planning history, learnings, or review/fix details only to resolve missing context,
+a contradiction, or a material limitation. Drafts use available checkpoint learnings
+and the actual diff without requiring final artifacts. Missing or legacy required
+inputs, unresolved merge blockers, invalid audit/completion, a tour other than `ready`,
+or stale commit bindings block ready status, not an honest authorized draft.
 
 Write these artifacts atomically under the spec folder:
 
@@ -124,14 +130,18 @@ apply only the affected work below within the existing review budget.
    original revisions and an explicit applicability assessment; a new SHA does not require
    every local suite. Require applicable configured CI passing on the final pushed commit
    before ready; absent CI does not create a local full-suite prerequisite or block completion.
-3. Regenerate `merge-evidence.json`/Markdown from actual outcomes.
+3. Update affected `merge-evidence.json`/Markdown records from actual outcomes only
+   if the evidence owner has not already brought them current. Preserve applicable
+   unchanged records and their original observations; do not reconstruct the package.
 4. Run or resume `spec-branch-refine` against the final branch within the selected review
    budget. Require current `evidence_verdict: proven` and the selected process's audit pass
    or valid `verified-at-cap` completion. Do not restart completed refinement merely to
    collect CI or publish; actual new defects still block readiness.
 5. Reuse a current `spec-work-tour` result or run it when missing or invalidated. Confirm
    its JSON/HTML, the audit artifact, and every required gate bind
-   the exact full `git rev-parse HEAD` SHA. Open `work-tour.html` and confirm it renders.
+   the exact full `git rev-parse HEAD` SHA. Reuse the tour owner's render/inspection
+   result; reopen only when output, renderer, or shared-file packaging changed, the
+   inspection is missing, or a concrete presentation defect is reported.
 
 If evidence cannot be re-established, keep the authorized PR in draft status and record the
 actual gaps. Continue useful repair and CI feedback; do not mark the candidate ready or
