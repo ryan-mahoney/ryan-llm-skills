@@ -248,6 +248,7 @@ See the [product documentation guide](docs/product-documentation.md).
 | Skill | Purpose |
 |---|---|
 | **agents-update** | Generate or update a repository's `AGENTS.md` |
+| **repo-status** | Collect local Git facts across repositories and worktrees, with optional open PR observations |
 | **architect-inspect**, **identify-where**, **feature-list** | Describe architecture around a file, locate where a behavior lives, or inventory features |
 | **controller-refactor-plan** | Find dead handlers and misplaced responsibilities in a controller |
 | **ux-auditor**, **design-align**, **form-modernizer** | Check UI against a prototype or design system, or modernize a form |
