@@ -16,6 +16,7 @@ filename contract for preparation and execution.
 The spec-driven development workflow plus the design-spec front-half:
 
 - `spec-end-to-end`
+- `spec-message`
 - `spec-upgrade`
 - `spec-architect-initial`
 - `spec-architect-critics`
@@ -39,6 +40,12 @@ The spec-driven development workflow plus the design-spec front-half:
 Includes the Augment CLI subagent adapter:
 
 - `augment/agents/spec-step-implementer.md`
+
+The bundle also ships `pi/agents/spec-step-owner.md` and
+`pi/agents/spec-step-editor.md`. Copy them to `~/.pi/agent/agents/` after extraction
+when using Pi; the portable installer has no Pi target. The editor uses OpenRouter
+`inception/mercury-2.5:high`. Pi retains owner/editor sessions across related steps
+with one writer, compact path-based handoffs, and a generated history index.
 
 `spec-branch` and `spec-branch-worktree` ship as backwards-compatible convenience utilities; the
 end-to-end orchestrator manages ordinary branch/worktree setup directly.
@@ -67,7 +74,9 @@ The generated `spec-skills` README also includes a stage-by-stage overview:
    the complete prepared package.
 4. Let the top-level agent establish a code branch or worktree. Keep all `.specs` reads and writes in the primary repository; ignore any worktree copy.
 5. Execute the immutable prepared package with `spec-run`, which reviews each step in the
-   background and fixes its findings before the next step.
+   background and fixes its findings before the next step. Structural readiness replaces
+   preparation hashes; prepared focused checks expand only for actual failures or
+   acceptance gaps, and review output retains findings and material limitations.
 6. Run `spec-branch-refine` for one review → fix round when step reviews cover every step,
    otherwise two, including the final fixes; record whether those fixes received an
    independent review.

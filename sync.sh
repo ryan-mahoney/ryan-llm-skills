@@ -87,6 +87,12 @@ if [ -d "$HOME/.cline" ]; then
   echo "Synced Cline skills."
 fi
 
+# Pi: native retained step owner/editor profiles. Pi discovers ~/.agents/skills.
+if [ -d "$HOME/.pi/agent" ]; then
+  sync_file_symlinks "$AGENTS_DIR/pi/agents" "$HOME/.pi/agent/agents"
+  echo "Synced Pi step owner and editor profiles."
+fi
+
 # Augment: skills and CLI subagent configs.
 #
 # Augment discovers ~/.agents/skills natively in current clients, but CLI

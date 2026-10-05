@@ -56,7 +56,7 @@ running stages individually, recovery, and harness setup.
 |---|---|---|
 | Proof proportional to context | Users, data value, compatibility, release process, and permitted operations are recorded once in `.specs/project-context.md`. Evidence matches actual exposure: disposable data needs no migration machinery, while security and valuable data keep full protection. | [Project context contract](skills/spec-end-to-end/references/project-context.md), `spec-write` |
 | Escalate only consequential decisions | Agents settle ordinary engineering questions themselves. They stop only for choices that change scope, authority, or risk, and never ask people to review specs or code. | Every stage's `decision-required` outcome |
-| Prepared intent is immutable | `spec-write` publishes a hash-bound package. Implementation may adapt to the repository but never edits the plan. Changed intent or proof goes back for re-preparation. | `spec-write`, `spec-run` |
+| Prepared intent is immutable | `spec-write` produces ready cards and structurally valid inputs. Implementation may adapt to the repository but never edits the plan. Changed intent or proof goes back for re-preparation. | `spec-write`, `spec-run` |
 | Every claim can fail | Each acceptance criterion maps to a claim, its credible failure hypotheses, and a gate able to reject each one (AC → CL → FH → EV). | [Executable evidence contract](skills/spec-work-tour/references/executable-evidence.md), `spec-branch-review` |
 | Proof through the real entry point | Runtime claims are shown through production composition, at the boundary that owns the behavior, without test-only prerequisites. | `spec-step-run`, `spec-run` verification |
 | Tests earn their place | A new test names the failure existing tests miss. A removal names the retained protection or the source that retired the obligation. Test counts, coverage, and a green suite after deletion justify neither. | [Unit testing guide](rules/unit-testing.md), `spec-branch-review`, `test-audit` |
@@ -64,7 +64,7 @@ running stages individually, recovery, and harness setup.
 | Minimal implementation | Steps write the least code that solves the stated problem, with no speculative abstractions, flags, or compatibility shims. | [Minimal implementation guide](rules/minimal-implementation.md), selected for every spec |
 | Reviewers do not fix; fixers do not review | Review and fix are separate agents that communicate only through `reviews/*-review.md` and `*-fix.md`. Reviewers test the implementer's conclusions instead of trusting them. | `spec-branch-review`, `spec-branch-fix` |
 | Review early, converge in bounded rounds | Each step is reviewed in the background while the next is built, and its findings are fixed before the following step. The branch then gets one review-and-fix round, or two when step reviews are incomplete. The completion record says when final fixes were not re-reviewed. | `spec-run`, `spec-branch-refine` |
-| Honest, commit-bound results | Every result names the revision it ran against and goes stale after later changes. An unrun test is never reported as passing. Incomplete work is recorded as `checkpoint` and gaps stay visible. | `spec-run`, merge evidence, `spec-work-tour` |
+| Honest, commit-bound results | Every result names the revision it ran against; relevant later changes require reassessing applicability. An unrun test is never reported as passing. Incomplete work is recorded as `checkpoint` and gaps stay visible. | `spec-run`, merge evidence, `spec-work-tour` |
 | Bounded execution | Every command and worker has an explicit deadline. A timeout is a recorded failure, not a pass. | Verification scheduling policy, `spec-run` |
 | Merge readiness is not deploy authority | The workflow ends at a published PR. Deployment readiness, authorization, and post-deploy observations are tracked separately, and no gate grants operational authority. | `spec-work-tour`, `spec-pr` |
 | Readable output | PRs, commits, and work tours explain the software without workflow narration or local file references. Specs keep the detail agents need. | [Engineering writing](rules/engineering-writing.md) |
@@ -75,7 +75,7 @@ running stages individually, recovery, and harness setup.
    `context.md` and `proposal.md`.
 2. `spec-architect-critics` stress-tests the proposal and writes `critique.md` (optional).
 3. `spec-write` writes the spec, its evidence plan, and one execution card per step, then
-   publishes the hash-bound package.
+   validates required inputs and ready cards.
 4. The top-level agent chooses a branch or worktree. All `.specs/` reads and writes stay in
    the primary repository, even when a worktree has a tracked copy.
 5. `spec-run` implements each step with its tests and evidence and commits it. After each
@@ -97,7 +97,8 @@ git-ignored.
 |---|---|---|
 | `context.md`, `proposal.md`, `critique.md` | Architecture stages | Context snapshot, chosen approach, and challenges to it |
 | `spec.md`, `evidence-plan.json` | `spec-write` | Behavior, acceptance criteria, pre-mortem, and the AC → CL → FH → EV graph |
-| `step-NNN-subspec.md`, `spec-steps.json`, `preparation.json` | `spec-write` | Execution cards and the hash manifest that implementation validates before each step |
+| `step-NNN-subspec.md`, `spec-steps.json`, `spec-prepare.md` | `spec-write` | Execution cards, step index, and preparation outcome; structural readiness is checked once |
+| `history-index.json` | `spec-run` script | Navigation to canonical learnings, decisions, handoffs, and unresolved reviews |
 | `learnings/step-NNN-learning.md` | `spec-step-run` | What the step did, departures from the card, later-step handoffs, and its evidence |
 | `reviews/step-NNN-*.md`, `reviews/branch-N-*.md` | Review and fix skills | Findings with stable signatures, and the fix or dismissal for each |
 | `merge-evidence.md`, `merge-evidence.json` | `spec-run`, then review and fix | Gate results bound to the current commit |
@@ -108,7 +109,13 @@ git-ignored.
 In Pi, the top-level agent runs `spec-end-to-end` and `spec-run` itself, because a child
 can launch subagents only when granted fanout. Assign models per role when starting the run,
 for example a different provider for step review than for implementation. The orchestrator
-passes each model on every launch for that role. For OpenCode's second worker level, see
+passes each model on launch and retains implementation sessions across related steps.
+The step owner directs one nested Mercury editor (`inception/mercury-2.5:high` on
+OpenRouter); only one writer is active. Handoffs carry canonical paths, outcomes,
+commits, and unresolved issues. The history index locates detail. Prepared focused
+checks own verification; actual failures, departures, or acceptance gaps justify
+additional checks. Reviews report defects and material limitations without positive
+correctness narratives. For OpenCode's second worker level, see
 [OpenCode nested delegation](docs/spec-workflow.md#opencode-nested-delegation).
 
 ### Skills

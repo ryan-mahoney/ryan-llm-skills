@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "27"
+  version: "28"
 ---
 
 # Spec Step Run
@@ -17,10 +17,12 @@ metadata:
 Apply [Verification and Review](../../rules/verification-and-review.md) for CI/operator ownership
 and batched Jev verification/review-triage checkpoints.
 
-Implement one step from the prepared package. This is a leaf implementation skill:
-do not spawn subagents, deliberately run the next indexed step, or perform the final
-branch evidence audit. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Work to the intended outcome even when repository evidence shows that
-the prepared route is incomplete or wrong.
+Own one assigned step from the prepared package. In Pi, use the retained owner/editor
+pair described in [Paired execution](references/paired-execution.md); the owner may
+launch exactly one editor when assigned that mode. A direct worker performs the same
+work itself without delegation. Do not begin the next step until assigned or perform
+independent branch review. Use the prepared card as the execution plan, adapting only
+where actual code or observed failures require it.
 
 ## Routed Overseer Messages
 
@@ -49,38 +51,36 @@ necessary later procedure, and record pending execution. A spec gate never grant
 
 ## Canonical Inputs
 
-The prompt identifies the code checkout and canonical target subspec path, or the
-canonical feature folder and target step. Resolve the package and step from those
-inputs; the parent need not restate their contents. Resolve paths with the shared workspace handoff even on direct
-invocation; never use a worktree spec copy. Read `context.md`, `spec.md`, `spec-steps.json`,
-`evidence-plan.json`, `spec-prepare.md`, `preparation.json`, optional criteria/invariants/blockers,
-the target `step-<NNN>-subspec.md`. Write the target learning to
-`<spec-dir>/learnings/step-<NNN>-learning.md` and non-committed evidence to the
-canonical feature folder using explicit output paths; execute tests in the code checkout.
-Read prior learnings and review/fix history as described below.
+The prompt supplies the code checkout and canonical subspec path, or feature folder
+and step. Resolve paths under [Workspace Handoff](../spec-end-to-end/references/workspace-handoff.md).
+Keep `.specs/` in the primary checkout; run code and checks in the implementation checkout.
+
+On first use, read `context.md`, the spec's shared contracts and assigned step, the
+matching `spec-steps.json` entry, owned `evidence-plan.json` gates, the subspec, and
+applicable rules. Follow references to relevant criteria/invariants and blockers.
+Reuse those inputs across assignments; load new constraints and affected sections
+when they change. Read other steps only to resolve a dependency or ownership question.
+Do not load the full preparation report and unrelated cards as routine startup work.
+
+Write `learnings/step-<NNN>-learning.md` and non-committed evidence under the canonical
+feature folder. Read the [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md)
+when producing or interpreting evidence records; do not duplicate its schema in handoffs.
 
 ## Prior Step Handoff
 
-Before production code work, list earlier step learnings in `<spec-dir>/learnings/`
-and earlier `reviews/step-<NNN>-review.md` and `reviews/step-<NNN>-fix.md` files.
-For a historical step whose learning exists only at `<spec-dir>/step-<NNN>-learning.md`,
-read that file. Prefer the `learnings/` copy if both paths exist. Do not write new
-learnings at the feature root or move historical artifacts with bound references.
+Use `<spec-dir>/history-index.json` to locate introduced symbols, decisions, handoffs,
+and review/fix records relevant to this step. Read the original sources for applicable
+items and any unresolved or unknown entry that could affect its contracts. An index
+is navigation, not authority or proof of resolution. If absent, rebuild it with
+`node ~/.agents/skills/spec-run/scripts/build-history-index.mjs --spec-dir <spec-dir>`;
+if unavailable or incomplete, inspect the original records for affected prior steps.
+Never treat an indexing failure as an empty history. Prefer `learnings/` over historical
+root-level learning copies.
 
-Scan the `introduced` entries, "Findings for subsequent steps", material departures,
-discrepancies/risks, and unresolved gaps in prior learnings. Scan review verdicts,
-finding signatures, and fix decisions. Open the surrounding prose only for items that
-touch this step's targets, contracts, invariants, tests, or verification route. Carry
-forward applicable handoffs and unresolved defects; check whether later code or a fix
-already resolved them before acting. A `fixed`, `false-positive`, or sourced
-`intentional`/`accepted-risk` decision is precedent, not an open task. A `deferred`
-or `unfixable` decision remains unresolved. A review alone does not override
-current code, sourced context, or the prepared spec.
-
-If no prior artifacts exist, proceed. If the scan finds no applicable item, proceed
-without adding a placeholder to the learning. Record an applicable handoff and its
-disposition in the existing learning prose; do not copy whole prior reports or create
-a second summary file.
+Carry forward applicable unresolved defects. Confirm whether a later fix already
+resolved one before acting. Fixed or validly dismissed findings are precedent;
+deferred/unfixable findings remain open. Record only material handoffs and their
+disposition, without copying prior reports or adding empty sections.
 
 Resolve the target step's `visualDesign` value from its matching entry in
 `spec-steps.json`. A strict boolean `true` activates the mandatory visual verification
@@ -91,27 +91,17 @@ disable the loop.
 Artifact writes are atomic: write a sibling temporary file and rename it over the
 destination. Markdown artifacts begin with a level-1 heading.
 
-## Inspect Current Preparation
+## Check The Assigned Card
 
-Before reading production code, validate sibling `preparation.json` using the
-strict version 3 contract. Recompute the SHA-256 binding for `context.md`, `spec.md`,
-`spec-steps.json`, `evidence-plan.json`, `spec-prepare.md`, every declared subspec, and optional
-`criteria.md`/`invariants.md`. Check and record whether:
+Require the canonical inputs, a matching step in the spec/index, exactly one assigned
+card with `planning.verdict: ready`, and concrete verification commands/cases. For
+`visualDesign: true`, require the prepared Visual Implementation Brief. Report missing
+or contradictory inputs to the planner; do not invent a substitute plan. Use a truthful
+`no-artifact` or `needs-spec-correction` outcome before dependent edits.
 
-- every bound file exists and matches its lowercase SHA-256 hash;
-- the evidence plan is version 2 and its context path/hash names this package's snapshot and matches `contextSha256`;
-- the requested step exists in both `spec.md` and `spec-steps.json`;
-- the manifest binds exactly one subspec for the requested step;
-- that subspec's strict `planning` block has the same spec hash and step number and
-  has `verdict: ready`;
-- its strict `verification` block is complete.
-- for `visualDesign: true`, the card records `Visual reference: <path | none>` and a
-  complete `Visual Implementation Brief` whose screenshot plan uses Playwright only.
-
-Missing, invalid, stale, or incomplete preparation is a provenance failure. Write a
-`no-artifact` learning naming the mismatched binding and stop this step without editing
-production code. Do not repair shared preparation artifacts here; rerun `spec-write`.
-This gate prevents implementation and evidence from silently targeting different intent.
+The coordinator checks package structure once. Do not repeat a full-package audit,
+compute preparation hashes, or require `preparation.json`. Ignore obsolete hash fields
+in otherwise usable legacy inputs; format migration alone is not a reason to replan.
 
 ## Preserve The Plan As Evidence
 
@@ -122,8 +112,7 @@ remain binding; expected edit targets and implementation routes may adapt. Depar
 mapping, or verification approach when repository evidence shows that doing so better
 achieves the spec's intended outcome. Record material departures as `outcome: adapted`.
 
-Read the full spec, the target subspec, applicable rules, relevant source/test files,
-the applicable prior handoffs above. From `criteria.md`, consume only
+Read the relevant source/test files and applicable prior handoffs. From `criteria.md`, consume only
 prose `Statement:` values. From `invariants.md`, consume only live statements not
 marked superseded. Treat criteria assigned to later steps or final completion as
 directional constraints, not reasons to stop the current step. Preserve them, satisfy
@@ -145,7 +134,7 @@ copy prototype-only fixtures, dependencies, shell UI, or fake data wiring.
   (`~/.agents/rules/minimal-implementation.md`). Prefer the shortest working diff
   consistent with the spec; add no abstraction the spec does not require. Before
   adding any function, type, constant table, or similar helper the card does not
-  name, read the `introduced` lists in prior step learnings and run the search in the
+  name, use the index to locate relevant `introduced` entries and run the search in the
   Reuse section of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
   Reuse or extend an equivalent; place a new general-purpose helper in the
   repository's shared-helper location and export it there. Record
@@ -169,52 +158,28 @@ changes distinguishable. Evaluate defensive branches against reachable states an
 required fallback/security behavior. Record new follow-ups in learning prose, routing any change
 to accepted scope through the planner rather than silently deferring a current obligation.
 
-## Prove Application Reachability In Isolation
+## Focused Verification And Its Stopping Rule
 
-Here, production wiring means actual application composition, not the live deployment. For a
-library-only deliverable, exercise its public exported entrypoint and real implementation; an
-unrequested consuming application is not a required proof target. Preserve promised application
-integration when it is actually part of the requested outcome.
-An injected interface is not implementation evidence by itself. Fakes may replace only true external boundaries such as an editor/runtime API, child-process spawning, filesystem, clock, or network. Do not substitute a test-only internal interface for the concrete production adapter that connects the feature to the running system.
+Execute the prepared acceptance checks after coherent edits. Risk analysis belongs
+primarily in subspec preparation: labels do not require another risk inventory, a
+case per label, or a pre-commit audit narrative. Add investigation or verification
+when actual code, a failure, or a material departure reveals a specific acceptance
+gap. Record the gap briefly with the resulting evidence. A card does not prevent
+fixing a real omission or known relevant failure.
 
-For a step that promises runtime- or user-observable behavior, trace one complete path before declaring success:
+For runtime-facing behavior, use the prepared production wiring and concrete adapter
+with the real application composition. Reuse a focused integration result that already
+establishes reachability; add a bounded smoke check only for missing runtime evidence.
+An internal fake or manually constructed, unwired component cannot establish a claimed
+production path. Library-only steps may exercise their public entrypoint; a named later
+integration owner is valid when the current objective does not promise runtime wiring.
 
-1. The actual runtime entrypoint or composition owner creates or registers the new behavior.
-2. Every required internal injected interface has a concrete production implementation.
-3. The downstream command, API, schema, or protocol exists and the concrete adapter uses its real contract.
-4. Write and run a focused integration test through that production composition when the changed boundary is ready. Reuse its result for reachability; use a local smoke check only for runtime evidence it does not establish.
-5. The promised result is reachable and observable without manually constructing an otherwise-unwired internal controller, provider, service, or node.
-6. The path works with ordinary startup/invocation prerequisites. Exercise the default path of
-   new test hooks/overrides and remove relevant test-only private assigns, preloads, registrations,
-   or initialization absent in normal use. Retain safe fixtures/external substitutes; never target
-   live services for this check. Reuse the same gate when it already establishes this behavior.
-
-Use the card's `Production wiring` and `Concrete adapter` targets when present. If a required link is absent, fake-only, deferred, or outside the prepared targets, implement or repair the smallest coherent production path rather than stopping. Green unit tests over an unreachable abstraction do not satisfy the step; preserve an honest checkpoint if the path cannot be completed.
-
-A deliberately library-only precursor may omit runtime reachability only when its prepared acceptance coverage is non-runtime and a named later step explicitly owns integration. Record that bounded handoff; do not apply it to a step whose own objective promises reachable behavior.
-
-## Expand Risk-Directed Verification During Execution
-
-Read the prepared card's `Risk lenses` and `Live invariants` lines. Use them to strengthen assertions and add or update the nearest relevant tests for credible failures. Run affected unit tests and focused boundary checks under the shared scheduling policy; defer broad regression checks to configured CI on authorized pushed checkpoints/final HEAD, or to operator-managed testing outside agent evidence when CI is absent. They guide vigilance; they are not scope limits or a demand to build abstractions merely to satisfy a label.
-
-Before implementation, privately map each applicable label to the smallest useful boundary checks:
-
-- `persistence-integrity` — corrupt-but-well-shaped input, mismatched metadata/hash/bytes, and restore/read validation.
-- `atomic-publication` — failure immediately before and after irreversible boundaries; the prior committed state remains usable.
-- `concurrency`, `lease-or-refcount`, `idempotency` — two owners/readers, stale ownership, duplicate retry/release, and repeated-call behavior.
-- `cancellation` — cancellation before work, with zero loop iterations or a full cache hit, between batches, and before irreversible commit.
-- `resource-budget` — total owned work, including cached or reused work, unless the spec explicitly defines a delta-only limit.
-- `progress-observer` — the external observer receives ordered events and exactly one terminal outcome; an internal event array alone is insufficient.
-- `filesystem-snapshot` — hashes, manifests, and derived output describe the same bytes when files may change during processing.
-- `cross-step-contract` — reuse established stores, registries, path constructors, ownership, and public shapes rather than introducing private replacements.
-- `external-runtime`, `security-boundary` — verify the prepared injected boundary, fail-closed behavior, and prohibited side effects.
-
-For each prepared verification case, ensure at least one assertion observes the promised result and, when relevant, the mutation that must not occur. Use risk labels as prompts for engineering judgment: act on credible risks in the final diff and briefly dismiss irrelevant labels, but do not manufacture abstractions or tests solely to account for every label. Do not add a broad suite or a second test harness without a concrete reason.
-
-Apply the shared **Maintained Test Value** policy while changing tests. Reuse or extend existing
-cases before adding files. Reassess temporary discovery tests before retaining them. For removals,
-record retained protection or the sourced retirement in existing learning prose. Preserve required
-gates and meaningful regression cases; fewer tests is not a completion criterion.
+Stop when the assigned checks pass and known relevant gaps are resolved. Do not rerun
+passing checks without an affected change or named uncertainty, or add another harness
+to account for a label. Preserve required visual observations. Reuse existing meaningful
+tests or deterministic evidence; a step need not create a test file just to complete.
+Apply [Unit Testing](../../rules/unit-testing.md) when changing tests and the shared
+verification policy for deadlines, Jev scheduling, and CI/operator broad-check ownership.
 
 ## Produce Owned Evidence
 
@@ -236,78 +201,11 @@ evidence path in the learning prose. Automated execution artifacts intentionally
 branch review stay `pending` and do not prevent implementation completion. A step whose other required merge evidence remains unproduced is
 not `as-specified` — preserve it as a truthful `checkpoint` with the gap recorded.
 
-## Render, Inspect, And Correct Visual Steps
+## Visual Steps
 
-When the target entry in `spec-steps.json` has `visualDesign: true`, treat seeing the
-rendered result as required implementation work, not optional final polish:
-
-1. Before editing, inspect any named visual reference and the applicable local design
-   system and design/UX rules. Read the installed `uishot` skill completely and resolve
-   its bundled launcher before the first capture. Open static reference images directly.
-   For an executable reference or an existing production view reachable by URL, use
-   `uishot` to capture the relevant page, region, states, and viewport sizes before
-   editing so the implementation loop begins with observed pixels rather than inference.
-2. Use `uishot` as the default Playwright-backed observation runner for the real changed
-   UI, including when the repository has its own Playwright suite. A local app, Storybook,
-   or component preview may serve the production component with its real styles. Run
-   `uishot` from the worktree root, run its setup command when required, and keep its
-   browser warm throughout the correction loop. `uishot` satisfies the Playwright-only
-   screenshot requirement; do not classify it as a generic browser screenshot fallback.
-3. Reuse the repository's Playwright configuration and fixture helpers. Run only an affected
-   automated journey when the changed behavior needs browser evidence; do not launch the full
-   suite for a capture. Use direct browser interaction and capture for capabilities that improve
-   the observation: existing authentication or data fixtures, and
-   interaction-driven states that `uishot` cannot create directly, such as hover, drag,
-   form entry, or opening a transient surface. When those helpers can establish a stable
-   URL or server-side state, capture the resulting view with `uishot`; otherwise capture
-   in the repository's Playwright context and inspect that image. Create a temporary raw
-   Playwright runner only when neither route can produce the required state. Do not add a
-   lasting Playwright dependency solely for disposable observation, and do not use
-   Cypress or a non-Playwright screenshot method as a fallback.
-4. Capture the smallest representative set that proves the visual outcome: at least the
-   primary changed view, plus any viewport, interaction, or non-ideal state materially
-   affected by the step or named acceptance criteria. Use `--wait-for`, `--wait-text`,
-   or `--selector` to pin `uishot` to meaningful content, and react to its readiness,
-   console-error, broken-image, and failed-request output. Reveal menus, dialogs,
-   validation, focus, overflow, or responsive behavior when those are part of the
-   change. When the reference is executable, capture reference and production at
-   matching states and viewport sizes.
-5. Inspect every screenshot through the eyes established by the `see` skill: view the
-   image directly under `host-vision`, or relay it through `see`'s `codex-see` under
-   `codex-relay`. Establish that mode once, before the first inspection, instead of
-   assuming the model running this step can view images — one that cannot will
-   describe a screenshot it never saw. Do not infer correctness from a successful
-   capture command, DOM assertions, or snapshot bytes.
-   Compare against the visual reference when one exists and assess hierarchy, alignment,
-   spacing, typography, color and contrast, clipping, overflow, layering, content states,
-   responsive behavior, and obvious interaction affordances under the project's design
-   posture. Confirm the image actually contains the changed UI and is not an error,
-   login, loading, blank, or stale page.
-6. Fix credible defects, repeat the affected local smoke interaction, recapture, and inspect again.
-   Continue while an iteration yields new evidence or improvement. Capture and inspect
-   at least one final image after the last visual code change; never call an image final
-   when it predates the current implementation.
-
-Write or update existing Playwright visual regression assertions and schedule the affected checks under the shared policy, but do not treat
-baseline acceptance as a substitute for looking at the rendered pixels. Keep ad hoc
-screenshots out of the commit unless the repository explicitly tracks Playwright visual
-baselines, retain the final inspected images under `.specs/<feature>/evidence/` so they
-survive as merge evidence, and terminate any server or watcher started for capture. If the first `uishot` capture launched its warm
-browser, stop it after the final capture and confirm `uishot status` reports it stopped;
-preserve a browser that was already running. Record the cleanup commands and outcomes.
-
-If `uishot` and the repository's Playwright path cannot render the UI, or screenshots
-can be neither viewed directly nor relayed through `see` after practical local
-diagnosis, record the exact attempts and preserve
-the result as `checkpoint`; passing non-visual tests does not make a `visualDesign: true`
-step complete. Count visual correction cycles in `fix_attempts`. In the learning prose,
-record the exact `uishot` and repository Playwright commands, target route or harness,
-viewport and state coverage, screenshot paths, readiness and console evidence, what the
-inspection found, corrections made, and the final visual assessment.
-
-The final captures and deterministic scenario/setup notes are QA-tour inputs. Preserve
-them under `.specs/<feature>/evidence/` with sensitive data removed. Rendered evidence
-does not replace behavioral, data, policy, or production-reachability gates.
+For `visualDesign: true`, read and apply [Visual verification](references/visual-verification.md).
+This retains the prepared visual brief, real rendered inspection, correction, and
+cleanup requirements. Other steps do not load this procedure.
 
 ## Run Focused Feedback
 
@@ -321,8 +219,7 @@ fabricate red/green evidence or turn every edit into a full-suite run.
 
 Observe the real changed path through the focused test when it covers application composition.
 Add a bounded local startup/entrypoint smoke check only for missing runtime evidence; preserve
-required visual inspection. Reuse observations across reachability, risk, and pre-commit
-summaries. Follow the shared deadlines, process ownership, and timeout diagnosis rules.
+required visual inspection. Record each observation once and reference it where needed. Follow the shared deadlines, process ownership, and timeout diagnosis rules.
 
 Record actual commands, selection, elapsed time, results, artifacts, and proof limits.
 Intentionally deferred final checks remain `skipped`/`pending`, with reason `deferred to
@@ -367,14 +264,16 @@ learning:
 ```
 
 Include exactly one evidence entry per EV item owned by this step; use `evidence: []`
-when none. List in `introduced` each new symbol another step or feature could plausibly
+when none. When reusing an earlier result, add `observedCommit` and `applicability`
+to its evidence entry: retain the actual execution SHA and explain why the result
+still applies. Copy those fields into assembled gate records; do not represent reuse
+as a new execution. List in `introduced` each new symbol another step or feature could plausibly
 reuse; omit feature-private details and use `introduced: []` when none. A passed EV records its exact command in `verification.commands` and a real
-artifact. Follow the YAML with the step reference/Covers tags, outcome, assumptions and material
-departures, a concise risk-audit and production-reachability summary covering the
-declared labels/invariants, at most five concrete findings for later steps, at most
-five discrepancies/risks, and the verification summary. Put later-step findings under
-`## Findings for subsequent steps`; write `None.` there when none exist. State each
-finding's affected step or path, condition, consequence, and next action. Keep prose
+artifact. Follow the YAML only with material decisions, departures, unresolved gaps,
+and findings for later steps. Record evidence once; do not add positive correctness,
+risk-lens, or routine process narratives. Omit empty sections. Put later-step findings
+under `## Findings for subsequent steps`, with affected step/path, condition, consequence,
+and next action. Do not cap unresolved findings in a way that hides an obligation. Keep prose
 short and decision-bearing: do not repeat command lists from YAML, copy test logs
 from evidence artifacts, or narrate routine implementation edits. Emit the learning in every
 terminal case, including checkpoints, consequential decisions, no-artifact results, and already satisfied steps.
@@ -413,9 +312,7 @@ material limitation without claiming the feature is complete.
 
 ## Completion Report
 
-Report the spec and step, preserved subspec path, learning path/outcome, commit hash,
-changed files, every exact verification command and result, fix attempts, produced
-evidence paths for any owned `Evidence:` lines, and any remaining finding or risk. For `visualDesign: true`, also report the inspected screenshot
-paths, exact `uishot` and repository Playwright commands, covered viewports/states,
-visual correction cycles, and final assessment or the reason rendered verification
-remained incomplete.
+Return outcome, learning path, commit, retained editor ID when paired, and unresolved
+decisions or material gaps. The learning and evidence artifacts hold commands, results,
+changed files, and visual observations; do not repeat them in the handoff. End with no
+active editor so the coordinator can safely run fixes or assign the next step.

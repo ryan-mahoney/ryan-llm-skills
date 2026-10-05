@@ -40,14 +40,16 @@ See [the evidence audit guide](reviews.md) for artifact paths and proof requirem
 
 ## Test Scheduling
 
-Implementation steps write or update tests for the changed behavior and run the affected
-unit tests and focused integration checks. A failed focused check is a failure to fix or
+Implementation steps execute the prepared focused acceptance checks after coherent edits.
+Reuse existing meaningful tests and evidence. Add checks when actual implementation,
+failures, or material departures reveal a concrete acceptance gap; risk labels do not
+require another planning exercise. A failed focused check is a failure to fix or
 record as a checkpoint, not a deferred pass. Steps use a local smoke check only for runtime
 evidence the focused tests do not establish, and visual steps keep rendered inspection.
-Broad regression suites stay pending until review.
+Broad regression suites belong to configured CI, or the operator when CI is absent.
 
-Review runs the required full suites and gates against the integrated branch, combining
-overlapping commands and reusing valid results after fixes. Commands have finite wall-clock limits:
+Review consumes required CI evidence and closes outstanding focused acceptance gaps,
+combining overlapping commands and reusing valid results after fixes. Commands have finite wall-clock limits:
 120 seconds by default for focused checks, with a justified longer limit chosen before
 known slower suites or builds. A polling interval is not a timeout.
 
@@ -67,15 +69,15 @@ Later stages reuse that context and ask only about unresolved consequential deci
 `spec-write` owns both phases in one invocation: decide behavior/contracts, then ground
 and decompose execution cards. Each step has one coherent objective with explicit prior
 outputs and resolved consequential decisions. Card-writing can split compound steps;
-compact prose is not a reason to omit implementation detail. The planner publishes the
-manifest only when every card is ready.
+compact prose is not a reason to omit implementation detail. The planner reports
+prepared only when every card is ready and structural evidence ownership is consistent.
 
 For an existing unimplemented package, rerun `spec-write` with its path and request a
 re-plan. It preserves accepted behavior and snapshots prior planning files before
-revising the steps. Use `spec-upgrade` for an explicitly selected batch. Existing data
-formats are unchanged: `spec-prepare.md` remains the report filename, execution cards
-retain their schemas, and `preparation.json` remains version 3. Valid existing packages
-remain usable; re-plan compressed work when helpful, not merely to migrate a format.
+revising the steps. Use `spec-upgrade` for an explicitly selected batch. Packages
+use `spec-prepare.md` as the report and ready execution cards. Preparation hashes and
+`preparation.json` are no longer required. Obsolete hash fields in existing cards and
+evidence records are ignored; re-plan for real gaps, not solely to migrate a format.
 
 After preparation, start implementation with this request:
 
@@ -86,6 +88,38 @@ resume from implementation through PR publication.
 
 The orchestrator checks the package and reuses valid planning artifacts. It refreshes only stale or incomplete stages.
 Direct `spec-run` requires a current prepared package and reports stale preparation instead of repairing it.
+
+## Pi Implementation Roles
+
+After planning, assign the capable implementation owner, dedicated editor, and
+independent reviewer directly. For example:
+
+```text
+/goal-direct Use spec-end-to-end to resume after spec-write for PACKAGE.
+Create a new branch/worktree. Use IMPLEMENT_AGENT as the step architect/owner,
+EDITOR_AGENT as its dedicated editor, and REVIEW_AGENT for step and branch reviews.
+Reuse the implementation owner/editor across steps.
+
+PACKAGE: /absolute/primary-repo/.specs/feature/
+IMPLEMENT_AGENT: <provider/model:thinking>
+EDITOR_AGENT: openrouter/inception/mercury-2.5:high
+REVIEW_AGENT: <provider/model:thinking>
+```
+
+The top-level session runs `spec-run`, which retains a `spec-step-owner` and its
+`spec-step-editor`. The editor is the only implementation writer. Independent fixes
+run between steps; the retained pair receives those commits and refreshes affected
+source before continuing. `sync.sh` installs these native profiles into Pi.
+
+Explicit selectors go straight to launch. The workflow does not enumerate every
+model or probe every agent before work; discovery is for ambiguity or a concrete
+launch failure. It never silently substitutes a provider or model. An explicit
+editor override wins over the Mercury default.
+
+The generated `history-index.json` points to canonical decisions, introduced symbols,
+handoffs, and review/fix records. Handoffs carry paths and unresolved exceptions;
+detailed evidence stays in the original records. A persistent worker still completes
+one assigned step and commit at a time.
 
 ## Context, Scope, And Operational Authority
 
@@ -205,8 +239,9 @@ an optional transition skill; new specs use the ordinary sequence above.
 ```
 
 The agent resumes at the earliest incomplete, stale, or invalid stage. A current artifact is reused;
-a filename's existence alone does not prove that it is current. Context source freshness, preparation hashes, audit verdicts,
-and evidence revisions must still match their inputs and the implemented commit.
+a filename's existence alone does not prove that it is current. Check substantive
+context changes, structural readiness, audit verdicts, and applicability of evidence
+to the implemented commit. Do not recompute preparation fingerprints.
 
 Equivalent existing prose and evidence satisfy the engineering decision contract.
 Missing headings alone do not require a rewrite. Missing or contradicted behavior and proof return to the owning stage for correction.

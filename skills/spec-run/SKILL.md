@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "29"
+  version: "30"
 ---
 
 # Spec Run
@@ -17,9 +17,18 @@ metadata:
 Apply [Verification and Review](../../rules/verification-and-review.md) for CI/operator ownership
 and batched Jev verification/review-triage checkpoints.
 
-Execute the package produced by `spec-write` within its sourced context and authority. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Preparation is immutable intent and evidence provenance; implementation may adapt to repository reality, but it may not execute against stale or mismatched prepared inputs.
+Execute the package produced by `spec-write` within its sourced context and authority. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Prepared inputs record accepted intent; implementation may adapt to repository reality while preserving acceptance and authority.
 
-Run steps sequentially. Dispatch one dedicated implementation agent per step when the harness supports subagents; otherwise follow `spec-step-run` directly for one step at a time. Do not batch steps or commits.
+Run steps sequentially with a retained implementation session. In Pi, dispatch
+`spec-step-owner`, explicitly authorizing it to direct one `spec-step-editor` under
+[Paired execution](../spec-step-run/references/paired-execution.md). Resume that owner
+across related steps. Keep separate objectives and commits; session reuse does not
+batch steps. Reviewers remain independent and fixers run only between steps.
+
+On harnesses without nested agents, retain one direct implementation worker where
+resumption is supported, or follow `spec-step-run` locally. Honor explicit model/mode
+directives. In Pi, profile/model setup failures require diagnosis, not an unannounced
+switch to a different model or execution mode.
 
 Set an explicit run deadline on every step-worker launch; never rely on the harness default, which can be as short as 30 minutes and interrupts larger or visual steps mid-edit. Use about 2 hours per step unless the run records a different budget. When the harness supports it, also request a checkpoint before the deadline (about 10 minutes) so the worker commits coherent work and records a `checkpoint` outcome instead of timing out with uncommitted changes. Pi `pi-subagents` launches take `timeoutMs: 7200000` and `checkpointBeforeDeadlineMs: 600000`. Record the chosen budget in the run ledger, and treat a deadline hit as an interruption to resume, not a step failure.
 
@@ -40,22 +49,35 @@ prepared scope; route consequential changes for correction and re-preparation.
 
 Resolve an explicit `.specs/<feature>/spec.md` or `.specs/<feature>/` argument first, then the folder named in the conversation or `Spec folder:` footer. If exactly one prepared `.specs/*/spec.md` exists, use it. Do not ask for confirmation; choose the strongest title/footer/context match. Return `no-artifact` only when no intended package can be identified.
 
-Read:
+Read the shared context, spec/index, evidence plan, and preparation outcome once.
+Workers consume their assigned cards and applicable criteria/invariants. Use the history
+index for prior results instead of rescanning all learning and review prose.
 
-- sibling `context.md`, current project context, `spec.md`, `spec-steps.json`, and `evidence-plan.json`;
-- sibling `spec-prepare.md` and `preparation.json`;
-- the subspec index and manifest bindings; workers read their assigned subspecs in full;
-- optional bound `criteria.md` and `invariants.md`;
-- applicable rule paths, existing blockers, and prior learning paths in
-  `<spec-dir>/learnings/` (or historical root-level files). Read outcome and evidence
-  fields when scheduling or assembling evidence; leave relevance scanning to the worker.
+## Check Structural Readiness
 
-## Inspect Preparation
+Before first dispatch, require the context, spec/index, evidence plan, and exactly one
+ready card per indexed step. Check matching step IDs, owned evidence, and concrete
+verification contracts. Use the evidence-plan validator for its schema when needed.
+Missing or contradictory inputs return to `spec-write`; never invent a technical brief
+to compensate. Preserve completed code and resume after the actual gap is resolved.
 
-Before touching production code, inspect the strict version 3 preparation manifest. Recompute and compare lowercase SHA-256 hashes for `context.md`, `spec.md`, `spec-steps.json`, `evidence-plan.json`, `spec-prepare.md`, every declared subspec, and optional criteria/invariants. Require evidence-plan version 2, then confirm its context path/hash matches this package's context and manifest.
-Confirm exactly one `ready` subspec exists for every indexed step and evidence ownership matches all three sources.
+Do not compute hashes or require `preparation.json`. Ignore obsolete hash fields in
+legacy packages. Do not repeat the package check on every dispatch; check the next
+card and revisit structure only after re-preparation or an observed contradiction.
 
-Repeat validation before every step dispatch. A missing, invalid, stale, incomplete, or partially published package blocks further implementation: report the exact mismatch and require `spec-write` to republish. Never repair preparation during `spec-run`. Already committed step artifacts remain intact.
+## History Index
+
+Build the index before first dispatch and after each completed step or fix:
+
+```bash
+node ~/.agents/skills/spec-run/scripts/build-history-index.mjs --spec-dir <canonical-spec-dir>
+```
+
+The generated `history-index.json` points to canonical learning/review/fix records,
+including historical root-level learnings. It preserves navigation to unresolved or
+unknown records without deciding that a defect is fixed. Pass the path, not its contents.
+If generation fails, report the input problem and use original records for affected
+history; never interpret failure as an empty history or reuse a stale index as current.
 
 ## Preserve Preparation As Evidence
 
@@ -70,18 +92,36 @@ contract before dependent work and re-prepare when intent or proof changes.
 
 ## Execute One Step At A Time
 
-For each indexed step in ascending order:
+On resume, reconcile the ledger with canonical learning records and Git commits in
+the selected checkout. Reuse completed `as-specified`/`adapted` steps whose recorded
+commits and acceptance evidence still apply; a filename alone does not prove completion.
+Resume interrupted/checkpoint work when its gap is still owned by that step, or carry
+the explicit later-owner handoff forward. Do not replay completed steps or reviews.
 
-1. Revalidate the preparation package and record, but do not gate on, resolvable drift.
-2. Run any pending step fixes and wait for them to finish (see Background Step Review).
-3. Provide the absolute code checkout, canonical target subspec path, owning skill path, and any routed message paths or new run-wide constraints. The worker resolves the step and package from the subspec and scans prior learnings plus completed step review/fix records under `spec-step-run`. Do not restate the technical brief or curate a parallel copy of the requirements.
-4. Require the agent to read and follow `~/.agents/skills/spec-step-run/SKILL.md` in full.
-5. Wait for that step to produce a learning and any reviewable commit. Run mechanical verification,
-   launch the background review for the new commits, and continue. When publication is already
-   authorized, push meaningful coherent checkpoints and create/update a draft through
-   `spec-pr mode=draft` so CI runs alongside the remaining work. Otherwise retain them locally.
+For each remaining assigned step in ascending order:
 
-The worker reads risk lenses from the card and applies the execution-time boundary expansion and pre-commit risk audit from `spec-step-run`; do not duplicate those instructions in the dispatch. When the harness exposes a reasoning-effort control, prefer elevated reasoning for `persistence-integrity`, `atomic-publication`, `concurrency`, `lease-or-refcount`, `cancellation`, `cross-step-contract`, and `security-boundary`; the absence of such a control does not block execution.
+1. Wait for the prior implementation assignment and its editor to finish. Run completed
+   review fixes before assigning the next step; never overlap writers.
+2. Refresh the history index. Supply the checkout, canonical next-card path, index path,
+   newly routed messages/constraints, and any intervening fix commits. Do not restate
+   the technical brief or the skill. Require affected source refresh after external fixes.
+3. Launch the owner once with its assigned model, explicit `cwd`, `context: "fresh"`,
+   and the deadline above. In Pi, authorize one nested editor explicitly. Thereafter use
+   `subagent({ action: "resume", id: "<latest-owner-run-id>", message: "<next assignment>" })`.
+   Track the latest owner and editor IDs in the existing ledger: resume may return new IDs.
+4. After interruption, check the exact known ID using `action: "status"`. Resume only
+   an inactive eligible worker. If retention is unavailable, record that reason and
+   restore a fresh same-role worker from canonical inputs after confirming no writer
+   remains active. Reset for demonstrated context confusion or an explicit model change,
+   not simply at a step boundary. Do not silently change a stored model contract.
+5. Consume the learning and commit, perform the completion check below, launch its
+   independent background review, and continue. Within publication authority, push useful
+   coherent checkpoints through `spec-pr mode=draft` so CI runs alongside remaining work.
+
+Read `spec-step-run` once per implementation session and reload only changed guidance.
+The prepared card owns planned verification; execution expands it for a concrete new
+failure or gap, not for a risk-label checklist. Keep the owner responsible for decisions
+and the editor responsible for execution; do not add another implementation judge.
 
 `spec-step-run` owns implementation, test writing, focused unit/integration feedback,
 required runtime/visual observations, deferred final-check handoffs, the step learning, staging the coherent artifact, and the conventional step
@@ -90,33 +130,20 @@ output separately, preserve that commit and the deliberate change commit within 
 the learning lists both and binds evidence to final step HEAD. The orchestrator does not
 second-guess the implementation before final branch refinement.
 
-## Mechanical Verification
+## Completion Check
 
-After each step returns, verify only the execution contract from its learning and
-referenced artifact/commit metadata. The following are checks of recorded outcomes,
-not a second code review or a reason to reread every subspec. Ask the worker to repair
-missing or contradictory records; leave substantive correctness to branch review:
+Read the returned outcome, learning path, and commit. Confirm the record exists, the
+commit belongs to the selected checkout, and required evidence is present or honestly
+pending. Derive progress from those records rather than requesting a second report.
+Do not review the code again, rerun worker checks, require new tests by count, or require
+positive risk/correctness narratives. Stop substantive checking once the record is
+consistent; independent review owns defect detection.
 
-1. Changed and staged files form a coherent repository-local artifact and exclude unrelated user changes and spec artifacts.
-2. Useful tests were written, affected unit/boundary checks and required visual/runtime observations have actual results, and remaining final checks have honest pending handoffs.
-3. Scheduling adaptations to older cards are recorded; no red/green evidence is fabricated.
-4. Commands had finite enforced deadlines; timeouts terminated owned processes and were recorded with elapsed time as failed attempts.
-5. Repeated attempts name an affected change or concrete diagnostic reason; passing results were reused across step sections.
-6. The learning record exists at `<spec-dir>/learnings/step-<NNN>-learning.md`, and a commit exists for `as-specified`, `adapted`, or `checkpoint`.
-7. Risk-tagged steps include a learning risk-audit summary that covers or explicitly dismisses every declared risk lens and live invariant.
-8. Runtime-facing steps include a complete production-reachability summary: entrypoint/composition owner, concrete internal adapter, real downstream contract, and focused path observation, including applicable ordinary-entry evidence without test-only prerequisites.
-9. An implementation-complete outcome does not contradict its own discrepancies/risks by describing required production wiring, an internal adapter, a downstream contract, or the promised user-observable path as absent, fake-only, deferred, or unreachable.
-10. Steps whose card carries `Evidence:` lines produced each merge artifact — in the commit or under `.specs/<feature>/evidence/` — or truthfully
-   recorded the gap. Automated execution artifacts deferred to CI or branch review are expected
-   pending handoffs and do not alone require checkpoint. Later-phase gates have concrete procedures/handoffs and honest statuses. Safe isolated
-   pre-deploy checks may run; live operations awaiting a release or authority stay `pending`.
-
-For an unresolved consequential decision or required spec correction, preserve that outcome and
-route it before dependent work. Otherwise, if item 9 or 10 fails, require the truthful outcome `checkpoint` rather than accepting `as-specified` or `adapted`. Preserve the commit and dispatch the next step with that evidence.
-
-Do not rerun commands merely to duplicate the implementer's evidence. Carry scope, command, preparation, and verification mismatches forward as findings. Continue after `checkpoint` and, when later work remains meaningful, after `no-artifact`; do not ask the user whether to proceed with already-authorized work. Route a
-`decision-required` result to the coordinator and `needs-spec-correction` to its owning planner; never count affected work complete while its
-consequential decision remains unresolved.
+A claimed complete step cannot also report missing required implementation, unreachable
+promised behavior, or failed required focused/visual evidence. Ask for a truthful
+`checkpoint` outcome and retain useful work. Route `decision-required` or
+`needs-spec-correction` before dependent work. Continue other meaningful steps within
+existing authority, carrying unresolved gaps to final refinement.
 
 ## Background Step Review
 
@@ -139,8 +166,9 @@ folder, and the model assigned to step review. Don't wait for it: it reads fixed
 so the next step worker can edit the checkout while it runs. Reviews may overlap.
 
 **Record results.** When a reviewer finishes, read only the leading `review:` YAML block
-of its file: verdict, actionable count, and signatures. Do not read its prose or copy
-findings into prompts. Record the run ID, range, and verdict in the ledger.
+of its file: verdict and finding identities. Derive actionable counts from
+`findings[].actionable`; explanations remain in the review for the fixer. Accept the
+review skill's legacy format on resumed runs. Do not copy findings into prompts. Record the run ID, range, and verdict in the ledger.
 
 **Fix between steps.** The fix owner applies Jev review-triage once to each actionable
 findings set before deciding repairs; the coordinator does not duplicate that call.
@@ -178,7 +206,8 @@ After all indexed steps have run and the step reviews and fixes have finished, m
 
 Assemble focused results and remaining automated commands, test files, setup, expected
 results, and output paths for branch review, deduplicating shared commands. Preserve the
-observed revisions and assess applicability after later changes. Do not duplicate worker
+observed revisions as `observedCommit` and record `applicability` when reusing a result
+for a different candidate `commit`. Do not duplicate worker
 checks in this coordinator or dispatch a final testing step; configured CI owns broad
 checks, while absent CI leaves operator testing outside agent evidence without blocking
 completion. Branch review consumes actual results and closes focused acceptance/failure gaps. Keep actual automated/smoke results distinct from unexecuted gates.
@@ -195,7 +224,7 @@ The Markdown begins with a level-1 heading and contains:
 - **QA tour input** — deterministic entrypoints, fixtures, scenarios, expected results, automated EV coverage, captures, and optional exploration-only questions. No required manual QA.
 - **Gaps** — missing coverage, unproduced evidence, and open findings carried to final refinement.
 
-`merge-evidence.json` binds `context.md` by path/hash, mirrors every CL/FH/EV item and its phase from `evidence-plan.json`, adds actual statuses, commands/outcomes/artifacts/proof boundaries, step commits, QA inputs, separate deployment readiness/authority/observations, merge gaps and later-phase gaps, and the full current `commit`. Use `readyForAudit: true` only when every required merge gate passed and later-phase procedures are honestly recorded; this is not the deploy verdict.
+`merge-evidence.json` identifies `context.md` by canonical path, mirrors every CL/FH/EV item and its phase from `evidence-plan.json`, adds actual statuses, commands/outcomes/artifacts/proof boundaries, step commits, QA inputs, separate deployment readiness/authority/observations, merge gaps and later-phase gaps, and the full current `commit`. Use `readyForAudit: true` only when every required merge gate passed and later-phase procedures are honestly recorded; this is not the deploy verdict.
 
 State gaps honestly. Finish this stage with `outcome: ready-for-refinement` when every indexed step
 has been dispatched and both merge-evidence files are bound to current HEAD. Do not run
@@ -204,8 +233,7 @@ visible and independently resumable.
 
 ## Report
 
-Report the spec and preparation manifest, every step result, exact commands/outcomes,
-criterion/claim/failure/gate coverage, both merge-evidence paths, current HEAD, step
-review and fix paths with their fix commits, `step-review-coverage` and any unreviewed
-commits, and remaining gaps/risks. End with `next: spec-branch-refine`. Do not claim an audit or deployment verdict, write
-work-tour/GitHub artifacts, or add attribution.
+Return outcome, merge-evidence paths, current HEAD, step-review coverage, retained owner
+and editor IDs, and unresolved decisions or gaps. Keep step results and commands in the
+indexed records. End with `next: spec-branch-refine`; do not claim an audit/deploy verdict
+or produce work-tour/GitHub artifacts in this stage.

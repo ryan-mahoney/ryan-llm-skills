@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "14"
+  version: "15"
 ---
 
 # Spec End To End
@@ -37,14 +37,19 @@ Treat workflow modifiers in the request as run-wide constraints. Examples includ
 - keep work in the current checkout;
 - delegate named stages to a named subagent or agent type;
 - include or skip the optional architecture critique;
-- assign a model or provider to a role such as step implementation, step review, step
+- assign a model or provider to a role such as step owner, step editor, step implementation, step review, step
   fix, branch review, or branch fix;
 - target a specific base branch, repository, feature package, or PR shape.
 
 Record role model assignments in the ledger as exact `provider/id[:thinking]` values
-and pass each one on every launch for that role. In Pi, check the IDs once with
-`subagent({ action: "models" })` before implementation. Unassigned roles use Pi's
-agent and settings defaults.
+and pass each one on every launch for that role. Preserve explicit provider/model
+selectors and resolve known role names directly; do not enumerate or test all models
+and agents before implementation. Actual launch validates availability. Use discovery
+only for an ambiguous selector or a concrete launch error, without silently substituting
+a model. The Pi step editor defaults to `openrouter/inception/mercury-2.5:high`; other
+unassigned roles use agent/settings defaults. A legacy step-implementation assignment
+selects the capable owner model; an explicit editor assignment overrides Mercury.
+Record owner/editor models separately.
 
 Honor explicit directives over the defaults below. Use delegation only when the user requests it,
 a leaf skill requires it, or the active harness instructions independently require it. The
@@ -97,7 +102,7 @@ valid output:
   `spec-write`.
 - **Existing proposal:** begin with the optional critique decision, then run `spec-write`.
 - **Existing spec:** run `spec-write` to complete or refresh planning when cards or the
-  preparation manifest are missing, stale, or explicitly selected for re-planning. Reuse
+  required prepared inputs are missing, contradictory, or explicitly selected for re-planning. Reuse
   a valid prepared package and begin at its earliest incomplete downstream stage.
 
 For a legacy package, preserve its accepted behavior, resolve the sourced context, and use
@@ -111,17 +116,17 @@ architecturally novel in the resolved context. A file type or maturity label alo
 ## Delegate With Compact Handoffs
 
 When delegation is authorized, use existing stage and prepared-step boundaries. Preserve sequential
-steps, dedicated step workers, commit boundaries, and independent reviewer separation. Before
+steps, retained implementation sessions, commit boundaries, and independent reviewer separation. Before
 delegating a stage that itself requires workers, verify the harness supports the needed nesting and
 tool access; otherwise retain that stage's coordination locally.
 
-Select agents by required capabilities before dispatch, not by names such as
-"reviewer" or "explorer". The branch-review stage owner must read the checkout and
+Use known role profiles with the tools the stage needs. Do not probe every profile
+before dispatch. The branch-review stage owner must read the checkout and
 canonical spec package, execute required verification commands, and write review
 and evidence artifacts in the primary repository's spec folder. A restriction on
 editing implementation code does not mean the stage can use a filesystem-read-only
-agent. Check the harness's declared tools and writable roots before assignment;
-if unclear, resolve that capability gap before starting substantial review work.
+agent. Resolve a genuinely unknown capability contract when selecting a profile;
+known installed profiles need no repeated capability audit.
 Use a capable general-purpose agent with the review role's code-edit prohibition
 when available. Analysis-only reviewers may assist with scoped findings, but cannot
 own the whole stage. If an explicitly requested agent type lacks a required capability,
@@ -133,28 +138,30 @@ stage, owning skill path, run-wide constraints, and completion return contract. 
 delegation is requested, delegate whole implementation and refinement stages when
 the harness supports their workers; the parent need not manage every implementation
 step or review iteration. In Pi, run `spec-run` in the top-level agent. It launches
-step workers, background step reviewers, and step fixers, and a Pi child can launch
-subagents only when the parent grants it fanout and the `subagent` tool.
+a retained `spec-step-owner`, background step reviewers, and step fixers. Grant the
+owner the `subagent` tool and explicit authority to direct one `spec-step-editor`.
+Use the installed profiles and [paired execution contract](../spec-step-run/references/paired-execution.md).
+Only the editor writes implementation code while the pair is active.
 
 For an implementation worker, pass the checkout, canonical subspec path, owning
 skill path, and paths to any newly routed messages. The subspec and its referenced
-package are the technical handoff. Workers load requirements, context, rules,
-evidence obligations, and prior learnings in `learnings/` (or historical root-level
-files) themselves. Do not copy step text or
+package are the technical handoff. Supply the generated history-index path and
+intervening fix commits; retained workers load only relevant original records and
+refresh affected source. Do not copy step text or
 reconstruct those documents in prompts. Missing or contradictory prepared inputs
 return to their owner; the parent does not compensate with an improvised technical
 brief. Preserve explicit user constraints not already captured in the package.
 
 Keep investigation, implementation, verification, and routine repair with the assigned worker under
 the owning skill's rules. Preserve its permitted checkpoint outcomes and escalation policy. Resume
-the same worker for follow-up within that assignment when supported. Coordinate at handoffs,
+the same implementation owner/editor across related step assignments when supported. Coordinate at handoffs,
 blockers, consequential check-ins, or cross-stage decisions; use completion notifications or blocking task calls when
 available instead of routine status polling or duplicating the worker's work.
 
 Keep full required reports and logs in canonical artifacts. Request a conversational handoff of
-about 200 words containing outcome, assigned unit, changed-file summary, checkout and tested
-revision, verification results and evidence paths, gaps, and decisions needed. Expand for mandatory
-report fields or material issues; brevity never hides failures or replaces required artifacts.
+only outcome, artifact paths, code revision, retained worker IDs, and unresolved
+decisions or gaps. Do not repeat command lists, findings, or completed work narratives
+already present in canonical records.
 
 ## Execute The Pipeline
 
@@ -167,7 +174,8 @@ excluded by the routing policy above:
 1. Run `spec-architect-initial` when a current proposal does not already exist.
 2. Run `spec-architect-critics` when the optional critique policy applies.
 3. Run `spec-write` once through both internal phases. Require `outcome: prepared`,
-   granular ready execution cards, and the current hash-bound `preparation.json`.
+   granular ready execution cards and consistent required package inputs. Preparation
+   hashes and `preparation.json` are not prerequisites; reuse usable legacy cards.
 4. Establish the implementation checkout directly as top-level orchestration work. Honor an
    explicit branch/worktree directive, reuse a clearly matching checkout when present, and use
    ordinary Git judgment otherwise. Read [workspace-handoff.md](references/workspace-handoff.md)

@@ -370,22 +370,21 @@ This converts the proposal, and optional critique, into:
 .specs/<feature>/evidence-plan.json
 ```
 
-The spec is the implementation contract. `evidence-plan.json` version 2 records the context binding, risk posture and phase-aware AC → claim → failure → gate graph. The writer never touches GitHub.
+The spec is the implementation contract. `evidence-plan.json` version 2 records the canonical context path, risk posture and phase-aware AC → claim → failure → gate graph. The writer never touches GitHub.
 
 The same `spec-write` invocation continues into preparation; do not invoke a second
 planning stage. It splits compound objectives into granular cards with explicit contracts.
 
-Preparation code-grounds and corrects the spec, reconciles the step index, derives prose-only guardrails, plans every step sequentially, and publishes a hash-bound manifest only when the complete package is current:
+Preparation code-grounds and corrects the spec, reconciles the step index, derives prose-only guardrails, plans every step sequentially, and validates required inputs and ready execution cards:
 
 ```txt
 .specs/<feature>/spec-prepare.md
 .specs/<feature>/criteria.md
 .specs/<feature>/invariants.md
 .specs/<feature>/step-<NNN>-subspec.md
-.specs/<feature>/preparation.json
 ```
 
-`criteria.md` and `invariants.md` are prose guidance, never executable audit programs. The version 3 manifest is the last write and binds context and every prepared artifact by SHA-256.
+`criteria.md` and `invariants.md` are prose guidance, never executable audit programs. Preparation produces no fingerprints or readiness manifest. Usable legacy hash fields are ignored.
 
 ### 4. Establish The Implementation Workspace
 
@@ -401,7 +400,9 @@ and its path resolver. Do not open a new editor or agent session for the handoff
 /spec-run <feature-slug or path-to-spec.md>
 ```
 
-This checks the package hashes and implements steps sequentially with their evidence and QA artifacts.
+This checks structural readiness once and implements steps sequentially with their evidence and QA artifacts. In Pi, retain a capable step owner and its nested Mercury editor across related steps, keeping one writer active. The editor uses OpenRouter `inception/mercury-2.5:high`.
+
+Pass canonical card/index paths, outcomes, commits, and unresolved issues. Use the generated history index to locate original learning and review records. Run prepared focused acceptance checks; expand for actual failures, material departures, or acceptance gaps. Reviews report defects and material limitations without positive correctness narratives.
 Each step produces a coherent commit. When repository policy requires separate generated output, the step records both commits and binds evidence to its final HEAD.
 The runner also prepares later-phase procedures and assembles evidence for the independent audit.
 
@@ -412,7 +413,7 @@ The runner also prepares later-phase procedures and assembles evidence for the i
 ```
 
 Each iteration includes review and fixes. Direct invocation defaults to ten rounds;
-`spec-end-to-end` passes `max-iterations=2`. Stop early on a clean review, or after
+`spec-end-to-end` passes one round when step reviews are complete, otherwise two. Stop early on a clean review, or after
 verified final fixes at the cap. The completion record states whether the final fixes
 were independently re-reviewed; unresolved findings or failed checks block the tour.
 
@@ -746,6 +747,10 @@ write_bundle_files() {
         printf '%s\n' "- \`augment/agents/$(basename "$agent")\`"
       done
     fi
+    if [ -d "$bundle_dir/pi/agents" ]; then
+      printf '\n## Pi Agents\n\n'
+      printf 'The portable installer has no Pi target. Copy `pi/agents/spec-step-owner.md` and `pi/agents/spec-step-editor.md` to `~/.pi/agent/agents/` after extraction.\n'
+    fi
     if [ "$name" = "spec-skills" ]; then
       write_spec_workflow_howto
       write_design_spec_workflow_howto
@@ -825,6 +830,8 @@ build_bundle() {
 
   if [ "$name" = "spec-skills" ]; then
     copy_file "$bundle_dir" "augment/agents/spec-step-implementer.md" "augment/agents/spec-step-implementer.md"
+    copy_file "$bundle_dir" "pi/agents/spec-step-owner.md" "pi/agents/spec-step-owner.md"
+    copy_file "$bundle_dir" "pi/agents/spec-step-editor.md" "pi/agents/spec-step-editor.md"
     copy_file "$bundle_dir" "docs/spec-workflow.md" "docs/spec-workflow.md"
     copy_file "$bundle_dir" "docs/reviews.md" "docs/reviews.md"
     copy_rules "$bundle_dir"
@@ -851,6 +858,7 @@ build_bundle() {
 
 spec_skills=(
   spec-end-to-end
+  spec-message
   spec-upgrade
   spec-architect-initial
   spec-architect-critics
