@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "28"
+  version: "29"
 ---
 
 # Spec Step Run
@@ -23,6 +23,10 @@ launch exactly one editor when assigned that mode. A direct worker performs the 
 work itself without delegation. Do not begin the next step until assigned or perform
 independent branch review. Use the prepared card as the execution plan, adapting only
 where actual code or observed failures require it.
+
+When the assignment includes a stronger-owner route, follow
+[Step owner routing](../spec-run/references/owner-routing.md#escalate-from-concrete-evidence)
+to request transfer through the coordinator. Do not launch a replacement owner yourself.
 
 ## Routed Overseer Messages
 

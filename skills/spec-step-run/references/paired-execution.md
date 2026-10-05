@@ -58,10 +58,12 @@ Provider or tool setup failures need diagnosis on the same execution route.
 At each step boundary, have the editor write the learning and commit the coherent
 artifact. Return the learning path, outcome, commit, latest editor ID, and unresolved
 issues to the coordinator. No editor may remain active when the owner returns; otherwise
-a between-step fixer could overlap it. The coordinator resumes the same owner for the
-next step, with intervening fix commits and new constraints. Refresh affected source
-before edits. Explicit model changes require a fresh matching session, not resuming an
-old model contract.
+a between-step fixer could overlap it. The coordinator resumes the matching owner for
+its next assigned step, with intervening commits and new constraints since that pair
+last ran. Refresh affected source before edits. A different owner model uses its own
+eligible retained pair or a fresh pair, never an old session with a changed model
+contract. Keep the editor attached to its owner even when another pair uses the same
+editor model.
 
 The owner and editor may reset or compact when context pressure or demonstrated confusion
 warrants it. Preserve canonical requirements, evidence, and unresolved findings. Step

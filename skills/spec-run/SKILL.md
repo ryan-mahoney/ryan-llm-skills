@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "30"
+  version: "31"
 ---
 
 # Spec Run
@@ -24,6 +24,10 @@ Run steps sequentially with a retained implementation session. In Pi, dispatch
 [Paired execution](../spec-step-run/references/paired-execution.md). Resume that owner
 across related steps. Keep separate objectives and commits; session reuse does not
 batch steps. Reviewers remain independent and fixers run only between steps.
+
+Use the assigned default owner unless the run supplies a stronger owner or explicit
+step overrides. In that case, read [Step owner routing](references/owner-routing.md)
+and select at dispatch time; retain a separate session for each selected owner model.
 
 On harnesses without nested agents, retain one direct implementation worker where
 resumption is supported, or follow `spec-step-run` locally. Honor explicit model/mode
@@ -105,15 +109,19 @@ For each remaining assigned step in ascending order:
 2. Refresh the history index. Supply the checkout, canonical next-card path, index path,
    newly routed messages/constraints, and any intervening fix commits. Do not restate
    the technical brief or the skill. Require affected source refresh after external fixes.
-3. Launch the owner once with its assigned model, explicit `cwd`, `context: "fresh"`,
+3. Select the owner under the run's routing policy, or use its single assigned owner.
+   Launch it on first use with its assigned model, explicit `cwd`, `context: "fresh"`,
    and the deadline above. In Pi, authorize one nested editor explicitly. Thereafter use
    `subagent({ action: "resume", id: "<latest-owner-run-id>", message: "<next assignment>" })`.
-   Track the latest owner and editor IDs in the existing ledger: resume may return new IDs.
+   Track the latest owner and its editor IDs by exact model assignment in the existing
+   ledger: resume may return new IDs. Refresh intervening changes since that pair last ran.
 4. After interruption, check the exact known ID using `action: "status"`. Resume only
    an inactive eligible worker. If retention is unavailable, record that reason and
    restore a fresh same-role worker from canonical inputs after confirming no writer
-   remains active. Reset for demonstrated context confusion or an explicit model change,
-   not simply at a step boundary. Do not silently change a stored model contract.
+   remains active. Reset for demonstrated context confusion, not simply at a step
+   boundary. A different selected model uses its own eligible session or a fresh one;
+   never change a stored session's model contract. Resolve a requested owner escalation
+   under the routing policy before treating its checkpoint as a completed assignment.
 5. Consume the learning and commit, perform the completion check below, launch its
    independent background review, and continue. Within publication authority, push useful
    coherent checkpoints through `spec-pr mode=draft` so CI runs alongside remaining work.
@@ -234,6 +242,6 @@ visible and independently resumable.
 ## Report
 
 Return outcome, merge-evidence paths, current HEAD, step-review coverage, retained owner
-and editor IDs, and unresolved decisions or gaps. Keep step results and commands in the
-indexed records. End with `next: spec-branch-refine`; do not claim an audit/deploy verdict
+and editor IDs by model assignment, and unresolved decisions or gaps. Keep step results
+and commands in the indexed records. End with `next: spec-branch-refine`; do not claim an audit/deploy verdict
 or produce work-tour/GitHub artifacts in this stage.

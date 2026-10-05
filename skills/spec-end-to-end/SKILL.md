@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "15"
+  version: "16"
 ---
 
 # Spec End To End
@@ -50,6 +50,13 @@ a model. The Pi step editor defaults to `openrouter/inception/mercury-2.5:high`;
 unassigned roles use agent/settings defaults. A legacy step-implementation assignment
 selects the capable owner model; an explicit editor assignment overrides Mercury.
 Record owner/editor models separately.
+
+Accept `DEFAULT_OWNER` (or legacy `IMPLEMENT_AGENT`) and optional `STRONG_OWNER`
+assignments. Supplying a stronger owner enables difficulty routing for implementation
+steps under [Step owner routing](../spec-run/references/owner-routing.md). Pass these
+assignments and any explicit step overrides to `spec-run`; it owns selection and
+escalation. Without a stronger assignment, preserve single-owner execution. Routing
+does not change the models assigned to editors, reviewers, or review fixers.
 
 Honor explicit directives over the defaults below. Use delegation only when the user requests it,
 a leaf skill requires it, or the active harness instructions independently require it. The
@@ -116,7 +123,7 @@ architecturally novel in the resolved context. A file type or maturity label alo
 ## Delegate With Compact Handoffs
 
 When delegation is authorized, use existing stage and prepared-step boundaries. Preserve sequential
-steps, retained implementation sessions, commit boundaries, and independent reviewer separation. Before
+steps, retained implementation sessions per selected owner, commit boundaries, and independent reviewer separation. Before
 delegating a stage that itself requires workers, verify the harness supports the needed nesting and
 tool access; otherwise retain that stage's coordination locally.
 
@@ -138,7 +145,7 @@ stage, owning skill path, run-wide constraints, and completion return contract. 
 delegation is requested, delegate whole implementation and refinement stages when
 the harness supports their workers; the parent need not manage every implementation
 step or review iteration. In Pi, run `spec-run` in the top-level agent. It launches
-a retained `spec-step-owner`, background step reviewers, and step fixers. Grant the
+retained `spec-step-owner` sessions, background step reviewers, and step fixers. Grant the
 owner the `subagent` tool and explicit authority to direct one `spec-step-editor`.
 Use the installed profiles and [paired execution contract](../spec-step-run/references/paired-execution.md).
 Only the editor writes implementation code while the pair is active.
@@ -154,7 +161,7 @@ brief. Preserve explicit user constraints not already captured in the package.
 
 Keep investigation, implementation, verification, and routine repair with the assigned worker under
 the owning skill's rules. Preserve its permitted checkpoint outcomes and escalation policy. Resume
-the same implementation owner/editor across related step assignments when supported. Coordinate at handoffs,
+the matching implementation owner/editor across its assigned steps when supported. Coordinate at handoffs,
 blockers, consequential check-ins, or cross-stage decisions; use completion notifications or blocking task calls when
 available instead of routine status polling or duplicating the worker's work.
 
