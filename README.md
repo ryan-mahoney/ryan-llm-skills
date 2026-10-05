@@ -118,6 +118,35 @@ additional checks. Reviews report defects and material limitations without posit
 correctness narratives. For OpenCode's second worker level, see
 [OpenCode nested delegation](docs/spec-workflow.md#opencode-nested-delegation).
 
+#### Default Pi prompt
+
+After `spec-write`, paste this into Pi with `/goal-direct` available. Replace `PACKAGE`
+with the absolute package path in the primary checkout. Choose a stronger owner or
+remove the `STRONG_OWNER` line to use one owner model throughout. The model assignments
+below are an editable example; the routing policy is provider-independent.
+
+```text
+/goal-direct Use spec-end-to-end to resume after spec-write for PACKAGE.
+Implement in a new branch/worktree and continue through PR publication.
+
+Use the configured step-owner routing and retained owner/editor pairs.
+Use REVIEW_AGENT for independent step and branch reviews.
+
+DEFAULT_OWNER: deepseek-flash:max from deepseek
+STRONG_OWNER: <model:thinking-level> from <provider>
+EDITOR_AGENT: inception/mercury-2.5:high from openrouter
+REVIEW_AGENT: mimo-v2.6-flash:high from xiaomi
+PACKAGE: <absolute path to .specs/feature-package/>
+```
+
+`DEFAULT_OWNER` handles easy and medium steps; `STRONG_OWNER` handles difficult remaining
+engineering decisions and stalled repairs. `IMPLEMENT_AGENT` remains an alias for
+`DEFAULT_OWNER`. Each owner retains its own editor, with one code writer active at a
+time. Selection uses prepared cards and observed failures under the
+[step-owner routing policy](skills/spec-run/references/owner-routing.md); it adds no
+planning pass or extra verification gates. To pin a known step, add a direction such
+as `Use STRONG_OWNER for steps 4 and 7.` Existing prepared specs need no new fields.
+
 ### Skills
 
 | Skill | Command | Purpose |
@@ -249,6 +278,7 @@ It only updates harness directories that already exist.
 | `claude/CLAUDE.md` | `~/.claude/CLAUDE.md` |
 | `codex/AGENTS.md` | `~/.codex/AGENTS.md` |
 | `skills/*/SKILL.md` | Harness skill directories; Augment reads `~/.agents/skills/` directly |
+| `pi/agents/*.md` | `~/.pi/agent/agents/` |
 | `augment/agents/*.md` | `~/.augment/agents/` (bootstrap with `SYNC_AUGMENT=1 ~/.agents/sync.sh`) |
 
 `sync.sh` does not edit provider credentials or runtime settings such as
@@ -277,6 +307,7 @@ git tag v2026.10.02 && git push origin v2026.10.02
 ├── claude/    # Claude Code global instructions
 ├── codex/     # Codex global instructions
 ├── augment/   # Augment CLI subagent adapters
+├── pi/        # Pi step owner and editor profiles
 ├── bundles/   # Bundle contents and install guide
 ├── scripts/   # Bundle build, skill lint, and SpecOps tooling
 └── sync.sh
