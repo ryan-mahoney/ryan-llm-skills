@@ -133,9 +133,9 @@ Use the configured step-owner routing and retained owner/editor pairs.
 Use REVIEW_AGENT for independent step and branch reviews.
 
 DEFAULT_OWNER: deepseek-flash:max from deepseek
-STRONG_OWNER: <model:thinking-level> from <provider>
+STRONG_OWNER: gpt-5.6-sol:high from openai-codex
 EDITOR_AGENT: inception/mercury-2.5:high from openrouter
-REVIEW_AGENT: mimo-v2.6-flash:high from xiaomi
+REVIEW_AGENT: gpt-6-astra:medium from openai-codex
 PACKAGE: <absolute path to .specs/feature-package/>
 ```
 
