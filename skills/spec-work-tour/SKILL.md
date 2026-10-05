@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "7"
+  version: "8"
 ---
 
 # Spec Work Tour
@@ -83,26 +83,26 @@ Read, when present:
 - sourced `context.md` and current project context; compare relevant sources for material changes
 - `proposal.md`, `critique.md`, and `prototype/`
 - `spec.md`, `spec-steps.json`, `evidence-plan.json`
-- `spec-prepare.md`, `preparation.json`, `criteria.md`, `invariants.md`
+- `spec-prepare.md`, `criteria.md`, `invariants.md`
 - every `step-<NNN>-subspec.md` and `learnings/step-<NNN>-learning.md`
   (read a historical root-level learning when no folder copy exists)
 - `merge-evidence.md` and `merge-evidence.json`
 - `evidence/`, `blockers.md`, and the latest branch review/fix artifacts
 - the merge-base-to-HEAD commits and diff
 
-Required inputs for an implemented spec are `context.md`, `spec.md`, version 2 `evidence-plan.json`, version 3 `preparation.json`, all expected learnings, and `merge-evidence.json`. A final merge-ready tour additionally requires a current passing branch evidence audit. If an older package predates one of these contracts, report the missing artifact as a blocking evidence gap; do not silently infer a pass.
+Required inputs for an implemented spec are `context.md`, `spec.md`, version 2 `evidence-plan.json`, all expected learnings, and `merge-evidence.json`. A final merge-ready tour additionally requires a current passing branch evidence audit. If an older package predates one of these contracts, report the missing artifact as a blocking evidence gap; do not silently infer a pass.
 
 ## Revalidate Provenance And Gates
 
-Validate all artifact hashes and commit bindings that their schemas provide. Then walk every claim and required gate in `evidence-plan.json`:
+Validate required artifact paths and code revision bindings that their schemas provide. Then walk every claim and required gate in `evidence-plan.json`:
 
 1. Confirm the claim maps to an applicable sourced requirement, with the correct decision phase.
-   Validate the context snapshot/hash and expose consequential decisions and omissions.
+   Read the context snapshot and expose consequential decisions and omissions.
 2. Confirm each failure hypothesis has at least one relevant gate capable of rejecting it.
 3. Confirm each executed gate has an observation artifact, exact command/procedure, actual target,
    effects, authority source, outcome and proof boundary. Later-phase gates may be `pending`, with a
    concrete procedure but no fabricated observations. Commands are not permission to execute them.
-4. Re-run cheap, safe gates when freshness is uncertain. For expensive or environment-specific gates, verify a commit-bound result and record why it was not rerun.
+4. Reuse valid results with their actual observed revision and scope. Re-run a gate only when a relevant change or concrete uncertainty affects its applicability; cost alone does not justify re-execution. Never relabel an earlier run as a new execution. When reusing prior evidence, retain its `observedCommit` and record `applicability` explaining why it supports the candidate `commit`.
 5. Confirm the final branch audit independently examined the integrated diff and closed every actionable finding.
 6. Treat open merge blockers, unresolved merge findings, material context changes, stale code
    bindings and missing required merge environments as blocking. Classify later-phase gaps
@@ -135,7 +135,6 @@ Write version 2 JSON with a trailing newline:
   "summary": "What changed and the user/system outcome.",
   "context": {
     "artifact": ".specs/feature/context.md",
-    "sha256": "<64 lowercase hex characters>",
     "summary": "Actual users, retained data, compatibility and release model.",
     "decisions": ["Decision and its user/project-policy source."],
     "omissions": ["No rollout flag: the existing release process does not require one."],
@@ -241,6 +240,8 @@ may still decide whether an independently evidenced operation is authorized.
 Never mark a claim `proven` on an optional gate while a required gate is unpassed. A runbook proves that a procedure exists; it does not prove that the procedure ran or that production recovered. Keep post-deploy execution `unproven` or restate the claim narrowly around the verified runbook artifact.
 
 Every acceptance criterion must appear in at least one claim. Every claim must name at least one gate. Every gate must name the failure hypothesis it rejects. Use portable artifact paths: resolve `.specs/` from the primary repository and code/test paths from the execution checkout. Pass canonical absolute input/output paths to the renderer while running it in the code checkout. Do not embed secrets, credentials, production records, or sensitive screenshots.
+
+Gate provenance: `commit` binds the evidence assessment to the candidate. Optional `observedCommit` records the full Git SHA where execution actually occurred; absence means it equals `commit` for existing records. When the revisions differ, require a nonempty `applicability` rationale assessing intervening changes. Keep results stale when applicability cannot be established. Pending procedures have no observed execution.
 
 ## Render And Inspect The HTML
 

@@ -114,7 +114,7 @@ Never claim a local brief is already tracked in an external system.
 ## Preparation: Put Proof At The Owning Boundary
 
 Check the rules and deferrals against current code and acceptance. Correct substantive omissions
-through the normal preparation process before publishing the manifest. A required counterexample
+through the normal preparation process before declaring the package prepared. A required counterexample
 belongs in an existing or new EV and in the owning card's strict `verification.cases`; no new
 machine fields are required. Make expected results independent of the implementation under test.
 

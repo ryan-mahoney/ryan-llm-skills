@@ -31,9 +31,8 @@ repository documentation. Update workflow references to the canonical path when 
 At intake, write `.specs/<feature>/context.md` in the primary repository: the relevant resolved facts, source references,
 decisions, unresolved questions, deliberate omissions, and permitted verification environments.
 Distinguish `user-confirmed`, `project-policy`, `repository-observed`, and `assumed` facts. Include
-source revision/hash for project files and a dated quotation or precise reference for user
-decisions. Never include credentials. Bind this snapshot in `evidence-plan.json` and
-`preparation.json`; every worker and reviewer reads it. It records constraints, not new authority.
+source revision or precise location for project files and a dated quotation or precise reference for user
+decisions. Never include credentials. Reference this snapshot by its canonical path in `evidence-plan.json`; workers and reviewers read the relevant constraints. It records constraints, not new authority.
 The shared `.specs/project-context.md` is project-wide; this feature snapshot remains a separate artifact.
 
 On resume, preparation, and before external actions, check relevant sources for material changes.

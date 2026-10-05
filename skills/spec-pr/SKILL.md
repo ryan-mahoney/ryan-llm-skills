@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "12"
+  version: "13"
 ---
 
 # Spec PR
@@ -43,7 +43,6 @@ draft status and explain the gap.
 Use `mode=ready` only for final readiness. This mode requires the complete package:
 
 - sourced `context.md`, `spec.md`, `spec-steps.json`, version 2 `evidence-plan.json`
-- version 3 `preparation.json`
 - `merge-evidence.json` and `merge-evidence.md`
 - latest `reviews/branch-<n>-review.md`
 - version 2 `work-tour.json` and its `work-tour.html`

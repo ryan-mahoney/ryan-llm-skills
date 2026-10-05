@@ -16,7 +16,7 @@ const manifest = {
   version: 2, feature: "evidence-demo", title: "Save normalized values through the real route",
   generatedAt: "2026-09-26T12:00:00Z", repository: ".", branch: "feature/evidence-demo", base: "origin/main", commit,
   verdict: "ready", summary: "The route now persists the normalized value. An isolated integration check observed the save and subsequent read. Release observations remain pending.",
-  context: { artifact: "context.md", sha256: "b".repeat(64), summary: "Customer service with retained data. Verification uses an isolated database. The existing deployment process remains in use.", decisions: ["Preserve existing records — project policy, Data section."], omissions: ["No new release flag: the established process does not use staged rollout."], burden: ["One maintained route regression test; no new configuration or services."] },
+  context: { artifact: "context.md", summary: "Customer service with retained data. Verification uses an isolated database. The existing deployment process remains in use.", decisions: ["Preserve existing records — project policy, Data section."], omissions: ["No new release flag: the established process does not use staged rollout."], burden: ["One maintained route regression test; no new configuration or services."] },
   architecture: { before: "Save accepted input without normalization.", after: "The registered route normalizes, persists, and returns the value.", boundaries: ["route -> model -> isolated database"], decisions: [] },
   implementation: { steps: [{ step: 1, name: "Persist normalized value", commit, files: ["route.js"], outcome: "Implemented and observed through application wiring." }] },
   claims: [
@@ -83,8 +83,25 @@ assert.ok(legacyHtml.includes("Earlier report · ready"));
 assert.ok(legacyHtml.includes("Project context and deployment permission were not recorded"));
 assert.ok(!legacyHtml.includes("Pre-merge verification · ready"));
 await writeFile(path.join(dir, "legacy.html"), legacyHtml);
+const reusedHtml = await check("prior observation supports candidate with explicit applicability", (m) => {
+  m.gates[0].observedCommit = "b".repeat(40);
+  m.gates[0].applicability = "Only documentation changed; route, adapter, fixtures and test are unchanged.";
+});
+assert.ok(reusedHtml.includes("Observed commit") && reusedHtml.includes("Candidate commit"));
+assert.ok(reusedHtml.includes("b".repeat(40)) && reusedHtml.includes("Only documentation changed"));
+await check("prior observation without applicability rejected", (m) => { m.gates[0].observedCommit = "b".repeat(40); }, /applicability/);
+for (const [name, rationale] of [["blank", "   "], ["object", { reason: "Unchanged" }]]) {
+  await check(`${name} reused-evidence rationale rejected`, (m) => {
+    m.gates[0].observedCommit = "b".repeat(40); m.gates[0].applicability = rationale;
+  }, /applicability must be a nonempty string/);
+}
+await check("invalid observed revision rejected", (m) => { m.gates[0].observedCommit = "short"; }, /observedCommit/);
+await check("reused observation cannot hide stale candidate binding", (m) => {
+  m.gates[0].commit = "c".repeat(40); m.gates[0].observedCommit = "b".repeat(40); m.gates[0].applicability = "Unchanged behavior.";
+}, /not bound to the tour commit/);
 await check("missing context rejected", (m) => { delete m.context; }, /context is required/);
-await check("bad context hash rejected", (m) => { m.context.sha256 = "missing"; }, /SHA-256/);
+await check("obsolete preparation field does not invalidate otherwise valid tour", (m) => { m.context.sha256 = "obsolete"; });
+await check("missing context artifact rejected", (m) => { delete m.context.artifact; }, /context.artifact/);
 await check("missing execution effects rejected", (m) => { delete m.gates[0].effects; }, /effects is required/);
 const blockedHtml = await check("honest blocked tour", (m) => { m.verdict = "blocked"; m.claims[0].status = "unproven"; m.gates[0].status = "failed"; m.deployment.readiness = "blocked"; m.gaps = ["Save did not persist."]; });
 assert.ok(blockedHtml.includes("Pre-merge verification · blocked"));

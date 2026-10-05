@@ -4,7 +4,7 @@ Perform these transformations in exactly this order. They are deliberately seque
 
 ### 1. Continue the same planning invocation
 
-The `spec-write` entrypoint has resolved the canonical paths and invalidated preparation
+The `spec-write` entrypoint has resolved the canonical paths and resolved required preparation inputs
 before editing. Continue with that context and the repository evidence already read;
 do not restart discovery or delegate the whole preparation phase. Resolve remaining
 unknowns at their owning boundary. Keep the current draft spec and indexes consistent.
@@ -79,14 +79,14 @@ Reuse the production-composition gate when it already covers ordinary entry.
 
 `spec.md` is canonical. Rewrite `spec-steps.json` to contain exactly one entry per final implementation step, in ascending order, using the current strict step-index schema. Each entry's number, name, description, difficulty, visual-design flag, and evidence array must match the Markdown step. The top-level `spec` path must equal the repository-relative path in the `Spec folder:` footer.
 
-Reconcile `evidence-plan.json` against the corrected spec. Preserve stable identifiers where their meaning survives. Correct posture, context binding, claim/hypothesis/gate mappings, phase, required flag, command,
+Reconcile `evidence-plan.json` against the corrected spec. Preserve stable identifiers where their meaning survives. Correct posture, context path, claim/hypothesis/gate mappings, phase, required flag, command,
 artifact, environment, effects, authority, independence and owner-step fields. Recalibrate in either
 direction from sourced facts. Replace costly gates with equivalent safe proof or remove demonstrably
 inapplicable obligations, recording why coverage remains sufficient. A genuine missing verifier
 requires the smallest sufficient local solution or an explicit phase-specific gap, never invented
 production operations. A prepared later-phase procedure may remain pending without blocking merge.
 
-Run `node ~/.agents/skills/spec-work-tour/scripts/validate-evidence-plan.mjs <path>` after reconciliation and again immediately before manifest hashing. Any structural or traceability failure blocks publication.
+Run `node ~/.agents/skills/spec-work-tour/scripts/validate-evidence-plan.mjs <path>` once after final reconciliation. Any structural or traceability failure blocks publication.
 
 ### 4. Derive prose guardrails and invariants
 
@@ -94,7 +94,7 @@ Walk Architecture, Notes, and Implementation Steps for normative statements that
 
 When at least one implementation guardrail exists, atomically write `criteria.md` with:
 
-- The spec source and SHA-256 generation hash.
+- The canonical spec source path.
 - One stable heading per property.
 - A `Statement:` field containing the implementation property in prose.
 - A `Source:` field quoting or precisely locating the normative spec sentence.
@@ -104,7 +104,7 @@ When at least one implementation guardrail exists, atomically write `criteria.md
 
 When cross-step or cross-phase ownership constraints exist, atomically update `invariants.md`. Keep established live entries, append new entries with their source and establishing step/phase, and retain a superseded entry only when a later spec explicitly licenses its replacement. Preparation and final review consume only live, non-superseded entries.
 
-If no criteria or invariants apply, ensure the corresponding artifact is absent and bind it as `null` in the final manifest. Removal happens before subspec planning so the final file set is unambiguous.
+If no criteria or invariants apply, ensure the corresponding artifact is absent. Removal happens before subspec planning so the final file set is unambiguous.
 
 ### 5. Write difficulty-routed execution cards
 
@@ -140,7 +140,7 @@ Place these lines in `Targets`. Do not add a repository survey merely to populat
 
 Include at least one focused verification case that traverses the real production composition through the concrete adapter to an observable result, while faking only the final external boundary. If the entrypoint, adapter, or downstream command/API contract required by this step is absent and the prepared step does not own its addition, correct the spec/step targets or return a non-ready verdict. A deliberately library-only precursor may defer wiring only when its own acceptance coverage is non-runtime and a named later step explicitly owns the integration; never use that exception for a step that itself promises reachable behavior.
 
-#### Label execution risks without deepening preparation
+#### Prepare focused risk cases
 
 For every medium or hard card, add these two lines to `Setup and Hazards` using only the spec, guardrails, invariants, targets, and repository context already read for that card:
 
@@ -164,7 +164,7 @@ Use only applicable labels from this fixed vocabulary:
 - `external-runtime`
 - `security-boundary`
 
-List only live invariants that the step establishes, consumes, or can violate through its named targets. Do not perform extra repository surveying, add commands, or expand a full adversarial boundary matrix merely to populate these lines. The labels route bounded execution-time verification in `spec-step-run`; they do not enlarge the prepared behavior or acceptance scope. Use `none` when no label or invariant applies.
+List only live invariants that the step establishes, consumes, or can violate through its named targets. Do not perform extra repository surveying, add commands, or expand a full adversarial boundary matrix merely to populate these lines. Turn credible risks into concrete cases and sufficient focused commands in the card's verification block, using the already-grounded behavior and invariants. Reuse cases that cover multiple obligations; do not add one test per label. Labels identify prepared risks and do not trigger routine execution-time expansion. Use `none` when no label or invariant applies.
 
 Apply the shared Verification Scheduling And Deadlines policy when assigning commands.
 Choose the strategy to fit the change. Cards retain exact focused commands and cases,
@@ -183,7 +183,7 @@ Do not create an implementation step solely to repeat those checks.
 Read the strict card schema and strategy/command guidance in
 [spec-subspec-write](../../spec-subspec-write/SKILL.md) before writing cards; reading its
 contract does not require delegation. Every card must contain strict `planning` and
-`verification` blocks matching that contract. The parent validates hashes, step numbers, filenames, concrete targets, focused commands, and observable cases mechanically. It does not create a second prose copy of the verification contract or semantically re-judge an equivalent planner's work.
+`verification` blocks matching that contract. The parent validates step numbers, filenames, concrete targets, focused commands, and observable cases mechanically. It does not create a second prose copy of the verification contract or semantically re-judge an equivalent planner's work.
 
 When a step carries an `Evidence:` tag in `spec.md`, add one line per owned EV item to `Targets`:
 
@@ -197,7 +197,7 @@ handoff. Identify safe isolated pre-deploy checks separately from operations awa
 authority; keep only unexecuted gates pending. Verify merge commands cannot accidentally target live
 resources through environment files, setup/teardown or app startup. Do not invent evidence obligations the spec does not own.
 
-Write targets and the edit sequence as the best expected route, never as an exhaustive file or permission whitelist. State in `Setup and Hazards` which criteria the step should establish now, preserve for later work, or may satisfy early even when another step was expected to own them. Treat applicable, authorized prepared verification commands as the baseline; the implementation worker may add relevant tests, files, and repository-specific commands when credible evidence requires them.
+Write targets and the edit sequence as the best expected route, never as an exhaustive file or permission whitelist. State in `Setup and Hazards` which criteria the step should establish now, preserve for later work, or may satisfy early even when another step was expected to own them. Treat applicable, authorized prepared verification as the execution plan. The implementation worker adds investigation or checks when actual code, a failure, or a material departure exposes a specific acceptance gap; it names that gap briefly. Do not routinely repeat architecture analysis or expand checks because a label is present.
 
 For every `Visual: yes` card, include one of these exact lines in `Targets`:
 
@@ -235,11 +235,10 @@ smallest required Playwright setup. Non-visual cards omit the section.
 
 When writing a card exposes independent objectives or unresolved consequential design
 choices, revise the step decomposition first. Update the spec, index and EV ownership,
-then regenerate cards affected by changed step boundaries or the spec hash. Preserve
+then regenerate cards affected by changed step boundaries or requirements. Preserve
 stable AC/CL/FH/EV identifiers where meaning survives. For an unimplemented re-plan,
 remove obsolete canonical `step-<NNN>-subspec.md` files only after preserving the prior
-planning snapshot; never remove execution learnings or evidence. Every retained card
-must bind the final spec hash, including otherwise unchanged cards.
+planning snapshot; never remove execution learnings or evidence. Retain unchanged cards when their targets and requirements still apply.
 
 Correct locally resolvable problems directly. Accumulate spec corrections discovered while producing cards, update the spec/index/guardrails once, then regenerate only cards whose inputs or required behavior changed. A missing field or stale private symbol is a repair, not a blocker.
 
@@ -249,10 +248,9 @@ Use `spec-subspec-write` only when an escalation trigger remains unresolved afte
 
 After the last step, reread every final artifact. Confirm:
 
-- The current spec hash equals every subspec's `planning.spec_sha256`.
 - Step numbers are exactly the ascending `spec-steps.json` numbers.
 - There is exactly one canonical subspec per indexed step and no unexpected canonical step number.
-- Every planning verdict is `ready`.
+- Every planning verdict is `ready`. Ignore obsolete `planning.spec_sha256` fields on retained cards; they do not require re-preparation.
 - Every verification contract has concrete focused commands and observable cases, including
   applicable domain counterexamples, owning-boundary proof, and ordinary-entry behavior from
   the Engineering Decisions contract; accepted deferrals have a concrete handoff.
@@ -265,12 +263,11 @@ After the last step, reread every final artifact. Confirm:
 - Every medium and hard card records canonical `Risk lenses` and `Live invariants` lines in `Setup and Hazards`.
 - Every requirement maps to a claim, every claim to at least one failure hypothesis and gate, and every failure hypothesis to a gate capable of rejecting it.
 - Every Executable Evidence Plan item is owned by exactly one step whose card and `spec-steps.json` entry carry matching evidence ownership and a concrete command, environment, artifact, independence level, rejected failure, and proof boundary.
-- `evidence-plan.json.context.path` resolves to this package's `context.md` and its `sha256`
-  equals the context digest used by the preparation manifest.
-- Context sources remain current; `evidence-plan.json` binds the exact `context.md` bytes, and
+- `evidence-plan.json.context.path` resolves to this package's required `context.md`.
+- Context sources remain current; `evidence-plan.json` names the canonical `context.md`, and
   posture fits actual exposure with every increase or reduction justified; user-visible work has QA-tour output; no required gate depends on human review or manual QA; every pre-mortem item carries a disposition.
 - Criteria contain prose `Statement` properties only.
-- The context, report, spec, index, optional criteria/invariants, and all subspecs are final before manifest hashing begins.
+- The context, report, spec, index, optional criteria/invariants, and all subspecs are complete before declaring readiness.
 
 ### 7. Write the report and publish last
 
@@ -286,34 +283,9 @@ Atomically write `spec-prepare.md` on every run. Include:
 - Corrections/reruns and open blockers.
 - Overall outcome: `prepared`, `decision-required`, or `blocked`.
 
-If blocked or awaiting a merge-relevant decision, stop after the report. Never publish a partial or failure manifest.
+If blocked or awaiting a merge-relevant decision, stop after the report. Do not declare a partial package prepared.
 
-Only for a completely valid package, compute SHA-256 over the final file bytes and atomically publish strict version 3 `preparation.json` **as the last write**:
-
-```json
-{
-  "version": 3,
-  "preparedAt": "canonical ISO 8601 timestamp",
-  "specSha256": "64 lowercase hex characters",
-  "contextSha256": "64 lowercase hex characters",
-  "stepIndexSha256": "64 lowercase hex characters",
-  "evidencePlanSha256": "64 lowercase hex characters",
-  "reportSha256": "64 lowercase hex characters",
-  "criteriaSha256": null,
-  "invariantsSha256": null,
-  "steps": [
-    {
-      "step": 1,
-      "subspec": {
-        "file": "step-001-subspec.md",
-        "sha256": "64 lowercase hex characters"
-      }
-    }
-  ]
-}
-```
-
-Use a hash string instead of `null` when an optional artifact exists. Include exactly one `steps` entry per indexed step. No keys beyond this schema are allowed. Validate all bindings immediately before rename; a changed or missing binding stops publication.
+Declare the package prepared only when its required artifacts exist, indexed steps have exactly one canonical card each, and all cards have a `ready` verdict. Do not emit `preparation.json` or another fingerprint/manifest replacement. Discard a legacy `preparation.json` during re-preparation.
 
 ## Exceptional Deep-Planning Fallback
 
@@ -334,8 +306,8 @@ Do not use fallback delegation for routine grounding, formatting, or validation 
 
 ## Output
 
-Return `outcome: prepared` only after publishing the manifest, with `next: spec-run`.
-For unresolved work return `decision-required` or `blocked` and leave the manifest absent.
-Report the canonical paths for `context.md`, `spec.md`, `spec-prepare.md`, `spec-steps.json`, `evidence-plan.json`, optional `criteria.md`/`invariants.md`, each step subspec, and `preparation.json`. State evidence posture and traceability counts, corrections, selected verification strategies, automation gaps, and whether the manifest was published.
+Return `outcome: prepared` only after validating the required artifacts and ready cards, with `next: spec-run`.
+For unresolved work return `decision-required` or `blocked` and do not claim readiness.
+Report the canonical paths for `context.md`, `spec.md`, `spec-prepare.md`, `spec-steps.json`, `evidence-plan.json`, optional `criteria.md`/`invariants.md`, and each step subspec. State evidence posture and traceability counts, corrections, selected verification strategies, automation gaps, and whether the package is prepared.
 
 Do not add attribution footers or co-author trailers.

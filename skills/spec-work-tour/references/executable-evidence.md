@@ -337,7 +337,7 @@ and keep execution pending. Do not run commands merely because they appear in an
 ├── critique.md                         # only when warranted
 ├── spec.md / spec-steps.json
 ├── evidence-plan.json                  # version 2: context + phase-aware CL/FH/EV graph
-├── spec-prepare.md / preparation.json   # version 3 manifest binds context too
+├── spec-prepare.md                     # preparation outcome and ready-card paths
 ├── criteria.md / invariants.md          # only when applicable
 ├── step-<NNN>-subspec.md
 ├── learnings/step-<NNN>-learning.md
@@ -348,8 +348,7 @@ and keep execution pending. Do not run commands merely because they appear in an
 ```
 
 Keep agent inputs compact; avoid re-explaining the same decision in every file. Machine indexes
-are projections, not competing sources. Old packages must resolve context, classify phases, and
-re-prepare before resuming implementation or publishing readiness. Reuse still-valid observations
+are projections, not competing sources. Packages missing sourced context or phase-aware evidence must resolve those substantive gaps before resuming implementation or publishing readiness. Otherwise usable version 2 packages may retain obsolete preparation/hash fields; ignore those fields rather than requiring format-only re-preparation. Reuse still-valid observations
 with recorded provenance; do not invent missing facts or merely relabel a legacy deploy verdict.
 The shared validator/renderer still accept version 1 for existing Design/SpecOps callers, with
 legacy notices. That compatibility does not satisfy standalone version 2 input contracts or
@@ -363,7 +362,7 @@ authorize publication: preparation, execution and PR stages must check their req
 {
   "version": 2,
   "spec": ".specs/feature/spec.md",
-  "context": {"path": ".specs/feature/context.md", "sha256": "<64 lowercase hex characters>"},
+  "context": {"path": ".specs/feature/context.md"},
   "posture": {
     "risk": "medium",
     "rationale": "Changes saved state in an isolated test of the existing runtime.",
@@ -405,6 +404,10 @@ same-phase gate; every failure has a rejecting gate. Links are reciprocal. Every
 step. For a later-phase gate, that step owns the procedure, handoff, and any safe isolated pre-deploy
 proof in its existing scope. It gains no authority for live operations. A gate can cover several claims; no one-test-per-identifier rule applies. Gate artifacts
 contain actual observations when run, not only the test source. Keep unexecuted later operations `pending`; phase names route verdicts, not permission.
+
+### Reused gate observations
+
+In merge evidence and work-tour gates, `commit` is the full candidate SHA to which the evidence assessment applies. Optional `observedCommit` preserves the full SHA where the check actually ran; existing records without it mean execution at `commit`. When these differ, `applicability` must explain why intervening changes leave the observed scope valid. Do not relabel prior execution or treat unknown applicability as passing evidence. Pending procedures record no observed execution.
 
 ## QA And Human Review
 

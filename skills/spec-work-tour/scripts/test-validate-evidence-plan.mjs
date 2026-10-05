@@ -13,7 +13,7 @@ const validator = fileURLToPath(new URL("validate-evidence-plan.mjs", import.met
 const plan = {
   version: 2,
   spec: ".specs/demo/spec.md",
-  context: { path: ".specs/demo/context.md", sha256: "a".repeat(64) },
+  context: { path: ".specs/demo/context.md" },
   posture: {
     risk: "medium", rationale: "Changes a registered route over disposable fixtures.",
     changeTypes: ["API"], boundaries: ["controller/context"], impacts: ["user-visible behavior"],
@@ -38,6 +38,7 @@ async function check(name, mutate, error) {
 }
 try {
   await check("focused isolated proof", () => {});
+  await check("legacy preparation field does not require format-only re-preparation", (p) => { p.context.sha256 = "obsolete"; });
   await check("shared gate covers two claims", (p) => {
     p.claims.push({ ...structuredClone(p.claims[0]), id: "CL-2", requirements: ["AC-2"] });
     p.failureHypotheses[0].claims.push("CL-2");
@@ -50,7 +51,7 @@ try {
   });
   await check("unknown gate", (p) => { p.claims[0].gates = ["EV-404"]; }, /unknown gate/);
   await check("missing context", (p) => { delete p.context; }, /context.path/);
-  await check("invalid context binding", (p) => { p.context.sha256 = "unknown"; }, /SHA-256/);
+  await check("missing context path", (p) => { delete p.context.path; }, /context.path/);
   await check("version-only downgrade is not a legacy plan", (p) => { p.version = 1; }, /mergeBlocking/);
   await check("unsupported version", (p) => { p.version = 9; }, /version must equal 1 or 2/);
   await check("existing out-of-scope callers retain version 1 validation", (p) => {

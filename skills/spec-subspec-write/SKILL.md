@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "24"
+  version: "25"
 ---
 
 # Spec Subspec Write
@@ -20,19 +20,19 @@ Produce a compact, code-grounded execution card for exactly one step of a prepar
 
 This skill is a leaf planning task. Do not spawn, delegate to, or coordinate another subagent.
 
-Write only the assigned **step subspec**. This invocation owns exactly one canonical `step-<NNN>-subspec.md`. Never edit `spec.md`, `spec-steps.json`, `evidence-plan.json`, `criteria.md`, `invariants.md`, `spec-prepare.md`, `preparation.json`, another step's subspec, or production/test code.
+Write only the assigned **step subspec**. This invocation owns exactly one canonical `step-<NNN>-subspec.md`. Never edit `spec.md`, `spec-steps.json`, `evidence-plan.json`, `criteria.md`, `invariants.md`, `spec-prepare.md`, another step's subspec, or production/test code.
 
 The parent `spec-write` agent is the only writer of shared preparation artifacts and the only authority that may correct or renumber the spec. Report a mismatch through the planning verdict; do not improvise a new design.
 
 ## Canonical Paths and Inputs
 
-Require the resolved `.specs/<feature>/spec.md`, step number, and current lowercase SHA-256 spec hash. Write only sibling `step-<NNN>-subspec.md`. If any input is missing or multiple spec folders match, return `blocked`; never guess by modification time.
+Require the resolved `.specs/<feature>/spec.md`, step number. Write only sibling `step-<NNN>-subspec.md`. If any input is missing or multiple spec folders match, return `blocked`; never guess by modification time.
 
 Write the complete Markdown body to a temporary file in the destination directory, then rename it over the final path. The file begins with a level-1 heading.
 
 ## Resolve and Ground the Step
 
-Read `context.md`, the full spec and `evidence-plan.json`, then isolate the assigned step including its objective, files, contracts, tests, `Covers:`, `Complexity:`, `Visual:`, and `Evidence:` tags. Confirm the injected step exists, the spec hash matches, and the step owns exactly the EV items recorded in both machine indexes.
+Read `context.md`, the full spec and `evidence-plan.json`, then isolate the assigned step including its objective, files, contracts, tests, `Covers:`, `Complexity:`, `Visual:`, and `Evidence:` tags. Confirm the injected step exists, the step owns exactly the EV items recorded in both machine indexes.
 
 Ground only the unresolved risk that caused escalation:
 
@@ -101,13 +101,12 @@ Immediately after the H1 and a one-sentence objective, emit this YAML block with
 ```yaml
 planning:
   version: 2
-  spec_sha256: <64 lowercase hexadecimal characters matching current spec bytes>
   step: <integer >= 1 matching the assigned step>
   output_file: <canonical step-NNN-subspec.md basename>
   verdict: <ready | needs-spec-correction | blocked>
 ```
 
-No extra keys are allowed. The output basename and zero-padded number must match the canonical path. A hash, number, filename, or verdict mismatch makes the result invalid.
+New planning blocks allow no extra keys. The output basename and zero-padded number must match the canonical path. A number, filename, or verdict mismatch makes the result invalid. Existing cards may retain an obsolete `spec_sha256` field; consumers ignore it rather than requiring re-preparation solely for its removal. New cards omit it.
 
 ## Strict Verification Block
 
@@ -126,7 +125,7 @@ verification:
 
 No extra keys are allowed. For a `ready` verdict, commands and cases must be non-empty and concrete. `test_files` may be
 empty for a sufficient deterministic inspection or disposable verifier; name its reproducible
-source, inputs and result artifact in Targets. Do not create a test file to satisfy the schema. The shared `spec-step-run` policy owns execution-time adaptation, additional verification, hang handling, and checkpoint behavior; do not turn this card into a permission whitelist.
+source, inputs and result artifact in Targets. Do not create a test file to satisfy the schema. The prepared contract is the execution baseline. Execution adds investigation or checks for actual failures, material departures, or acceptance gaps, with the specific gap named briefly; risk labels alone do not justify another planning pass. The shared `spec-step-run` policy owns adaptation, hang handling, and checkpoints.
 
 For `needs-spec-correction` or `blocked`, keep the exact block shape. Use the narrowest prospective verification known; when none can be determined, use one explanatory item in each list. The parent will not publish this result as ready.
 
@@ -250,7 +249,7 @@ Risk lenses: <comma-separated labels | none>
 Live invariants: <comma-separated invariant IDs | none>
 ```
 
-Use only these risk labels: `persistence-integrity`, `atomic-publication`, `concurrency`, `lease-or-refcount`, `idempotency`, `cancellation`, `resource-budget`, `progress-observer`, `filesystem-snapshot`, `cross-step-contract`, `external-runtime`, and `security-boundary`. List only live invariants the step establishes, consumes, or can violate. Do not add repository searches or broaden the plan solely to classify risk; these labels route execution-time verification and do not create new behavior.
+Use only these risk labels: `persistence-integrity`, `atomic-publication`, `concurrency`, `lease-or-refcount`, `idempotency`, `cancellation`, `resource-budget`, `progress-observer`, `filesystem-snapshot`, `cross-step-contract`, `external-runtime`, and `security-boundary`. List only live invariants the step establishes, consumes, or can violate. Do not add repository searches or broaden the plan solely to classify risk; labels identify prepared risks rather than requiring execution-time expansion. Put concrete credible failure cases and their sufficient focused checks in `verification.cases` and `verification.commands`. Reuse a case that already protects the obligation; a label alone does not require an additional test.
 
 ### Correction or Blocker
 

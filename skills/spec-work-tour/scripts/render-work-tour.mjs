@@ -70,7 +70,6 @@ for (const key of ["feature", "title", "generatedAt", "branch", "base", "commit"
 if (!["ready", "blocked"].includes(manifest.verdict)) throw new Error("verdict must be ready or blocked");
 const context = required(manifest.context, "context");
 for (const key of ["artifact", "summary"]) required(context[key], `context.${key}`);
-if (!legacy && !/^[0-9a-f]{64}$/.test(context.sha256 || "")) throw new Error("context.sha256 must be a SHA-256 binding");
 for (const key of ["decisions", "omissions", "burden"]) array(context[key], `context.${key}`);
 const claims = array(manifest.claims, "claims");
 const gates = array(manifest.gates, "gates");
@@ -100,6 +99,10 @@ for (const gate of gates) {
   if (!array(gate.rejects, `${gate.id}.rejects`).length) throw new Error(`${gate.id} rejects no failure hypothesis`);
   for (const key of legacy ? ["boundary", "commit"] : ["kind", "command", "environment", "effects", "authorization", "artifact", "boundary", "commit"]) required(gate[key], `${gate.id}.${key}`);
   if (!legacy && gate.status === "passed") required(gate.proof, `${gate.id}.proof`);
+  if (gate.observedCommit !== undefined) {
+    if (!/^[0-9a-f]{40,64}$/.test(gate.observedCommit)) throw new Error(`${gate.id}.observedCommit must be a full lowercase git SHA`);
+    if (gate.observedCommit !== gate.commit && (typeof gate.applicability !== "string" || !gate.applicability.trim())) throw new Error(`${gate.id}.applicability must be a nonempty string`);
+  }
   // Pending procedures bind to the candidate too; their commit is not a claim of execution.
   if ((!legacy || gate.required) && gate.commit !== manifest.commit && gate.status !== "stale") throw new Error(`${gate.id} is not bound to the tour commit; mark stale evidence honestly`);
   for (const id of gate.claims) {
@@ -232,7 +235,7 @@ const initialScenario = (qa.scenarios || []).find((scenario) => (scenario.automa
 const renderGate = (gate) => {
   const gateStatusClass = (gate.required === false || gate.phase !== "merge") && gate.status !== "passed" ? "status--stale" : statusClass(gate.status);
   const copyLabel = /^(follow|inspect|review)\b/i.test(gate.command || "") ? "Copy instruction" : "Copy command";
-  return `<section class="gate-proof" id="gate-${attr(gate.id)}"><header class="gate-head"><div><span class="evidence-id">${escapeHtml(displayLabel(gate.kind))}</span><strong class="${gateStatusClass}">${escapeHtml(displayLabel(gate.status))}</strong></div><span class="gate-posture">${escapeHtml(displayLabel(gate.phase))} · ${gate.required === false ? "Optional check" : "Required check"}</span></header>${gate.command ? `<div class="command"><code>${escapeHtml(gate.command)}</code><button type="button" data-copy-command="${attr(gate.command)}">${copyLabel}</button></div>` : '<p class="muted">No command recorded.</p>'}<dl class="proof-facts"><div><dt>Result</dt><dd>${escapeHtml(gate.proof || "No result recorded.")}</dd></div><div><dt>References</dt><dd><details><summary>Check identifiers</summary>${escapeHtml([gate.id, ...gate.claims, ...gate.rejects].join(", "))}</details></dd></div><div><dt>Limits</dt><dd>${escapeHtml(gate.boundary)}</dd></div><div><dt>Environment</dt><dd>${escapeHtml(gate.environment || "Unspecified")}</dd></div><div><dt>Effects</dt><dd>${escapeHtml(gate.effects)}</dd></div><div><dt>Permission</dt><dd>${escapeHtml(gate.authorization)}</dd></div><div><dt>Commit</dt><dd><code>${escapeHtml(gate.commit)}</code></dd></div><div><dt>Details</dt><dd>${artifactLink(gate.artifact || "")}</dd></div></dl></section>`;
+  return `<section class="gate-proof" id="gate-${attr(gate.id)}"><header class="gate-head"><div><span class="evidence-id">${escapeHtml(displayLabel(gate.kind))}</span><strong class="${gateStatusClass}">${escapeHtml(displayLabel(gate.status))}</strong></div><span class="gate-posture">${escapeHtml(displayLabel(gate.phase))} · ${gate.required === false ? "Optional check" : "Required check"}</span></header>${gate.command ? `<div class="command"><code>${escapeHtml(gate.command)}</code><button type="button" data-copy-command="${attr(gate.command)}">${copyLabel}</button></div>` : '<p class="muted">No command recorded.</p>'}<dl class="proof-facts"><div><dt>Result</dt><dd>${escapeHtml(gate.proof || "No result recorded.")}</dd></div><div><dt>References</dt><dd><details><summary>Check identifiers</summary>${escapeHtml([gate.id, ...gate.claims, ...gate.rejects].join(", "))}</details></dd></div><div><dt>Limits</dt><dd>${escapeHtml(gate.boundary)}</dd></div><div><dt>Environment</dt><dd>${escapeHtml(gate.environment || "Unspecified")}</dd></div><div><dt>Effects</dt><dd>${escapeHtml(gate.effects)}</dd></div><div><dt>Permission</dt><dd>${escapeHtml(gate.authorization)}</dd></div><div><dt>Candidate commit</dt><dd><code>${escapeHtml(gate.commit)}</code></dd></div>${["passed", "failed", "stale"].includes(gate.status) ? `<div><dt>Observed commit</dt><dd><code>${escapeHtml(gate.observedCommit || gate.commit)}</code></dd></div>` : ""}${gate.observedCommit && gate.observedCommit !== gate.commit ? `<div><dt>Applicability</dt><dd>${escapeHtml(gate.applicability)}</dd></div>` : ""}<div><dt>Details</dt><dd>${artifactLink(gate.artifact || "")}</dd></div></dl></section>`;
 };
 
 const claimStatusClass = (claim) => claim.phase !== "merge" && claim.status !== "proven" ? "status--stale" : statusClass(claim.status);

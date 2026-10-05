@@ -1,6 +1,6 @@
 ---
 name: spec-write
-description: "This skill should be used when the user asks to \"write a spec\", \"create a spec\", \"spec this out\", \"plan this feature\", or \"write an implementation plan\" for a feature or change. Creates or re-plans a complete implementation-ready package with granular execution cards and a bound preparation manifest, without implementing code or interacting with GitHub issues."
+description: "This skill should be used when the user asks to \"write a spec\", \"create a spec\", \"spec this out\", \"plan this feature\", or \"write an implementation plan\" for a feature or change. Creates or re-plans a complete implementation-ready package with granular ready execution cards, without implementing code or interacting with GitHub issues."
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "22"
+  version: "23"
 ---
 
 # Spec Write
@@ -37,7 +37,6 @@ Always write the completed spec to the resolved standalone spec folder:
 .specs/<feature-slug>/evidence-plan.json
 .specs/<feature-slug>/spec-prepare.md
 .specs/<feature-slug>/step-<NNN>-subspec.md
-.specs/<feature-slug>/preparation.json
 ```
 
 Write every artifact atomically: write the full content to a temporary file in the destination directory, then rename it over the final path. Every markdown artifact begins with a level-1 `#` heading on line 1. `.specs/` is standalone working state and may be gitignored; do not stage or commit it unless the repository explicitly tracks specs.
@@ -94,12 +93,11 @@ investigation; do not dispatch a second full planning pass. First establish inte
 behavior and concrete contracts, then follow
 [Ground Execution Cards And Publish The Package](references/prepare-package.md) in full.
 That mandatory second phase may revise the draft's step boundaries. A spec without
-ready cards and a valid manifest is not a completed output.
+ready cards and valid required inputs is not a completed output.
 
-Before changing any package input, remove an existing `preparation.json`; an error
-invalidating it stops the run. Never restore the old manifest after a failed edit.
+Discard legacy `preparation.json` when re-preparing; it is no longer produced or used as readiness authority.
 For an existing unimplemented package, preserve overwritten planning files in a unique
-snapshot under canonical `.specs/.planning-backups/<feature>/` before invalidation,
+snapshot under canonical `.specs/.planning-backups/<feature>/` before editing,
 unless this run already has an intact backup. Exclude credentials and runtime artifacts.
 Use the existing spec as intent even without a proposal; retain accepted behavior while
 re-grounding and splitting compound steps. No data-format migration is required.
@@ -110,7 +108,7 @@ erase its evidence. For a partially implemented package, preserve completed step
 and history, and limit corrections to pending work with explicit dependency mappings;
 return a consequential scope conflict rather than silently rewriting execution history.
 Reuse a valid package when no re-plan is requested or needed. Explicit re-planning may
-change decomposition even when hashes are current. Do not search or re-plan unrelated
+change decomposition even when existing cards are ready. Do not search or re-plan unrelated
 feature packages without selection by the user or active workflow.
 
 ## Reconcile Critique Feedback
@@ -430,10 +428,10 @@ Write `.specs/<feature-slug>/evidence-plan.json` as version 2 JSON using the sch
 After drafting `spec.md`, `spec-steps.json`, and version 2 `evidence-plan.json`, read and
 execute [Ground Execution Cards And Publish The Package](references/prepare-package.md)
 in full in this same invocation. Reuse known facts and refine step boundaries as the
-cards expose complexity. Publish `preparation.json` last, only after every card is ready
-and the complete package validates. Return `outcome: prepared`, canonical artifact paths,
+cards expose complexity. Declare readiness only after every card is ready
+and the required inputs and complete package validate. Return `outcome: prepared`, canonical artifact paths,
 step counts, material decisions, validation results, and `next: spec-run`.
 
 Never stop at `outcome: written` or hand off to a separate preparation skill. If a
 consequential choice remains, report `decision-required`; otherwise report a concrete
-`blocked` outcome, with the manifest absent. Do not implement the plan or add attribution.
+`blocked` outcome, without claiming readiness. Do not implement the plan or add attribution.

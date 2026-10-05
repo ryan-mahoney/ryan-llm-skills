@@ -17,7 +17,6 @@ if (!legacy && plan.version !== 2) fail("version must equal 1 or 2");
 text(plan.spec, "spec");
 if (!legacy) {
   text(plan.context?.path, "context.path");
-  if (!/^[0-9a-f]{64}$/.test(plan.context?.sha256 || "")) fail("context.sha256 must be a SHA-256 binding");
 }
 const phases = new Set(["merge", "deploy", "post-deploy"]);
 const posture = plan.posture || fail("posture is required");

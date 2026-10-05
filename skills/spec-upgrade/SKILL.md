@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "3"
+  version: "4"
 ---
 
 # Spec Upgrade
@@ -51,7 +51,7 @@ ask feature-specific questions only when they change that feature's implementati
 Do not treat old generated assumptions, a "prototype" label, or absent deployment files as proof
 of disposable data, absent consumers, or permission to operate services.
 
-Inspect all selected packages for shared decisions before binding their final context snapshots.
+Inspect all selected packages for shared decisions before writing their final context snapshots.
 If a later answer materially changes shared context, revisit only the affected earlier packages
 and re-prepare them before reporting the batch ready. Report potentially stale unselected packages
 without rewriting them. Dependencies between specs do not count as already implemented code;
@@ -78,9 +78,7 @@ For each selected, unimplemented package:
 3. Before the first edit to a package's planning inputs, preserve the existing planning files that
    will be overwritten in a filesystem snapshot outside the canonical package (for example,
    `.specs/.upgrade-backups/<feature>/<unique-run>/`). Specs may be gitignored, so Git is not a
-   backup. Exclude runtime captures, credentials and unrelated files. Then remove any existing
-   `preparation.json` before changing its bound inputs. A failed invalidation stops that package;
-   never restore an old valid-looking manifest over changed inputs.
+   backup. Exclude runtime captures, credentials and unrelated files. Discard legacy `preparation.json`; preparation no longer produces or consumes a fingerprint manifest.
 4. Write the sourced feature `context.md`. Reconcile any affected proposal/critique decisions with
    the resolved facts so obsolete instructions cannot be reintroduced by downstream readers.
    Preserve original feedback and note why it was superseded. Do not replay architecture or
@@ -88,15 +86,13 @@ For each selected, unimplemented package:
 5. Run `spec-write` in its existing-spec upgrade mode, using the original spec as an intent source
    even if no proposal exists. Pass resolved decisions and the reasons for changed obligations.
    In that same invocation, ground the revised plan, split compound objectives, regenerate
-   execution cards, and publish the current manifest last. Follow both internal phases
-   in full; do not invoke the planner twice. Reuse the snapshot already taken above. If a prerequisite or consequential decision prevents preparation, leave the
-   manifest absent and report that outcome rather than manufacturing readiness.
-6. Check the resulting evidence plan with its validator, recompute the preparation hashes, and
-   confirm the context binding and owned-step coverage. These checks establish preparation validity,
+   execution cards, and validate required inputs and ready cards. Follow both internal phases
+   in full; do not invoke the planner twice. Reuse the snapshot already taken above. If a prerequisite or consequential decision prevents preparation, report the non-ready outcome rather than manufacturing readiness.
+6. Check the resulting evidence plan with its validator, confirm the context path, required artifacts, ready cards, and owned-step coverage. These checks establish preparation validity,
    not implementation correctness or deployment readiness. No feature has passed a future gate
    merely because its plan was upgraded.
 
-Reuse a current package whose context, obligations, grounding and manifest already satisfy these
+Reuse a current package whose context, obligations, grounding and ready cards already satisfy these
 requirements. Return `already-current` without rewriting files, refreshing dates or taking another
 backup. On an interrupted upgrade, reuse intact backups, inspect the current files and finish only
 the missing work; do not overwrite the only original snapshot with partially upgraded inputs.
