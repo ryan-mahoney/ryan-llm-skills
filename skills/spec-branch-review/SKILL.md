@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "21"
+  version: "22"
 ---
 
 # Spec Branch Evidence Audit
@@ -25,7 +25,8 @@ the branch evidence loop driven by `spec-branch-refine`: it finds bugs and inval
 partner `spec-branch-fix` reads the file and applies fixes. This skill never edits
 code. Its stage owner must have command execution and write access to the canonical
 spec folder: it consumes CI and runs outstanding focused verification, updates merge evidence, and writes the
-review artifact. Check those capabilities before substantive work. A harness agent
+review artifact. Use the known profile's declared tools; do not launch probes or
+repeat a capability audit for installed profiles. A harness agent
 named "reviewer" may be analysis-only and therefore unsuitable as the stage owner.
 Report a capability mismatch immediately; do not complete a long analysis expecting
 the parent to reconstruct and write the required artifacts afterward.
@@ -70,8 +71,8 @@ reuse the result; it is not a branch audit.
   next step worker is editing it.
 - Load spec-aware context as below, except merge evidence, which does not exist yet.
   Read the subspecs of later steps too. Behavior a later step is scheduled to add is
-  planned work, not a finding; list it under Considered & Dismissed with the subspec
-  citation.
+  planned work, not a finding. Retain a sourced dismissal only when needed to
+  prevent an already-raised issue from recurring.
 - Load dismissals from earlier `reviews/step-<k>-fix.md` files under the Load Prior
   Dismissals rules.
 - Map commits to steps as in Stage A, then apply the Stage B lenses (1, 3, 4, 5),
@@ -82,13 +83,13 @@ reuse the result; it is not a branch audit.
   those against the integrated branch. Skip dirty-tree handling too; uncommitted
   changes belong to the step in progress.
 - Write `<spec-dir>/reviews/step-<NNN>-review.md` atomically in the Emit format with
-  `kind: step`, `step: <NNN>`, `target: <since>..<head>`, `commit: <head>`, and
-  `commits: [<full sha>, ...]` listing every commit reviewed. Give each finding a
-  `commit:` field naming the commit that introduced it. Omit `iteration`,
-  `evidence_verdict`, `claims_audited`, and `gates_reexecuted`.
+  `kind: step`, `step: <NNN>`, `target: <since>..<head>`, `scope: step`, and
+  `commit: <head>`. Give each finding a `commit` naming its introducing commit.
+  Omit `iteration` and `evidence_verdict`; the exact Git range identifies reviewed
+  commits without a duplicate inventory.
 
-Return the verdict and actionable count in about 50 words. The coordinator reads only
-the YAML block and hands the file to `spec-branch-fix` when the verdict is `needs-fix`.
+Return the artifact path, verdict, reviewed range, and any unresolved decision or
+material limitation. The coordinator derives actionable findings from the YAML list.
 
 ## Autonomous Audit
 
@@ -130,12 +131,12 @@ and incomplete affected merge claims, then return `decision-required` with the e
 
   If `<base>..HEAD` contains no commits: in `committed` scope, report
   `nothing to review: <range>`, write no review file, and stop. In `working-tree`
-  scope, review only the uncommitted and untracked changes and set
-  `commits_reviewed: 0`.
+  scope, review only the uncommitted and untracked changes and disclose that scope
+  in `limitations`.
 - **Dirty-tree handling.** In `scope=committed`, if `git status --porcelain` is
   non-empty, the working tree has uncommitted or untracked changes this review does
   **not** see. Keep the `scope` field a pure enum and record the exclusion in the
-  separate `excluded_worktree_changes` count and `scope_note` string (see Emit) so a
+  `limitations` list (see Emit) so a
   reader — and a parser — knows live work was excluded. This is the failure mode that
   would otherwise let the review silently miss its own untracked files.
   When excluded changes can affect code, tests, evidence, configuration, migrations,
@@ -147,7 +148,7 @@ and incomplete affected merge claims, then return `decision-required` with the e
 Read for judgement:
 
 - `context.md` and current project sources — users/data/compatibility, release model, authority,
-  decision provenance, and deliberate omissions; check snapshot hashes and material changes.
+  decision provenance, and deliberate omissions; inspect material changes.
 - `spec.md` — the whole intent, plus any `## Adaptations` log.
 - `evidence-plan.json` — the posture and AC → CL → FH → EV graph.
 - `merge-evidence.json` and `merge-evidence.md` — produced gate results and proof boundaries.
@@ -182,7 +183,7 @@ defect or launch another suite solely because CI is still running.
 
 Capture exact commands, elapsed times, outcomes, environment, output artifacts, and HEAD.
 Update `merge-evidence.md` and `merge-evidence.json` atomically with actual gate results,
-claim coverage, and remaining gaps; preserve preparation and original step learnings.
+claim coverage, and remaining gaps; preserve original step learnings.
 Set `readyForAudit: true` only after all required merge gates pass and later-phase handoffs
 are recorded. Test failures or unresolved timeouts produce actionable evidence findings
 for the existing fix loop. Test-source defects also go to that loop; do not edit code here.
@@ -218,7 +219,7 @@ Apply the Reuse and Critique And Branch Audit sections of [Engineering Decisions
 Challenge consequential domain assumptions with concrete counterexamples, even when spec and
 implementation agree. Inspect ordinary-entry prerequisites, the actual owner of derived behavior,
 and deferral destinations. Keep material challenges and sourced resolutions in existing report
-prose; convert concrete unresolved defects or proof gaps into normal machine-readable findings.
+entries; convert concrete unresolved defects or proof gaps into normal findings.
 A justified response can close a question without a code change. No separate verdict is added.
 
 ### Bounded guardrail lens
@@ -234,7 +235,8 @@ finding. Do not create a separate verdict or report.
 
 Read every earlier `<spec-dir>/reviews/branch-<k>-fix.md` (`k < iter`) and every
 `reviews/step-<k>-fix.md`, and collect
-the **signatures** of `dismissed` findings **with their dismissal class**. This is
+the **signatures** of `dismissed` findings **with their dismissal class**. Also
+load exceptional `dismissals` from earlier review records under the same rules. This is
 the loop's anti-thrash memory, but not every dismissal class suppresses re-raise —
 only the ones that establish no unresolved applicable defect do. An agent-generated
 assumption, spec sentence, or learning does not authorize material risk acceptance:
@@ -302,15 +304,14 @@ on its unit. Every commit gets a focused pass. Across refine iterations: if the
 previous fix did not touch a commit's files, you can reuse its prior per-commit
 result. Re-review only the commits the last fix changed. Always re-run Stage C.
 
-**Reuse step reviews.** A commit listed in the `commits:` field of a
-`reviews/step-<NNN>-review.md` file, and still present in `<base>..HEAD` with the same
-SHA, has already had its Stage B pass. Use that review's findings for the commit
-instead of reviewing it again, minus any that the matching `step-<NNN>-fix.md`
-dismissed with a suppressing class. Review fresh only the commits that no step review
-lists: fix commits made after the last step review, commits whose step review failed,
-and rewritten history. Ingested findings go through Stage C like any other, so one
-that a later step fix resolved drops out there. Record `step_reviews_ingested`
-alongside `commits_reviewed`, which counts the fresh reviews.
+**Reuse step reviews.** Resolve each completed `reviews/step-<NNN>-review.md`
+`target` range through Git. Commits in that range still present in `<base>..HEAD`
+with identical SHAs already had their Stage B pass. Use their findings rather than
+reviewing them again, minus matching fix dismissals with a suppressing class.
+Review uncovered commits, failed/incomplete step reviews, and rewritten history
+fresh. Ingested findings still pass through Stage C, where resolved defects drop
+out. For older records without a resolvable range, use their explicit `commits`
+list only after checking every SHA; unavailable provenance cannot establish reuse.
 
 **Stage C — Aggregate + integrate (the range layer).** Over the union of fresh
 per-commit findings plus the integrated end state:
@@ -332,8 +333,8 @@ status", "track generated review artifact", "parse branch review verdict"), not 
 by newly introduced symbol names. For each meaningful hit, switch to exact search
 (`rg`) and direct file reads to confirm whether the branch duplicates an existing
 helper, store, parser, route, UI state model, or workflow. If `code_search` is not
-available, perform the same pass with exact search only and record that semantic
-search was unavailable.
+available, perform the same pass with exact search only. Disclose a limitation
+only if it materially reduces the review coverage.
 
 This pass is mandatory for the branch review because duplicated/reinvented
 functionality is often invisible in a narrow diff. Report only confirmed overlap:
@@ -461,9 +462,6 @@ skip a fired lens because its preferred skill is absent.
   Test-style improvements and optional consolidation stay advisory. Missing or circular coverage that leaves a material
   merge claim unsupported is an actionable `evidence` finding under the always-on evidence lens.
 
-Record the lenses that ran on the `lenses:` field (and any delegated skill). A lens
-that finds nothing still counts as run — list it so the record shows the risk was
-checked, not skipped.
 
 ## Report Discipline (every lens, every finding)
 
@@ -504,16 +502,11 @@ always-emit rule lives once in Severity, Actionability, Verdict.)
   narrowest stable location, its severity matches the harm you traced, and no two
   findings contradict. Drop any that fail. A strong drop-filter — not
   self-censorship — is what lets you surface borderline findings confidently.
-- **Record considered-and-dismissed candidates.** When a per-commit pass raises a
-  *real* code property and you drop it because a subspec, learning, or the spec
-  records a deferral grounded in context or an authorized risk decision (not because it was vague), note it in a short
-  **Considered & dismissed** list in the prose, each with its citation. This is
-  non-actionable and never affects the verdict — but it turns a silent `pass` into an
-  auditable one: a reader sees the candidate was weighed and why it is not a bug,
-instead of wondering whether the review looked at all. This is exactly where a
-blind whole-diff pass fails — it reports `pass` with no evidence it ever considered
-the defect a spec-unaware external tool would raise. Keep it to candidates with a
-  concrete code location and an explicit citation; never pad it with nits.
+- **Dismissal memory is exceptional.** Retain a sourced decision only when it
+  resolves an already-raised issue that could recur. Put its signature, dismissal
+  class, reason, and source in optional `dismissals`; apply the Load Prior
+  Dismissals authorization rules. Do not inventory discarded suspicions or record
+  working code merely to demonstrate review coverage.
 
 ## Severity, Actionability, Verdict
 
@@ -545,41 +538,22 @@ acceptance failure, security/data defect, or failed required gate into a pass.
 
 ## Emit The Review File
 
-Write to:
-
-```txt
-<spec-dir>/reviews/branch-<iteration>-review.md
-```
-
-If `reviews/` does not exist, create it. Write the file atomically: write a temp file
-in the destination directory, then rename it. Begin the file with a level-1 `#`
-heading on line 1. The file leads with a fenced YAML block — the
-machine-readable contract that `spec-branch-fix` and `spec-branch-refine` parse —
-followed by human-readable prose that only explains the findings. Downstream skills
-read the YAML first; the prose is never parsed for control flow.
-
-````txt
-# Branch Evidence Audit — iteration <iteration> (<feature-slug>)
+Write `<spec-dir>/reviews/branch-<iteration>-review.md` atomically (temporary file
+in the destination directory, then rename), creating `reviews/` if needed. Begin
+with a level-1 heading and one fenced YAML record. The record contains each
+finding's explanation once; do not add parallel prose findings, correctness
+narratives, lens lists, counters, commit inventories, empty sections, or locator
+footers. Detailed gate executions and claim coverage stay in merge evidence.
 
 ```yaml
 review:
   kind: branch
-  iteration: <iteration>
-  spec: <spec-dir>/spec.md
-  target: <base-sha>..<head-sha>
-  scope: committed | working-tree   # pure enum — never annotate this field
-  excluded_worktree_changes: 0      # count of uncommitted/untracked files NOT reviewed (committed scope only)
-  scope_note: ""                    # e.g. "3 uncommitted/untracked files were not reviewed"; "" when clean
-  verdict: pass | needs-fix
+  iteration: 1
+  target: <full-base-sha>..<full-head-sha>
+  scope: committed # committed | working-tree | step
   commit: <full audited HEAD SHA>
-  evidence_verdict: proven | incomplete
-  claims_audited: <count>
-  gates_reexecuted: <count>
-  actionable: <count>
-  advisory: <count>
-  lenses: [correctness, reference-integrity, security, simplification, ai-authorship, executable-evidence]   # plus any fired: design, deep-security, data-deploy, dependency, performance, test-quality
-  commits_reviewed: <n>             # informational: commits decomposed and reviewed in the per-commit pass (Stage B)
-  step_reviews_ingested: <n>        # step review files whose commits Stage B reused; 0 when none exist
+  verdict: needs-fix # pass | needs-fix
+  evidence_verdict: incomplete # branch only: proven | incomplete
   findings:
     - id: F1
       severity: HIGH
@@ -589,50 +563,50 @@ review:
       line: 42
       symbol: resolveRoot
       signature: correctness:src/foo.ts:resolveRoot:caller passes unresolved root
-    - id: F2
-      severity: LOW
-      category: simplification
-      actionable: false
-      file: src/bar.ts
-      line: 10
-      symbol: wrap
-      signature: simplification:src/bar.ts:wrap:redundant wrapper
+      explanation: >-
+        The caller passes an unresolved root, so relative paths resolve against
+        the process directory and load the wrong configuration.
+      correction: Pass the resolved root to this caller.
 ```
 
-## Findings
+`explanation` states the failure condition, concrete impact, and evidence needed to
+guide correction. `correction` is optional when no safe correction is established;
+`line` is display metadata, while the stable signature drives recurrence. Preserve
+finding IDs for the same defect within resumed records; across records the signature
+is the canonical identity. Step findings also include their introducing `commit`.
+For step records replace `iteration` with `step` and omit `evidence_verdict`.
 
-### F1 · HIGH · correctness · src/foo.ts:resolveRoot (L42) · [actionable]
-What: <one line>
-Harm: <what concretely goes wrong if unfixed — a traced failure path, not "violates best practices">
-Fix:  <concrete suggested change>
+Optional fields appear only when needed:
 
-### F2 · LOW · simplification · src/bar.ts:wrap (L10) · [advisory]
-...
+- `limitations`: nonempty strings describing material coverage limits, including
+  excluded candidate changes or working-tree inputs not identified by the Git range.
+  Working-tree scope must identify the actual reviewed uncommitted inputs (paths and
+  retained diff/content artifact); `commit` alone does not bind those inputs.
+- `dismissals`: exceptional already-raised issues resolved without a current finding;
+  each has `signature`, `dismissal`, `note`, and `source`, plus `approved: true` and
+  `approval_source` for authorized accepted risk. These use the same suppression rules
+  as fix decisions, and later reviews load them alongside prior fix dismissals.
+- `decision_required`: the exact unresolved consequential choice. Return
+  `decision-required` to the coordinator without hiding findings or proof gaps.
 
-## Considered & Dismissed
+A review with no findings uses `findings: []`; an advisory-only review lists its
+findings and returns `pass`. A branch pass additionally requires
+`evidence_verdict: proven`, closed required merge claims, and no excluded candidate
+changes affecting those claims. Pending deploy/post-deploy claims do not block a
+merge pass unless their known failure also disproves a merge claim.
 
-List non-actionable candidates dropped because a cited artifact records a sourced requirement or authorized risk decision; include stable locations/citations and never pad the list.
+### Interrupted-run compatibility
 
-Review: <spec-dir>/reviews/branch-<iteration>-review.md (iteration <iteration>)
-````
-A clean branch requires `verdict: pass`, `evidence_verdict: proven`, all required merge claims closed, no excluded working-tree changes capable of affecting the candidate, `actionable: 0`, and an empty `findings: []`,
-`## Findings\nNone`, and the locator line — plus a **Considered & dismissed** list when a
-per-commit pass weighed and (correctly) dropped a context-justified candidate. That list is
-what distinguishes an audited `pass` from a blind one. When no candidates were
-dismissed, keep the `## Considered & Dismissed` section and write `None.` under it —
-an explicit zero, not an absent section. A pending deploy/post-deploy claim does not block a merge pass. A known later-phase failure
-that also disproves a merge claim does block it; document the dependency. A `pass` verdict is the signal
-`spec-branch-refine` stops on.
+Consumers accept earlier records in the same canonical review paths: retain verdict,
+range, SHA, finding IDs/signatures, and dismissal authority. For old findings lacking
+`explanation`, read the matching F-ID prose once; missing substantive explanation or
+code provenance is a handoff gap, never an empty/pass result. Ignore legacy counters,
+lens lists, and preparation hashes. Do not rewrite historical records or regenerate
+completed reviews just for format migration. Emit only the compact format for new
+records; this compatibility applies only to existing interrupted-run artifacts.
 
 ## Completion Report
 
-Report:
-
-1. Spec path and iteration.
-2. Review file path.
-3. Verdict and actionable/advisory counts.
-4. The lenses that ran, claim/gate counts, re-executed gates, evidence verdict, any risk trigger that did not fire, how many commits the per-commit pass reviewed, and how many step reviews it reused.
-5. The scope and diff target (e.g. `committed merge-base..HEAD`), whether the working
-   tree was dirty (and excluded), and how many prior dismissals were honored — by class.
-
-Do not implement fixes — that is `spec-branch-fix`. Do not add Co-Authored-By trailers, "Generated with" footers, or any AI model attribution.
+Return artifact path, verdict, reviewed range/commit, and unresolved decisions or
+material limitations. Keep finding details in the record. Do not implement fixes;
+`spec-branch-fix` owns them. Do not add authorship attribution.

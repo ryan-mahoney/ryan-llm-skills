@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "15"
+  version: "16"
 ---
 
 # Spec Branch Fix
@@ -90,9 +90,12 @@ the checkout. Everything below applies, with these differences:
 ## Read The Review
 
 Parse the review file's leading **`review:` YAML block** first — that is the
-machine-readable contract; the prose below it is only explanation. Take `verdict`
+machine-readable contract defined by `spec-branch-review`. Take `verdict`
 and each finding's `id`, `severity`, `category`, `actionable`, `file`, `line`,
-`symbol`, and `signature`.
+`symbol`, `signature`, and `explanation` (plus optional `correction`). For existing
+interrupted-run records lacking `explanation`, read the matching F-ID prose once.
+Missing explanation or provenance is a handoff gap; ignore legacy counters, lenses,
+and preparation hashes. New records use only the compact format.
 
 - If `verdict: pass` with no actionable findings, write a no-op fix file recording
   that nothing was actionable and stop without a code change.
@@ -194,7 +197,7 @@ This lives in the `reviews/` subfolder of the spec folder, next to the
 review it consumes. Write it atomically (temp file in the destination directory,
 then rename) and begin it with a level-1 `#` heading on line 1. The file leads with
 a fenced `fix:` YAML block — the machine-readable record the loop driver parses —
-followed by prose. Every dismissed finding must carry its `signature` and
+with each decision explained once in its `note`. Every dismissed finding carries its `signature` and
 `dismissal` class.
 
 ````txt
@@ -224,18 +227,16 @@ fix:
       signature: security:src/net.ts:fetchAll:no timeout on outbound call
       note: bounded by upstream gateway; risk accepted for this release
   material_change: true   # false when this iteration changed no code (only dismissals) — the loop's stalled signal
-  commit: <hash or none>
+  commit: <full SHA or none>
+  verification:
+    - evidence: <existing result artifact path>
+      outcome: passed
+      observed_commit: <actual execution SHA>
 ```
-
-## Decisions
-- F1 · fixed — thread resolved root to caller (src/foo.ts:resolveRoot, L42)
-- F2 · dismissed (intentional) — wrapper intentional
-
-## Verification
-<commands> → <outcomes>; <n> fix-up attempt(s)
-
-Fix: <spec-dir>/reviews/branch-<iteration>-fix.md (iteration <iteration>)
 ````
+
+Do not repeat decisions or verification below the YAML. Omit `verification` when
+no check ran; reference existing evidence rather than copying its command logs.
 
 Set `material_change: false` only when this iteration produced no code change at all
 (every finding dismissed, nothing edited). The loop driver reads it to decide
@@ -269,15 +270,6 @@ consume evidence still bound to the pre-fix SHA.
 
 ## Completion Report
 
-Report:
-
-1. Spec path and iteration.
-2. Review file consumed and fix file written.
-3. Per-finding decisions (fixed / dismissed + class) in one line each.
-4. Verification commands and outcomes.
-5. Commit hash (the `fix(...)` commit, or `none` when only review/fix artifacts
-   changed) and
-   `material_change`.
-
-Do not add Co-Authored-By trailers, "Generated with" footers, or any AI model
-attribution.
+Return the fix artifact path, consumed review path, actual outcome/commit, and any
+unresolved signatures or decision. Keep per-finding explanations and verification
+in their canonical records. Do not add authorship attribution.

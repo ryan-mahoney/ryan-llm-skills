@@ -10,11 +10,12 @@ and delegating a run. Compact worker reports do not replace the evidence package
 
 ## Test Execution
 
-Steps write tests and perform bounded local smoke/visual checks. They defer all automated
-test execution to review, recording unrun gates as pending. The reviewer executes those
-gates once against the integrated branch and retains commands, outcomes, elapsed times,
-and logs. Deduplicate suites and focused commands that cover the same cases. After a
-fix, rerun affected checks; the coordinator does not repeat passing commands.
+Steps run their prepared focused acceptance checks after coherent implementation and
+record actual revisions, results, and proof limits. They hand off outstanding final
+focused checks to branch review. The reviewer reuses applicable step/CI evidence and
+executes remaining focused gates for concrete gaps. Configured CI owns broad suites;
+without CI, broad testing remains operator-managed outside agent evidence and does not
+block completion. After a fix, rerun affected checks; coordinators consume results.
 
 ## Artifact Package
 
@@ -29,7 +30,6 @@ fix, rerun affected checks; the coordinator does not repeat passing commands.
 ├── spec-prepare.md
 ├── criteria.md                         # optional prose guardrails
 ├── invariants.md                       # optional live invariants
-├── preparation.json                    # version 3: binds context and evidence plan
 ├── step-<NNN>-subspec.md               # immutable execution card
 ├── learnings/
 │   └── step-<NNN>-learning.md          # command/evidence outcomes and later-step handoffs
@@ -52,12 +52,12 @@ files when no folder copy exists; existing evidence paths remain unchanged.
 ## Evidence Audit Stages
 
 `spec-branch-review` leaves production code unchanged and is independent of the fixer.
-It executes deferred tests and writes their evidence. It runs:
+It closes outstanding focused acceptance gaps and writes their evidence. It runs:
 
-1. **Orientation and provenance:** resolve the prepared package, exact base/HEAD, commit mapping, evidence posture, hashes, dirty-tree exclusions, and prior decisions.
+1. **Orientation and provenance:** resolve the prepared package, exact base/HEAD, commit mapping, evidence posture, dirty-tree exclusions, and prior decisions.
 2. **Per-commit checks:** inspect each small diff against its step intent for correctness, security, reference integrity, simplification, and local evidence defects.
 3. **Integrated branch checks:** inspect final producer/consumer contracts, real application composition in isolation, cross-step behavior, data/policy boundaries, deployment concerns, and defects hidden by isolated commits.
-4. **Executable-evidence audit:** walk every AC → CL → FH → EV chain, inspect gate relevance and independence, execute deferred required gates and rerun affected gates for named remaining gaps, and try credible adversarial cases. Reuse
+4. **Executable-evidence audit:** walk every AC → CL → FH → EV chain, inspect gate relevance and independence, execute outstanding focused required gates and rerun affected gates for named remaining gaps, and try credible adversarial cases. Reuse
    sufficient checks; no quota of tests, harnesses or operational exercises applies.
 5. **Context and guardrails:** compare the result with sourced context, deliberate omissions,
    criteria and invariants. New configuration, flags, compatibility or release mechanisms need a
@@ -67,7 +67,9 @@ The audit emits ordinary structured findings. `category: evidence` is used when 
 
 The audit challenges domain assumptions even when the implementation and tests agree with the spec.
 Each material challenge identifies a concrete input, state transition, caller, or interleaving that breaks a promise.
-The report records the evidence and resolution. A sourced explanation can close a question without a code change.
+Findings retain concrete impact and supporting evidence. Exceptional sourced dismissals
+record resolutions of already-raised issues that might recur; discarded suspicions and
+positive correctness narratives are omitted.
 
 Reviewers examine ordinary startup and invocation for prerequisites that exist only in test setup.
 They also check database evidence for actual persistence behavior and deferred work for concrete destinations.
@@ -75,6 +77,23 @@ Test-style improvements remain advisory. Missing or circular proof that leaves a
 
 See the [engineering decision contract](../skills/spec-work-tour/references/standalone-engineering-decisions.md)
 for the stage-specific rules. These checks use the existing findings and verdicts.
+
+## Review Record
+
+A heading and one fenced `review:` YAML block identify `kind`, branch `iteration` or
+`step`, exact SHA `target` range, `scope`, audited `commit`, `verdict`, and `findings`.
+Branch reviews also retain `evidence_verdict`. Each finding appears once with stable
+`id` and `signature`, severity/category/actionability, file/symbol/location, and an
+`explanation` stating its failure condition and impact. Optional `correction` guides
+repair; step findings identify their introducing commit. Only material `limitations`,
+exceptional sourced `dismissals`, or an unresolved `decision_required` add metadata.
+
+Consumers derive actionable counts from the finding list and reviewed commits from
+the Git range. A no-findings review uses `findings: []`; advisory-only findings remain
+listed with `verdict: pass`. Neither needs empty sections, lens inventories, or prose
+repeating the YAML. Detailed verification stays in its original evidence records.
+Existing interrupted runs may read older finding prose and checked commit lists when
+needed; missing explanation or provenance never establishes a pass.
 
 ## Fix And Convergence
 
@@ -125,7 +144,7 @@ Local briefs include their actionable text in both the tour and PR. Unmet merge 
 - Architecture sets the initial evidence posture and provisional failure hypotheses.
 - Critique attacks solution and evidence sufficiency.
 - Spec writing owns stable AC/CL/FH/EV definitions and `evidence-plan.json`.
-- Preparation code-grounds, corrects, and hashes the implementation/evidence contract.
+- Preparation code-grounds and corrects ready execution cards and their verification contracts.
 - Step execution owns implementation plus assigned evidence and QA artifacts.
 - Branch audit owns independent falsification and never edits code.
 - Branch fix owns corrections and never rewrites the audit verdict.
@@ -138,8 +157,9 @@ It does not block merge unless the gap also invalidates a merge claim. A known l
 reveals an implementation defect must not be hidden by phase labeling. The tour renderer validates
 structure and contradictory statuses; the independent audit verifies truth, relevance and authority.
 
-Existing packages require sourced context, phase-aware evidence-plan/tour version 2 and preparation
-version 3 before reuse. Reuse valid observations with honest provenance; no migration of application
+Existing packages require sourced context, consistent ready cards, and phase-aware
+evidence-plan/tour version 2 before reuse. Preparation hashes and `preparation.json`
+are not prerequisites. Reuse valid observations with honest provenance; no migration of application
 data or automated compatibility layer is required to update workflow artifacts.
 
 For unimplemented packages, use `spec-upgrade` to resolve context and refresh preparation before implementation.
@@ -149,4 +169,5 @@ See [the transition guide](spec-workflow.md#transition-existing-unimplemented-sp
 Shared tools still accept version 1 artifacts for existing callers outside this standalone workflow.
 Their legacy output does not establish current standalone readiness.
 
-Any prepared-artifact drift blocks execution until `spec-write` republishes. Any code change after an audit or tour invalidates their readiness until affected gates, the integrated audit, and the tour are refreshed.
+Missing or contradictory prepared inputs return to `spec-write`; format changes alone
+do not require re-preparation. Any code change after an audit or tour invalidates their readiness until affected gates, the integrated audit, and the tour are refreshed.

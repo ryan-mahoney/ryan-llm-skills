@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "15"
+  version: "16"
 ---
 
 # Spec Branch Refine
@@ -103,8 +103,11 @@ handoff gap, not permission to silently reset the budget. Then:
    writes `<spec-dir>/reviews/branch-<i>-review.md` and dedupes against prior
    dismissals itself.
 2. **Read the verdict.** Parse the review file's leading `review:` YAML block — the
-   `verdict` and the set of actionable finding `signature`s. The prose is never
-   parsed for control flow.
+   `verdict` and the set of actionable finding `signature`s. Derive counts from `findings[].actionable`; ignore legacy counters and lens lists.
+   Finding explanations live in the same YAML entries. For existing interrupted-run
+   artifacts, accept legacy entries and read matching F-ID prose only when their
+   explanations are needed. Missing provenance or findings is a handoff gap, not a pass.
+   Use the exact compact/legacy compatibility contract in `spec-branch-review`.
    If the review or preceding fix reports an unresolved consequential decision or required spec
    correction, preserve its findings and return `decision-required` or `needs-spec-correction` to
    the coordinator. Do not burn review iterations waiting for the same missing decision.
@@ -135,7 +138,7 @@ handoff gap, not permission to silently reset the budget. Then:
    without a named remaining failure or use the loop to authorize live operations.
 6. **Check the cap after fixing.** If `i >= max-iterations`, inspect the fix decisions
    and existing verification evidence. Every actionable finding must be fixed or have
-   a supported terminal dismissal; `unfixable`, missing decisions, unauthorized risk
+   a supported terminal dismissal; `deferred`, `unfixable`, missing decisions, unauthorized risk
    acceptance, failed/pending required merge gates, and stale evidence remain blockers.
    If those checks pass, return `outcome: verified-at-cap`; otherwise return
    `outcome: cap` with the remaining gaps. Do not run a final review, restart refinement, or rerun
@@ -150,7 +153,7 @@ different fix or an explicit dismissal is still available.
 ## Completion Handoff
 
 Always write canonical `reviews/refinement-completion.md` atomically, with a heading,
-a fenced YAML record, and concise per-round findings/decisions/evidence references:
+a fenced YAML record referencing canonical review/fix evidence:
 
 ```yaml
 refinement:
@@ -186,22 +189,9 @@ no commit; only code changes made by `spec-branch-fix` are committed.
 
 ## Reporting
 
-Report:
-
-1. Spec path and `max-iterations`.
-2. How many iterations ran, and why the loop stopped: **proven** / **verified-at-cap** / **cap** /
-   **stalled** / **decision-required** / **needs-spec-correction**.
-3. Per-iteration one-liners: actionable count in, fixes applied, dismissals.
-4. Latest audit verdict and its SHA, whether final fixes were independently re-reviewed, and any residual findings (actionable left at cap/stalled, plus advisory
-   findings never required to fix), with their `file:symbol` and signature.
-5. The review/fix artifact paths written under `<spec-dir>/reviews/`.
-6. The commit hashes produced (fix commits), or note `none` when review/fix
-   artifacts were the only changes.
-7. On `proven` or `verified-at-cap`, the completion record, exact bound commit, and
-   `next: spec-work-tour`.
-
-A first-iteration proven pass is the common outcome on a well-built branch. Do not invoke
-`spec-work-tour`; it is the next explicit top-level stage.
-
-Do not add Co-Authored-By trailers, "Generated with" footers, or any AI model
-attribution.
+Return completion record path, outcome, final commit, latest review/fix paths,
+whether final fixes received independent review, and unresolved signatures or
+material limitations. Preserve advisory findings in their original reviews; they
+do not block completion. Do not repeat per-round findings or evidence narratives.
+On success include `next: spec-work-tour`; this is the next explicit top-level stage.
+Do not invoke it here or add authorship attribution.
