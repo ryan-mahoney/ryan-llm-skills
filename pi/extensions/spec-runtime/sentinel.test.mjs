@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, statSync, existsSync, symlinkSync, realpathSync, renameSync, chmodSync, lstatSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, statSync, existsSync, symlinkSync, realpathSync, renameSync, chmodSync, lstatSync, unlinkSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -798,4 +798,211 @@ test('sentinel checkpoint: non-completed returns stay blocked/unknown and active
     package: packagePath, workflow_id: 'wf-veto', expected_revision: 2,
     assignment_id: 'assign-2', return_state: 'completed', coordinator_session: 'other', checkout: '/tmp/x',
   }), /overwrite workflow ownership/);
+});
+
+test('sentinel inbox: unresolved outcomes stay blocking and only applied directions release holds', t => {
+  const { packagePath } = canonicalFixture(t);
+  mkdirSync(join(packagePath, 'processed'), { recursive: true });
+  const procId = '20260103T000000Z-u1';
+  const procText = original({ id: procId, kind: 'information' });
+  putOriginal(packagePath, 'processed', procId, procText);
+
+  // A recognized but unresolved outcome keeps a processed original blocking:
+  // recognized is not resolved.
+  for (const outcome of ['held', 'decision-required', 'needs-spec-correction']) {
+    const guard = readInboxGuard(packagePath, { items: [{ id: procId, sha256: sha(procText), outcome }] });
+    assert.equal(guard.items.find(item => item.id === procId).state, 'blocking', outcome);
+    assert.equal(guard.blocking, true, outcome);
+    assert.ok(guard.reasons.includes(`outcome-unresolved:${procId}`), outcome);
+  }
+  // A resolved non-applied outcome is genuinely nonblocking.
+  const resolved = readInboxGuard(packagePath, { items: [{ id: procId, sha256: sha(procText), outcome: 'not-applicable' }] });
+  assert.equal(resolved.items.find(item => item.id === procId).state, 'observed');
+  assert.equal(resolved.blocking, false);
+
+  // A hold releases only when its releasing direction itself carries an
+  // applied, hash-bound outcome; a not-applicable direction never releases.
+  const holdId = '20260103T000001Z-u2';
+  const holdText = original({ id: holdId, kind: 'hold', body: 'stop' });
+  putOriginal(packagePath, 'processed', holdId, holdText);
+  const dirId = '20260104T000000Z-u3';
+  const dirText = original({ id: dirId, kind: 'direction', body: `release the hold ${holdId}` });
+  putOriginal(packagePath, 'processed', dirId, dirText);
+  const notApplied = readInboxGuard(packagePath, { items: [
+    { id: holdId, sha256: sha(holdText), outcome: 'applied', release_source_id: dirId },
+    { id: dirId, sha256: sha(dirText), outcome: 'not-applicable' },
+  ] });
+  assert.equal(notApplied.items.find(item => item.id === holdId).state, 'held');
+  assert.equal(notApplied.blocking, true);
+  const applied = readInboxGuard(packagePath, { items: [
+    { id: holdId, sha256: sha(holdText), outcome: 'applied', release_source_id: dirId },
+    { id: dirId, sha256: sha(dirText), outcome: 'applied' },
+  ] });
+  assert.equal(applied.items.find(item => item.id === holdId).state, 'released');
+});
+
+test('sentinel checkpoint: observed originals and mailbox directories are retained without outcomes', t => {
+  const { packagePath } = canonicalFixture(t);
+  const holdId = '20260105T000000Z-r1';
+  const holdText = original({ id: holdId, kind: 'hold', body: 'stop dependent work' });
+  putOriginal(packagePath, 'inbox', holdId, holdText);
+
+  // Checkpoint the unread hold with no supplied outcome: the observed original
+  // is retained by identity/hash and blocks.
+  const first = recordCheckpoint(baseCheckpoint(packagePath, { workflow_id: 'wf-retain', inbox: { items: [] } }));
+  assert.equal(first.inbox_guard.blocking, true);
+  const retained = first.inbox.items.find(item => item.id === holdId);
+  assert.equal(retained.sha256, sha(holdText));
+  assert.equal(retained.kind, 'hold');
+  assert.equal(retained.directory, 'inbox');
+  assert.equal(retained.outcome, null);
+  assert.deepEqual(first.inbox.observed_directories, ['inbox']);
+
+  // Removing the original without a sourced release is unresolved history.
+  rmSync(join(packagePath, 'inbox', `${holdId}.md`));
+  const second = recordCheckpoint(baseCheckpoint(packagePath, { workflow_id: 'wf-retain', expected_revision: 1, inbox: { items: [] } }));
+  assert.equal(second.inbox_guard.blocking, true);
+  assert.equal(second.inbox_guard.state, 'unknown');
+  assert.ok(second.inbox_guard.reasons.includes(`missing-history:${holdId}`));
+
+  // Removing the whole mailbox is still missing-history, never empty/healthy.
+  rmSync(join(packagePath, 'inbox'), { recursive: true, force: true });
+  const third = recordCheckpoint(baseCheckpoint(packagePath, { workflow_id: 'wf-retain', expected_revision: 2, inbox: { items: [] } }));
+  assert.equal(third.inbox_guard.blocking, true);
+  assert.equal(third.inbox_guard.state, 'unknown');
+  assert.ok(third.inbox_guard.reasons.includes('missing-history'));
+  assert.deepEqual(third.inbox.observed_directories, ['inbox']);
+
+  // Directory observation alone (an empty mailbox) is retained too: losing a
+  // previously observed mailbox without any original stays unknown.
+  const other = canonicalFixture(t);
+  mkdirSync(join(other.packagePath, 'inbox'), { recursive: true });
+  mkdirSync(join(other.packagePath, 'processed'), { recursive: true });
+  const observed = recordCheckpoint(baseCheckpoint(other.packagePath, { workflow_id: 'wf-dirs' }));
+  assert.equal(observed.inbox_guard.blocking, false);
+  assert.deepEqual(observed.inbox.observed_directories, ['inbox', 'processed']);
+  rmSync(join(other.packagePath, 'inbox'), { recursive: true, force: true });
+  rmSync(join(other.packagePath, 'processed'), { recursive: true, force: true });
+  const lost = recordCheckpoint(baseCheckpoint(other.packagePath, { workflow_id: 'wf-dirs', expected_revision: 1 }));
+  assert.equal(lost.inbox_guard.blocking, true);
+  assert.equal(lost.inbox_guard.state, 'unknown');
+  assert.notEqual(lost.inbox_guard.state, 'empty');
+});
+
+test('sentinel inbox: symlinked or nonregular mailbox directories fail closed', t => {
+  const { packagePath, base } = canonicalFixture(t);
+  // An external processed mailbox with a perfectly valid applied original.
+  const external = join(base, 'external-processed');
+  mkdirSync(external, { recursive: true });
+  const extId = '20260106T000000Z-e1';
+  const extText = original({ id: extId, kind: 'information' });
+  writeFileSync(join(external, `${extId}.md`), extText);
+  mkdirSync(join(packagePath, 'inbox'), { recursive: true });
+  symlinkSync(external, join(packagePath, 'processed'));
+  const guard = readInboxGuard(packagePath, {
+    priorItems: [{ id: extId, sha256: sha(extText), outcome: 'applied' }],
+  });
+  assert.ok(guard.reasons.some(reason => reason.startsWith('symlink:processed-directory')));
+  assert.equal(guard.blocking, true);
+  assert.equal(guard.state, 'unknown');
+  assert.deepEqual(guard.directories, ['inbox']);
+
+  // A non-directory mailbox component is blocking, never enumerated.
+  unlinkSync(join(packagePath, 'processed'));
+  writeFileSync(join(packagePath, 'processed'), 'not a directory');
+  const nonDir = readInboxGuard(packagePath);
+  assert.ok(nonDir.reasons.some(reason => reason === 'nonregular:processed-directory'));
+  assert.equal(nonDir.blocking, true);
+
+  // A relevant nonregular .md entry is unknown rather than silently ignored.
+  rmSync(join(packagePath, 'processed'));
+  mkdirSync(join(packagePath, 'processed'), { recursive: true });
+  mkdirSync(join(packagePath, 'inbox', '20260106T000001Z-e2.md'));  const nonregular = readInboxGuard(packagePath);
+  assert.ok(nonregular.reasons.some(reason => reason.startsWith('nonregular:inbox/20260106T000001Z-e2.md')));
+  assert.equal(nonregular.blocking, true);
+  assert.ok(nonregular.sources.some(source => source.state === 'unknown' && source.reason === 'nonregular'));
+});
+
+test('sentinel inbox: enumeration is bounded by examined entries and reports truncation', t => {
+  const { packagePath } = canonicalFixture(t);
+  const inbox = join(packagePath, 'inbox');
+  mkdirSync(inbox, { recursive: true });
+  // Exactly at the examination ceiling the mailbox is provably complete.
+  for (let i = 0; i < 800; i += 1) writeFileSync(join(inbox, `sibling-${i}`), '');
+  const complete = readInboxGuard(packagePath);
+  assert.equal(complete.blocking, false);
+  assert.ok(complete.reasons.every(reason => !reason.startsWith('enumeration-cap')));
+  // One entry beyond the ceiling prevents proving completeness: the projection
+  // stays blocking instead of visiting the whole directory.
+  writeFileSync(join(inbox, 'sibling-800'), '');
+  const truncated = readInboxGuard(packagePath);
+  assert.equal(truncated.blocking, true);
+  assert.ok(truncated.reasons.includes('enumeration-cap:inbox'));
+});
+
+test('sentinel checkpoint: a terminal return never erases an explicit coordinator stop', t => {
+  const { packagePath } = canonicalFixture(t);
+  for (const stop of ['user-held', 'waiting-external', 'decision-required', 'blocked', 'complete']) {
+    const workflowId = `wf-stop-${stop.replace(/-/g, '')}`;
+    recordCheckpoint(baseCheckpoint(packagePath, {
+      workflow_id: workflowId,
+      state: stop,
+      workers: [{ id: 'assign-9', kind: 'owner', state: 'working' }],
+    }));
+    const reconciled = reconcileRuntimeReturn({
+      package: packagePath,
+      workflow_id: workflowId,
+      expected_revision: 1,
+      assignment_id: 'assign-9',
+      return_state: 'completed',
+      workers: [{ id: 'assign-9', kind: 'owner', state: 'working' }],
+      ...coordinator,
+      now: () => FIXED,
+    });
+    // The reconciliation obligation and terminal worker state are recorded,
+    // but the explicit stop survives; only a coordinator checkpoint reconciles it.
+    assert.equal(reconciled.state, stop, stop);
+    assert.equal(reconciled.obligation.key, 'reconcile:assign-9');
+    assert.equal(reconciled.workers.find(worker => worker.id === 'assign-9').state, 'complete');
+    assert.equal(reconciled.receipt, 'reconciled');
+    const stored = readCheckpointRecord(packagePath, workflowId);
+    assert.equal(stored.state, stop, stop);
+    assert.notEqual(stored.state, 'ready');
+  }
+});
+
+test('sentinel fingerprint: workflow-bound incidents retain identity and separate history', t => {
+  const dir = sandbox(t);
+  const packagePath = join(dir, 'pkg');
+  mkdirSync(packagePath, { recursive: true });
+  const recorder = createVerificationRecorder({ now: () => FIXED });
+
+  // Two workflows fail independently: each retains its own identity, count
+  // and incident history in its workflow-owned snapshot.
+  for (const workflowId of ['wf-inc-a', 'wf-inc-b']) {
+    for (let i = 1; i <= 3; i += 1) {
+      const observed = recorder.observe({ package: packagePath, assignment_id: `assign-${workflowId}`, workflow_id: workflowId },
+        failureEvent(`${workflowId}-call-${i}`));
+      if (i === 3) {
+        assert.ok(observed.incident);
+        assert.equal(observed.incident.workflow_id, workflowId);
+      }
+    }
+    const stored = readVerificationIncidents(packagePath, workflowId);
+    assert.equal(stored.workflow_id, workflowId);
+    assert.equal(stored.assignments[`assign-${workflowId}`].workflow_id, workflowId);
+    assert.equal(stored.assignments[`assign-${workflowId}`].count, 3);
+  }
+  assert.equal(existsSync(verificationIncidentsPath(packagePath, 'wf-inc-a')), true);
+  assert.equal(existsSync(verificationIncidentsPath(packagePath, 'wf-inc-b')), true);
+  // A workflow-scoped read never returns another workflow's snapshot.
+  assert.equal(readVerificationIncidents(packagePath, 'wf-inc-a').assignments['assign-wf-inc-b'], undefined);
+
+  // Unbound legacy observation stays observation-only at the package root.
+  assert.equal(existsSync(verificationIncidentsPath(packagePath)), false);
+  recorder.observe({ package: packagePath, assignment_id: 'assign-legacy' }, failureEvent('legacy-call-1'));
+  const legacy = readVerificationIncidents(packagePath);
+  assert.equal(legacy.workflow_id, null);
+  assert.equal(legacy.assignments['assign-legacy'].count, 1);
+  assert.equal(legacy.assignments['assign-legacy'].workflow_id, null);
 });

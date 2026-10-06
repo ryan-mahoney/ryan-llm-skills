@@ -4,9 +4,10 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSyn
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { createSentinelObserver, SENTINEL_COALESCE_MS, SENTINEL_RECONCILE_MS, SENTINEL_WIDGET_KEY, readCheckpointRecord, reconcileRuntimeReturn } from './sentinel.mjs';
+import { createSentinelObserver, SENTINEL_COALESCE_MS, SENTINEL_RECONCILE_MS, SENTINEL_WIDGET_KEY, readCheckpointRecord } from './sentinel.mjs';
 import { canonicalPackage } from './runtime.mjs';
 import { enrollmentDirectory, workspaceKey } from '../../../scripts/spec-observe/sentinel.mjs';
 
@@ -635,20 +636,105 @@ test('sentinel checkpoint: registered sentinel dispatch binds the receipt checko
     workflow_id: 'wf-dispatch', assignment_id: 'assign-dispatch-int' }, undefined, undefined, ctx);
   assert.equal(receipt.isError, false);
   assert.equal(receipt.details.workflow_id, 'wf-dispatch');
-  assert.equal(receipt.details.checkpoint_revision, 2);
+  assert.equal(receipt.details.checkpoint_revision, 3);
   const stored = readCheckpointRecord(canonical.packagePath, 'wf-dispatch');
   assert.equal(stored.checkout, checkout);
-  assert.equal(stored.state, 'waiting-worker');
+  // A terminal receipt is reconciled through the production composition: the
+  // exited worker is declared terminal, never active, and no manual reducer
+  // call is needed to expose the reconcile obligation.
+  assert.equal(stored.state, 'ready');
+  assert.equal(stored.obligation.key, 'reconcile:assign-dispatch-int');
+  assert.notEqual(stored.state, 'complete');
   // The dispatch update retains the reconciled revision; it does not adopt a live one.
   assert.equal(stored.input_revision, 0);
-  assert.deepEqual(stored.workers.find(worker => worker.id === 'assign-dispatch-int'), { id: 'assign-dispatch-int', kind: 'owner', state: 'working' });
+  assert.deepEqual(stored.workers.find(worker => worker.id === 'assign-dispatch-int'), { id: 'assign-dispatch-int', kind: 'owner', state: 'complete' });
+});
 
-  // The retained mapping turns a terminal return into a reconcile obligation.
-  const reconciled = reconcileRuntimeReturn({ package: canonical.packagePath, workflow_id: 'wf-dispatch',
-    expected_revision: stored.revision, assignment_id: 'assign-dispatch-int', return_state: 'completed',
-    workers: stored.workers, coordinator_session: ctx.sessionManager.getSessionFile(), checkout });
-  assert.equal(reconciled.obligation.key, 'reconcile:assign-dispatch-int');
-  assert.notEqual(reconciled.state, 'complete');
+test('sentinel checkpoint: successive dispatches under one workflow bind sequential assignments', { skip: sdkSkip, timeout: 60000 }, async t => {
+  const dir = sandbox(t);
+  const { repo } = primary(dir, 'sequence-repo');
+  commit(repo);
+  const packagePath = pack(repo);
+  const canonical = canonicalPackage(packagePath);
+  const checkout = join(dir, 'sequence-checkout');
+  mkdirSync(checkout, { recursive: true });
+  // The run records simulate two finished steps without launching processes.
+  // The defaulted runtime assignment key is the absolute prepared card path.
+  const stepPath = join(packagePath, 'step-001-subspec.md');
+  const runA = { schema_version: 1, id: 'run-seq-a', assignment_id: stepPath, package: canonical.packagePath,
+    step: stepPath, checkout, state: 'completed', started_at: new Date().toISOString() };
+  const runB = { ...runA, id: 'run-seq-b' };
+  mkdirSync(join(packagePath, 'runtime', 'runs'), { recursive: true });
+  writeFileSync(join(packagePath, 'runtime', 'runs', 'run-seq-a.json'), JSON.stringify(runA));
+  writeFileSync(join(packagePath, 'runtime', 'runs', 'run-seq-b.json'), JSON.stringify(runB));
+  writeFileSync(join(packagePath, 'runtime', 'run.json'), JSON.stringify(runA));
+  // The second step's durable assignment link, as the runtime itself writes it.
+  mkdirSync(join(packagePath, 'runtime', 'assignments'), { recursive: true });
+  writeFileSync(join(packagePath, 'runtime', 'assignments', `${createHash('sha256').update('assign-seq-b').digest('hex')}.json`),
+    JSON.stringify({ assignment_id: 'assign-seq-b', run_id: 'run-seq-b', contract: 'fixture' }));
+
+  const { loader } = await loadExtension(t, { dir });
+  const tools = new Map(loader.getExtensions().extensions.flatMap(extension => [...extension.tools.entries()]));
+  const ctx = { sessionManager: { getSessionFile: () => join(dir, 'sessions', 'coord.jsonl'), getSessionId: () => 'coord-session' } };
+  await tools.get('spec_checkpoint').definition.execute('call-0', { package: canonical.packagePath, workflow_id: 'wf-seq',
+    expected_revision: 0, state: 'ready', obligation: { key: 'impl:step-001', stage: 'implementation', summary: 'work', artifacts: [] },
+    workers: [], inbox: { items: [] }, reconciles_input_revision: 0 }, undefined, undefined, ctx);
+
+  // First dispatch omits assignment_id: the runtime key stays the step path in
+  // the receipt, while the declared checkpoint worker is the real run UUID.
+  const first = await tools.get('spec_dispatch').definition.execute('call-1', { action: 'startup', package: canonical.packagePath,
+    workflow_id: 'wf-seq' }, undefined, undefined, ctx);
+  assert.equal(first.isError, false);
+  assert.equal(first.details.run_id, 'run-seq-a');
+  assert.equal(first.details.assignment_id, stepPath);
+  assert.equal(first.details.checkpoint_revision, 3);
+  let stored = readCheckpointRecord(canonical.packagePath, 'wf-seq');
+  assert.equal(stored.checkout, checkout);
+  assert.equal(stored.state, 'ready');
+  assert.equal(stored.obligation.key, 'reconcile:run-seq-a');
+  assert.deepEqual(stored.workers.find(worker => worker.id === 'run-seq-a'), { id: 'run-seq-a', kind: 'owner', state: 'complete' });
+  assert.equal(stored.workers.some(worker => worker.id === stepPath), false);
+
+  // The ledger now points at the next step's finished run, exactly as the
+  // runtime's own dispatch would have written it.
+  writeFileSync(join(packagePath, 'runtime', 'run.json'), JSON.stringify(runB));
+  const second = await tools.get('spec_dispatch').definition.execute('call-2', { action: 'startup', package: canonical.packagePath,
+    workflow_id: 'wf-seq', assignment_id: 'assign-seq-b' }, undefined, undefined, ctx);
+  assert.equal(second.isError, false);
+  assert.equal(second.details.run_id, 'run-seq-b');
+  stored = readCheckpointRecord(canonical.packagePath, 'wf-seq');
+  // Successive assignments accumulate terminal history under one workflow.
+  assert.deepEqual(stored.workers.find(worker => worker.id === 'run-seq-a'), { id: 'run-seq-a', kind: 'owner', state: 'complete' });
+  assert.deepEqual(stored.workers.find(worker => worker.id === 'assign-seq-b'), { id: 'assign-seq-b', kind: 'owner', state: 'complete' });
+  assert.equal(stored.obligation.key, 'reconcile:assign-seq-b');
+  assert.equal(stored.state, 'ready');
+  assert.equal(second.details.checkpoint_revision, stored.revision);
+
+  // A resume of a genuinely active ledger run is not a conflict: the same run
+  // is reused and declared active while it works.
+  const runC = { ...runA, id: 'run-seq-c', state: 'running' };
+  writeFileSync(join(packagePath, 'runtime', 'runs', 'run-seq-c.json'), JSON.stringify(runC));
+  writeFileSync(join(packagePath, 'runtime', 'run.json'), JSON.stringify(runC));
+  const resume = await tools.get('spec_dispatch').definition.execute('call-3', { action: 'startup', package: canonical.packagePath,
+    workflow_id: 'wf-seq' }, undefined, undefined, ctx);
+  assert.equal(resume.isError, false);
+  stored = readCheckpointRecord(canonical.packagePath, 'wf-seq');
+  assert.equal(stored.state, 'waiting-worker');
+  assert.deepEqual(stored.workers.find(worker => worker.id === 'run-seq-c'), { id: 'run-seq-c', kind: 'owner', state: 'working' });
+  const beforeRefusal = stored.revision;
+
+  // Dispatching a different assignment while that one is genuinely active is
+  // refused from durable state BEFORE any launch or checkpoint mutation.
+  const runD = { ...runA, id: 'run-seq-d' };
+  writeFileSync(join(packagePath, 'runtime', 'runs', 'run-seq-d.json'), JSON.stringify(runD));
+  writeFileSync(join(packagePath, 'runtime', 'run.json'), JSON.stringify(runD));
+  const refused = await tools.get('spec_dispatch').definition.execute('call-4', { action: 'startup', package: canonical.packagePath,
+    workflow_id: 'wf-seq' }, undefined, undefined, ctx);
+  assert.equal(refused.isError, true);
+  assert.match(refused.details.error, /still has active assignment run-seq-c/);
+  const after = readCheckpointRecord(canonical.packagePath, 'wf-seq');
+  assert.equal(after.revision, beforeRefusal);
+  assert.deepEqual(after.workers.find(worker => worker.id === 'run-seq-c'), { id: 'run-seq-c', kind: 'owner', state: 'working' });
 });
 
 test('sentinel checkpoint: an unregistered workflow is refused before any dispatch mutation', { skip: sdkSkip, timeout: 60000 }, async t => {

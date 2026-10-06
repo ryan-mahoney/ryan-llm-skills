@@ -4,7 +4,7 @@
 // status. It never starts, stops, messages or cancels a worker and never writes
 // anything except the explicit enrollment record created by /spec-sentinel add.
 
-import { watch, mkdirSync, renameSync, readdirSync, writeFileSync, readFileSync, statSync, existsSync, lstatSync, realpathSync, openSync, closeSync, fsyncSync, unlinkSync, linkSync, fstatSync, readSync } from 'node:fs';
+import { watch, mkdirSync, renameSync, readdirSync, writeFileSync, readFileSync, statSync, existsSync, lstatSync, realpathSync, openSync, closeSync, fsyncSync, unlinkSync, linkSync, fstatSync, readSync, opendirSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { join, resolve, dirname, sep, relative, isAbsolute, basename } from 'node:path';
 
@@ -310,9 +310,13 @@ const isoNow = value => {
   return Number.isFinite(time) ? new Date(time).toISOString() : null;
 };
 
-const emptySnapshot = packagePath => ({
+const emptySnapshot = (packagePath, workflowId = null) => ({
   version: 1,
   package: packagePath,
+  // Workflow binding carried from the runtime record: a workflow-bound
+  // failure retains its workflow identity and history. Unbound records stay
+  // observation-only in the package-wide snapshot.
+  workflow_id: workflowId,
   updated_at: null,
   assignments: {},
 });
@@ -349,7 +353,10 @@ function verificationEventSubject({ record, event } = {}) {
   const packagePath = record?.package;
   const assignment = record?.assignment_id ?? record?.id;
   if (typeof packagePath !== 'string' || typeof assignment !== 'string' || !assignment) return null;
-  return { packagePath, assignment };
+  // Workflow identity binds through the runtime record when it has the
+  // registered shape; anything else stays unbound legacy observation.
+  const workflowId = typeof record?.workflow_id === 'string' && ID_SHAPE.test(record.workflow_id) ? record.workflow_id : null;
+  return { packagePath, assignment, workflowId };
 }
 
 // Only completed spec_verify results reduce; every other decoded event leaves
@@ -357,14 +364,16 @@ function verificationEventSubject({ record, event } = {}) {
 export function reduceVerificationResult(snapshot, { record, event }, now = Date.now) {
   const subject = verificationEventSubject({ record, event });
   if (!subject) return { snapshot, incident: null };
-  const { packagePath, assignment } = subject;
+  const { packagePath, assignment, workflowId } = subject;
   const observedAt = isoNow(now);
   const state = snapshot && snapshot.version === 1 && typeof snapshot.package === 'string'
+    && (workflowId == null ? snapshot.workflow_id == null : snapshot.workflow_id === workflowId)
     ? { ...snapshot, assignments: { ...snapshot.assignments } }
-    : emptySnapshot(packagePath);
+    : emptySnapshot(packagePath, workflowId);
   state.package = packagePath;
   const previous = state.assignments[assignment] ?? {
     assignment_id: assignment, checkout: typeof record?.checkout === 'string' ? record.checkout : null,
+    workflow_id: workflowId,
     count: 0, fingerprint: null, tool_call_ids: [], replay_ids: [], replay_exhausted: false,
     state: 'idle', generation: 0, incident_id: null, linked_from: null,
     incident_fingerprint: null, observed_at: observedAt,
@@ -423,6 +432,7 @@ export function reduceVerificationResult(snapshot, { record, event }, now = Date
         kind: VERIFICATION_INCIDENT_KIND,
         assignment_id: assignment,
         package: packagePath,
+        ...(workflowId ? { workflow_id: workflowId } : {}),
         generation: entry.generation,
         linked_from: entry.linked_from,
         ...fingerprint,
@@ -444,8 +454,12 @@ export function reduceVerificationResult(snapshot, { record, event }, now = Date
   return { snapshot: state, incident };
 }
 
-export function verificationIncidentsPath(packagePath) {
-  return join(packagePath, 'runtime', 'sentinel', INCIDENTS_FILE);
+export function verificationIncidentsPath(packagePath, workflowId = null) {
+  // Workflow-bound snapshots publish inside the workflow's sentinel directory
+  // beside its checkpoint; unbound observation stays at the package-wide root.
+  return workflowId
+    ? join(packagePath, 'runtime', 'sentinel', workflowId, INCIDENTS_FILE)
+    : join(packagePath, 'runtime', 'sentinel', INCIDENTS_FILE);
 }
 
 // Nonregular and symlinked sources are rejected before opening: a FIFO or
@@ -453,12 +467,13 @@ export function verificationIncidentsPath(packagePath) {
 // the runtime event seam, and a symlink must not be followed outside the
 // package. The opened descriptor is validated itself and the bytes actually
 // read are bounded.
-export function readVerificationIncidents(packagePath) {
+export function readVerificationIncidents(packagePath, workflowId = null) {
   let fd;
   try {
-    // Resolve runtime/sentinel without following a symlinked or escaping
-    // component.
-    const directory = validatedStateDirectory(packagePath, ['runtime', 'sentinel']);
+    if (workflowId != null) validateId(workflowId, 'workflow_id');
+    // Resolve the state components without following a symlinked or escaping
+    // component; a workflow-bound snapshot resolves its workflow directory too.
+    const directory = validatedStateDirectory(packagePath, ['runtime', 'sentinel', ...(workflowId ? [workflowId] : [])]);
     if (!directory) return null;
     const file = join(directory, INCIDENTS_FILE);
     let info;
@@ -476,18 +491,25 @@ export function readVerificationIncidents(packagePath) {
     }
     if (total > INCIDENTS_MAX_BYTES) return null;
     const value = JSON.parse(buffer.toString('utf8', 0, total));
-    return value && value.version === 1 && value.package === packagePath && value.assignments
-      && typeof value.assignments === 'object' ? value : null;
+    if (!value || value.version !== 1 || value.package !== packagePath || !value.assignments
+      || typeof value.assignments !== 'object') return null;
+    // A workflow-scoped snapshot must carry its own binding; a package-wide
+    // snapshot stays unbound legacy observation and never speaks for a workflow.
+    if (workflowId ? value.workflow_id !== workflowId : value.workflow_id != null) return null;
+    return value;
   } catch { return null; } finally {
     if (fd !== undefined) { try { closeSync(fd); } catch { /* Closing is best effort. */ } }
   }
 }
 
 export function writeVerificationIncidents(packagePath, snapshot) {
-  // Create/validate runtime/sentinel component-by-component so publication
-  // cannot follow a symlinked ancestor outside the canonical package, and
-  // refuse a nonregular destination rather than replacing it.
-  const directory = ensureStateDirectory(packagePath, ['runtime', 'sentinel'], 'sentinel incident state directory');
+  // Workflow-bound snapshots publish inside the workflow's sentinel directory;
+  // unbound observation stays at the package-wide root. Create/validate the
+  // components one-by-one so publication cannot follow a symlinked ancestor
+  // outside the canonical package, and refuse a nonregular destination rather
+  // than replacing it.
+  const workflowId = typeof snapshot?.workflow_id === 'string' && ID_SHAPE.test(snapshot.workflow_id) ? snapshot.workflow_id : null;
+  const directory = ensureStateDirectory(packagePath, ['runtime', 'sentinel', ...(workflowId ? [workflowId] : [])], 'sentinel incident state directory');
   const file = join(directory, INCIDENTS_FILE);
   let info;
   try { info = lstatSync(file); } catch (error) {
@@ -510,8 +532,9 @@ export function createVerificationRecorder({ now = Date.now, read = readVerifica
         // Irrelevant events are filtered before any storage access: the
         // recorder must not add I/O — or a hostile blocking source — to
         // ordinary decoded events.
-        if (!verificationEventSubject({ record, event })) return null;
-        const current = read(record.package) ?? emptySnapshot(record.package);
+        const subject = verificationEventSubject({ record, event });
+        if (!subject) return null;
+        const current = read(record.package, subject.workflowId) ?? emptySnapshot(record.package, subject.workflowId);
         const result = reduceVerificationResult(current, { record, event }, now);
         if (result.snapshot !== current) write(record.package, result.snapshot);
         return result;
@@ -537,7 +560,17 @@ const CHECKPOINT_STATES = new Set([
 const WORKER_STATES = new Set([
   'ready', 'working', 'waiting-external', 'decision-required', 'blocked', 'user-held', 'complete', 'failed', 'aborted', 'cancelled', 'unknown',
 ]);
+// Explicit coordinator stop states a runtime return must never erase (INV-4):
+// the terminal worker state and reconcile obligation are recorded, and only a
+// successful authorized coordinator checkpoint reconciles the stop. `complete`
+// is included so a terminal return can never regress a reconciled checkpoint.
+const RECONCILE_PRESERVED_STATES = new Set(['complete', 'user-held', 'waiting-external', 'decision-required', 'blocked']);
 const INBOX_OUTCOMES = new Set(['applied', 'not-applicable', 'held', 'decision-required', 'needs-spec-correction']);
+// Recognized is not resolved (AC-8): held, decision-required and
+// needs-spec-correction are unresolved directions. Only applied or
+// not-applicable resolve a processed original, and only `applied` on both the
+// hold and its releasing direction can release a hold.
+const RESOLVED_INBOX_OUTCOMES = new Set(['applied', 'not-applicable']);
 const ID_SHAPE = /^[A-Za-z0-9_-]{1,128}$/;
 const HASH_SHAPE = /^[a-f0-9]{64}$/;
 const KEY_MAX = 160;
@@ -549,6 +582,12 @@ const ARTIFACT_TOTAL_BYTES = 1024 * 1024;
 const INBOX_MAX_FILES = 200;
 const INBOX_FILE_BYTES = 32 * 1024;
 const INBOX_TOTAL_BYTES = 1024 * 1024;
+// Enumeration is bounded by examined entries, not only selected candidates
+// (mirroring the observer's directoryEntryFactor): a mailbox larger than the
+// examination ceiling is reported as an incomplete blocking projection
+// instead of being visited in full.
+const INBOX_EXAMINE_FACTOR = 4;
+const INBOX_EXAMINE_MAX = INBOX_MAX_FILES * INBOX_EXAMINE_FACTOR;
 
 // Errors are plain, actionable and never swallow the reason into a vague guard.
 class CheckpointError extends Error {
@@ -857,8 +896,29 @@ export function recordCheckpoint({
   // Project the inbox/processed originals against the retained references plus
   // the current supplied items BEFORE publication. A compact guard projection is
   // retained so bad/missing/unprocessed sources visibly block rather than being
-  // trusted. This reads only; it never moves files.
-  const guard = readInboxGuard(packagePath, { priorItems: [...retainedItems.values()], items: preparedItems, now });
+  // trusted. This reads only; it never moves files. The prior observed
+  // directories are supplied so a lost mailbox is missing-history even when no
+  // original was ever retained.
+  const guard = readInboxGuard(packagePath, { priorItems: [...retainedItems.values()], items: preparedItems,
+    priorDirectories: existing?.inbox?.observed_directories ?? [], now });
+  // Retain every observed original's identity/hash independently of supplied
+  // coordinator outcomes, and the validly observed mailbox directories: a later
+  // checkpoint must still detect a removed original or a lost mailbox through
+  // missing-history even when no outcome was ever supplied for it.
+  for (const item of guard.items) {
+    if (!item?.id || typeof item.sha256 !== 'string' || !item.directory) continue;
+    // Never overwrite a retained historical hash: a conflicting observed
+    // original projects through the guard's blocking view instead.
+    if (retainedItems.has(item.id)) continue;
+    retainedItems.set(item.id, { id: item.id, sha256: item.sha256, kind: item.kind ?? null,
+      directory: item.directory, outcome: item.outcome ?? null,
+      ...(item.release_source_id ? { release_source_id: item.release_source_id } : {}) });
+  }
+  const observedDirectories = [...new Set([
+    ...(Array.isArray(existing?.inbox?.observed_directories)
+      ? existing.inbox.observed_directories.filter(name => name === 'inbox' || name === 'processed') : []),
+    ...guard.directories,
+  ])];
   const inboxGuard = {
     state: guard.state,
     blocking: guard.blocking,
@@ -886,7 +946,7 @@ export function recordCheckpoint({
       artifacts: preparedArtifacts,
     },
     workers: preparedWorkers,
-    inbox: { items: [...retainedItems.values()] },
+    inbox: { items: [...retainedItems.values()], observed_directories: observedDirectories },
     inbox_guard: inboxGuard,
     input_revision: reconciledInput,
     observed_at: new Date(typeof now === 'function' ? now() : now).toISOString(),
@@ -937,7 +997,7 @@ function parseFrontmatter(text) {
 // conflicting ID/hash or unprocessed sources. Release requires a later
 // `kind: direction` original naming the hold ID plus a coordinator outcome bound
 // to both hashes (release_source_id). Verifies references/order/identity only.
-export function readInboxGuard(packagePath, { priorItems = [], items = [], now = Date.now } = {}) {
+export function readInboxGuard(packagePath, { priorItems = [], items = [], priorDirectories = [], now = Date.now } = {}) {
   const reasons = [];
   const sources = [];
   const byId = new Map();
@@ -951,35 +1011,95 @@ export function readInboxGuard(packagePath, { priorItems = [], items = [], now =
   }
 
   const root = realpathSync(packagePath);
+  // Mailbox directories are validated before enumeration: a symlinked,
+  // non-directory or escaping component is unknown/blocking, never followed.
+  // Enumeration itself is bounded by examined entries, not only selected
+  // candidates: a ceiling that prevents proving completeness is reported as a
+  // blocking truncation rather than silently visited in full.
   const readDir = (name) => {
     const dir = join(root, name);
-    let entries;
-    try { entries = readdirSync(dir, { withFileTypes: true }); }
-    catch (error) {
-      if (error?.code === 'ENOENT') return { missing: true, files: [] };
+    let info;
+    try { info = lstatSync(dir); } catch (error) {
+      if (error?.code === 'ENOENT') return { missing: true, files: [], valid: false };
       reasons.push(`${name}-unreadable`);
-      return { missing: false, files: [] };
+      return { missing: false, files: [], valid: false };
     }
-    return { missing: false, files: entries };
+    if (info.isSymbolicLink()) {
+      reasons.push(`symlink:${name}-directory`);
+      return { missing: false, files: [], valid: false };
+    }
+    if (!info.isDirectory()) {
+      reasons.push(`nonregular:${name}-directory`);
+      return { missing: false, files: [], valid: false };
+    }
+    let real;
+    try { real = realpathSync(dir); } catch {
+      reasons.push(`${name}-unreadable`);
+      return { missing: false, files: [], valid: false };
+    }
+    if (real !== dir) {
+      reasons.push(`escape:${name}-directory`);
+      return { missing: false, files: [], valid: false };
+    }
+    let handle;
+    try { handle = opendirSync(dir); }
+    catch (error) {
+      if (error?.code === 'ENOENT') return { missing: true, files: [], valid: false };
+      reasons.push(`${name}-unreadable`);
+      return { missing: false, files: [], valid: false };
+    }
+    const files = [];
+    try {
+      while (files.length < INBOX_EXAMINE_MAX) {
+        const entry = handle.readSync();
+        if (!entry) break;
+        files.push(entry);
+      }
+      if (files.length >= INBOX_EXAMINE_MAX && handle.readSync() !== null) {
+        // Completeness can no longer be proven; the projection stays blocking.
+        reasons.push(`enumeration-cap:${name}`);
+      }
+    } catch (error) {
+      reasons.push(`${name}-unreadable`);
+      return { missing: false, files: [], valid: false };
+    } finally {
+      try { handle.closeSync(); } catch { /* best effort */ }
+    }
+    return { missing: false, files, valid: true };
   };
 
   const inbox = readDir('inbox');
   const processed = readDir('processed');
+  // Directories validly observed this pass; retained by recordCheckpoint so a
+  // later checkpoint detects a lost mailbox even when no original was retained.
+  const directories = [];
+  if (inbox.valid) directories.push('inbox');
+  if (processed.valid) directories.push('processed');
   // An absent inbox is empty only for a newly initialized workflow; losing a
   // previously observed inbox/archive is unknown.
-  const sawPrior = priorItems.length > 0;
+  const priorDirs = new Set((Array.isArray(priorDirectories) ? priorDirectories : [])
+    .filter(name => name === 'inbox' || name === 'processed'));
+  const sawPrior = priorItems.length > 0 || priorDirs.size > 0;
   if ((inbox.missing || processed.missing) && sawPrior) reasons.push('missing-history');
   if (inbox.missing && processed.missing && !sawPrior) {
-    return { state: 'empty', blocking: false, sources: [], items: [], reasons: [], observed_at: new Date(typeof now === 'function' ? now() : now).toISOString() };
+    return { state: 'empty', blocking: false, sources: [], items: [], reasons: [], directories: [], observed_at: new Date(typeof now === 'function' ? now() : now).toISOString() };
   }
 
   const candidates = [];
   for (const [name, result] of [['inbox', inbox], ['processed', processed]]) {
     if (result.missing) continue;
     for (const entry of result.files) {
-      if (!entry.isFile() && !entry.isSymbolicLink()) continue; // ignore sibling temp/dirs
-      if (!entry.name.endsWith('.md')) continue; // ignore temporary/non-.md files
-      candidates.push({ name, entry });
+      if (entry.isFile() || entry.isSymbolicLink()) {
+        if (!entry.name.endsWith('.md')) continue; // ignore temporary/non-.md files
+        candidates.push({ name, entry });
+        continue;
+      }
+      // A relevant nonregular .md entry (directory, FIFO, socket) is unknown,
+      // never silently ignored; other siblings stay ignorable temporaries.
+      if (entry.name.endsWith('.md')) {
+        reasons.push(`nonregular:${name}/${entry.name}`);
+        sources.push({ path: `${name}/${entry.name}`, state: 'unknown', reason: 'nonregular' });
+      }
     }
   }
   // Deterministic filename order so projection and hold/release ordering are
@@ -1005,7 +1125,11 @@ export function readInboxGuard(packagePath, { priorItems = [], items = [], now =
       sources.push({ path: `${name}/${entry.name}`, state: 'unknown', reason: `unreadable:${error?.code ?? 'error'}` });
       continue;
     }
-    if (!info.isFile()) continue;
+    if (!info.isFile()) {
+      reasons.push(`nonregular:${name}/${entry.name}`);
+      sources.push({ path: `${name}/${entry.name}`, state: 'unknown', reason: 'nonregular' });
+      continue;
+    }
     if (info.size > INBOX_FILE_BYTES) {
       reasons.push(`oversize:${name}/${entry.name}`);
       sources.push({ path: `${name}/${entry.name}`, state: 'blocking', reason: 'oversize' });
@@ -1093,12 +1217,17 @@ export function readInboxGuard(packagePath, { priorItems = [], items = [], now =
       // release_source_id + applied outcome, bound to both hashes.
       state = 'held';
     } else {
-      // A processed original is nonblocking only with a recognized outcome whose
-      // supplied hash matches the observed source. Missing/mismatched outcome
-      // keeps it blocking.
-      const bound = outcome && INBOX_OUTCOMES.has(outcome.outcome) && outcome.sha256 === record.sha256;
+      // A processed original is nonblocking only with a resolved outcome
+      // (applied or not-applicable) whose supplied hash matches the observed
+      // source. An unresolved recognized outcome (held, decision-required,
+      // needs-spec-correction) keeps it blocking: recognized is not resolved.
+      const bound = outcome && RESOLVED_INBOX_OUTCOMES.has(outcome.outcome) && outcome.sha256 === record.sha256;
       state = bound ? record.state : 'blocking';
-      if (outcome && (!INBOX_OUTCOMES.has(outcome.outcome) || outcome.sha256 !== record.sha256)) {
+      if (outcome && !INBOX_OUTCOMES.has(outcome.outcome)) {
+        reasons.push(`outcome-mismatch:${record.id}`);
+      } else if (outcome && !RESOLVED_INBOX_OUTCOMES.has(outcome.outcome)) {
+        reasons.push(`outcome-unresolved:${record.id}`);
+      } else if (outcome && outcome.sha256 !== record.sha256) {
         reasons.push(`outcome-mismatch:${record.id}`);
       } else if (!outcome) {
         reasons.push(`outcome-missing:${record.id}`);
@@ -1147,7 +1276,9 @@ export function readInboxGuard(packagePath, { priorItems = [], items = [], now =
     // source too. This verifies references/order/identity only, never the
     // natural-language authority of the sender.
     const releaseOutcome = outcomes.get(releaseSource.id);
-    const releaseBound = releaseOutcome && INBOX_OUTCOMES.has(releaseOutcome.outcome)
+    // The direction itself must carry an applied, hash-bound outcome: an
+    // unresolved or not-applicable direction never releases a hold.
+    const releaseBound = releaseOutcome && releaseOutcome.outcome === 'applied'
       && releaseOutcome.sha256 === releaseSource.sha256;
     const ordered = directions.some(direction => direction.id === releaseSource.id
       && direction.sha256 === releaseSource.sha256
@@ -1170,6 +1301,7 @@ export function readInboxGuard(packagePath, { priorItems = [], items = [], now =
     sources,
     items: projected,
     reasons,
+    directories,
     observed_at: new Date(typeof now === 'function' ? now() : now).toISOString(),
   };
 }
@@ -1222,9 +1354,11 @@ export function observeInput(state = { input_revision: 0, active_prompts: 0 }, e
 // (e.g. 'completed' | 'failed' | 'aborted' | 'error' | 'cancelled'). Preserves
 // checkpoint input/inbox sources and owner/checkout, replaces the obligation with
 // a stable `reconcile:<assignment-id>` key and a review/fix-oriented summary,
-// never writes `complete`, marks the matching declared worker terminal, and uses
+// never writes `complete`, marks the matching declared worker terminal, uses
 // `ready` only for a completed return (other terminal/error states stay
-// blocked/unknown). Ordinary expected-revision checks are preserved.
+// blocked/unknown), and never clears an explicit coordinator stop state —
+// only a successful authorized coordinator checkpoint reconciles those.
+// Ordinary expected-revision checks are preserved.
 export function reconcileRuntimeReturn({
   package: packageInput,
   workflow_id: workflowId,
@@ -1262,8 +1396,13 @@ export function reconcileRuntimeReturn({
   const completed = returnState === 'completed';
   // Never `complete`: reconciliation is pending work even after a successful
   // owner return. `ready` only for a completed return; other terminal/error
-  // returns keep a blocked/unknown stop state.
-  const state = completed ? 'ready' : (returnState === 'aborted' || returnState === 'error' || returnState === 'failed' ? 'blocked' : 'unknown');
+  // returns keep a blocked/unknown stop state. An explicit coordinator stop
+  // (or an already recorded `complete`) is preserved as-is: a runtime return
+  // records the reconciliation obligation and terminal worker state without
+  // clearing the stop; only a successful authorized coordinator checkpoint
+  // reconciles it.
+  const reconciled = completed ? 'ready' : (returnState === 'aborted' || returnState === 'error' || returnState === 'failed' ? 'blocked' : 'unknown');
+  const state = RECONCILE_PRESERVED_STATES.has(existing.state) ? existing.state : reconciled;
   const key = `reconcile:${assignmentId}`;
   const summary = `Reconcile owner return for ${assignmentId}: verify review/fix duties against the returned work before any acceptance.`;
   const obRevision = obligationRevision(workflowId, key);

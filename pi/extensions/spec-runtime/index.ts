@@ -1,8 +1,8 @@
 import { Type } from '@earendil-works/pi-ai';
 import { getAgentDir } from '@earendil-works/pi-coding-agent';
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
-import { join, resolve } from 'node:path';
+import { randomUUID, createHash } from 'node:crypto';
+import { join, resolve, realpathSync } from 'node:path';
 import { homedir } from 'node:os';
 import { Runtime, loadRun, summary, assertLease, runEditor, runCommand, runVerification, runAdvice, runCompletion, canonicalPackage, event as runtimeEvent } from './runtime.mjs';
 import { createCommunication } from './communication.mjs';
@@ -39,6 +39,51 @@ const boundCheckout = (packagePath: string, workflowId: string, dispatches: Map<
     return record?.checkout ?? null;
   } catch { return null; }
 };
+
+// The durable assignment link the runtime writes at launch: assignment ID ->
+// run ID. Used to resolve a declared working worker to its actual run.
+function assignmentRunId(packagePath: string, assignmentId: string): string | null {
+  try {
+    const link: any = JSON.parse(readFileSync(join(packagePath, 'runtime', 'assignments',
+      `${createHash('sha256').update(assignmentId).digest('hex')}.json`), 'utf8'));
+    return typeof link?.run_id === 'string' && link.run_id ? link.run_id : null;
+  } catch { return null; }
+}
+
+// A workflow conflicts with a new dispatch only through a genuinely active
+// assignment: each declared working worker is resolved to its actual runtime
+// run, and terminal runs free the workflow for its next assignment (successive
+// steps reuse one workflow). An unreadable run cannot prove the writer exited,
+// so it stays a conflict until a coordinator checkpoint reconciles it. A
+// resume of the same assignment or of the ledger's own run is not a conflict.
+function activeAssignmentConflict(packagePath: string, record: any, args: any): { id: string; state: string } | null {
+  const candidateKey = typeof args?.assignment_id === 'string' && args.assignment_id ? args.assignment_id
+    : args?.action === 'start' && typeof args?.step === 'string' && args.step ? realpathStep(args.step) : null;
+  let ledgerRunId: string | null = null;
+  if (args?.action !== 'start' && !args?.step) {
+    try { const latest: any = loadRun(packagePath); ledgerRunId = typeof latest?.id === 'string' ? latest.id : null; } catch { ledgerRunId = null; }
+  }
+  for (const worker of record?.workers ?? []) {
+    if (worker?.state !== 'working' || typeof worker?.id !== 'string' || !worker.id) continue;
+    if (candidateKey && worker.id === candidateKey) continue;
+    // A defaulted dispatch declares the run UUID itself, so the run record is
+    // the fallback when no assignment link exists for the worker ID.
+    const runId = assignmentRunId(packagePath, worker.id) ?? worker.id;
+    if (ledgerRunId !== null && runId === ledgerRunId) continue;
+    let state: string | null = null;
+    try { state = summary(loadRun(packagePath, runId))?.state ?? null; } catch { state = null; }
+    if (state === null || !['completed', 'failed', 'cancelled'].includes(state)) {
+      return { id: worker.id, state: state ?? 'unresolved' };
+    }
+  }
+  return null;
+}
+
+// The runtime keys an assignment by the realpath of its step card; mirror that
+// normalization for same-assignment resume detection.
+function realpathStep(step: string): string {
+  try { return realpathSync(step); } catch { return step; }
+}
 
 export default function (pi: any) {
   const role = process.env.SPEC_RUNTIME_ROLE;
@@ -319,6 +364,18 @@ export default function (pi: any) {
           if ((registeredWorkflow.input_revision ?? 0) !== inputGuard.input_revision) {
             return result({ error: `workflow ${workflowId} has unreconciled native input: checkpoint revision ${registeredWorkflow.input_revision ?? 0} does not match the current native input revision ${inputGuard.input_revision}`, next: 'record a successful spec_checkpoint for the current input revision before dispatch' }, true);
           }
+          if (typeof args.assignment_id === 'string' && !/^[A-Za-z0-9_-]{1,128}$/.test(args.assignment_id)) {
+            return result({ error: 'assignment_id must be 1-128 ASCII letters/digits/underscore/hyphen; the checkpoint worker identity validates it', next: 'supply a valid stable attempt ID or omit it to use the run identity' }, true);
+          }
+          // A genuinely active assignment under this workflow conflicts with a
+          // new dispatch. Validated from durable state BEFORE launch so no
+          // lease, run record or process precedes a refusal; terminal
+          // assignments free the workflow for its next assignment while the
+          // per-run notification mappings stay retained.
+          const conflict = activeAssignmentConflict(canonicalPackage(args.package).packagePath, registeredWorkflow, args);
+          if (conflict) {
+            return result({ error: `workflow ${workflowId} still has active assignment ${conflict.id} (run state ${conflict.state}); refusing a concurrent dispatch`, next: 'await its completion or confirmed cancellation, or reconcile the assignment with spec_checkpoint before dispatching the next one' }, true);
+          }
         }
         const configFile = join(homedir(), '.pi/agent/spec-runtime.json');
         const config = existsSync(configFile) ? JSON.parse(readFileSync(configFile, 'utf8')) : {};
@@ -330,6 +387,9 @@ export default function (pi: any) {
         // The actual receipt binds its run/checkout to the workflow validated above
         // and is retained so the terminal notification reconciles to
         // `reconcile:<assignment-id>`. Dispatch never mints workflow ownership.
+        // Successive assignments under one workflow replace the workflow-level
+        // binding while every per-run mapping is retained for its own terminal
+        // notification; only a genuinely active assignment was refused above.
         if (workflowId && receipt.run_id) {
           const coordinator_session = coordinatorIdentity(ctx);
           const packagePath = canonicalPackage(args.package).packagePath;
@@ -340,23 +400,34 @@ export default function (pi: any) {
           if (existing.coordinator_session !== coordinator_session) {
             return result({ error: `workflow ${workflowId} is owned by another coordinator session; refusing an unowned mapping`, next: 'do not overwrite workflow ownership' }, true);
           }
-          const assignmentId = args.assignment_id ?? receipt.assignment_id ?? receipt.run_id;
-          const prior = dispatchBindings.get(workflowId);
-          if (prior && (prior.run_id !== receipt.run_id || prior.assignment_id !== assignmentId)) {
-            return result({ error: `workflow ${workflowId} is already mapped to a different dispatch; refusing a conflicting mapping`, next: 'reuse the registered assignment or register a new workflow_id' }, true);
-          }
+          // A defaulted runtime assignment key is the absolute prepared card
+          // path, which cannot be a checkpoint worker identity. The declared
+          // worker is the caller's explicit attempt ID or the real run UUID;
+          // the runtime assignment key stays in the receipt untouched.
+          const assignmentId = args.assignment_id ?? receipt.run_id;
           const boundCheckoutValue = receipt.checkout ?? existing.checkout ?? null;
           const alreadyBound = existing.checkout === boundCheckoutValue
-            && (existing.workers ?? []).some((worker: any) => worker.id === assignmentId && worker.state === 'working');
+            && (existing.workers ?? []).some((worker: any) => worker.id === assignmentId
+              && ['working', 'complete', 'failed', 'cancelled'].includes(worker.state));
           let revision = existing.revision;
+          const workers = [...(existing.workers ?? [])].filter((worker: any) => worker.id !== assignmentId)
+            .concat([{ id: assignmentId, kind: 'owner', state: 'working' }]);
           if (!alreadyBound) {
-            const workers = [...(existing.workers ?? [])].filter((worker: any) => worker.id !== assignmentId)
-              .concat([{ id: assignmentId, kind: 'owner', state: 'working' }]);
             const updated = recordCheckpoint({ package: packagePath, workflow_id: workflowId,
               expected_revision: existing.revision, state: 'waiting-worker', obligation: existing.obligation,
               workers, inbox: existing.inbox ?? { items: [] },
               reconciles_input_revision: existing.input_revision ?? 0, coordinator_session, checkout: boundCheckoutValue });
             revision = updated.revision;
+          }
+          // A terminal receipt (a startup resume or idempotent start of an
+          // already finished run) never emits another completion notification:
+          // reconcile it now through the production reducer instead of
+          // declaring an exited worker active.
+          if (['completed', 'failed', 'cancelled'].includes(receipt.state)) {
+            const reconciled = reconcileRuntimeReturn({ package: packagePath, workflow_id: workflowId,
+              expected_revision: revision, assignment_id: assignmentId, return_state: receipt.state,
+              workers, coordinator_session, checkout: boundCheckoutValue });
+            revision = reconciled.revision;
           }
           const binding = { package: packagePath, run_id: receipt.run_id, workflow_id: workflowId,
             assignment_id: assignmentId, checkout: boundCheckoutValue, coordinator_session };
