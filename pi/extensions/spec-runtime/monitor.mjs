@@ -184,5 +184,8 @@ export function createMonitor({ interval = setInterval, clear = clearInterval, n
       timer = interval(render, 1000); timer.unref?.(); refresh();
     },
     close() { close(); ctx?.ui?.setWidget('spec-runtime', undefined); ctx?.ui?.setStatus('spec-runtime', undefined); record = undefined; },
+    // Read-only identity of the currently displayed record, so other widgets
+    // can collapse only genuinely redundant rows.
+    currentRun() { return record ?? null; },
   };
 }

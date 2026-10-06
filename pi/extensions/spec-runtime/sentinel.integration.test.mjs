@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync, realpathSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync, realpathSync, statSync, renameSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -111,6 +111,50 @@ const lastNote = captured => captured.notes[captured.notes.length - 1];
 const lastWidget = captured => captured.widgets[captured.widgets.length - 1];
 const lastStatus = captured => captured.statuses[captured.statuses.length - 1];
 
+// Shared fixture for the focused observer cases: one enrolled primary with one
+// receipt, injectable watch/timer boundaries and a captured UI.
+function observerFixture(t, { state = 'running', nativeRun = null, maxWatchers } = {}) {
+  const dir = sandbox(t);
+  const { repo } = primary(dir, 'focus-repo');
+  const packagePath = pack(repo);
+  receipt(packagePath, { id: 'run-focus', assignment_id: 'assign-focus', state, started_at: new Date(Date.now() - 60000).toISOString() });
+  const directory = enrollmentDirectory({ agentDir: dir });
+  const canonical = canonicalPackage(packagePath);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const enrollmentFile = join(directory, 'fixture.json');
+  writeFileSync(enrollmentFile, JSON.stringify({ version: 1, root: canonical.primary, common: canonical.common, enrolled_at: new Date().toISOString() }));
+  const watchers = [];
+  const captures = capturedUI();
+  const timers = new Map();
+  const repeats = new Map();
+  let timerId = 0;
+  const registered = [];
+  const observer = createSentinelObserver({
+    pi: { registerCommand: (name, spec) => registered.push({ name, spec }) },
+    context: { hasUI: true, ui: captures.ui },
+    agentDir: dir,
+    indexDir: join(dir, 'spec-runtime'),
+    nativeRun,
+    maxWatchers,
+    watchDirectory: (target, listener) => {
+      const watcher = {
+        dir: target, listener, closed: false, errorCallback: null,
+        close() { this.closed = true; },
+        on(event, callback) { if (event === 'error') this.errorCallback = callback; return this; },
+        fail(error) { this.errorCallback?.(error); },
+      };
+      watchers.push(watcher);
+      return watcher;
+    },
+    setTimer: (callback, ms) => { const id = ++timerId; timers.set(id, { callback, ms }); return id; },
+    clearTimer: id => timers.delete(id),
+    repeat: (callback, ms) => { const id = ++timerId; repeats.set(id, { callback, ms }); return id; },
+    cancelRepeat: id => repeats.delete(id),
+  });
+  t.after(() => observer.close());
+  return { dir, packagePath, enrollmentFile, observer, handler: registered[0].spec.handler, watchers, captures, timers, repeats };
+}
+
 // The scripted provider counts every request and refuses to serve one: any
 // provider call would already fail the observation-only contract.
 function scriptedProvider(requests) {
@@ -216,8 +260,12 @@ test('sentinel status: actual index.ts serves enrolled workspace facts with zero
   assert.match(status.message, /running/);
   assert.equal(lastWidget(captured).key, SENTINEL_WIDGET_KEY);
   assert.equal(lastStatus(captured).key, SENTINEL_WIDGET_KEY);
-  // One observed run keeps only the header line in the widget.
-  assert.equal(lastWidget(captured).content.length, 1);
+  // No native monitor is attached to this enrolled external run, so the widget
+  // keeps its identity/execution detail and conditions, not only a header.
+  const widget = lastWidget(captured).content.join('\n');
+  assert.ok(lastWidget(captured).content.length > 1);
+  assert.match(widget, /assign-status/);
+  assert.match(widget, /running/);
 
   await session.prompt('/spec-sentinel inspect assign-status');
   const inspected = lastNote(captured);
@@ -286,7 +334,12 @@ test('sentinel observer: coalesced invalidation, missed-event reconciliation and
     agentDir: dir,
     indexDir: join(dir, 'spec-runtime'),
     watchDirectory: (target, listener) => {
-      const watcher = { dir: target, listener, closed: false, close() { this.closed = true; }, on() { return this; } };
+      const watcher = {
+        dir: target, listener, closed: false, errorCallback: null,
+        close() { this.closed = true; },
+        on(event, callback) { if (event === 'error') this.errorCallback = callback; return this; },
+        fail(error) { this.errorCallback?.(error); },
+      };
       watchers.push(watcher);
       return watcher;
     },
@@ -318,10 +371,45 @@ test('sentinel observer: coalesced invalidation, missed-event reconciliation and
   await reconcile.callback();
   assert.match(lastWidget(captures).content[0], /3 run\(s\)/);
 
+  // Nested activity snapshots replace atomically inside <run-id>-activity
+  // directories; nonrecursive watching means those directories carry their
+  // own invalidation watches.
+  const activityDirectory = join(packagePath, 'runtime', 'runs', 'run-observer-1-activity');
+  mkdirSync(activityDirectory, { recursive: true });
+  writeFileSync(join(activityDirectory, 'owner.json'), JSON.stringify({ run_id: 'run-observer-1', role: 'owner', phase: 'working', hint: 'editing source files', last_activity: new Date().toISOString() }));
+  for (const watcher of watchers) watcher.listener();
+  const [activityRefresh] = [...timers.values()];
+  timers.clear();
+  await activityRefresh.callback();
+  const activityWatcher = watchers.find(watcher => !watcher.closed && watcher.dir.endsWith('run-observer-1-activity'));
+  assert.ok(activityWatcher, 'the nested activity directory is watched');
+
+  // Replacing the role snapshot atomically, with no top-level receipt change,
+  // still invalidates the workspace observer through the nested watch.
+  const replacement = join(activityDirectory, 'owner.json.new');
+  writeFileSync(replacement, JSON.stringify({ run_id: 'run-observer-1', role: 'owner', phase: 'working', hint: 'verifying edited files', last_activity: new Date().toISOString() }));
+  renameSync(replacement, join(activityDirectory, 'owner.json'));
+  activityWatcher.listener();
+  const [replacedRefresh] = [...timers.values()];
+  timers.clear();
+  await replacedRefresh.callback();
+  assert.match(lastWidget(captures).content.join('\n'), /verifying edited files/);
+
+  // A failed watch is disposed, displayed as stale coverage and retried on
+  // the next reconciliation instead of staying silently dead.
+  const failed = watchers.find(watcher => !watcher.closed && watcher.dir.endsWith(join('runtime', 'runs')));
+  failed.fail(new Error('watch failed'));
+  assert.ok(failed.closed);
+  assert.ok(lastWidget(captures).content.some(line => line.includes('Watcher unavailable')));
+  assert.match(lastStatus(captures).text, /stale/);
+  await reconcile.callback();
+  assert.ok(watchers.some(watcher => watcher !== failed && !watcher.closed && watcher.dir === failed.dir));
+  assert.ok(!lastWidget(captures).content.some(line => line.includes('Watcher unavailable')));
+
   assert.deepEqual(readdirSync(packagePath).sort(), ['runtime']);
   assert.deepEqual(readdirSync(join(packagePath, 'runtime')).sort(), ['runs']);
   assert.deepEqual(readdirSync(join(packagePath, 'runtime', 'runs')).sort(),
-    ['run-observer-1.json', 'run-observer-2.json', 'run-observer-3.json']);
+    ['run-observer-1-activity', 'run-observer-1.json', 'run-observer-2.json', 'run-observer-3.json']);
   assert.equal(readdirSync(directory).filter(name => name.endsWith('.json')).length, 1);
 
   observer.close();
@@ -329,6 +417,77 @@ test('sentinel observer: coalesced invalidation, missed-event reconciliation and
   assert.equal(timers.size, 0);
   assert.equal(repeats.size, 0);
   observer.close();
+});
+
+test('sentinel observer: off and close during pending reads never install disposed handles', async t => {
+  // close() racing a pending read must not resurrect handles afterwards.
+  const closing = observerFixture(t);
+  const closingRead = closing.observer.refresh();
+  closing.observer.close();
+  await closingRead;
+  assert.equal(closing.watchers.length, 0);
+
+  // off() racing a pending read likewise leaves no live handles.
+  const offing = observerFixture(t);
+  const offingRead = offing.observer.refresh();
+  await offing.handler('off');
+  await offingRead;
+  assert.equal(offing.watchers.length, 0);
+
+  // One-shot status after off reads fresh facts without any handles.
+  await offing.handler('status');
+  const status = lastNote(offing.captures);
+  assert.equal(status.type, 'info');
+  assert.match(status.message, /focus-repo/);
+  assert.match(status.message, /assign-focus/);
+  assert.equal(offing.watchers.length, 0);
+});
+
+test('sentinel observer: unreadable enrollment retains prior facts as stale', async t => {
+  const f = observerFixture(t);
+  await f.observer.refresh();
+  assert.match(lastWidget(f.captures).content[0], /1 run\(s\)/);
+  assert.match(lastWidget(f.captures).content.join('\n'), /assign-focus/);
+
+  // The only enrollment record becoming malformed must not turn the workspace
+  // into healthy emptiness: prior facts are retained and shown stale.
+  writeFileSync(f.enrollmentFile, '{not json');
+  await f.observer.refresh();
+  const retained = lastWidget(f.captures).content.join('\n');
+  assert.match(retained, /assign-focus/);
+  assert.match(retained, /coverage stale/);
+  assert.match(retained, /enrollment-invalid/);
+  assert.match(retained, /Enrollment unreadable/);
+  assert.match(lastStatus(f.captures).text, /stale/);
+});
+
+test('sentinel observer: an external single run keeps details; only the natively displayed run collapses', async t => {
+  let native = null;
+  const f = observerFixture(t, { state: 'failed', nativeRun: () => native });
+  await f.observer.refresh();
+  // No native monitor is attached to a fresh coordinator: an enrolled external
+  // failure stays fully visible in the persistent widget.
+  const external = lastWidget(f.captures).content.join('\n');
+  assert.ok(lastWidget(f.captures).content.length > 1);
+  assert.match(external, /assign-focus/);
+  assert.match(external, /failed/);
+  assert.match(external, /execution-failed/);
+
+  // When the native monitor displays the same run, only its duplicated
+  // identity/execution row collapses; sentinel-only conditions remain.
+  native = { id: 'run-focus', package: f.packagePath };
+  await f.observer.refresh();
+  const collapsed = lastWidget(f.captures).content.join('\n');
+  assert.doesNotMatch(collapsed, /assign-focus/);
+  assert.match(collapsed, /execution-failed/);
+  assert.match(collapsed, /coverage complete/);
+});
+
+test('sentinel observer: a watcher-cap exclusion is reported, not hidden', async t => {
+  const f = observerFixture(t, { maxWatchers: 1 });
+  await f.observer.refresh();
+  assert.match(lastWidget(f.captures).content.join('\n'), /Watcher cap reached \(1 of \d+ directories\)/);
+  assert.match(lastStatus(f.captures).text, /stale/);
 });
 
 test('sentinel status: the CLI reports a disposable package and preserves runs discovery', { timeout: 60000 }, async t => {
@@ -373,6 +532,16 @@ test('sentinel status: the CLI reports a disposable package and preserves runs d
 
   const emptyOut = cli(['sentinel', 'status', '--agent-dir', empty], dir);
   assert.match(emptyOut, /No enrolled roots\. Add one in Pi with \/spec-sentinel add \/absolute\/primary\./);
+
+  // Unreadable enrollment is an explicit unknown in the CLI too, never a
+  // healthy empty workspace.
+  const enrollments = enrollmentDirectory({ agentDir: empty });
+  mkdirSync(enrollments, { recursive: true });
+  writeFileSync(join(enrollments, 'broken.json'), '{not json');
+  const broken = cli(['sentinel', 'status', '--agent-dir', empty], dir);
+  assert.match(broken, /coverage unavailable/);
+  assert.match(broken, /enrollment-invalid/);
+  assert.doesNotMatch(broken, /No enrolled roots\. Add one/);
 
   const runs = JSON.parse(cli(['runs', '--index-root', emptyIndex], dir));
   assert.deepEqual(runs.runs, []);

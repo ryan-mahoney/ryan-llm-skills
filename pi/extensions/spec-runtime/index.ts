@@ -126,7 +126,8 @@ export default function (pi: any) {
   });
   pi.on('session_start', (_event: any, ctx: any) => {
     sentinel?.close();
-    sentinel = createSentinelObserver({ pi, context: ctx, agentDir: getAgentDir(), scope: process.env.PI_INTERCOM_SCOPE_ID ?? null, ownPackages });
+    sentinel = createSentinelObserver({ pi, context: ctx, agentDir: getAgentDir(), scope: process.env.PI_INTERCOM_SCOPE_ID ?? null, ownPackages,
+      nativeRun: () => monitor.currentRun() });
     monitor.close();
     const entries = ctx.sessionManager.getBranch();
     for (let i = entries.length - 1; i >= 0; i--) {

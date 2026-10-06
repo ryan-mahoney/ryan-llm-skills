@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 
-import { SENTINEL_LIMITS, collectWorkspace, reduceConditions, renderWorkspace } from './sentinel.mjs';
+import { SENTINEL_LIMITS, collectWorkspace, reduceConditions, renderWorkspace, enrollmentReasons } from './sentinel.mjs';
 
 const FIXED = Date.parse('2026-10-06T12:00:00.000Z');
 const now = () => FIXED;
@@ -371,4 +371,39 @@ test('an unrepresentable numeric activity time stays an explicit unknown', async
   assert.ok(run.coverage.reasons.includes('activity-invalid: owner'));
   assert.equal(run.observed_at, ago(60000));
   assert.deepEqual(condition(run, 'activity-unreadable'), { ...condition(run, 'activity-unreadable'), severity: 'attention', state: 'unknown' });
+});
+
+test('enrollment read failures project into workspace coverage, never healthy emptiness', async t => {
+  const f = sandbox(t);
+  const packagePath = pack(primary(f.dir, 'enroll-err'));
+  receipt(packagePath, { id: 'run-enroll-err', assignment_id: 'assign-enroll-err', state: 'running', started_at: ago(60000) });
+
+  // The only enrollment record being unreadable must not read as a fully
+  // observed empty workspace.
+  const broken = await collectWorkspace({
+    roots: [], enrollmentErrors: [{ path: '/agent/spec-sentinel/ws/enrollments/a.json', code: 'ENROLLMENT_INVALID' }],
+    indexDir: f.indexDir, now,
+  });
+  assert.equal(broken.runs.length, 0);
+  assert.equal(broken.coverage.state, 'unavailable');
+  assert.equal(broken.coverage.omitted, null);
+  assert.ok(broken.coverage.reasons.some(reason => reason.startsWith('enrollment-invalid')), JSON.stringify(broken.coverage.reasons));
+  assert.match(renderWorkspace(broken).join('\n'), /enrollment-invalid/);
+  assert.doesNotMatch(renderWorkspace(broken).join('\n'), /no enrolled roots/);
+
+  // A still-readable root beside a failed record keeps partial coverage with
+  // the explicit unknown rather than claiming completeness.
+  const mixed = await collectWorkspace({
+    roots: [join(f.dir, 'enroll-err')],
+    enrollmentErrors: [{ path: '/agent/spec-sentinel/ws/enrollments/b.json', code: 'EACCES' }],
+    indexDir: f.indexDir, now,
+  });
+  assert.equal(mixed.runs.length, 1);
+  assert.equal(mixed.coverage.state, 'partial');
+  assert.equal(mixed.coverage.omitted, null);
+  assert.ok(mixed.coverage.reasons.some(reason => reason.startsWith('enrollment-unavailable')), JSON.stringify(mixed.coverage.reasons));
+
+  assert.deepEqual(enrollmentReasons(null), []);
+  assert.deepEqual(enrollmentReasons([{ path: '/a', code: 'ENROLLMENT_CAP' }, { path: '/a', code: 'ENROLLMENT_CAP' }]),
+    ['enrollment-cap: /a (ENROLLMENT_CAP)']);
 });

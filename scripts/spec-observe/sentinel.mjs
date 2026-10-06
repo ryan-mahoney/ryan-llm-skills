@@ -69,6 +69,22 @@ export function workspaceKey({ agentDir, scope = null }) {
   return sha256(JSON.stringify([resolve(agentDir), scope ?? null]));
 }
 
+// Enrollment read failures become explicit workspace coverage reasons in
+// every entrypoint; unreadable enrollment is an unknown omission, never a
+// healthy empty workspace.
+export function enrollmentReasons(errors) {
+  const reasons = [];
+  for (const error of Array.isArray(errors) ? errors : []) {
+    if (!error?.path) continue;
+    const code = typeof error.code === 'string' ? error.code : 'UNKNOWN';
+    const kind = code === 'ENROLLMENT_INVALID' || code === 'ENROLLMENT_OVERSIZED' ? 'enrollment-invalid'
+      : code === 'ENROLLMENT_CAP' ? 'enrollment-cap' : 'enrollment-unavailable';
+    const reason = `${kind}: ${error.path} (${code})`;
+    if (!reasons.includes(reason)) reasons.push(reason);
+  }
+  return reasons;
+}
+
 // Enrollment state is written only by the owning Pi session; the reader only
 // observes it. One directory per agent dir and routing scope.
 export function enrollmentDirectory({ agentDir, scope = null }) {
@@ -315,7 +331,7 @@ export function renderWorkspace(snapshot) {
   return lines;
 }
 
-export async function collectWorkspace({ roots = [], packages = [], indexDir = join(homedir(), '.pi/agent/spec-runtime'),
+export async function collectWorkspace({ roots = [], packages = [], enrollmentErrors = [], indexDir = join(homedir(), '.pi/agent/spec-runtime'),
   now = Date.now, agentDir, scope } = {}) {
   const tick = clock(now);
   const readTime = clockIso(tick);
@@ -324,6 +340,10 @@ export async function collectWorkspace({ roots = [], packages = [], indexDir = j
   let knownOmitted = 0;
   let unknownOmission = false;
   const workspace = workspaceKey({ agentDir: agentDir ?? dirname(resolve(indexDir)), scope: scope ?? process.env.PI_INTERCOM_SCOPE_ID ?? null });
+  for (const reason of enrollmentReasons(enrollmentErrors)) {
+    reasons.push(reason);
+    unknownOmission = true;
+  }
 
   // Roots are explicit enrollment: strings only, resolved, deduplicated, sorted.
   const enrolled = sortPaths(Array.isArray(roots) ? roots.filter(value => typeof value === 'string') : []);

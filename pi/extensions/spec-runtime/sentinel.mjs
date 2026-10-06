@@ -6,11 +6,11 @@
 
 import { watch, mkdirSync, renameSync, readdirSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
-import { join, resolve } from 'node:path';
+import { join, resolve, dirname, sep } from 'node:path';
 
 import { canonicalPackage } from './runtime.mjs';
 import { publicHint } from './monitor.mjs';
-import { collectWorkspace, renderWorkspace, enrollmentDirectory, readEnrollments, SENTINEL_LIMITS } from '../../../scripts/spec-observe/sentinel.mjs';
+import { collectWorkspace, renderWorkspace, enrollmentDirectory, readEnrollments, enrollmentReasons, SENTINEL_LIMITS } from '../../../scripts/spec-observe/sentinel.mjs';
 
 export const SENTINEL_COALESCE_MS = 250;
 export const SENTINEL_RECONCILE_MS = 15000;
@@ -20,7 +20,8 @@ const USAGE = 'Usage: /spec-sentinel status | add /absolute/primary | inspect ID
 const MAX_WATCHERS = 60;
 
 export function createSentinelObserver({ pi, context, agentDir, scope = null, ownPackages = [], indexDir = join(agentDir, 'spec-runtime'),
-  now = Date.now, watchDirectory = watch, setTimer = setTimeout, clearTimer = clearTimeout, repeat = setInterval, cancelRepeat = clearInterval }) {
+  now = Date.now, watchDirectory = watch, setTimer = setTimeout, clearTimer = clearTimeout, repeat = setInterval, cancelRepeat = clearInterval,
+  nativeRun = null, maxWatchers = MAX_WATCHERS }) {
   let closed = false;
   let hidden = false;
   let latest = null;
@@ -60,16 +61,31 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
       watchers.delete(directory);
       try { watcher.close?.(); } catch { /* Closing is best effort. */ }
     }
-    for (const directory of wanted.slice(0, MAX_WATCHERS)) {
+    const selected = wanted.slice(0, maxWatchers);
+    if (wanted.length > selected.length) {
+      // Excluded directories keep only 15 s reconciliation; the gap stays visible.
+      note = `Watcher cap reached (${selected.length} of ${wanted.length} directories); reconciliation covers the excluded ones.`;
+    }
+    for (const directory of selected) {
       if (watchers.has(directory)) continue;
       try {
         const watcher = watchDirectory(directory, () => invalidate());
-        watcher?.on?.('error', () => {
-          // Watcher failure keeps last known facts; it never throws into the session.
+        watcher?.on?.('error', error => {
+          // A failed watch is disposed immediately and retried on the next
+          // reconciliation; last known facts are kept and the coverage loss
+          // is displayed, never silently swallowed.
+          watchers.delete(directory);
+          try { watcher.close?.(); } catch { /* Closing is best effort. */ }
+          if (error?.code === 'ENOENT') return;
           note = 'Watcher unavailable; status reflects the last bounded read.';
+          render();
         });
         watchers.set(directory, watcher);
-      } catch { /* A directory may vanish between reads; the next refresh re-syncs. */ }
+      } catch (error) {
+        // A directory that is absent now is an ordinary gap retried on the
+        // next refresh; any other construction failure is reported.
+        if (error?.code !== 'ENOENT') note = 'Watcher unavailable; status reflects the last bounded read.';
+      }
     }
   }
 
@@ -79,7 +95,16 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
       targets.push(root, join(root, '.specs'));
     }
     for (const run of snapshot?.runs ?? []) {
-      if (run?.package) targets.push(join(run.package, 'runtime', 'runs'));
+      if (!run?.package) continue;
+      const runtimeDirectory = join(run.package, 'runtime');
+      targets.push(join(runtimeDirectory, 'runs'));
+      // Node directory watches are nonrecursive: every nested directory that
+      // actually holds observed sources (activity roles, checkpoint
+      // workflows) needs its own invalidation watch.
+      for (const source of run.source_paths ?? []) {
+        if (typeof source !== 'string' || !source.startsWith(`${runtimeDirectory}${sep}`)) continue;
+        targets.push(dirname(source));
+      }
     }
     return targets;
   }
@@ -91,18 +116,33 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
       if (hidden && !force) return latest;
       try {
         const enrolled = await readEnrollments({ agentDir, scope });
+        const enrollmentErrors = enrolled.errors ?? [];
+        const roots = enrolled.roots ?? [];
+        if (!roots.length && enrollmentErrors.length && latest) {
+          // Unreadable enrollment retains the last known facts as stale
+          // instead of replacing them with an unobserved empty workspace.
+          latest = { ...latest, roots, coverage: { ...latest.coverage, state: 'stale', omitted: null,
+            reasons: [...new Set([...latest.coverage.reasons, ...enrollmentReasons(enrollmentErrors)])] } };
+          note = 'Enrollment unreadable; status reflects the last bounded read.';
+          if (!closed && !hidden) render();
+          return latest;
+        }
         const snapshot = await collectWorkspace({
-          roots: enrolled.roots ?? [], packages: [...ownPackages], indexDir, agentDir, scope, now,
+          roots, packages: [...ownPackages], enrollmentErrors, indexDir, agentDir, scope, now,
         });
-        latest = { ...snapshot, roots: enrolled.roots ?? [] };
+        latest = { ...snapshot, roots };
         note = null;
-        syncWatchers(snapshotTargets(latest));
-        render();
+        // Lifecycle fence: off or close during the asynchronous reads must
+        // never install handles or render into a hidden/disposed view.
+        if (!closed && !hidden) {
+          syncWatchers(snapshotTargets(latest));
+          render();
+        }
         return latest;
       } catch (error) {
         // Last known facts are kept; the failure becomes an explicit note.
         note = `Sentinel workspace unavailable: ${publicHint(error?.message ?? String(error))}`;
-        render();
+        if (!closed && !hidden) render();
         return latest;
       } finally {
         inFlight = null;
@@ -114,13 +154,22 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
   function render() {
     if (closed || hidden || !context?.hasUI) return;
     try {
-      const lines = latest ? renderWorkspace(latest) : [];
-      // One native run is already shown by its own widget; keep only the header.
-      if (latest?.runs?.length === 1) lines.splice(1);
+      // A failed read or watch keeps the last facts but displays stale coverage.
+      const shown = note && latest ? { ...latest, coverage: { ...latest.coverage, state: 'stale' } } : latest;
+      const lines = shown ? renderWorkspace(shown) : [];
+      const current = nativeRun?.() ?? null;
+      // Only the identity/execution detail row of a run the native monitor is
+      // already displaying is redundant; workspace coverage notes and
+      // sentinel-only conditions always remain visible.
+      if (shown?.runs?.length === 1 && current?.id && typeof current.package === 'string'
+        && shown.runs[0]?.source_paths?.some(source => resolve(source)
+          === resolve(join(current.package, 'runtime', 'runs', `${current.id}.json`)))) {
+        lines.splice(1, 1);
+      }
       if (note) lines.push(note);
       context.ui.setWidget(SENTINEL_WIDGET_KEY, lines);
       context.ui.setStatus(SENTINEL_WIDGET_KEY,
-        `sentinel ${latest?.coverage?.state ?? 'unknown'} · ${latest?.runs?.length ?? 0} run(s)`);
+        `sentinel ${shown?.coverage?.state ?? 'unknown'} · ${shown?.runs?.length ?? 0} run(s)`);
     } catch { /* UI failure must not affect observation. */ }
   }
 
@@ -168,7 +217,9 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
       if (!action || action === 'status') {
         const snapshot = await run(true);
         if (!snapshot) { notify(ctx, 'Sentinel workspace unavailable.', 'error'); return; }
-        notify(ctx, renderWorkspace(snapshot).join('\n'), 'info');
+        // Explicit status carries the retained-read uncertainty too, not only
+        // the unrendered observer note.
+        notify(ctx, [...renderWorkspace(snapshot), ...(note ? [note] : [])].join('\n'), 'info');
         return;
       }
       if (action === 'add') {

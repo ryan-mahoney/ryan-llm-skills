@@ -64,7 +64,7 @@ try {
     let enrollmentErrors = [];
     if (options['--package']) packages.push(options['--package']);
     else ({ roots, errors: enrollmentErrors } = await readEnrollments({ agentDir, scope }));
-    const snapshot = await collectWorkspace({ roots, packages, indexDir: path.join(agentDir, 'spec-runtime'), agentDir, scope });
+    const snapshot = await collectWorkspace({ roots, packages, enrollmentErrors, indexDir: path.join(agentDir, 'spec-runtime'), agentDir, scope });
     if (format === 'json') {
       await print(JSON.stringify(enrollmentErrors.length ? { ...snapshot, enrollment_errors: enrollmentErrors } : snapshot, null, 2));
       process.exit(0);
