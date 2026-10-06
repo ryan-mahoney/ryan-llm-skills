@@ -157,7 +157,7 @@ Continue through PR publication.
 
 DEFAULT_OWNER: deepseek-flash:max from deepseek
 STRONG_OWNER: gpt-5.6-sol:high from openai-codex
-EDITOR_AGENT: deepseek/deepseek-v4.1-flash:low from openrouter
+EDITOR_AGENT: deepseek/deepseek-v4.1-flash:high from openrouter
 REVIEW_AGENT: gpt-6.1-sol:medium from openai-codex
 SCOUT_AGENT: gpt-6-luna:low from openai-codex
 PACKAGE: <absolute path to .specs/feature-package/>
