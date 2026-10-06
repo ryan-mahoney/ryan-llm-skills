@@ -1,8 +1,10 @@
-// Session-local read-only workspace observer for the spec sentinel.
+// Session-local workspace observer for the spec sentinel.
 //
-// The observer collects bounded workspace facts and renders them as plain
-// status. It never starts, stops, messages or cancels a worker and never writes
-// anything except the explicit enrollment record created by /spec-sentinel add.
+// Observation is read-only: it collects bounded workspace facts and renders them
+// as plain status, and never starts, stops, messages or cancels a worker. Its only
+// writes are the explicit enrollment record created by /spec-sentinel add and the
+// explicit native policy/authority storage created by /spec-sentinel enable (with
+// /spec-sentinel disable revocation), which arms a session-local capability only.
 
 import { watch, mkdirSync, renameSync, readdirSync, writeFileSync, readFileSync, statSync, existsSync, lstatSync, realpathSync, openSync, closeSync, fsyncSync, unlinkSync, linkSync, fstatSync, readSync, opendirSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
@@ -16,12 +18,12 @@ export const SENTINEL_COALESCE_MS = 250;
 export const SENTINEL_RECONCILE_MS = 15000;
 export const SENTINEL_WIDGET_KEY = 'spec-sentinel';
 
-const USAGE = 'Usage: /spec-sentinel status | add /absolute/primary | inspect ID | off';
+const USAGE = 'Usage: /spec-sentinel status | add /absolute/primary | inspect ID | enable /absolute/policy.json | disable | off';
 const MAX_WATCHERS = 60;
 
 export function createSentinelObserver({ pi, context, agentDir, scope = null, ownPackages = [], indexDir = join(agentDir, 'spec-runtime'),
   now = Date.now, watchDirectory = watch, setTimer = setTimeout, clearTimer = clearTimeout, repeat = setInterval, cancelRepeat = clearInterval,
-  nativeRun = null, maxWatchers = MAX_WATCHERS }) {
+  nativeRun = null, maxWatchers = MAX_WATCHERS, enablePolicy = null, disablePolicy: disableAuthority = null }) {
   let closed = false;
   let hidden = false;
   let latest = null;
@@ -214,6 +216,11 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
     try {
       const [actionRaw, ...rest] = String(args ?? '').trim().split(/\s+/).filter(Boolean);
       const action = (actionRaw ?? '').toLowerCase();
+      // A replaced or shut-down observer must not retain or re-arm authority.
+      if (closed && ['enable', 'disable', 'off', 'add'].includes(action)) {
+        notify(ctx, 'Sentinel observer is closed; this command is refused.', 'error');
+        return;
+      }
       if (!action || action === 'status') {
         const snapshot = await run(true);
         if (!snapshot) { notify(ctx, 'Sentinel workspace unavailable.', 'error'); return; }
@@ -253,11 +260,49 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
         notify(ctx, lines.join('\n'), 'info');
         return;
       }
+      if (action === 'enable') {
+        const policyPath = rest.join(' ');
+        if (!policyPath) throw new Error(USAGE);
+        if (!enablePolicy) throw new Error('Sentinel authority is unavailable in this session; only the native coordinator command can arm it.');
+        const receipt = await enablePolicy(policyPath, ctx);
+        const kinds = receipt.actions.filter(kind => kind === 'continue' || kind === 'cancel');
+        if (receipt.diagnosis) kinds.push('diagnose');
+        notify(ctx, [
+          'Sentinel authority armed.',
+          `package: ${receipt.package}`,
+          `workflow: ${receipt.workflow_id}`,
+          `checkout: ${receipt.checkout}`,
+          `session: ${receipt.coordinator_session}`,
+          `mode: ${receipt.mode}`,
+          `kinds: ${kinds.join(', ') || 'none'}`,
+          `caps: effects ${receipt.max_effects}, diagnostics ${receipt.max_diagnostics}`,
+          `expires: ${receipt.expires_at}`,
+          `authority: ${receipt.authority_reference}`,
+          `source: ${receipt.source_hash}`,
+        ].join('\n'), 'info');
+        return;
+      }
+      if (action === 'disable') {
+        if (!disableAuthority) throw new Error('Sentinel authority is unavailable in this session.');
+        const result = await disableAuthority(ctx);
+        if (result.persisted === false) notify(ctx, `Sentinel authority revoked${result.was_armed ? '' : ' (none was armed)'}, but revocation persistence failed: ${result.error}. Observation remains available.`, 'warning');
+        else notify(ctx, result.was_armed ? 'Sentinel authority revoked. Observation remains available.' : 'No live sentinel authority was armed. Observation remains available.', 'info');
+        return;
+      }
       if (action === 'off') {
+        // Revoke the live capability first, then hide observation regardless of
+        // whether the revocation persisted, and report both facts.
+        let revocation = { revoked: true, persisted: true, was_armed: false };
+        if (disableAuthority) {
+          try { revocation = await disableAuthority(ctx); }
+          catch (error) { revocation = { revoked: false, persisted: false, was_armed: true, error: error?.message ?? String(error) }; }
+        }
         hidden = true;
         stopHandles();
         clearWidgets();
-        notify(ctx, 'Sentinel observation hidden for this session; no worker was stopped, changed or messaged.', 'info');
+        const armed = revocation.was_armed ? 'Sentinel authority revoked' : 'No live sentinel authority was armed';
+        const persisted = revocation.persisted === false ? `; revocation persistence failed: ${revocation.error}` : '';
+        notify(ctx, `${armed}${persisted}. Sentinel observation hidden for this session; no worker was stopped, changed or messaged.`, revocation.persisted === false ? 'warning' : 'info');
         return;
       }
       throw new Error(USAGE);
@@ -273,7 +318,7 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
   }
 
   pi.registerCommand('spec-sentinel', {
-    description: 'Read-only workspace observation: status | add PATH | inspect ID | off',
+    description: 'Sentinel: read-only status/add/inspect plus live-session authority enable/disable/off',
     handler,
   });
 
@@ -703,12 +748,23 @@ function validateArtifacts(packagePath, artifacts) {
 // Fails closed on any storage error. Exclusive mode hard-links the temp into
 // place so a concurrent first registration cannot be overwritten; update mode
 // atomically replaces only the writer's own validated record.
-function publishDurable(file, value, { exclusive = false, directory } = {}) {
+function publishDurable(file, value, { exclusive = false, directory, requireParentFsync = false } = {}) {
   // Checkpoint callers pass a directory already validated component-by-component
   // by ensureCheckpointDirectory so publication cannot follow a symlinked state
   // ancestor. Only an unguarded caller falls back to recursive creation.
   const target = directory ?? dirname(file);
   if (!directory) mkdirSync(target, { recursive: true, mode: 0o700 });
+  // Authority/slot/intent publication refuses a symlinked or nonregular existing
+  // destination before replacement; checkpoint behavior is unchanged.
+  if (!exclusive && requireParentFsync) {
+    try {
+      const existing = lstatSync(file);
+      if (existing.isSymbolicLink() || !existing.isFile()) fail(`publication destination must be a regular non-symlink file: ${file}`, 'checkpoint-storage');
+    } catch (error) {
+      if (error instanceof CheckpointError) throw error;
+      if (error?.code !== 'ENOENT') fail(`publication destination is unreadable: ${file} (${error?.code ?? 'error'})`, 'checkpoint-storage');
+    }
+  }
   const temp = `${file}.${randomUUID()}.tmp`;
   const fd = openSync(temp, 'wx', 0o600);
   try {
@@ -730,7 +786,9 @@ function publishDurable(file, value, { exclusive = false, directory } = {}) {
     fail(`checkpoint publication failed: ${error?.message ?? error}`, 'checkpoint-storage');
   }
   const dirFd = openSync(target, 'r');
-  try { fsyncSync(dirFd); } catch { /* parent fsync is best effort on some FS */ } finally { closeSync(dirFd); }
+  try { fsyncSync(dirFd); } catch (error) {
+    if (requireParentFsync) fail(`parent directory fsync failed: ${target} (${error?.message ?? error})`, 'checkpoint-storage');
+  } finally { closeSync(dirFd); }
 }
 
 // Read-side guard: resolve state components without following a symlink at
@@ -1437,4 +1495,554 @@ export function reconcileRuntimeReturn({
   const file = checkpointPath(packagePath, workflowId);
   publishDurable(file, record, { directory: ensureCheckpointDirectory(packagePath, workflowId) });
   return { ...record, receipt: 'reconciled' };
+}
+
+// ---------------------------------------------------------------------------
+// Scoped grants and durable intent reservations (AC-9, AC-10, AC-11, AC-17).
+//
+// createSentinelAuthority returns an opaque, session-local capability. Only the
+// live native command handler calling activatePolicy can arm it; a fresh
+// authority is disarmed and no disk state reconstructs the capability. Every
+// decision re-reads and re-validates the policy source, grant, checkpoint scope
+// and expiry. Reservations are fixed per-workflow slots published durably before
+// any effect; unfinished, orphaned or malformed state fails closed and spent
+// capacity is never reclaimed. No product/model effect lives here.
+// ---------------------------------------------------------------------------
+
+const POLICY_MODES = new Set(['shadow', 'recover']);
+const POLICY_ACTIONS = new Set(['continue', 'cancel']);
+const INTENT_KINDS = new Set(['continue', 'cancel', 'diagnose']);
+const FINISH_STATES = new Set(['applied', 'blocked', 'failed', 'unknown']);
+const POLICY_BYTES = 16 * 1024;
+const AUTHORITY_MAX_EFFECTS = 2;
+const AUTHORITY_MAX_DIAGNOSTICS = 2;
+const SLOT_POOLS = { continue: 'effect', cancel: 'effect', diagnose: 'diagnostic' };
+const POOL_DIRECTORIES = { effect: 'effect-slots', diagnostic: 'diagnostic-slots' };
+const POLICY_KEYS = new Set(['version', 'package', 'workflow_id', 'checkout', 'coordinator_session', 'mode',
+  'actions', 'expires_at', 'max_effects', 'max_diagnostics', 'diagnosis', 'authority_reference']);
+const DIAGNOSIS_KEYS = new Set(['model']);
+const AUTHORITY_STATE = Symbol('sentinel-authority-state');
+
+// An opaque capability. The armed flag and policy live only in this private
+// symbol slot; nothing exported reconstructs it from disk.
+export function createSentinelAuthority() {
+  const state = { armed: false, policy: null, policyHash: null, sourcePath: null,
+    packagePath: null, workflowId: null, checkout: null, coordinatorSession: null,
+    provenance: null, grant: null, activatedAt: null, activationId: null, activationPath: null,
+    activationCommand: null, createdIntents: new Set() };
+  const authority = {};
+  Object.defineProperty(authority, AUTHORITY_STATE, { value: state, enumerable: false });
+  return Object.freeze(authority);
+}
+
+function authorityState(authority) {
+  const state = authority != null ? authority[AUTHORITY_STATE] : undefined;
+  if (!state) fail('a live sentinel authority capability is required', 'authority-invalid');
+  return state;
+}
+
+function readPolicyFile(policyPath) {
+  if (typeof policyPath !== 'string' || !isAbsolute(policyPath)) fail('policy path must be absolute', 'policy-invalid');
+  let info;
+  try { info = lstatSync(policyPath); } catch (error) { fail(`policy source is unreadable: ${policyPath} (${error?.code ?? 'error'})`, 'policy-unreadable'); }
+  // A symlink or any nonregular source is refused before opening so a swapped
+  // FIFO/socket/symlink is never followed.
+  if (!info.isFile()) fail('policy source must be a regular non-symlink file', 'policy-symlink');
+  let fd;
+  try {
+    fd = openSync(policyPath, 'r');
+    const opened = fstatSync(fd);
+    // The opened descriptor must be the exact same regular file that was lstat'd.
+    if (opened.dev !== info.dev || opened.ino !== info.ino) fail('policy source changed between check and open', 'policy-symlink');
+    if (!opened.isFile()) fail('policy source must be a regular non-symlink file', 'policy-symlink');
+    if (opened.size > POLICY_BYTES) fail(`policy source exceeds ${POLICY_BYTES} bytes`, 'policy-oversize');
+    const buffer = Buffer.alloc(POLICY_BYTES + 1);
+    let total = 0;
+    while (total < buffer.length) {
+      const bytes = readSync(fd, buffer, total, buffer.length - total, null);
+      if (bytes === 0) break;
+      total += bytes;
+    }
+    if (total > POLICY_BYTES) fail(`policy source exceeds ${POLICY_BYTES} bytes`, 'policy-oversize');
+    const bytes = buffer.subarray(0, total);
+    const text = bytes.toString('utf8');
+    let value;
+    try { value = JSON.parse(text); } catch { fail('policy source must be valid JSON', 'policy-invalid'); }
+    // Hash the exact bytes read from the descriptor, not a re-encoded string.
+    return { value, hash: createHash('sha256').update(bytes).digest('hex') };
+  } catch (error) {
+    if (error instanceof CheckpointError) throw error;
+    fail(`policy source is unreadable: ${policyPath} (${error?.code ?? 'error'})`, 'policy-unreadable');
+  } finally {
+    if (fd !== undefined) { try { closeSync(fd); } catch { /* best effort. */ } }
+  }
+}
+
+const EXACT_ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
+function parseExactIso(value, label) {
+  if (typeof value !== 'string' || !EXACT_ISO.test(value)) fail(`${label} must be an exact ISO 8601 UTC timestamp`, 'policy-invalid');
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) fail(`${label} must be an exact ISO timestamp`, 'policy-invalid');
+  return parsed;
+}
+
+const SELECTOR_SHAPE = /^[^\s/]+\/[^\s:]+(?::[^\s]+)?$/;
+function validateSelector(value, label) {
+  if (typeof value !== 'string' || !value) fail(`${label} is required`, 'policy-invalid');
+  if (/[\u0000-\u001f\u007f]/.test(value) || !SELECTOR_SHAPE.test(value)) fail(`${label} must be a provider/model[:thinking] selector with no whitespace or control characters`, 'policy-invalid');
+  return value;
+}
+
+// Exact SentinelPolicy schema and exact nested diagnosis schema, plus canonical
+// identity, expiry, caps and action/diagnosis agreement. Unknown keys/kinds are
+// rejected rather than ignored.
+function validatePolicy(value, { now } = {}) {
+  if (!isPlainObject(value)) fail('policy must be an object', 'policy-invalid');
+  for (const key of Object.keys(value)) if (!POLICY_KEYS.has(key)) fail(`policy has an unknown key: ${key}`, 'policy-invalid');
+  if (value.version !== 1) fail('policy.version must be 1', 'policy-invalid');
+  if (typeof value.package !== 'string' || !value.package) fail('policy.package is required', 'policy-invalid');
+  validateId(value.workflow_id, 'policy.workflow_id');
+  if (typeof value.checkout !== 'string' || !value.checkout) fail('policy.checkout is required', 'policy-invalid');
+  if (typeof value.coordinator_session !== 'string' || !value.coordinator_session) fail('policy.coordinator_session is required', 'policy-invalid');
+  if (!POLICY_MODES.has(value.mode)) fail(`policy.mode is unrecognized: ${value.mode}`, 'policy-invalid');
+  if (!Array.isArray(value.actions)) fail('policy.actions must be an array', 'policy-invalid');
+  const actions = [];
+  for (const action of value.actions) {
+    if (!POLICY_ACTIONS.has(action)) fail(`policy action is unrecognized: ${action}`, 'policy-invalid');
+    if (actions.includes(action)) fail(`policy action is duplicated: ${action}`, 'policy-invalid');
+    actions.push(action);
+  }
+  const nowMs = typeof now === 'function' ? now() : now;
+  const expiry = parseExactIso(value.expires_at, 'policy.expires_at');
+  if (expiry <= nowMs) fail('policy.expires_at must be in the future', 'policy-expired');
+  if (expiry > nowMs + 8 * 60 * 60 * 1000) fail('policy.expires_at must be no later than eight hours', 'policy-invalid');
+  if (!Number.isInteger(value.max_effects) || value.max_effects < 0 || value.max_effects > AUTHORITY_MAX_EFFECTS) fail('policy.max_effects must be an integer 0..2', 'policy-invalid');
+  if (!Number.isInteger(value.max_diagnostics) || value.max_diagnostics < 0 || value.max_diagnostics > AUTHORITY_MAX_DIAGNOSTICS) fail('policy.max_diagnostics must be an integer 0..2', 'policy-invalid');
+  if (typeof value.authority_reference !== 'string' || !value.authority_reference.trim()) fail('policy.authority_reference is required', 'policy-invalid');
+  let diagnosis = null;
+  if (value.diagnosis !== undefined) {
+    if (!isPlainObject(value.diagnosis)) fail('policy.diagnosis must be an object', 'policy-invalid');
+    for (const key of Object.keys(value.diagnosis)) if (!DIAGNOSIS_KEYS.has(key)) fail(`policy.diagnosis has an unknown key: ${key}`, 'policy-invalid');
+    validateSelector(value.diagnosis.model, 'policy.diagnosis.model');
+    if (value.max_diagnostics < 1) fail('a diagnosis configuration requires a nonzero diagnostic budget', 'policy-invalid');
+    diagnosis = { model: value.diagnosis.model };
+  }
+  if (actions.includes('cancel') && !diagnosis) fail('cancel permission requires a diagnosis configuration', 'policy-invalid');
+  return { ...value, actions, diagnosis };
+}
+
+// One private bounded regular-file descriptor JSON reader for sentinel state.
+// lstat + open + fstat identity/type, bounded read, close; a symlinked, replaced
+// or nonregular target fails closed instead of being followed.
+function readBoundedJsonFile(file, maxBytes = ARTIFACT_TOTAL_BYTES) {
+  let fd;
+  let info;
+  try { info = lstatSync(file); } catch { return null; }
+  if (!info.isFile()) return null;
+  try {
+    fd = openSync(file, 'r');
+    const opened = fstatSync(fd);
+    if (!opened.isFile() || opened.dev !== info.dev || opened.ino !== info.ino || opened.size > maxBytes) return null;
+    const buffer = Buffer.alloc(maxBytes + 1);
+    let total = 0;
+    while (total < buffer.length) {
+      const bytes = readSync(fd, buffer, total, buffer.length - total, null);
+      if (bytes === 0) break;
+      total += bytes;
+    }
+    if (total > maxBytes) return null;
+    const value = JSON.parse(buffer.toString('utf8', 0, total));
+    return isPlainObject(value) ? value : null;
+  } catch { return null; }
+  finally { if (fd !== undefined) { try { closeSync(fd); } catch { /* best effort. */ } } }
+}
+
+// Read a stored sentinel JSON record without following a symlinked ancestor.
+function readStateJson(packagePath, workflowId, components) {
+  const directory = validatedStateDirectory(packagePath, ['runtime', 'sentinel', workflowId, ...components.slice(0, -1)]);
+  if (!directory) return null;
+  return readBoundedJsonFile(join(directory, components[components.length - 1]));
+}
+
+// The immutable activation receipt referenced by the current grant.
+function readActivationReceipt(packagePath, workflowId, activationId) {
+  if (typeof activationId !== 'string' || !ID_SHAPE.test(activationId)) return null;
+  return readStateJson(packagePath, workflowId, ['authority', 'activations', `${activationId}.json`]);
+}
+
+// Arm the live capability only after provenance and current grant are durable.
+// The authority is the only arming path; disk files never arm it.
+export function activatePolicy(authority, {
+  policy_path: policyPath,
+  coordinator_session: coordinatorSession,
+  command,
+  now = Date.now,
+} = {}) {
+  const state = authorityState(authority);
+  if (typeof coordinatorSession !== 'string' || !coordinatorSession) fail('coordinator_session is required', 'authority-invalid');
+  // Package/workflow/checkout come only from the validated policy file, then the
+  // retained checkpoint must match them; caller-supplied scope is never trusted.
+  const { value, hash: sourceHash } = readPolicyFile(policyPath);
+  const policy = validatePolicy(value, { now });
+  const canonical = canonicalPackage(policy.package);
+  const packagePath = canonical.packagePath;
+  const workflowId = policy.workflow_id;
+  if (policy.coordinator_session !== coordinatorSession) fail('policy.coordinator_session does not match the native coordinator session', 'policy-scope');
+  const boundCheckout = resolve(policy.checkout);
+  const checkpoint = readCheckpointRecord(packagePath, workflowId);
+  if (!checkpoint) fail(`workflow ${workflowId} has no retained checkpoint`, 'policy-scope');
+  if (checkpoint.package !== packagePath || checkpoint.workflow_id !== workflowId) fail('policy scope does not match the retained checkpoint', 'policy-scope');
+  if (checkpoint.coordinator_session !== coordinatorSession) fail('native coordinator session does not match the retained checkpoint', 'policy-scope');
+  if (checkpoint.checkout == null || resolve(checkpoint.checkout) !== boundCheckout) fail('policy.checkout does not match the retained checkpoint', 'policy-scope');
+  // A re-activation on an already-armed capability may only narrow it: action
+  // subset, no cap/expiry/mode expansion; it can never extend the live grant.
+  if (state.armed) {
+    if (state.packagePath !== packagePath || state.workflowId !== workflowId
+      || state.checkout !== boundCheckout || state.coordinatorSession !== coordinatorSession) {
+      fail('a re-activation must keep the live authority scope', 'policy-scope');
+    }
+    const live = state.policy;
+    for (const action of policy.actions) if (!live.actions.includes(action)) fail(`a re-activation cannot add action ${action}`, 'policy-narrow');
+    if (policy.max_effects > live.max_effects) fail('a re-activation cannot raise the effect cap', 'policy-narrow');
+    if (policy.max_diagnostics > live.max_diagnostics) fail('a re-activation cannot raise the diagnostic cap', 'policy-narrow');
+    if (parseExactIso(policy.expires_at, 'policy.expires_at') > parseExactIso(live.expires_at, 'policy.expires_at')) fail('a re-activation cannot extend expiry', 'policy-narrow');
+    if (live.mode === 'shadow' && policy.mode === 'recover') fail('a re-activation cannot expand shadow observation into recover', 'policy-narrow');
+  }
+  const activatedAt = new Date(typeof now === 'function' ? now() : now).toISOString();
+  const directory = ensureStateDirectory(packagePath, ['runtime', 'sentinel', workflowId, 'authority'], 'sentinel authority directory');
+  const activationDirectory = ensureStateDirectory(packagePath, ['runtime', 'sentinel', workflowId, 'authority', 'activations'], 'sentinel activation directory');
+  const activationId = randomUUID();
+  const activation = { version: 1, activation_id: activationId, workflow_id: workflowId, package: packagePath,
+    coordinator_session: coordinatorSession, checkout: boundCheckout, source_path: policyPath, source_hash: sourceHash,
+    command: typeof command === 'string' ? command : '', mode: policy.mode, actions: policy.actions,
+    max_effects: policy.max_effects, max_diagnostics: policy.max_diagnostics, diagnosis: policy.diagnosis,
+    expires_at: policy.expires_at, authority_reference: policy.authority_reference, activated_at: activatedAt };
+  // Immutable provenance receipt per activation, referenced by the current grant.
+  publishDurable(join(activationDirectory, `${activationId}.json`), activation, { exclusive: true, directory: activationDirectory, requireParentFsync: true });
+  const grant = { ...activation, revoked: false, activation_path: `activations/${activationId}.json` };
+  publishDurable(join(directory, 'grant.json'), grant, { directory, requireParentFsync: true });
+  // Arm only now that durable provenance and grant exist.
+  state.armed = true;
+  state.policy = policy;
+  state.policyHash = sourceHash;
+  state.sourcePath = policyPath;
+  state.packagePath = packagePath;
+  state.workflowId = workflowId;
+  state.checkout = boundCheckout;
+  state.coordinatorSession = coordinatorSession;
+  state.provenance = activation;
+  state.grant = grant;
+  state.activatedAt = activatedAt;
+  state.activationId = activationId;
+  state.activationPath = grant.activation_path;
+  state.activationCommand = activation.command;
+  return { armed: true, activation_id: activationId, mode: policy.mode, actions: policy.actions,
+    max_effects: policy.max_effects, max_diagnostics: policy.max_diagnostics, diagnosis: policy.diagnosis,
+    expires_at: policy.expires_at, authority_reference: policy.authority_reference, source_hash: sourceHash,
+    package: packagePath, workflow_id: workflowId, checkout: boundCheckout, coordinator_session: coordinatorSession };
+}
+
+// Revoke live authority synchronously and only then attempt storage. A storage
+// failure is surfaced while the capability remains disarmed.
+export function disablePolicy(authority, { now = Date.now, reason = 'disabled' } = {}) {
+  const state = authorityState(authority);
+  const previous = { armed: state.armed, packagePath: state.packagePath, workflowId: state.workflowId, coordinatorSession: state.coordinatorSession };
+  state.armed = false;
+  state.policy = null;
+  state.policyHash = null;
+  state.sourcePath = null;
+  state.packagePath = null;
+  state.workflowId = null;
+  state.checkout = null;
+  state.coordinatorSession = null;
+  state.provenance = null;
+  state.grant = null;
+  state.activationId = null;
+  state.activationPath = null;
+  state.activationCommand = null;
+  if (!previous.armed || !previous.packagePath || !previous.workflowId) return { armed: false, revoked: true, persisted: true, was_armed: previous.armed };
+  try {
+    const directory = ensureStateDirectory(previous.packagePath, ['runtime', 'sentinel', previous.workflowId, 'authority'], 'sentinel authority directory');
+    const grant = readStateJson(previous.packagePath, previous.workflowId, ['authority', 'grant.json'])
+      ?? { version: 1, workflow_id: previous.workflowId, package: previous.packagePath, coordinator_session: previous.coordinatorSession };
+    publishDurable(join(directory, 'grant.json'), { ...grant, revoked: true,
+      revoked_at: new Date(typeof now === 'function' ? now() : now).toISOString(), reason: String(reason) }, { directory, requireParentFsync: true });
+    return { armed: false, revoked: true, persisted: true, was_armed: previous.armed };
+  } catch (error) {
+    return { armed: false, revoked: true, persisted: false, was_armed: previous.armed, error: error?.message ?? String(error) };
+  }
+}
+
+// Re-read and re-validate the source/hash, current grant, checkpoint scope and
+// expiry. It may only narrow the armed grant or block; it never extends it.
+export function readPolicyGuard(authority, { workflow_id: workflowId, now = Date.now } = {}) {
+  const state = authorityState(authority);
+  if (!state.armed) return { armed: false, state: 'disarmed', blocking: false, allowed: [], reasons: [] };
+  try {
+    const scoped = workflowId ?? state.workflowId;
+    if (!scoped || scoped !== state.workflowId) fail('workflow_id does not match the live authority', 'policy-scope');
+    const { value, hash: sourceHash } = readPolicyFile(state.sourcePath);
+    if (sourceHash !== state.policyHash) fail('policy source hash changed since activation', 'policy-scope');
+    const policy = validatePolicy(value, { now });
+    if (canonicalPackage(policy.package).packagePath !== state.packagePath) fail('policy source package changed', 'policy-scope');
+    if (policy.workflow_id !== state.workflowId) fail('policy source workflow changed', 'policy-scope');
+    if (resolve(policy.checkout) !== state.checkout) fail('policy source checkout changed', 'policy-scope');
+    if (policy.coordinator_session !== state.coordinatorSession) fail('policy source session changed', 'policy-scope');
+    const grant = readStateJson(state.packagePath, state.workflowId, ['authority', 'grant.json']);
+    if (!grant) fail('policy grant receipt is missing', 'policy-revoked');
+    if (grant.revoked) fail('policy grant is revoked', 'policy-revoked');
+    // Every reread grant field must match the live capability and the source, so
+    // tampering blocks rather than being ignored.
+    const grantChecks = [['version', 1], ['package', state.packagePath], ['workflow_id', state.workflowId],
+      ['checkout', state.checkout], ['coordinator_session', state.coordinatorSession], ['source_hash', sourceHash],
+      ['source_path', state.sourcePath], ['mode', state.policy.mode], ['max_effects', state.policy.max_effects],
+      ['max_diagnostics', state.policy.max_diagnostics], ['expires_at', state.policy.expires_at],
+      ['authority_reference', state.policy.authority_reference], ['activation_id', state.activationId],
+      ['activation_path', state.activationPath], ['command', state.activationCommand], ['activated_at', state.activatedAt]];
+    for (const [field, expected] of grantChecks) if (grant[field] !== expected) fail(`policy grant ${field} no longer matches the live authority`, 'policy-scope');
+    if (JSON.stringify(grant.actions) !== JSON.stringify(state.policy.actions)) fail('policy grant actions no longer match the live authority', 'policy-scope');
+    if (JSON.stringify(grant.diagnosis ?? null) !== JSON.stringify(state.policy.diagnosis ?? null)) fail('policy grant diagnosis no longer matches the live authority', 'policy-scope');
+    // The immutable activation receipt referenced by the grant must exist and agree.
+    const activation = typeof grant.activation_id === 'string' ? readActivationReceipt(state.packagePath, state.workflowId, grant.activation_id) : null;
+    if (!activation) fail('policy activation receipt is missing', 'policy-scope');
+    const activationChecks = [['version', 1], ['activation_id', grant.activation_id], ['package', state.packagePath],
+      ['workflow_id', state.workflowId], ['checkout', state.checkout], ['coordinator_session', state.coordinatorSession],
+      ['source_hash', sourceHash], ['source_path', state.sourcePath], ['mode', state.policy.mode],
+      ['max_effects', state.policy.max_effects], ['max_diagnostics', state.policy.max_diagnostics],
+      ['expires_at', state.policy.expires_at], ['authority_reference', state.policy.authority_reference],
+      ['command', state.activationCommand], ['activated_at', state.activatedAt]];
+    for (const [field, expected] of activationChecks) if (activation[field] !== expected) fail(`policy activation ${field} no longer matches the live authority`, 'policy-scope');
+    if (JSON.stringify(activation.actions) !== JSON.stringify(state.policy.actions)) fail('policy activation actions no longer match the live authority', 'policy-scope');
+    if (JSON.stringify(activation.diagnosis ?? null) !== JSON.stringify(state.policy.diagnosis ?? null)) fail('policy activation diagnosis no longer matches the live authority', 'policy-scope');
+    const checkpoint = readCheckpointRecord(state.packagePath, state.workflowId);
+    if (!checkpoint || checkpoint.package !== state.packagePath || checkpoint.workflow_id !== state.workflowId
+      || checkpoint.coordinator_session !== state.coordinatorSession
+      || checkpoint.checkout == null || resolve(checkpoint.checkout) !== state.checkout) {
+      fail('retained checkpoint scope no longer matches the live authority', 'policy-scope');
+    }
+    return { armed: true, state: 'ready', blocking: false, mode: state.policy.mode,
+      allowed: policy.actions.filter(action => state.policy.actions.includes(action)),
+      max_effects: Math.min(policy.max_effects, state.policy.max_effects),
+      max_diagnostics: Math.min(policy.max_diagnostics, state.policy.max_diagnostics),
+      diagnosis: state.policy.diagnosis, expires_at: policy.expires_at, policy_hash: sourceHash, reasons: [] };
+  } catch (error) {
+    return { armed: true, state: 'blocked', blocking: true, allowed: [],
+      reasons: [error?.message ?? String(error)], code: error?.code ?? 'policy-invalid' };
+  }
+}
+
+const INTENT_STATES = new Set(['accepted', 'requested', 'applied', 'blocked', 'failed', 'unknown']);
+const INTENT_KEYS = new Set(['version', 'id', 'workflow_id', 'package', 'coordinator_session', 'kind', 'subject_key',
+  'source_revision', 'policy_hash', 'reserved_at', 'state', 'reason_code', 'result_reference']);
+function readIntentRecord(packagePath, workflowId, intentId) {
+  const directory = validatedStateDirectory(packagePath, ['runtime', 'sentinel', workflowId, 'intents']);
+  if (!directory) return null;
+  const value = readBoundedJsonFile(join(directory, `${intentId}.json`));
+  if (!value || value.version !== 1 || value.workflow_id !== workflowId || value.id !== intentId) return null;
+  // Exact fixed Intent keys only; implementation-only fields make the record malformed.
+  for (const key of Object.keys(value)) if (!INTENT_KEYS.has(key)) return null;
+  for (const key of INTENT_KEYS) if (key !== 'result_reference' && !(key in value)) return null;
+  if (!INTENT_KINDS.has(value.kind) || !INTENT_STATES.has(value.state)) return null;
+  if (typeof value.subject_key !== 'string' || typeof value.source_revision !== 'string'
+    || typeof value.policy_hash !== 'string' || typeof value.reserved_at !== 'string'
+    || typeof value.reason_code !== 'string' || typeof value.coordinator_session !== 'string') return null;
+  return value;
+}
+
+// Conservative reservation read: malformed/orphan slots, unreadable intents and
+// retained accepted/requested intents not created by the live authority all
+// block and stay spent. Never reclaims capacity.
+const INTENT_ENUM_MAX = 64;
+// Bounded intent-directory enumeration: completeness is never proven past the cap.
+function readIntentsBounded(directory) {
+  const names = [];
+  let handle;
+  try { handle = opendirSync(directory); } catch { return { names, truncated: true }; }
+  try {
+    while (names.length < INTENT_ENUM_MAX) {
+      const entry = handle.readSync();
+      if (!entry) break;
+      names.push(entry.name);
+    }
+    return { names, truncated: names.length >= INTENT_ENUM_MAX && handle.readSync() !== null };
+  } catch { return { names, truncated: true }; }
+  finally { try { handle.closeSync(); } catch { /* best effort. */ } }
+}
+
+// Conservative reservation read: malformed/orphan slots, unreadable intents,
+// cross-link disagreement and retained accepted/requested intents not created by
+// the live authority all block and stay spent. Never reclaims capacity.
+function readReservationState(packagePath, workflowId, liveIntentIds) {
+  const result = { blocking: false, reasons: [], spent: { effect: 0, diagnostic: 0 }, slotted: new Set(), intentSlots: new Map(), lastDiagnosticAt: null };
+  const push = reason => { if (!result.reasons.includes(reason)) result.reasons.push(reason); };
+  const intentsDirectory = validatedStateDirectory(packagePath, ['runtime', 'sentinel', workflowId, 'intents']);
+  if (intentsDirectory) {
+    const { names, truncated } = readIntentsBounded(intentsDirectory);
+    if (truncated) { result.blocking = true; push('intent-enumeration-cap'); }
+    for (const name of names) {
+      if (!name.endsWith('.json')) continue;
+      const id = name.slice(0, -5);
+      const intent = readIntentRecord(packagePath, workflowId, id);
+      if (!intent) { result.blocking = true; push(`intent-malformed:${id}`); continue; }
+      const pool = SLOT_POOLS[intent.kind];
+      if (!pool) { result.blocking = true; push(`intent-unrecognized:${id}`); continue; }
+      result.spent[pool] += 1;
+      if (pool === 'diagnostic') {
+        const at = Date.parse(intent.reserved_at);
+        if (Number.isFinite(at) && (result.lastDiagnosticAt == null || at > result.lastDiagnosticAt)) result.lastDiagnosticAt = at;
+      }
+      if ((intent.state === 'accepted' || intent.state === 'requested') && !liveIntentIds.has(intent.id)) {
+        result.blocking = true; push(`intent-unreconciled:${intent.id}`);
+      }
+    }
+  }
+  for (const pool of ['effect', 'diagnostic']) {
+    const directory = validatedStateDirectory(packagePath, ['runtime', 'sentinel', workflowId, POOL_DIRECTORIES[pool]]);
+    if (!directory) continue;
+    for (const slot of ['0', '1']) {
+      const slotFile = join(directory, `${slot}.json`);
+      try { lstatSync(slotFile); } catch (error) { if (error?.code === 'ENOENT') continue; }
+      // Bounded descriptor read; a symlinked/replaced/nonregular slot fails closed.
+      const record = readBoundedJsonFile(slotFile);
+      if (!record) { result.blocking = true; push(`slot-malformed:${POOL_DIRECTORIES[pool]}/${slot}`); continue; }
+      // Bounded schema plus pool/directory/index/kind agreement.
+      if (!isPlainObject(record) || record.version !== 1 || record.workflow_id !== workflowId
+        || record.pool !== pool || record.slot !== Number(slot) || typeof record.intent_id !== 'string'
+        || SLOT_POOLS[record.kind] !== pool) {
+        result.blocking = true; push(`slot-malformed:${POOL_DIRECTORIES[pool]}/${slot}`); continue;
+      }
+      const intent = readIntentRecord(packagePath, workflowId, record.intent_id);
+      if (!intent) { result.blocking = true; push(`intent-missing:${record.intent_id}`); continue; }
+      // The slot record validates pool/directory/index/kind; the linked intent
+      // must agree on kind and pool (the fixed Intent has no slot field).
+      if (intent.kind !== record.kind || SLOT_POOLS[intent.kind] !== pool) {
+        result.blocking = true; push(`slot-crosslink:${POOL_DIRECTORIES[pool]}/${slot}`); continue;
+      }
+      result.slotted.add(record.intent_id);
+      result.intentSlots.set(record.intent_id, Number(slot));
+    }
+  }
+  return result;
+}
+
+// A subject generation is workflow+kind+subject_key. source_revision is recorded
+// on the intent but cannot replenish the subject's single reservation.
+const intentId = (workflowId, kind, subjectKey) => createHash('sha256')
+  .update(`${workflowId}\u0000${kind}\u0000${subjectKey}`).digest('hex').slice(0, 32);
+
+// Reserve one durable slot + immutable intent before any effect. Permission is
+// enforced from the re-read guard; a subject generation reserves once. The first
+// publication returns `accepted:true`; a complete duplicate returns
+// `duplicate:true` with `accepted:false` so callers never repeat an effect;
+// retained unfinished state from a previous authority blocks as unknown.
+export function reserveIntent(authority, {
+  workflow_id: workflowId,
+  kind,
+  subject_key: subjectKey,
+  source_revision: sourceRevision,
+  now = Date.now,
+} = {}) {
+  const state = authorityState(authority);
+  const guard = readPolicyGuard(authority, { workflow_id: workflowId, now });
+  if (!guard.armed || guard.blocking) return { accepted: false, state: guard.armed ? 'blocked' : 'disarmed', blocking: true, reasons: guard.reasons ?? ['no live authority'], guard };
+  if (workflowId != null && workflowId !== state.workflowId) fail('workflow_id does not match the live authority', 'policy-scope');
+  if (!INTENT_KINDS.has(kind)) fail(`intent kind is unrecognized: ${kind}`, 'intent-invalid');
+  if (typeof subjectKey !== 'string' || !subjectKey || subjectKey.length > KEY_MAX) fail(`intent subject_key must be 1-${KEY_MAX} characters`, 'intent-invalid');
+  if (typeof sourceRevision !== 'string' || !sourceRevision || sourceRevision.length > KEY_MAX) fail(`intent source_revision must be 1-${KEY_MAX} characters`, 'intent-invalid');
+  const pool = SLOT_POOLS[kind];
+  // Permission comes from the guarded policy, never from the caller's kind alone.
+  if (pool === 'effect' && !guard.allowed.includes(kind)) return { accepted: false, state: 'denied', blocking: true, reasons: [`action ${kind} is not permitted by the guarded policy`] };
+  if (kind === 'diagnose' && !guard.diagnosis) return { accepted: false, state: 'denied', blocking: true, reasons: ['diagnosis is not permitted by the guarded policy'] };
+  const nowMs = typeof now === 'function' ? now() : now;
+  const id = intentId(state.workflowId, kind, subjectKey);
+  const reservation = readReservationState(state.packagePath, state.workflowId, state.createdIntents);
+  const existing = readIntentRecord(state.packagePath, state.workflowId, id);
+  if (existing) {
+    if (reservation.slotted.has(id) && !reservation.blocking) {
+      // A complete duplicate never repeats the effect: terminal intents stay
+      // idempotent across restart; unfinished live ones return the retained
+      // receipt, while an unfinished intent from another authority blocks.
+      if ((existing.state === 'accepted' || existing.state === 'requested') && !state.createdIntents.has(id)) {
+        return { accepted: false, state: 'unknown', blocking: true, intent: existing, reasons: [`intent ${id} is retained unfinished from a previous authority`] };
+      }
+      return { accepted: false, duplicate: true, state: existing.state, intent: existing, slot: reservation.intentSlots.get(id) ?? null };
+    }
+    if (!state.createdIntents.has(id) && (existing.state === 'accepted' || existing.state === 'requested')) {
+      return { accepted: false, state: 'unknown', blocking: true, intent: existing, reasons: [`intent ${id} is retained unfinished from a previous authority`] };
+    }
+    return { accepted: false, state: 'blocked', blocking: true, intent: existing, reasons: [`intent ${id} is retained without a complete durable slot`] };
+  }
+  if (reservation.blocking) return { accepted: false, state: 'blocked', blocking: true, reasons: reservation.reasons };
+  // One diagnostic generation at a time: a 5-minute cooldown across generations.
+  if (kind === 'diagnose' && reservation.lastDiagnosticAt != null && (nowMs - reservation.lastDiagnosticAt) < 5 * 60 * 1000) {
+    return { accepted: false, state: 'cooldown', blocking: true, reasons: ['diagnostic cooldown is active'] };
+  }
+  const ceiling = pool === 'effect' ? AUTHORITY_MAX_EFFECTS : AUTHORITY_MAX_DIAGNOSTICS;
+  const cap = Math.max(0, Math.min(guard[pool === 'effect' ? 'max_effects' : 'max_diagnostics'], ceiling));
+  if (reservation.spent[pool] >= cap) return { accepted: false, state: 'exhausted', blocking: true, reasons: [`${pool} budget exhausted (${reservation.spent[pool]}/${cap})`] };
+  const slotDirectory = ensureStateDirectory(state.packagePath, ['runtime', 'sentinel', state.workflowId, POOL_DIRECTORIES[pool]], 'sentinel slot directory');
+  let slot = null;
+  for (const index of [0, 1]) { if (!existsSync(join(slotDirectory, `${index}.json`))) { slot = index; break; } }
+  if (slot === null) return { accepted: false, state: 'exhausted', blocking: true, reasons: [`${pool} slots are occupied`] };
+  const reservedAt = new Date(nowMs).toISOString();
+  const intent = { version: 1, id, workflow_id: state.workflowId, package: state.packagePath,
+    coordinator_session: state.coordinatorSession, kind, subject_key: subjectKey, source_revision: sourceRevision,
+    policy_hash: state.policyHash, reserved_at: reservedAt, state: 'accepted', reason_code: 'reserved' };
+  const intentsDirectory = ensureStateDirectory(state.packagePath, ['runtime', 'sentinel', state.workflowId, 'intents'], 'sentinel intent directory');
+  // Slot first: after a crash an orphan slot stays spent and blocking. Then the
+  // immutable intent; only this first publication returns accepted.
+  const slotRecord = { version: 1, workflow_id: state.workflowId, pool, slot, intent_id: id, kind, reserved_at: reservedAt };
+  try {
+    publishDurable(join(slotDirectory, `${slot}.json`), slotRecord, { exclusive: true, directory: slotDirectory, requireParentFsync: true });
+  } catch (error) {
+    return { accepted: false, state: 'blocked', blocking: true, reasons: [error?.message ?? String(error)] };
+  }
+  try {
+    publishDurable(join(intentsDirectory, `${id}.json`), intent, { exclusive: true, directory: intentsDirectory, requireParentFsync: true });
+  } catch (error) {
+    // The slot is retained without an intent: it stays spent and blocking.
+    return { accepted: false, state: 'blocked', blocking: true, reasons: [error?.message ?? String(error)] };
+  }
+  state.createdIntents.add(id);
+  return { accepted: true, duplicate: false, intent, slot };
+}
+
+// Replace only the live authority's own validated intent with a terminal state.
+// Slots are never reclaimed and no other intent is touched.
+export function finishIntent(authority, {
+  workflow_id: workflowId,
+  intent_id: requestedIntentId,
+  state: finishState,
+  reason_code: reasonCode,
+  result_reference: resultReference,
+  now = Date.now,
+} = {}) {
+  const state = authorityState(authority);
+  if (!state.armed) fail('a live armed sentinel authority is required to finish an intent', 'authority-invalid');
+  if (workflowId != null && workflowId !== state.workflowId) fail('workflow_id does not match the live authority', 'policy-scope');
+  validateId(requestedIntentId, 'intent_id');
+  if (finishState !== 'requested' && !FINISH_STATES.has(finishState)) fail(`finish state is unrecognized: ${finishState}`, 'intent-invalid');
+  if (typeof reasonCode !== 'string' || !reasonCode.trim()) fail('a terminal update requires a nonempty reason_code', 'intent-invalid');
+  if (!state.createdIntents.has(requestedIntentId)) fail(`intent ${requestedIntentId} is not owned by the live authority`, 'intent-owner');
+  const existing = readIntentRecord(state.packagePath, state.workflowId, requestedIntentId);
+  if (!existing) fail(`intent ${requestedIntentId} is missing`, 'intent-missing');
+  if (existing.coordinator_session !== state.coordinatorSession) fail('intent is bound to another session', 'intent-owner');
+  // A terminal update requires the matching durable slot link by ID/kind/workflow.
+  const reservation = readReservationState(state.packagePath, state.workflowId, state.createdIntents);
+  if (!reservation.intentSlots.has(requestedIntentId)) fail(`intent ${requestedIntentId} has no matching durable slot`, 'intent-missing');
+  // Lifecycle: accepted -> requested|terminal, requested -> terminal; an exact
+  // same-state replay is idempotent and any conflicting/backward rewrite refuses.
+  const allowed = existing.state === 'accepted'
+    ? (finishState === 'requested' || FINISH_STATES.has(finishState))
+    : (existing.state === 'requested' && FINISH_STATES.has(finishState));
+  if (!allowed) {
+    if (existing.state === finishState && (existing.reason_code ?? '') === reasonCode
+      && (existing.result_reference ?? undefined) === (resultReference ?? undefined)) return existing;
+    fail(`intent ${requestedIntentId} cannot transition ${existing.state} -> ${finishState}; refusing a conflicting or backward rewrite`, 'intent-owner');
+  }
+  const updated = { ...existing, state: finishState, reason_code: String(reasonCode),
+    ...(resultReference === undefined ? {} : { result_reference: String(resultReference) }) };
+  const directory = ensureStateDirectory(state.packagePath, ['runtime', 'sentinel', state.workflowId, 'intents'], 'sentinel intent directory');
+  publishDurable(join(directory, `${requestedIntentId}.json`), updated, { directory, requireParentFsync: true });
+  return updated;
 }

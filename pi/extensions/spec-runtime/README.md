@@ -253,6 +253,51 @@ missing, oversized or replaced sources stay unknown or stale, never healthy. No
 model call, transcript read or recovery authority is introduced here: completion,
 exit and silence remain non-acceptance facts.
 
+## Scoped authority (enable/disable)
+
+`/spec-sentinel enable /absolute/policy.json` arms a live, session-local capability
+for the coordinator session; `/spec-sentinel disable` revokes it and `/spec-sentinel
+off` revokes it before hiding observation. Only this native command can arm it: a
+fresh session, reload, checkpoint, model output or copied/forged file never arms it.
+The policy file must be an absolute regular non-symlink JSON file of at most 16 KiB
+with exactly this schema:
+
+```json
+{
+  "version": 1,
+  "package": "/repo/.specs/feature",
+  "workflow_id": "wf-example",
+  "checkout": "/worktrees/feature",
+  "coordinator_session": "<native SDK session identity>",
+  "mode": "shadow",
+  "actions": ["continue"],
+  "expires_at": "2026-01-01T00:00:00.000Z",
+  "max_effects": 1,
+  "max_diagnostics": 1,
+  "diagnosis": { "model": "provider/model:thinking" },
+  "authority_reference": "user:enable"
+}
+```
+
+The package, workflow, checkout and native session must match the retained checkpoint.
+`expires_at` must be a future exact ISO-8601 UTC timestamp no later than eight hours.
+`max_effects` and `max_diagnostics` are integers 0..2; `actions` holds unique
+`continue`/`cancel`; `cancel` requires a diagnosis selector and a diagnosis selector
+requires a nonzero diagnostic budget. `diagnose` is reported only when configured.
+
+Budgets are finite and retained per workflow: two effect slots (continue/cancel share
+them) and two diagnostic slots, at most one continuation per obligation revision and
+one cancellation per incident generation, plus at most one diagnosis per incident
+generation with a five-minute cooldown. Re-enabling never resets consumed capacity. A
+duplicate same-kind/subject reservation returns its retained receipt without repeating
+the effect. Reservations are published durably (slot first, then an immutable intent)
+before any effect; an orphan/malformed/corrupt record or an unfinished intent from a
+previous authority stays spent and blocks as unknown. `/spec-sentinel disable` revokes
+the live capability synchronously and reports a persistence failure while remaining
+disarmed; `/spec-sentinel off` revokes first and then hides observation, reporting both
+facts. Step 5 performs no continuation, cancellation, diagnosis or model effect; any
+actual effect belongs to later steps under this guarded authority.
+
 ## Workflow metrics
 
 `/spec-metrics /absolute/canonical/package` displays a read-only aggregate from native

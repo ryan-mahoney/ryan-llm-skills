@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync, realpathSync, statSync, renameSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync, realpathSync, statSync, renameSync, unlinkSync, symlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { createSentinelObserver, SENTINEL_COALESCE_MS, SENTINEL_RECONCILE_MS, SENTINEL_WIDGET_KEY, readCheckpointRecord } from './sentinel.mjs';
+import { createSentinelObserver, SENTINEL_COALESCE_MS, SENTINEL_RECONCILE_MS, SENTINEL_WIDGET_KEY, readCheckpointRecord, recordCheckpoint } from './sentinel.mjs';
 import { canonicalPackage } from './runtime.mjs';
 import { enrollmentDirectory, workspaceKey } from '../../../scripts/spec-observe/sentinel.mjs';
 
@@ -209,13 +209,14 @@ async function loadExtension(t, { dir, role, recordFile } = {}) {
   await loader.reload();
   assert.deepEqual(loader.getExtensions().errors, []);
   const errors = [];
+  const sessionManager = SessionManager.inMemory(dir);
   const { session } = await createAgentSession({
     cwd: dir,
     agentDir: dir,
     modelRuntime,
     settingsManager,
     resourceLoader: loader,
-    sessionManager: SessionManager.inMemory(dir),
+    sessionManager,
     tools: [],
   });
   await session.bindExtensions({ uiContext: captured.ui, mode: 'rpc', onError: error => errors.push(error) });
@@ -227,7 +228,7 @@ async function loadExtension(t, { dir, role, recordFile } = {}) {
     try { await session.prompt('/spec-sentinel off'); } catch { /* Observer may already be absent. */ }
     session.dispose();
   });
-  return { session, loader, captured, requests, errors, modelRuntime, settingsManager };
+  return { session, sessionManager, loader, captured, requests, errors, modelRuntime, settingsManager };
 }
 
 function cli(args, cwd) {
@@ -796,4 +797,71 @@ test('sentinel checkpoint: a missing native session identity is refused without 
   assert.equal(refused.isError, true);
   assert.match(refused.details.error, /session identity is unavailable/);
   assert.equal(existsSync(join(packagePath, 'runtime')), false);
+});
+
+test('sentinel policy: the native SDK command arms only the live session and a copied grant cannot', { skip: sdkSkip, timeout: 15000 }, async t => {
+  const dir = sandbox(t);
+  const { repo } = primary(dir, 'authority-repo');
+  commit(repo);
+  const packagePath = pack(repo);
+  const canonical = canonicalPackage(packagePath);
+  const run = await loadExtension(t, { dir });
+  const manager = run.sessionManager;
+  // The native SDK session manager is the only identity source the command uses.
+  const sessionFile = typeof manager.getSessionFile === 'function' ? manager.getSessionFile() : undefined;
+  const sessionId = typeof manager.getSessionId === 'function' ? manager.getSessionId() : undefined;
+  const identity = typeof sessionFile === 'string' && sessionFile ? sessionFile
+    : (typeof sessionId === 'string' && sessionId ? sessionId : null);
+  assert.ok(identity, 'the native SDK session exposes a nonempty identity');
+  const checkout = join(dir, 'authority-checkout');
+  mkdirSync(checkout, { recursive: true });
+  recordCheckpoint({ package: canonical.packagePath, workflow_id: 'wf-auth', expected_revision: 0, state: 'ready',
+    obligation: { key: 'impl:step-005', stage: 'implementation', summary: 'work', artifacts: [] },
+    workers: [], inbox: { items: [] }, reconciles_input_revision: 0, coordinator_session: identity, checkout });
+  const policyPath = join(dir, 'authority-policy.json');
+  writeFileSync(policyPath, JSON.stringify({ version: 1, package: canonical.packagePath, workflow_id: 'wf-auth',
+    checkout, coordinator_session: identity, mode: 'recover', actions: ['continue'],
+    expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    max_effects: 1, max_diagnostics: 1, diagnosis: { model: 'test/diag' }, authority_reference: 'user:enable' }));
+
+  await run.session.prompt(`/spec-sentinel enable ${policyPath}`);
+  const armed = lastNote(run.captured);
+  assert.equal(armed.type, 'info');
+  assert.match(armed.message, /Sentinel authority armed/);
+  assert.ok(armed.message.includes(canonical.packagePath));
+  assert.ok(armed.message.includes('wf-auth'));
+  assert.ok(armed.message.includes(identity));
+  assert.match(armed.message, /mode: recover/);
+  assert.match(armed.message, /kinds: continue, diagnose/);
+  assert.match(armed.message, /caps: effects 1, diagnostics 1/);
+  assert.match(armed.message, /authority: user:enable/);
+  assert.match(armed.message, /source: [a-f0-9]{64}/);
+
+  const authorityDir = join(packagePath, 'runtime', 'sentinel', 'wf-auth', 'authority');
+  assert.ok(existsSync(join(authorityDir, 'grant.json')));
+  assert.equal(readdirSync(join(authorityDir, 'activations')).length, 1);
+
+  // Command-level disable persistence failure via a nonregular grant destination.
+  const grantFile = join(authorityDir, 'grant.json');
+  const grantBytes = readFileSync(grantFile, 'utf8');
+  unlinkSync(grantFile);
+  symlinkSync(join(dir, 'outside-authority-grant.json'), grantFile);
+  await run.session.prompt('/spec-sentinel disable');
+  const failed = lastNote(run.captured);
+  assert.equal(failed.type, 'warning');
+  assert.match(failed.message, /revocation persistence failed/);
+  await run.session.prompt('/spec-sentinel status');
+  assert.equal(lastNote(run.captured).type, 'info');
+  unlinkSync(grantFile);
+  writeFileSync(grantFile, grantBytes);
+
+  // A fresh coordinator session must not reconstruct the capability from disk.
+  const fresh = await loadExtension(t, { dir });
+  await fresh.session.prompt('/spec-sentinel disable');
+  assert.equal(lastNote(fresh.captured).type, 'info');
+  assert.match(lastNote(fresh.captured).message, /No live sentinel authority was armed/);
+  await fresh.session.prompt('/spec-sentinel status');
+  assert.equal(lastNote(fresh.captured).type, 'info');
+  assert.equal(fresh.requests.length, 0);
+  assert.equal(run.requests.length, 0);
 });

@@ -1,7 +1,7 @@
 ---
 name: spec-sentinel
 description: "Read-only workspace status for spec runs across enrolled repositories: bounded receipts, activity, coverage and factual conditions. Use for 'workspace status', 'sentinel status', 'enrolled repositories', or 'is any spec run stuck'. Observation only; it never starts, stops, changes or messages a worker."
-argument-hint: "[status | add /absolute/primary | inspect ID | off]"
+argument-hint: "[status | add /absolute/primary | inspect ID | enable /absolute/policy.json | disable | off]"
 disable-model-invocation: false
 license: MIT
 metadata:
@@ -25,8 +25,14 @@ no transcript, metrics, model call, raw command, lease token or cost is read.
   ability to start, stop, change or message a worker.
 - `/spec-sentinel inspect ID` — show one observed run or condition, matched by
   assignment id, workflow id, package path, package name, or condition id/kind.
-- `/spec-sentinel off` — hide the widget and status text and stop this session's
-  watchers and timers. It never stops, changes or messages a worker.
+- `/spec-sentinel enable /absolute/policy.json` — arm a live, session-local scoped
+  authority for this coordinator session from a validated policy file. Only this
+  native command arms it; a fresh session, reload, checkpoint or copied file never does.
+- `/spec-sentinel disable` — revoke the live authority synchronously, leaving
+  observation active, and report any persistence failure.
+- `/spec-sentinel off` — revoke the live authority first, then hide the widget and
+  status text and stop this session's watchers and timers. It never stops, changes or
+  messages a worker.
 
 ## Commands (CLI, no Pi session)
 
@@ -83,6 +89,23 @@ collection while no session is open.
 
 ## Authority
 
-This skill grants no continuation, cancellation, diagnosis or recovery. It writes
-no product state beyond the single enrollment record created by an explicit
+This skill grants no continuation, cancellation, diagnosis or recovery by itself. It
+writes no product state beyond the single enrollment record created by an explicit
 `add` command. Observation never establishes accepted work.
+
+The optional `/spec-sentinel enable /absolute/policy.json` command arms a live,
+session-local capability for this coordinator session only. It validates an absolute
+regular non-symlink JSON policy of at most 16 KiB whose package, workflow, checkout
+and native session match the retained checkpoint; `expires_at` must be a future exact
+ISO-8601 UTC timestamp no later than eight hours; `max_effects`/`max_diagnostics` are
+integers 0..2; actions are unique `continue`/`cancel`; `cancel` requires a diagnosis
+selector and a nonzero diagnostic budget. Budgets are finite and retained per workflow
+(two effect slots shared by continue/cancel, two diagnostic slots, at most one
+continuation per obligation revision and one cancellation per incident generation, plus
+at most one diagnosis per incident generation with a five-minute cooldown); re-enabling
+never resets consumed capacity. A duplicate same-kind/subject reservation returns its retained
+receipt without repeating the effect, and orphan/malformed/unfinished reservations stay
+spent and fail closed as unknown across restarts. `/spec-sentinel disable` revokes
+synchronously and reports a persistence failure while staying disarmed; `/spec-sentinel
+off` revokes then hides observation. Step 5 performs no continuation, cancellation,
+diagnosis or model effect.

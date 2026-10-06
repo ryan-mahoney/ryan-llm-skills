@@ -7,7 +7,7 @@ import { homedir } from 'node:os';
 import { Runtime, loadRun, summary, assertLease, runEditor, runCommand, runVerification, runAdvice, runCompletion, canonicalPackage, event as runtimeEvent } from './runtime.mjs';
 import { createCommunication } from './communication.mjs';
 import { createMonitor } from './monitor.mjs';
-import { createSentinelObserver, createVerificationRecorder, recordCheckpoint, readInboxGuard, readCheckpointRecord, observeInput, reconcileRuntimeReturn, checkpointPath } from './sentinel.mjs';
+import { createSentinelObserver, createVerificationRecorder, recordCheckpoint, readInboxGuard, readCheckpointRecord, observeInput, reconcileRuntimeReturn, checkpointPath, createSentinelAuthority, activatePolicy, disablePolicy } from './sentinel.mjs';
 import { createScout, SCOUT_MODEL } from './scout.mjs';
 import { installProgressContext, recordCheckpoint, refreshProgress } from './completion.mjs';
 import { metrics, formatMetrics } from './metrics.mjs';
@@ -257,8 +257,16 @@ export default function (pi: any) {
   });
   pi.on('session_start', (_event: any, ctx: any) => {
     sentinel?.close();
+    // One fresh, disarmed capability per coordinator session. Only the native
+    // command handler can arm it; the authority object is never exposed and no
+    // tool, load, checkpoint or file can arm it.
+    const authority = createSentinelAuthority();
     sentinel = createSentinelObserver({ pi, context: ctx, agentDir: getAgentDir(), scope: process.env.PI_INTERCOM_SCOPE_ID ?? null, ownPackages,
-      nativeRun: () => monitor.currentRun() });
+      nativeRun: () => monitor.currentRun(),
+      enablePolicy: (policyPath: string, commandCtx: any) => serializeWorkflow(async () => activatePolicy(authority, {
+        policy_path: policyPath, coordinator_session: coordinatorIdentity(commandCtx),
+        command: `/spec-sentinel enable ${policyPath}` })),
+      disablePolicy: () => serializeWorkflow(async () => disablePolicy(authority)) });
     monitor.close();
     const entries = ctx.sessionManager.getBranch();
     for (let i = entries.length - 1; i >= 0; i--) {
