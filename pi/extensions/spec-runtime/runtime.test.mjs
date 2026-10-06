@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { Runtime, launch, loadRun, groupAlive, runEditor, runCommand, runVerification, runCompletion, runAdvice, activeGroups, spawnManaged, settleGroup, assertLease, canonicalPackage } from './runtime.mjs';
+import { Runtime, launch, loadRun, summary, groupAlive, runEditor, runCommand, runVerification, runCompletion, runAdvice, activeGroups, spawnManaged, settleGroup, assertLease, canonicalPackage } from './runtime.mjs';
 import { createVerificationRecorder, readVerificationIncidents } from './sentinel.mjs';
 
 function fixture(t, source) {
@@ -527,6 +527,12 @@ test('historical assignment IDs remain idempotent after another step and reject 
   assert.equal(runtime.start({ ...f.input, assignment_id: 'A' }).run_id, first.run_id);
   assert.equal(f.pids.length, 2);
   assert.throws(() => runtime.start({ ...f.input, assignment_id: 'A', owner_model: 'test/strong' }), /different launch contract/);
+  // A supplied workflow_id joins the launch contract: the same assignment cannot
+  // be reused under a workflow (or under a different workflow).
+  assert.throws(() => runtime.start({ ...f.input, assignment_id: 'A', workflow_id: 'wf-contract' }), /different launch contract/);
+  const workflowDone = new Promise(resolve => { notify = resolve; });
+  runtime.start({ ...f.input, assignment_id: 'C', workflow_id: 'wf-contract' }); await workflowDone;
+  assert.throws(() => runtime.start({ ...f.input, assignment_id: 'C', workflow_id: 'wf-other' }), /different launch contract/);
 });
 
 test('concurrent cancellation requests share one terminal outcome without recreating a blocked run', async t => {
@@ -562,4 +568,26 @@ test('owner completion persists learning from real verification and releases the
   assert.equal(finished.handoff.status, 'recorded'); assert.match(finished.handoff.acceptance, /review/);
   assert.equal(existsSync(r.lock), false);
   assert.equal(JSON.parse(readFileSync(join(f.packagePath, 'runtime/progress.json'))).runs[0].execution, 'completed');
+});
+
+test('runtime carries a validated workflow_id and stable assignment_id into the record and summary', async t => {
+  const f = fixture(t), runtime = new Runtime(f.options);
+  const started = runtime.start({ ...f.input, workflow_id: 'wf-runtime-int', assignment_id: 'assign-runtime-int' });
+  assert.equal(started.workflow_id, 'wf-runtime-int');
+  assert.equal(started.assignment_id, 'assign-runtime-int');
+  const record = loadRun(f.packagePath, started.run_id);
+  assert.equal(record.workflow_id, 'wf-runtime-int');
+  assert.equal(record.assignment_id, 'assign-runtime-int');
+  assert.equal(summary(record).workflow_id, 'wf-runtime-int');
+  assert.equal(summary(record).assignment_id, 'assign-runtime-int');
+  await f.finished;
+  // The persisted record keeps the identity after completion for the terminal
+  // notification fallback; it is never inferred from the run id or step.
+  assert.equal(summary(loadRun(f.packagePath, started.run_id)).workflow_id, 'wf-runtime-int');
+
+  // A malformed supplied workflow_id is refused before any run/lease side effect.
+  const g = fixture(t), runtime2 = new Runtime(g.options);
+  assert.throws(() => runtime2.start({ ...g.input, workflow_id: 'bad id!' }), /workflow_id must be/);
+  assert.equal(existsSync(join(g.packagePath, 'runtime')), false);
+  assert.equal(g.pids.length, 0);
 });

@@ -45,7 +45,7 @@ export function loadRun(packagePath, id) {
   return read(join(canonicalPackage(packagePath).packagePath, 'runtime', id ? `runs/${id}.json` : 'run.json'));
 }
 export function summary(record) {
-  return { run_id: record.id, state: record.state, package: record.package, step: record.step,
+  return { run_id: record.id, assignment_id: record.assignment_id, workflow_id: record.workflow_id ?? null, state: record.state, package: record.package, step: record.step,
     checkout: record.checkout, owner_session: record.owner_session, editor_session: record.editor_session,
     ledger: join(record.package, 'runtime/progress.json'), run_receipt: join(record.package, 'runtime/run.json'), events: join(record.package, 'runtime/events.jsonl'),
     checks: ['canonical package', 'checkout repository and requested branch', 'exclusive writer lease at launch'],
@@ -249,12 +249,21 @@ export class Runtime {
   start(input, parentSession) {
     const requestedAt = input.dispatch_requested_at || timestamp();
     if (process.platform === 'win32') throw new Error('spec-runtime requires POSIX process groups');
+    // A supplied workflow_id is carried, never inferred; reject a malformed one
+    // before any package/lease side effect.
+    if (input.workflow_id !== undefined
+      && (typeof input.workflow_id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(input.workflow_id)))
+      throw new Error('workflow_id must be 1-128 ASCII letters/digits/underscore/hyphen');
     const config = resolveInput(input);
     const key = input.assignment_id || config.step;
     const runtimeDir = join(config.package, 'runtime');
     mkdirSync(join(runtimeDir, 'runs'), { recursive: true });
     const assignmentFile = join(runtimeDir, 'assignments', `${createHash('sha256').update(key).digest('hex')}.json`);
-    const contract = JSON.stringify([config.step, config.checkout, config.owner_model, config.editor_model, config.scout_model, config.child_extensions || [], config.instructions || '']);
+    const contractParts = [config.step, config.checkout, config.owner_model, config.editor_model, config.scout_model, config.child_extensions || [], config.instructions || ''];
+    // A supplied workflow_id joins the launch contract so an existing assignment
+    // cannot be reused under another workflow; the legacy/no-workflow shape is
+    // preserved exactly.
+    const contract = JSON.stringify(config.workflow_id == null ? contractParts : [...contractParts, config.workflow_id]);
     if (existsSync(assignmentFile)) {
       const previous = read(assignmentFile);
       if (previous.contract !== contract) throw new Error('assignment_id already identifies a different launch contract; use a new explicit attempt ID for an intentional change.');
@@ -278,7 +287,7 @@ export class Runtime {
     const pair = createHash('sha256').update(JSON.stringify([config.checkout, config.owner_model, config.editor_model, config.child_extensions || []])).digest('hex').slice(0, 16);
     const sessionDir = join(runtimeDir, 'sessions', pair);
     mkdirSync(sessionDir, { recursive: true });
-    const record = { schema_version: 1, completion_contract: 1, id, assignment_id: key, package: config.package, primary: config.primary,
+    const record = { schema_version: 1, completion_contract: 1, id, assignment_id: key, workflow_id: config.workflow_id ?? null, package: config.package, primary: config.primary,
       step: config.step, checkout: config.checkout, owner_model: config.owner_model, editor_model: config.editor_model, scout_model: config.scout_model,
       dispatch_requested_at: requestedAt, routing_reason: config.routing_reason,
       environment: environmentFacts(config.checkout, config.primary),

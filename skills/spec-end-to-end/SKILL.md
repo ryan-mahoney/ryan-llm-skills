@@ -46,6 +46,16 @@ its next obligation. A completed worker still needs its independent review/fix c
 Pass an explicit `step` after reconciliation; a retry needs a new `assignment_id`.
 Preserve the recorded owner on an interrupted step with `owner_override`.
 
+In managed Pi, reuse the existing stage-ledger run ID as the checkpoint `workflow_id`.
+Register it with `spec_checkpoint` before dispatch: supply the stable obligation key for
+this stage, the current checkpoint revision, the current native input revision, declared
+native workers, and per-original ID/hash/outcome inbox references. Pass that same
+`workflow_id` to `spec_dispatch`; it validates the registered owner and binds the real
+dispatch receipt to it. Consume returned checkpoint revisions and a terminal
+`reconcile:<assignment-id>` obligation as pending acceptance/review work, never as
+completion. The handwritten stage ledger remains the fallback only outside managed Pi;
+do not keep a second ledger inside it.
+
 Trust the receipt's mechanical checks for that launch. Do not re-check Git paths,
 leases, model availability, installed profiles or nesting without a specific error
 or changed input. Owners read their card and applicable implementation policy.
@@ -85,6 +95,13 @@ shell commands, or infer completion from silence. On completion, consume the han
 and continue. Instructions do not create a wake mechanism: if the harness supplies
 neither completion events nor blocking waits, leave an explicit resumable checkpoint
 with the worker reference and next action rather than claiming unattended continuation.
+
+In managed Pi, checkpoint at existing stage handoffs and before a legitimate blocked or
+yield return, not per tool call and not by polling. Reuse the current `workflow_id` and
+revision from the prior `spec_checkpoint`/`spec_dispatch` receipt; record the new stage's
+stable obligation key, the current input revision, declared native workers and hash-bound
+inbox outcomes. A returned `reconcile:<assignment-id>` obligation is pending
+acceptance/review work, never completion; a process exit does not grant acceptance.
 
 Treat an actionable failure as work to diagnose and route within the existing retry,
 review and authority limits. Repeating an unchanged failed action is not progress.

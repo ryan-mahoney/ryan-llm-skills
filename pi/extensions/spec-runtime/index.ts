@@ -2,18 +2,43 @@ import { Type } from '@earendil-works/pi-ai';
 import { getAgentDir } from '@earendil-works/pi-coding-agent';
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { Runtime, loadRun, summary, assertLease, runEditor, runCommand, runVerification, runAdvice, runCompletion, canonicalPackage, event as runtimeEvent } from './runtime.mjs';
 import { createCommunication } from './communication.mjs';
 import { createMonitor } from './monitor.mjs';
-import { createSentinelObserver, createVerificationRecorder } from './sentinel.mjs';
+import { createSentinelObserver, createVerificationRecorder, recordCheckpoint, readInboxGuard, readCheckpointRecord, observeInput, reconcileRuntimeReturn, checkpointPath } from './sentinel.mjs';
 import { createScout, SCOUT_MODEL } from './scout.mjs';
 import { installProgressContext, recordCheckpoint, refreshProgress } from './completion.mjs';
 import { metrics, formatMetrics } from './metrics.mjs';
 
 const result = (value: unknown, isError = false) => ({ content: [{ type: 'text', text: JSON.stringify(value) }], details: value, isError });
 const optional = (description: string) => Type.Optional(Type.String({ description }));
+
+// Coordinator identity is taken from the actual session manager (session file /
+// stable session id), never from a model field. A checkout is accepted only from
+// an already bound checkpoint or a matching real Runtime dispatch receipt.
+const coordinatorIdentity = (ctx: any): string => {
+  const manager = ctx?.sessionManager;
+  const file = typeof manager?.getSessionFile === 'function' ? manager.getSessionFile() : null;
+  if (typeof file === 'string' && file) return file;
+  const id = typeof manager?.getSessionId === 'function' ? manager.getSessionId() : null;
+  if (typeof id === 'string' && id) return id;
+  // A missing/empty native session identity is refused, never a shared constant:
+  // a checkpoint or dispatch must be bound to the real owning SDK session.
+  throw new Error('coordinator session identity is unavailable; refusing a checkpoint or dispatch without the native SDK session');
+};
+
+// Maps a workflow to its assigned checkout from a real dispatch receipt or an
+// already bound checkpoint; a model-supplied checkout is never trusted.
+const boundCheckout = (packagePath: string, workflowId: string, dispatches: Map<string, any>): string | null => {
+  const bound = dispatches.get(workflowId);
+  if (bound?.checkout) return bound.checkout;
+  try {
+    const record: any = readCheckpointRecord(canonicalPackage(packagePath).packagePath, workflowId);
+    return record?.checkout ?? null;
+  } catch { return null; }
+};
 
 export default function (pi: any) {
   const role = process.env.SPEC_RUNTIME_ROLE;
@@ -113,6 +138,67 @@ export default function (pi: any) {
   // session explicitly dispatched plus explicitly enrolled primaries.
   const ownPackages: string[] = [];
   let sentinel: ReturnType<typeof createSentinelObserver> | undefined;
+  // Session-local native-input guard and workflow->dispatch checkout bindings for
+  // the coordinator branch. Interactive/RPC input advances the revision before
+  // processing; extension-originated messages never do. Never model-supplied.
+  let inputGuard = { input_revision: 0, active_prompts: 0 };
+  const dispatchBindings = new Map<string, any>();
+  // spec_checkpoint and spec_dispatch share checkpoint/mapping state; serialize
+  // their tool execution so concurrent calls cannot interleave reads and writes.
+  let workflowQueue: Promise<unknown> = Promise.resolve();
+  const serializeWorkflow = <T>(task: () => Promise<T>): Promise<T> => {
+    const run = workflowQueue.then(task, task);
+    workflowQueue = run.then(() => undefined, () => undefined);
+    return run;
+  };
+  pi.on('input', (event: any) => {
+    // Only interactive/RPC input increments the revision before processing.
+    if (event?.source === 'interactive' || event?.source === 'rpc') inputGuard = observeInput(inputGuard, { type: 'input', source: event.source });
+  });
+  pi.on('ui_prompt_start', () => { inputGuard = observeInput(inputGuard, { type: 'prompt_start' }); });
+  pi.on('ui_prompt_end', () => { inputGuard = observeInput(inputGuard, { type: 'prompt_end' }); });
+  // Coordinator-only checkpoint registration. Identity comes from the live
+  // session manager and a checkout already bound by a prior checkpoint or a real
+  // Runtime dispatch receipt; the model supplies neither. A runtime return is
+  // reconciliation work, never acceptance. No recovery authority is granted.
+  pi.registerTool({ name: 'spec_sentinel_checkpoint', label: 'Record sentinel workflow checkpoint',
+    description: 'Coordinator-only: record the current workflow obligation and stop state against canonical sources. Supply the workflow_id registered for this coordinator, expected_revision from the previous receipt (0 for the first registration), the current state, obligation with prepared artifacts, declared workers and inbox outcomes, and reconciles_input_revision equal to the current native input revision. Identical stable obligation keys keep obligation_revision; changing source hashes alone does not. It never grants recovery authority.',
+    parameters: Type.Object({
+      package: Type.String({ description: 'Absolute canonical .specs feature directory or its spec.md in the primary checkout' }),
+      workflow_id: Type.String({ minLength: 1, maxLength: 128, description: 'Registered workflow identity for this coordinator session' }),
+      expected_revision: Type.Number({ minimum: 0, description: 'Revision from the previous checkpoint receipt; 0 for the first registration' }),
+      state: Type.Union([Type.Literal('ready'), Type.Literal('waiting-worker'), Type.Literal('waiting-external'), Type.Literal('decision-required'), Type.Literal('blocked'), Type.Literal('user-held'), Type.Literal('complete'), Type.Literal('unknown')]),
+      obligation: Type.Object({
+        key: Type.String({ minLength: 1, maxLength: 160, description: 'Stable obligation key; identical keys keep obligation_revision' }),
+        stage: Type.String({ minLength: 1 }),
+        step: optional('Optional prepared step identity'),
+        summary: Type.String({ minLength: 1, maxLength: 160 }),
+        artifacts: Type.Array(Type.Object({ path: Type.String({ minLength: 1, description: 'Package-contained artifact path' }), sha256: Type.String({ minLength: 64, maxLength: 64, description: 'Exact sha256 of the prepared artifact' }) })),
+      }),
+      workers: Type.Optional(Type.Array(Type.Object({ id: Type.String({ minLength: 1, maxLength: 128 }), kind: Type.String({ minLength: 1 }),
+        state: Type.Union([Type.Literal('ready'), Type.Literal('working'), Type.Literal('waiting-external'), Type.Literal('decision-required'), Type.Literal('blocked'), Type.Literal('user-held'), Type.Literal('complete'), Type.Literal('failed'), Type.Literal('aborted'), Type.Literal('cancelled'), Type.Literal('unknown')]) }))),
+      inbox: Type.Optional(Type.Object({ items: Type.Array(Type.Object({
+        id: Type.String({ minLength: 1, maxLength: 128 }), sha256: Type.String({ minLength: 64, maxLength: 64 }),
+        outcome: Type.Union([Type.Literal('applied'), Type.Literal('not-applicable'), Type.Literal('held'), Type.Literal('decision-required'), Type.Literal('needs-spec-correction')]),
+        release_source_id: optional('Required to release a held original: the later direction ID') })) })),
+      reconciles_input_revision: Type.Number({ minimum: 0, description: 'Must equal the current native input revision' }),
+    }),
+    async execute(_id: string, args: any, _signal: AbortSignal, _update: any, ctx: any) {
+      return serializeWorkflow(async () => {
+      try {
+        const coordinator_session = coordinatorIdentity(ctx);
+        if (args.reconciles_input_revision !== inputGuard.input_revision) {
+          return result({ error: `reconciles_input_revision ${args.reconciles_input_revision} does not match the current native input revision ${inputGuard.input_revision}`, next: 'record the checkpoint against the current input revision; a stale value is refused' }, true);
+        }
+        const checkout = boundCheckout(args.package, args.workflow_id, dispatchBindings);
+        const receipt = recordCheckpoint({ package: args.package, workflow_id: args.workflow_id,
+          expected_revision: args.expected_revision, state: args.state, obligation: args.obligation,
+          workers: args.workers ?? [], inbox: args.inbox ?? {},
+          reconciles_input_revision: args.reconciles_input_revision, coordinator_session, checkout });
+        return result(receipt);
+      } catch (error: any) { return result({ error: error.message, next: 'correct this checkpoint error; do not assume recovery authority' }, true); }
+      });
+    } });
   pi.registerCommand('spec-metrics', {
     description: 'Read-only timing, model/tool calls, test submissions and cost: /spec-metrics /absolute/canonical/package',
     handler: async (args: string, ctx: any) => {
@@ -149,7 +235,50 @@ export default function (pi: any) {
     },
   });
   const verificationRecorder = createVerificationRecorder();
-  const runtime = new Runtime({ notify: (value: any) => pi.sendMessage({ customType: 'spec-runtime', content: JSON.stringify(value), display: true }, { triggerTurn: true }),
+  const runtime = new Runtime({ notify: (value: any) => {
+    // On a mapped terminal runtime notification, reconcile the checkpoint before
+    // sending the existing native completion message. A runtime return is
+    // reconciliation work, never acceptance; any reconcile error is reported
+    // without suppressing the runtime completion message.
+    try {
+      const v: any = value;
+      let mapped = v?.package && v?.run_id ? dispatchBindings.get(`${v.package}\u0000${v.run_id}`) : null;
+      const notificationWorkflow = typeof v?.workflow_id === 'string' && v.workflow_id ? v.workflow_id : null;
+      if (!mapped && notificationWorkflow && v?.package) {
+        // Persisted notification identity fallback: read the checkpoint for its
+        // owning coordinator and bound checkout rather than trusting the notification.
+        try {
+          const persisted: any = readCheckpointRecord(v.package, notificationWorkflow);
+          if (persisted) {
+            mapped = { package: v.package, run_id: v.run_id, workflow_id: notificationWorkflow,
+              assignment_id: typeof v.assignment_id === 'string' && v.assignment_id ? v.assignment_id : null,
+              checkout: persisted.checkout ?? null, coordinator_session: persisted.coordinator_session };
+          }
+        } catch { /* Unreadable checkpoint stays unmapped; the completion message still sends. */ }
+      }
+      if (mapped?.workflow_id && ['completed', 'failed', 'cancelled', 'blocked'].includes(v?.state)) {
+        try {
+          const record: any = readCheckpointRecord(mapped.package, mapped.workflow_id);
+          reconcileRuntimeReturn({
+            package: mapped.package,
+            workflow_id: mapped.workflow_id,
+            expected_revision: record?.revision ?? 0,
+            assignment_id: mapped.assignment_id ?? mapped.run_id,
+            return_state: v.state,
+            workers: record?.workers ?? [],
+            // The live input revision is deliberately not passed: only a successful
+            // spec_checkpoint acknowledges native input, so reconciliation preserves
+            // the checkpoint's stored input_revision.
+            coordinator_session: mapped.coordinator_session,
+            checkout: mapped.checkout,
+          });
+        } catch (reconcileError: any) {
+          pi.sendMessage({ customType: 'spec-runtime', content: JSON.stringify({ reconcile_error: reconcileError?.message ?? String(reconcileError), workflow_id: mapped.workflow_id }), display: true }, { triggerTurn: false });
+        }
+      }
+    } catch { /* Never suppress the runtime completion message. */ }
+    pi.sendMessage({ customType: 'spec-runtime', content: JSON.stringify(value), display: true }, { triggerTurn: true });
+  },
     onWorkerEvent: (record: any, event: any) => verificationRecorder.observe(record, event) });
   pi.on('session_shutdown', async () => {
     monitor.close();
@@ -162,20 +291,82 @@ export default function (pi: any) {
       strong_owner_model: optional('Optional STRONG_OWNER; startup routes prepared hard steps here'), owner_override: optional('Explicit owner for the selected step; takes precedence over owner_model in start and startup, including tier routing'),
       step: optional('Absolute canonical prepared subspec path; required for start'), owner_model: optional('provider/model[:thinking]; required unless owner_override is supplied'), editor_model: optional('provider/model[:thinking]; required for start'), scout_model: optional('SCOUT_AGENT selector as provider/model[:thinking]; default openai-codex/gpt-6-luna:low'),
       checkout: optional('Existing checkout or desired new worktree path'), branch: optional('Requested worktree branch'), base: optional('Start ref for a new branch, default HEAD'),
-      assignment_id: optional('Stable ID for this step attempt. Omit to use step path. Use a new ID only for an intentional subsequent attempt.'), run_id: optional('Existing run ID, otherwise latest'),
+      assignment_id: optional('Stable ID for this step attempt. Omit to use step path. Use a new ID only for an intentional subsequent attempt.'), run_id: optional('Existing run ID, otherwise latest'), workflow_id: optional('Registered workflow ID from a prior spec_checkpoint; binds this real dispatch to its checkpoint'),
       instructions: optional('Scoped task direction, acceptance constraints and publication authority'), timeout_ms: Type.Optional(Type.Number({ minimum: 1000, maximum: 86400000, description: 'Whole assignment deadline, default 7200000 (2 hours)' })), child_extensions: Type.Optional(Type.Array(Type.String({ description: 'Explicit trusted pi-intercom and provider/compat extension paths; discovery is disabled in managed children' }))) }),
     async execute(_id: string, args: any, _signal: AbortSignal, _update: any, ctx: any) {
+      return serializeWorkflow(async () => {
       try {
         const { packagePath } = canonicalPackage(args.package); progress.attach(packagePath);
         if (args.action === 'status') { const record = loadRun(args.package, args.run_id); monitor.attach(record, ctx); return result(summary(record)); }
         if (args.action === 'cancel') return result(await runtime.cancel(args.package, args.run_id));
+        // A supplied workflow_id is a registered mapping key, validated before any
+        // dispatch side effect. Dispatch never mints workflow ownership: a missing,
+        // malformed, differently-owned or checkout-conflicting checkpoint is refused
+        // before runtime.start/startup can launch or resume work.
+        const workflowId = typeof args.workflow_id === 'string' && args.workflow_id ? args.workflow_id : null;
+        let registeredWorkflow: any = null;
+        if (workflowId) {
+          registeredWorkflow = readCheckpointRecord(canonicalPackage(args.package).packagePath, workflowId);
+          if (!registeredWorkflow) {
+            return result({ error: `workflow ${workflowId} has no registered checkpoint; spec_dispatch never mints workflow ownership`, next: 'register the workflow with spec_checkpoint first' }, true);
+          }
+          if (registeredWorkflow.coordinator_session !== coordinatorIdentity(ctx)) {
+            return result({ error: `workflow ${workflowId} is owned by another coordinator session; refusing an unowned mapping`, next: 'do not overwrite workflow ownership' }, true);
+          }
+          if (registeredWorkflow.checkout && args.checkout && resolve(args.checkout) !== resolve(registeredWorkflow.checkout)) {
+            return result({ error: `workflow ${workflowId} is bound to checkout ${registeredWorkflow.checkout}; refusing a different requested checkout`, next: 'omit checkout to reuse the registered one or use a new workflow_id' }, true);
+          }
+          if ((registeredWorkflow.input_revision ?? 0) !== inputGuard.input_revision) {
+            return result({ error: `workflow ${workflowId} has unreconciled native input: checkpoint revision ${registeredWorkflow.input_revision ?? 0} does not match the current native input revision ${inputGuard.input_revision}`, next: 'record a successful spec_checkpoint for the current input revision before dispatch' }, true);
+          }
+        }
         const configFile = join(homedir(), '.pi/agent/spec-runtime.json');
         const config = existsSync(configFile) ? JSON.parse(readFileSync(configFile, 'utf8')) : {};
-        const input = { ...args, scout_model: args.scout_model ?? config.scout_model ?? SCOUT_MODEL, child_extensions: args.child_extensions ?? config.child_extensions ?? [] };
+        const input = { ...args, scout_model: args.scout_model ?? config.scout_model ?? SCOUT_MODEL, child_extensions: args.child_extensions ?? config.child_extensions ?? [],
+          ...(workflowId && !args.checkout && registeredWorkflow?.checkout ? { checkout: registeredWorkflow.checkout } : {}) };
         const receipt = args.action === 'startup' ? await runtime.startup(input, ctx.sessionManager.getSessionFile()) : runtime.start(input, ctx.sessionManager.getSessionFile());
         if (receipt.run_id) monitor.attach(loadRun(args.package, receipt.run_id), ctx);
         if (receipt.run_id && !ownPackages.includes(args.package)) ownPackages.push(args.package);
+        // The actual receipt binds its run/checkout to the workflow validated above
+        // and is retained so the terminal notification reconciles to
+        // `reconcile:<assignment-id>`. Dispatch never mints workflow ownership.
+        if (workflowId && receipt.run_id) {
+          const coordinator_session = coordinatorIdentity(ctx);
+          const packagePath = canonicalPackage(args.package).packagePath;
+          const existing: any = readCheckpointRecord(packagePath, workflowId);
+          if (!existing) {
+            return result({ error: `workflow ${workflowId} has no registered checkpoint; spec_dispatch never mints workflow ownership`, next: 'register the workflow with spec_checkpoint first' }, true);
+          }
+          if (existing.coordinator_session !== coordinator_session) {
+            return result({ error: `workflow ${workflowId} is owned by another coordinator session; refusing an unowned mapping`, next: 'do not overwrite workflow ownership' }, true);
+          }
+          const assignmentId = args.assignment_id ?? receipt.assignment_id ?? receipt.run_id;
+          const prior = dispatchBindings.get(workflowId);
+          if (prior && (prior.run_id !== receipt.run_id || prior.assignment_id !== assignmentId)) {
+            return result({ error: `workflow ${workflowId} is already mapped to a different dispatch; refusing a conflicting mapping`, next: 'reuse the registered assignment or register a new workflow_id' }, true);
+          }
+          const boundCheckoutValue = receipt.checkout ?? existing.checkout ?? null;
+          const alreadyBound = existing.checkout === boundCheckoutValue
+            && (existing.workers ?? []).some((worker: any) => worker.id === assignmentId && worker.state === 'working');
+          let revision = existing.revision;
+          if (!alreadyBound) {
+            const workers = [...(existing.workers ?? [])].filter((worker: any) => worker.id !== assignmentId)
+              .concat([{ id: assignmentId, kind: 'owner', state: 'working' }]);
+            const updated = recordCheckpoint({ package: packagePath, workflow_id: workflowId,
+              expected_revision: existing.revision, state: 'waiting-worker', obligation: existing.obligation,
+              workers, inbox: existing.inbox ?? { items: [] },
+              reconciles_input_revision: existing.input_revision ?? 0, coordinator_session, checkout: boundCheckoutValue });
+            revision = updated.revision;
+          }
+          const binding = { package: packagePath, run_id: receipt.run_id, workflow_id: workflowId,
+            assignment_id: assignmentId, checkout: boundCheckoutValue, coordinator_session };
+          dispatchBindings.set(`${packagePath}\u0000${receipt.run_id}`, binding);
+          dispatchBindings.set(workflowId, binding);
+          receipt.workflow_id = workflowId;
+          receipt.checkpoint_revision = revision;
+        }
         return result(receipt);
       } catch (error: any) { return result({ error: error.message, next: 'correct this specific runtime error; do not probe unrelated models or launch another writer' }, true); }
+      });
     } });
 }

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { createSentinelObserver, SENTINEL_COALESCE_MS, SENTINEL_RECONCILE_MS, SENTINEL_WIDGET_KEY } from './sentinel.mjs';
+import { createSentinelObserver, SENTINEL_COALESCE_MS, SENTINEL_RECONCILE_MS, SENTINEL_WIDGET_KEY, readCheckpointRecord, reconcileRuntimeReturn } from './sentinel.mjs';
 import { canonicalPackage } from './runtime.mjs';
 import { enrollmentDirectory, workspaceKey } from '../../../scripts/spec-observe/sentinel.mjs';
 
@@ -553,14 +553,18 @@ test('sentinel status: the CLI reports a disposable package and preserves runs d
   assert.equal(runs.runs_truncated, false);
 });
 
-test('sentinel role: worker load has no sentinel command and an empty coordinator stays observe-only', { skip: sdkSkip, timeout: 60000 }, async t => {
+test('sentinel checkpoint: sentinel role worker load has no checkpoint tool and an empty coordinator stays observe-only', { skip: sdkSkip, timeout: 60000 }, async t => {
   const dir = sandbox(t);
   const recordFile = join(dir, 'worker-record.json');
   writeFileSync(recordFile, JSON.stringify({ id: 'run-worker', package: dir, state: 'running' }));
   const worker = await loadExtension(t, { dir, role: 'owner', recordFile });
   const workerCommands = worker.loader.getExtensions().extensions.flatMap(extension => [...extension.commands.keys()]);
   assert.equal(workerCommands.includes('spec-sentinel'), false);
-  assert.deepEqual(worker.loader.getExtensions().extensions.flatMap(extension => [...extension.tools.keys()]).filter(name => /sentinel/i.test(name)), []);
+  const workerTools = worker.loader.getExtensions().extensions.flatMap(extension => [...extension.tools.keys()]);
+  assert.deepEqual(workerTools.filter(name => /sentinel/i.test(name)), []);
+  // Managed workers never receive the coordinator-only checkpoint or dispatch tools.
+  assert.equal(workerTools.includes('spec_sentinel_checkpoint'), false);
+  assert.equal(workerTools.includes('spec_dispatch'), false);
 
   const dir2 = sandbox(t);
   const coordinator = await loadExtension(t, { dir: dir2 });
@@ -572,4 +576,138 @@ test('sentinel role: worker load has no sentinel command and an empty coordinato
   assert.ok(commands.includes('spec-sentinel'));
   assert.deepEqual(coordinator.loader.getExtensions().extensions.flatMap(extension => [...extension.tools.keys()]).filter(name => /sentinel/i.test(name)), []);
   assert.equal(coordinator.requests.length, 0);
+});
+
+test('sentinel checkpoint: the actual coordinator tool registers and refuses a stale native input revision', { skip: sdkSkip, timeout: 60000 }, async t => {
+  const dir = sandbox(t);
+  const { repo } = primary(dir, 'checkpoint-repo');
+  const packagePath = pack(repo);
+  const canonical = canonicalPackage(packagePath);
+  const { loader } = await loadExtension(t, { dir });
+  const tools = new Map(loader.getExtensions().extensions.flatMap(extension => [...extension.tools.entries()]));
+  assert.ok(tools.has('spec_sentinel_checkpoint'), 'coordinator registers spec_checkpoint');
+  // Identity is read from the live session manager, never the model arguments.
+  const ctx = { sessionManager: { getSessionFile: () => join(dir, 'sessions', 'coord.jsonl'), getSessionId: () => 'coord-session' } };
+  const checkpoint = tools.get('spec_sentinel_checkpoint');
+  const args = { package: canonical.packagePath, workflow_id: 'wf-int', expected_revision: 0, state: 'ready',
+    obligation: { key: 'impl:s1', stage: 'implementation', summary: 'work', artifacts: [] },
+    workers: [], inbox: { items: [] }, reconciles_input_revision: 0 };
+  const created = await checkpoint.definition.execute('call-1', args, undefined, undefined, ctx);
+  assert.equal(created.isError, false);
+  assert.equal(created.details.workflow_id, 'wf-int');
+  assert.equal(created.details.revision, 1);
+  assert.equal(created.details.receipt, 'created');
+  const file = join(packagePath, 'runtime', 'sentinel', 'wf-int', 'checkpoint.json');
+  assert.ok(existsSync(file));
+
+  // A stale native input revision is refused without mutating the checkpoint.
+  const before = readFileSync(file, 'utf8');
+  const stale = await checkpoint.definition.execute('call-2', { ...args, expected_revision: 1, reconciles_input_revision: 5 }, undefined, undefined, ctx);
+  assert.equal(stale.isError, true);
+  assert.match(stale.details.error, /does not match the current native input revision/);
+  assert.equal(readFileSync(file, 'utf8'), before);
+});
+
+test('sentinel checkpoint: registered sentinel dispatch binds the receipt checkout and maps terminal returns', { skip: sdkSkip, timeout: 60000 }, async t => {
+  const dir = sandbox(t);
+  const { repo } = primary(dir, 'dispatch-repo');
+  commit(repo);
+  const packagePath = pack(repo);
+  const canonical = canonicalPackage(packagePath);
+  // A completed prior run lets startup resume without launching a process.
+  const checkout = join(dir, 'dispatch-checkout');
+  mkdirSync(checkout, { recursive: true });
+  const runRecord = { schema_version: 1, id: 'run-dispatch-int', assignment_id: 'assign-dispatch-int',
+    package: canonical.packagePath, step: join(packagePath, 'step-001-subspec.md'), checkout, state: 'completed', started_at: new Date().toISOString() };
+  mkdirSync(join(packagePath, 'runtime', 'runs'), { recursive: true });
+  writeFileSync(join(packagePath, 'runtime', 'runs', 'run-dispatch-int.json'), JSON.stringify(runRecord));
+  writeFileSync(join(packagePath, 'runtime', 'run.json'), JSON.stringify(runRecord));
+
+  const { loader } = await loadExtension(t, { dir });
+  const tools = new Map(loader.getExtensions().extensions.flatMap(extension => [...extension.tools.entries()]));
+  const ctx = { sessionManager: { getSessionFile: () => join(dir, 'sessions', 'coord.jsonl'), getSessionId: () => 'coord-session' } };
+  // The workflow owner must be registered first; dispatch never mints it.
+  await tools.get('spec_sentinel_checkpoint').definition.execute('call-1', { package: canonical.packagePath, workflow_id: 'wf-dispatch',
+    expected_revision: 0, state: 'ready', obligation: { key: 'impl:step-001', stage: 'implementation', summary: 'work', artifacts: [] },
+    workers: [], inbox: { items: [] }, reconciles_input_revision: 0 }, undefined, undefined, ctx);
+
+  const receipt = await tools.get('spec_dispatch').definition.execute('call-2', { action: 'startup', package: canonical.packagePath,
+    workflow_id: 'wf-dispatch', assignment_id: 'assign-dispatch-int' }, undefined, undefined, ctx);
+  assert.equal(receipt.isError, false);
+  assert.equal(receipt.details.workflow_id, 'wf-dispatch');
+  assert.equal(receipt.details.checkpoint_revision, 2);
+  const stored = readCheckpointRecord(canonical.packagePath, 'wf-dispatch');
+  assert.equal(stored.checkout, checkout);
+  assert.equal(stored.state, 'waiting-worker');
+  // The dispatch update retains the reconciled revision; it does not adopt a live one.
+  assert.equal(stored.input_revision, 0);
+  assert.deepEqual(stored.workers.find(worker => worker.id === 'assign-dispatch-int'), { id: 'assign-dispatch-int', kind: 'owner', state: 'working' });
+
+  // The retained mapping turns a terminal return into a reconcile obligation.
+  const reconciled = reconcileRuntimeReturn({ package: canonical.packagePath, workflow_id: 'wf-dispatch',
+    expected_revision: stored.revision, assignment_id: 'assign-dispatch-int', return_state: 'completed',
+    workers: stored.workers, coordinator_session: ctx.sessionManager.getSessionFile(), checkout });
+  assert.equal(reconciled.obligation.key, 'reconcile:assign-dispatch-int');
+  assert.notEqual(reconciled.state, 'complete');
+});
+
+test('sentinel checkpoint: an unregistered workflow is refused before any dispatch mutation', { skip: sdkSkip, timeout: 60000 }, async t => {
+  const dir = sandbox(t);
+  const { repo } = primary(dir, 'unregistered-repo');
+  commit(repo);
+  const packagePath = pack(repo);
+  const canonical = canonicalPackage(packagePath);
+  const { loader } = await loadExtension(t, { dir });
+  const tools = new Map(loader.getExtensions().extensions.flatMap(extension => [...extension.tools.entries()]));
+  const ctx = { sessionManager: { getSessionFile: () => join(dir, 'sessions', 'coord.jsonl'), getSessionId: () => 'coord-session' } };
+  // No spec_sentinel_checkpoint registration exists: dispatch must refuse before it can
+  // create a run directory, lease, assignment record or worktree.
+  const refused = await tools.get('spec_dispatch').definition.execute('call-1', { action: 'startup', package: canonical.packagePath,
+    workflow_id: 'wf-unregistered' }, undefined, undefined, ctx);
+  assert.equal(refused.isError, true);
+  assert.match(refused.details.error, /no registered checkpoint/);
+  assert.equal(existsSync(join(packagePath, 'runtime')), false);
+});
+
+test('sentinel checkpoint: workflow dispatch refuses an unreconciled native input revision before runtime', { skip: sdkSkip, timeout: 60000 }, async t => {
+  const dir = sandbox(t);
+  const { repo } = primary(dir, 'input-revision-repo');
+  commit(repo);
+  const packagePath = pack(repo);
+  const canonical = canonicalPackage(packagePath);
+  const { loader } = await loadExtension(t, { dir });
+  const tools = new Map(loader.getExtensions().extensions.flatMap(extension => [...extension.tools.entries()]));
+  const sessionFile = join(dir, 'sessions', 'coord.jsonl');
+  const ctx = { sessionManager: { getSessionFile: () => sessionFile, getSessionId: () => 'coord-session' } };
+  // A checkpoint whose reconciled input revision is ahead of the live revision
+  // means native input is unreconciled; dispatch must refuse before runtime.
+  const checkpointFile = join(packagePath, 'runtime', 'sentinel', 'wf-input', 'checkpoint.json');
+  mkdirSync(dirname(checkpointFile), { recursive: true });
+  writeFileSync(checkpointFile, JSON.stringify({ version: 1, workflow_id: 'wf-input', package: canonical.packagePath,
+    coordinator_session: sessionFile, revision: 1, input_revision: 5, checkout: null, state: 'ready',
+    obligation: { key: 'k', stage: 's', summary: 'x', artifacts: [] }, workers: [], inbox: { items: [] } }));
+  const refused = await tools.get('spec_dispatch').definition.execute('call-1', { action: 'startup', package: canonical.packagePath,
+    workflow_id: 'wf-input' }, undefined, undefined, ctx);
+  assert.equal(refused.isError, true);
+  assert.match(refused.details.error, /native input revision/);
+  assert.equal(existsSync(join(packagePath, 'runtime', 'runs')), false);
+});
+
+test('sentinel checkpoint: a missing native session identity is refused without checkpoint mutation', { skip: sdkSkip, timeout: 60000 }, async t => {
+  const dir = sandbox(t);
+  const { repo } = primary(dir, 'identity-repo');
+  commit(repo);
+  const packagePath = pack(repo);
+  const canonical = canonicalPackage(packagePath);
+  const { loader } = await loadExtension(t, { dir });
+  const tools = new Map(loader.getExtensions().extensions.flatMap(extension => [...extension.tools.entries()]));
+  // The SDK session provides no native identity: the coordinator-only tool must
+  // refuse rather than binding the workflow to a shared placeholder.
+  const ctx = { sessionManager: { getSessionFile: () => '', getSessionId: () => '' } };
+  const refused = await tools.get('spec_sentinel_checkpoint').definition.execute('call-1', { package: canonical.packagePath, workflow_id: 'wf-identity',
+    expected_revision: 0, state: 'ready', obligation: { key: 'k', stage: 's', summary: 'x', artifacts: [] },
+    workers: [], inbox: { items: [] }, reconciles_input_revision: 0 }, undefined, undefined, ctx);
+  assert.equal(refused.isError, true);
+  assert.match(refused.details.error, /session identity is unavailable/);
+  assert.equal(existsSync(join(packagePath, 'runtime')), false);
 });
