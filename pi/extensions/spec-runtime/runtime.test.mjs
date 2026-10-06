@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { Runtime, launch, loadRun, groupAlive, runEditor, runCommand, runVerification, runAdvice, activeGroups, spawnManaged, settleGroup, assertLease, canonicalPackage } from './runtime.mjs';
+import { Runtime, launch, loadRun, groupAlive, runEditor, runCommand, runVerification, runCompletion, runAdvice, activeGroups, spawnManaged, settleGroup, assertLease, canonicalPackage } from './runtime.mjs';
 
 function fixture(t, source) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'spec-runtime-test-')));
@@ -141,6 +141,8 @@ test('oversized results preserve their beginning and expose a complete readable 
   new Runtime(f.options).start(f.input);
   const outcome = await f.finished;
   assert.equal(outcome.state, 'completed');
+  assert.equal(outcome.handoff.status, 'handoff_incomplete');
+  assert.equal(existsSync(loadRun(f.packagePath).lock), false);
   assert.equal(outcome.result_truncated, true);
   assert.ok(outcome.result.startsWith('Outcome: change applied.'));
   assert.ok(outcome.result.length <= 8000);
@@ -452,4 +454,21 @@ test('a bounded UI-style command can start and reap a temporary server before ha
   assert.equal(output.exit_code, 0); assert.equal(output.error, undefined);
   assert.equal(activeGroups(record).filter(group => group.role === 'command').length, 0);
   await runtime.cancel(f.packagePath, undefined, 1000);
+});
+
+
+test('owner completion persists learning from real verification and releases the settled lease without accepting review', async t => {
+  const f = fixture(t, `setTimeout(() => console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'Handoff submitted.'}]}})), 1000);`);
+  writeFileSync(join(f.packagePath, 'spec.md'), '# Fixture');
+  writeFileSync(join(f.packagePath, 'evidence-plan.json'), JSON.stringify({ gates: [{ id: 'EV-1', phase: 'merge', ownerStep: 1, required: true, rejects: ['FH-1'] }] }));
+  const runtime = new Runtime(f.options); runtime.start(f.input);
+  const r = loadRun(f.packagePath);
+  const check = await runVerification(r, 'echo focused-result');
+  assert.ok(check.receipt_id);
+  const completion = await runCompletion(r, { outcome: 'as-specified', strategy: 'implementation-first', decisions: [], gaps: [], findings: [], introduced: [], evidence: [{ id: 'EV-1', status: 'passed', receipt_id: check.receipt_id, artifact: check.full_output_path, proof_boundary: 'command plumbing only' }] });
+  assert.equal(completion.status, 'recorded');
+  const finished = await f.finished;
+  assert.equal(finished.handoff.status, 'recorded'); assert.match(finished.handoff.acceptance, /review/);
+  assert.equal(existsSync(r.lock), false);
+  assert.equal(JSON.parse(readFileSync(join(f.packagePath, 'runtime/progress.json'))).runs[0].execution, 'completed');
 });

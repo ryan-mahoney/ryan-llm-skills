@@ -290,3 +290,40 @@ Use the project's isolated fixture environment, loopback endpoint and an owned f
 port. The server log path is returned separately from the capture log. The example
 selects no production data or fixture setup for the caller. Readiness and capture have
 separate finite deadlines; the whole assignment deadline remains in force.
+
+
+## Structured handoffs and durable progress
+
+New assignments carry `completion_contract: 1`. `spec_complete` is an owner-only tool, serialized
+with editing/verification. It writes `learnings/step-NNN-learning.md` and a per-attempt structured
+receipt. The owner supplies judgments (outcome, strategy, decisions, reusable symbols, gaps,
+subsequent-step findings and EV assessments); the runtime supplies HEAD and recorded commands.
+`spec_verify` returns `receipt_id` and retains observed HEAD/dirty state, exit status and raw-log
+path. A passed command is not automatically a passed EV: the owner maps it to the obligation
+and states the proof boundary. Earlier/dirty-tree evidence requires applicability, not a rerun.
+External evidence remains explicitly owner-reported with command, actual SHA and artifact.
+
+Process `state: completed` means the worker exited. `handoff.status: recorded` means its structured
+record exists and matches the canonical learning. It does not accept implementation or independent
+review. Missing/changed handoffs yield `handoff_incomplete` without retaining a settled process
+lease. Continued editing/checking invalidates the submission; resubmit afterward. Old attempts are
+`legacy_unchecked` and retain their existing manual reconciliation route. No automatic repair loop
+or new model dispatch is introduced.
+
+`runtime/progress.json` is a generated ledger of attempts, handoffs, check-receipt counts,
+review/fix artifact references and coordinator stage decisions. `spec_checkpoint` records the
+remaining judgment-bearing stage status, next action, decisions and canonical artifact references.
+Stage receipts live in `runtime/stages/`; preserve explicit holds/authority there or in their
+referenced canonical records. Artifact presence is not a passing review. The existing
+`run-ledger.md`, if present, remains a legacy source and is not overwritten.
+
+The coordinator watches canonical learning/review/fix directories and runtime records, coalesces
+notifications, and repairs missed events with a 15-second metadata reconciliation. History-index
+and progress writes are serialized per process. Errors remain visible; the watcher never triggers
+a model turn. Each model request gets one ephemeral current-obligation reminder, replacing its
+predecessor, so compaction cannot remove the source of that reminder. Coordinator bindings are
+persisted as Pi custom entries and restored on session resume. This is not a sentinel, daemon,
+auto-restart loop, or guarantee that a closed session continues running.
+
+Existing live Pi processes keep their loaded extension. Use a fresh/reloaded idle coordinator and
+new assignments to pick up the tools; do not restart active work solely for these bookkeeping changes.

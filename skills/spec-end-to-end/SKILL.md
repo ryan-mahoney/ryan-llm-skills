@@ -156,13 +156,21 @@ the next stage may proceed.
 5. Keep one canonical feature slug and spec-package path in the primary repository through the
    run. Apply [Workspace Handoff](references/workspace-handoff.md) before resolving paths. A
    worktree changes the code execution root, never the location of `.specs/`.
-6. Maintain one compact stage ledger with `pending`, `running`, `complete`, or `blocked` status,
+6. In the managed Pi runtime, use `runtime/progress.json` as the generated workflow ledger.
+   Worker lifecycle, verification receipts, canonical handoffs and review/fix artifact arrivals
+   are recorded automatically. Use `spec_checkpoint` for stage status, material decisions,
+   authority/hold references and next action; reference canonical artifacts instead of repeating
+   their contents. Do not also maintain a duplicate handwritten ledger. Preserve any existing
+   legacy ledger as a historical source and carry its unresolved obligations forward.
+   Outside the managed runtime, maintain one compact stage ledger with `pending`, `running`, `complete`, or `blocked` status,
    the code checkout and primary-repository spec path, worker/session IDs, decisions, revision-bound evidence references,
    unresolved findings, consequential decisions/authority sources, and the next action. Update it at material handoffs and give concise
    progress updates. Keep any harness goal objective short and stable; reference the ledger and
    spec package instead of expanding the objective with execution history.
 
-After continuation or compaction, reconcile the ledger with current artifacts and Git state before
+Managed Pi injects a concise state-derived reminder before model calls, including after
+compaction; it starts no extra turns. Use the named receipts to resolve gaps rather than
+reloading all procedure files. After continuation or compaction, reconcile the ledger with current artifacts and Git state before
 resuming. Reopen settled decisions only when new evidence invalidates them.
 
 If multiple feature packages or goals match and repository evidence cannot disambiguate them, stop

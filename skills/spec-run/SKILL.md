@@ -105,7 +105,10 @@ card and revisit structure only after re-preparation or an observed contradictio
 
 ## History Index
 
-Build the index before first dispatch and refresh after learning/review/fix artifacts
+The managed Pi runtime builds and refreshes history/progress on handoffs and observed
+learning/review/fix changes; do not duplicate these writes. Read `runtime/progress.json`
+for facts and missing handoffs. A refresh error is visible uncertainty, never empty history.
+Outside that runtime, build the index before first dispatch and refresh after learning/review/fix artifacts
 change. Reuse that refresh at the next dispatch; do not build it again merely to advance:
 
 ```bash
@@ -173,6 +176,14 @@ the learning lists both and binds evidence to final step HEAD. The orchestrator 
 second-guess the implementation at the next stage transition.
 
 ## Completion Check
+
+Managed receipts separate `state` (process lifecycle) from `handoff.status`. `completed` with
+`handoff_incomplete` means the process exited but the canonical structured handoff is missing
+or inconsistent. Preserve the commit and checks, arrange only a bounded handoff repair at a safe
+worker boundary, and retain the obligation in progress. Do not keep a settled writer lease or
+restart implementation for paperwork. Legacy receipts remain `legacy_unchecked`; reconcile
+existing records without pretending the new validator ran. `recorded` validates structure,
+identity and evidence references, not implementation quality or review acceptance.
 
 Read the returned outcome, learning path, and commit. Confirm the record exists, the
 commit belongs to the selected checkout, and required evidence is present or honestly

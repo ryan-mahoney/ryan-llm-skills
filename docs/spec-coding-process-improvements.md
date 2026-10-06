@@ -158,3 +158,18 @@ environment warmth. Measure time through accepted completion, cost coverage, rep
 repair work and independent findings together. Change one intervention between runs; do not
 change active workers' instructions to improve a live metric. Sentinel supervision and shared
 source-memory ideas remain proposals, not shipped capabilities of this runtime.
+
+
+## Runtime-owned process records
+
+Managed Pi assignments now submit `spec_complete` instead of hand-authoring their learning.
+The tool preserves recorded command outcomes/revisions and asks the owner only for material
+judgments, reusable symbols and evidence applicability. Missing structured handoffs remain visible
+separately from worker exit; process leases still release after confirmed termination. Independent
+review/fix remains responsible for correctness.
+
+Runtime events and artifact arrivals refresh `runtime/progress.json` and the history index.
+Coordinators use `spec_checkpoint` for stage decisions and next actions, without another handwritten
+ledger. State-derived context reminders survive compaction without polling models or generating
+extra turns. These changes address an observed missing-learning/index-refresh failure; they do not
+establish compaction as its cause or guarantee all semantic process judgments are correct.

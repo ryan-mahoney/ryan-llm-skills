@@ -239,6 +239,15 @@ cleanup requirements. Other steps do not load this procedure.
 
 ## Verify, Learn, And Commit
 
+In the managed Pi runtime, finish the coherent commit through the editor, then call
+`spec_complete`. It materializes the schema below from your structured judgments and recorded
+verification receipts. Do not ask the editor to write the same learning, copy command results,
+or rerun evidence merely because execution preceded the commit: supply its applicability.
+Use explicit empty arrays when there are no decisions, introduced symbols, gaps or findings.
+A checkpoint still needs a submission. If the tool is unavailable in an older running worker
+or another harness, use the manual record procedure below; never treat an evidence log as
+its replacement. Independent review/fix and coordinator acceptance remain separate.
+
 Inspect the changed-file list and separate unrelated user changes from the coherent
 artifact. Create `<spec-dir>/learnings/` if needed and atomically write the target
 `learnings/step-<NNN>-learning.md` with a fenced `learning:` YAML

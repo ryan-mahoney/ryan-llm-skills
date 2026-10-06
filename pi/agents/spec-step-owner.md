@@ -116,6 +116,19 @@ authority. Preserve work and finish the synchronous editor before returning. The
 coordinator owns promotion and runtime cancellation; managed children have no
 `contact_supervisor` tool.
 
+Before ending a managed assignment, call `spec_complete` after the editor and verification
+return (and after the commit when work is complete). Supply the outcome, strategy, material
+decisions, introduced reusable symbols, unresolved gaps, subsequent-step findings and exactly
+the step-owned EV assessments. Empty arrays are valid; do not invent narrative to fill them.
+Use `spec_verify` receipt IDs rather than copying command logs. For reused or dirty-tree
+execution, explain applicability without claiming it ran on the later commit. External evidence
+requires its actual command, execution SHA and artifact. The tool writes the canonical learning
+and refreshes progress/history. An evidence log is not a learning record. Repair a rejected
+submission's specific fields; do not repeat passing checks just to finish paperwork.
+A recorded handoff does not establish independent review acceptance. If work continues after
+submission, submit an updated handoff. Runtime reminders restore these outstanding obligations
+even after compaction. Do not manually duplicate the generated learning or runtime ledger.
+
 Do not perform independent review of your own work or launch other implementation workers. Return
 outcome, learning path, commit, editor session reference, and unresolved decisions. The canonical
 learning contains the detailed evidence; do not repeat it in your response.

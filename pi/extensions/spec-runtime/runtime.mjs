@@ -9,6 +9,7 @@ import { SCOUT_MODEL } from './scout.mjs';
 import { createLogSummary } from '../../../scripts/spec-facts/core.mjs';
 import { decide } from '../../../scripts/jev/core.mjs';
 import { preparedEntry } from './startup.mjs';
+import { submitCompletion, completionStatus, refreshProgress, revision, recordVerification, invalidateCompletion } from './completion.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const terminal = new Set(['completed', 'failed', 'cancelled']);
@@ -46,12 +47,13 @@ export function loadRun(packagePath, id) {
 export function summary(record) {
   return { run_id: record.id, state: record.state, package: record.package, step: record.step,
     checkout: record.checkout, owner_session: record.owner_session, editor_session: record.editor_session,
-    ledger: join(record.package, 'runtime/run.json'), events: join(record.package, 'runtime/events.jsonl'),
+    ledger: join(record.package, 'runtime/progress.json'), run_receipt: join(record.package, 'runtime/run.json'), events: join(record.package, 'runtime/events.jsonl'),
     checks: ['canonical package', 'checkout repository and requested branch', 'exclusive writer lease at launch'],
     owner_model: record.owner_model, editor_model: record.editor_model, routing_reason: record.routing_reason,
     environment: record.environment,
+    handoff: record.handoff || completionStatus(record), progress: join(record.package, 'runtime/progress.json'),
     result: record.result, result_truncated: record.result_truncated, full_result_path: record.full_result_path, error: record.error,
-    next: record.state === 'running' ? 'await completion event; do not poll' : record.state === 'blocked' ? 'resolve worker termination before another writer' : 'evaluate result; independent step review remains required' };
+    next: record.handoff?.status === 'handoff_incomplete' ? 'Repair the structured handoff only; preserve code and prior checks. Review/fix remains required.' : record.state === 'running' ? 'await completion event; do not poll' : record.state === 'blocked' ? 'resolve worker termination before another writer' : 'evaluate result; independent step review remains required' };
 }
 export function assertLease(record) {
   const lease = read(join(record.lock, 'lease.json'));
@@ -181,7 +183,7 @@ export function launch(record, role, prompt, options = {}) {
     '--model', record[`${role}_model`], '--no-extensions', '--no-skills', '--no-prompt-templates',
     ...((record.child_extensions || []).flatMap(path => ['--extension', path])),
     ...(role === 'owner' ? ['--extension', join(homedir(), '.pi/agent/npm/node_modules/pi-subagents/index.js')] : []),
-    '--extension', join(here, 'index.ts'), '--tools', role === 'owner' ? 'read,grep,find,ls,spec_editor,spec_answer,spec_verify,spec_scout,spec_advice' : 'read,grep,find,ls,edit,write,bash,spec_question',
+    '--extension', join(here, 'index.ts'), '--tools', role === 'owner' ? 'read,grep,find,ls,spec_editor,spec_answer,spec_verify,spec_scout,spec_advice,spec_complete' : 'read,grep,find,ls,edit,write,bash,spec_question',
     '--append-system-prompt', profile, '--', prompt ];
   const child = spawnManaged(record, role, options.command || 'pi', args);
   const activity = activityRecorder(record, role);
@@ -273,7 +275,7 @@ export class Runtime {
     const pair = createHash('sha256').update(JSON.stringify([config.checkout, config.owner_model, config.editor_model, config.child_extensions || []])).digest('hex').slice(0, 16);
     const sessionDir = join(runtimeDir, 'sessions', pair);
     mkdirSync(sessionDir, { recursive: true });
-    const record = { schema_version: 1, id, assignment_id: key, package: config.package, primary: config.primary,
+    const record = { schema_version: 1, completion_contract: 1, id, assignment_id: key, package: config.package, primary: config.primary,
       step: config.step, checkout: config.checkout, owner_model: config.owner_model, editor_model: config.editor_model, scout_model: config.scout_model,
       dispatch_requested_at: requestedAt, routing_reason: config.routing_reason,
       environment: environmentFacts(config.checkout, config.primary),
@@ -285,12 +287,12 @@ export class Runtime {
     atomic(assignmentFile, { assignment_id: key, run_id: record.id, contract });
     mkdirSync(this.indexDir, { recursive: true });
     atomic(join(this.indexDir, `${id}.json`), { run_id: id, package: config.package, manifest: join(runtimeDir, 'runs', `${id}.json`), parent_session: parentSession });
-    const prompt = `Implement this prepared step as its architect/owner using spec_editor.\nPACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\nRead the card and required policy. Choose the implementation approach yourself, then send a short Change/Edits/Preserve/Return packet for a bounded transformation. Name affected symbols, the chosen approach and preservation constraints; let the editor choose local implementation details and batch related edits. The editor does not run tests, compile/lint checks or other executable verification. After it returns, use spec_verify for necessary focused checks and diagnose failures before assigning bounded corrections. Do not check every packet automatically; reuse valid evidence. Read/search missing source facts directly. The editor normally reads and edits in one assignment; reserve facts-only requests for a specific blocking fact unavailable through your tools. Request compact results with artifact paths, not source inventories. Do not delegate architecture, whole-step restoration, or an entire acceptance suite with open-ended repairs. Reuse retained context. Assess each returned diff/result before the next packet; commit is a separate assignment after acceptance of the completed changes and required evidence. Use spec_scout only for a bounded discovery gap worth delegating; direct reads remain the default. Do not discover models, run startup suites, poll, or start other agents outside that scout tool. The runtime retains both sessions. This owner assignment ends after this step; independent review belongs to the coordinator.\n${input.instructions || ''}`;
+    const prompt = `Implement this prepared step as its architect/owner using spec_editor.\nPACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\nRead the card and required policy. Choose the implementation approach yourself, then send a short Change/Edits/Preserve/Return packet for a bounded transformation. Name affected symbols, the chosen approach and preservation constraints; let the editor choose local implementation details and batch related edits. The editor does not run tests, compile/lint checks or other executable verification. After it returns, use spec_verify for necessary focused checks and diagnose failures before assigning bounded corrections. Do not check every packet automatically; reuse valid evidence. Read/search missing source facts directly. The editor normally reads and edits in one assignment; reserve facts-only requests for a specific blocking fact unavailable through your tools. Request compact results with artifact paths, not source inventories. Do not delegate architecture, whole-step restoration, or an entire acceptance suite with open-ended repairs. Reuse retained context. Assess each returned diff/result before the next packet; commit is a separate assignment after acceptance of the completed changes and required evidence. Use spec_scout only for a bounded discovery gap worth delegating; direct reads remain the default. Do not discover models, run startup suites, poll, or start other agents outside that scout tool. The runtime retains both sessions. Before ending, call spec_complete with decisions, introduced symbols, gaps and step-owned evidence assessments. It writes the canonical learning from verification receipts; an evidence log is not a learning. Commit via the editor first when complete. Missing handoffs remain unfinished obligations. This owner assignment ends after this step; independent review belongs to the coordinator.\n${input.instructions || ''}`;
     let task;
     try { task = this.launchProcess(record, 'owner', `${prompt}\nEnvironment paths (observations, not setup approval): ${JSON.stringify(record.environment)}`); }
     catch (error) { record.state = 'failed'; record.error = error.message; save(record); release(record); throw error; }
     record.pid = task.child.pid;
-    save(record); event(record, 'run_started', { dispatch_requested_at: requestedAt, owner_session: record.owner_session, editor_session: record.editor_session, parent_session: parentSession, pid: record.pid });
+    save(record); refreshProgress(record.package).catch(error => { record.progress_error = error.message; }); event(record, 'run_started', { dispatch_requested_at: requestedAt, owner_session: record.owner_session, editor_session: record.editor_session, parent_session: parentSession, pid: record.pid });
     const timer = setTimeout(() => { event(record, 'deadline_reached'); this.cancel(record.package, id).then(value => this.notify(value)).catch(error => this.notify({ ...summary(record), error: error.message })); }, record.timeout_ms);
     timer.unref();
     this.active.set(id, { record, task, timer });
@@ -304,19 +306,21 @@ export class Runtime {
     });
     return summary(record);
   }
-  finish(record, result) {
+  async finish(record, result) {
     if (record.state === 'cancelling' || terminal.has(record.state)) return;
     for (const group of activeGroups(record)) settleGroup(record, group.pid);
     if (activeGroups(record).length || (record.pid && this.isAlive(record.pid))) {
       record.state = 'blocked'; record.error = 'A managed process group is still alive; writer lease retained.';
     } else {
       record.state = result.error ? 'failed' : 'completed'; record.error = result.error; record.result = result.result;
+      record.handoff = completionStatus(record, { checkHead: true });
       record.result_truncated = result.result_truncated; record.full_result_path = result.full_result_path; record.finished_at = timestamp();
       release(record);
     }
     save(record); event(record, 'run_finished', { state: record.state, error: record.error });
     if (record.state !== 'blocked') { clearTimeout(this.active.get(record.id)?.timer); this.active.delete(record.id); }
-    this.notify(summary(record));
+    try { await refreshProgress(record.package); } catch (error) { record.progress_error = error.message; save(record); }
+    this.notify({ ...summary(record), progress_error: record.progress_error });
   }
   cancel(packagePath, id, timeoutMs = 5000) {
     const record = loadRun(packagePath, id);
@@ -347,7 +351,9 @@ export class Runtime {
       for (const pid of groups) { try { this.kill(pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; } }
       if (!(await waitGroupsGone(record, groups, timeoutMs))) throw new Error('A newly registered process group has not stopped');
       record.state = 'cancelled'; record.finished_at = timestamp(); release(record); save(record); event(record, 'run_finished', { state: 'cancelled' });
-      clearTimeout(active.timer); this.active.delete(record.id); return summary(record);
+      clearTimeout(active.timer); this.active.delete(record.id);
+      try { await refreshProgress(record.package); } catch (error) { record.progress_error = error.message; }
+      return summary(record);
     } catch (error) {
       record.state = 'blocked'; record.error = `Cancellation unconfirmed: ${error.message}`; save(record); event(record, 'cancellation_failed', { error: record.error });
       throw new Error(record.error);
@@ -361,6 +367,7 @@ export async function runEditor(record, assignment, signal, launchProcess = laun
   try { mkdirSync(editorLock); } catch { throw new Error('An editor assignment is already active; await its result.'); }
   let task;
   try {
+    invalidateCompletion(record);
     task = launchProcess(record, 'editor', `PACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\n${assignment}`);
     event(record, 'editor_started', { pid: task.child.pid, editor_session: record.editor_session });
     let stopping;
@@ -395,10 +402,35 @@ export async function runEditor(record, assignment, signal, launchProcess = laun
 }
 
 // Share the editor slot so checks cannot race writes, even during a question pause.
+export async function runCompletion(record, input) {
+  return withIdleWriter(record, async () => {
+    const receipt = submitCompletion(record, input);
+    event(record, 'handoff_recorded', { outcome: receipt.outcome, learning_path: receipt.learning_path });
+    try { await refreshProgress(record.package); }
+    catch (error) { return { ...receipt, progress_error: error.message, next: 'Handoff saved; refresh derived progress, not verification.' }; }
+    return receipt;
+  });
+}
+
 export async function runVerification(record, command, timeout = 120, signal, server) {
-  return withIdleWriter(record, () => server
-    ? withVerificationServer(record, server, () => runCommand(record, command, timeout, signal), signal)
-    : runCommand(record, command, timeout, signal));
+  return withIdleWriter(record, async () => {
+    invalidateCompletion(record);
+    const before = revision(record);
+    let reply;
+    try {
+      reply = await (server
+        ? withVerificationServer(record, server, () => runCommand(record, command, timeout, signal), signal)
+        : runCommand(record, command, timeout, signal));
+    } catch (error) {
+      const receipt = recordVerification(record, command, before, revision(record), { error: error.message, exit_code: null });
+      event(record, 'verification_finished', { receipt_id: receipt.id, outcome: receipt.outcome });
+      error.receipt_id = receipt.id;
+      throw error;
+    }
+    const receipt = recordVerification(record, command, before, revision(record), reply);
+    event(record, 'verification_finished', { receipt_id: receipt.id, outcome: receipt.outcome });
+    return { ...reply, receipt_id: receipt.id, observed_revision: receipt.before };
+  });
 }
 
 // A server belongs to one verification operation, including its readiness wait,

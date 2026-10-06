@@ -3,10 +3,11 @@ import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { Runtime, loadRun, summary, assertLease, runEditor, runCommand, runVerification, runAdvice, event as runtimeEvent } from './runtime.mjs';
+import { Runtime, loadRun, summary, assertLease, runEditor, runCommand, runVerification, runAdvice, runCompletion, canonicalPackage, event as runtimeEvent } from './runtime.mjs';
 import { createCommunication } from './communication.mjs';
 import { createMonitor } from './monitor.mjs';
 import { createScout, SCOUT_MODEL } from './scout.mjs';
+import { installProgressContext, recordCheckpoint, refreshProgress } from './completion.mjs';
 import { metrics, formatMetrics } from './metrics.mjs';
 
 const result = (value: unknown, isError = false) => ({ content: [{ type: 'text', text: JSON.stringify(value) }], details: value, isError });
@@ -16,8 +17,9 @@ export default function (pi: any) {
   const role = process.env.SPEC_RUNTIME_ROLE;
   if (role) {
     const record = JSON.parse(readFileSync(process.env.SPEC_RUNTIME_RECORD!, 'utf8'));
+    installProgressContext(pi, { record, role });
     const communication = createCommunication(pi, record, role, { onEvent: (name: string, detail: any) => runtimeEvent(record, name, detail) });
-    const allowed = role === 'owner' ? ['read', 'grep', 'find', 'ls', 'spec_editor', 'spec_answer', 'spec_verify', 'spec_scout', 'spec_advice'] : ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', 'spec_question'];
+    const allowed = role === 'owner' ? ['read', 'grep', 'find', 'ls', 'spec_editor', 'spec_answer', 'spec_verify', 'spec_scout', 'spec_advice', 'spec_complete'] : ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', 'spec_question'];
     pi.on('session_shutdown', () => communication.close());
     pi.on('session_start', () => pi.setActiveTools(allowed));
     pi.on('tool_call', (event: any) => {
@@ -29,6 +31,20 @@ export default function (pi: any) {
       } catch (error: any) { return { block: true, reason: error.message }; }
     });
     if (role === 'owner') {
+      pi.registerTool({ name: 'spec_complete', label: 'Record step handoff', description: 'After edits, focused checks and any commit, record the step outcome and material judgments. Runtime writes canonical learning, supplies HEAD and verification receipts, and refreshes progress/history. Does not accept independent review or certify evidence. Supply exactly the prepared step-owned EV IDs; use spec_verify receipt_id for observed checks, applicability for earlier/dirty revisions. External evidence requires command, observedCommit, applicability and artifact. Use checkpoint for unresolved required merge evidence. Empty decisions/gaps/findings/introduced arrays are allowed; do not add process narration.',
+        parameters: Type.Object({ outcome: Type.Union(['as-specified', 'adapted', 'checkpoint', 'no-artifact', 'decision-required', 'needs-spec-correction'].map(v => Type.Literal(v))),
+          strategy: Type.Union([Type.Literal('test-first'), Type.Literal('implementation-first')]),
+          fix_attempts: Type.Optional(Type.Number({ minimum: 0 })),
+          decisions: Type.Array(Type.String()), gaps: Type.Array(Type.String()), findings: Type.Array(Type.String()),
+          introduced: Type.Array(Type.Object({ symbol: Type.String(), path: Type.String(), purpose: Type.String() })),
+          evidence: Type.Array(Type.Object({ id: Type.String(), status: Type.Union(['passed', 'failed', 'blocked', 'pending'].map(v => Type.Literal(v))), proof_boundary: Type.String(),
+            receipt_id: optional('Observed spec_verify receipt ID'), artifact: optional('Existing artifact; defaults to prepared gate artifact'),
+            applicability: optional('Why existing evidence applies without claiming a new execution'), command: optional('Exact command for owner-reported external evidence'), observedCommit: optional('Actual execution SHA for external evidence') })) }),
+        async execute(_id: string, args: any) {
+          try { return result(await runCompletion(record, args)); }
+          catch (error: any) { return result({ error: error.message, next: 'Repair only the missing handoff information; do not repeat valid checks.' }, true); }
+        } });
+
       pi.registerTool({ name: 'spec_advice', label: 'Jev advice', description: 'Batch Jev verification scheduling before expensive/repeated checks, or triage actionable review findings. Uses the assigned checkout after the editor returns. Supply the version 1 input from ~/.agents/scripts/jev/README.md: change_summary, policy, acceptance_criteria, mandatory_gates, focused_checks/planned_ci_checks, evidence or findings. No shell JSON construction or editor handoff needed. Advisory only; never waives acceptance or certifies passes. Reuse a still-applicable decision; do not call per edit or retry uncertain advice unchanged.',
         parameters: Type.Object({ task: Type.Union([Type.Literal('verification'), Type.Literal('review-triage')]), input: Type.Object({}, { additionalProperties: true }), offline: Type.Optional(Type.Boolean()) }),
         async execute(_id: string, args: any, signal: AbortSignal) {
@@ -53,7 +69,7 @@ export default function (pi: any) {
         parameters: Type.Object({ command: Type.String(), timeout: Type.Optional(Type.Number({ minimum: 1, maximum: 600 })), server: Type.Optional(Type.Object({ command: Type.String({ description: 'Foreground dev server command; no nohup or background ampersand. Runtime owns startup and cleanup.' }), ready_url: Type.String({ description: 'Loopback HTTP(S) readiness URL on an owned free port' }), readiness_timeout: Type.Optional(Type.Number({ minimum: 1, maximum: 600 })) })) }),
         async execute(_id: string, args: any, signal: AbortSignal) {
           try { const reply = await runVerification(record, args.command, args.timeout, signal, args.server); return result(reply, Boolean(reply.error) || reply.exit_code !== 0); }
-          catch (error: any) { return result({ error: error.message }, true); }
+          catch (error: any) { return result({ error: error.message, receipt_id: error.receipt_id }, true); }
         } });
       pi.registerTool({ name: 'spec_editor', label: 'Spec editor', description: 'Apply a bounded transformation whose behavior and architectural approach the owner has chosen; let the editor choose local implementation details. Send a Change/Edits/Preserve/Return packet with named symbols and concrete operations. The owner reads/searches source directly; reserve facts-only requests for a blocking fact unavailable through those tools. Return a compact result and artifact paths. The editor does not run verification; the owner uses spec_verify after the return. Do not delegate whole-step design or open-ended repair. Assess the return before the next assignment; commit is separate. No polling.',
         parameters: Type.Object({ assignment: Type.String() }),
@@ -83,7 +99,14 @@ export default function (pi: any) {
     }
     return;
   }
+  const progress = installProgressContext(pi);
   const monitor = createMonitor();
+  pi.registerTool({ name: 'spec_checkpoint', label: 'Record workflow decision', description: 'Record the current stage, next action and material decisions in the managed workflow ledger. Runtime records worker/check/review-arrival facts automatically; do not transcribe those. Complete is a coordinator assessment backed by artifact references, never inferred from worker exit. Preserve human holds and unresolved obligations.',
+    parameters: Type.Object({ package: Type.String(), stage: Type.String(), status: Type.Union(['pending', 'running', 'complete', 'blocked'].map(v => Type.Literal(v))), next: Type.String(), decisions: Type.Array(Type.String()), artifacts: Type.Array(Type.String({ description: 'Canonical package-relative evidence/decision artifact paths' })) }),
+    async execute(_id: string, args: any) {
+      try { const { packagePath } = canonicalPackage(args.package); await refreshProgress(packagePath); const receipt = recordCheckpoint(packagePath, args); progress.attach(packagePath); await refreshProgress(packagePath); return result(receipt); }
+      catch (error: any) { return result({ error: error.message }, true); }
+    } });
   pi.registerCommand('spec-metrics', {
     description: 'Read-only timing, model/tool calls, test submissions and cost: /spec-metrics /absolute/canonical/package',
     handler: async (args: string, ctx: any) => {
@@ -103,7 +126,7 @@ export default function (pi: any) {
       if (message?.role !== 'toolResult' || message.toolName !== 'spec_dispatch') continue;
       const receipt = message.details;
       if (!receipt?.package || !receipt.run_id) continue;
-      try { monitor.attach(loadRun(receipt.package, receipt.run_id), ctx); } catch { /* Missing historical record. */ }
+      try { const record = loadRun(receipt.package, receipt.run_id); monitor.attach(record, ctx); progress.attach(record.package); } catch { /* Missing historical record. */ }
       break;
     }
   });
@@ -130,6 +153,7 @@ export default function (pi: any) {
       instructions: optional('Scoped task direction, acceptance constraints and publication authority'), timeout_ms: Type.Optional(Type.Number({ minimum: 1000, maximum: 86400000, description: 'Whole assignment deadline, default 7200000 (2 hours)' })), child_extensions: Type.Optional(Type.Array(Type.String({ description: 'Explicit trusted pi-intercom and provider/compat extension paths; discovery is disabled in managed children' }))) }),
     async execute(_id: string, args: any, _signal: AbortSignal, _update: any, ctx: any) {
       try {
+        const { packagePath } = canonicalPackage(args.package); progress.attach(packagePath);
         if (args.action === 'status') { const record = loadRun(args.package, args.run_id); monitor.attach(record, ctx); return result(summary(record)); }
         if (args.action === 'cancel') return result(await runtime.cancel(args.package, args.run_id));
         const configFile = join(homedir(), '.pi/agent/spec-runtime.json');
