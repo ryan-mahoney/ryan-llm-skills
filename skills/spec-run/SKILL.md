@@ -1,6 +1,6 @@
 ---
 name: spec-run
-description: "Implement every step from a standalone .specs package while escalating only unresolved consequential decisions. Use when the user asks to run or execute a prepared spec. Treat prepared subspecs as launchpads, preserve reviewable checkpoint commits, continue through imperfect results, review each finished step in the background and fix its findings between steps, and leave integration review and final checks to branch refinement."
+description: "Implement every step from a standalone .specs package while escalating only unresolved consequential decisions. Use when the user asks to run or execute a prepared spec. Treat prepared subspecs as launchpads, preserve reviewable checkpoint commits, continue through imperfect results, review each finished step in the background and fix its findings between steps, and hand completed step review/fix cycles and evidence to publication without an automatic final branch review."
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,19 +9,46 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "31"
+  version: "34"
 ---
 
 # Spec Run
+
+## Prepared Pi startup
+
+Use the [prepared Pi entry](../spec-end-to-end/SKILL.md#prepared-pi-entry):
+`spec_dispatch action=startup` resolves and launches prepared work in one call.
+Pass the default/strong owners and optional explicit override; use recorded tiers,
+without another Jev difficulty call. Runtime receipts replace repeated mechanical
+startup checks. Existing progress returns for bounded ledger/review reconciliation;
+worker completion never waives review or required fixes. This route supersedes the
+manual structural-readiness and first history-index build below. Preparation already
+owns full package validation; the runtime checks required input paths and index shape.
+Load the detailed reference for the stage you are doing, not every linked reference
+before dispatch. The owner consumes implementation/evidence policy; the coordinator
+reads the background-review section before scheduling its first review.
+
+## Connection interruptions
+
+Connection errors, WebSocket failures and provider timeouts are transport observations,
+not evidence that step difficulty or model capability was misclassified. Preserve the
+checkout, retained sessions, model assignments and existing evidence. Let an in-flight
+provider retry finish; never launch a competing worker. After a terminal transport
+failure and confirmed lease release, allow at most one coordinator retry with a new
+attempt ID and the same owner/editor, resuming the current diff and outstanding work.
+If it fails again, record the connection blocker and resume after recovery; do not
+reset budgets, replay completed edits or promote models to repair connectivity.
+The whole-step deadline remains a safety bound, not a network-health diagnosis.
+
 
 Apply [Verification and Review](../../rules/verification-and-review.md) for CI/operator ownership
 and batched Jev verification/review-triage checkpoints.
 
 Execute the package produced by `spec-write` within its sourced context and authority. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Prepared inputs record accepted intent; implementation may adapt to repository reality while preserving acceptance and authority.
 
-Run steps sequentially with a retained implementation session. In Pi, dispatch
-`spec-step-owner`, explicitly authorizing it to direct one `spec-step-editor` under
-[Paired execution](../spec-step-run/references/paired-execution.md). Resume that owner
+Run steps sequentially with a retained implementation session. In Pi, use the
+repo-owned `spec_dispatch` runtime and synchronous owner-side `spec_editor` under
+[Paired execution](../spec-step-run/references/paired-execution.md). Reuse its disk sessions
 across related steps. Keep separate objectives and commits; session reuse does not
 batch steps. Reviewers remain independent and fixers run only between steps.
 
@@ -29,12 +56,17 @@ Use the assigned default owner unless the run supplies a stronger owner or expli
 step overrides. In that case, read [Step owner routing](references/owner-routing.md)
 and select at dispatch time; retain a separate session for each selected owner model.
 
+For a concrete discovery gap worth delegating, use [Optional Pi scouting](references/scouting.md)
+with the installed scout profile and Luna. Coordinator, owner and reviewer can request
+scouting; it is not a startup gate or a replacement for direct source reads. Pass the
+run's SCOUT_AGENT as `spec_dispatch.scout_model` and in reviewer assignments.
+
 On harnesses without nested agents, retain one direct implementation worker where
 resumption is supported, or follow `spec-step-run` locally. Honor explicit model/mode
 directives. In Pi, profile/model setup failures require diagnosis, not an unannounced
 switch to a different model or execution mode.
 
-Set an explicit run deadline on every step-worker launch; never rely on the harness default, which can be as short as 30 minutes and interrupts larger or visual steps mid-edit. Use about 2 hours per step unless the run records a different budget. When the harness supports it, also request a checkpoint before the deadline (about 10 minutes) so the worker commits coherent work and records a `checkpoint` outcome instead of timing out with uncommitted changes. Pi `pi-subagents` launches take `timeoutMs: 7200000` and `checkpointBeforeDeadlineMs: 600000`. Record the chosen budget in the run ledger, and treat a deadline hit as an interruption to resume, not a step failure.
+Set an explicit run deadline on every step-worker launch; never rely on the harness default, which can be as short as 30 minutes and interrupts larger or visual steps mid-edit. Use about 2 hours per step unless the run records a different budget. When the harness supports it, also request a checkpoint before the deadline (about 10 minutes) so the worker commits coherent work and records a `checkpoint` outcome instead of timing out with uncommitted changes. For Pi, pass `timeout_ms: 7200000` to `spec_dispatch` unless the run records another budget; the runtime cancels live process groups at that deadline. Do not add nested subagent launch options. Record the chosen budget in the run ledger, and treat a deadline hit as an interruption to resume, not a step failure.
 
 When the end-to-end handoff includes an overseer mailbox, follow its
 [routing contract](../spec-end-to-end/references/overseer-inbox.md). The top-level
@@ -53,13 +85,15 @@ prepared scope; route consequential changes for correction and re-preparation.
 
 Resolve an explicit `.specs/<feature>/spec.md` or `.specs/<feature>/` argument first, then the folder named in the conversation or `Spec folder:` footer. If exactly one prepared `.specs/*/spec.md` exists, use it. Do not ask for confirmation; choose the strongest title/footer/context match. Return `no-artifact` only when no intended package can be identified.
 
-Read the shared context, spec/index, evidence plan, and preparation outcome once.
+Reuse the just-produced `spec-write` handoff: resolve canonical package, shared context,
+step index, owned evidence and the next ready card. Dispatch without model capability
+probes, baseline broad checks, later-stage pre-reading or generated workflow files.
 Workers consume their assigned cards and applicable criteria/invariants. Use the history
 index for prior results instead of rescanning all learning and review prose.
 
 ## Check Structural Readiness
 
-Before first dispatch, require the context, spec/index, evidence plan, and exactly one
+On the manual/non-runtime path before first dispatch, require the context, spec/index, evidence plan, and exactly one
 ready card per indexed step. Check matching step IDs, owned evidence, and concrete
 verification contracts. Use the evidence-plan validator for its schema when needed.
 Missing or contradictory inputs return to `spec-write`; never invent a technical brief
@@ -71,7 +105,8 @@ card and revisit structure only after re-preparation or an observed contradictio
 
 ## History Index
 
-Build the index before first dispatch and after each completed step or fix:
+Build the index before first dispatch and refresh after learning/review/fix artifacts
+change. Reuse that refresh at the next dispatch; do not build it again merely to advance:
 
 ```bash
 node ~/.agents/skills/spec-run/scripts/build-history-index.mjs --spec-dir <canonical-spec-dir>
@@ -106,22 +141,21 @@ For each remaining assigned step in ascending order:
 
 1. Wait for the prior implementation assignment and its editor to finish. Run completed
    review fixes before assigning the next step; never overlap writers.
-2. Refresh the history index. Supply the checkout, canonical next-card path, index path,
+2. Reuse the current history index, refreshing only after its source artifacts change.
+   Supply the checkout, canonical next-card path, index path,
    newly routed messages/constraints, and any intervening fix commits. Do not restate
    the technical brief or the skill. Require affected source refresh after external fixes.
 3. Select the owner under the run's routing policy, or use its single assigned owner.
-   Launch it on first use with its assigned model, explicit `cwd`, `context: "fresh"`,
-   and the deadline above. In Pi, authorize one nested editor explicitly. Thereafter use
-   `subagent({ action: "resume", id: "<latest-owner-run-id>", message: "<next assignment>" })`.
-   Track the latest owner and its editor IDs by exact model assignment in the existing
-   ledger: resume may return new IDs. Refresh intervening changes since that pair last ran.
-4. After interruption, check the exact known ID using `action: "status"`. Resume only
-   an inactive eligible worker. If retention is unavailable, record that reason and
-   restore a fresh same-role worker from canonical inputs after confirming no writer
-   remains active. Reset for demonstrated context confusion, not simply at a step
-   boundary. A different selected model uses its own eligible session or a fresh one;
-   never change a stored session's model contract. Resolve a requested owner escalation
-   under the routing policy before treating its checkpoint as a completed assignment.
+   In Pi, invoke `spec_dispatch` with canonical package/card, explicit model assignments,
+   constraints and checkout when selected. The runtime creates an isolated worktree when
+   checkout is omitted and retains owner/editor disk sessions. Use its tool schema; do
+   not launch this pair through `subagent` or build a shell dispatch workflow.
+4. Await the native completion event. After interruption, inspect the exact known runtime
+   ID only to recover state. Cancel through the runtime and establish actual owner/editor
+   termination before replacement, escalation or a fixer. Failed or unknown cancellation
+   retains checkout ownership. Preserve working changes and accepted commits; do not
+   hard-reset or replay work to reconstruct a session. On non-Pi harnesses, resume an
+   inactive eligible worker or restore canonical inputs after confirming no writer remains.
 5. Consume the learning and commit, perform the completion check below, launch its
    independent background review, and continue. Within publication authority, push useful
    coherent checkpoints through `spec-pr mode=draft` so CI runs alongside remaining work.
@@ -136,7 +170,7 @@ required runtime/visual observations, deferred final-check handoffs, the step le
 commit for `as-specified`, `adapted`, or `checkpoint` work. When repository policy requires generated
 output separately, preserve that commit and the deliberate change commit within the same step;
 the learning lists both and binds evidence to final step HEAD. The orchestrator does not
-second-guess the implementation before final branch refinement.
+second-guess the implementation at the next stage transition.
 
 ## Completion Check
 
@@ -147,21 +181,28 @@ Do not review the code again, rerun worker checks, require new tests by count, o
 positive risk/correctness narratives. Stop substantive checking once the record is
 consistent; independent review owns defect detection.
 
+Use `~/.agents/scripts/spec-facts/cli.mjs git --repo <checkout>` for needed Git facts;
+add `--base <review-base> --head <review-head>` for an explicit comparison. Reuse the
+returned snapshot when applicable. This is not another per-step prerequisite or a
+substitute for evidence. See `~/.agents/docs/spec-workflow-efficiency.md` for existing
+deterministic helpers; do not rebuild their logic in prompts or ad hoc shell workflows.
+
 A claimed complete step cannot also report missing required implementation, unreachable
 promised behavior, or failed required focused/visual evidence. Ask for a truthful
 `checkpoint` outcome and retain useful work. Route `decision-required` or
 `needs-spec-correction` before dependent work. Continue other meaningful steps within
-existing authority, carrying unresolved gaps to final refinement.
+existing authority, carrying unresolved gaps to the responsible step owner before publication.
 
 ## Background Step Review
 
-Review each finished step while the next one is being implemented, so the branch review
-only has to cover integration, duplication, and final checks. As in branch refinement,
+Review each finished step while the next one is being implemented. These step review/fix
+cycles are the default review process; no final integrated branch review follows. As in explicit branch refinement,
 the reviewer and fixer are separate agents that communicate only through review and fix
 files. This coordinator schedules them and reads verdicts. It does not review code itself.
 
 The agent that dispatches step workers owns these launches. If it cannot launch
-subagents, skip this section. Branch review then reviews every commit itself.
+subagents, retain an explicit review gap and report the missing capability. Do not silently
+skip step review or replace it with an automatic branch audit.
 
 **Launch a review after each step.** Once a step passes mechanical verification, launch
 one background reviewer for the commits from the previous review's `head` (or the branch
@@ -191,17 +232,26 @@ or `needs-spec-correction` the same way as a step's. Handle a review that is sti
 running at the next step boundary rather than waiting for it.
 
 **Failures.** If a reviewer fails or times out, record it, relaunch it once, and
-continue. Commits that are still unreviewed are left for the branch review.
+continue independent work. If the retry also fails, report the unresolved scoped review
+gap; it prevents ready status, but not a truthful draft push. Resume only missing step reviews.
 
 **After the last step.** Wait for running reviews, then run any pending step fixes
-before the Completion Gate. The branch review covers fix commits made after the last
-step review. Report `step-review-coverage: complete` when step reviews cover every
+before the Completion Gate, including fixes for the last step. Resolve every actionable
+finding with a recorded fix or justified dismissal and affected focused evidence. No
+extra review of the final fixes or whole branch is automatic; record those fixes as not
+independently re-reviewed. Report `step-review-coverage: complete` when step reviews cover every
 step's commits, `partial` when some are uncovered, and `none` when no review ran.
 
 **In Pi.** Launch reviewers and fixers as async single-agent `subagent` runs with an
-explicit `cwd`. Pi's builtin `reviewer` agent has no `bash` or `write` tool, so it
-cannot write a step review; use `delegate` or a project review profile that has
-`read`, `bash`, and `write`, and state the no-edit rule in the task. Pass the role's
+explicit `cwd`. Use the installed `spec-stage-reviewer` profile for reviews; it supports
+both Pi tools and the provider adapter's command/patch replacement tools. Pi's builtin
+`reviewer` is analysis-only and cannot own the artifact-writing stage. Keep the provider
+extension available in the async child and state the no-code-edit rule in the task.
+Use `agent: spec-step-fixer` for step fixes, with `context: fresh`, `async: true`,
+an explicit checkout `cwd`, and the provider extension available. Never use the generic
+read-only `worker` for a fixer. The known profile retains edit/write and apply_patch;
+do not probe it before each launch. A missing tool reported at runtime is a launch
+error, not authority to switch the assigned model. Pass the role's
 assigned model as `model` (`provider/id[:thinking]`); otherwise the agent default
 applies. Give reviews `timeoutMs: 2700000`. Give fixers the step-worker budget and
 `checkpointBeforeDeadlineMs`. Don't call `bg_wait` for reviewers, because Pi wakes the
@@ -210,38 +260,39 @@ parent when a child completes. After a resume, check
 
 ## Completion Gate
 
-After all indexed steps have run and the step reviews and fixes have finished, map each acceptance criterion and claim to its commits and verification results, each Executable Evidence Plan gate (`EV-n`) to its produced artifact, and each pre-mortem item (`PM-n`) to its implemented disposition. Record missing coverage for final refinement; do not hide gaps or discard useful commits.
+After all indexed steps have run and the step reviews and fixes have finished, map each acceptance criterion and claim to its commits and verification results, each Executable Evidence Plan gate (`EV-n`) to its produced artifact, and each pre-mortem item (`PM-n`) to its implemented disposition. Route missing focused coverage to the owning step; do not hide gaps or discard useful commits.
 
 Assemble focused results and remaining automated commands, test files, setup, expected
-results, and output paths for branch review, deduplicating shared commands. Preserve the
+results, and output paths for publication, deduplicating shared commands. Preserve the
 observed revisions as `observedCommit` and record `applicability` when reusing a result
 for a different candidate `commit`. Do not duplicate worker
 checks in this coordinator or dispatch a final testing step; configured CI owns broad
 checks, while absent CI leaves operator testing outside agent evidence without blocking
-completion. Branch review consumes actual results and closes focused acceptance/failure gaps. Keep actual automated/smoke results distinct from unexecuted gates.
+completion. The responsible step/fix owner closes concrete focused acceptance/failure gaps. Keep actual automated/smoke results distinct from unexecuted gates.
 
-Then atomically write both `.specs/<feature>/merge-evidence.md` and version 2 `.specs/<feature>/merge-evidence.json`. These are the pre-audit evidence assembly bound to the exact current HEAD; final readiness still requires independent branch audit/refinement and a work tour.
+Then atomically write both `.specs/<feature>/merge-evidence.md` and version 2 `.specs/<feature>/merge-evidence.json`. These are the evidence assembly bound to current HEAD. Record default review completion under the shared **Step Review Completion** contract; the next stage presents this evidence in a work tour, without another review.
 
 The Markdown begins with a level-1 heading and contains:
 
 - **What was built** — one paragraph plus the commit list.
 - **Right problem** — each acceptance criterion mapped to the requirement it serves and the commits/tests covering it.
-- **Correct** — the verification evidence: exact commands and outcomes from step learnings, test files added, smoke observations, and automated commands deferred to review.
+- **Correct** — the verification evidence: exact commands and outcomes from step learnings, test files added, smoke observations, and any outstanding focused commands and their responsible owner.
 - **Safe** — each pre-mortem item with its implemented disposition; residual accepted risks stated plainly.
 - **Evidence index** — each EV item with claim/failure mapping, exact command, environment, artifact, status, observed result, proof boundary, and bound commit.
 - **QA tour input** — deterministic entrypoints, fixtures, scenarios, expected results, automated EV coverage, captures, and optional exploration-only questions. No required manual QA.
-- **Gaps** — missing coverage, unproduced evidence, and open findings carried to final refinement.
+- **Gaps** — missing coverage, unproduced evidence, and open findings assigned to their step/fix owner.
 
-`merge-evidence.json` identifies `context.md` by canonical path, mirrors every CL/FH/EV item and its phase from `evidence-plan.json`, adds actual statuses, commands/outcomes/artifacts/proof boundaries, step commits, QA inputs, separate deployment readiness/authority/observations, merge gaps and later-phase gaps, and the full current `commit`. Use `readyForAudit: true` only when every required merge gate passed and later-phase procedures are honestly recorded; this is not the deploy verdict.
+`merge-evidence.json` identifies `context.md` by canonical path, mirrors every CL/FH/EV item and its phase from `evidence-plan.json`, adds actual statuses, commands/outcomes/artifacts/proof boundaries, step commits, QA inputs, separate deployment readiness/authority/observations, merge gaps and later-phase gaps, and the full current `commit`. Add `audit` with `scope: steps`, `verdict: pass`, current `commit`, and `artifact: merge-evidence.md` only when the shared Step Review Completion conditions hold. The Markdown includes a compact **Step review completion** section linking original review ranges, fix decisions, and affected evidence, with the final fixes’ review status. Use existing records; do not create another review/report. Ignore legacy `readyForAudit` as a routing instruction.
 
-State gaps honestly. Finish this stage with `outcome: ready-for-refinement` when every indexed step
-has been dispatched and both merge-evidence files are bound to current HEAD. Do not run
-`spec-branch-refine` or `spec-work-tour`; they are separate top-level stages so their outcomes remain
-visible and independently resumable.
+State gaps honestly. Return `outcome: ready-for-publication` when every indexed step and
+its review/fix cycle is complete and required focused evidence is current. Pending configured
+CI is collected after pushing and still gates PR ready status. Otherwise return a truthful
+`checkpoint` with the remaining scoped work. Do not invoke a tour, branch refinement, or
+publication here; those are separately resumable top-level stages.
 
 ## Report
 
 Return outcome, merge-evidence paths, current HEAD, step-review coverage, retained owner
 and editor IDs by model assignment, and unresolved decisions or gaps. Keep step results
-and commands in the indexed records. End with `next: spec-branch-refine`; do not claim an audit/deploy verdict
+and commands in the indexed records. On completion, end with `next: spec-work-tour`; do not claim an audit/deploy verdict
 or produce work-tour/GitHub artifacts in this stage.

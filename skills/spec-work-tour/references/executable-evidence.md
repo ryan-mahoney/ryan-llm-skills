@@ -30,7 +30,7 @@ sourced requirement/context -> claim -> credible failure -> gate -> observed res
 Relevance, independence, reproducibility, and proof limits matter more than volume. A second agent
 is useful but is not by itself an independent oracle: expected results must come from sourced
 requirements, real contracts, or independently derived properties, not copied implementation logic.
-A validator proves artifact structure; the independent audit judges evidence truth and sufficiency.
+A validator proves artifact structure; independent reviewers judge evidence truth and sufficiency within their assigned scope.
 
 ## Context And Proportionality At Intake
 
@@ -50,7 +50,7 @@ Resolve `context.md` before choosing architecture or evidence. Record:
 
 Recalibrate in either direction when facts change. Removing a gate requires a recorded explanation
 that its obligation is inapplicable, superseded, or covered by equivalent proof, with source and
-claim mapping. The owning planner updates and re-prepares the package; the independent audit
+claim mapping. The owning planner updates and re-prepares the package; the independent reviewer
 checks that no applicable requirement disappeared. A real residual risk needs acceptance from
 current user instructions or sourced project policy. An agent's assumption, missing harness,
 failed check, schedule, or desire for green output is not acceptance.
@@ -59,8 +59,8 @@ failed check, schedule, or desire for green output is not acceptance.
 
 | Risk | Evidence emphasis |
 |---|---|
-| Low | Focused assertion or deterministic inspection at the changed boundary; relevant static checks; independent integrated audit. |
-| Medium | Observable acceptance coverage, a real composition/seam check where crossed, credible negative paths, and independent audit. |
+| Low | Focused assertion or deterministic inspection at the changed boundary; relevant static checks; independent step review. |
+| Medium | Observable acceptance coverage, a real composition/seam check where crossed, credible negative paths, and independent step review. |
 | High | Independent oracle or adversarial evidence for the high-consequence failure; representative isolated data/runtime; recovery proof when retained state or availability is actually at risk. |
 | Critical | High-risk proof plus isolated rehearsal and recovery/fail-closed checks for consequential irreversible paths; unresolved material uncertainty blocks the affected phase. |
 
@@ -79,7 +79,7 @@ Security, privacy, relevant accessibility, and protection of valuable data still
    results for reproducibility. Add maintained regression tests when recurrence warrants them.
 5. Add tooling or another verification layer only for a named material gap the existing evidence
    cannot close. Account for setup, maintenance, cost, and external effects.
-6. Stop when applicable claims are supported and independent audit finds no material gap. Do not
+6. Stop when applicable claims are supported and the selected review/fix process has no unresolved material gap. Do not
    rerun unchanged checks or invent hypothetical failures to make the package look complete.
 
 A missing safe verifier for an applicable claim remains a gap; it does not justify unsafe testing
@@ -104,11 +104,41 @@ domain documentation when they serve later changes, rather than only in feature-
 Do not create a parallel catalog or one-test-per-rule requirement. Loss of required protection
 or circular evidence is a material gap; optional unrelated consolidation remains follow-up work.
 
+## Step Review Completion
+
+The end-to-end default is independent step review and recorded fixes, including the last
+step, followed by evidence/tour assembly and PR publication. No final branch review is
+automatic. The operator/organization chooses further PR review and merge; publication
+never merges automatically. `REVIEW_AGENT` selects a model, not an additional review stage.
+
+`spec-run` records completion in existing `merge-evidence.md`/JSON when all steps have
+review coverage, every actionable finding has a fix or justified dismissal, affected
+focused checks support those decisions, and no known acceptance/review gap remains.
+Link the original review ranges, fix records, and evidence; do not copy their contents.
+Final fixes need affected evidence but no automatic additional independent review.
+State that distinction honestly; completion is not an integrated branch audit pass.
+
+Use the existing `audit` object with `scope: steps`, `verdict: pass`, the candidate `commit`,
+and `artifact: merge-evidence.md`. Here `pass` means the selected step review/fix process
+completed. The tour labels it **Step reviews · complete** and discloses that no final
+branch audit was performed. `scope: branch` (or absent scope in legacy records) retains
+branch-review meaning. Preserve original reviews' actual SHAs; after Git changes, record
+why unchanged reviews still apply and route substantive uncovered changes to their owner.
+Missing step review is a scoped gap, not permission to launch an automatic whole-branch audit.
+
+Tour and publication consume this completion without re-reviewing implementation or
+re-running valid checks. Keep pending CI, failed required gates, and known defects honest;
+completion of reviews alone does not establish readiness. For older packages, generic
+final branch review defaults are superseded by this policy without regenerating specs.
+Actual explicit user/project review requirements still apply.
+
 ## Bounded Refinement Completion
 
+Branch refinement is opt-in: run it only when explicitly requested or required by sourced
+project policy. Missing branch artifacts alone never select this route.
+
 `spec-branch-refine` counts review → fix rounds, including the last fix pass. The
-end-to-end default is one round when background step reviews cover every step's
-commits, otherwise two. A clean review may finish earlier. At the cap, resolved
+explicitly selected round budget applies. A clean review may finish earlier. At the cap, resolved
 findings and passing required merge gates allow `verified-at-cap`, without a further
 independent review of the last fixes. This is distinct from an independent audit pass.
 
@@ -116,7 +146,7 @@ For `spec-work-tour` and `spec-pr`, a current `reviews/refinement-completion.md`
 `outcome: verified-at-cap`, `evidence_verdict: proven`, and no unresolved findings replaces
 the final independent-audit pass requirement. Validate its links to actual review/fix
 records, terminal decisions, and final-commit gate results. Map completion to the tour's
-existing `audit` fields (`verdict: pass`, final `commit`, completion `artifact`) as the
+existing `audit` fields (`scope: branch`, `verdict: pass`, final `commit`, completion `artifact`) as the
 selected review process's completion, not independent post-fix review. Record the limit
 and absence of that final review in `context.decisions` and `residualRisks`; use the
 human-facing label Review. Preserve the earlier audit's real verdict and SHA.
@@ -200,7 +230,7 @@ Preparation retains exact commands, cases, files, and EV ownership. In existing 
 prose, record the failure covered, test layer, execution stage, setup cost when known, and
 deadline. Do not add mandatory schema fields or guess runtimes. Steps record actual focused
 results and hand off remaining checks. Use `pending` gates and `skipped` commands with reason
-`deferred to CI` or `deferred to branch review` only for intentionally deferred work, never to conceal a failure.
+`deferred to CI` only for CI-owned work, never to conceal a failure. A branch-review deferral is valid only when that stage was explicitly selected; otherwise the step/fix owner closes required focused gaps.
 Deferring final checks alone does not require a checkpoint; missing implementation or failed
 required step verification does. For older cards, record a scheduling adaptation in learning
 without rewriting immutable preparation or dropping acceptance obligations.
@@ -280,7 +310,8 @@ when the source is locally obtainable, but preparation cannot mark an essential 
 
 - **Merge:** implementation and evidence are sufficient for integration under the resolved context.
   Required merge gates and claims must pass; the selected independent review process must
-  complete at current HEAD under the bounded-completion policy. Required relevant CI must
+  complete for the current candidate under Step Review Completion, or the explicitly selected
+  bounded branch process. Required relevant CI must
   pass on the final pushed commit for remote readiness where configured. Local-only/no-CI
   work records actual focused evidence and operator-managed broad testing outside its
   evidence; absence of CI does not block completion or require an unauthorized push/local
@@ -319,7 +350,7 @@ and keep execution pending. Do not run commands merely because they appear in an
 - **Execution:** write owned tests, run focused unit/boundary checks, and produce required runtime/visual evidence;
   hand off final checks and later-phase procedures without executing outside authority. Record exact outcomes
   and limits; return consequential decisions upstream.
-- **Audit/refine:** reuse valid focused and final-commit CI results, execute outstanding focused gates, independently falsify claims, enforce context constraints, and close material
+- **Step review/fix (default); branch audit/refine (explicit only):** reuse valid focused and final-commit CI results, execute outstanding focused gates, independently falsify claims, enforce context constraints, and close material
   merge findings. Verify later-phase status honestly without forcing premature execution.
 - **Tour:** expose context, choices, omissions, proof, burden, and separate readiness/authority states.
 - **PR:** explain the resulting change and material limits, linking accessible evidence when useful.
@@ -330,7 +361,7 @@ and keep execution pending. Do not run commands merely because they appear in an
 Each downstream stage consumes the preceding owner's current records. Validate scope,
 revision bindings, required coverage, unresolved gaps, and contradictions; do not repeat
 that owner's substantive assessment or execution merely to make a new handoff. The
-independent audit remains responsible for challenging implementation evidence. Tour and
+independent step reviewer (or explicitly requested branch auditor) challenges implementation evidence. Tour and
 publication reuse that assessment, investigating original source only for a concrete
 gap, change, or discrepancy. Required checks and known failures keep their obligations.
 Use existing artifacts for this provenance; add no handoff report or verification stage.
@@ -351,7 +382,8 @@ Use existing artifacts for this provenance; add no handoff report or verificatio
 ├── learnings/step-<NNN>-learning.md
 ├── evidence/                            # source/inputs/results, captures and checks
 ├── merge-evidence.md / merge-evidence.json
-├── reviews/branch-<i>-review.md / branch-<i>-fix.md
+├── reviews/step-<NNN>-review.md / step-<NNN>-fix.md
+├── reviews/branch-<i>-review.md / branch-<i>-fix.md  # only for explicit branch refinement
 └── work-tour.json / work-tour.html      # version 2: separate decision states
 ```
 
@@ -380,7 +412,7 @@ authorize publication: preparation, execution and PR stages must check their req
     "reversibility": "easy",
     "uncertainty": "low",
     "requiredLayers": ["data", "server contract"],
-    "independence": ["independent integrated audit"],
+    "independence": ["independent step reviews"],
     "environments": ["local test database with disposable fixtures"],
     "qaMode": "automated"
   },

@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "15"
+  version: "16"
 ---
 
 # Spec PR
@@ -21,7 +21,14 @@ readiness, authorization and post-deployment observations remain separate. Apply
 
 This skill opens or updates PRs and never merges them. It may change repository and remote Git state only as required for rebase, commit, and push. It never publishes a red or stale evidence case as merge-ready.
 
-## Bounded Review Completion
+## Review Completion
+
+Default to the shared **Step Review Completion** contract: consume completed independent
+step reviews and fixes, including the last step, from current merge evidence. No branch
+audit artifact is required. Do not launch a final review or turn artifact assembly into
+one. Additional PR review and merge decisions belong to the operator/organization.
+
+### Explicit Branch Refinement
 
 Apply the shared **Bounded Refinement Completion** policy when refinement returns
 `verified-at-cap`. Its current completion record replaces the final independent-audit
@@ -47,7 +54,7 @@ evidence under the sequence below instead of demanding a tour before a planned r
 
 - sourced `context.md`, `spec.md`, `spec-steps.json`, version 2 `evidence-plan.json`
 - `merge-evidence.json` and `merge-evidence.md`
-- latest `reviews/branch-<n>-review.md`
+- completed step review/fix records linked from merge evidence; branch audit/completion only when explicitly selected
 - version 2 `work-tour.json` and its `work-tour.html`
 - `blockers.md` when present
 
@@ -73,7 +80,7 @@ For a draft without a tour, use `"tour": null` in `pr-url.json`.
 ```text
 draft: resolve authority/checkpoint -> safe push -> create/update draft -> inspect CI
 ready: fetch/rebase -> resolve conflicts -> commit coherent work -> focused evidence
--> safe push -> collect final-commit CI -> independent branch refine -> render work tour
+-> safe push -> collect final-commit CI -> consume step review/fix completion -> render work tour
 -> verify HEAD/evidence/CI bindings and mergeability -> update PR to ready -> verify publication
 ```
 
@@ -86,8 +93,7 @@ ready status. Preserve the selected review budget; pending CI does not require a
 For ready mode, reconcile the current base before final evidence. An early draft can use
 its current coherent branch unless project policy requires an immediate rebase; perform the
 safe rebase and refresh affected proof before ready status.
-In an end-to-end run, the coordinator applies this procedure before final branch
-refinement and the work tour. At publication, reuse its recorded result when the
+In an end-to-end run, the coordinator applies this procedure before final evidence and the work tour. At publication, reuse its recorded result when the
 fetched base is still an ancestor of HEAD and no relevant state has changed.
 
 1. Read current project context and validate the snapshot/decision sources before publication.
@@ -114,10 +120,9 @@ A rebase, conflict resolution, staged commit, dependency/base change, or any cod
 The steps below establish ready-mode evidence. Draft mode records pending/stale gates and
 runs needed focused feedback without requiring final audit/tour assembly before its push.
 
-For an unchanged candidate with current applicable evidence, a current passing audit or
-valid bounded-refinement completion, a ready tour, and required CI (when configured)
+For an unchanged candidate with current applicable evidence, current step review/fix completion (or an explicitly selected branch review completion), a ready tour, and required CI (when configured)
 passing on the published HEAD, skip evidence
-regeneration, refinement, and tour rendering. Proceed to PR metadata and publication
+regeneration, review, and tour rendering. Proceed to PR metadata and publication
 verification. A stage transition alone does not invalidate those outputs. If the base,
 candidate, authority, or relevant check result changes, explain the invalidation and
 apply only the affected work below within the existing review budget.
@@ -133,13 +138,15 @@ apply only the affected work below within the existing review budget.
 3. Update affected `merge-evidence.json`/Markdown records from actual outcomes only
    if the evidence owner has not already brought them current. Preserve applicable
    unchanged records and their original observations; do not reconstruct the package.
-4. Run or resume `spec-branch-refine` against the final branch within the selected review
-   budget. Require current `evidence_verdict: proven` and the selected process's audit pass
-   or valid `verified-at-cap` completion. Do not restart completed refinement merely to
-   collect CI or publish; actual new defects still block readiness.
+4. Consume the current step review/fix completion in merge evidence. Route concrete new
+   defects or substantive conflict changes to the owning step/fix worker and review only
+   uncovered implementation. Do not launch `spec-branch-refine` unless explicitly requested
+   or required by sourced project policy. Publication, a new SHA, or a missing branch audit
+   is not a reason to review completed work again.
 5. Reuse a current `spec-work-tour` result or run it when missing or invalidated. Confirm
-   its JSON/HTML, the audit artifact, and every required gate bind
-   the exact full `git rev-parse HEAD` SHA. Reuse the tour owner's render/inspection
+   its JSON/HTML and review completion bind the exact full `git rev-parse HEAD` SHA.
+   Required evidence must apply to that candidate; preserve original review ranges and
+   observed revisions with explicit applicability rather than relabeling them. Reuse the tour owner's render/inspection
    result; reopen only when output, renderer, or shared-file packaging changed, the
    inspection is missing, or a concrete presentation defect is reported.
 
@@ -149,7 +156,7 @@ publish a failed gate as passed.
 
 ## Push Without Overwriting Foreign Work
 
-Push the branch. After a rebase, use `--force-with-lease`, never bare `--force`. If the lease fails, fetch and inspect remote divergence. Rebase/integrate the remote work and repeat the full affected-evidence and audit/tour sequence, or stop. Never overwrite commits the lease identified as foreign.
+Push all coherent task-owned commits, including final step fixes; preserve unrelated user work. After a rebase, use `--force-with-lease`, never bare `--force`. If the lease fails, fetch and inspect remote divergence. Rebase/integrate the remote work and repeat the affected evidence, scoped review if needed, and tour sequence, or stop. Never overwrite commits the lease identified as foreign.
 
 After pushing, compare the remote branch SHA to local HEAD. For ready status it must also
 match the current tour/evidence and relevant passing CI results. Drafts record pending or
@@ -198,7 +205,13 @@ Do not copy secrets or sensitive evidence into the PR.
 Use `gh pr view --json number,url,state,isDraft` to find an existing PR for the branch.
 For draft mode, create with `gh pr create --draft` when absent, otherwise update its body/title
 and retain or restore draft status with `gh pr ready --undo` as needed. For ready mode,
-change to ready only after the checks below. Write `pr-url.json` after the platform returns the URL.
+change to ready only after the checks below. Write `pr-url.json` after the platform returns the URL. Retain existing publication
+fields and add `schema_version: 1`, `kind: pr_submission`, `url`, `submitted_at`
+(actual UTC submission time), `package` (canonical absolute spec folder), and
+`parent_session` (the coordinator's exact transcript path) when available. Do not guess
+session identity or reuse an older submission timestamp. This receipt records PR
+submission, not coordinator completion or acceptance; later publication queries do not
+change that timestamp.
 
 ## Verify Publication
 
@@ -215,7 +228,7 @@ and correct relevant failures, update affected evidence/tour, push, and refresh 
 Before `gh pr ready`, confirm applicable configured final-commit CI and closed acceptance/
 review gaps. Without CI, broad testing stays operator-managed outside agent evidence;
 its absence does not block ready status. Also confirm current
-mergeability, the selected audit completion, and a ready tour. Publication never merges or deploys.
+mergeability, the selected review completion, and a ready tour. Publication never merges or deploys.
 
 ## Report
 

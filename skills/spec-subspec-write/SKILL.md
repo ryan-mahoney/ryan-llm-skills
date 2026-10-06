@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "25"
+  version: "26"
 ---
 
 # Spec Subspec Write
@@ -60,9 +60,9 @@ dependencies, shell UI, or fake data wiring into production.
 
 ### Bounded new-code checks
 
-When the step creates a function, helper, file, or new test harness:
+When the step creates a function, helper, shared constant, UI component, file, or new test harness:
 
-1. Search for an equivalent as the Reuse section of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md) describes: by behavior with `code_search` when available, and by exact likely symbols/literals. Reuse or extend an equivalent when found and name it in `Targets`; if the spec mandates duplication, return `needs-spec-correction`. Place a new general-purpose helper in the repository's shared-helper location.
+1. Reuse the spec's grounded ownership decision, or make the bounded lookup in the Reuse section of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md). In `Targets`, name the symbol, path, and reuse/extend action; for new code, name its owning location and why an existing owner does not fit. Apply this to helpers, shared values, and components. If the spec mandates duplication under the same contract, return `needs-spec-correction`.
 2. Read one model file of the same kind only when the new shape is not already fixed by the spec or an adjacent target.
 3. For runtime behavior of a third-party/platform API, confirm semantics from installed source/types or official documentation. If it cannot be confirmed, name the assumption and return `blocked` when correctness depends on it.
 
@@ -149,8 +149,8 @@ name retained protection or the sourced retirement. Do not require new maintaine
 
 ### Focused commands only
 
-Every ready plan names exact commands scoped to the changed behavior: a test file, test-name filter, targeted typecheck/build command, or similarly bounded verifier. Keep per-step commands focused; record any required full-suite command once in the evidence plan for CI consumption by
-branch review when CI is configured; otherwise record operator ownership outside the
+Every ready plan names exact commands scoped to the changed behavior: a test file, test-name filter, targeted typecheck/build command, or similarly bounded verifier. Keep per-step commands focused; record any required full-suite command once in the evidence plan for CI consumption at
+publication when CI is configured; otherwise record operator ownership outside the
 agent-required evidence graph. Broad local diagnostics require explicit user direction. Do not replace repository-specific commands with a generic command. Apply the shared Verification Scheduling And Deadlines policy. Inspect script expansion and filter semantics, combine overlapping cases into one focused invocation when supported, and record the process-level deadline in Setup (120 seconds by default; justify longer limits). Assign each command an execution stage in Setup under the shared policy; do not repeat a unit-test matrix through every integration layer.
 
 For a `Visual: yes` step, name an exact focused Playwright command and repository-relative

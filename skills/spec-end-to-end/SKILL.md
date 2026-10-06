@@ -1,14 +1,61 @@
 ---
 name: spec-end-to-end
-description: "Run the complete standalone spec-driven workflow from a feature goal or existing .specs package through architecture, specification, preparation, branch or worktree setup, implementation, evidence refinement, work tour, and a published pull request. Use when the user says \"do the spec workflow end to end\", \"take this from idea to PR\", \"run the whole spec process\", \"finish this spec and open a PR\", or asks for the full workflow with modifiers such as a named subagent or worktree."
+description: "Run the complete standalone spec-driven workflow from a feature goal or existing .specs package through architecture, specification, preparation, branch or worktree setup, implementation and step review/fix cycles, evidence assembly, work tour, and a published pull request. Use when the user says \"do the spec workflow end to end\", \"take this from idea to PR\", \"run the whole spec process\", \"finish this spec and open a PR\", or asks for the full workflow with modifiers such as a named subagent or worktree."
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "17"
+  version: "20"
 ---
 
 # Spec End To End
+
+## Standing Run Defaults
+
+For a prepared Pi run, reuse its recorded branch/worktree and completed work; create
+an isolated branch/worktree only when none is assigned. Resume the first unfinished
+obligation from current receipts and the ledger, including outstanding review or fixes.
+Use configured difficulty routing and retained owner/editor pairs through the managed
+Pi runtime. `REVIEW_AGENT` selects independent step reviews; `SCOUT_AGENT` selects
+optional bounded source discovery for owners and reviewers. Reuse deterministic fact,
+history and rendering helpers. The owner calls `spec_advice` at shared Jev checkpoints;
+use the installed Mercury clerk only for useful bounded prose transformation under
+the compact-delegation contract below. These are defaults, not instructions that a
+user must repeat in every prompt. Explicit model and run directives take precedence.
+
+An invocation requesting continuation through PR publication authorizes ordinary
+task-owned commits, safe pushes and PR creation/update within that outcome. Reuse
+that authority; ask only for a consequential unresolved decision or action outside
+the request. Complete independent step review/fix cycles and required evidence, then
+publish. No final branch review or merge is automatic.
+
+## Prepared Pi entry
+
+For an explicitly prepared package after `spec-write`, read applicable `AGENTS.md`
+and honor user directives, then call `spec_dispatch action=startup` with `package`,
+`owner_model` (DEFAULT_OWNER/IMPLEMENT_AGENT), `editor_model`, and optional
+`strong_owner_model`, `scout_model`, checkout/branch/base and step override.
+Omit `step` on first entry. `owner_override` pins a selected step's owner.
+This route takes precedence over the general startup reading sequence below.
+
+The runtime resolves canonical paths, uses the prepared index, routes hard steps,
+creates/reuses the checkout, acquires the writer lease and starts the pair in one call.
+It returns pending inbox messages or existing progress instead of replaying work.
+On resume, consume that receipt and only the ledger/history entries needed to resolve
+its next obligation. A completed worker still needs its independent review/fix cycle.
+Pass an explicit `step` after reconciliation; a retry needs a new `assignment_id`.
+Preserve the recorded owner on an interrupted step with `owner_override`.
+
+Trust the receipt's mechanical checks for that launch. Do not re-check Git paths,
+leases, model availability, installed profiles or nesting without a specific error
+or changed input. Owners read their card and applicable implementation policy.
+The coordinator loads review guidance when scheduling review, and assembly/tour/PR
+references at those stages. Do not pre-read scouting, paired-execution internals,
+architecture, publication or efficiency references to launch prepared work.
+Required repository rules and unresolved authority, inbox holds and known failures
+still apply. Preparation gaps go back to preparation; no blanket revalidation or
+reclassification of an already prepared package.
+
 
 Apply [Verification and Review](../../rules/verification-and-review.md) for CI/operator ownership
 and batched Jev verification/review-triage checkpoints.
@@ -19,9 +66,41 @@ with the requested readiness, or a stage produces a concrete blocker. An early d
 CI but does not end the run. This workflow ends at publication; merge, deployment,
 and production verification remain separate actions under existing authority.
 
+## Continue Through The Authorized Outcome
+
+A harness goal is optional. Do not create one or change goal settings unless requested.
+Keep the requested outcome and next action in the existing stage ledger; do not add
+a second task list or rewrite the objective at every handoff.
+
+When a stage returns, assess its handoff and perform the next authorized action in
+the same turn. A plan, commit, passing check, stage checkpoint, tour, or early draft
+is progress, not a reason to offer to continue or ask for routine permission. A worker
+checkpoint returns control to the coordinator: resolve its question, route a concrete
+repair, or advance when the owning skill permits it.
+
+While a worker is active, do only independent authorized coordination. When none
+remains, yield to its completion event or use the harness's blocking wait. Record the
+worker ID and pending action once; do not produce repeated "waiting" turns, poll via
+shell commands, or infer completion from silence. On completion, consume the handoff
+and continue. Instructions do not create a wake mechanism: if the harness supplies
+neither completion events nor blocking waits, leave an explicit resumable checkpoint
+with the worker reference and next action rather than claiming unattended continuation.
+
+Treat an actionable failure as work to diagnose and route within the existing retry,
+review and authority limits. Repeating an unchanged failed action is not progress.
+Stop dependent work only for a concrete missing decision, authority, input or external
+dependency, or an exhausted owning-stage budget. Complete independent authorized work
+and report the exact blocker, attempted recovery and action needed to resume. Never
+weaken acceptance, bypass a required gate or reset a budget to keep going.
+
+Respect a user pause or cancellation immediately. Otherwise end the run only at its
+requested verified outcome or an explicit unresolved blocker; an event wait remains
+in progress. On resumption, take the next action from the ledger and current receipts
+without replaying completed stages.
+
 ## Engineering Decision Handoffs
 
-Read [Engineering Decisions Through The Standalone Workflow](../spec-work-tour/references/standalone-engineering-decisions.md).
+When planning or assembling final evidence, read [Engineering Decisions Through The Standalone Workflow](../spec-work-tour/references/standalone-engineering-decisions.md).
 Carry domain rules and concrete counterexamples from architecture into AC/CL/FH/EV evidence;
 carry accepted deferred work into the final tour and PR. Use existing stage artifacts and verdicts.
 Stage owners check rule coverage, ordinary-entry proof, and scope limits. The parent
@@ -91,7 +170,7 @@ with the exact ambiguity. Do not choose by modification time.
 
 ## Receive Overseer Messages
 
-Before implementation begins, read [Overseer Inbox](references/overseer-inbox.md).
+For non-runtime startup or when the runtime reports pending messages, read [Overseer Inbox](references/overseer-inbox.md).
 Initialize the canonical feature's `inbox/` and `processed/` folders and record the
 run ID and paths in the ledger. Messages arrive during implementation and review,
 never during planning. The parent owns intake and routing; addressed workers own
@@ -123,31 +202,45 @@ architecturally novel in the resolved context. A file type or maturity label alo
 ## Delegate With Compact Handoffs
 
 When delegation is authorized, use existing stage and prepared-step boundaries. Preserve sequential
-steps, retained implementation sessions per selected owner, commit boundaries, and independent reviewer separation. Before
-delegating a stage that itself requires workers, verify the harness supports the needed nesting and
-tool access; otherwise retain that stage's coordination locally.
+steps, retained implementation sessions per selected owner, commit boundaries, and independent reviewer separation.
+Use known harness capabilities and installed role contracts without a startup probe.
+Investigate nesting or tool access only after a concrete dispatch error; on a harness
+known to lack nesting, retain that stage's coordination locally.
 
 Use known role profiles with the tools the stage needs. Do not probe every profile
-before dispatch. The branch-review stage owner must read the checkout and
+before dispatch. The independent review stage owner must read the checkout and
 canonical spec package, execute required verification commands, and write review
 and evidence artifacts in the primary repository's spec folder. A restriction on
 editing implementation code does not mean the stage can use a filesystem-read-only
 agent. Resolve a genuinely unknown capability contract when selecting a profile;
 known installed profiles need no repeated capability audit.
-Use a capable general-purpose agent with the review role's code-edit prohibition
-when available. Analysis-only reviewers may assist with scoped findings, but cannot
+In Pi, use `spec-stage-reviewer` with the explicit REVIEW_AGENT model. Its allowlist
+includes both Pi tools and provider-adapter command/patch replacements; keep the
+provider extension available in the child. On other harnesses use a capable
+general-purpose agent with the review role's code-edit prohibition when available. Analysis-only reviewers may assist with scoped findings, but cannot
 own the whole stage. If an explicitly requested agent type lacks a required capability,
-surface that mismatch rather than silently substituting it or having the parent
-transcribe its output to complete the stage.
+diagnose that launch's tool/profile configuration while preserving the requested model.
+Do not probe unrelated providers or substitute an explicitly selected model unless the
+user supplied a fallback or approves the change. Announcing a substitution does not
+authorize it. If the requested route remains unavailable, checkpoint that stage with
+the concrete failure; do not claim the model itself lacks the capability or have the
+parent transcribe its output to complete the stage.
+
+When a clerical task needs a helper, consult `~/.agents/docs/spec-workflow-efficiency.md` for existing deterministic helpers
+instead of reconstructing their work in prompts. An optional Pi `spec-clerk` subagent
+can draft concise prose from explicitly supplied approved facts when this saves a
+substantial writing pass. It uses Mercury by default, read-only tools, fresh context,
+and a one-minute deadline. The coordinator assesses its draft before use; no mandatory
+clerk, startup probe, engineering decisions or publication authority is added.
 
 Give each stage coordinator the canonical checkout and spec-package paths, assigned
 stage, owning skill path, run-wide constraints, and completion return contract. When
 delegation is requested, delegate whole implementation and refinement stages when
 the harness supports their workers; the parent need not manage every implementation
 step or review iteration. In Pi, run `spec-run` in the top-level agent. It launches
-retained `spec-step-owner` sessions, background step reviewers, and step fixers. Grant the
-owner the `subagent` tool and explicit authority to direct one `spec-step-editor`.
-Use the installed profiles and [paired execution contract](../spec-step-run/references/paired-execution.md).
+retained owner/editor disk sessions through the repo-owned `spec_dispatch` and
+synchronous `spec_editor` tools, plus independent background step reviewers and fixers.
+Do not launch implementation pairs through nested `pi-subagents`. For manual dispatch or paired-execution recovery, use the installed profiles and [paired execution contract](../spec-step-run/references/paired-execution.md).
 Only the editor writes implementation code while the pair is active.
 
 For an implementation worker, pass the checkout, canonical subspec path, owning
@@ -183,46 +276,39 @@ excluded by the routing policy above:
 3. Run `spec-write` once through both internal phases. Require `outcome: prepared`,
    granular ready execution cards and consistent required package inputs. Preparation
    hashes and `preparation.json` are not prerequisites; reuse usable legacy cards.
-4. Establish the implementation checkout directly as top-level orchestration work. Honor an
+4. Proceed from prepared handoff to the first editor assignment with only canonical
+   path/context resolution and required readiness checks. Do not audit known model
+   capabilities, run baseline broad checks, pre-read later-stage skills, or generate an
+   orchestration workflow. In Pi, `spec_dispatch` can create the isolated worktree when
+   checkout is omitted. Otherwise establish the implementation checkout directly as top-level orchestration work. Honor an
    explicit branch/worktree directive, reuse a clearly matching checkout when present, and use
    ordinary Git judgment otherwise. Read [workspace-handoff.md](references/workspace-handoff.md)
    before creating or reusing a worktree. Do not invoke a branch-management skill merely to run
    commands a capable agent already knows how to run.
 5. Run `spec-run` from the implementation checkout. It owns prepared step implementation,
    per-step commits, background step reviews and the fixes between steps, evidence
-   production, and pre-audit merge-evidence assembly. This run's PR scope authorizes early
+   production, and merge-evidence assembly. This run's PR scope authorizes early
    draft publication at the first meaningful coherent checkpoint and subsequent useful pushes;
    apply `spec-pr mode=draft` without waiting for final local regression or a ready tour.
-6. Before final refinement, apply `spec-pr`'s **Rebase Safely** procedure to reconcile
-   the base, resolve conflicts, and record the result in `pr-rebase-log.md`. Refresh
-   affected evidence, push the coherent candidate within the authorized draft scope,
-   and collect applicable CI. Do this before producing the final tour. Then, by
-   default, run `spec-branch-refine max-iterations=1` when `spec-run` reports
-   `step-review-coverage: complete`, and `max-iterations=2` otherwise. One round is a
-   review and its fix, with no further review. The branch review reuses step reviews,
-   so that round covers unreviewed commits, cross-step integration, duplication, and the
-   required gates while reusing CI-owned broad-suite results. Collect relevant CI for the
-   final pushed commit before final readiness when CI is configured. Without CI, broad
-   testing is operator-managed outside agent evidence and does not block completion.
-   Do not duplicate broad suites locally.
-   Honor an explicit user limit instead. Accept `proven`
-   or `verified-at-cap` only with the completion record and passing required evidence
-   bound to current HEAD; preserve the final fixes' review status honestly. Carry the
-   round budget through resumption, tour, and publication; downstream stages must not
-   reset it or start another refinement loop.
-7. Push any final refinement commits and collect their required CI before the tour;
-   resolve relevant failures within the existing review budget. Run `spec-work-tour`.
-   It owns the final JSON/HTML evidence and separate release states and must
-   finish with merge `verdict: ready` bound to the same HEAD. Deployment readiness, authority,
-   and post-deployment observations are separate; pending later-phase gates do not force execution.
-8. Run `spec-pr mode=ready` from the same checkout to update the draft after final-commit
-   configured required CI passes and acceptance/review gaps close. Without CI, broad
-   operator testing remains outside recorded evidence and is not a completion blocker.
-   Reuse the current audit, evidence, and tour under `spec-pr`'s unchanged-candidate
-   path; publication is not a reason to repeat those stages. If a new base or failure
-   invalidates readiness, report the concrete remaining work and refresh affected
-   artifacts before claiming completion. Preserve an explicit request for draft-only
-   publication; report its remaining readiness limits honestly.
+6. After the last step's independent review and fixes finish, apply `spec-pr`'s
+   **Rebase Safely** procedure before final evidence/tour assembly. Refresh only affected
+   evidence; route substantive conflict changes or uncovered implementation back to the
+   owning step's review/fix cycle. Reuse unchanged reviewed work and original review ranges.
+   Push every coherent task-owned commit, including final fixes, and collect configured
+   required CI on the final candidate. Without CI, broad testing remains operator-managed
+   outside agent evidence and does not block completion.
+7. Run `spec-work-tour` from the completed step-review/fix records and current merge evidence.
+   Require merge `verdict: ready` at current HEAD; deployment readiness, authority, and
+   post-deployment observations remain separate. No final branch review is automatic.
+   Invoke `spec-branch-refine` only for an explicit user request or sourced project requirement;
+   a `REVIEW_AGENT` assignment, missing branch audit, or legacy default is not such a request.
+   Preserve any explicitly selected refinement budget through resume and publication.
+8. Run `spec-pr mode=ready` to publish/update the PR after applicable required CI and known
+   acceptance/review gaps close. Reuse current step completion, evidence, and tour; do not
+   add a review during publication or resume. Push all remaining task-owned commits and
+   verify the remote HEAD matches. Preserve draft-only requests and keep unresolved required
+   evidence honest in a draft. The operator/organization chooses subsequent PR review and
+   merge; this workflow never merges automatically.
 
 After every stage, check the returned outcome, required artifact existence, relevant
 revision bindings, unresolved decisions, and next stage. Inspect the declared

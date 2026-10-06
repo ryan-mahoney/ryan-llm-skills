@@ -67,6 +67,9 @@ Preserve intent and voice. Apply the entrypoint's step-granularity rules before 
 hiding them in a longer card. Do not restyle a sound spec. Re-running preparation against unchanged inputs must converge without churn.
 
 Apply the Reuse and Preparation sections of [Engineering Decisions](../../spec-work-tour/references/standalone-engineering-decisions.md).
+Carry helper, shared-value, and component ownership into each affected card's `Targets`:
+symbol, path, and reuse/extend action, or the new destination and reason. Reuse grounded
+planning results; search only unresolved ownership. Do not add another report or inventory.
 Verify material domain rules have sourced examples/counterexamples and AC/CL/FH/EV coverage;
 verify deferrals preserve current acceptance and have concrete destinations. Existing equivalent
 prose suffices. Correct missing behavior or proof, not headings. Ground database-derived behavior
@@ -112,7 +115,7 @@ Use each `spec-steps.json` entry's existing `difficulty` as the default preparat
 
 | Difficulty | Grounding budget | Card depth |
 |---|---|---|
-| `easy` | Verify named paths, modified public shapes, and an exact focused command. Do not survey callers or search for precedent unless a target is missing or the card adds a function or helper (run the Reuse search). | Minimal |
+| `easy` | Verify named paths, modified public shapes, and an exact focused command. Do not survey callers. Use the bounded Reuse lookup for a missing target or unresolved ownership of a new helper, shared value, or component. | Minimal |
 | `medium` | Read named symbols, their immediate integration seam, and the existing target test or nearest test file. | Grounded |
 | `hard` | Inspect the relevant cross-module contracts, consequential callers/callees, and test architecture. | Detailed |
 
@@ -243,6 +246,14 @@ planning snapshot; never remove execution learnings or evidence. Retain unchange
 Correct locally resolvable problems directly. Accumulate spec corrections discovered while producing cards, update the spec/index/guardrails once, then regenerate only cards whose inputs or required behavior changed. A missing field or stale private symbol is a repair, not a blocker.
 
 Use `spec-subspec-write` only when an escalation trigger remains unresolved after the bounded grounding above. The fallback leaf must return a compact card or identify the exact genuine blocker; the parent still owns all shared artifacts. Stop without publishing only for a required product decision, unavailable dependency, or irreconcilable spec/repository contract that cannot be resolved from local evidence.
+
+#### Refine complexity once from prepared facts
+
+After normal grounding, assess the remaining implementation judgment using the entrypoint's complexity rubric. In the same preparation invocation, request `step-difficulty` advice through the shared [Jev CLI/MCP contract](../../../scripts/jev/README.md). Submit compact facts already known from each card: objective, direct precedent (or its absence), settled contracts/ownership, remaining judgment (explicitly `none` when settled), failure consequences, and the credible mistakes focused evidence can expose or miss. Use the current planner tier. Batch up to eight relevant newly prepared or materially changed steps per request. Attempt the first eligible batch normally without a service-readiness probe. An unavailable response stops further advisory calls for this preparation invocation; use planner judgment for the rest. Do not repeatedly request unchanged steps, gather diffs or explore repository files merely to classify, add a classifier agent/stage, or call again at dispatch.
+
+The result is advisory, not a model-quality guarantee. Consider each assessment separately; an uncertain sibling does not invalidate a usable assessment. Missing facts, unclear tiers, unavailable service or exhausted budget fall back immediately to planner judgment with no retries or implementation block. The tool preserves the supplied planner tier as a floor; do not lower a tier while concrete consequential judgment remains. A planner may independently correct an overestimate when normal grounding demonstrates a settled route, recording the short reason in existing preparation prose. Genuine medium/hard uncertainty favors hard. Intent or authority ambiguity still follows the existing planning-blocker route.
+
+Update only the authoritative `Complexity:` tag and its `spec-steps.json` `difficulty` mirror when justified, before package validation. Retain completed grounding and valid cards; no repeat grounding, format migration, competing difficulty field or extra report is required. Put a useful advisory/fallback reason in the existing preparation row when it changes the routing decision. Preserve explicit owner overrides and stronger-owner capability.
 
 ### 6. Validate the complete package
 

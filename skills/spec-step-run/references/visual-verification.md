@@ -3,6 +3,23 @@
 When the target entry in `spec-steps.json` has `visualDesign: true`, treat seeing the
 rendered result as required implementation work, not optional final polish:
 
+In the Pi owner/editor pair, the owner owns capture, image inspection, visual decisions
+and evidence. Use `spec_verify` for capture/vision-relay commands after the editor
+returns; the editor applies bounded corrections and does not run the visual checks.
+Read `uishot` and `see` only when visual work is relevant. Establish vision for the
+current model/harness rather than carrying another worker's cached verdict across
+model changes. Independent reviewers reuse applicable captures and obtain fresh ones
+only to close a concrete evidence gap against a stable reviewed revision.
+
+For a needed dev server, pass `server: {command, ready_url, readiness_timeout}` to
+`spec_verify` and put the capture operation in its outer `command`. The server command
+runs in the foreground; readiness uses an owned loopback port. The runtime retains
+the writer reservation through startup, capture and cleanup, then returns image/log
+paths for inspection. Close browsers created by the capture and preserve pre-existing
+ones. Do not leave `nohup` or background servers between tool calls. Readiness failure,
+capture failure or cancellation still requires cleanup; unconfirmed termination blocks
+another writer and notifies the coordinator.
+
 1. Before editing, inspect any named visual reference and the applicable local design
    system and design/UX rules. Read the installed `uishot` skill completely and resolve
    its bundled launcher before the first capture. Open static reference images directly.

@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "30"
+  version: "33"
 ---
 
 # Spec Step Run
@@ -18,15 +18,30 @@ Apply [Verification and Review](../../rules/verification-and-review.md) for CI/o
 and batched Jev verification/review-triage checkpoints.
 
 Own one assigned step from the prepared package. In Pi, use the retained owner/editor
-pair described in [Paired execution](references/paired-execution.md); the owner may
-launch exactly one editor when assigned that mode. A direct worker performs the same
+pair described in [Paired execution](references/paired-execution.md); the owner invokes
+one synchronous `spec_editor` assignment at a time with the chosen implementation
+approach and bounded scope, assesses its result, then
+selects the next assignment. Use the paired reference's short assignment packet;
+unresolved design decisions remain with the owner. The owner reads/searches source
+directly; the editor's ordinary assignment combines current-source reading and edits.
+Use read-only editor assignments only for a specific blocking fact unavailable to the
+owner's tools. In paired execution the editor writes changes (including assigned test
+code) but does not run tests, compile/lint checks or other executable verification.
+The owner runs necessary focused checks through `spec_verify` after the editor returns,
+reuses valid evidence and directs bounded repairs. Commit is a separate assignment
+after owner acceptance of the changes and required evidence. Use the runtime's native disk sessions
+and completion/termination contract rather than nested subagent resume or status polling. A direct worker performs the same
 work itself without delegation. Do not begin the next step until assigned or perform
 independent branch review. Use the prepared card as the execution plan, adapting only
 where actual code or observed failures require it.
 
 When the assignment includes a stronger-owner route, follow
 [Step owner routing](../spec-run/references/owner-routing.md#escalate-from-concrete-evidence)
-to request transfer through the coordinator. Do not launch a replacement owner yourself.
+to request transfer through the coordinator. In managed Pi, return a `checkpoint`
+with the unresolved question and diagnostics (or `decision-required` for missing
+authority); the runtime completion event returns that handoff to the coordinator.
+Use a supervisor messaging tool only on harnesses that actually provide it.
+Do not launch a replacement owner yourself.
 
 ## Routed Overseer Messages
 
@@ -137,7 +152,7 @@ copy prototype-only fixtures, dependencies, shell UI, or fake data wiring.
 - Reuse before writing: stop at the highest rung of the necessity ladder that holds
   (`~/.agents/rules/minimal-implementation.md`). Prefer the shortest working diff
   consistent with the spec; add no abstraction the spec does not require. Before
-  adding any function, type, constant table, or similar helper the card does not
+  adding any reusable function, type, shared constant, UI component, or similar helper the card does not
   name, use the index to locate relevant `introduced` entries and run the search in the
   Reuse section of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
   Reuse or extend an equivalent; place a new general-purpose helper in the
@@ -189,8 +204,9 @@ Apply Jev verification once before expensive/repeated checks for a coherent revi
 On older cards that defer all automation, record this scheduling adaptation without
 rewriting preparation. Record actual commands, scope, elapsed time, outcomes, artifacts,
 and proof limits once. Intentionally deferred final checks stay `skipped`/`pending`, with
-reason `deferred to branch review`, exact paths, expected observations, setup, and artifact
-destinations. A failed focused check is a failure, not a deferred pass: resolve it or
+reason and responsible owner, exact paths, expected observations, setup, and artifact
+destinations. There is no automatic final branch review: resolve deferred required focused
+checks through the step/fix owner before publication; broad checks follow CI/operator policy. A failed focused check is a failure, not a deferred pass: resolve it or
 return a truthful checkpoint. The evidence and commit sections below consume these
 results; they are not additional verification passes.
 
@@ -210,8 +226,9 @@ as plain procedural language — imperative mood, one instruction per sentence, 
 before its command, no "should". Label optional exploration questions as product
 discovery, never required verification. Captured output names the command and context
 that produced it. Record every produced
-evidence path in the learning prose. Automated execution artifacts intentionally deferred to
-branch review stay `pending` and do not prevent implementation completion. A step whose other required merge evidence remains unproduced is
+evidence path in the learning prose. CI-owned gates stay `pending` until the configured
+run returns; they do not require local duplication. Older cards deferring focused checks
+to branch review must route them to the step/fix owner, not silently skip them. A step whose other required merge evidence remains unproduced is
 not `as-specified` — preserve it as a truthful `checkpoint` with the gap recorded.
 
 ## Visual Steps
@@ -250,7 +267,7 @@ learning:
       rejects: <FH-n>
       proof_boundary: <what this result does and does not establish>
   introduced:
-    - symbol: <new reusable function, type, or constant>
+    - symbol: <new reusable function, type, constant, or component>
       path: <checkout-relative path>
       purpose: <one-line behavior it owns>
 ```
@@ -278,7 +295,7 @@ commit when useful and authorized, but do not claim dependent obligations comple
 
 Use `checkpoint` when meaningful implementation, tests, reproduction evidence, or a
 concrete repair exists but implementation or required focused/visual/runtime verification
-remains incomplete. Final checks intentionally deferred to CI or branch review alone do not require a checkpoint.
+remains incomplete. Final checks intentionally deferred to configured CI alone do not require a checkpoint.
 Use `no-artifact` only when no meaningful repository-local artifact could be produced.
 Never describe missing production reachability as complete, but do not discard or hide
 useful work because it is imperfect.

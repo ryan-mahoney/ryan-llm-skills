@@ -1,21 +1,27 @@
-# Integrated Evidence Audit And Work Tour
+# Step Reviews, Optional Branch Audit, And Work Tour
 
-The standalone spec workflow does not depend on human code review. Its final authority is a commit-bound chain from requirement to falsifiable claim, credible failure hypothesis, executable gate, observed result, the selected review mode, and phase-specific verdict. Operational authority remains a separate sourced decision.
+The default workflow reviews each step independently and fixes its findings, including
+the final step, then assembles the work tour and publishes the PR. Push all task-owned
+commits. There is no automatic final integrated branch review or merge. The operator or
+organization chooses any subsequent PR review and merge process.
 
-`spec-branch-refine` alternates `spec-branch-review` and `spec-branch-fix` until the implementation and its evidence are proven or the loop is honestly blocked. A proven pass hands off to the explicit `spec-work-tour` stage, which emits the required machine verdict and HTML tour. A PR distributes that case; it is not where safety is expected to emerge.
+Completion is recorded in existing merge evidence with `audit.scope: steps`. It links
+original review ranges and fix records and does not claim final fixes received another
+independent review. The tour labels this **Step reviews · complete**. Required focused
+evidence, known failures, and configured required CI still govern ready status.
 
-`spec-end-to-end` coordinates these stages after `spec-run`, checks each handoff, and invokes
-`spec-pr` after the tour is ready. See the [workflow guide](spec-workflow.md) for starting, resuming,
-and delegating a run. Compact worker reports do not replace the evidence package or this audit.
+`spec-branch-refine` remains available for an explicit request or sourced project requirement.
+It alternates independent branch reviews and fixes within the selected budget. The branch
+audit sections below describe that opt-in process, not a prerequisite for ordinary publication.
+See the [workflow guide](spec-workflow.md) for starting and resuming a run.
 
 ## Test Execution
 
-Steps run their prepared focused acceptance checks after coherent implementation and
-record actual revisions, results, and proof limits. They hand off outstanding final
-focused checks to branch review. The reviewer reuses applicable step/CI evidence and
-executes remaining focused gates for concrete gaps. Configured CI owns broad suites;
+Steps run prepared focused acceptance checks after coherent implementation and record
+actual revisions, results, and proof limits. The step/fix owner closes outstanding focused
+gaps; the tour and publisher consume those results. Configured CI owns broad suites;
 without CI, broad testing remains operator-managed outside agent evidence and does not
-block completion. After a fix, rerun affected checks; coordinators consume results.
+block completion. After a fix, rerun affected checks, not unrelated passing suites.
 
 ## Artifact Package
 
@@ -35,11 +41,11 @@ block completion. After a fix, rerun affected checks; coordinators consume resul
 │   └── step-<NNN>-learning.md          # command/evidence outcomes and later-step handoffs
 ├── evidence/                            # captures, logs, dry runs, QA inputs
 ├── merge-evidence.md
-├── merge-evidence.json                 # pre-audit results bound to HEAD
+├── merge-evidence.json                 # results and step review completion bound to HEAD
 ├── blockers.md                          # when applicable
 ├── reviews/
-│   ├── branch-<i>-review.md             # independent evidence audit
-│   └── branch-<i>-fix.md
+│   ├── step-<NNN>-review.md / step-<NNN>-fix.md
+│   └── branch-<i>-review.md / branch-<i>-fix.md  # explicit branch refinement only
 ├── work-tour.json                      # version 2: separate merge/release states
 └── work-tour.html                      # architecture/evidence/QA tour
 ```
@@ -49,7 +55,7 @@ pass its canonical path to workers and never copy the package into a worktree.
 New step learnings go in `learnings/`. Readers accept historical root-level learning
 files when no folder copy exists; existing evidence paths remain unchanged.
 
-## Evidence Audit Stages
+## Optional Branch Evidence Audit
 
 `spec-branch-review` leaves production code unchanged and is independent of the fixer.
 It closes outstanding focused acceptance gaps and writes their evidence. It runs:
@@ -109,8 +115,7 @@ needed; missing explanation or provenance never establishes a pass.
 
 `max-iterations` counts review → fix rounds, including the final fix. A limit of two
 means review → fix → review → fix, with early exit for a clean review. Direct invocation
-still defaults to ten. `spec-end-to-end` defaults to one when background step reviews
-cover every step's commits, and two otherwise. Resume finishes an
+still defaults to ten. `spec-end-to-end` does not invoke this process automatically. Resume finishes an
 interrupted round without resetting the budget. The completion record at
 `reviews/refinement-completion.md` distinguishes a clean independent audit from verified
 final fixes. Both successful outcomes can proceed to the tour and PR; neither permits
@@ -129,7 +134,7 @@ Every implemented spec produces `work-tour.json` and `work-tour.html`. The HTML 
 - rerunnable commands, artifacts, observed results, and honest proof limits;
 - QA entrypoints, deterministic fixtures, ideal/non-ideal scenarios, visual captures, and automated coverage;
 - migrations, configuration, observability, rollback/forward-fix, and residual risks;
-- independent audit provenance and any evidence gaps.
+- selected step review/fix completion (or explicit branch audit) and any evidence gaps.
 
 For user-visible work, the QA section makes the implementation easy to explore without making a person's attention part of the safety system. Optional taste or discovery questions are labeled separately from correctness.
 
@@ -155,7 +160,7 @@ Local briefs include their actionable text in both the tour and PR. Unmet merge 
 A later-phase gate may remain `pending` with a concrete procedure and no fabricated observation.
 It does not block merge unless the gap also invalidates a merge claim. A known live failure that
 reveals an implementation defect must not be hidden by phase labeling. The tour renderer validates
-structure and contradictory statuses; the independent audit verifies truth, relevance and authority.
+structure and contradictory statuses; independent reviewers assess truth, relevance and authority within their assigned scope.
 
 Existing packages require sourced context, consistent ready cards, and phase-aware
 evidence-plan/tour version 2 before reuse. Preparation hashes and `preparation.json`

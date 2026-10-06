@@ -22,27 +22,22 @@ not the difficulty-escalation route.
 
 ## Select at dispatch
 
-Use the prepared card, relevant indexed history, and known blockers. Default to the
-ordinary owner for settled implementation routes and established repository patterns.
-Choose the stronger owner when consequential reasoning remains during execution:
-unresolved cross-component contracts, concurrency or recovery semantics, security or
-data-integrity choices within existing authority, or unfamiliar integration without a
-reliable precedent. Planning may already have resolved these difficulties. Step length,
-file count, or a risk label alone does not justify upgrading.
+Use the prepared canonical `Complexity:` tier (`difficulty` in `spec-steps.json`) for upfront selection. With `STRONG_OWNER` available, route `hard` to that owner from the start; settled `easy` and `medium` steps use the ordinary owner unless explicit assignments or known concrete difficulties warrant the stronger owner. User assignments stay pinned. Preparation already assesses remaining judgment from its compact grounded facts; do not repeat classification, call Jev at dispatch, gather new source merely to classify, or create a separate report. Existing prepared packages remain usable; a known consequential difficulty can justify the stronger owner without re-preparing or adding fields.
 
 Record the selected model and a short reason with the step's existing ledger entry.
-On resumption, preserve the step's recorded owner and promotion state; do not reclassify
+On resumption, preserve the recorded owner and promotion state; do not reclassify
 interrupted work back to the default owner or reset its promotion allowance.
-Do not score the whole package, reread all source to classify a step, dispatch a
-classifier, or write a separate difficulty report. Explicit overrides support known
-hard steps without requiring new card fields or rewriting prepared specs.
+The stronger owner is available proactively for consequential design, contract,
+concurrency or recovery judgment and poor choices that focused tests may miss.
+Do not require a test failure before choosing it. Missing authority retains the
+existing planning-blocker route.
 
 ## Retain pairs and transfer work
 
 In Pi, lazily create one `spec-step-owner` session per selected model, each with its
-own retained `spec-step-editor`. Resume an inactive eligible matching session; otherwise
-create a fresh matching session under the existing retention rules. Do not transfer a
-nested editor between owners or launch idle pairs as preparation. Run steps sequentially
+own retained editor disk session through `spec_dispatch` and `spec_editor`. Reuse
+matching inactive sessions through that runtime. Do not transfer an editor between
+owners or launch idle pairs as preparation. Run steps sequentially
 and keep only one code writer active, including between-step review fixers.
 Reuse a pair only while both owner and editor model/tool contracts still match the
 assignment; a changed editor contract requires replacing that inactive editor.
@@ -67,7 +62,8 @@ Before transfer, have the current owner finish or stop its editor and return an 
 existing outcome (`checkpoint`, or `no-artifact` if appropriate), the current revision
 and working changes, its editor ID, and the unresolved question with diagnostic paths.
 Retain these in existing learning/ledger records. Confirm both the owner and editor are
-inactive before the next owner writes. Preserve useful work and valid check results;
+terminated or completed before the next owner writes; a failed or unknown runtime
+cancellation retains the checkout lock and blocks replacement. Preserve useful work and valid check results;
 do not reset the checkout, replay implementation, or mark the step complete on transfer.
 
 The coordinator resumes or launches the assigned stronger owner, passing that handoff.

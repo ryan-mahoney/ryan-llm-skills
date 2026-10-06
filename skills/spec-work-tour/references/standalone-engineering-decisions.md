@@ -11,8 +11,8 @@ sentences and one existing gate. These are reasoning obligations, not document-s
 Every stage reads this section. Helpers written separately by isolated workers drift apart:
 one copy gets a fix and the others keep the old behavior. Give each behavior one owner.
 
-**Search by behavior, then confirm.** Before planning or writing a function, type, constant
-table, parser, formatter, path builder, or similar helper, search for an existing owner. When the
+**Search by behavior, then confirm.** Before planning or writing a reusable function, type,
+shared constant, UI component, parser, formatter, path builder, or similar helper, locate its existing owner. When the
 turn exposes a semantic `code_search` tool, query the responsibility ("format a duration for
 display", "build the feature worktree path"), not only a likely symbol name. Otherwise use exact
 search (`rg`) for several plausible names, distinctive literals, and the API calls the helper
@@ -30,17 +30,37 @@ dependence on this feature's domain — belongs in the repository's existing sha
 behavior. Keep a helper private to a feature module only when it is genuinely feature-specific.
 Do not create a new shared location when one exists.
 
+**Give shared values a domain owner.** Domain values, limits, configuration, and design
+tokens used across surfaces belong in the existing owning module or token/config source.
+Import or derive them there instead of copying them into pages, sections, or components.
+Keep values local when their meaning is local; equal literals alone do not imply shared
+ownership. Avoid a global constants file that couples unrelated domains.
+
+**Contribute to shared UI.** Locate the existing component or primitive with the same
+behavior before building a page-specific version. Compose it or add a compatible variant
+in its owning component module, preserving existing callers and accessibility behavior.
+When current consumers need a new shared component, place it in the established component
+library; keep feature-specific composition local. Visual similarity alone does not justify
+merging different behavior contracts or creating speculative component APIs.
+
 Stage obligations:
 
-- **Architecture and specification:** identify the repository's shared-helper location as a
-  constraint. State each reuse decision in Architecture prose ("format amounts with
+- **Architecture and specification:** identify the relevant helper, shared-value, and component
+  owners. State each reuse decision in Architecture prose ("format amounts with
   `formatMoney` in `src/lib/currency.ts`") so preparation can derive it as a guardrail.
-- **Preparation:** any card that adds a function or helper runs the search above, whatever the
-  step's difficulty. Name the reuse target in `Targets` when one exists.
-- **Implementation:** run the search before adding any helper the card did not name, and read
-  the `introduced` lists in prior step learnings first. Record each new reusable symbol in this
-  step's learning so later steps find it.
-- **Branch audit and fix:** check both directions. A new helper may duplicate an existing one,
+- **Preparation:** for new helpers, shared values, or components, reuse grounded search
+  results or make the bounded lookup above, whatever the step's difficulty. Name the symbol,
+  path, and reuse/extend action in `Targets`; for a new owner, name its destination and why
+  the nearest existing owner does not fit. No separate inventory or report is required.
+- **Implementation:** carry these ownership decisions into the editor's existing `Edits`
+  and `Preserve` fields. Search only for additions or uncertainties the card did not settle,
+  using relevant prior `introduced` entries. Record new reusable symbols, including shared
+  components, in the step's existing learning so later steps find them.
+- **Step review:** check new or changed responsibilities against their named owners and a
+  bounded precedent search at the reviewed revision. Confirm the same contract and concrete
+  drift or maintenance harm before flagging a duplicate. Do not survey the whole repository
+  or defer this check to a final branch audit.
+- **Explicit branch audit and fix:** check both directions. A new helper may duplicate an existing one,
   and a changed helper may have copies that still carry the old behavior. When a fix corrects a
   helper's logic, search for copies with the same defect and correct or consolidate them, or
   record why they serve a different contract.

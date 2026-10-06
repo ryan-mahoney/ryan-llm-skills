@@ -25,17 +25,17 @@ The sequence is:
 
 ```text
 project context and consequential decisions → architecture → optional critique → combined specification and preparation → workspace setup
-→ step implementation → base reconciliation → independent branch refinement → final push/CI → work tour → PR publication
+→ step implementation + independent step reviews/fixes → base reconciliation → final push/CI → work tour → PR publication
 ```
 
 `spec-run` reviews each finished step in the background while the next step is built,
-and fixes those findings before the following step. It ends after the last step's review
-and fixes and pre-audit evidence assembly. The orchestrator then runs `spec-branch-refine`
-with one review → fix round when step reviews cover every step, or two otherwise, stopping
-early when a review is clean. The branch review reuses step reviews and covers unreviewed
-commits, cross-step contracts, duplication, and the final checks. Resolved findings and passing checks at the cap complete the
-stage with an explicit record that final fixes were not independently re-reviewed. `spec-work-tour` produces the final JSON/HTML verdict. The orchestrator invokes
-each stage separately; callers using the individual skills must make those handoffs themselves.
+and fixes those findings before the following step. It finishes the last step's review
+and fixes and records completion in merge evidence. After base reconciliation and affected
+evidence refresh, push all task-owned commits and collect required CI. `spec-work-tour`
+presents the existing evidence, then `spec-pr` publishes the PR. No final branch review or
+merge is automatic; further PR review and merge belong to the operator/organization.
+`spec-branch-refine` remains available for explicit requests or sourced project requirements.
+Each stage is separately resumable; missing branch audit files do not trigger it.
 See [the evidence audit guide](reviews.md) for artifact paths and proof requirements.
 
 ## Test Scheduling
@@ -95,9 +95,9 @@ After planning, assign the capable implementation owner, dedicated editor, and
 independent reviewer directly. For example:
 
 ```text
-/goal-direct Use spec-end-to-end to resume after spec-write for PACKAGE.
+Use spec-end-to-end to resume after spec-write for PACKAGE.
 Create a new branch/worktree. Use IMPLEMENT_AGENT as the step architect/owner,
-EDITOR_AGENT as its dedicated editor, and REVIEW_AGENT for step and branch reviews.
+EDITOR_AGENT as its dedicated editor, and REVIEW_AGENT for independent step reviews. No automatic final branch review or merge.
 Reuse the implementation owner/editor across steps.
 
 PACKAGE: /absolute/primary-repo/.specs/feature/
@@ -106,10 +106,14 @@ EDITOR_AGENT: openrouter/inception/mercury-2.5:high
 REVIEW_AGENT: <provider/model:thinking>
 ```
 
-The top-level session runs `spec-run`, which retains a `spec-step-owner` and its
-`spec-step-editor`. The editor is the only implementation writer. Independent fixes
-run between steps; the retained pair receives those commits and refreshes affected
-source before continuing. `sync.sh` installs these native profiles into Pi.
+The top-level session runs `spec-run` and calls `spec_dispatch` for each prepared step.
+The runtime retains owner/editor disk sessions, creates or reuses the selected worktree,
+and sends a completion event. The owner calls `spec_editor` synchronously; only the editor
+writes implementation code. Independent fixes run between completed steps; the retained
+pair receives those commits and refreshes affected source before continuing.
+`sync.sh` installs the profiles and extension. Restart Pi after syncing.
+See [runtime setup and API](../pi/extensions/spec-runtime/README.md) and
+[run observation](spec-runtime-observation.md) for persistent ledgers and session discovery.
 
 Explicit selectors go straight to launch. The workflow does not enumerate every
 model or probe every agent before work; discovery is for ambiguity or a concrete
@@ -268,9 +272,24 @@ workers finish. Inactive retained sessions do not prevent completion.
 
 ## Goal Mode And Compact Delegation
 
-A harness goal can keep the run active across turns. Keep its objective short and point it at the
-canonical package. Store changing progress in the stage ledger and evidence artifacts. After
-continuation or compaction, the agent checks that ledger against the files and current Git state.
+Use a normal prompt by default; a harness goal is optional. `spec-end-to-end` directs the
+coordinator to take the next authorized action after each handoff, recover from actionable
+failures within existing budgets, and continue to the requested publication outcome.
+Stage completion does not require another user instruction. Concrete blockers and user
+pause/cancellation remain valid stopping conditions; acceptance and authority are unchanged.
+
+Managed implementation and background review completion events wake the running Pi
+session. While work is active, yield to those events instead of repeating "waiting"
+turns or polling logs. The skill is guidance, not a scheduler: it cannot keep a closed
+session running or guarantee continuation when a harness has no wake/wait mechanism.
+An optional goal's auto-continuation must coordinate with worker waits to avoid redundant
+turns; the spec runtime currently does not register waits with Pi's goal scheduler.
+
+Store progress and the next action in the existing stage ledger. If the user explicitly
+uses a harness goal, keep its objective short and point it at the canonical package.
+Do not change an active goal's settings automatically. After continuation or compaction,
+reconcile the ledger with current receipts, relevant artifacts and Git state; resume
+pending work without replaying completed stages.
 
 Delegation follows user directives and the owning skill's policy. To request a stage coordinator:
 

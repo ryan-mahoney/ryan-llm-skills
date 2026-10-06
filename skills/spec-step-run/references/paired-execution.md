@@ -1,70 +1,170 @@
 # Paired execution in Pi
 
-Use this reference when the coordinator assigns paired execution. The owner follows
-`spec-step-run`; its editor executes bounded parts of that work. No extra planning or
-review stage is introduced. The coordinator explicitly grants the owner permission to
-launch one editor, and only one editor may be active in the checkout.
+Use the repo-owned `spec-runtime` extension for assigned Pi implementation pairs.
+The coordinator starts an asynchronous owner with `spec_dispatch`; the owner invokes
+`spec_editor` synchronously. Native `pi --print --mode json` processes reuse explicit
+disk sessions. Do not use nested `pi-subagents` launches or resume IDs for implementation/editing.
+Use `spec_dispatch(action: start)` with `package` (absolute canonical folder), `step`
+(absolute subspec), `owner_model` and `editor_model` (`provider/id[:thinking]`). Optional
+`checkout`, `branch`, `base`, `assignment_id` and `instructions` carry existing directives.
+`timeout_ms` bounds the whole assignment (default `7200000`, two hours).
+An explicit checkout is reused; omitting it creates a sibling worktree. The owner calls
+`spec_editor(assignment: <bounded instructions>)`. Read the
+[runtime API](../../../pi/extensions/spec-runtime/README.md) only for setup/recovery detail.
+Consult the extension's tool schema for arguments; do not generate a shell orchestration
+workflow or inspect installed models before trying the assigned tool. Optional
+`scout_model` carries SCOUT_AGENT. The owner can call `spec_scout(task)` for bounded
+read-only discovery using the installed scout profile; direct reads remain the default.
+No general subagent tool is exposed to the owner or editor.
 
-The profiles are installed by `~/.agents/sync.sh` from `pi/agents/`. Use native Pi agents
-`spec-step-owner` and `spec-step-editor`. The owner inherits the configured capable model
-unless the operator assigns one. The editor defaults to OpenRouter
-`inception/mercury-2.5:high`; its Pi model selector is
-`openrouter/inception/mercury-2.5:high`. Honor explicit role overrides.
+The profiles come from `pi/agents/`. The owner uses the assigned capable model; the
+editor defaults to `openrouter/inception/mercury-2.5:high`. Preserve exact selectors and
+explicit overrides. Diagnose actual launch failures on this route; do not silently
+substitute models or providers. Non-Pi harnesses retain the direct worker route.
 
-Use these known profiles and the explicit model selectors directly. Do not enumerate
-agents/models or launch probe agents before work. Actual dispatch validates availability;
-use discovery only to resolve ambiguity or diagnose a concrete launch failure.
-Preserve the selected model, including the `:high` suffix;
-do not substitute a different Mercury version or a provider after a launch failure.
-Profile or model unavailability is a concrete setup issue, not permission to silently
-switch execution modes. Harnesses without nested delegation use the direct worker route
-defined by `spec-run` instead.
+## Bounded assignments
 
-## Owner and editor exchange
+Pass the canonical package and assigned card/step, checkout when already selected,
+run constraints, history-index path and intervening commits. The runtime can establish
+an isolated worktree when checkout is omitted. Keep all `.specs/` access in the primary
+repository. Use the prepared card as the execution plan.
 
-Give the editor the checkout, canonical subspec path, and a bounded assignment with
-its relevant constraints. Start with the card's decided edit sequence. Request targeted
-source inspection only where needed to execute it. The editor performs searches, reads,
-edits, checks, evidence writes, and commits; the owner resolves engineering choices and
-accepts results from actual excerpts, diffs, and diagnostics.
+Dispatch the first bounded edit once the prepared card and decisive source facts settle
+its approach. Later edit details can wait until that batch returns; exhaustive step-wide
+discovery is not a prerequisite. The owner retains all decisions, one writer and checks
+only after the editor returns.
 
-Examples of useful assignments: inspect a named interface and its callers; apply the
-specified behavior using the existing pattern; run the prepared focused check and
-diagnose a failure. Do not require an owner exchange for every tool call or ask the
-editor to independently replan the whole step. Escalate a contradiction, material
-departure, or repeated failure without new evidence; continue routine execution.
+The owner settles behavior and architectural boundaries, while the editor chooses local
+implementation details and edit strategy. Send a bounded transformation using a short
+plain-text packet inside `assignment`; related functions/files can be edited together:
 
-Launch the editor with an explicit `cwd`, `async: true`, `context: "fresh"`,
-`timeoutMs: 7200000`, and `checkpointBeforeDeadlineMs: 600000`, unless the run has a
-different budget. Send only task-relevant context, not the owner's transcript. The
-editor profile supplies the default model; pass an explicit model if the run overrides it.
-Do not layer host verification gates over checks already owned by the step.
-
-## Retain sessions
-
-After completion, resume the editor with:
-
-```js
-subagent({ action: "resume", id: "<latest-editor-run-id>", message: "<next assignment>" })
+```text
+Change: One concrete behavior or move.
+Edits: Affected files/symbols and chosen approach; pseudocode only when ambiguity warrants it.
+Preserve: Specific behavior/coverage this change must retain; current scope exclusions.
+Return: Relevant diff and result, or the unresolved decision; stop here, no commit.
 ```
 
-Keep the latest returned ID: a revival may create a new run ID while preserving prior
-context. Inspect the exact known ID with `action: "status"` after interruption. Never
-resume or replace a still-active writer. A completed child is resumed, not steered.
-If retained-session eligibility fails, record the reason and launch a fresh editor only
-after confirming the prior writer is inactive. Restore context from the card and index.
-Provider or tool setup failures need diagnosis on the same execution route.
+For example, after inspecting a selected-record update handler:
 
-At each step boundary, have the editor write the learning and commit the coherent
-artifact. Return the learning path, outcome, commit, latest editor ID, and unresolved
-issues to the coordinator. No editor may remain active when the owner returns; otherwise
-a between-step fixer could overlap it. The coordinator resumes the matching owner for
-its next assigned step, with intervening commits and new constraints since that pair
-last ran. Refresh affected source before edits. A different owner model uses its own
-eligible retained pair or a fresh pair, never an old session with a changed model
-contract. Keep the editor attached to its owner even when another pair uses the same
-editor model.
+```text
+Change: Ignore updates for a record that is no longer selected.
+Edits: In src/selection.ts, onUpdate: before changing state, compare update.recordId
+with state.selectedRecordId. If different, return the existing state unchanged.
+In test/selection.test.ts, use the existing A/B fixture: select B, deliver A's update,
+and assert both selected ID and displayed content still belong to B.
+Preserve: Keep the matching-record path unchanged. Do not alter subscriptions or fixtures.
+Return: Changed hunks and unresolved gaps. Stop; no verification, commit or unrelated repairs.
+```
 
-The owner and editor may reset or compact when context pressure or demonstrated confusion
-warrants it. Preserve canonical requirements, evidence, and unresolved findings. Step
-numbers alone are not a reason to discard a useful session.
+Use real inspected symbols in a live packet. The owner retains the verification plan.
+Reuse session context and canonical references; do not prepend the entire history or
+repeat stable policy. Put current preservation and stop constraints at the end.
+Include relevant source/scout pointers so the editor starts at the affected region.
+Reference settled card contracts instead of restating their full implementation. A
+dependency question that needs many reads is a bounded scout assignment: request its
+exact contract and decisive excerpts, then inspect those. Avoid front-loading later
+transformations or collecting full-file context before the first coherent edit.
+Carry settled reuse decisions in `Edits`/`Preserve`: exact helper, shared-value, or
+component owners and the reuse/extend action. Resolve missing ownership for this
+transformation only; let the editor choose details within those boundaries.
+Within a retained step, reuse known policy and exact source plus successful replacements;
+refresh only changed or uncertain text. Do not require post-edit file inventories,
+line counts or repeated status/diff calls just to populate a return. Broad mechanical
+edits may warrant a focused readback; preserve that judgment rather than imposing a
+hard read budget.
+Test assignments name one behavior scenario or closely coupled cases, observable
+expectations; the editor can choose among existing fixture conventions. Several files may
+belong to one assignment; neither a per-file handoff nor a fixed number of calls is required.
+
+The owner reads/searches the relevant source directly to choose the approach. The editor
+reads current source while implementing it. Reserve a facts-only assignment for a
+specific blocking fact unavailable through the owner's tools, such as command output;
+request a bounded answer, not a source inventory. Routine assignments should make
+changes rather than relay file contents between models. Do not delegate "restore every
+handler," "finish extraction and wiring," or "implement all acceptance tests and fix
+production until they pass." The owner must name the particular move, wiring change
+or test case and resolve its approach first. Calling a broad repair a single coherent
+transformation does not make it suitable for the editor.
+
+For extractions, name the callbacks/helpers to move and their source/destination, then
+assign wiring or obsolete-code removal when the relevant behavior is established.
+Combine mechanically inseparable edits. Do not require tests on intentionally incomplete
+intermediate states; keep required checks with the assignment that makes the behavior
+executable. The owner retains every remaining acceptance obligation in the existing
+step context rather than narrowing the overall step to the current packet.
+
+The editor completes that assignment and returns the relevant diff and unresolved gaps.
+It does not run tests, compile/build checks, lint checks or other executable verification.
+Reading changed regions/diffs and formatting affected files are part of editing.
+The owner uses `spec_verify(command, timeout)` for necessary focused checks, diagnostics
+and evidence after the editor returns, following the shared verification/Jev policy.
+The runtime rejects verification while the editor is active, including question pauses.
+Use `spec_advice(task, input)` for the Jev checkpoint with the shared version-1 input;
+the runtime supplies the checkout and excludes concurrent editing. Do not ask the editor
+to prepare a JSON file for this call. Uncertain advice falls back to owner judgment.
+Managed command results retain actual exit status and a separate raw-log path. Long
+output includes bounded deterministic excerpts; read missing log ranges instead of
+rerunning a check merely to recover diagnostics.
+Do not verify every assignment automatically: batch until the behavior is executable,
+reuse valid evidence, and leave broad suites to CI/operator policy. The owner diagnoses
+failures and sends bounded corrections; the editor does not run fix-until-green loops.
+When a repair leaves the same failure, establish the first unproven boundary before
+another structural rewrite. Use a scout for unfamiliar cross-file tracing; if execution
+evidence is missing, group the diagnostic edits into one assignment, then have the owner
+run the focused reproduction. Avoid one editor handoff per log line or speculation.
+This changes who runs checks, not the acceptance obligations. It may make ordinary repairs within scope, but may not weaken
+behavior or remove acceptance coverage to obtain a pass. The owner assesses the result
+and chooses the next assignment using those returned facts, without repeating discovery
+or successful checks. This is implementation acceptance, not another independent review.
+
+Commit is a separate assignment after the owner assesses the completed changes and
+required evidence. It may include canonical learning/evidence finalization and must
+preserve evidence revisions; it does not authorize new implementation or renewed tests
+without a concrete need. A general instruction to implement the step does not grant
+the editor commit authority. Do not depend on asynchronous steering to stop an editor
+before it commits or crosses an assignment boundary.
+
+The editor uses `spec_question` for a concrete unresolved engineering choice. Through
+pi-intercom's scoped extension channel, `spec_editor` returns `needs_decision` to the
+owner while the same editor waits. The owner calls `spec_answer` with the exact request
+ID; it publishes the answer and resumes waiting for that editor's completion or next
+question. Do not use conversational intercom `ask` in busy print sessions. Questions
+have finite readiness/response deadlines and cancellation; communication failure
+returns an unresolved exception, never permission to guess or replace the editor.
+The owner resolves concrete contradictions,
+consequential choices, repeated failures without a new diagnosis, and acceptance gaps.
+For unresolved escalation, it returns a `checkpoint` and concrete question to the
+coordinator; missing authority returns `decision-required`. Managed Pi children have
+no supervisor messaging tool. It does not duplicate discovery, baseline tests or
+successful verification. The editor
+uses contextual patches for existing files and coherent writes for small new files.
+An anchor mismatch calls for a scoped reread; repeated edit failure without a new
+diagnosis returns the error and current fragment to the owner. The owner batches focused checks after coherent edits rather than adding a per-file
+verification ceremony.
+
+Keep larger diffs, diagnostics and successful logs in canonical artifacts. Lead returns
+with outcome, changed symbols and unresolved exceptions; state verification not run. Aim for at most
+4,000 characters, with only decision-relevant hunks and absolute paths for the rest.
+If the runtime marks a result truncated, read the needed portion of its full-result file;
+do not ask the editor to reconstruct it. No routine progress narration is required.
+
+## Completion, retention and cancellation
+
+The runtime sends the coordinator a native completion event. Wait for that event;
+do not poll status, tail transcripts, or infer completion from quiet output. Use `spec_dispatch(action: status, package: <canonical folder>, run_id: <known ID>)`
+only to recover after interruption or diagnose an actual failure.
+
+Owner and editor disk sessions stay attached to their exact model assignments across
+turns and steps. Refresh affected source after intervening commits; reuse valid evidence
+with its original revision. A changed model uses a distinct session. Context compaction
+must preserve requirements and unresolved work; it never authorizes a Git reset.
+
+The runtime holds an exclusive checkout lock through the owner and editor process
+group. `spec_dispatch(action: cancel)` takes the canonical package and known run ID.
+Cancellation must establish actual process termination before any replacement
+writer or review fixer starts. Failed or unknown cancellation retains the lock: report
+the gap and diagnose it rather than starting another worker. A completed owner has no
+active editor. Return the runtime/session references, learning, commit and unresolved
+issues for the existing ledger. Never hard-reset, discard, or overwrite accepted commits
+or another worker's changes to recreate a prior session state.

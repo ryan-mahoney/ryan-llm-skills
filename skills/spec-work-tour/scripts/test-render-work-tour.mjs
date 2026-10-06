@@ -32,7 +32,7 @@ const manifest = {
   deployment: { readiness: "ready", authorization: "not-requested", authorizationSource: "none", postDeploy: "not-run", gaps: [], migrations: "none", configuration: "none", observability: ["Existing availability check after authorized release."], rollback: "Existing application-version rollback; stored format unchanged.", residualRisks: [] },
   audit: { iteration: 1, verdict: "pass", artifact: "audit.md", commit }, gaps: []
 };
-for (const file of ["context.md", "route-result.txt", "release-procedure.md", "audit.md", "route.js"]) await writeFile(path.join(dir, file), `Renderer fixture: ${file}\n`);
+for (const file of ["context.md", "route-result.txt", "release-procedure.md", "audit.md", "merge-evidence.md", "route.js"]) await writeFile(path.join(dir, file), `Renderer fixture: ${file}\n`);
 let checks = 0;
 async function check(name, mutate, error) {
   const candidate = structuredClone(manifest); mutate(candidate);
@@ -48,6 +48,27 @@ async function check(name, mutate, error) {
 const html = await check("merge ready with unauthorized pending release", () => {});
 for (const text of ["Pre-merge verification · ready", "Deployment approval:", "not requested", "after deployment", "pending", "Background", "No new release flag", "Test scenarios", 'data-claim-panel="CL-1"', "Copy command", 'href="route-result.txt"']) assert.ok(html.includes(text), `missing ${text}`);
 assert.ok(!html.includes('attention-item attention-item--blocking'), "later work was rendered as a merge blocker");
+// Step completion is sufficient without a final branch audit; stale/missing records are not.
+const stepHtml = await check("completed step cycles allow readiness without branch audit", (m) => {
+  m.audit = { scope: "steps", verdict: "pass", artifact: "merge-evidence.md", commit };
+});
+assert.ok(stepHtml.includes("Step reviews · complete"));
+assert.ok(stepHtml.includes("No final branch audit was performed"));
+assert.ok(!stepHtml.includes("Review · pass"));
+await check("step completion must bind the candidate", (m) => {
+  m.audit.scope = "steps"; m.audit.commit = "b".repeat(40);
+}, /review completion bound to the tour commit/);
+await check("missing step completion cannot pass", (m) => {
+  m.audit.scope = "steps"; m.audit.verdict = "pending";
+}, /review completion bound to the tour commit/);
+await check("step completion needs its source record", (m) => {
+  m.audit.scope = "steps"; delete m.audit.artifact;
+}, /step review completion artifact/);
+await check("unknown review scope rejected", (m) => { m.audit.scope = "skipped"; }, /audit.scope/);
+await check("explicit branch audit remains supported", (m) => { m.audit.scope = "branch"; });
+await check("step completion does not waive a failed required check", (m) => {
+  m.audit.scope = "steps"; m.gates[0].status = "failed";
+}, /unpassed or stale required gate/);
 await check("merge ready despite deployment gap", (m) => { m.deployment.readiness = "blocked"; m.deployment.gaps = ["Awaiting an isolated release rehearsal."]; });
 await check("deployment not assessed", (m) => { m.deployment.readiness = "not-assessed"; });
 await check("granted authority with source", (m) => { m.deployment.authorization = "granted"; m.deployment.authorizationSource = "User decision 2026-09-26: deploy candidate to staging only."; });

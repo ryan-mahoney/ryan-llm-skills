@@ -63,7 +63,7 @@ running stages individually, recovery, and harness setup.
 | One owner per behavior | Steps reuse existing helpers. A fix to one copy searches for others. Review searches the repository for reinvented behavior. | [Engineering decisions](skills/spec-work-tour/references/standalone-engineering-decisions.md), `spec-branch-review` |
 | Minimal implementation | Steps write the least code that solves the stated problem, with no speculative abstractions, flags, or compatibility shims. | [Minimal implementation guide](rules/minimal-implementation.md), selected for every spec |
 | Reviewers do not fix; fixers do not review | Review and fix are separate agents that communicate only through `reviews/*-review.md` and `*-fix.md`. Reviewers test the implementer's conclusions instead of trusting them. | `spec-branch-review`, `spec-branch-fix` |
-| Review early, converge in bounded rounds | Each step is reviewed in the background while the next is built, and its findings are fixed before the following step. The branch then gets one review-and-fix round, or two when step reviews are incomplete. The completion record says when final fixes were not re-reviewed. | `spec-run`, `spec-branch-refine` |
+| Review each step, then publish | Each step is independently reviewed while the next is built. Finish all findings, including the last step’s fixes, then publish. Whole-branch review is opt-in; the operator owns further PR review and merge. | `spec-run`, `spec-pr` |
 | Honest, commit-bound results | Every result names the revision it ran against; relevant later changes require reassessing applicability. An unrun test is never reported as passing. Incomplete work is recorded as `checkpoint` and gaps stay visible. | `spec-run`, merge evidence, `spec-work-tour` |
 | Bounded execution | Every command and worker has an explicit deadline. A timeout is a recorded failure, not a pass. | Verification scheduling policy, `spec-run` |
 | Merge readiness is not deploy authority | The workflow ends at a published PR. Deployment readiness, authorization, and post-deploy observations are tracked separately, and no gate grants operational authority. | `spec-work-tour`, `spec-pr` |
@@ -80,10 +80,9 @@ running stages individually, recovery, and harness setup.
    the primary repository, even when a worktree has a tracked copy.
 5. `spec-run` implements each step with its tests and evidence and commits it. After each
    step it starts a background review and fixes earlier findings before the next step.
-6. `spec-branch-refine` reviews the integrated branch: unreviewed commits, cross-step
-   contracts, duplication, applicable test evidence, and every gate. It runs one review-and-fix
-   round by default when step reviews cover every step, otherwise two. Reconcile the base
-   before this review; push final fixes and collect required CI before building the tour.
+6. Finish the last step’s review/fix cycle, reconcile the base, refresh affected evidence,
+   and push all task-owned commits. Collect configured required CI before ready status.
+   `spec-branch-refine` is available only when explicitly requested or required by project policy.
 7. `spec-work-tour` writes `work-tour.json` and a browser-ready `work-tour.html` for the
    final commit.
 8. `spec-pr` supports an early authorized draft and a final ready candidate. Publication
@@ -102,6 +101,7 @@ git-ignored.
 | `spec.md`, `evidence-plan.json` | `spec-write` | Behavior, acceptance criteria, pre-mortem, and the AC → CL → FH → EV graph |
 | `step-NNN-subspec.md`, `spec-steps.json`, `spec-prepare.md` | `spec-write` | Execution cards, step index, and preparation outcome; structural readiness is checked once |
 | `history-index.json` | `spec-run` script | Navigation to canonical learnings, decisions, handoffs, and unresolved reviews |
+| `runtime/run.json`, `runtime/runs/*.json`, `runtime/events.jsonl` | Pi execution extension | Managed assignment state, worker session locations, and timestamped lifecycle events |
 | `learnings/step-NNN-learning.md` | `spec-step-run` | What the step did, departures from the card, later-step handoffs, and its evidence |
 | `reviews/step-NNN-*.md`, `reviews/branch-N-*.md` | Review and fix skills | Findings with stable signatures, and the fix or dismissal for each |
 | `merge-evidence.md`, `merge-evidence.json` | `spec-run`, then review and fix | Gate results bound to the current commit |
@@ -109,44 +109,67 @@ git-ignored.
 
 ### Running under Pi or OpenCode
 
-In Pi, the top-level agent runs `spec-end-to-end` and `spec-run` itself, because a child
-can launch subagents only when granted fanout. Assign models per role when starting the run,
-for example a different provider for step review than for implementation. The orchestrator
-passes each model on launch and retains implementation sessions across related steps.
-The step owner directs one nested Mercury editor (`inception/mercury-2.5:high` on
-OpenRouter); only one writer is active. Handoffs carry canonical paths, outcomes,
+In Pi, the top-level agent runs `spec-end-to-end` and `spec-run`. The installed
+`spec_dispatch` tool starts a step owner with a retained disk session; the owner calls
+`spec_editor` for bounded edits and `spec_verify` for owner-run focused verification. The runtime
+owns process completion, cancellation, and an exclusive lock for managed writers.
+It uses the assigned models directly and sends a completion event to the orchestrator.
+See the [runtime setup and API](pi/extensions/spec-runtime/README.md) and
+[run observation guide](docs/spec-runtime-observation.md) for installation and recovery.
+The editor defaults to `inception/mercury-2.5:high` on OpenRouter.
+Optional coordinator, owner and reviewer scouting uses the installed `pi-subagents` scout profile with
+`openai-codex/gpt-6-luna:low`, restricted to read/search tools. See
+[scouting setup and scope](skills/spec-run/references/scouting.md). `SCOUT_AGENT` in the
+initial prompt can override its model; scouting is never required for every step.
+The initial `REVIEW_AGENT` selects the model; the `spec-stage-reviewer` profile supplies
+the review role and compatible tools without fixing a model. Step fixes use the
+`spec-step-fixer` profile with the assigned fix model and native/provider write tools.
+See [workflow efficiency](docs/spec-workflow-efficiency.md) for deterministic helpers,
+direct owner `spec_advice` calls to Jev, local Jev effectiveness reports, and optional
+Mercury clerical drafts through `spec-clerk`.
+Owner/editor questions use pi-intercom's scoped channel: the editor waits while the
+owner answers, then continues in the same assignment with its writer reservation held.
+Handoffs carry canonical paths, outcomes,
 commits, and unresolved issues. The history index locates detail. Prepared focused
 checks own verification; actual failures, departures, or acceptance gaps justify
 additional checks. Reviews report defects and material limitations without positive
 correctness narratives. For OpenCode's second worker level, see
 [OpenCode nested delegation](docs/spec-workflow.md#opencode-nested-delegation).
 
-Each stage consumes current upstream records: step reviews load scoped context, branch
-review assesses the integrated evidence, the tour presents that assessment, and publication
+Each stage consumes current upstream records: step reviews assess scoped changes and
+evidence, the tour presents their completion and proof limits, and publication
 checks freshness and remote readiness. Repeated execution needs a relevant change, failure,
 or concrete gap. Existing inspected UI captures and tour-render results are reused;
 unchanged evidence records are preserved through fixes.
 
 #### Default Pi prompt
 
-After `spec-write`, paste this into Pi with `/goal-direct` available. Replace `PACKAGE`
+After `spec-write`, paste this into Pi as a normal prompt. Replace `PACKAGE`
 with the absolute package path in the primary checkout. Choose a stronger owner or
 remove the `STRONG_OWNER` line to use one owner model throughout. The model assignments
 below are an editable example; the routing policy is provider-independent.
 
 ```text
-/goal-direct Use spec-end-to-end to resume after spec-write for PACKAGE.
-Implement in a new branch/worktree and continue through PR publication.
-
-Use the configured step-owner routing and retained owner/editor pairs.
-Use REVIEW_AGENT for independent step and branch reviews.
+/spec-end-to-end Resume after spec-write for PACKAGE.
+Continue through PR publication.
 
 DEFAULT_OWNER: deepseek-flash:max from deepseek
 STRONG_OWNER: gpt-5.6-sol:high from openai-codex
-EDITOR_AGENT: inception/mercury-2.5:high from openrouter
-REVIEW_AGENT: gpt-6-astra:medium from openai-codex
+EDITOR_AGENT: mimo-v2.6-pro-ultraspeed:off from xiaomi
+REVIEW_AGENT: gpt-6.1-sol:medium from openai-codex
+SCOUT_AGENT: gpt-6-luna:low from openai-codex
 PACKAGE: <absolute path to .specs/feature-package/>
 ```
+
+The skill owns branch/worktree reuse, unfinished-work recovery, runtime pairing,
+step reviews, bounded scouting, deterministic helpers, Jev checkpoints and optional
+clerical drafts. Add only run-specific exceptions to this prompt; keep the complete
+model assignment section when customizing selectors.
+
+No goal loop is required. The skill directs continuation between stages, and managed
+worker completion events wake the top-level session while Pi remains running. A harness
+goal is optional; uncoordinated auto-continuation can add idle turns while workers run.
+The instructions do not keep a closed session alive or guarantee uninterrupted execution.
 
 `DEFAULT_OWNER` handles easy and medium steps; `STRONG_OWNER` handles difficult remaining
 engineering decisions and stalled repairs. `IMPLEMENT_AGENT` remains an alias for
@@ -283,12 +306,18 @@ It only updates harness directories that already exist.
 ~/.agents/sync.sh
 ```
 
+The Pi spec runtime uses `pi-intercom@0.16.1` for scoped owner/editor questions.
+Install it with `pi install npm:pi-intercom@0.16.1`, configure its explicit child
+extension path as described in the [runtime guide](pi/extensions/spec-runtime/README.md),
+and restart Pi. The runtime keeps dispatch and worker termination separate from messaging.
+
 | Source | Destination |
 |---|---|
 | `claude/CLAUDE.md` | `~/.claude/CLAUDE.md` |
 | `codex/AGENTS.md` | `~/.codex/AGENTS.md` |
 | `skills/*/SKILL.md` | Harness skill directories; Augment reads `~/.agents/skills/` directly |
 | `pi/agents/*.md` | `~/.pi/agent/agents/` |
+| `pi/extensions/*/` | `~/.pi/agent/extensions/` (restart Pi after syncing) |
 | `augment/agents/*.md` | `~/.augment/agents/` (bootstrap with `SYNC_AUGMENT=1 ~/.agents/sync.sh`) |
 
 `sync.sh` does not edit provider credentials or runtime settings such as
@@ -317,7 +346,7 @@ git tag v2026.10.02 && git push origin v2026.10.02
 ├── claude/    # Claude Code global instructions
 ├── codex/     # Codex global instructions
 ├── augment/   # Augment CLI subagent adapters
-├── pi/        # Pi step owner and editor profiles
+├── pi/        # Pi step profiles and managed execution extension
 ├── bundles/   # Bundle contents and install guide
 ├── scripts/   # Bundle build, skill lint, and SpecOps tooling
 └── sync.sh

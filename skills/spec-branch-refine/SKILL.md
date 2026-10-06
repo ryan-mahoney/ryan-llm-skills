@@ -1,6 +1,6 @@
 ---
 name: spec-branch-refine
-description: "Run the final independent branch evidence loop: audit the integrated implementation and claim/gate evidence, fix defects, and repeat within a bounded number of review/fix rounds. Use after implementation and before the ready work tour and final PR readiness."
+description: "Run the final independent branch evidence loop: audit the integrated implementation and claim/gate evidence, fix defects, and repeat within a bounded number of review/fix rounds. Use only when branch refinement is explicitly requested or required by sourced project policy; it is not an automatic end-to-end stage."
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "16"
+  version: "17"
 ---
 
 # Spec Branch Refine

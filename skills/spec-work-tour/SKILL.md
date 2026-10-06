@@ -1,11 +1,11 @@
 ---
 name: spec-work-tour
-description: "Build or refresh the final machine-readable evidence verdict and practitioner-facing HTML work tour for an implemented standalone spec. Use as the explicit stage after spec-branch-refine and before spec-pr, or when asked for an implementation walkthrough, deploy-safety case, executable-evidence report, proof review, or QA handoff. The tour surfaces blocking evidence, residual risk, claim-to-gate traceability, rerunnable proof, QA scenarios, and deployment recovery without presenting the manifest as a wall of cards or tables."
+description: "Build or refresh the final machine-readable evidence verdict and practitioner-facing HTML work tour for an implemented standalone spec. Use as the explicit stage after step review/fix completion and before spec-pr (or after explicitly requested branch refinement), or when asked for an implementation walkthrough, deploy-safety case, executable-evidence report, proof review, or QA handoff. The tour surfaces blocking evidence, residual risk, claim-to-gate traceability, rerunnable proof, QA scenarios, and deployment recovery without presenting the manifest as a wall of cards or tables."
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "10"
+  version: "11"
 ---
 
 # Spec Work Tour
@@ -66,7 +66,14 @@ evidence produces `verdict: blocked`. Pending deploy/post-deploy evidence stays 
 Route unresolved consequential context decisions to the coordinator under the shared contract.
 Human operational authorization is a separate legitimate decision, not a correctness gate.
 
-## Bounded Review Completion
+## Review Completion
+
+Default to the shared **Step Review Completion** contract: consume completed independent
+step reviews and fixes, including the last step, from current merge evidence. No branch
+audit artifact is required. Do not launch a final review or turn artifact assembly into
+one. Additional PR review and merge decisions belong to the operator/organization.
+
+### Explicit Branch Refinement
 
 Apply the shared **Bounded Refinement Completion** policy when refinement returns
 `verified-at-cap`. Its current completion record replaces the final independent-audit
@@ -80,18 +87,17 @@ round budget. A stale completion remains a blocker.
 Resolve an explicit `.specs/<feature>/` folder or contained artifact first, then the feature named in the conversation. Stop on ambiguity. Resolve the repository root, merge base, current branch, and exact `HEAD` SHA. The tour is commit-bound to that SHA.
 
 Start with sourced `context.md`, `spec.md`, `spec-steps.json`, `evidence-plan.json`,
-the assembled `merge-evidence.json`/Markdown, blockers, and the current refinement
-completion or audit. Use the history index to locate supporting learnings and decisions.
+the assembled `merge-evidence.json`/Markdown, blockers, and the current step review/fix completion (or explicitly selected branch completion). Use the history index to locate supporting learnings and decisions.
 Confirm required records exist; read originals for missing explanation, contradictions,
 unresolved gaps, or the specific architecture/QA narrative being written. Do not reload
 every subspec, learning, proposal, critique, or full diff to reconstruct an already
-audited implementation. Historical root-level learnings remain usable.
+reviewed implementation. Historical root-level learnings remain usable.
 
-Required inputs for an implemented spec are `context.md`, `spec.md`, version 2 `evidence-plan.json`, all expected learnings, and `merge-evidence.json`. A final merge-ready tour additionally requires a current passing branch evidence audit. If an older package predates one of these contracts, report the missing artifact as a blocking evidence gap; do not silently infer a pass.
+Required inputs for an implemented spec are `context.md`, `spec.md`, version 2 `evidence-plan.json`, all expected learnings, and `merge-evidence.json`. A final merge-ready tour requires current completion of the selected review process; default step review/fix completion is sufficient. If an older package predates one of these contracts, report the missing artifact as a blocking evidence gap; do not silently infer a pass.
 
 ## Revalidate Provenance And Gates
 
-The independent branch audit owns semantic evidence assessment. The tour owns faithful
+Independent step reviewers own scoped semantic evidence assessment; a branch audit does so only when explicitly selected. The tour owns faithful
 assembly and presentation. Validate required paths, coverage, statuses, and revision
 bindings against the evidence plan and current audit/completion record. For each claim
 and required gate, carry forward the audited mapping, phase, observation, authority,
@@ -108,7 +114,7 @@ that handoff insufficient, inspect the affected original evidence and apply thes
    effects, authority source, outcome and proof boundary. Later-phase gates may be `pending`, with a
    concrete procedure but no fabricated observations. Commands are not permission to execute them.
 4. Reuse valid results with their actual observed revision and scope. Re-run a gate only when a relevant change or concrete uncertainty affects its applicability; cost alone does not justify re-execution. Never relabel an earlier run as a new execution. When reusing prior evidence, retain its `observedCommit` and record `applicability` explaining why it supports the candidate `commit`.
-5. Confirm the final branch audit independently examined the integrated diff and closed every actionable finding.
+5. Confirm the selected review/fix process completed, including the last step, and every actionable finding has a recorded resolution. Preserve the original review SHAs and the absence of independent re-review of final fixes; do not imply an integrated branch audit occurred.
 6. Treat open merge blockers, unresolved merge findings, material context changes, stale code
    bindings and missing required merge environments as blocking. Classify later-phase gaps
    separately; a known defect that also disproves a merge claim remains a merge blocker.
@@ -198,9 +204,9 @@ Write version 2 JSON with a trailing newline:
     "residualRisks": []
   },
   "audit": {
-    "iteration": 2,
+    "scope": "steps",
     "verdict": "pass",
-    "artifact": ".specs/feature/reviews/branch-2-review.md",
+    "artifact": "merge-evidence.md",
     "commit": "full SHA"
   },
   "gaps": []
@@ -225,7 +231,7 @@ requires at least one required gate and all its required gates passed at this co
   verdict; missing CI alone is not a blocking gap or a demand for local full-suite testing.
   State its ownership without claiming an unseen pass.
 - `verdict: ready` requires all merge claims proven, required merge gates passed, no merge gaps,
-  and a current independent audit pass. Later-phase pending gates are permitted.
+  and current step review/fix completion (or explicitly selected branch completion). Later-phase pending gates are permitted.
 - `deployment.readiness`: `ready | blocked | not-assessed | not-applicable`. `ready` requires merge
   readiness, all deploy claims proven and required deploy gates passed, no deployment gaps, and an
   assessed existing release process. `not-applicable` needs a context justification and no deploy
@@ -238,9 +244,9 @@ requires at least one required gate and all its required gates passed at this co
   A failed post-deploy gate cannot be hidden behind `not-run` or `passed`.
 
 The renderer checks structure and contradictory statuses, not whether an authorization source or
-observed result is truthful. The audit verifies those sources. Keep unrelated or optional discovery
-out of blocking calculations. No manual code review or testing may establish correctness; a human
-may still decide whether an independently evidenced operation is authorized.
+observed result is truthful. Independent reviewers assess those sources within their assigned scope. Keep unrelated or optional discovery
+out of blocking calculations. Future human review must not substitute for missing required
+evidence. The operator/organization chooses further PR review, merge, and release decisions.
 
 Never mark a claim `proven` on an optional gate while a required gate is unpassed. A runbook proves that a procedure exists; it does not prove that the procedure ran or that production recovered. Keep post-deploy execution `unproven` or restate the claim narrowly around the verified runbook artifact.
 
@@ -295,7 +301,7 @@ render/inspection result in the normal handoff so publication can reuse it.
 
 ## Freshness Rule
 
-Any material context/authority change or code, test, migration, configuration, lockfile, or deployment-file change after the tour's evidence was assembled invalidates the tour. Re-run affected gates, re-run the branch audit when the integrated diff changed, update `work-tour.json`, and render again. `spec-pr` must compare the tour commit to the pushed HEAD and refuse ready status when they differ; an authorized draft may precede the ready tour.
+Any material context/authority change or code, test, migration, configuration, lockfile, or deployment-file change after the tour's evidence was assembled invalidates the tour. Refresh affected evidence and route uncovered implementation to its scoped step review/fix cycle; preserve valid earlier observations and review ranges. Refresh explicitly requested branch completion only under its existing budget. Update `work-tour.json` and render again. `spec-pr` must compare the tour commit to the pushed HEAD and refuse ready status when they differ; an authorized draft may precede the ready tour.
 
 ## Output
 

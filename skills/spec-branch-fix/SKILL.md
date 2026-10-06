@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "17"
+  version: "18"
 ---
 
 # Spec Branch Fix
@@ -25,8 +25,9 @@ fixes the actionable findings across the branch, and records its decisions in
 `reviews/branch-<iteration>-fix.md`.
 
 The two skills are coupled **only** through the review file, and this skill never
-re-reviews — `spec-branch-refine` runs the next `spec-branch-review` as the
-independent check that fixes landed.
+re-reviews. Step fixes enter the next step review range when one remains; no extra
+review of final step fixes is automatic. Explicit branch refinement runs another review
+only while its selected round budget remains.
 
 Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Evidence findings are first-class: correct the implementation, test/gate, artifact, claim mapping, or proof boundary that made the evidence invalid, then reproduce the affected gate.
 

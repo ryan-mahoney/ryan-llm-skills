@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "23"
+  version: "24"
 ---
 
 # Spec Write
@@ -183,7 +183,7 @@ Avoid abstractions with only one use, abstract layers "for future flexibility," 
 inapplicable obligations with sourced rationale. Every new flag, environment variable, compatibility
 path, or release mechanism needs a concrete context fact and requirement; otherwise omit it.
 
-Ground the architecture in existing code: before adding a new module or helper, search for an existing owner as the Reuse section of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md) describes — by behavior with `code_search` when available, otherwise exact search — and reuse or extend what already exists. Name the repository's shared-helper location, and state each reuse decision as an ownership sentence naming the existing symbol and path so preparation derives it as a guardrail.
+Ground the architecture in existing code: before adding a module, helper, shared constant, or UI component, locate its owner under the Reuse section of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md). Name the symbol, path, and reuse/extend action so preparation derives the ownership constraint. For a new owner, name its destination and why the nearest existing implementation does not fit. Keep domain constants with their domain and contribute shared UI behavior to the existing component library; preserve genuinely local values and composition.
 
 Read the Reuse, Specification, and Preparation sections of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
 In Architecture, carry each material domain rule with its source, concrete example/counterexample,
@@ -219,7 +219,7 @@ For every EV item name:
 - The exact command/procedure, actual target/environment, effects including setup/teardown,
   authority source, independence, phase, and whether it is required in that phase.
 - In existing plan prose, the test layer, distinct failure it detects, execution stage
-  (implementation feedback, boundary completion, or final review), and setup cost when known.
+  (implementation feedback, boundary completion, or CI before publication), and setup cost when known.
   Use the shared scheduling policy; do not add schema fields or invent duration estimates.
   Keep permutations in unit tests and integration cases focused on actual boundary contracts.
 
@@ -296,15 +296,17 @@ For each step include:
 9. Evidence: when this step owns one or more Executable Evidence Plan gates, an `Evidence:` tag line (`Evidence: EV-2` or `Evidence: EV-2, EV-5`). Producing merge evidence is part of the step's work. For later gates it owns the procedure and
 handoff, not premature execution; record the runtime result as pending until authorized and run. Steps owning no evidence omit the line.
 
-Each step's `Covers:`, `Complexity:`, `Visual:`, and (when the step owns evidence) `Evidence:` tag lines sit together at the end of the step. Judge complexity by *this step's own* work, applying the rubric the same way every time so the label is reproducible across runs. Anchor the choice on four signals — scope (files/modules this step touches), novelty (new abstractions vs. reusing existing patterns), domain difficulty (the Qualifications this step exercises), and integration risk (state, I/O, migrations, blast radius this step incurs):
+Each step's `Covers:`, `Complexity:`, `Visual:`, and (when the step owns evidence) `Evidence:` tag lines sit together at the end of the step. Judge the implementation judgment that remains in *this step*, using its known precedent, settled contracts and ownership, failure consequences, and what focused evidence can expose:
 
 | Tier | When |
 |---|---|
-| `easy` | One file or a few closely-related files; uses existing patterns directly; no new abstractions; local or pure logic; low blast radius. |
-| `medium` | Several files, or some new types/functions following established patterns; limited state/IO; standard domain knowledge. |
-| `hard` | New architecture/abstractions, cross-module integration, concurrency, migrations, non-trivial algorithms, specialized domain depth, or a wide high-risk change where subtle correctness dominates. |
+| `easy` | Explicit settled route, direct precedent, mechanical choices, and focused evidence that exposes credible mistakes. |
+| `medium` | Established route with bounded adaptation, settled contracts and ownership, and observable error paths. |
+| `hard` | Consequential remaining design, contract, concurrency or recovery judgment; or poor choices with substantial consequences likely missed by focused tests. |
 
-When torn between two tiers, choose the higher one — an under-powered model is the costlier error.
+Size, file count, novelty and a risk label alone do not determine the tier. A large explicit propagation can be easy; a small consequential design decision can be hard. When genuinely uncertain between medium and hard, favor hard: stronger judgment upfront can prevent subtle poor choices even when tests pass. Product intent or authority ambiguity remains a planning blocker, never a difficulty guess.
+
+These initial estimates set the normal grounding budget. Preparation may refine the same canonical `Complexity:` field from the facts it already gathered, with bounded Jev advice as described in [Ground Execution Cards And Publish The Package](references/prepare-package.md). Preserve completed grounding; do not restart preparation after a tier correction.
 
 Each step's terse name, one-line description, `Complexity:` value, and `Visual:` flag are also emitted to a machine-readable `spec-steps.json` index (see Machine-Readable Step Index). The JSON `difficulty` field must equal the step's `Complexity:` tag and `visualDesign` must equal its `Visual:` flag (`Visual: yes` → `true`) — the tags in `spec.md` are canonical; the JSON mirrors them.
 

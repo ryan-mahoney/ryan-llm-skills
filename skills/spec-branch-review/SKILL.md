@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "23"
+  version: "24"
 ---
 
 # Spec Branch Evidence Audit
@@ -31,7 +31,7 @@ named "reviewer" may be analysis-only and therefore unsuitable as the stage owne
 Report a capability mismatch immediately; do not complete a long analysis expecting
 the parent to reconstruct and write the required artifacts afterward.
 
-This is the independent final evidence boundary before the work tour. It must not trust
+In explicitly requested branch scope, this is the independent final evidence boundary before the work tour. Default end-to-end runs use this skill in Step Scope and proceed to publication after their review/fix cycles. It must not trust
 the implementer's readiness conclusion. It receives intent, implementation, and produced
 evidence so it can try to falsify claims against the integrated branch. Its recall comes
 from per-commit decomposition plus claim/failure/gate auditing.
@@ -63,8 +63,8 @@ branch review. Single pass per call: review once, write the file, stop.
 `scope=step step=<NNN> since=<sha> head=<sha>` reviews one finished unit of work in
 the background while the next step is implemented. `spec-run` launches it at each step
 boundary for the commits `<since>..<head>`: the step's own commits plus any step-fix
-commits made since the previous unit. It runs Stage B early so the branch review can
-reuse the result; it is not a branch audit.
+commits made since the previous unit. Apply Stage B and the bounded reuse check below.
+This is the default end-to-end review path; no later branch audit is assumed.
 
 - Read code only at fixed revisions: `git show <sha>` for each commit and
   `git show <head>:<path>` for surrounding code. Never read the working tree; the
@@ -78,9 +78,20 @@ reuse the result; it is not a branch audit.
 - Map commits to steps as in Stage A, then apply the Stage B lenses (1, 3, 4, 5),
   Report Discipline, and Severity rules to each commit in the unit. Review the commits
   yourself rather than fanning out.
-- Skip Stage C, Stage D, conditional fan-out, the executable-evidence and guardrail
-  lenses, test and gate execution, and merge-evidence updates. The branch review runs
-  those against the integrated branch. Skip dirty-tree handling too; uncommitted
+- For new or changed helpers, shared values, and UI components, check the card's
+  ownership decisions and make a bounded precedent search for the affected
+  responsibility. Search the fixed reviewed tree (for example `git grep -n -e
+  '<symbol-or-literal>' <head> -- <relevant-paths>`), then inspect decisive hits with
+  `git show <head>:<path>`. Reuse still-applicable prior search evidence. Check whether
+  the change copies an existing owner, shadows a shared value locally, or recreates
+  a component instead of extending it. Report confirmed same-contract overlap with
+  both paths and concrete drift or maintenance harm; local constants, feature-specific
+  composition, and deliberately different contracts are not duplicates. Apply Stage D's
+  finding classification and severity to this bounded check, without its branch-wide pass.
+- Skip Stage C, the full Stage D pass, conditional fan-out, the executable-evidence
+  and full guardrail lenses, test and gate execution, and merge-evidence updates.
+  The bounded reuse check still enforces explicit ownership constraints. Do not add
+  a final audit to compensate. Skip dirty-tree handling too; uncommitted
   changes belong to the step in progress.
 - Write `<spec-dir>/reviews/step-<NNN>-review.md` atomically in the Emit format with
   `kind: step`, `step: <NNN>`, `target: <since>..<head>`, `scope: step`, and
@@ -401,8 +412,8 @@ aggregation):
    dead/duplicated code, needless indirection, and internal-contract inconsistencies
    (a docstring that contradicts the code's behavior, one error type where the rest
    of the module raises another, a caller that cannot discriminate the failure).
-   Duplicated/reinvented behavior must be grounded in Stage D's repository search,
-   preferably `code_search` plus exact confirmation, and takes Stage D's severity.
+   Duplicated/reinvented behavior must be grounded in the step's bounded reuse check
+   or Stage D's repository search for branch scope, and takes Stage D's severity.
    Other simplification findings are usually `LOW`/advisory — still always emitted
    (see Severity, Actionability, Verdict).
 5. **AI-authorship tells** — this branch was written by an LLM (`spec-step-run`), so
@@ -542,7 +553,7 @@ acceptance failure, security/data defect, or failed required gate into a pass.
 - **Severity** `HIGH`/`MED`/`LOW`; **Category** `correctness`/`security`/`perf`/
   `simplification`/`design`/`guardrail`/`evidence`.
 - **Actionable** = `HIGH` or `MED` in `correctness`, `security`, `guardrail`, or `evidence`, plus a
-  `MED` `simplification` finding that Stage D confirms as duplicated behavior or a stale copy. All else is
+  `MED` `simplification` finding that the scoped reuse check confirms as duplicated behavior or a stale copy. All else is
   **advisory**. A violation of an explicit context constraint or sourced omission is `guardrail`, even when
   removing unnecessary machinery is the fix. Ordinary simplification stays advisory. The split
   gates only the **verdict and the loop**: advisory findings
