@@ -173,9 +173,33 @@ function scriptedProvider(requests) {
   };
 }
 
+// A deterministic provider that serves a final assistant message so the real
+// settle boundary can approve exactly one continuation request.
+function continuationProvider(requests) {
+  return {
+    name: 'Sentinel continuation fixture',
+    api: 'openai-completions',
+    baseUrl: 'http://unused.invalid',
+    apiKey: 'fixture-key',
+    models: [{ id: 'scripted', name: 'Scripted fixture', input: ['text'], reasoning: false, contextWindow: 10000, maxTokens: 1000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
+    streamSimple(model) {
+      requests.push(Date.now());
+      const stream = sdk.ai.createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = { role: 'assistant', content: [{ type: 'text', text: 'Fixture response.' }], api: model.api, provider: model.provider, model: model.id,
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+          stopReason: 'stop', timestamp: Date.now() };
+        stream.push({ type: 'done', reason: 'stop', message });
+        stream.end(message);
+      });
+      return stream;
+    },
+  };
+}
+
 // Isolated SDK session over the real index.ts with a scripted provider that
 // never serves a request: status must be observation-only.
-async function loadExtension(t, { dir, role, recordFile } = {}) {
+async function loadExtension(t, { dir, role, recordFile, providerFactory = scriptedProvider } = {}) {
   const env = isolatedEnv(t);
   if (role) {
     env.set('SPEC_RUNTIME_ROLE', role);
@@ -191,7 +215,7 @@ async function loadExtension(t, { dir, role, recordFile } = {}) {
   // at the sandbox, never the operator's live agent state.
   env.set('PI_CODING_AGENT_DIR', dir);
   const modelRuntime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false, refreshOnCreate: false });
-  modelRuntime.registerProvider('sentinel-fixture', scriptedProvider(requests));
+  modelRuntime.registerProvider('sentinel-fixture', providerFactory(requests));
   const settingsManager = SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: false } });
   const loader = new DefaultResourceLoader({
     cwd: dir,
@@ -204,7 +228,7 @@ async function loadExtension(t, { dir, role, recordFile } = {}) {
     noContextFiles: true,
     systemPrompt: 'Isolated sentinel integration fixture.',
     additionalExtensionPaths: [indexPath],
-    extensionFactories: [pi => pi.registerProvider('sentinel-fixture', scriptedProvider(requests))],
+    extensionFactories: [pi => pi.registerProvider('sentinel-fixture', providerFactory(requests))],
   });
   await loader.reload();
   assert.deepEqual(loader.getExtensions().errors, []);
@@ -864,4 +888,103 @@ test('sentinel policy: the native SDK command arms only the live session and a c
   assert.equal(lastNote(fresh.captured).type, 'info');
   assert.equal(fresh.requests.length, 0);
   assert.equal(run.requests.length, 0);
+});
+
+// The native SDK boundary fixture: real extension hook, deterministic provider,
+// canonical checkpoint/grant paths. The decisive ready checkpoint is reconciled
+// through the registered production spec_checkpoint tool at native input revision
+// 0, and all model prompts use {source:'extension'} so the native input guard
+// stays exactly reconciled.
+async function continuationFixture(t, { mode = 'recover', actions = ['continue'] } = {}) {
+  const dir = sandbox(t);
+  const { repo } = primary(dir, 'continuation-repo');
+  commit(repo);
+  const packagePath = pack(repo);
+  const canonical = canonicalPackage(packagePath);
+  const run = await loadExtension(t, { dir, providerFactory: continuationProvider });
+  const manager = run.sessionManager;
+  const identity = (typeof manager.getSessionFile === 'function' && manager.getSessionFile())
+    || (typeof manager.getSessionId === 'function' && manager.getSessionId()) || null;
+  assert.ok(identity, 'the native SDK session exposes a nonempty identity');
+  const checkout = join(dir, 'continuation-checkout');
+  mkdirSync(checkout, { recursive: true });
+  recordCheckpoint({ package: canonical.packagePath, workflow_id: 'wf-cont', expected_revision: 0, state: 'ready',
+    obligation: { key: 'impl:step-006', stage: 'implementation', summary: 'continue once', artifacts: [] },
+    workers: [], inbox: { items: [] }, reconciles_input_revision: 0, coordinator_session: identity, checkout });
+  const policyPath = join(dir, 'continuation-policy.json');
+  writeFileSync(policyPath, JSON.stringify({ version: 1, package: canonical.packagePath, workflow_id: 'wf-cont',
+    checkout, coordinator_session: identity, mode, actions,
+    expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    max_effects: 2, max_diagnostics: 0, authority_reference: 'user:enable' }));
+  await run.session.prompt(`/spec-sentinel enable ${policyPath}`);
+  // The decisive ready checkpoint comes through the registered production tool,
+  // not a direct fixture write (the earlier record is checkout prebinding only).
+  const tools = new Map(run.loader.getExtensions().extensions.flatMap(extension => [...extension.tools.entries()]));
+  const checkpointTool = tools.get('spec_checkpoint');
+  assert.ok(checkpointTool, 'the production checkpoint tool is registered');
+  const ctx = { sessionManager: manager };
+  const created = await checkpointTool.definition.execute('call-checkpoint-1', { package: canonical.packagePath,
+    workflow_id: 'wf-cont', expected_revision: 1, state: 'ready',
+    obligation: { key: 'impl:step-006', stage: 'implementation', summary: 'continue once', artifacts: [] },
+    workers: [], inbox: { items: [] }, reconciles_input_revision: 0 }, undefined, undefined, ctx);
+  assert.equal(created.isError, false, JSON.stringify(created.details));
+  return { run, dir, packagePath, canonical, identity, checkout, checkpointTool, ctx };
+}
+
+test('sentinel continuation: recover mode adds exactly one visible request and marks it delivered', { skip: sdkSkip, timeout: 15000 }, async t => {
+  const f = await continuationFixture(t, { mode: 'recover' });
+  await f.run.session.prompt('Run the isolated continuation fixture.', { source: 'extension' });
+  await f.run.session.waitForIdle();
+  assert.equal(f.run.requests.length, 2, 'exactly one extra provider request');
+  const branch = f.run.session.sessionManager.getBranch();
+  assert.ok(branch.some(entry => entry.type === 'custom_message' && entry.customType === 'spec-sentinel'), 'the visible sentinel entry is retained');
+  const intentsDir = join(f.packagePath, 'runtime', 'sentinel', 'wf-cont', 'intents');
+  const names = readdirSync(intentsDir);
+  assert.equal(names.length, 1);
+  const intent = JSON.parse(readFileSync(join(intentsDir, names[0]), 'utf8'));
+  // The requested continuation turn started: applied is delivery, never acceptance.
+  assert.equal(intent.state, 'applied');
+  assert.equal(intent.reason_code, 'delivered');
+  // Reissue the unchanged obligation through the production tool, then a second
+  // extension-source turn: the duplicate cannot refill the budget.
+  const reissued = await f.checkpointTool.definition.execute('call-checkpoint-2', { package: f.canonical.packagePath,
+    workflow_id: 'wf-cont', expected_revision: 2, state: 'ready',
+    obligation: { key: 'impl:step-006', stage: 'implementation', summary: 'continue once', artifacts: [] },
+    workers: [], inbox: { items: [] }, reconciles_input_revision: 0 }, undefined, undefined, f.ctx);
+  assert.equal(reissued.isError, false, JSON.stringify(reissued.details));
+  await f.run.session.prompt('Second turn with the same obligation.', { source: 'extension' });
+  await f.run.session.waitForIdle();
+  assert.equal(f.run.requests.length, 3, 'the same obligation does not refill the budget');
+  assert.equal(readdirSync(intentsDir).length, 1);
+});
+
+test('sentinel continuation: shadow records would-continue with no visible entry or extra request', { skip: sdkSkip, timeout: 15000 }, async t => {
+  const f = await continuationFixture(t, { mode: 'shadow' });
+  await f.run.session.prompt('Run the isolated shadow fixture.', { source: 'extension' });
+  await f.run.session.waitForIdle();
+  assert.equal(f.run.requests.length, 1, 'shadow makes no extra provider request');
+  const branch = f.run.session.sessionManager.getBranch();
+  assert.equal(branch.some(entry => entry.type === 'custom_message' && entry.customType === 'spec-sentinel'), false);
+  const intentsDir = join(f.packagePath, 'runtime', 'sentinel', 'wf-cont', 'intents');
+  const names = readdirSync(intentsDir);
+  assert.equal(names.length, 1);
+  const intent = JSON.parse(readFileSync(join(intentsDir, names[0]), 'utf8'));
+  assert.equal(intent.state, 'blocked');
+  assert.equal(intent.reason_code, 'shadow-would-continue');
+});
+
+test('sentinel continuation: a retained disk grant does not arm a fresh session', { skip: sdkSkip, timeout: 15000 }, async t => {
+  // First session persists the grant through the actual /spec-sentinel enable
+  // command and the decisive checkpoint through the registered production tool.
+  const f = await continuationFixture(t, { mode: 'recover' });
+  assert.ok(existsSync(join(f.packagePath, 'runtime', 'sentinel', 'wf-cont', 'authority', 'grant.json')));
+  // A second fresh coordinator session against the same sandbox/package never
+  // enables, so its live capability stays disarmed despite the retained disk state.
+  const fresh = await loadExtension(t, { dir: f.dir, providerFactory: continuationProvider });
+  await fresh.session.prompt('Run the isolated fresh fixture.', { source: 'extension' });
+  await fresh.session.waitForIdle();
+  assert.equal(fresh.requests.length, 1, 'disk state does not arm the fresh live capability');
+  const branch = fresh.session.sessionManager.getBranch();
+  assert.equal(branch.some(entry => entry.type === 'custom_message' && entry.customType === 'spec-sentinel'), false);
+  assert.equal(existsSync(join(f.packagePath, 'runtime', 'sentinel', 'wf-cont', 'intents')), false);
 });

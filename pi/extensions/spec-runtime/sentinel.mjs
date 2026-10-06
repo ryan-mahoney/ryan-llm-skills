@@ -2046,3 +2046,133 @@ export function finishIntent(authority, {
   publishDurable(join(directory, `${requestedIntentId}.json`), updated, { directory, requireParentFsync: true });
   return updated;
 }
+
+// ---------------------------------------------------------------------------
+// Settlement decision and synchronous continuation reservation (U2, AC-12/13).
+//
+// decideSettle is a pure decision table. handleBeforeSettle consumes the step-5
+// owners, re-reads live guards, reserves a durable continuation intent
+// synchronously, and proposes a visible continuation entry to the Pi SDK
+// boundary (step 6 owns that effect). No model or product call lives here.
+// ---------------------------------------------------------------------------
+
+const SETTLE_TERMINAL_WORKER_STATES = new Set(['complete', 'failed', 'aborted', 'cancelled']);
+
+// Pure U2 table over the current agent_before_settle event and freshly read
+// guards. An initial event.context.canContinue === false is deliberately not a
+// veto: Pi recomputes eligibility after applying proposed entries.
+export function decideSettle({ event = {}, checkpoint = null, inputGuard = {}, inboxGuard = null, policyGuard = null, activeManaged } = {}) {
+  const veto = reason => ({ allow: false, reason });
+  if (event?.continue === true) return veto('another handler already requested continuation');
+  if (event?.outcome !== 'completed') return veto(`settlement outcome is ${event?.outcome ?? 'unknown'}, not completed`);
+  if (!Array.isArray(event?.entries)) return veto('event.entries must be an array');
+  if (!checkpoint) return veto('no retained checkpoint');
+  if (checkpoint.state !== 'ready') return veto(`checkpoint stop state ${checkpoint.state} is not ready`);
+  if (!checkpoint.obligation || typeof checkpoint.obligation.key !== 'string' || !checkpoint.obligation.key
+    || typeof checkpoint.obligation_revision !== 'string' || !checkpoint.obligation_revision) return veto('checkpoint has no valid open obligation revision');
+  // Exact nonnegative integers only: missing or malformed guard data vetoes.
+  if (!Number.isInteger(checkpoint.input_revision) || checkpoint.input_revision < 0) return veto('checkpoint.input_revision is missing or malformed');
+  if (!Number.isInteger(inputGuard.input_revision) || inputGuard.input_revision < 0) return veto('inputGuard.input_revision is missing or malformed');
+  if (!Number.isInteger(inputGuard.active_prompts) || inputGuard.active_prompts < 0) return veto('inputGuard.active_prompts is missing or malformed');
+  if (inputGuard.input_revision !== checkpoint.input_revision) return veto('native input revision is not reconciled to the checkpoint');
+  if (inputGuard.active_prompts !== 0) return veto('a UI prompt is active');
+  // Queued work is read only from the installed BoundaryState shape.
+  const pending = event?.context?.pendingMessages;
+  if (!Array.isArray(pending)) return veto('event.context.pendingMessages must be an array');
+  if (pending.length > 0) return veto('pending messages exist');
+  if (!inboxGuard || inboxGuard.blocking !== false) return veto('inbox guard is blocking or unknown');
+  if (!Array.isArray(checkpoint.workers)) return veto('checkpoint.workers is malformed');
+  if (checkpoint.workers.some(worker => !isPlainObject(worker) || !WORKER_STATES.has(worker.state)
+    || !SETTLE_TERMINAL_WORKER_STATES.has(worker.state))) return veto('a declared worker is malformed or still nonterminal');
+  if (activeManaged !== false) return veto('active-worker status is not explicitly false');
+  if (!policyGuard || policyGuard.armed !== true || policyGuard.blocking) return veto('no live healthy policy');
+  if (policyGuard.mode !== 'shadow' && policyGuard.mode !== 'recover') return veto('policy mode is not shadow or recover');
+  if (!Array.isArray(policyGuard.allowed) || !policyGuard.allowed.includes('continue')) return veto('current policy does not permit continue');
+  return { allow: true };
+}
+
+function projectInboxGuard(packagePath, checkpoint, now) {
+  const retained = checkpoint?.inbox?.items ?? [];
+  return readInboxGuard(packagePath, { priorItems: retained, items: retained,
+    priorDirectories: checkpoint?.inbox?.observed_directories ?? [], now });
+}
+
+function buildContinuationMessage(checkpoint, sourceDigest) {
+  const artifactCount = (checkpoint.obligation?.artifacts ?? []).length;
+  return {
+    type: 'custom_message',
+    customType: 'spec-sentinel',
+    display: true,
+    content: `Continue obligation "${checkpoint.obligation.key}" (${checkpoint.obligation.summary}) revision ${checkpoint.obligation_revision}. Workflow ${checkpoint.workflow_id}; checkpoint ${checkpointPath(checkpoint.package, checkpoint.workflow_id)} revision ${checkpoint.revision}; source digest ${sourceDigest}; artifacts ${artifactCount}. Reconcile these sources before acting. This is a bounded continuation request proposed to the SDK boundary, not acceptance.`,
+  };
+}
+
+// Stable digest over the decisive rechecked checkpoint revision, obligation
+// revision, input revision, artifact path/hash references and freshly read inbox
+// source identity/hash references.
+function settleSourceRevision(checkpoint, inboxGuard) {
+  const artifacts = (checkpoint.obligation?.artifacts ?? []).map(artifact => `${artifact.path}\u0000${artifact.sha256}`).sort();
+  const inboxSources = (inboxGuard?.sources ?? []).map(source => `${source.path ?? source.id ?? ''}\u0000${source.sha256 ?? ''}`).sort();
+  return createHash('sha256').update(JSON.stringify([checkpoint.revision, checkpoint.obligation_revision,
+    checkpoint.input_revision, artifacts, inboxSources])).digest('hex');
+}
+
+// Read live guards, decide, re-read and require the same checkpoint/obligation
+// revision, then reserve synchronously before returning. Recover mode returns a
+// visible custom message plus continue:true; shadow mode records one
+// would-continue observation and returns undefined. All uncertainty abstains.
+export function handleBeforeSettle(event = {}, {
+  authority,
+  workflow_id: workflowId,
+  package: packageInput,
+  coordinator_session: coordinatorSession,
+  inputGuard = () => ({}),
+  activeManaged = () => false,
+  onRequested = () => {},
+  now = Date.now,
+} = {}) {
+  try {
+    const state = authorityState(authority);
+    const scoped = workflowId ?? state.workflowId;
+    if (!scoped || scoped !== state.workflowId) return undefined;
+    if (coordinatorSession != null && coordinatorSession !== state.coordinatorSession) return undefined;
+    const packagePath = canonicalPackage(packageInput).packagePath;
+    if (packagePath !== state.packagePath) return undefined;
+    const readInput = () => (typeof inputGuard === 'function' ? (inputGuard() ?? {}) : (inputGuard ?? {}));
+    // Preserve the raw value: only an explicit false may reach the allowing branch.
+    const readActive = () => (typeof activeManaged === 'function' ? activeManaged() : activeManaged);
+    const checkpoint = readCheckpointRecord(packagePath, scoped);
+    const inboxGuard = projectInboxGuard(packagePath, checkpoint, now);
+    const policyGuard = readPolicyGuard(authority, { workflow_id: scoped, now });
+    if (!decideSettle({ event, checkpoint, inputGuard: readInput(), inboxGuard, policyGuard, activeManaged: readActive() }).allow) return undefined;
+    // Immediately re-read live state and re-run the full table; a weaker hand
+    // subset is not acceptable, and the checkpoint/obligation revision must not change.
+    const recheckpoint = readCheckpointRecord(packagePath, scoped);
+    const reinbox = projectInboxGuard(packagePath, recheckpoint, now);
+    const repolicy = readPolicyGuard(authority, { workflow_id: scoped, now });
+    const reinput = readInput();
+    const reactive = readActive();
+    if (!recheckpoint || recheckpoint.revision !== checkpoint.revision
+      || recheckpoint.obligation_revision !== checkpoint.obligation_revision) return undefined;
+    if (!decideSettle({ event, checkpoint: recheckpoint, inputGuard: reinput, inboxGuard: reinbox, policyGuard: repolicy, activeManaged: reactive }).allow) return undefined;
+    const sourceRevision = settleSourceRevision(recheckpoint, reinbox);
+    const reservation = reserveIntent(authority, { workflow_id: scoped, kind: 'continue',
+      subject_key: recheckpoint.obligation_revision, source_revision: sourceRevision, now });
+    if (!reservation || reservation.accepted !== true || !reservation.intent) return undefined;
+    if (repolicy.mode === 'shadow') {
+      // Record one would-continue observation as terminal blocked; never a
+      // model-visible entry/turn and never applied.
+      finishIntent(authority, { workflow_id: scoped, intent_id: reservation.intent.id,
+        state: 'blocked', reason_code: 'shadow-would-continue', now });
+      return undefined;
+    }
+    const requested = finishIntent(authority, { workflow_id: scoped, intent_id: reservation.intent.id,
+      state: 'requested', reason_code: 'requested', now });
+    // An onRequested failure falls through to the outer fail-closed catch: a
+    // continuation that cannot be tracked for agent_start delivery must abstain.
+    onRequested(requested);
+    const message = buildContinuationMessage(recheckpoint, sourceRevision);
+    const entries = Array.isArray(event?.entries) ? [...event.entries, message] : [message];
+    return { entries, continue: true };
+  } catch { return undefined; }
+}

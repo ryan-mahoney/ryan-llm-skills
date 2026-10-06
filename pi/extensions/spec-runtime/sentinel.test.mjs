@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 
-import { reduceVerificationResult, readVerificationIncidents, writeVerificationIncidents, verificationIncidentsPath, createVerificationRecorder, recordCheckpoint, readInboxGuard, checkpointPath, readCheckpointRecord, observeInput, reconcileRuntimeReturn, createSentinelAuthority, activatePolicy, disablePolicy, readPolicyGuard, reserveIntent, finishIntent } from './sentinel.mjs';
+import { reduceVerificationResult, readVerificationIncidents, writeVerificationIncidents, verificationIncidentsPath, createVerificationRecorder, recordCheckpoint, readInboxGuard, checkpointPath, readCheckpointRecord, observeInput, reconcileRuntimeReturn, createSentinelAuthority, activatePolicy, disablePolicy, readPolicyGuard, reserveIntent, finishIntent, decideSettle, handleBeforeSettle } from './sentinel.mjs';
 
 const FIXED = Date.parse('2026-10-06T12:00:00Z');
 const record = { package: '/tmp/pkg', assignment_id: 'assign-1', checkout: '/tmp/repo' };
@@ -1303,4 +1303,160 @@ test('sentinel storage: a symlinked slot or intent read fails closed', t => {
   const blockedByIntent = reserveIntent(authority, { workflow_id: 'wf-1', kind: 'continue', subject_key: 'sym-intent', source_revision: 'r', now: () => FIXED });
   assert.equal(blockedByIntent.accepted, false);
   assert.equal(blockedByIntent.state, 'blocked');
+});
+
+// --- settle / continuation (step 6) ---
+
+function settleFixture(t, { mode = 'recover', actions = ['continue'], checkpointOver = {}, policyOver = {} } = {}) {
+  const { packagePath, base } = canonicalFixture(t);
+  recordCheckpoint(baseCheckpoint(packagePath, checkpointOver));
+  const authority = createSentinelAuthority();
+  const file = writePolicy(base, policyFor(packagePath, { mode, actions, ...policyOver }));
+  activatePolicy(authority, activateArgs(packagePath, file));
+  return { packagePath, base, authority,
+    options: (over = {}) => ({ authority, workflow_id: 'wf-1', package: packagePath, coordinator_session: 'session-1',
+      inputGuard: () => ({ input_revision: 0, active_prompts: 0 }), activeManaged: () => false, now: () => FIXED, ...over }) };
+}
+
+test('sentinel settle: decideSettle vetoes each non-ready dimension', () => {
+  const ready = { state: 'ready', package: '/p', obligation: { key: 'k', artifacts: [] }, obligation_revision: 'ob', input_revision: 0, workers: [] };
+  const input = { input_revision: 0, active_prompts: 0 };
+  const inbox = { blocking: false };
+  const policy = { armed: true, blocking: false, allowed: ['continue'], mode: 'recover' };
+  const table = (over = {}) => decideSettle({ event: over.event ?? { outcome: 'completed', context: { pendingMessages: [], canContinue: false }, entries: [] },
+    checkpoint: over.checkpoint ?? ready, inputGuard: over.inputGuard ?? input, inboxGuard: over.inboxGuard ?? inbox,
+    policyGuard: over.policyGuard ?? policy, activeManaged: 'activeManaged' in over ? over.activeManaged : false });
+  assert.equal(table().allow, true);
+  // An initial canContinue=false is deliberately not a veto.
+  assert.equal(table({ event: { outcome: 'completed', context: { pendingMessages: [], canContinue: false }, entries: [] } }).allow, true);
+  assert.equal(table({ event: { outcome: 'completed', continue: true, context: { pendingMessages: [] }, entries: [] } }).allow, false);
+  assert.equal(table({ event: { outcome: 'aborted', context: { pendingMessages: [] }, entries: [] } }).allow, false);
+  assert.equal(table({ checkpoint: { ...ready, state: 'waiting-external' } }).allow, false);
+  assert.equal(table({ checkpoint: { ...ready, state: 'complete' } }).allow, false);
+  assert.equal(table({ checkpoint: { ...ready, input_revision: 2 } }).allow, false);
+  assert.equal(table({ inputGuard: { input_revision: 0, active_prompts: 1 } }).allow, false);
+  assert.equal(table({ event: { outcome: 'completed', context: { pendingMessages: [{}] }, entries: [] } }).allow, false);
+  assert.equal(table({ inboxGuard: { blocking: true } }).allow, false);
+  assert.equal(table({ checkpoint: { ...ready, workers: [{ id: 'w', kind: 'owner', state: 'working' }] } }).allow, false);
+  assert.equal(table({ activeManaged: true }).allow, false);
+  assert.equal(table({ policyGuard: { ...policy, blocking: true } }).allow, false);
+  assert.equal(table({ policyGuard: { ...policy, armed: false } }).allow, false);
+  assert.equal(table({ policyGuard: { ...policy, allowed: ['cancel'] } }).allow, false);
+  assert.equal(table({ policyGuard: { ...policy, mode: 'observe' } }).allow, false);
+  assert.equal(table({ checkpoint: { ...ready, obligation_revision: '' } }).allow, false);
+  // Missing/malformed context or guard data vetoes rather than normalizing to zero.
+  assert.equal(table({ event: { outcome: 'completed', entries: [] } }).allow, false);
+  assert.equal(table({ event: { outcome: 'completed', context: {}, entries: [] } }).allow, false);
+  assert.equal(table({ event: { outcome: 'completed', context: { pendingMessages: 'none' }, entries: [] } }).allow, false);
+  assert.equal(table({ checkpoint: { ...ready, input_revision: undefined } }).allow, false);
+  assert.equal(table({ checkpoint: { ...ready, input_revision: -1 } }).allow, false);
+  assert.equal(table({ inputGuard: { active_prompts: 0 } }).allow, false);
+  assert.equal(table({ inputGuard: { input_revision: 0 } }).allow, false);
+  assert.equal(table({ inputGuard: { input_revision: 0, active_prompts: -1 } }).allow, false);
+  // Malformed entries/workers and a non-explicit active-worker status veto.
+  assert.equal(table({ event: { outcome: 'completed', context: { pendingMessages: [] } } }).allow, false);
+  assert.equal(table({ checkpoint: { ...ready, workers: 'bad' } }).allow, false);
+  assert.equal(table({ checkpoint: { ...ready, workers: [{ id: 'w', kind: 'owner', state: 'bogus' }] } }).allow, false);
+  assert.equal(table({ activeManaged: undefined }).allow, false);
+});
+
+test('sentinel settle: completed ready obligation continues once with entry preservation and requested intent', t => {
+  const f = settleFixture(t);
+  let requested = null;
+  const event = { outcome: 'completed', context: { pendingMessages: [], canContinue: false },
+    entries: [{ type: 'custom_message', customType: 'other-handler', display: true, content: 'earlier handler draft' }] };
+  const result = handleBeforeSettle(event, f.options({ onRequested: intent => { requested = intent; } }));
+  assert.ok(result, 'a ready obligation continues');
+  assert.equal(result.continue, true);
+  assert.equal(result.entries.length, 2);
+  assert.deepEqual(result.entries[0], event.entries[0]);
+  assert.equal(result.entries[1].type, 'custom_message');
+  assert.equal(result.entries[1].customType, 'spec-sentinel');
+  assert.equal(result.entries[1].display, true);
+  assert.match(result.entries[1].content, /implement:step-004/);
+  assert.match(result.entries[1].content, /revision/);
+  assert.match(result.entries[1].content, /source digest [a-f0-9]{64}/);
+  assert.match(result.entries[1].content, /artifacts 0/);
+  assert.ok(requested, 'the continuation is marked requested');
+  assert.equal(requested.state, 'requested');
+  assert.equal(requested.kind, 'continue');
+  // A second settlement with the same obligation is a duplicate, not a refill.
+  assert.equal(handleBeforeSettle(event, f.options()), undefined);
+});
+
+test('sentinel settle: stop state, worker, input, prompt, inbox, active and policy vetoes abstain', t => {
+  const stopped = settleFixture(t, { checkpointOver: { state: 'waiting-external' } });
+  assert.equal(handleBeforeSettle({ outcome: 'completed', context: { pendingMessages: [] }, entries: [] }, stopped.options()), undefined);
+  assert.equal(existsSync(join(stopped.packagePath, 'runtime', 'sentinel', 'wf-1', 'intents')), false);
+
+  const worker = settleFixture(t);
+  recordCheckpoint(baseCheckpoint(worker.packagePath, { expected_revision: 1, workers: [{ id: 'assign-1', kind: 'owner', state: 'working' }] }));
+  assert.equal(handleBeforeSettle({ outcome: 'completed', context: { pendingMessages: [] }, entries: [] }, worker.options()), undefined);
+
+  const input = settleFixture(t);
+  assert.equal(handleBeforeSettle({ outcome: 'completed', context: { pendingMessages: [] }, entries: [] }, input.options({ inputGuard: () => ({ input_revision: 3, active_prompts: 0 }) })), undefined);
+
+  const prompt = settleFixture(t);
+  assert.equal(handleBeforeSettle({ outcome: 'completed', context: { pendingMessages: [] }, entries: [] }, prompt.options({ inputGuard: () => ({ input_revision: 0, active_prompts: 1 }) })), undefined);
+
+  const inbox = settleFixture(t);
+  putOriginal(inbox.packagePath, 'inbox', '20260101T000000Z-i1', original({ id: '20260101T000000Z-i1', kind: 'information' }));
+  assert.equal(handleBeforeSettle({ outcome: 'completed', context: { pendingMessages: [] }, entries: [] }, inbox.options()), undefined);
+
+  const active = settleFixture(t);
+  assert.equal(handleBeforeSettle({ outcome: 'completed', context: { pendingMessages: [] }, entries: [] }, active.options({ activeManaged: () => true })), undefined);
+
+  // An unknown active-worker status must veto, not normalize to false.
+  const unknownActive = settleFixture(t);
+  assert.equal(handleBeforeSettle({ outcome: 'completed', context: { pendingMessages: [] }, entries: [] }, unknownActive.options({ activeManaged: () => undefined })), undefined);
+
+  const pending = settleFixture(t);
+  assert.equal(handleBeforeSettle({ outcome: 'completed', context: { pendingMessages: [{}] }, entries: [] }, pending.options()), undefined);
+
+  const malicious = settleFixture(t);
+  assert.equal(handleBeforeSettle({ outcome: 'completed', context: {}, entries: [] }, malicious.options()), undefined);
+
+  const disarmed = settleFixture(t);
+  disablePolicy(disarmed.authority);
+  assert.equal(handleBeforeSettle({ outcome: 'completed', context: { pendingMessages: [] }, entries: [] }, disarmed.options()), undefined);
+
+  const expired = settleFixture(t);
+  const expiredAt = FIXED + 2 * 60 * 60 * 1000;
+  assert.equal(handleBeforeSettle({ outcome: 'completed', context: { pendingMessages: [] }, entries: [] }, expired.options({ now: () => expiredAt })), undefined);
+});
+
+test('sentinel settle: immediate recheck mutation abstains without reserving', t => {
+  const f = settleFixture(t);
+  let calls = 0;
+  const inputGuard = () => ({ input_revision: calls++ === 0 ? 0 : 1, active_prompts: 0 });
+  assert.equal(handleBeforeSettle({ outcome: 'completed', context: { pendingMessages: [] }, entries: [] }, f.options({ inputGuard })), undefined);
+  assert.equal(existsSync(join(f.packagePath, 'runtime', 'sentinel', 'wf-1', 'intents')), false);
+});
+
+test('sentinel continuation: shadow records one would-continue observation and returns nothing', t => {
+  const f = settleFixture(t, { mode: 'shadow' });
+  const event = { outcome: 'completed', context: { pendingMessages: [] }, entries: [] };
+  assert.equal(handleBeforeSettle(event, f.options()), undefined);
+  const sentinelDir = join(f.packagePath, 'runtime', 'sentinel', 'wf-1');
+  const names = readdirSync(join(sentinelDir, 'intents'));
+  assert.equal(names.length, 1);
+  const intent = JSON.parse(readFileSync(join(sentinelDir, 'intents', names[0]), 'utf8'));
+  assert.equal(intent.state, 'blocked');
+  assert.equal(intent.reason_code, 'shadow-would-continue');
+  // A second shadow settlement is a duplicate, not a new observation.
+  assert.equal(handleBeforeSettle(event, f.options()), undefined);
+  assert.equal(readdirSync(join(sentinelDir, 'intents')).length, 1);
+});
+
+test('sentinel continuation: a crash-resumed unfinished reservation blocks', t => {
+  const f = settleFixture(t);
+  const event = { outcome: 'completed', context: { pendingMessages: [] }, entries: [] };
+  assert.ok(handleBeforeSettle(event, f.options()), 'first live continuation reserves');
+  // A fresh authority re-enables the same policy but never reconstructs the
+  // created-intent capability, so the retained requested intent blocks.
+  const restarted = createSentinelAuthority();
+  activatePolicy(restarted, activateArgs(f.packagePath, writePolicy(f.base, policyFor(f.packagePath, { mode: 'recover', actions: ['continue'] }))));
+  const restartedOptions = { authority: restarted, workflow_id: 'wf-1', package: f.packagePath, coordinator_session: 'session-1',
+    inputGuard: () => ({ input_revision: 0, active_prompts: 0 }), activeManaged: () => false, now: () => FIXED };
+  assert.equal(handleBeforeSettle(event, restartedOptions), undefined);
 });

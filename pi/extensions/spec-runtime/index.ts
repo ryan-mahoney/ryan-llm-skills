@@ -7,7 +7,7 @@ import { homedir } from 'node:os';
 import { Runtime, loadRun, summary, assertLease, runEditor, runCommand, runVerification, runAdvice, runCompletion, canonicalPackage, event as runtimeEvent } from './runtime.mjs';
 import { createCommunication } from './communication.mjs';
 import { createMonitor } from './monitor.mjs';
-import { createSentinelObserver, createVerificationRecorder, recordCheckpoint, readInboxGuard, readCheckpointRecord, observeInput, reconcileRuntimeReturn, checkpointPath, createSentinelAuthority, activatePolicy, disablePolicy } from './sentinel.mjs';
+import { createSentinelObserver, createVerificationRecorder, recordCheckpoint, readInboxGuard, readCheckpointRecord, observeInput, reconcileRuntimeReturn, checkpointPath, createSentinelAuthority, activatePolicy, disablePolicy, handleBeforeSettle, finishIntent } from './sentinel.mjs';
 import { createScout, SCOUT_MODEL } from './scout.mjs';
 import { installProgressContext, recordCheckpoint, refreshProgress } from './completion.mjs';
 import { metrics, formatMetrics } from './metrics.mjs';
@@ -183,6 +183,9 @@ export default function (pi: any) {
   // session explicitly dispatched plus explicitly enrolled primaries.
   const ownPackages: string[] = [];
   let sentinel: ReturnType<typeof createSentinelObserver> | undefined;
+  let sentinelAuthority: ReturnType<typeof createSentinelAuthority> | null = null;
+  let sentinelScope: any = null;
+  let pendingContinuation: any = null;
   // Session-local native-input guard and workflow->dispatch checkout bindings for
   // the coordinator branch. Interactive/RPC input advances the revision before
   // processing; extension-originated messages never do. Never model-supplied.
@@ -259,14 +262,27 @@ export default function (pi: any) {
     sentinel?.close();
     // One fresh, disarmed capability per coordinator session. Only the native
     // command handler can arm it; the authority object is never exposed and no
-    // tool, load, checkpoint or file can arm it.
+    // tool, load, checkpoint or file can arm it. Session reset clears the live
+    // scope and any pending requested continuation before durable revocation.
+    sentinelScope = null;
+    pendingContinuation = null;
     const authority = createSentinelAuthority();
+    sentinelAuthority = authority;
     sentinel = createSentinelObserver({ pi, context: ctx, agentDir: getAgentDir(), scope: process.env.PI_INTERCOM_SCOPE_ID ?? null, ownPackages,
       nativeRun: () => monitor.currentRun(),
-      enablePolicy: (policyPath: string, commandCtx: any) => serializeWorkflow(async () => activatePolicy(authority, {
-        policy_path: policyPath, coordinator_session: coordinatorIdentity(commandCtx),
-        command: `/spec-sentinel enable ${policyPath}` })),
-      disablePolicy: () => serializeWorkflow(async () => disablePolicy(authority)) });
+      enablePolicy: (policyPath: string, commandCtx: any) => serializeWorkflow(async () => {
+        const receipt = await activatePolicy(authority, { policy_path: policyPath,
+          coordinator_session: coordinatorIdentity(commandCtx), command: `/spec-sentinel enable ${policyPath}` });
+        // Store the validated scope only after a successful activation.
+        sentinelScope = { package: receipt.package, workflow_id: receipt.workflow_id,
+          coordinator_session: receipt.coordinator_session, mode: receipt.mode };
+        return receipt;
+      }),
+      disablePolicy: () => serializeWorkflow(async () => {
+        sentinelScope = null;
+        pendingContinuation = null;
+        return disablePolicy(authority);
+      }) });
     monitor.close();
     const entries = ctx.sessionManager.getBranch();
     for (let i = entries.length - 1; i >= 0; i--) {
@@ -333,6 +349,40 @@ export default function (pi: any) {
     pi.sendMessage({ customType: 'spec-runtime', content: JSON.stringify(value), display: true }, { triggerTurn: true });
   },
     onWorkerEvent: (record: any, event: any) => verificationRecorder.observe(record, event) });
+  // Bounded continuation: only a live armed authority with an exact scope is
+  // consulted, through the shared workflow serialization. A requested identity is
+  // held until the next agent_start marks that exact intent applied (delivery
+  // only, never acceptance).
+  pi.on('agent_before_settle', (event: any) => {
+    if (!sentinelAuthority || !sentinelScope) return undefined;
+    const authority = sentinelAuthority;
+    const scope = sentinelScope;
+    return serializeWorkflow(async () => {
+      if (sentinelAuthority !== authority || sentinelScope !== scope) return undefined;
+      return handleBeforeSettle(event, { authority, workflow_id: scope.workflow_id,
+        package: scope.package, coordinator_session: scope.coordinator_session,
+        inputGuard: () => inputGuard, activeManaged: () => runtime.active.size > 0,
+        onRequested: (intent: any) => {
+          pendingContinuation = { workflow_id: scope.workflow_id, intent_id: typeof intent?.id === 'string' ? intent.id : null };
+        } });
+    });
+  });
+  pi.on('agent_start', () => {
+    if (!pendingContinuation || !sentinelAuthority || !sentinelScope) return undefined;
+    const authority = sentinelAuthority;
+    const scope = sentinelScope;
+    const pending = pendingContinuation;
+    pendingContinuation = null;
+    // Return the promise so Pi awaits the requested->applied delivery record
+    // before the turn proceeds; never retry on failure.
+    return serializeWorkflow(async () => {
+      if (sentinelAuthority !== authority || sentinelScope !== scope || !pending.intent_id) return;
+      try {
+        finishIntent(authority, { workflow_id: pending.workflow_id, intent_id: pending.intent_id,
+          state: 'applied', reason_code: 'delivered' });
+      } catch { /* Delivery observation only; never retry or refill capacity. */ }
+    });
+  });
   pi.on('session_shutdown', async () => {
     monitor.close();
     sentinel?.close();

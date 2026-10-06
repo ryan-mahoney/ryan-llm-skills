@@ -109,3 +109,17 @@ spent and fail closed as unknown across restarts. `/spec-sentinel disable` revok
 synchronously and reports a persistence failure while staying disarmed; `/spec-sentinel
 off` revokes then hides observation. Step 5 performs no continuation, cancellation,
 diagnosis or model effect.
+
+## Continuation
+
+In recover mode, a completed settlement with a ready open obligation, an exactly
+reconciled native input revision, no UI prompt, no pending messages, a nonblocking
+inbox, no nonterminal declared worker and an active permitting policy appends one
+visible `spec-sentinel` custom message and requests exactly one additional model turn.
+All guards are re-read immediately before a durable one-per-obligation reservation; a
+second settlement or reissued checkpoint with the same obligation does not continue
+again. An initial `canContinue === false` is not a veto. Shadow mode records one
+would-continue observation (terminal `blocked`, reason `shadow-would-continue`) and adds
+no message or turn. `requested` means proposed and `applied` means the requested turn
+started; neither is acceptance, and ambiguous requests are never retried. This skill
+grants no cancellation, diagnosis or recovery effect.

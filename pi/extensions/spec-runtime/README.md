@@ -298,6 +298,28 @@ disarmed; `/spec-sentinel off` revokes first and then hides observation, reporti
 facts. Step 5 performs no continuation, cancellation, diagnosis or model effect; any
 actual effect belongs to later steps under this guarded authority.
 
+## Bounded continuation
+
+When explicitly enabled in recover mode, the coordinator may propose exactly one
+additional model turn at the Pi settle boundary. The handler admits only a completed
+settlement with a ready open obligation, an exactly reconciled native input revision,
+zero UI prompt depth, no `context.pendingMessages`, a nonblocking inbox, no nonterminal
+or malformed declared worker, no active managed Runtime handle, and an armed unexpired
+policy that permits `continue`; prior handlers' `continue:true` and every explicit stop
+state veto. It re-reads all guards and requires the same checkpoint/obligation revision,
+then durably reserves the continuation (one per obligation revision) before returning
+`{entries:[...event.entries, visible custom_message], continue:true}`. The visible
+`custom_message` has `customType: "spec-sentinel"` and `display:true`, names the
+workflow, obligation key/summary, the actual checkpoint path and revisions, a source
+digest and an artifact count, and instructs reconciliation before acting. An initial
+`event.context.canContinue === false` is not a veto; Pi recomputes eligibility after the
+proposed entries. A second settlement with the same obligation is a duplicate and does
+not refill the budget. In shadow mode the reservation is recorded as terminal `blocked`
+with reason `shadow-would-continue` and no custom entry or extra turn is produced. A
+`requested` record means the continuation was proposed; `applied` means the requested
+turn started (delivery only), never that work was accepted, and ambiguous requested
+effects are not retried.
+
 ## Workflow metrics
 
 `/spec-metrics /absolute/canonical/package` displays a read-only aggregate from native
