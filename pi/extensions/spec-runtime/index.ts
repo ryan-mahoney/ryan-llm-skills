@@ -374,8 +374,8 @@ export default function (pi: any) {
     onWorkerEvent: (record: any, event: any) => verificationRecorder.observe(record, event) });
   // Bounded continuation: only a live armed authority with an exact scope is
   // consulted, through the shared workflow serialization. A requested identity is
-  // held until the next agent_start marks that exact intent applied (delivery
-  // only, never acceptance).
+  // held only until the immediately accepted continuation turn starts or the
+  // session settles without it (delivery only, never acceptance).
   pi.on('agent_before_settle', (event: any) => {
     if (!sentinelAuthority || !sentinelScope) return undefined;
     const authority = sentinelAuthority;
@@ -396,14 +396,37 @@ export default function (pi: any) {
     const scope = sentinelScope;
     const pending = pendingContinuation;
     pendingContinuation = null;
-    // Return the promise so Pi awaits the requested->applied delivery record
-    // before the turn proceeds; never retry on failure.
+    // This agent_start follows the reservation with no intervening settlement,
+    // so it is the immediately accepted continuation turn the SDK started for
+    // that exact intent — never an arbitrary later turn. Return the promise so
+    // Pi awaits the requested->applied delivery record before the turn
+    // proceeds; never retry on failure.
     return serializeWorkflow(async () => {
       if (sentinelAuthority !== authority || sentinelScope !== scope || !pending.intent_id) return;
       try {
         finishIntent(authority, { workflow_id: pending.workflow_id, intent_id: pending.intent_id,
           state: 'applied', reason_code: 'delivered' });
       } catch { /* Delivery observation only; never retry or refill capacity. */ }
+    });
+  });
+  // A session that settles while a requested continuation is still pending was
+  // never delivered: the boundary result was aborted after this handler
+  // reserved, or a later boundary handler vetoed the draft. Retire the request
+  // without delivery — the consumed slot stays spent and the explicitly unknown
+  // outcome blocks automatic retry until an authorized reconciliation (AC-11),
+  // instead of letting an unrelated later turn mint a false delivery receipt.
+  pi.on('agent_settled', () => {
+    if (!pendingContinuation || !sentinelAuthority || !sentinelScope) return undefined;
+    const authority = sentinelAuthority;
+    const scope = sentinelScope;
+    const pending = pendingContinuation;
+    pendingContinuation = null;
+    return serializeWorkflow(async () => {
+      if (sentinelAuthority !== authority || sentinelScope !== scope || !pending.intent_id) return;
+      try {
+        finishIntent(authority, { workflow_id: pending.workflow_id, intent_id: pending.intent_id,
+          state: 'unknown', reason_code: 'undelivered' });
+      } catch { /* Retirement observation only; the retained request stays spent and blocking. */ }
     });
   });
   pi.on('session_shutdown', async () => {

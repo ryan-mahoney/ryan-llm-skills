@@ -199,7 +199,7 @@ function continuationProvider(requests) {
 
 // Isolated SDK session over the real index.ts with a scripted provider that
 // never serves a request: status must be observation-only.
-async function loadExtension(t, { dir, role, recordFile, providerFactory = scriptedProvider } = {}) {
+async function loadExtension(t, { dir, role, recordFile, providerFactory = scriptedProvider, extraFactories = [] } = {}) {
   const env = isolatedEnv(t);
   if (role) {
     env.set('SPEC_RUNTIME_ROLE', role);
@@ -228,7 +228,7 @@ async function loadExtension(t, { dir, role, recordFile, providerFactory = scrip
     noContextFiles: true,
     systemPrompt: 'Isolated sentinel integration fixture.',
     additionalExtensionPaths: [indexPath],
-    extensionFactories: [pi => pi.registerProvider('sentinel-fixture', providerFactory(requests))],
+    extensionFactories: [pi => pi.registerProvider('sentinel-fixture', providerFactory(requests)), ...extraFactories],
   });
   await loader.reload();
   assert.deepEqual(loader.getExtensions().errors, []);
@@ -987,13 +987,13 @@ test('sentinel policy: disable and off revoke at command entry behind pending wo
 // through the registered production spec_checkpoint tool at native input revision
 // 0, and all model prompts use {source:'extension'} so the native input guard
 // stays exactly reconciled.
-async function continuationFixture(t, { mode = 'recover', actions = ['continue'] } = {}) {
+async function continuationFixture(t, { mode = 'recover', actions = ['continue'], factories = [] } = {}) {
   const dir = sandbox(t);
   const { repo } = primary(dir, 'continuation-repo');
   commit(repo);
   const packagePath = pack(repo);
   const canonical = canonicalPackage(packagePath);
-  const run = await loadExtension(t, { dir, providerFactory: continuationProvider });
+  const run = await loadExtension(t, { dir, providerFactory: continuationProvider, extraFactories: factories });
   const manager = run.sessionManager;
   const identity = (typeof manager.getSessionFile === 'function' && manager.getSessionFile())
     || (typeof manager.getSessionId === 'function' && manager.getSessionId()) || null;
@@ -1079,4 +1079,80 @@ test('sentinel continuation: a retained disk grant does not arm a fresh session'
   const branch = fresh.session.sessionManager.getBranch();
   assert.equal(branch.some(entry => entry.type === 'custom_message' && entry.customType === 'spec-sentinel'), false);
   assert.equal(existsSync(join(f.packagePath, 'runtime', 'sentinel', 'wf-cont', 'intents')), false);
+});
+
+// Reads the single retained continuation intent from the fixture's workflow.
+function readContinuationIntent(packagePath) {
+  const intentsDir = join(packagePath, 'runtime', 'sentinel', 'wf-cont', 'intents');
+  const names = readdirSync(intentsDir).filter(name => name.endsWith('.json'));
+  assert.equal(names.length, 1, `expected exactly one retained intent, got ${names.length}`);
+  return JSON.parse(readFileSync(join(intentsDir, names[0]), 'utf8'));
+}
+
+test('sentinel continuation: a later-handler veto retires the undelivered request and a later turn cannot deliver it', { skip: sdkSkip, timeout: 15000 }, async t => {
+  // A later boundary handler removes the proposed draft and overrides
+  // continue:false after this extension already reserved and requested its
+  // continuation: the real SDK boundary composes the replacement and the
+  // session settles without the continuation turn ever starting.
+  const vetoFactory = pi => { pi.on('agent_before_settle', () => ({ entries: [], continue: false })); };
+  const f = await continuationFixture(t, { mode: 'recover', factories: [vetoFactory] });
+  await f.run.session.prompt('Run the vetoed continuation fixture.', { source: 'extension' });
+  await f.run.session.waitForIdle();
+  assert.equal(f.run.requests.length, 1, 'the vetoed continuation never made a provider request');
+  const branch = f.run.session.sessionManager.getBranch();
+  assert.equal(branch.some(entry => entry.type === 'custom_message' && entry.customType === 'spec-sentinel'), false,
+    'the vetoed draft is not retained');
+  // Settlement without delivery retires the still-pending request as an
+  // explicitly unknown outcome: capacity stays consumed and no later turn can
+  // mint a delivery receipt for a turn that never happened.
+  let intent = readContinuationIntent(f.packagePath);
+  assert.equal(intent.state, 'unknown');
+  assert.equal(intent.reason_code, 'undelivered');
+  // An unrelated later prompt must not mark the old request applied/delivered.
+  await f.run.session.prompt('Unrelated later turn after the veto.', { source: 'extension' });
+  await f.run.session.waitForIdle();
+  assert.equal(f.run.requests.length, 2, 'one request per unrelated turn only');
+  intent = readContinuationIntent(f.packagePath);
+  assert.equal(intent.state, 'unknown', 'the undelivered request never becomes applied');
+  assert.notEqual(intent.reason_code, 'delivered');
+  assert.equal(readdirSync(join(f.packagePath, 'runtime', 'sentinel', 'wf-cont', 'intents')).length, 1,
+    'the unknown outcome blocks automatic retry, so no second intent is reserved');
+});
+
+test('sentinel continuation: a post-reservation abort retires the undelivered request and a later turn cannot deliver it', { skip: sdkSkip, timeout: 15000 }, async t => {
+  // A later boundary handler parks the real boundary composition on a test
+  // gate, so the abort lands while agent_before_settle is still running —
+  // after this extension already reserved and requested its continuation.
+  let release = null;
+  const gate = new Promise(resolve => { release = resolve; });
+  const parkedFactory = pi => { pi.on('agent_before_settle', async () => { await gate; return undefined; }); };
+  const f = await continuationFixture(t, { mode: 'recover', factories: [parkedFactory] });
+  const intentsDir = join(f.packagePath, 'runtime', 'sentinel', 'wf-cont', 'intents');
+  const run = f.run.session.prompt('Run the aborted continuation fixture.', { source: 'extension' });
+  const deadline = Date.now() + 5000;
+  let reserved = false;
+  while (Date.now() < deadline) {
+    const names = existsSync(intentsDir) ? readdirSync(intentsDir).filter(name => name.endsWith('.json')) : [];
+    if (names.length > 0 && JSON.parse(readFileSync(join(intentsDir, names[0]), 'utf8')).state === 'requested') { reserved = true; break; }
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  assert.ok(reserved, 'the continuation was reserved and requested before the abort');
+  // Abort while the boundary is parked: the SDK drops the proposed
+  // continuation and settles without starting its turn.
+  const aborted = f.run.session.abort();
+  release();
+  await Promise.allSettled([run, aborted]);
+  assert.equal(f.run.requests.length, 1, 'the aborted continuation never made a provider request');
+  let intent = readContinuationIntent(f.packagePath);
+  assert.equal(intent.state, 'unknown');
+  assert.equal(intent.reason_code, 'undelivered');
+  // An unrelated later prompt must not mark the old request applied/delivered.
+  await f.run.session.prompt('Unrelated later turn after the abort.', { source: 'extension' });
+  await f.run.session.waitForIdle();
+  assert.equal(f.run.requests.length, 2, 'one request per unrelated turn only');
+  intent = readContinuationIntent(f.packagePath);
+  assert.equal(intent.state, 'unknown', 'the undelivered request never becomes applied');
+  assert.notEqual(intent.reason_code, 'delivered');
+  assert.equal(readdirSync(intentsDir).length, 1,
+    'the unknown outcome blocks automatic retry, so no second intent is reserved');
 });
