@@ -7,7 +7,7 @@ import { homedir } from 'node:os';
 import { Runtime, loadRun, summary, assertLease, runEditor, runCommand, runVerification, runAdvice, runCompletion, canonicalPackage, event as runtimeEvent } from './runtime.mjs';
 import { createCommunication } from './communication.mjs';
 import { createMonitor } from './monitor.mjs';
-import { createSentinelObserver, createVerificationRecorder, recordCheckpoint, readInboxGuard, readCheckpointRecord, observeInput, reconcileRuntimeReturn, checkpointPath, createSentinelAuthority, activatePolicy, disablePolicy, handleBeforeSettle, finishIntent } from './sentinel.mjs';
+import { createSentinelObserver, createVerificationRecorder, recordCheckpoint, readInboxGuard, readCheckpointRecord, observeInput, reconcileRuntimeReturn, checkpointPath, createSentinelAuthority, createDiagnosisController, activatePolicy, disablePolicy, handleBeforeSettle, finishIntent } from './sentinel.mjs';
 import { createScout, SCOUT_MODEL } from './scout.mjs';
 import { installProgressContext, recordCheckpoint, refreshProgress } from './completion.mjs';
 import { metrics, formatMetrics } from './metrics.mjs';
@@ -184,6 +184,7 @@ export default function (pi: any) {
   const ownPackages: string[] = [];
   let sentinel: ReturnType<typeof createSentinelObserver> | undefined;
   let sentinelAuthority: ReturnType<typeof createSentinelAuthority> | null = null;
+  let diagnosisController: ReturnType<typeof createDiagnosisController> | null = null;
   let sentinelScope: any = null;
   let pendingContinuation: any = null;
   // Session-local native-input guard and workflow->dispatch checkout bindings for
@@ -270,6 +271,8 @@ export default function (pi: any) {
     // scope and any pending requested continuation before durable revocation.
     sentinelScope = null;
     pendingContinuation = null;
+    diagnosisController?.close();
+    diagnosisController = null;
     const authority = createSentinelAuthority();
     sentinelAuthority = authority;
     sentinel = createSentinelObserver({ pi, context: ctx, agentDir: getAgentDir(), scope: process.env.PI_INTERCOM_SCOPE_ID ?? null, ownPackages,
@@ -290,6 +293,10 @@ export default function (pi: any) {
             disablePolicy(authority, { reason: 'disabled-during-activation' });
             return { ...receipt, fenced: true };
           }
+          // Replace any prior controller only after the fence and a successful
+          // activation, so a controller can never outlive or precede its grant.
+          diagnosisController?.close();
+          diagnosisController = createDiagnosisController({ authority, workflow_id: receipt.workflow_id, events: pi.events });
           // Store the validated scope only after a successful activation.
           sentinelScope = { package: receipt.package, workflow_id: receipt.workflow_id,
             coordinator_session: receipt.coordinator_session, mode: receipt.mode };
@@ -304,6 +311,9 @@ export default function (pi: any) {
         disableEpoch += 1;
         sentinelScope = null;
         pendingContinuation = null;
+        // Revocation cancels only the owned diagnosis before the authority is disarmed.
+        diagnosisController?.close();
+        diagnosisController = null;
         return disablePolicy(authority);
       } });
     monitor.close();
@@ -371,7 +381,14 @@ export default function (pi: any) {
     } catch { /* Never suppress the runtime completion message. */ }
     pi.sendMessage({ customType: 'spec-runtime', content: JSON.stringify(value), display: true }, { triggerTurn: true });
   },
-    onWorkerEvent: (record: any, event: any) => verificationRecorder.observe(record, event) });
+    onWorkerEvent: (record: any, event: any) => {
+      // Incident observation never affects the run lifecycle: the diagnosis is
+      // fire-and-forget and any failure is contained.
+      const observed = verificationRecorder.observe(record, event);
+      if (observed?.incident && diagnosisController) {
+        diagnosisController.diagnose(record, observed.incident).catch(() => {});
+      }
+    } });
   // Bounded continuation: only a live armed authority with an exact scope is
   // consulted, through the shared workflow serialization. A requested identity is
   // held only until the immediately accepted continuation turn starts or the
@@ -433,6 +450,8 @@ export default function (pi: any) {
     monitor.close();
     sentinel?.close();
     sentinel = undefined;
+    diagnosisController?.close();
+    diagnosisController = null;
     await Promise.allSettled([...runtime.active.values()].map(({ record }: any) => runtime.cancel(record.package, record.id)));
   });
   pi.registerTool({ name: 'spec_dispatch', label: 'Spec step runtime', description: 'Use startup to enter a prepared package in one call: first-step selection, recorded difficulty routing, checkout/lease setup and dispatch; existing progress returns a resume obligation without replay. Start launches an explicit prepared spec step with an owner and retained editor. Creates/reuses the checkout, holds its exclusive writer lease, and delivers a completion event. Repeated assignment IDs are idempotent. Status is for explicit recovery, never polling. Cancellation returns only after confirmed process-group termination.',

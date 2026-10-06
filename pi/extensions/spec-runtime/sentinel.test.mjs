@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 
-import { reduceVerificationResult, readVerificationIncidents, writeVerificationIncidents, verificationIncidentsPath, createVerificationRecorder, recordCheckpoint, readInboxGuard, checkpointPath, readCheckpointRecord, observeInput, reconcileRuntimeReturn, createSentinelAuthority, activatePolicy, disablePolicy, readPolicyGuard, reserveIntent, finishIntent, decideSettle, handleBeforeSettle } from './sentinel.mjs';
+import { reduceVerificationResult, readVerificationIncidents, writeVerificationIncidents, verificationIncidentsPath, createVerificationRecorder, recordCheckpoint, readInboxGuard, checkpointPath, readCheckpointRecord, observeInput, reconcileRuntimeReturn, createSentinelAuthority, createDiagnosisController, activatePolicy, disablePolicy, readPolicyGuard, reserveIntent, finishIntent, decideSettle, handleBeforeSettle, buildDiagnosisPacket, validateDiagnosisResult, diagnoseIncident, readDiagnosisAttempt, diagnosisAttemptPath } from './sentinel.mjs';
 
 const FIXED = Date.parse('2026-10-06T12:00:00Z');
 const record = { package: '/tmp/pkg', assignment_id: 'assign-1', checkout: '/tmp/repo' };
@@ -1574,4 +1574,319 @@ test('sentinel continuation: a crash-resumed unfinished reservation blocks', t =
   const restartedOptions = { authority: restarted, workflow_id: 'wf-1', package: f.packagePath, coordinator_session: 'session-1',
     inputGuard: () => ({ input_revision: 0, active_prompts: 0 }), activeManaged: () => false, now: () => FIXED };
   assert.equal(handleBeforeSettle(event, restartedOptions), undefined);
+});
+
+// --- bounded incident diagnosis (step 7) ---
+
+const diagnosisIncident = (packagePath, over = {}) => ({
+  id: 'd'.repeat(32), kind: 'repeated-verification-failure', assignment_id: 'assign-1', package: packagePath,
+  generation: 1, linked_from: null, command_sha256: 'a'.repeat(64), summary_sha256: 'b'.repeat(64),
+  tree_digest: 'c'.repeat(64), count: 3, tool_call_ids: ['call-1', 'call-2', 'call-3'],
+  observed_at: new Date(FIXED).toISOString(), ...over,
+});
+const diagnosisRecord = (packagePath, base) => ({ id: 'run-diag', package: packagePath, checkout: base, assignment_id: 'assign-1' });
+const diagnosisReply = (incident, over = {}) => JSON.stringify({
+  decision: 'observe', fact_ids: [], reason_code: 'repeated-unchanged-failure',
+  incident_id: incident.id, incident_generation: incident.generation, note: 'bounded note', ...over,
+});
+const leafHarness = replies => {
+  const calls = [];
+  const createLeaf = (events, options) => {
+    calls.push({ events, options });
+    return {
+      run: async () => {
+        const next = replies.shift();
+        if (next instanceof Error) throw next;
+        return next;
+      },
+      close() {},
+    };
+  };
+  return { calls, createLeaf };
+};
+const armDiagnosis = (packagePath, base) => armFixture(packagePath, base, {
+  mode: 'recover', actions: ['continue'], diagnosis: { model: 'test/diag' }, max_diagnostics: 2,
+});
+
+test('sentinel diagnosis: packet drops secrets and bounds large checkpoints', () => {
+  const incident = diagnosisIncident('/pkg');
+  const checkpoint = {
+    revision: 4, state: 'ready', obligation_revision: 'e'.repeat(32), input_revision: 2, observed_at: new Date(FIXED).toISOString(),
+    obligation: { key: 'impl:key', stage: 'implementation', summary: 'SECRET_SUMMARY_TOKEN', artifacts: [{ path: 'SECRET_PATH_TOKEN.md', sha256: 'f'.repeat(64) }] },
+    workers: Array.from({ length: 8 }, (_, i) => ({ id: `w-${i}`, kind: 'owner', state: 'working' })).concat([{ id: 'SECRET_WORKER_TOKEN', kind: 'owner', state: 'working' }]),
+    inbox_guard: { state: 'blocking', blocking: true, reasons: ['conflict:SECRET_REASON_TOKEN'],
+      items: [{ id: 'item-1', sha256: '1'.repeat(64), state: 'held' }, { id: 'item-2', sha256: '2'.repeat(64), state: 'blocking' }] },
+  };
+  const built = buildDiagnosisPacket({ incident,
+    record: { id: 'run-diag', checkout: '/repo', assignment_id: 'assign-1', pid: 'SECRET_PID_TOKEN' }, checkpoint,
+    policy: { mode: 'recover', policy_hash: '9'.repeat(64), max_diagnostics: 2, expires_at: new Date(FIXED + 3600000).toISOString() } });
+  for (const secret of ['SECRET_SUMMARY_TOKEN', 'SECRET_PATH_TOKEN', 'SECRET_WORKER_TOKEN', 'SECRET_REASON_TOKEN', 'SECRET_PID_TOKEN']) {
+    assert.equal(built.json.includes(secret), false, `packet leaked ${secret}`);
+  }
+  for (const hash of ['a'.repeat(64), 'b'.repeat(64), 'c'.repeat(64)]) assert.ok(built.json.includes(hash));
+  assert.equal(built.packet.facts.find(fact => fact.id === 'worker.0.state').value, 'working');
+  assert.equal(built.packet.facts.find(fact => fact.id === 'inbox.state').value, 'blocking');
+  assert.equal(built.packet.coverage.state, 'partial');
+  assert.ok(built.packet.coverage.omitted.includes('workers'));
+
+  const manyWorkers = Array.from({ length: 60 }, (_, i) => ({ id: `worker-${i}-${'x'.repeat(80)}`, kind: 'owner', state: 'working' }));
+  const manyItems = Array.from({ length: 60 }, (_, i) => ({ id: `item-${i}-${'y'.repeat(80)}`, sha256: '3'.repeat(64), state: i % 2 ? 'held' : 'blocking' }));
+  const large = buildDiagnosisPacket({ incident, record: null,
+    checkpoint: { ...checkpoint, workers: manyWorkers,
+      inbox_guard: { state: 'blocking', blocking: true, reasons: Array.from({ length: 30 }, (_, i) => `reason-${i}:detail`), items: manyItems } },
+    policy: null });
+  assert.ok(large.bytes <= 16 * 1024, `packet ${large.bytes} bytes`);
+  assert.ok(large.packet.facts.length <= 96, `packet ${large.packet.facts.length} facts`);
+  assert.equal(large.packet.coverage.state, 'partial');
+  assert.ok(large.packet.coverage.omitted.length > 0);
+});
+
+test('sentinel diagnosis: validator enforces the exact six-key response contract', () => {
+  const incident = { id: 'd'.repeat(32), generation: 2 };
+  const factIds = ['incident.id', 'incident.count'];
+  const valid = { decision: 'observe', fact_ids: ['incident.id'], reason_code: 'repeated-unchanged-failure', incident_id: incident.id, incident_generation: 2, note: 'ok' };
+  const ok = validateDiagnosisResult(JSON.stringify(valid), { incident, fact_ids: factIds });
+  assert.equal(ok.ok, true);
+  assert.equal(ok.result.note_verified, false);
+  const code = (text, options = { incident, fact_ids: factIds }) => validateDiagnosisResult(text, options).code;
+  assert.equal(code('x'.repeat(8193)), 'oversize');
+  assert.equal(code('not json'), 'not-json');
+  assert.equal(code('[]'), 'not-object');
+  assert.equal(code(JSON.stringify({ ...valid, extra: 1 })), 'unknown-field');
+  assert.equal(code(JSON.stringify({ decision: 'observe', fact_ids: [], reason_code: 'repeated-unchanged-failure', incident_id: incident.id, incident_generation: 2 })), 'missing-field');
+  assert.equal(code(JSON.stringify({ ...valid, decision: 'maybe' })), 'bad-enum');
+  assert.equal(code(JSON.stringify({ ...valid, fact_ids: 'incident.id' })), 'bad-fact-ids');
+  assert.equal(code(JSON.stringify({ ...valid, fact_ids: ['incident.id', 'incident.id'] })), 'bad-fact-ids');
+  assert.equal(code(JSON.stringify({ ...valid, fact_ids: ['unknown'] })), 'unknown-fact-id');
+  assert.equal(code(JSON.stringify({ ...valid, note: 'x'.repeat(501) })), 'bad-note');
+  assert.equal(code(JSON.stringify({ ...valid, incident_id: 'e'.repeat(32) })), 'stale-incident');
+  assert.equal(code(JSON.stringify({ ...valid, incident_generation: 3 })), 'stale-incident');
+});
+
+test('sentinel diagnosis: preconditions abstain without a leaf launch', async t => {
+  const { packagePath, base } = canonicalFixture(t);
+  const incident = diagnosisIncident(packagePath);
+  const record = diagnosisRecord(packagePath, base);
+  const disarmedHarness = leafHarness([]);
+  const disarmed = await diagnoseIncident({ authority: createSentinelAuthority(), incident, record, workflow_id: 'wf-1', events: {}, createLeaf: disarmedHarness.createLeaf, now: () => FIXED });
+  assert.equal(disarmed.launched, false);
+  assert.equal(disarmedHarness.calls.length, 0);
+
+  const { authority } = armDiagnosis(packagePath, base);
+  unlinkSync(checkpointPath(packagePath, 'wf-1'));
+  const noCheckpointHarness = leafHarness([]);
+  const noCheckpoint = await diagnoseIncident({ authority, incident, record, workflow_id: 'wf-1', events: {}, createLeaf: noCheckpointHarness.createLeaf, now: () => FIXED });
+  assert.equal(noCheckpoint.launched, false);
+  assert.equal(noCheckpointHarness.calls.length, 0);
+  assert.equal(existsSync(join(packagePath, 'runtime', 'sentinel', 'wf-1', 'diagnoses')), false);
+});
+
+test('sentinel diagnosis: a valid reply applies and retains one bounded attempt', async t => {
+  const { packagePath, base } = canonicalFixture(t);
+  const { authority } = armDiagnosis(packagePath, base);
+  const incident = diagnosisIncident(packagePath);
+  const record = diagnosisRecord(packagePath, base);
+  const harness = leafHarness([{ result: diagnosisReply(incident), usage: { input: 7, output: 3 } }]);
+  const result = await diagnoseIncident({ authority, incident, record, workflow_id: 'wf-1', events: {}, createLeaf: harness.createLeaf, now: () => FIXED });
+  assert.equal(result.launched, true);
+  assert.equal(result.state, 'applied');
+  assert.equal(result.decision, 'observe');
+  assert.equal(result.reason_code, 'repeated-unchanged-failure');
+  assert.equal(result.usage_available, true);
+  assert.equal(result.attempt_path, diagnosisAttemptPath(packagePath, 'wf-1', incident.id));
+  assert.equal(harness.calls.length, 1);
+  const { options } = harness.calls[0];
+  assert.equal(options.agent, 'spec-sentinel-diagnostician');
+  assert.equal(options.nodeId, 'diagnostician');
+  assert.equal(options.model, 'test/diag');
+  assert.deepEqual(options.toolBudget, { hard: 0, block: '*' });
+  assert.equal(options.skill, false);
+  assert.equal(options.artifacts, false);
+  assert.equal(options.cwd, base);
+  assert.equal(options.label, 'Diagnosis');
+  const stored = readDiagnosisAttempt(packagePath, 'wf-1', incident.id);
+  assert.equal(stored.state, 'applied');
+  assert.equal(stored.validation, 'valid');
+  assert.equal(stored.decision, 'observe');
+  assert.equal(stored.reason_code, 'repeated-unchanged-failure');
+  assert.deepEqual(stored.fact_ids, []);
+  assert.deepEqual(stored.usage, { input: 7, output: 3 });
+  assert.equal(stored.usage_available, true);
+  const duplicate = await diagnoseIncident({ authority, incident, record, workflow_id: 'wf-1', events: {}, createLeaf: harness.createLeaf, now: () => FIXED });
+  assert.equal(duplicate.launched, false);
+  assert.equal(duplicate.state, 'duplicate');
+  assert.equal(harness.calls.length, 1);
+});
+
+test('sentinel diagnosis: missing usage stays unavailable and never zero', async t => {
+  const { packagePath, base } = canonicalFixture(t);
+  const { authority } = armDiagnosis(packagePath, base);
+  const incident = diagnosisIncident(packagePath);
+  const record = diagnosisRecord(packagePath, base);
+  const harness = leafHarness([{ result: diagnosisReply(incident) }]);
+  const result = await diagnoseIncident({ authority, incident, record, workflow_id: 'wf-1', events: {}, createLeaf: harness.createLeaf, now: () => FIXED });
+  assert.equal(result.state, 'applied');
+  assert.equal(result.usage, null);
+  assert.equal(result.usage_available, false);
+  const stored = readDiagnosisAttempt(packagePath, 'wf-1', incident.id);
+  assert.equal(stored.usage, null);
+  assert.equal(stored.usage_available, false);
+});
+
+test('sentinel diagnosis: malformed replies fail closed and cool down without a second launch', async t => {
+  const { packagePath, base } = canonicalFixture(t);
+  const { authority } = armDiagnosis(packagePath, base);
+  const incident = diagnosisIncident(packagePath);
+  const record = diagnosisRecord(packagePath, base);
+  const harness = leafHarness([{ result: diagnosisReply(incident, { fact_ids: ['not-a-fact'] }) }]);
+  const result = await diagnoseIncident({ authority, incident, record, workflow_id: 'wf-1', events: {}, createLeaf: harness.createLeaf, now: () => FIXED });
+  assert.equal(result.state, 'failed');
+  assert.equal(result.error, 'unknown-fact-id');
+  const stored = readDiagnosisAttempt(packagePath, 'wf-1', incident.id);
+  assert.equal(stored.validation, 'invalid');
+  assert.equal(stored.error, 'unknown-fact-id');
+  assert.equal('result' in stored, false);
+  assert.equal(JSON.stringify(stored).includes('not-a-fact'), false);
+  const other = diagnosisIncident(packagePath, { id: 'e'.repeat(32), generation: 2 });
+  const cooldown = await diagnoseIncident({ authority, incident: other, record, workflow_id: 'wf-1', events: {}, createLeaf: harness.createLeaf, now: () => FIXED });
+  assert.equal(cooldown.launched, false);
+  assert.equal(harness.calls.length, 1);
+});
+
+test('sentinel diagnosis: a stale incident reply fails closed', async t => {
+  const { packagePath, base } = canonicalFixture(t);
+  const { authority } = armDiagnosis(packagePath, base);
+  const incident = diagnosisIncident(packagePath);
+  const record = diagnosisRecord(packagePath, base);
+  const harness = leafHarness([{ result: diagnosisReply(incident, { incident_id: 'e'.repeat(32) }) }]);
+  const result = await diagnoseIncident({ authority, incident, record, workflow_id: 'wf-1', events: {}, createLeaf: harness.createLeaf, now: () => FIXED });
+  assert.equal(result.state, 'failed');
+  assert.equal(result.error, 'stale-incident');
+  const stored = readDiagnosisAttempt(packagePath, 'wf-1', incident.id);
+  assert.equal(stored.validation, 'invalid');
+  assert.equal(stored.error, 'stale-incident');
+});
+
+test('sentinel diagnosis: the controller serializes attempts and reports a later duplicate', async t => {
+  const { packagePath, base } = canonicalFixture(t);
+  const { authority } = armDiagnosis(packagePath, base);
+  const record = diagnosisRecord(packagePath, base);
+  const incidentA = diagnosisIncident(packagePath);
+  const incidentB = diagnosisIncident(packagePath, { id: 'e'.repeat(32), generation: 2 });
+  let clock = FIXED;
+  let releaseA;
+  const gateA = new Promise(resolve => { releaseA = resolve; });
+  const calls = [];
+  const createLeaf = (events, options) => ({
+    run: async (task, signal) => {
+      const index = calls.push({ options }) - 1;
+      if (index === 0) await gateA;
+      const packet = JSON.parse(task.slice(task.indexOf('PACKET:\n') + 'PACKET:\n'.length));
+      return { result: JSON.stringify({ decision: 'observe', fact_ids: [], reason_code: 'repeated-unchanged-failure',
+        incident_id: packet.incident_id, incident_generation: packet.incident_generation, note: 'ok' }), usage: { input: 1 } };
+    },
+    close() {},
+  });
+  const controller = createDiagnosisController({ authority, workflow_id: 'wf-1', events: {}, createLeaf, now: () => clock });
+  const pendingA = controller.diagnose(record, incidentA);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls.length, 1);
+  assert.equal(controller.active(), true);
+  const pendingB = controller.diagnose(record, incidentB);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls.length, 1, 'a later incident waits for the active attempt');
+  clock = FIXED + 6 * 60 * 1000;
+  releaseA();
+  const resultA = await pendingA;
+  const resultB = await pendingB;
+  assert.equal(resultA.state, 'applied');
+  assert.equal(resultB.state, 'applied');
+  assert.equal(calls.length, 2);
+  const again = await controller.diagnose(record, incidentA);
+  assert.equal(again.launched, false);
+  assert.equal(again.state, 'duplicate');
+  assert.equal(calls.length, 2);
+});
+
+test('sentinel diagnosis: cancel aborts only the owned attempt and close refuses later ones', async t => {
+  const { packagePath, base } = canonicalFixture(t);
+  const { authority } = armDiagnosis(packagePath, base);
+  const record = diagnosisRecord(packagePath, base);
+  const incident = diagnosisIncident(packagePath);
+  const calls = [];
+  let aborted = 0;
+  const createLeaf = (events, options) => ({
+    run: async (task, signal) => {
+      calls.push({ options });
+      return new Promise((resolve, reject) => {
+        signal.addEventListener('abort', () => { aborted += 1; reject(new Error('aborted')); }, { once: true });
+      });
+    },
+    close() {},
+  });
+  const controller = createDiagnosisController({ authority, workflow_id: 'wf-1', events: {}, createLeaf, now: () => FIXED });
+  const pending = controller.diagnose(record, incident);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls.length, 1);
+  controller.cancel('stop');
+  const result = await pending;
+  assert.equal(result.state, 'failed');
+  assert.equal(result.reason_code, 'cancelled');
+  assert.equal(aborted, 1);
+  controller.close();
+  const after = await controller.diagnose(record, incident);
+  assert.equal(after, null);
+  assert.equal(calls.length, 1);
+});
+
+test('sentinel diagnosis: the real owned leaf deadline and an unavailable model abstain without a second launch', async t => {
+  const requestEvent = 'prompt-template:subagent:request';
+  const startedEvent = 'prompt-template:subagent:started';
+  const responseEvent = 'prompt-template:subagent:response';
+  const bus = () => {
+    const listeners = new Map();
+    return {
+      requests: [],
+      on(name, fn) { if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name).add(fn); return () => listeners.get(name).delete(fn); },
+      emit(name, value) { for (const fn of [...(listeners.get(name) || [])]) fn(value); },
+    };
+  };
+
+  // A started reply clears the readiness timer, so only the owned leaf's own
+  // deadline can end the wait; no response is ever emitted.
+  const deadline = canonicalFixture(t);
+  const deadlineArm = armDiagnosis(deadline.packagePath, deadline.base);
+  const deadlineRecord = diagnosisRecord(deadline.packagePath, deadline.base);
+  const deadlineIncident = diagnosisIncident(deadline.packagePath);
+  const deadlineEvents = bus();
+  deadlineEvents.on(requestEvent, value => {
+    deadlineEvents.requests.push(value);
+    deadlineEvents.emit(startedEvent, { requestId: value.requestId, ownerRunId: value.ownerRunId, nodeId: value.nodeId });
+  });
+  const expired = await diagnoseIncident({ authority: deadlineArm.authority, incident: deadlineIncident, record: deadlineRecord,
+    workflow_id: 'wf-1', events: deadlineEvents, timeoutMs: 5, readyMs: 5000, now: () => FIXED });
+  assert.equal(expired.launched, true);
+  assert.equal(expired.state, 'failed');
+  assert.equal(deadlineEvents.requests.length, 1);
+  const noSecond = await diagnoseIncident({ authority: deadlineArm.authority, incident: deadlineIncident, record: deadlineRecord,
+    workflow_id: 'wf-1', events: deadlineEvents, timeoutMs: 5, readyMs: 5000, now: () => FIXED });
+  assert.equal(noSecond.launched, false);
+  assert.equal(deadlineEvents.requests.length, 1, 'no second or fallback launch for the same incident');
+
+  // An unavailable model fails the one owned request and is never retried.
+  const unavailable = canonicalFixture(t);
+  const unavailableArm = armDiagnosis(unavailable.packagePath, unavailable.base);
+  const unavailableRecord = diagnosisRecord(unavailable.packagePath, unavailable.base);
+  const unavailableIncident = diagnosisIncident(unavailable.packagePath);
+  const unavailableEvents = bus();
+  unavailableEvents.on(requestEvent, value => {
+    unavailableEvents.requests.push(value);
+    unavailableEvents.emit(responseEvent, { ...value, status: 'failed', error: 'Selected model unavailable' });
+  });
+  const failed = await diagnoseIncident({ authority: unavailableArm.authority, incident: unavailableIncident, record: unavailableRecord,
+    workflow_id: 'wf-1', events: unavailableEvents, now: () => FIXED });
+  assert.equal(failed.launched, true);
+  assert.equal(failed.state, 'failed');
+  assert.equal(failed.error, 'Selected model unavailable');
+  assert.equal(unavailableEvents.requests.length, 1, 'the unavailable model makes no retry or fallback request');
 });

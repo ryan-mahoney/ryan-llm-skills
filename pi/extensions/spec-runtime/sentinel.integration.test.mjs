@@ -2,12 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync, realpathSync, statSync, renameSync, unlinkSync, symlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { createSentinelObserver, SENTINEL_COALESCE_MS, SENTINEL_RECONCILE_MS, SENTINEL_WIDGET_KEY, readCheckpointRecord, recordCheckpoint } from './sentinel.mjs';
+import { createSentinelObserver, SENTINEL_COALESCE_MS, SENTINEL_RECONCILE_MS, SENTINEL_WIDGET_KEY, readCheckpointRecord, recordCheckpoint, createSentinelAuthority, activatePolicy, createDiagnosisController, readDiagnosisAttempt } from './sentinel.mjs';
 import { canonicalPackage } from './runtime.mjs';
 import { enrollmentDirectory, workspaceKey } from '../../../scripts/spec-observe/sentinel.mjs';
 
@@ -98,6 +98,7 @@ function capturedUI() {
     ui: {
       setWidget: (key, content) => widgets.push({ key, content }),
       setStatus: (key, text) => statuses.push({ key, text }),
+      setToolsExpanded: () => {},
       notify: (message, type) => notes.push({ message, type }),
       select: async () => undefined,
       confirm: async () => false,
@@ -197,9 +198,76 @@ function continuationProvider(requests) {
   };
 }
 
+const piSubagentsPath = join(homedir(), '.pi/agent/npm/node_modules/pi-subagents/index.js');
+const delegationSkip = sdkSkip || (existsSync(piSubagentsPath) ? false : 'Install pi-subagents to run the delegation composition case');
+
+// A valid source-backed incident for the real delegation composition case.
+function incidentFixture(packagePath, tag) {
+  return {
+    id: createHash('sha256').update(String(tag)).digest('hex').slice(0, 32),
+    kind: 'repeated-verification-failure',
+    assignment_id: 'assign-diag',
+    package: packagePath,
+    workflow_id: 'wf-diag',
+    generation: 1,
+    linked_from: null,
+    command_sha256: 'a'.repeat(64),
+    summary_sha256: 'b'.repeat(64),
+    tree_digest: 'c'.repeat(64),
+    count: 3,
+    tool_call_ids: ['call-1', 'call-2', 'call-3'],
+    observed_at: '2026-10-06T12:00:00.000Z',
+  };
+}
+
+// Scripted final provider for the owned diagnosis: the first request is held
+// until releaseFirst so the test can prove serialization; later requests finish
+// deterministically. replyFor(index) supplies the bounded JSON text.
+function deferredDiagnosisProvider(replyFor) {
+  const calls = [];
+  let firstFinish = null;
+  let releaseRequested = false;
+  let firstFinished = false;
+  let resolveFirstCall;
+  const firstCall = new Promise(resolve => { resolveFirstCall = resolve; });
+  const flushFirst = () => {
+    // Release is tolerant of arriving before the first provider call, and
+    // idempotent: the first stream finishes exactly once.
+    if (!releaseRequested || !firstFinish || firstFinished) return;
+    firstFinished = true;
+    firstFinish();
+  };
+  const provider = {
+    name: 'Sentinel diagnosis fixture',
+    api: 'openai-completions',
+    baseUrl: 'http://unused.invalid',
+    apiKey: 'fixture-key',
+    models: [{ id: 'scripted', name: 'Scripted fixture', input: ['text'], reasoning: false, contextWindow: 10000, maxTokens: 1000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
+    streamSimple(model) {
+      const index = calls.length;
+      calls.push(Date.now());
+      const stream = sdk.ai.createAssistantMessageEventStream();
+      const finish = () => {
+        const message = { role: 'assistant', content: [{ type: 'text', text: replyFor(index) }], api: model.api, provider: model.provider, model: model.id,
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+          stopReason: 'stop', timestamp: Date.now() };
+        stream.push({ type: 'done', reason: 'stop', message });
+        stream.end(message);
+      };
+      if (index === 0) {
+        firstFinish = finish;
+        resolveFirstCall();
+        flushFirst();
+      } else queueMicrotask(finish);
+      return stream;
+    },
+  };
+  return { provider, calls, firstCall, releaseFirst: () => { releaseRequested = true; flushFirst(); } };
+}
+
 // Isolated SDK session over the real index.ts with a scripted provider that
 // never serves a request: status must be observation-only.
-async function loadExtension(t, { dir, role, recordFile, providerFactory = scriptedProvider, extraFactories = [] } = {}) {
+async function loadExtension(t, { dir, role, recordFile, providerFactory = scriptedProvider, extraFactories = [], extraExtensionPaths = [] } = {}) {
   const env = isolatedEnv(t);
   if (role) {
     env.set('SPEC_RUNTIME_ROLE', role);
@@ -227,7 +295,7 @@ async function loadExtension(t, { dir, role, recordFile, providerFactory = scrip
     noThemes: true,
     noContextFiles: true,
     systemPrompt: 'Isolated sentinel integration fixture.',
-    additionalExtensionPaths: [indexPath],
+    additionalExtensionPaths: [indexPath, ...extraExtensionPaths],
     extensionFactories: [pi => pi.registerProvider('sentinel-fixture', providerFactory(requests)), ...extraFactories],
   });
   await loader.reload();
@@ -1155,4 +1223,95 @@ test('sentinel continuation: a post-reservation abort retires the undelivered re
   assert.notEqual(intent.reason_code, 'delivered');
   assert.equal(readdirSync(intentsDir).length, 1,
     'the unknown outcome blocks automatic retry, so no second intent is reserved');
+});
+
+test('sentinel delegation: the real adapter loads the profile and validates one correlated diagnosis', { skip: delegationSkip, timeout: 60000 }, async t => {
+  const dir = sandbox(t);
+  const { repo } = primary(dir, 'diagnosis-repo');
+  commit(repo);
+  const packagePath = pack(repo);
+  const canonical = canonicalPackage(packagePath);
+  mkdirSync(join(dir, 'agents'), { recursive: true });
+  writeFileSync(join(dir, 'agents', 'spec-sentinel-diagnostician.md'),
+    readFileSync(join(here, '..', '..', 'agents', 'spec-sentinel-diagnostician.md')));
+  const checkout = join(dir, 'diagnosis-checkout');
+  mkdirSync(checkout, { recursive: true });
+
+  recordCheckpoint({ package: canonical.packagePath, workflow_id: 'wf-diag', expected_revision: 0, state: 'ready',
+    obligation: { key: 'diag:step-007', stage: 'implementation', summary: 'diagnose', artifacts: [] },
+    workers: [], inbox: { items: [] }, reconciles_input_revision: 0, coordinator_session: 'session-diag', checkout });
+  const policyPath = join(dir, 'diagnosis-policy.json');
+  writeFileSync(policyPath, JSON.stringify({ version: 1, package: canonical.packagePath, workflow_id: 'wf-diag',
+    checkout, coordinator_session: 'session-diag', mode: 'shadow', actions: [],
+    expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    max_effects: 0, max_diagnostics: 2, diagnosis: { model: 'sentinel-fixture/scripted' }, authority_reference: 'user:fixture' }));
+  const authority = createSentinelAuthority();
+  activatePolicy(authority, { policy_path: policyPath, coordinator_session: 'session-diag', command: 'fixture' });
+
+  const incidentA = incidentFixture(packagePath, 'a');
+  const incidentB = incidentFixture(packagePath, 'b');
+  const record = { id: 'run-diag-int', package: canonical.packagePath, checkout, assignment_id: 'assign-diag' };
+  const { provider, calls, firstCall, releaseFirst } = deferredDiagnosisProvider(index => JSON.stringify({
+    decision: 'cancel-candidate', fact_ids: ['incident.count'], reason_code: 'repeated-unchanged-failure',
+    incident_id: [incidentA, incidentB][index].id, incident_generation: 1, note: 'fixture' }));
+  let capturedPi;
+  await loadExtension(t, { dir, providerFactory: () => provider, extraExtensionPaths: [piSubagentsPath],
+    extraFactories: [pi => { capturedPi = pi; }] });
+
+  const requests = [];
+  let resolveFirstRequest;
+  const firstRequest = new Promise(resolve => { resolveFirstRequest = resolve; });
+  capturedPi.events.on('prompt-template:subagent:request', value => {
+    requests.push(value);
+    if (requests.length === 1) resolveFirstRequest(value);
+  });
+  const responses = [];
+  capturedPi.events.on('prompt-template:subagent:response', value => { responses.push(value); });
+  let clock = Date.now();
+  const controller = createDiagnosisController({ authority, workflow_id: 'wf-diag', events: capturedPi.events, now: () => clock });
+  const a = controller.diagnose(record, incidentA);
+  const b = controller.diagnose(record, incidentB);
+  await firstRequest;
+  assert.equal(requests.length, 1, 'only the first diagnosis request is in flight');
+  const request = requests[0];
+  assert.equal(request.agent, 'spec-sentinel-diagnostician');
+  assert.equal(request.nodeId, 'diagnostician');
+  assert.equal(request.model, 'sentinel-fixture/scripted');
+  assert.equal(request.context, 'fresh');
+  assert.deepEqual(request.toolBudget, { hard: 0, block: '*' });
+  assert.equal(request.skill, false);
+  assert.equal(request.artifacts, false);
+  assert.deepEqual(request.intercomBridge, { mode: 'off' });
+  assert.deepEqual(request.result, { kind: 'text' });
+
+  await firstCall;
+  assert.equal(calls.length, 1, 'only the first provider request is in flight while the second incident waits');
+  clock += 6 * 60 * 1000;
+  releaseFirst();
+  const [resultA, resultB] = await Promise.all([a, b]);
+  assert.equal(responses.length, 2, `terminal responses: ${JSON.stringify(responses.map(r => ({ status: r.status, error: r.error })))}`);
+  assert.equal(responses[0].status, 'completed', `delegation terminal status ${responses[0].status}: ${responses[0].error ?? ''}`);
+  assert.equal(resultA.state, 'applied', `diagnosis A state ${resultA.state}: ${resultA.error ?? ''}`);
+  assert.equal(resultB.state, 'applied', `diagnosis B state ${resultB.state}: ${resultB.error ?? ''}`);
+  assert.equal(calls.length, 2, 'no extra or fallback provider request');
+  assert.equal(resultA.state, 'applied');
+  assert.equal(resultA.decision, 'cancel-candidate');
+  assert.equal(resultA.reason_code, 'repeated-unchanged-failure');
+  assert.equal(resultB.state, 'applied');
+  assert.equal(resultB.decision, 'cancel-candidate');
+  assert.equal(resultB.reason_code, 'repeated-unchanged-failure');
+  assert.equal(requests.length, 2, 'the second diagnosis also reached the real adapter');
+  const second = requests[1];
+  assert.equal(second.agent, 'spec-sentinel-diagnostician');
+  assert.equal(second.nodeId, 'diagnostician');
+  const stored = readDiagnosisAttempt(packagePath, 'wf-diag', incidentA.id);
+  assert.equal(stored.decision, 'cancel-candidate');
+  assert.deepEqual(stored.fact_ids, ['incident.count']);
+  assert.equal(stored.reason_code, 'repeated-unchanged-failure');
+  assert.equal(typeof stored.usage_available, 'boolean');
+
+  const duplicate = await controller.diagnose(record, incidentA);
+  assert.equal(duplicate.launched, false);
+  assert.equal(duplicate.state, 'duplicate');
+  assert.equal(calls.length, 2);
 });

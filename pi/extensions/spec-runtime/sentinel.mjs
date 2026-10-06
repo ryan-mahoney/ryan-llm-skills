@@ -12,6 +12,7 @@ import { join, resolve, dirname, sep, relative, isAbsolute, basename } from 'nod
 
 import { canonicalPackage } from './runtime.mjs';
 import { publicHint } from './monitor.mjs';
+import { createOwnedLeaf } from './scout.mjs';
 import { collectWorkspace, renderWorkspace, enrollmentDirectory, readEnrollments, enrollmentReasons, SENTINEL_LIMITS } from '../../../scripts/spec-observe/sentinel.mjs';
 
 export const SENTINEL_COALESCE_MS = 250;
@@ -2245,4 +2246,399 @@ export function handleBeforeSettle(event = {}, {
     const entries = Array.isArray(event?.entries) ? [...event.entries, message] : [message];
     return { entries, continue: true };
   } catch { return undefined; }
+}
+
+// ---------------------------------------------------------------------------
+// Bounded incident diagnosis (step 7, AC-10/AC-11/AC-14/AC-17).
+//
+// buildDiagnosisPacket projects only bounded operational facts from retained
+// incident/checkpoint/policy state; validateDiagnosisResult enforces the exact
+// six-key text reply; diagnoseIncident reserves one diagnostic intent and runs
+// one zero-tool owned leaf, retaining a bounded attempt record. No second call,
+// fallback model or raw model text is ever retained.
+// ---------------------------------------------------------------------------
+
+const DIAGNOSIS_MAX_PACKET_BYTES = 16 * 1024;
+const DIAGNOSIS_MAX_RESPONSE_BYTES = 8 * 1024;
+const DIAGNOSIS_MAX_FACTS = 96;
+const DIAGNOSIS_MAX_NOTE = 500;
+const DIAGNOSIS_MAX_VALUE = 160;
+const DIAGNOSIS_FILE = 'diagnoses';
+const DIAGNOSIS_DECISIONS = new Set(['observe', 'cancel-candidate', 'human-decision', 'abstain']);
+const DIAGNOSIS_REASON_CODES = new Set(['repeated-unchanged-failure', 'insufficient-context', 'external-dependency', 'authority-question']);
+const DIAGNOSIS_RESPONSE_KEYS = ['decision', 'fact_ids', 'reason_code', 'incident_id', 'incident_generation', 'note'];
+
+const boundedDiagnosisValue = value => {
+  if (typeof value === 'string') return value.slice(0, DIAGNOSIS_MAX_VALUE);
+  if (typeof value === 'number' || typeof value === 'boolean') return value;
+  return undefined;
+};
+
+// Pure source-backed packet builder. Only identifiers, counts, digests and safe
+// category names leave this function; never obligation summaries, artifact
+// paths, reason strings, command/log text or process identity.
+export function buildDiagnosisPacket({ incident, record = null, checkpoint = null, policy = null } = {}) {
+  const base = [];
+  const artifacts = [];
+  const workers = [];
+  const inbox = [];
+  const reasons = [];
+  const items = [];
+  const policyFacts = [];
+  const add = (target, id, category, value) => {
+    const bounded = boundedDiagnosisValue(value);
+    if (bounded === undefined) return;
+    target.push({ id, category, value: bounded });
+  };
+
+  add(base, 'incident.id', 'identity', incident?.id);
+  add(base, 'incident.kind', 'identity', incident?.kind);
+  add(base, 'incident.generation', 'count', incident?.generation);
+  add(base, 'incident.count', 'count', incident?.count);
+  add(base, 'incident.command_sha256', 'hash', incident?.command_sha256);
+  add(base, 'incident.summary_sha256', 'hash', incident?.summary_sha256);
+  add(base, 'incident.tree_digest', 'hash', incident?.tree_digest);
+  add(base, 'incident.observed_at', 'wait', incident?.observed_at);
+  if (incident?.linked_from) add(base, 'incident.linked_from', 'identity', incident.linked_from);
+  add(base, 'record.id', 'identity', record?.id);
+  add(base, 'record.checkout', 'identity', record?.checkout);
+  add(base, 'record.workflow_id', 'identity', record?.workflow_id);
+  add(base, 'record.assignment_id', 'identity', record?.assignment_id);
+  add(base, 'checkpoint.revision', 'count', checkpoint?.revision);
+  add(base, 'checkpoint.state', 'identity', checkpoint?.state);
+  add(base, 'checkpoint.obligation_revision', 'hash', checkpoint?.obligation_revision);
+  add(base, 'checkpoint.obligation.key', 'identity', checkpoint?.obligation?.key);
+  add(base, 'checkpoint.obligation.stage', 'identity', checkpoint?.obligation?.stage);
+  add(base, 'checkpoint.input_revision', 'count', checkpoint?.input_revision);
+  add(base, 'checkpoint.observed_at', 'wait', checkpoint?.observed_at);
+
+  const artifactList = Array.isArray(checkpoint?.obligation?.artifacts) ? checkpoint.obligation.artifacts : [];
+  artifactList.slice(0, 16).forEach((entry, index) => add(artifacts, `artifact.${index}.sha256`, 'hash', entry?.sha256));
+
+  const workerList = Array.isArray(checkpoint?.workers) ? checkpoint.workers : [];
+  const workersOmitted = workerList.length > 8;
+  workerList.slice(0, 8).forEach((worker, index) => {
+    add(workers, `worker.${index}.id`, 'wait', worker?.id);
+    add(workers, `worker.${index}.kind`, 'wait', worker?.kind);
+    add(workers, `worker.${index}.state`, 'wait', worker?.state);
+  });
+
+  const guard = checkpoint?.inbox_guard ?? {};
+  add(inbox, 'inbox.state', 'identity', guard.state);
+  add(inbox, 'inbox.blocking', 'hold', guard.blocking);
+  const guardItems = Array.isArray(guard.items) ? guard.items : [];
+  add(inbox, 'inbox.items_count', 'count', guardItems.length);
+  add(inbox, 'inbox.held_count', 'count', guardItems.filter(item => item?.state === 'held').length);
+  add(inbox, 'inbox.blocking_count', 'count', guardItems.filter(item => item?.state === 'blocking' || item?.state === 'unknown').length);
+  const reasonCategories = new Map();
+  for (const reason of Array.isArray(guard.reasons) ? guard.reasons : []) {
+    const category = String(reason).split(':')[0];
+    reasonCategories.set(category, (reasonCategories.get(category) ?? 0) + 1);
+  }
+  [...reasonCategories.entries()].slice(0, 12).forEach(([category, count]) => add(reasons, `inbox.reason.${category}`, 'count', count));
+  const heldOrBlocking = guardItems
+    .filter(item => item?.state === 'held' || item?.state === 'blocking' || item?.state === 'unknown')
+    .slice(0, 12);
+  heldOrBlocking.forEach((item, index) => {
+    add(items, `inbox.item.${index}.id`, 'hold', item?.id);
+    add(items, `inbox.item.${index}.sha256`, 'hash', item?.sha256);
+  });
+
+  add(policyFacts, 'policy.mode', 'identity', policy?.mode);
+  add(policyFacts, 'policy.policy_hash', 'hash', policy?.policy_hash);
+  add(policyFacts, 'policy.max_diagnostics', 'count', policy?.max_diagnostics);
+  add(policyFacts, 'policy.expires_at', 'wait', policy?.expires_at);
+
+  const omitted = [];
+  const coverageReasons = [];
+  if (workersOmitted) { omitted.push('workers'); coverageReasons.push('workers-omitted'); }
+  const groups = { base, artifacts, workers, inbox, reasons, items, policy: policyFacts };
+  const assemble = () => {
+    const facts = [...groups.base, ...groups.artifacts, ...groups.workers, ...groups.inbox,
+      ...groups.reasons, ...groups.items, ...groups.policy];
+    const coverage = omitted.length
+      ? { state: 'partial', omitted: [...new Set(omitted)], reasons: [...new Set(coverageReasons)] }
+      : { state: 'complete', omitted: [], reasons: [] };
+    const packet = { version: 1, incident_id: incident?.id ?? null, incident_generation: incident?.generation ?? null, facts, coverage };
+    const json = JSON.stringify(packet);
+    return { packet, json, bytes: Buffer.byteLength(json, 'utf8') };
+  };
+  const over = result => result.packet.facts.length > DIAGNOSIS_MAX_FACTS || result.bytes > DIAGNOSIS_MAX_PACKET_BYTES;
+  let result = assemble();
+  if (over(result) && groups.reasons.length) {
+    groups.reasons = []; omitted.push('reason-categories'); coverageReasons.push('reason-categories-omitted'); result = assemble();
+  }
+  if (over(result) && groups.workers.length > 3) {
+    groups.workers = groups.workers.slice(0, 3); omitted.push('workers'); coverageReasons.push('workers-omitted'); result = assemble();
+  }
+  if (over(result) && groups.items.length > 2) {
+    groups.items = groups.items.slice(0, 2); omitted.push('inbox-items'); coverageReasons.push('inbox-items-omitted'); result = assemble();
+  }
+  if (over(result) && groups.artifacts.length > 1) {
+    groups.artifacts = groups.artifacts.slice(0, 1); omitted.push('artifact-hashes'); coverageReasons.push('artifact-hashes-omitted'); result = assemble();
+  }
+  while (over(result)) {
+    const group = ['policy', 'reasons', 'items', 'workers', 'artifacts'].find(key => groups[key].length);
+    if (!group) break;
+    groups[group].pop();
+    if (!omitted.includes('overflow')) { omitted.push('overflow'); coverageReasons.push('overflow-trimmed'); }
+    result = assemble();
+  }
+  return result;
+}
+
+// Strict local validator for the bounded text-result contract. Checks run in a
+// fixed order so a malformed reply yields one deterministic code.
+export function validateDiagnosisResult(text, { incident, fact_ids: factIds = [] } = {}) {
+  if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > DIAGNOSIS_MAX_RESPONSE_BYTES) return { ok: false, code: 'oversize' };
+  let value;
+  try { value = JSON.parse(text); } catch { return { ok: false, code: 'not-json' }; }
+  if (!isPlainObject(value)) return { ok: false, code: 'not-object' };
+  if (Object.keys(value).some(key => !DIAGNOSIS_RESPONSE_KEYS.includes(key))) return { ok: false, code: 'unknown-field' };
+  if (DIAGNOSIS_RESPONSE_KEYS.some(key => !Object.prototype.hasOwnProperty.call(value, key))) return { ok: false, code: 'missing-field' };
+  if (!DIAGNOSIS_DECISIONS.has(value.decision) || !DIAGNOSIS_REASON_CODES.has(value.reason_code)) return { ok: false, code: 'bad-enum' };
+  const ids = value.fact_ids;
+  if (!Array.isArray(ids) || ids.length > DIAGNOSIS_MAX_FACTS || ids.some(id => typeof id !== 'string') || new Set(ids).size !== ids.length) {
+    return { ok: false, code: 'bad-fact-ids' };
+  }
+  const allowed = new Set(Array.isArray(factIds) ? factIds : []);
+  if (ids.some(id => !allowed.has(id))) return { ok: false, code: 'unknown-fact-id' };
+  if (typeof value.note !== 'string' || value.note.length > DIAGNOSIS_MAX_NOTE) return { ok: false, code: 'bad-note' };
+  if (value.incident_id !== incident?.id || value.incident_generation !== incident?.generation) return { ok: false, code: 'stale-incident' };
+  return { ok: true, result: { decision: value.decision, fact_ids: [...ids], reason_code: value.reason_code,
+    incident_id: value.incident_id, incident_generation: value.incident_generation, note: value.note, note_verified: false } };
+}
+
+// Durable attempt location; validates IDs before any path construction.
+export function diagnosisAttemptPath(packagePath, workflowId, incidentId) {
+  validateId(workflowId, 'workflow_id');
+  validateId(incidentId, 'incident_id');
+  return join(packagePath, 'runtime', 'sentinel', workflowId, DIAGNOSIS_FILE, `${incidentId}.json`);
+}
+
+// Bounded read of one retained diagnosis attempt, never following a symlinked
+// state ancestor. Malformed or mismatched records are unavailable.
+export function readDiagnosisAttempt(packagePath, workflowId, incidentId) {
+  validateId(workflowId, 'workflow_id');
+  validateId(incidentId, 'incident_id');
+  const directory = validatedStateDirectory(packagePath, ['runtime', 'sentinel', workflowId, DIAGNOSIS_FILE]);
+  if (!directory) return null;
+  const value = readBoundedJsonFile(join(directory, `${incidentId}.json`), DIAGNOSIS_MAX_PACKET_BYTES);
+  return value && value.version === 1 && value.workflow_id === workflowId && value.incident_id === incidentId ? value : null;
+}
+
+// One optional bounded diagnosis of a source-backed incident. Preconditions
+// abstain before any reservation; a successful reservation launches exactly one
+// zero-tool owned leaf. Missing usage never becomes zero and no retry, fallback
+// model or raw model text is retained.
+export async function diagnoseIncident({
+  authority,
+  incident,
+  record = null,
+  workflow_id: workflowId = null,
+  events = null,
+  createLeaf = createOwnedLeaf,
+  readyMs = 5000,
+  timeoutMs = 120000,
+  ownerRunId = null,
+  now = Date.now,
+  signal,
+} = {}) {
+  const abstain = (state, error = null, extra = {}) => ({
+    version: 1, launched: false, state, decision: 'abstain', fact_ids: [], reason_code: 'insufficient-context',
+    note: null, note_verified: false, usage: null, usage_available: false,
+    incident_id: isPlainObject(incident) && typeof incident.id === 'string' ? incident.id : null,
+    incident_generation: isPlainObject(incident) && Number.isInteger(incident.generation) ? incident.generation : null,
+    intent_id: null, packet_sha256: null, packet_bytes: null, attempt_path: null, model: null, error, ...extra,
+  });
+  if (!isPlainObject(incident) || typeof incident.id !== 'string' || !ID_SHAPE.test(incident.id)
+    || !Number.isInteger(incident.generation) || incident.generation < 1) {
+    return abstain('invalid', 'invalid-incident');
+  }
+  const scopedWorkflow = workflowId ?? record?.workflow_id ?? incident.workflow_id ?? null;
+  if (typeof scopedWorkflow !== 'string' || !ID_SHAPE.test(scopedWorkflow)) return abstain('skipped', 'workflow-scope-missing');
+  let guard;
+  try { guard = readPolicyGuard(authority, { workflow_id: scopedWorkflow, now }); }
+  catch { guard = { armed: false, state: 'disarmed', blocking: false, reasons: [] }; }
+  if (!guard || guard.armed !== true) return abstain('disarmed', null);
+  if (guard.blocking) return abstain('blocked', (guard.reasons ?? []).join('; ') || 'policy-blocked');
+  if (!guard.diagnosis || typeof guard.diagnosis.model !== 'string' || !guard.diagnosis.model) return abstain('denied', null);
+  let packagePath;
+  try { packagePath = canonicalPackage(record?.package ?? incident.package).packagePath; }
+  catch { return abstain('skipped', 'checkpoint-unavailable'); }
+  const checkpoint = readCheckpointRecord(packagePath, scopedWorkflow);
+  if (!checkpoint || checkpoint.workflow_id !== scopedWorkflow || checkpoint.package !== packagePath) {
+    return abstain('skipped', 'checkpoint-unavailable');
+  }
+  if (!events) return abstain('unavailable', 'delegation-unavailable');
+
+  const built = buildDiagnosisPacket({ incident, record, checkpoint, policy: guard });
+  const packetSha256 = createHash('sha256').update(built.json).digest('hex');
+  const base = { packet_sha256: packetSha256, packet_bytes: built.bytes, model: guard.diagnosis.model };
+  let reservation;
+  try {
+    reservation = reserveIntent(authority, { workflow_id: scopedWorkflow, kind: 'diagnose',
+      subject_key: incident.id, source_revision: packetSha256, now });
+  } catch (error) {
+    return abstain('blocked', publicHint(String(error?.message ?? error)), base);
+  }
+  if (!reservation || reservation.accepted !== true) {
+    const state = reservation?.duplicate ? 'duplicate' : (reservation?.state ?? 'blocked');
+    return abstain(state, (reservation?.reasons ?? []).join('; ') || null, base);
+  }
+  const intentIdValue = reservation.intent?.id ?? null;
+  const task = 'Return exactly one JSON object with exactly the keys decision, fact_ids, reason_code, incident_id, '
+    + 'incident_generation and note. decision must be one of observe|cancel-candidate|human-decision|abstain; '
+    + 'reason_code one of repeated-unchanged-failure|insufficient-context|external-dependency|authority-question; '
+    + 'fact_ids must cite only ids present in the PACKET and be unique; incident_id and incident_generation must '
+    + 'echo the incident; note must be a string of at most 500 characters. Abstain when the packet is insufficient.\n\nPACKET:\n'
+    + built.json;
+  let reply = null;
+  let thrown = null;
+  try {
+    const leaf = createLeaf(events, {
+      ownerRunId: ownerRunId ?? record?.id ?? incident.assignment_id,
+      nodeId: 'diagnostician',
+      agent: 'spec-sentinel-diagnostician',
+      cwd: record?.checkout ?? packagePath,
+      model: guard.diagnosis.model,
+      timeoutMs,
+      readyMs,
+      toolBudget: { hard: 0, block: '*' },
+      skill: false,
+      artifacts: false,
+      label: 'Diagnosis',
+      maxTaskLength: DIAGNOSIS_MAX_PACKET_BYTES + 4096,
+    });
+    reply = await leaf.run(task, signal);
+  } catch (error) { thrown = error; }
+
+  const validation = thrown
+    ? { ok: false, code: signal?.aborted ? 'cancelled' : 'unavailable' }
+    : validateDiagnosisResult(reply?.result, { incident, fact_ids: built.packet.facts.map(fact => fact.id) });
+  const applied = validation.ok === true;
+  const attemptState = applied ? 'applied' : 'failed';
+  const reasonCode = applied ? 'diagnosed' : (validation.code ?? (signal?.aborted ? 'cancelled' : 'unavailable'));
+  const errorCode = applied ? null
+    : thrown ? publicHint(String(thrown?.message ?? 'unavailable')).slice(0, 200) : validation.code;
+  const usage = reply?.usage ?? null;
+  const attemptPath = diagnosisAttemptPath(packagePath, scopedWorkflow, incident.id);
+  const attempt = {
+    version: 1,
+    workflow_id: scopedWorkflow,
+    package: packagePath,
+    incident_id: incident.id,
+    incident_generation: incident.generation,
+    assignment_id: record?.assignment_id ?? incident.assignment_id ?? null,
+    record_id: record?.id ?? null,
+    model: guard.diagnosis.model,
+    intent_id: intentIdValue,
+    state: attemptState,
+    validation: applied ? 'valid' : (thrown ? 'unavailable' : 'invalid'),
+    decision: applied ? validation.result.decision : 'abstain',
+    fact_ids: applied ? validation.result.fact_ids : [],
+    reason_code: applied ? validation.result.reason_code : (validation.code ?? reasonCode),
+    note: applied ? validation.result.note : null,
+    note_verified: false,
+    error: errorCode,
+    usage,
+    usage_available: usage != null,
+    packet_sha256: packetSha256,
+    packet_bytes: built.bytes,
+    completed_at: new Date(typeof now === 'function' ? now() : now).toISOString(),
+  };
+  let retainedPath = attemptPath;
+  let persistenceError = null;
+  try {
+    const directory = ensureStateDirectory(packagePath, ['runtime', 'sentinel', scopedWorkflow, DIAGNOSIS_FILE], 'sentinel diagnosis directory');
+    const serialized = JSON.stringify(attempt);
+    if (Buffer.byteLength(serialized, 'utf8') > DIAGNOSIS_MAX_PACKET_BYTES) {
+      throw new CheckpointError('diagnosis attempt exceeds the retained bound', 'diagnosis-oversize');
+    }
+    publishDurable(join(directory, `${incident.id}.json`), attempt, { directory });
+  } catch (error) {
+    retainedPath = null;
+    persistenceError = publicHint(String(error?.message ?? error));
+  }
+  try {
+    finishIntent(authority, { workflow_id: scopedWorkflow, intent_id: intentIdValue, state: attemptState,
+      reason_code: reasonCode, ...(applied ? { result_reference: `${DIAGNOSIS_FILE}/${incident.id}.json` } : {}), now });
+  } catch (error) {
+    persistenceError = persistenceError ?? publicHint(String(error?.message ?? error));
+  }
+  return {
+    version: 1,
+    launched: true,
+    state: attemptState,
+    decision: applied ? validation.result.decision : 'abstain',
+    fact_ids: applied ? validation.result.fact_ids : [],
+    reason_code: applied ? validation.result.reason_code : (validation.code ?? reasonCode),
+    note: applied ? validation.result.note : null,
+    note_verified: false,
+    usage,
+    usage_available: usage != null,
+    incident_id: incident.id,
+    incident_generation: incident.generation,
+    intent_id: intentIdValue,
+    packet_sha256: packetSha256,
+    packet_bytes: built.bytes,
+    attempt_path: retainedPath,
+    model: guard.diagnosis.model,
+    error: persistenceError ?? errorCode,
+  };
+}
+
+// One serialized diagnosis per coordinator. Attempts queue behind each other so
+// only one owned leaf runs at a time; cancel aborts only the active attempt and
+// close refuses all later diagnoses. No retry and no fallback model.
+export function createDiagnosisController({
+  authority,
+  workflow_id: workflowId = null,
+  events,
+  createLeaf = createOwnedLeaf,
+  readyMs = 5000,
+  timeoutMs = 120000,
+  now = Date.now,
+} = {}) {
+  let queue = Promise.resolve();
+  let active = null;
+  let closed = false;
+  return {
+    diagnose(record, incident) {
+      const previous = queue;
+      const run = previous.then(async () => {
+        if (closed) return null;
+        const abort = new AbortController();
+        active = abort;
+        try {
+          return await diagnoseIncident({
+            authority,
+            incident,
+            record,
+            workflow_id: incident?.workflow_id ?? workflowId ?? record?.workflow_id,
+            events,
+            createLeaf,
+            readyMs,
+            timeoutMs,
+            now,
+            signal: abort.signal,
+          });
+        } finally {
+          if (active === abort) active = null;
+        }
+      });
+      queue = run.then(() => undefined, () => undefined);
+      return run;
+    },
+    cancel(reason) {
+      // Only the active owned attempt is cancelled; a queued or finished
+      // attempt is untouched.
+      active?.abort(reason);
+    },
+    close() {
+      closed = true;
+      active?.abort('closed');
+    },
+    active() { return active !== null; },
+  };
 }
