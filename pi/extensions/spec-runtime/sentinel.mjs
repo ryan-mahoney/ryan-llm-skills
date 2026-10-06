@@ -265,6 +265,10 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
         if (!policyPath) throw new Error(USAGE);
         if (!enablePolicy) throw new Error('Sentinel authority is unavailable in this session; only the native coordinator command can arm it.');
         const receipt = await enablePolicy(policyPath, ctx);
+        if (receipt?.fenced) {
+          notify(ctx, 'Sentinel authority activation completed after a later disable or reload; it was revoked again and stays disarmed. Re-run enable to arm it.', 'warning');
+          return;
+        }
         const kinds = receipt.actions.filter(kind => kind === 'continue' || kind === 'cancel');
         if (receipt.diagnosis) kinds.push('diagnose');
         notify(ctx, [
@@ -830,6 +834,17 @@ function ensureStateDirectory(packagePath, components, label = 'checkpoint state
       try { mkdirSync(current, { mode: 0o700 }); }
       catch (mkdirError) {
         if (mkdirError?.code !== 'EEXIST') fail(`${label} could not be created: ${component} (${mkdirError?.code ?? 'error'})`, 'checkpoint-storage');
+      }
+      // Durably publish the new directory's name in its parent before any
+      // record can be written inside it: a crash must never lose a freshly
+      // created authority/reservation directory while an older durable
+      // checkpoint survives and later grants fresh capacity. Fails closed.
+      try {
+        const parentFd = openSync(dirname(current), 'r');
+        try { fsyncSync(parentFd); }
+        finally { closeSync(parentFd); }
+      } catch (syncError) {
+        fail(`${label} could not be durably published: ${component} (${syncError?.code ?? syncError?.message ?? 'error'})`, 'checkpoint-storage');
       }
       try { info = lstatSync(current); }
       catch (readError) { fail(`${label} is unavailable: ${component} (${readError?.code ?? 'error'})`, 'checkpoint-storage'); }
@@ -1849,9 +1864,9 @@ function readIntentRecord(packagePath, workflowId, intentId) {
   return value;
 }
 
-// Conservative reservation read: malformed/orphan slots, unreadable intents and
-// retained accepted/requested intents not created by the live authority all
-// block and stay spent. Never reclaims capacity.
+// Conservative reservation read: malformed/orphan slots, unreadable intents,
+// unknown outcomes and retained accepted/requested intents not created by the
+// live authority all block and stay spent. Never reclaims capacity.
 const INTENT_ENUM_MAX = 64;
 // Bounded intent-directory enumeration: completeness is never proven past the cap.
 function readIntentsBounded(directory) {
@@ -1869,15 +1884,42 @@ function readIntentsBounded(directory) {
   finally { try { handle.closeSync(); } catch { /* best effort. */ } }
 }
 
+// Resolve one reservation state directory, distinguishing a legitimately
+// absent initial directory (nothing has been retained yet) from an invalid,
+// symlinked, non-directory or unreadable one: absence alone never blocks a
+// first reservation, while invalid retained state blocks reservations in
+// either pool (AC-11).
+function resolveReservationDirectory(packagePath, workflowId, leaf) {
+  let root;
+  try { root = realpathSync(packagePath); } catch { return { status: 'invalid', directory: null }; }
+  let current = root;
+  for (const component of ['runtime', 'sentinel', workflowId, leaf]) {
+    current = join(current, component);
+    let info;
+    try { info = lstatSync(current); } catch (error) {
+      return { status: error?.code === 'ENOENT' ? 'absent' : 'invalid', directory: null };
+    }
+    if (info.isSymbolicLink() || !info.isDirectory()) return { status: 'invalid', directory: null };
+    try { if (realpathSync(current) !== current) return { status: 'invalid', directory: null }; }
+    catch { return { status: 'invalid', directory: null }; }
+  }
+  return { status: 'ok', directory: current };
+}
+
 // Conservative reservation read: malformed/orphan slots, unreadable intents,
-// cross-link disagreement and retained accepted/requested intents not created by
-// the live authority all block and stay spent. Never reclaims capacity.
+// cross-link disagreement, an unresolved unknown outcome and retained
+// accepted/requested intents not created by the live authority all block and
+// stay spent. The intent/slot graph is validated in both directions and
+// capacity is never reclaimed.
 function readReservationState(packagePath, workflowId, liveIntentIds) {
-  const result = { blocking: false, reasons: [], spent: { effect: 0, diagnostic: 0 }, slotted: new Set(), intentSlots: new Map(), lastDiagnosticAt: null };
+  const result = { blocking: false, reasons: [], spent: { effect: 0, diagnostic: 0 }, slotted: new Set(), intentSlots: new Map(), slotCounts: new Map(), lastDiagnosticAt: null };
   const push = reason => { if (!result.reasons.includes(reason)) result.reasons.push(reason); };
-  const intentsDirectory = validatedStateDirectory(packagePath, ['runtime', 'sentinel', workflowId, 'intents']);
-  if (intentsDirectory) {
-    const { names, truncated } = readIntentsBounded(intentsDirectory);
+  const enumerated = new Set();
+  const intents = resolveReservationDirectory(packagePath, workflowId, 'intents');
+  if (intents.status === 'invalid') {
+    result.blocking = true; push('intent-state-invalid');
+  } else if (intents.status === 'ok') {
+    const { names, truncated } = readIntentsBounded(intents.directory);
     if (truncated) { result.blocking = true; push('intent-enumeration-cap'); }
     for (const name of names) {
       if (!name.endsWith('.json')) continue;
@@ -1887,20 +1929,27 @@ function readReservationState(packagePath, workflowId, liveIntentIds) {
       const pool = SLOT_POOLS[intent.kind];
       if (!pool) { result.blocking = true; push(`intent-unrecognized:${id}`); continue; }
       result.spent[pool] += 1;
+      enumerated.add(intent.id);
       if (pool === 'diagnostic') {
         const at = Date.parse(intent.reserved_at);
         if (Number.isFinite(at) && (result.lastDiagnosticAt == null || at > result.lastDiagnosticAt)) result.lastDiagnosticAt = at;
       }
-      if ((intent.state === 'accepted' || intent.state === 'requested') && !liveIntentIds.has(intent.id)) {
+      // An explicitly unknown outcome is unresolved uncertainty: it blocks
+      // further automation for this workflow regardless of live ownership,
+      // until an authorized reconciliation finishes it terminally (AC-11).
+      if (intent.state === 'unknown') {
+        result.blocking = true; push(`intent-unknown-outcome:${intent.id}`);
+      } else if ((intent.state === 'accepted' || intent.state === 'requested') && !liveIntentIds.has(intent.id)) {
         result.blocking = true; push(`intent-unreconciled:${intent.id}`);
       }
     }
   }
   for (const pool of ['effect', 'diagnostic']) {
-    const directory = validatedStateDirectory(packagePath, ['runtime', 'sentinel', workflowId, POOL_DIRECTORIES[pool]]);
-    if (!directory) continue;
+    const slots = resolveReservationDirectory(packagePath, workflowId, POOL_DIRECTORIES[pool]);
+    if (slots.status === 'invalid') { result.blocking = true; push(`slot-state-invalid:${POOL_DIRECTORIES[pool]}`); continue; }
+    if (slots.status !== 'ok') continue;
     for (const slot of ['0', '1']) {
-      const slotFile = join(directory, `${slot}.json`);
+      const slotFile = join(slots.directory, `${slot}.json`);
       try { lstatSync(slotFile); } catch (error) { if (error?.code === 'ENOENT') continue; }
       // Bounded descriptor read; a symlinked/replaced/nonregular slot fails closed.
       const record = readBoundedJsonFile(slotFile);
@@ -1920,7 +1969,16 @@ function readReservationState(packagePath, workflowId, liveIntentIds) {
       }
       result.slotted.add(record.intent_id);
       result.intentSlots.set(record.intent_id, Number(slot));
+      result.slotCounts.set(record.intent_id, (result.slotCounts.get(record.intent_id) ?? 0) + 1);
     }
+  }
+  // Every enumerated intent must hold exactly one durable slot: a removed,
+  // duplicated or cross-pool slot link is missing retained budget history and
+  // blocks reservations in either pool (AC-11).
+  for (const id of enumerated) {
+    const count = result.slotCounts.get(id) ?? 0;
+    if (count === 0) { result.blocking = true; push(`slot-missing:${id}`); }
+    else if (count > 1) { result.blocking = true; push(`slot-duplicate:${id}`); }
   }
   return result;
 }
@@ -1958,6 +2016,12 @@ export function reserveIntent(authority, {
   const reservation = readReservationState(state.packagePath, state.workflowId, state.createdIntents);
   const existing = readIntentRecord(state.packagePath, state.workflowId, id);
   if (existing) {
+    // An explicitly unknown outcome never becomes duplicate permission or a
+    // fresh acceptance: only an authorized reconciliation can clear it.
+    if (existing.state === 'unknown') {
+      return { accepted: false, state: 'unknown', blocking: true, intent: existing,
+        reasons: [`intent ${id} is retained with an unknown outcome; reconcile it before further automation`] };
+    }
     if (reservation.slotted.has(id) && !reservation.blocking) {
       // A complete duplicate never repeats the effect: terminal intents stay
       // idempotent across restart; unfinished live ones return the retained
@@ -2030,11 +2094,17 @@ export function finishIntent(authority, {
   // A terminal update requires the matching durable slot link by ID/kind/workflow.
   const reservation = readReservationState(state.packagePath, state.workflowId, state.createdIntents);
   if (!reservation.intentSlots.has(requestedIntentId)) fail(`intent ${requestedIntentId} has no matching durable slot`, 'intent-missing');
-  // Lifecycle: accepted -> requested|terminal, requested -> terminal; an exact
-  // same-state replay is idempotent and any conflicting/backward rewrite refuses.
+  // Lifecycle: accepted -> requested|terminal, requested -> terminal; an
+  // unknown outcome may be reconciled to a definite terminal state by its
+  // owning live authority; an exact same-state replay is idempotent and any
+  // conflicting/backward rewrite refuses.
   const allowed = existing.state === 'accepted'
     ? (finishState === 'requested' || FINISH_STATES.has(finishState))
-    : (existing.state === 'requested' && FINISH_STATES.has(finishState));
+    : existing.state === 'requested'
+      ? FINISH_STATES.has(finishState)
+      : existing.state === 'unknown'
+        ? ['applied', 'blocked', 'failed'].includes(finishState)
+        : false;
   if (!allowed) {
     if (existing.state === finishState && (existing.reason_code ?? '') === reasonCode
       && (existing.result_reference ?? undefined) === (resultReference ?? undefined)) return existing;

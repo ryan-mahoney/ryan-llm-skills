@@ -1305,6 +1305,121 @@ test('sentinel storage: a symlinked slot or intent read fails closed', t => {
   assert.equal(blockedByIntent.state, 'blocked');
 });
 
+test('sentinel intent: an explicit unknown outcome blocks automation until reconciled', t => {
+  const { packagePath, base } = canonicalFixture(t);
+  const { authority } = armFixture(packagePath, base, { mode: 'recover', actions: ['continue'], max_effects: 2 });
+  const first = reserveIntent(authority, { workflow_id: 'wf-1', kind: 'continue', subject_key: 'unknown-1', source_revision: 'r', now: () => FIXED });
+  assert.equal(first.accepted, true);
+  const unknown = finishIntent(authority, { workflow_id: 'wf-1', intent_id: first.intent.id, state: 'unknown', reason_code: 'outcome-uncertain', now: () => FIXED });
+  assert.equal(unknown.state, 'unknown');
+  // An exact unknown replay stays idempotent; a backward rewrite refuses.
+  const replay = finishIntent(authority, { workflow_id: 'wf-1', intent_id: first.intent.id, state: 'unknown', reason_code: 'outcome-uncertain', now: () => FIXED });
+  assert.equal(replay.state, 'unknown');
+  assert.throws(() => finishIntent(authority, { workflow_id: 'wf-1', intent_id: first.intent.id, state: 'requested', reason_code: 'queued' }), /cannot transition/);
+  // The same live authority cannot automate past the unresolved outcome.
+  const distinct = reserveIntent(authority, { workflow_id: 'wf-1', kind: 'continue', subject_key: 'unknown-2', source_revision: 'r', now: () => FIXED });
+  assert.equal(distinct.accepted, false);
+  assert.equal(distinct.state, 'blocked');
+  assert.ok(distinct.reasons.some(reason => reason.startsWith('intent-unknown-outcome')));
+  // The same subject returns the honest unknown, never duplicate permission.
+  const repeat = reserveIntent(authority, { workflow_id: 'wf-1', kind: 'continue', subject_key: 'unknown-1', source_revision: 'r', now: () => FIXED });
+  assert.equal(repeat.accepted, false);
+  assert.equal(repeat.state, 'unknown');
+  assert.equal(repeat.duplicate, undefined);
+  // A fresh authority re-enabling the same policy is blocked identically.
+  const fresh = createSentinelAuthority();
+  activatePolicy(fresh, activateArgs(packagePath, writePolicy(base, policyFor(packagePath, { mode: 'recover', actions: ['continue'], max_effects: 2 }))));
+  const freshDistinct = reserveIntent(fresh, { workflow_id: 'wf-1', kind: 'continue', subject_key: 'unknown-3', source_revision: 'r', now: () => FIXED });
+  assert.equal(freshDistinct.accepted, false);
+  assert.equal(freshDistinct.state, 'blocked');
+  assert.ok(freshDistinct.reasons.some(reason => reason.startsWith('intent-unknown-outcome')));
+  // The owning live authority's explicit reconciliation resolves the
+  // uncertainty even after a fresh activation retired its grant rereads, and
+  // the currently live authority may reserve again within the retained cap.
+  const reconciled = finishIntent(authority, { workflow_id: 'wf-1', intent_id: first.intent.id, state: 'failed', reason_code: 'reconciled-failed', result_reference: 'receipt-1', now: () => FIXED });
+  assert.equal(reconciled.state, 'failed');
+  const after = reserveIntent(fresh, { workflow_id: 'wf-1', kind: 'continue', subject_key: 'unknown-2', source_revision: 'r', now: () => FIXED });
+  assert.equal(after.accepted, true);
+});
+
+test('sentinel storage: the reservation graph is validated in both directions and invalid state blocks either pool', t => {
+  const { packagePath, base } = canonicalFixture(t);
+  const { authority } = armFixture(packagePath, base, { mode: 'recover', actions: ['continue'], diagnosis: { model: 'test/diag' }, max_effects: 2, max_diagnostics: 2 });
+  const sentinelDir = join(packagePath, 'runtime', 'sentinel', 'wf-1');
+  const first = reserveIntent(authority, { workflow_id: 'wf-1', kind: 'continue', subject_key: 'graph-1', source_revision: 'r', now: () => FIXED });
+  assert.equal(first.accepted, true);
+  finishIntent(authority, { workflow_id: 'wf-1', intent_id: first.intent.id, state: 'applied', reason_code: 'done', now: () => FIXED });
+  // A spent intent whose slot receipt was removed is missing retained history.
+  unlinkSync(join(sentinelDir, 'effect-slots', `${first.slot}.json`));
+  const missing = reserveIntent(authority, { workflow_id: 'wf-1', kind: 'continue', subject_key: 'graph-2', source_revision: 'r', now: () => FIXED });
+  assert.equal(missing.accepted, false);
+  assert.equal(missing.state, 'blocked');
+  assert.ok(missing.reasons.some(reason => reason.startsWith('slot-missing')));
+  // A reservation in the other pool cannot bypass the corrupt effect pool.
+  const bypass = reserveIntent(authority, { workflow_id: 'wf-1', kind: 'diagnose', subject_key: 'gen-1', source_revision: 'r', now: () => FIXED });
+  assert.equal(bypass.accepted, false);
+  assert.equal(bypass.state, 'blocked');
+  // Two slot receipts linking one intent are not exactly one slot.
+  const slotBody = slot => ({ version: 1, workflow_id: 'wf-1', pool: 'effect', slot, intent_id: first.intent.id, kind: 'continue', reserved_at: new Date(FIXED).toISOString() });
+  writeFileSync(join(sentinelDir, 'effect-slots', '0.json'), JSON.stringify(slotBody(0)));
+  writeFileSync(join(sentinelDir, 'effect-slots', '1.json'), JSON.stringify(slotBody(1)));
+  const duplicated = reserveIntent(authority, { workflow_id: 'wf-1', kind: 'diagnose', subject_key: 'gen-2', source_revision: 'r', now: () => FIXED });
+  assert.equal(duplicated.accepted, false);
+  assert.ok(duplicated.reasons.some(reason => reason.startsWith('slot-duplicate')));
+  // A nonregular pool directory blocks reservations in either pool.
+  rmSync(join(sentinelDir, 'effect-slots'), { recursive: true, force: true });
+  writeFileSync(join(sentinelDir, 'effect-slots'), 'not a directory');
+  const invalidEffect = reserveIntent(authority, { workflow_id: 'wf-1', kind: 'continue', subject_key: 'graph-3', source_revision: 'r', now: () => FIXED });
+  assert.equal(invalidEffect.accepted, false);
+  assert.ok(invalidEffect.reasons.some(reason => reason.startsWith('slot-state-invalid')));
+  const invalidDiagnostic = reserveIntent(authority, { workflow_id: 'wf-1', kind: 'diagnose', subject_key: 'gen-3', source_revision: 'r', now: () => FIXED });
+  assert.equal(invalidDiagnostic.accepted, false);
+  assert.ok(invalidDiagnostic.reasons.some(reason => reason.startsWith('slot-state-invalid')));
+  // An invalid intents directory blocks the same way.
+  rmSync(join(sentinelDir, 'intents'), { recursive: true, force: true });
+  writeFileSync(join(sentinelDir, 'intents'), 'not a directory');
+  const invalidIntents = reserveIntent(authority, { workflow_id: 'wf-1', kind: 'continue', subject_key: 'graph-4', source_revision: 'r', now: () => FIXED });
+  assert.equal(invalidIntents.accepted, false);
+  assert.ok(invalidIntents.reasons.some(reason => reason.startsWith('intent-state-invalid')));
+  // Legitimately absent initial directories never block a first reservation.
+  const clean = canonicalFixture(t);
+  const cleanArm = armFixture(clean.packagePath, clean.base, { mode: 'recover', actions: ['continue'] });
+  const cleanFirst = reserveIntent(cleanArm.authority, { workflow_id: 'wf-1', kind: 'continue', subject_key: 'fresh-1', source_revision: 'r', now: () => FIXED });
+  assert.equal(cleanFirst.accepted, true);
+  assert.equal(existsSync(join(clean.packagePath, 'runtime', 'sentinel', 'wf-1', 'diagnostic-slots')), false);
+});
+
+test('sentinel storage: newly created directories are durably linked through their parent before an effect', t => {
+  const { packagePath, base } = canonicalFixture(t);
+  recordCheckpoint(baseCheckpoint(packagePath));
+  // The workflow directory exists but denies parent reads, so a newly created
+  // authority directory cannot be durably published: creation still succeeds
+  // while the linkage fsync fails, and activation must fail closed un-armed.
+  const workflowDir = join(packagePath, 'runtime', 'sentinel', 'wf-1');
+  const authority = createSentinelAuthority();
+  chmodSync(workflowDir, 0o300);
+  try {
+    assert.throws(() => activatePolicy(authority, activateArgs(packagePath, writePolicy(base, policyFor(packagePath, { mode: 'recover', actions: ['continue'] })))), /durably published/);
+  } finally {
+    chmodSync(workflowDir, 0o700);
+  }
+  assert.equal(readPolicyGuard(authority).armed, false);
+
+  // The same boundary refuses a first reservation on an armed authority.
+  const armed = canonicalFixture(t);
+  const armedAuthority = armFixture(armed.packagePath, armed.base, { mode: 'recover', actions: ['continue'] });
+  const armedDir = join(armed.packagePath, 'runtime', 'sentinel', 'wf-1');
+  chmodSync(armedDir, 0o300);
+  try {
+    assert.throws(() => reserveIntent(armedAuthority.authority, { workflow_id: 'wf-1', kind: 'continue', subject_key: 'link-1', source_revision: 'r', now: () => FIXED }), /durably published/);
+  } finally {
+    chmodSync(armedDir, 0o700);
+  }
+  // Restoring the parent read repermits the reservation; nothing was spent.
+  const after = reserveIntent(armedAuthority.authority, { workflow_id: 'wf-1', kind: 'continue', subject_key: 'link-1', source_revision: 'r', now: () => FIXED });
+  assert.equal(after.accepted, true);
+});
+
 // --- settle / continuation (step 6) ---
 
 function settleFixture(t, { mode = 'recover', actions = ['continue'], checkpointOver = {}, policyOver = {} } = {}) {

@@ -890,6 +890,98 @@ test('sentinel policy: the native SDK command arms only the live session and a c
   assert.equal(run.requests.length, 0);
 });
 
+test('sentinel policy: disable and off revoke at command entry behind pending workflow work', { skip: sdkSkip, timeout: 30000 }, async t => {
+  const dir = sandbox(t);
+  const { repo } = primary(dir, 'fence-repo');
+  commit(repo);
+  const packagePath = pack(repo);
+  const canonical = canonicalPackage(packagePath);
+  // A fully prepared package so spec_dispatch startup reaches its asynchronous
+  // history-index build; spec.md becomes a FIFO with no writer, so that read
+  // stays pending inside the serialized workflow queue without blocking the
+  // event loop: a deliberately pending workflow operation.
+  writeFileSync(join(packagePath, 'context.md'), '# Context\n');
+  writeFileSync(join(packagePath, 'spec-prepare.md'), '# Prepare\n');
+  writeFileSync(join(packagePath, 'evidence-plan.json'), JSON.stringify({ version: 1 }));
+  writeFileSync(join(packagePath, 'spec-steps.json'), JSON.stringify({ steps: [{ step: 1, difficulty: 'easy' }] }));
+  writeFileSync(join(packagePath, 'step-001-subspec.md'), '# Step 1\n');
+  writeFileSync(join(dirname(packagePath), 'project-context.md'), '# Project\n');
+  mkdirSync(join(packagePath, 'inbox'), { recursive: true });
+  mkdirSync(join(packagePath, 'processed'), { recursive: true });
+  writeFileSync(join(packagePath, 'spec.md'), '# Spec\n');
+  const run = await loadExtension(t, { dir, providerFactory: continuationProvider });
+  const manager = run.sessionManager;
+  const identity = (typeof manager.getSessionFile === 'function' && manager.getSessionFile())
+    || (typeof manager.getSessionId === 'function' && manager.getSessionId()) || null;
+  assert.ok(identity, 'the native SDK session exposes a nonempty identity');
+  const checkout = join(dir, 'fence-checkout');
+  mkdirSync(checkout, { recursive: true });
+  recordCheckpoint({ package: canonical.packagePath, workflow_id: 'wf-fence', expected_revision: 0, state: 'ready',
+    obligation: { key: 'impl:step-001', stage: 'implementation', summary: 'work', artifacts: [] },
+    workers: [], inbox: { items: [] }, reconciles_input_revision: 0, coordinator_session: identity, checkout });
+  const policyPath = join(dir, 'fence-policy.json');
+  writeFileSync(policyPath, JSON.stringify({ version: 1, package: canonical.packagePath, workflow_id: 'wf-fence',
+    checkout, coordinator_session: identity, mode: 'recover', actions: ['continue'],
+    expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    max_effects: 2, max_diagnostics: 0, authority_reference: 'user:enable' }));
+  await run.session.prompt(`/spec-sentinel enable ${policyPath}`);
+  assert.match(lastNote(run.captured).message, /Sentinel authority armed/);
+  const grantFile = join(packagePath, 'runtime', 'sentinel', 'wf-fence', 'authority', 'grant.json');
+  assert.equal(JSON.parse(readFileSync(grantFile, 'utf8')).revoked, false);
+
+  // The deliberately pending workflow operation: startup's history-index read
+  // blocks on the FIFO spec.md inside the serialized workflow queue.
+  const specFile = join(packagePath, 'spec.md');
+  execFileSync('mkfifo', [`${specFile}.gate`]);
+  renameSync(specFile, `${specFile}.regular`);
+  renameSync(`${specFile}.gate`, specFile);
+  const tools = new Map(run.loader.getExtensions().extensions.flatMap(extension => [...extension.tools.entries()]));
+  let dispatchSettled = false;
+  const dispatch = tools.get('spec_dispatch').definition.execute('call-fence-1', { action: 'startup',
+    package: canonical.packagePath, workflow_id: 'wf-fence', owner_override: 'sentinel-fixture/scripted',
+    editor_model: 'sentinel-fixture/scripted' }, undefined, undefined, { sessionManager: manager })
+    .finally(() => { dispatchSettled = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(dispatchSettled, false, 'the workflow operation is pending');
+
+  // Disable completes at command entry while the dispatch is still pending and
+  // revokes before its disk I/O; queueing revocation behind the pending startup
+  // would hang here and leave the capability armed throughout its waits.
+  await run.session.prompt('/spec-sentinel disable');
+  assert.match(lastNote(run.captured).message, /Sentinel authority revoked/);
+  assert.equal(dispatchSettled, false, 'revocation preceded the pending workflow work');
+  assert.equal(JSON.parse(readFileSync(grantFile, 'utf8')).revoked, true);
+
+  // An activation queued behind the pending work cannot re-arm after off.
+  const enablePrompt = run.session.prompt(`/spec-sentinel enable ${policyPath}`);
+  await new Promise(resolve => setImmediate(resolve));
+  await run.session.prompt('/spec-sentinel off');
+  assert.match(lastNote(run.captured).message, /No live sentinel authority was armed/);
+  assert.equal(dispatchSettled, false, 'the workflow operation is still pending');
+
+  // Release the gate: the dispatch finishes, then the queued activation lands
+  // and is fenced and re-revoked instead of re-arming the live capability.
+  writeFileSync(specFile, '');
+  let gateTimer;
+  const gateTimeout = new Promise((_, reject) => { gateTimer = setTimeout(() => reject(new Error('the queued enable did not complete after the gate released')), 5000); });
+  await Promise.race([enablePrompt, gateTimeout]).finally(() => clearTimeout(gateTimer));
+  assert.match(lastNote(run.captured).message, /revoked again and stays disarmed/);
+  const grant = JSON.parse(readFileSync(grantFile, 'utf8'));
+  assert.equal(grant.revoked, true);
+  assert.equal(grant.reason, 'disabled-during-activation');
+  const dispatched = await dispatch;
+  assert.equal(dispatched.isError, true, 'the gated dispatch itself fails on the empty spec read');
+
+  // The fenced authority never arms: one extension-source turn, no sentinel
+  // entry, no continuation reservation.
+  await run.session.prompt('Confirm no continuation happens while disarmed.', { source: 'extension' });
+  await run.session.waitForIdle();
+  assert.equal(run.requests.length, 1, 'the disarmed authority adds no extra provider request');
+  const branch = run.sessionManager.getBranch();
+  assert.equal(branch.some(entry => entry.type === 'custom_message' && entry.customType === 'spec-sentinel'), false);
+  assert.equal(existsSync(join(packagePath, 'runtime', 'sentinel', 'wf-fence', 'intents')), false);
+});
+
 // The native SDK boundary fixture: real extension hook, deterministic provider,
 // canonical checkpoint/grant paths. The decisive ready checkpoint is reconciled
 // through the registered production spec_checkpoint tool at native input revision

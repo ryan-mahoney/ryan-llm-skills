@@ -290,10 +290,14 @@ them) and two diagnostic slots, at most one continuation per obligation revision
 one cancellation per incident generation, plus at most one diagnosis per incident
 generation with a five-minute cooldown. Re-enabling never resets consumed capacity. A
 duplicate same-kind/subject reservation returns its retained receipt without repeating
-the effect. Reservations are published durably (slot first, then an immutable intent)
-before any effect; an orphan/malformed/corrupt record or an unfinished intent from a
-previous authority stays spent and blocks as unknown. `/spec-sentinel disable` revokes
-the live capability synchronously and reports a persistence failure while remaining
+the effect. Reservations are published durably (slot first, then an immutable intent,
+with every newly created state directory linked to its parent by fsync before any
+effect); an orphan/malformed/corrupt record, an invalid state directory, an intent
+missing its slot link or an unfinished intent from a previous authority stays spent
+and blocks as unknown, as does an explicitly unknown outcome until its owning live
+authority reconciles it to a terminal state. `/spec-sentinel disable` revokes
+the live capability synchronously at command entry — never queued behind workflow
+work — and reports a persistence failure while remaining
 disarmed; `/spec-sentinel off` revokes first and then hides observation, reporting both
 facts. Step 5 performs no continuation, cancellation, diagnosis or model effect; any
 actual effect belongs to later steps under this guarded authority.

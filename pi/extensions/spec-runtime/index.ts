@@ -191,6 +191,10 @@ export default function (pi: any) {
   // processing; extension-originated messages never do. Never model-supplied.
   let inputGuard = { input_revision: 0, active_prompts: 0 };
   const dispatchBindings = new Map<string, any>();
+  // Revocation epoch for the sentinel authority: incremented synchronously at
+  // every disable/off command entry and session reset, so an activation still
+  // queued behind workflow work can never re-arm behind a revocation.
+  let disableEpoch = 0;
   // spec_checkpoint and spec_dispatch share checkpoint/mapping state; serialize
   // their tool execution so concurrent calls cannot interleave reads and writes.
   let workflowQueue: Promise<unknown> = Promise.resolve();
@@ -270,19 +274,38 @@ export default function (pi: any) {
     sentinelAuthority = authority;
     sentinel = createSentinelObserver({ pi, context: ctx, agentDir: getAgentDir(), scope: process.env.PI_INTERCOM_SCOPE_ID ?? null, ownPackages,
       nativeRun: () => monitor.currentRun(),
-      enablePolicy: (policyPath: string, commandCtx: any) => serializeWorkflow(async () => {
-        const receipt = await activatePolicy(authority, { policy_path: policyPath,
-          coordinator_session: coordinatorIdentity(commandCtx), command: `/spec-sentinel enable ${policyPath}` });
-        // Store the validated scope only after a successful activation.
-        sentinelScope = { package: receipt.package, workflow_id: receipt.workflow_id,
-          coordinator_session: receipt.coordinator_session, mode: receipt.mode };
-        return receipt;
-      }),
-      disablePolicy: () => serializeWorkflow(async () => {
+      enablePolicy: (policyPath: string, commandCtx: any) => {
+        // Captured at command entry, before queueing: a disable that arrives
+        // while this activation waits behind workflow work must win.
+        const arrivalEpoch = disableEpoch;
+        return serializeWorkflow(async () => {
+          // A session reset replaced the live capability: this late activation
+          // may not arm or re-publish a grant for the retired one.
+          if (sentinelAuthority !== authority) return { fenced: true };
+          const receipt = await activatePolicy(authority, { policy_path: policyPath,
+            coordinator_session: coordinatorIdentity(commandCtx), command: `/spec-sentinel enable ${policyPath}` });
+          if (disableEpoch !== arrivalEpoch || sentinelAuthority !== authority) {
+            // A disable arrived while this activation was queued: revoke again
+            // so the activation cannot re-arm behind the revocation.
+            disablePolicy(authority, { reason: 'disabled-during-activation' });
+            return { ...receipt, fenced: true };
+          }
+          // Store the validated scope only after a successful activation.
+          sentinelScope = { package: receipt.package, workflow_id: receipt.workflow_id,
+            coordinator_session: receipt.coordinator_session, mode: receipt.mode };
+          return receipt;
+        });
+      },
+      disablePolicy: () => {
+        // AC-11: disable revokes the live authority before disk I/O. The
+        // capability is disarmed synchronously at command entry, independent
+        // of queued workflow work (a pending dispatch's awaits included); only
+        // its own bounded persistence follows, still inside this call.
+        disableEpoch += 1;
         sentinelScope = null;
         pendingContinuation = null;
         return disablePolicy(authority);
-      }) });
+      } });
     monitor.close();
     const entries = ctx.sessionManager.getBranch();
     for (let i = entries.length - 1; i >= 0; i--) {
