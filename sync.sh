@@ -87,10 +87,21 @@ if [ -d "$HOME/.cline" ]; then
   echo "Synced Cline skills."
 fi
 
-# Pi: native retained step owner/editor profiles. Pi discovers ~/.agents/skills.
+# Pi: retained step profiles and the managed execution extension.
 if [ -d "$HOME/.pi/agent" ]; then
   sync_file_symlinks "$AGENTS_DIR/pi/agents" "$HOME/.pi/agent/agents"
-  echo "Synced Pi step owner and editor profiles."
+  mkdir -p "$HOME/.pi/agent/extensions"
+  for extension in "$AGENTS_DIR/pi/extensions"/*/; do
+    [ -d "$extension" ] || continue
+    extension_name="$(basename "$extension")"
+    extension_target="$HOME/.pi/agent/extensions/$extension_name"
+    if [ -e "$extension_target" ] && [ ! -L "$extension_target" ]; then
+      echo "Cannot sync Pi extension over an existing directory: $extension_target" >&2
+      exit 1
+    fi
+    ln -sfn "${extension%/}" "$extension_target"
+  done
+  echo "Synced Pi profiles and execution extensions; restart Pi to load extension changes."
 fi
 
 # Augment: skills and CLI subagent configs.
