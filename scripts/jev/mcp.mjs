@@ -12,6 +12,7 @@ const inputSchema = {
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [
   { name: 'jev_verification', description: 'Recommend useful focused local feedback; broad suites follow supplied repository policy and mandatory gates remain. Does not execute checks or establish passes.', inputSchema },
   { name: 'jev_review_triage', description: 'Recommend must_fix, investigate or follow_up for supplied findings without waiving protected obligations.', inputSchema },
+  { name: 'jev_step_difficulty', description: 'Advisory upfront difficulty from compact prepared step facts; no repository reads, model routing or authority decisions.', inputSchema },
   { name: 'jev_status', description: 'Report credential availability separately from cached auth and connectivity. No network unless verify_connectivity is true.', inputSchema: { type: 'object', properties: { verify_connectivity: { type: 'boolean' } }, additionalProperties: false } }
 ] }));
 server.setRequestHandler(CallToolRequestSchema, async request => {
@@ -22,7 +23,7 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
       if (Object.keys(args).some(k => k !== 'verify_connectivity') || (args.verify_connectivity !== undefined && typeof args.verify_connectivity !== 'boolean')) throw new Error();
       result = await status({ offline, verifyConnectivity: args.verify_connectivity ?? false });
     } else {
-      const tasks = { jev_verification: 'verification', jev_review_triage: 'review-triage' };
+      const tasks = { jev_verification: 'verification', jev_review_triage: 'review-triage', jev_step_difficulty: 'step-difficulty' };
       const task = tasks[request.params.name];
       if (!task || Object.keys(args).some(k => !['repo', 'input'].includes(k))) throw new Error();
       result = await decide(task, { ...args, offline });

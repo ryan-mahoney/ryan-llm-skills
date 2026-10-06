@@ -108,6 +108,8 @@ test('mechanical git facts redact credentials, invalidate omitted context, and n
   assert.ok(!first.change_excerpt.includes('password-fixture'));
   assert.ok(!first.change_excerpt.includes('_authToken'));
   assert.equal(first.context_incomplete, true);
+  assert.ok(first.context_issues.includes('context_sensitive_paths_omitted'));
+  assert.ok(first.context_issues.includes('context_redacted'));
   const next = await decide('verification', { repo, input: { ...input, focused_checks: [{ id: 'danger', purpose: 'A command is data only', command: `touch ${marker}` }] }, offline: true }, { recordDecision: async () => 'recorded' });
   assert.equal(next.status, 'unavailable');
   await assert.rejects(stat(marker), { code: 'ENOENT' });
@@ -119,9 +121,11 @@ test('mechanical git facts redact credentials, invalidate omitted context, and n
   const clean = await collectFacts(repo);
   assert.equal(clean.dirty, false);
   assert.equal(clean.context_incomplete, true);
+  assert.deepEqual(clean.context_issues, ['context_no_change_excerpt']);
   const committed = await collectFacts(repo, { baseRevision: base });
   assert.match(committed.change_excerpt, /return 42/);
   assert.equal(committed.context_incomplete, false);
+  assert.deepEqual(committed.context_issues, []);
   assert.ok(committed.changed_files.includes('accounts.mjs'));
 });
 
@@ -148,10 +152,13 @@ test('official MCP client negotiates stdio and reads structured offline fallback
   await client.connect(transport);
   t.after(() => client.close());
   const listed = await client.listTools();
-  assert.deepEqual(listed.tools.map(x => x.name), ['jev_verification', 'jev_review_triage', 'jev_status']);
+  assert.deepEqual(listed.tools.map(x => x.name), ['jev_verification', 'jev_review_triage', 'jev_step_difficulty', 'jev_status']);
   const reply = await client.callTool({ name: 'jev_verification', arguments: { repo: directory, input } });
   assert.equal(reply.isError, false);
   assert.equal(JSON.parse(reply.content[0].text).status, 'unavailable');
+  const difficulty = await client.callTool({ name: 'jev_step_difficulty', arguments: { repo: directory, input: { schema_version: 1, steps: [{ id: 'offline', planner_difficulty: 'hard' }] } } });
+  assert.equal(difficulty.isError, false);
+  assert.equal(JSON.parse(difficulty.content[0].text).recommendation.steps[0].difficulty, 'hard');
   const invalid = await client.callTool({ name: 'jev_verification', arguments: { repo: directory, input: { schema_version: 1, arbitrary_command: 'exit 1' } } });
   assert.equal(invalid.isError, true);
 });
@@ -200,4 +207,73 @@ test('absence of CI leaves broad testing with the operator while allowing useful
   assert.equal(result.recommendation.broad_suite, 'operator');
   assert.deepEqual(result.recommendation.focused_check_ids, ['target']);
   assert.deepEqual(result.recommendation.mandatory_gates, ['security-contract']);
+});
+
+const prepared = { id: 'small-hard', planner_difficulty: 'medium', objective: 'Transfer ownership', precedent: 'No safe precedent', settled_contracts: 'Only current owner publishes', remaining_judgment: 'Recovery and racing cancellation', failure_consequences: 'Duplicate retained data', focused_evidence: 'Normal cases miss interleavings' };
+const tierAnswer = (selected, confidence = 0.96) => ({ type: 'choice', choice: selected, confidence, probabilities: Object.fromEntries(['easy', 'medium', 'hard', 'unclear'].map(k => [k, k === selected ? confidence : (1 - confidence) / 3])) });
+
+test('difficulty can promote a small consequential step upfront without any repository reads', async () => {
+  const deps = dependencies({ context_0: answer(0.96), tier_0: tierAnswer('hard') });
+  deps.collectFacts = async () => { assert.fail('difficulty must not explore the checkout'); };
+  const lib = await deps.loadLibrary();
+  deps.loadLibrary = async () => ({ ...lib, ask: async (client, request) => { assert.equal(Object.hasOwn(request.state.steps[0], 'planner_difficulty'), false); return lib.ask(client, request); } });
+  const result = await decide('step-difficulty', { repo: '/repo', input: { schema_version: 1, steps: [prepared] } }, deps);
+  assert.equal(result.status, 'recommendation');
+  assert.equal(result.recommendation.steps[0].difficulty, 'hard');
+  assert.equal(result.assessment[0].calibration, 'not_validated_for_step_difficulty');
+  assert.equal(result.assessment[0].probabilities.hard, 0.96);
+  assert.equal(result.revision, null);
+});
+
+test('difficulty preserves planner floor and isolates uncertainty to the affected batch sibling', async () => {
+  const steps = [{ ...prepared, planner_difficulty: 'hard' }, { ...prepared, id: 'ambiguous' }];
+  const result = await decide('step-difficulty', { repo: '/repo', input: { schema_version: 1, steps } }, dependencies({ context_0: answer(0.96), tier_0: tierAnswer('easy'), context_1: answer(0.5), tier_1: tierAnswer('hard', 0.6) }));
+  assert.equal(result.status, 'uncertain');
+  assert.deepEqual(result.recommendation.steps.map(s => [s.difficulty, s.source]), [['hard', 'advisory_with_planner_floor'], ['medium', 'planner']]);
+  assert.deepEqual(result.assessment[0].uncertainty, []);
+  assert.ok(result.assessment[1].uncertainty.includes('tier_uncertain'));
+});
+
+test('difficulty missing facts, unclear choices and malformed distributions retain planner judgment', async () => {
+  const request = { repo: '/repo', input: { schema_version: 1, steps: [prepared] } };
+  const missing = await decide('step-difficulty', { ...request, input: { schema_version: 1, steps: [{ ...prepared, remaining_judgment: '' }] } }, dependencies({ context_0: answer(0.99), tier_0: tierAnswer('hard') }));
+  assert.equal(missing.recommendation.steps[0].source, 'planner');
+  assert.ok(missing.assessment[0].uncertainty.includes('prepared_facts_missing'));
+  const unclear = await decide('step-difficulty', request, dependencies({ context_0: answer(0.99), tier_0: tierAnswer('unclear') }));
+  assert.equal(unclear.recommendation.steps[0].difficulty, 'medium');
+  const malformed = await decide('step-difficulty', request, dependencies({ context_0: answer(0.99), tier_0: { ...tierAnswer('hard'), probabilities: { hard: 1 } } }));
+  assert.equal(malformed.status, 'unavailable');
+  assert.ok(malformed.uncertainty.includes('malformed_response'));
+});
+
+test('difficulty budget fallback has one attempt and offline has no library or repository access', async () => {
+  const deps = dependencies({});
+  const lib = await deps.loadLibrary();
+  let calls = 0;
+  deps.loadLibrary = async () => ({ ...lib, ask: async () => { calls++; return { ok: false, errorCode: 'budget' }; } });
+  deps.collectFacts = async () => assert.fail('unexpected source access');
+  const request = { repo: '/repo', input: { schema_version: 1, steps: [prepared] } };
+  const result = await decide('step-difficulty', request, deps);
+  assert.equal(calls, 1);
+  assert.deepEqual(result.uncertainty, ['budget']);
+  assert.equal(result.recommendation.steps[0].difficulty, 'medium');
+  deps.loadLibrary = async () => assert.fail('offline library access');
+  assert.deepEqual((await decide('step-difficulty', { ...request, offline: true }, deps)).uncertainty, ['offline']);
+  await assert.rejects(decide('step-difficulty', { ...request, input: { schema_version: 1, steps: Array(9).fill(prepared) } }), /Invalid decision input/);
+});
+
+
+test('difficulty ledger persists aggregate tiers without facts, IDs or model distributions', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'jev-difficulty-log-'));
+  const prior = process.env.JEV_STATE_DIR;
+  process.env.JEV_STATE_DIR = directory;
+  t.after(async () => { if (prior === undefined) delete process.env.JEV_STATE_DIR; else process.env.JEV_STATE_DIR = prior; await rm(directory, { recursive: true, force: true }); });
+  const result = await decide('step-difficulty', { repo: '/private-checkout', input: { schema_version: 1, steps: [{ ...prepared, objective: 'private-step-facts' }] } }, dependencies({ context_0: answer(0.96), tier_0: tierAnswer('hard') }));
+  assert.equal(await recordDecision(result, '/private-checkout', 'pending'), 'recorded');
+  const raw = await readFile(join(directory, 'decisions.jsonl'), 'utf8');
+  assert.ok(!raw.includes('private-checkout'));
+  assert.ok(!raw.includes('private-step-facts'));
+  assert.ok(!raw.includes('small-hard'));
+  assert.ok(!raw.includes('probabilities'));
+  assert.deepEqual(JSON.parse(raw).difficulty_counts, { easy: 0, medium: 0, hard: 1 });
 });

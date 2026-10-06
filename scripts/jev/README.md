@@ -1,7 +1,7 @@
 # Shared Jev decisions
 
 The CLI and stdio MCP server share one decision implementation. They recommend
-verification effort and review priority across projects. They never execute supplied
+verification effort, review priority, and prepared step difficulty across projects. They never execute supplied
 commands, change Git state, establish test passes, or replace repository requirements.
 
 Use Node 22.19 or later. Install locked dependencies once:
@@ -29,7 +29,8 @@ produce `module_unavailable`; a key alone never produces a working status.
 
 ## Input contract version 1
 
-Only these fields are accepted. Unknown fields, duplicate IDs and oversized inputs
+Verification and review-triage accept the fields below; step difficulty uses the separate
+[prepared-step contract](#prepared-step-difficulty). Unknown fields, duplicate IDs and oversized inputs
 are rejected. Input is bounded to 32 KiB. Commands and source references are text
 for assessment and are never executed or fetched.
 
@@ -181,3 +182,74 @@ contracts.
 
 Run `npm test --prefix ~/.agents/scripts/jev`. Tests use synthetic repositories,
 a fake judgment boundary and the real MCP SDK client; no billable service calls.
+
+## Measure usefulness without another judgment
+
+```sh
+node ~/.agents/scripts/jev/cli.mjs report
+node ~/.agents/scripts/jev/cli.mjs report --repo /absolute/checkout --since 2026-10-05
+```
+
+The report reads retained local decision logs (seven days by default), counts
+recommendation/uncertain/unavailable outcomes, uncertainty reasons and mean latency.
+Repository filtering uses the exact path supplied to the original call. Rotated-log
+duplicates are ignored and malformed rows are counted. It makes no network request
+and does not measure savings or infer that recommendations were followed. Caller
+handling remains `pending` unless the invocation explicitly recorded another outcome.
+New context reason codes distinguish excerpt limits, empty change context, omitted
+sensitive/binary content, redaction and collection failure; old calls retain their
+coarser reasons. Use these to diagnose low utility rather than increasing call volume.
+
+In managed Pi owners, `spec_advice` accepts `task` and the same `input` object directly,
+supplies the assigned checkout and waits for an idle writer slot. Call after the editor
+returns. This avoids an editor assignment or temporary file solely for input JSON.
+
+## Prepared step difficulty
+
+Normal spec preparation can call `step-difficulty` once for relevant prepared steps:
+
+```sh
+node ~/.agents/scripts/jev/cli.mjs step-difficulty --repo /absolute/checkout --input /path/compact-facts.json
+```
+
+The same task is `jev_step_difficulty` in MCP. It reads **no repository files or Git
+facts**, and never changes specs or dispatches models. Supply only prepared facts:
+
+```json
+{
+  "schema_version": 1,
+  "steps": [{
+    "id": "step-1",
+    "planner_difficulty": "medium",
+    "objective": "Adapt the existing create handler for a second resource",
+    "precedent": "Existing create handler has the same transaction pattern",
+    "settled_contracts": "Validation, owner and response shape are specified",
+    "remaining_judgment": "Bounded field mapping; no ownership decisions",
+    "failure_consequences": "Incorrect mapping can reject valid requests",
+    "focused_evidence": "Existing handler cases expose success and rejection paths"
+  }]
+}
+```
+
+One to eight steps, unique IDs, six prose fields of at most 2,000 characters each,
+32 KiB total; optional `outcome` retains the shared enum. Missing/empty facts are
+accepted for safe planner fallback, never treated as evidence that work is easy.
+An entirely incomplete batch falls back locally without a service request. The planner
+tier stays local to avoid anchoring the model. State is submitted once with two typed questions per step (context and a tier
+choice including `unclear`), within the shared one-request caps and five-second
+deadline. No retry or additional discovery is needed. `--offline` returns planner
+judgment without collecting Git facts.
+
+Each `assessment` exposes proposed tier, raw distribution, context probability,
+confidence, per-step uncertainty and `calibration: not_validated_for_step_difficulty`.
+The 0.8/0.2 abstention thresholds are conservative operating heuristics, **not measured
+accuracy or calibrated confidence in engineering success**. `recommendation.steps`
+retains each planner tier unless usable advice raises it; uncertain or unavailable
+advice cannot downgrade it. Batch status may be uncertain while individual steps
+remain usable; inspect each assessment. The planner owns final Complexity corrections,
+including justified decreases, and mirrors `difficulty` in the existing step index.
+No competing field, mandatory report or per-dispatch reassessment is introduced.
+
+The enum-only ledger adds aggregate tier counts without IDs or facts. Service/model
+availability and a small synthetic smoke test do not establish prediction of actual
+implementation quality; review/fix outcomes may inform future evaluation.

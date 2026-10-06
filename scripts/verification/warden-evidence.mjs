@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { dirname, resolve } from 'node:path';
+import { realpathSync } from 'node:fs';
+import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 
@@ -37,4 +38,33 @@ export function classifyProjectCheck(tool, input, failed, output = '', cwd) {
     const dirty = spawnSync('git', ['-C', repo, 'status', '--porcelain', '--untracked-files=normal'], options);
     return head.status === 0 && dirty.status === 0 && !dirty.stdout.trim() && head.stdout.trim() === receipt.revision ? 'check-pass' : 'unknown';
   } catch { return 'unknown'; }
+}
+
+// Only workflow-owned prose and metadata qualify, never arbitrary .specs content.
+// Resolve existing ancestors so a symlink cannot hide an implementation edit.
+function physicalPath(file) {
+  try { return realpathSync(file); } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    const parent = dirname(file);
+    if (parent === file) throw error;
+    return resolve(physicalPath(parent), file.slice(parent.length + 1));
+  }
+}
+export function classifySpecArtifact(tool, input, cwd) {
+  if (!['write', 'edit'].includes(tool) || !cwd) return undefined;
+  const file = input.path ?? input.file_path;
+  if (typeof file !== 'string' || !file) return undefined;
+  try {
+    const root = physicalPath(resolve(cwd));
+    const rel = relative(root, physicalPath(resolve(cwd, file))).replaceAll('\\', '/');
+    if (rel === '.specs/project-context.md') return 'unknown';
+    const match = /^\.specs\/[^/]+\/(.+)$/.exec(rel);
+    if (!match) return undefined;
+    const artifact = match[1];
+    const known = /^(?:spec|proposal|context|learning|merge-evidence|work-tour|pr-message|pr-rebase-log|ledger)\.md$/.test(artifact)
+      || /^(?:evidence-plan|merge-evidence|work-tour|pr-url)\.json$/.test(artifact)
+      || artifact === 'work-tour.html'
+      || /^(?:learnings\/step-\d+-learning|step-\d+-subspec|steps\/step-\d+-(?:subspec|learning)|reviews\/(?:step|branch)-\d+-(?:review|fix))\.md$/.test(artifact);
+    return known ? 'unknown' : undefined;
+  } catch { return undefined; }
 }
