@@ -1,4 +1,5 @@
 import { Type } from '@earendil-works/pi-ai';
+import { getAgentDir } from '@earendil-works/pi-coding-agent';
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
@@ -6,6 +7,7 @@ import { homedir } from 'node:os';
 import { Runtime, loadRun, summary, assertLease, runEditor, runCommand, runVerification, runAdvice, runCompletion, canonicalPackage, event as runtimeEvent } from './runtime.mjs';
 import { createCommunication } from './communication.mjs';
 import { createMonitor } from './monitor.mjs';
+import { createSentinelObserver } from './sentinel.mjs';
 import { createScout, SCOUT_MODEL } from './scout.mjs';
 import { installProgressContext, recordCheckpoint, refreshProgress } from './completion.mjs';
 import { metrics, formatMetrics } from './metrics.mjs';
@@ -107,6 +109,10 @@ export default function (pi: any) {
       try { const { packagePath } = canonicalPackage(args.package); await refreshProgress(packagePath); const receipt = recordCheckpoint(packagePath, args); progress.attach(packagePath); await refreshProgress(packagePath); return result(receipt); }
       catch (error: any) { return result({ error: error.message }, true); }
     } });
+  // Session-local sentinel observation: read-only, and only for packages this
+  // session explicitly dispatched plus explicitly enrolled primaries.
+  const ownPackages: string[] = [];
+  let sentinel: ReturnType<typeof createSentinelObserver> | undefined;
   pi.registerCommand('spec-metrics', {
     description: 'Read-only timing, model/tool calls, test submissions and cost: /spec-metrics /absolute/canonical/package',
     handler: async (args: string, ctx: any) => {
@@ -119,6 +125,8 @@ export default function (pi: any) {
     },
   });
   pi.on('session_start', (_event: any, ctx: any) => {
+    sentinel?.close();
+    sentinel = createSentinelObserver({ pi, context: ctx, agentDir: getAgentDir(), scope: process.env.PI_INTERCOM_SCOPE_ID ?? null, ownPackages });
     monitor.close();
     const entries = ctx.sessionManager.getBranch();
     for (let i = entries.length - 1; i >= 0; i--) {
@@ -142,6 +150,8 @@ export default function (pi: any) {
   const runtime = new Runtime({ notify: (value: any) => pi.sendMessage({ customType: 'spec-runtime', content: JSON.stringify(value), display: true }, { triggerTurn: true }) });
   pi.on('session_shutdown', async () => {
     monitor.close();
+    sentinel?.close();
+    sentinel = undefined;
     await Promise.allSettled([...runtime.active.values()].map(({ record }: any) => runtime.cancel(record.package, record.id)));
   });
   pi.registerTool({ name: 'spec_dispatch', label: 'Spec step runtime', description: 'Use startup to enter a prepared package in one call: first-step selection, recorded difficulty routing, checkout/lease setup and dispatch; existing progress returns a resume obligation without replay. Start launches an explicit prepared spec step with an owner and retained editor. Creates/reuses the checkout, holds its exclusive writer lease, and delivers a completion event. Repeated assignment IDs are idempotent. Status is for explicit recovery, never polling. Cancellation returns only after confirmed process-group termination.',
@@ -161,6 +171,7 @@ export default function (pi: any) {
         const input = { ...args, scout_model: args.scout_model ?? config.scout_model ?? SCOUT_MODEL, child_extensions: args.child_extensions ?? config.child_extensions ?? [] };
         const receipt = args.action === 'startup' ? await runtime.startup(input, ctx.sessionManager.getSessionFile()) : runtime.start(input, ctx.sessionManager.getSessionFile());
         if (receipt.run_id) monitor.attach(loadRun(args.package, receipt.run_id), ctx);
+        if (receipt.run_id && !ownPackages.includes(args.package)) ownPackages.push(args.package);
         return result(receipt);
       } catch (error: any) { return result({ error: error.message, next: 'correct this specific runtime error; do not probe unrelated models or launch another writer' }, true); }
     } });

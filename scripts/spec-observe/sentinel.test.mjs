@@ -194,3 +194,17 @@ test('completion reconciles, ordinary startup and benign silence never become sp
   assert.match(rendered, /reconciliation-pending/);
   assert.deepEqual(reduceConditions(snapshot).runs.map(run => run.conditions), snapshot.runs.map(run => run.conditions));
 });
+
+test('a package without a prepared step index keeps coverage complete with an unknown obligation', async t => {
+  const f = sandbox(t);
+  const packagePath = pack(primary(f.dir, 'nosteps'));
+  receipt(packagePath, { id: 'run-nosteps', assignment_id: 'assign-nosteps', state: 'running', started_at: ago(60000) });
+
+  const snapshot = await collectWorkspace({ roots: [join(f.dir, 'nosteps')], indexDir: f.indexDir, now });
+  const run = snapshot.runs.find(item => item.assignment_id === 'assign-nosteps');
+  assert.ok(run);
+  assert.equal(run.obligation, null);
+  assert.equal(run.coverage.state, 'complete');
+  assert.equal(run.coverage.reasons.some(reason => reason.startsWith('step-index-invalid')), false);
+  assert.equal(snapshot.coverage.reasons.some(reason => reason.startsWith('step-index-invalid')), false);
+});

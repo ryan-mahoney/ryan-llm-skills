@@ -1,0 +1,402 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync, realpathSync, statSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import { createSentinelObserver, SENTINEL_COALESCE_MS, SENTINEL_RECONCILE_MS, SENTINEL_WIDGET_KEY } from './sentinel.mjs';
+import { canonicalPackage } from './runtime.mjs';
+import { enrollmentDirectory, workspaceKey } from '../../../scripts/spec-observe/sentinel.mjs';
+
+// workspaceKey documents the same agentDir/scope hash the enrollment directory
+// uses; enrollmentDirectory alone locates the workspace records.
+
+const here = dirname(fileURLToPath(import.meta.url));
+const indexPath = join(here, 'index.ts');
+const cliPath = join(here, '../../../scripts/spec-observe/cli.mjs');
+
+// The installed SDK is the only loader for the real index.ts; without it the
+// composition cases cannot run and say so instead of guessing.
+let sdk;
+try {
+  const bin = execFileSync('which', ['pi'], { encoding: 'utf8' }).trim();
+  const sdkRoot = dirname(dirname(dirname(realpathSync(bin))));
+  const entry = join(sdkRoot, 'dist', 'index.js');
+  const aiEntry = join(sdkRoot, 'node_modules', '@earendil-works', 'pi-ai', 'dist', 'index.js');
+  if (existsSync(entry) && existsSync(aiEntry)) {
+    sdk = {
+      ...(await import(pathToFileURL(entry).href)),
+      ai: await import(pathToFileURL(aiEntry).href),
+    };
+  }
+} catch { /* No installed SDK: SDK-dependent cases skip. */ }
+const sdkSkip = sdk ? false : 'Install the pi coding-agent SDK (pi on PATH) to run the composition cases';
+
+const ENV_KEYS = ['SPEC_RUNTIME_ROLE', 'SPEC_RUNTIME_RECORD', 'PI_CODING_AGENT_DIR', 'PI_INTERCOM_SCOPE_ID'];
+
+// The owner's verification process exports SPEC_RUNTIME_ROLE; every case needs
+// a coordinator or explicit role, so the environment is snapshotted per test.
+function isolatedEnv(t) {
+  const previous = Object.fromEntries(ENV_KEYS.map(key => [key, process.env[key]]));
+  delete process.env.PI_INTERCOM_SCOPE_ID;
+  t.after(() => {
+    for (const key of ENV_KEYS) {
+      if (previous[key] === undefined) delete process.env[key];
+      else process.env[key] = previous[key];
+    }
+  });
+  return {
+    delete(key) { delete process.env[key]; },
+    set(key, value) { process.env[key] = value; },
+  };
+}
+
+function sandbox(t) {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'sentinel-integration-')));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+function primary(base, name = 'repo') {
+  const repo = join(base, name);
+  mkdirSync(repo, { recursive: true });
+  const git = (...args) => execFileSync('git', ['-C', repo, ...args], { stdio: 'pipe' });
+  git('init', '-q');
+  git('config', 'user.name', 'Sentinel Integration');
+  git('config', 'user.email', 'sentinel-integration@example.invalid');
+  return { repo, git };
+}
+
+function commit(repo) {
+  writeFileSync(join(repo, 'README'), 'fixture\n');
+  execFileSync('git', ['-C', repo, 'add', 'README'], { stdio: 'pipe' });
+  execFileSync('git', ['-C', repo, 'commit', '-qm', 'Initial fixture'], { stdio: 'pipe' });
+}
+
+function pack(repo, name = 'feature') {
+  const packagePath = join(repo, '.specs', name);
+  mkdirSync(packagePath, { recursive: true });
+  return packagePath;
+}
+
+function receipt(packagePath, record) {
+  const file = join(packagePath, 'runtime', 'runs', `${record.id}.json`);
+  mkdirSync(join(packagePath, 'runtime', 'runs'), { recursive: true });
+  writeFileSync(file, JSON.stringify({ ...record, package: record.package ?? packagePath }));
+  return file;
+}
+
+function capturedUI() {
+  const widgets = [], statuses = [], notes = [];
+  return {
+    widgets,
+    statuses,
+    notes,
+    ui: {
+      setWidget: (key, content) => widgets.push({ key, content }),
+      setStatus: (key, text) => statuses.push({ key, text }),
+      notify: (message, type) => notes.push({ message, type }),
+      select: async () => undefined,
+      confirm: async () => false,
+      input: async () => undefined,
+      editor: async () => undefined,
+      custom: async () => undefined,
+    },
+  };
+}
+
+const lastNote = captured => captured.notes[captured.notes.length - 1];
+const lastWidget = captured => captured.widgets[captured.widgets.length - 1];
+const lastStatus = captured => captured.statuses[captured.statuses.length - 1];
+
+// The scripted provider counts every request and refuses to serve one: any
+// provider call would already fail the observation-only contract.
+function scriptedProvider(requests) {
+  return {
+    name: 'Sentinel fixture',
+    api: 'openai-completions',
+    baseUrl: 'http://127.0.0.1:1',
+    apiKey: 'fixture-key',
+    models: [{ id: 'scripted', name: 'Scripted fixture', input: ['text'], reasoning: false, contextWindow: 4096, cost: {} }],
+    streamSimple: () => {
+      requests.push(Date.now());
+      if (requests.length > 8) throw new Error('Sentinel fixture provider served an unexpected request');
+      throw new Error('Sentinel fixture provider must never be called');
+    },
+  };
+}
+
+// Isolated SDK session over the real index.ts with a scripted provider that
+// never serves a request: status must be observation-only.
+async function loadExtension(t, { dir, role, recordFile } = {}) {
+  const env = isolatedEnv(t);
+  if (role) {
+    env.set('SPEC_RUNTIME_ROLE', role);
+    env.set('SPEC_RUNTIME_RECORD', recordFile);
+  } else {
+    env.delete('SPEC_RUNTIME_ROLE');
+    env.delete('SPEC_RUNTIME_RECORD');
+  }
+  const captured = capturedUI();
+  const requests = [];
+  const { DefaultResourceLoader, SettingsManager, SessionManager, createAgentSession, ModelRuntime } = sdk;
+  // The real index.ts resolves getAgentDir() from this variable; it must point
+  // at the sandbox, never the operator's live agent state.
+  env.set('PI_CODING_AGENT_DIR', dir);
+  const modelRuntime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false, refreshOnCreate: false });
+  modelRuntime.registerProvider('sentinel-fixture', scriptedProvider(requests));
+  const settingsManager = SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: false } });
+  const loader = new DefaultResourceLoader({
+    cwd: dir,
+    agentDir: dir,
+    settingsManager,
+    noExtensions: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    noContextFiles: true,
+    systemPrompt: 'Isolated sentinel integration fixture.',
+    additionalExtensionPaths: [indexPath],
+    extensionFactories: [pi => pi.registerProvider('sentinel-fixture', scriptedProvider(requests))],
+  });
+  await loader.reload();
+  assert.deepEqual(loader.getExtensions().errors, []);
+  const errors = [];
+  const { session } = await createAgentSession({
+    cwd: dir,
+    agentDir: dir,
+    modelRuntime,
+    settingsManager,
+    resourceLoader: loader,
+    sessionManager: SessionManager.inMemory(dir),
+    tools: [],
+  });
+  await session.bindExtensions({ uiContext: captured.ui, mode: 'rpc', onError: error => errors.push(error) });
+  await session.setModel(modelRuntime.getModel('sentinel-fixture', 'scripted'));
+  if (role) t.after(() => session.dispose());
+  else t.after(async () => {
+    // Always dispose observer handles first, or the open reconcile timer keeps
+    // the test process alive past its deadline.
+    try { await session.prompt('/spec-sentinel off'); } catch { /* Observer may already be absent. */ }
+    session.dispose();
+  });
+  return { session, loader, captured, requests, errors, modelRuntime, settingsManager };
+}
+
+function cli(args, cwd) {
+  return execFileSync(process.execPath, [cliPath, ...args], { cwd, encoding: 'utf8' });
+}
+
+test('sentinel status: actual index.ts serves enrolled workspace facts with zero provider calls', { skip: sdkSkip, timeout: 60000 }, async t => {
+  const dir = sandbox(t);
+  const { repo } = primary(dir, 'status-repo');
+  const packagePath = pack(repo);
+  const file = receipt(packagePath, { id: 'run-status', assignment_id: 'assign-status', state: 'running', started_at: new Date(Date.now() - 60000).toISOString() });
+  const receiptBytes = readFileSync(file);
+  const { session, captured, requests } = await loadExtension(t, { dir });
+
+  await session.prompt('/spec-sentinel add ' + repo);
+  const directory = enrollmentDirectory({ agentDir: dir });
+  const names = readdirSync(directory).filter(name => name.endsWith('.json'));
+  assert.equal(names.length, 1);
+  const record = JSON.parse(readFileSync(join(directory, names[0]), 'utf8'));
+  const canonical = canonicalPackage(packagePath);
+  assert.equal(record.version, 1);
+  assert.equal(record.root, canonical.primary);
+  assert.equal(record.common, canonical.common);
+  assert.equal((statSync(join(directory, names[0])).mode & 0o777).toString(8), '600');
+
+  await session.prompt('/spec-sentinel status');
+  const status = lastNote(captured);
+  assert.equal(status.type, 'info');
+  assert.match(status.message, /status-repo/);
+  assert.match(status.message, /assign-status/);
+  assert.match(status.message, /running/);
+  assert.equal(lastWidget(captured).key, SENTINEL_WIDGET_KEY);
+  assert.equal(lastStatus(captured).key, SENTINEL_WIDGET_KEY);
+  // One observed run keeps only the header line in the widget.
+  assert.equal(lastWidget(captured).content.length, 1);
+
+  await session.prompt('/spec-sentinel inspect assign-status');
+  const inspected = lastNote(captured);
+  assert.match(inspected.message, /assign-status/);
+  assert.match(inspected.message, /coverage/);
+
+  await session.prompt('/spec-sentinel off');
+  assert.deepEqual(lastWidget(captured).content, []);
+  assert.equal(lastStatus(captured).text, '');
+
+  assert.equal(requests.length, 0);
+  assert.deepEqual([...readFileSync(file)], [...receiptBytes]);
+  assert.deepEqual(readdirSync(packagePath).sort(), ['runtime']);
+  assert.equal(existsSync(join(packagePath, 'runtime', 'package.lock')), false);
+  assert.deepEqual(readdirSync(join(packagePath, 'runtime')).sort(), ['runs']);
+  assert.equal(readdirSync(join(packagePath, 'runtime', 'runs')).some(name => name.includes('-processes')), false);
+});
+
+test('sentinel enrollment: add writes one canonical record and rejects linked worktrees', { skip: sdkSkip, timeout: 60000 }, async t => {
+  const dir = sandbox(t);
+  const { repo, git } = primary(dir, 'enroll-repo');
+  commit(repo);
+  const packagePath = pack(repo);
+  receipt(packagePath, { id: 'run-enroll', assignment_id: 'assign-enroll', state: 'running', started_at: new Date(Date.now() - 60000).toISOString() });
+  const { session, captured } = await loadExtension(t, { dir });
+  const directory = enrollmentDirectory({ agentDir: dir });
+  const count = () => readdirSync(directory).filter(name => name.endsWith('.json')).length;
+
+  await session.prompt('/spec-sentinel add ' + repo);
+  await session.prompt('/spec-sentinel add ' + repo);
+  assert.equal(count(), 1);
+
+  const worktree = join(dir, 'enroll-worktree');
+  git('worktree', 'add', '-q', worktree);
+  pack(worktree);
+  await session.prompt('/spec-sentinel add ' + worktree);
+  assert.match(lastNote(captured).message, /linked worktrees are not enrolled/);
+  assert.equal(count(), 1);
+
+  await session.prompt('/spec-sentinel add ' + join(dir, 'does-not-exist'));
+  assert.equal(lastNote(captured).type, 'error');
+  assert.equal(count(), 1);
+});
+
+test('sentinel observer: coalesced invalidation, missed-event reconciliation and clean disposal', async t => {
+  const dir = sandbox(t);
+  const { repo } = primary(dir, 'observer-repo');
+  const packagePath = pack(repo);
+  const directory = enrollmentDirectory({ agentDir: dir });
+  const canonical = canonicalPackage(packagePath);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  writeFileSync(join(directory, 'fixture.json'),
+    JSON.stringify({ version: 1, root: canonical.primary, common: canonical.common, enrolled_at: new Date().toISOString() }));
+
+  const watchers = [];
+  const timers = new Map();
+  const repeats = new Map();
+  let timerId = 0;
+  const captures = capturedUI();
+  const registered = [];
+  const pi = { registerCommand: (name, spec) => registered.push({ name, spec }) };
+  const context = { hasUI: true, ui: captures.ui };
+  const observer = createSentinelObserver({
+    pi,
+    context,
+    agentDir: dir,
+    indexDir: join(dir, 'spec-runtime'),
+    watchDirectory: (target, listener) => {
+      const watcher = { dir: target, listener, closed: false, close() { this.closed = true; }, on() { return this; } };
+      watchers.push(watcher);
+      return watcher;
+    },
+    setTimer: (callback, ms) => { const id = ++timerId; timers.set(id, { callback, ms }); return id; },
+    clearTimer: id => timers.delete(id),
+    repeat: (callback, ms) => { const id = ++timerId; repeats.set(id, { callback, ms }); return id; },
+    cancelRepeat: id => repeats.delete(id),
+  });
+  t.after(() => observer.close());
+  assert.deepEqual(registered.map(item => item.name), ['spec-sentinel']);
+
+  await observer.refresh();
+  assert.ok(watchers.length > 0);
+  receipt(packagePath, { id: 'run-observer-1', assignment_id: 'assign-observer-1', state: 'running', started_at: new Date(Date.now() - 60000).toISOString() });
+  receipt(packagePath, { id: 'run-observer-2', assignment_id: 'assign-observer-2', state: 'running', started_at: new Date(Date.now() - 50000).toISOString() });
+
+  for (const watcher of watchers) { watcher.listener(); watcher.listener(); }
+  assert.equal(timers.size, 1);
+  const [pending] = [...timers.values()];
+  assert.equal(pending.ms, SENTINEL_COALESCE_MS);
+  timers.clear();
+  await pending.callback();
+  assert.match(lastWidget(captures).content[0], /2 run\(s\)/);
+
+  receipt(packagePath, { id: 'run-observer-3', assignment_id: 'assign-observer-3', state: 'running', started_at: new Date(Date.now() - 40000).toISOString() });
+  assert.equal(repeats.size, 1);
+  const [reconcile] = [...repeats.values()];
+  assert.equal(reconcile.ms, SENTINEL_RECONCILE_MS);
+  await reconcile.callback();
+  assert.match(lastWidget(captures).content[0], /3 run\(s\)/);
+
+  assert.deepEqual(readdirSync(packagePath).sort(), ['runtime']);
+  assert.deepEqual(readdirSync(join(packagePath, 'runtime')).sort(), ['runs']);
+  assert.deepEqual(readdirSync(join(packagePath, 'runtime', 'runs')).sort(),
+    ['run-observer-1.json', 'run-observer-2.json', 'run-observer-3.json']);
+  assert.equal(readdirSync(directory).filter(name => name.endsWith('.json')).length, 1);
+
+  observer.close();
+  assert.ok(watchers.every(watcher => watcher.closed));
+  assert.equal(timers.size, 0);
+  assert.equal(repeats.size, 0);
+  observer.close();
+});
+
+test('sentinel status: the CLI reports a disposable package and preserves runs discovery', { timeout: 60000 }, async t => {
+  const dir = sandbox(t);
+  const empty = join(dir, 'empty-agent');
+  const emptyIndex = join(dir, 'empty-index');
+  mkdirSync(empty, { recursive: true });
+  mkdirSync(emptyIndex, { recursive: true });
+  const { repo } = primary(dir, 'cli-repo');
+  const packagePath = pack(repo);
+  receipt(packagePath, { id: 'run-cli', assignment_id: 'assign-cli', state: 'running', started_at: new Date(Date.now() - 60000).toISOString() });
+
+  const text = cli(['sentinel', 'status', '--package', packagePath, '--agent-dir', empty], dir);
+  assert.match(text, /cli-repo/);
+  assert.match(text, /assign-cli/);
+  assert.match(text, /running/);
+
+  const parsed = JSON.parse(cli(['sentinel', 'status', '--package', packagePath, '--format', 'json', '--agent-dir', empty], dir));
+  assert.equal(parsed.version, 1);
+  assert.equal(parsed.runs[0].package, canonicalPackage(packagePath).packagePath);
+  assert.equal(parsed.runs[0].assignment_id, 'assign-cli');
+
+  // A snapshot larger than the ~64 KiB pipe buffer must still drain intact.
+  const manyRepo = primary(dir, 'many-repo').repo;
+  const manyPackage = pack(manyRepo);
+  for (let index = 1; index <= 50; index++) {
+    receipt(manyPackage, {
+      id: `run-many-${index}`,
+      assignment_id: `assign-many-${index}`,
+      state: 'running',
+      started_at: new Date(Date.now() - 60000).toISOString(),
+      // Realistic retained session paths keep the fixture above the pipe buffer.
+      parent_session: join(dir, 'sessions', 'coordinator-' + 'retained-'.repeat(16) + `${index}.jsonl`),
+    });
+  }
+  const large = cli(['sentinel', 'status', '--package', manyPackage, '--format', 'json', '--agent-dir', empty], dir);
+  assert.ok(large.length > 65536, `expected a snapshot above the pipe buffer, got ${large.length} bytes`);
+  const many = JSON.parse(large);
+  assert.equal(many.runs.length, 50);
+  assert.deepEqual(many.runs.map(run => run.assignment_id).sort(),
+    Array.from({ length: 50 }, (unused, index) => `assign-many-${index + 1}`).sort());
+
+  const emptyOut = cli(['sentinel', 'status', '--agent-dir', empty], dir);
+  assert.match(emptyOut, /No enrolled roots\. Add one in Pi with \/spec-sentinel add \/absolute\/primary\./);
+
+  const runs = JSON.parse(cli(['runs', '--index-root', emptyIndex], dir));
+  assert.deepEqual(runs.runs, []);
+  assert.equal(runs.candidates_truncated, false);
+  assert.equal(runs.runs_truncated, false);
+});
+
+test('sentinel role: worker load has no sentinel command and an empty coordinator stays observe-only', { skip: sdkSkip, timeout: 60000 }, async t => {
+  const dir = sandbox(t);
+  const recordFile = join(dir, 'worker-record.json');
+  writeFileSync(recordFile, JSON.stringify({ id: 'run-worker', package: dir, state: 'running' }));
+  const worker = await loadExtension(t, { dir, role: 'owner', recordFile });
+  const workerCommands = worker.loader.getExtensions().extensions.flatMap(extension => [...extension.commands.keys()]);
+  assert.equal(workerCommands.includes('spec-sentinel'), false);
+  assert.deepEqual(worker.loader.getExtensions().extensions.flatMap(extension => [...extension.tools.keys()]).filter(name => /sentinel/i.test(name)), []);
+
+  const dir2 = sandbox(t);
+  const coordinator = await loadExtension(t, { dir: dir2 });
+  await coordinator.session.prompt('/spec-sentinel status');
+  const note = lastNote(coordinator.captured);
+  assert.match(note.message, /No observed runs\./);
+  assert.match(note.message, /coverage complete/);
+  const commands = coordinator.loader.getExtensions().extensions.flatMap(extension => [...extension.commands.keys()]);
+  assert.ok(commands.includes('spec-sentinel'));
+  assert.deepEqual(coordinator.loader.getExtensions().extensions.flatMap(extension => [...extension.tools.keys()]).filter(name => /sentinel/i.test(name)), []);
+  assert.equal(coordinator.requests.length, 0);
+});

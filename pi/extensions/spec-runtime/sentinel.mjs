@@ -1,0 +1,238 @@
+// Session-local read-only workspace observer for the spec sentinel.
+//
+// The observer collects bounded workspace facts and renders them as plain
+// status. It never starts, stops, messages or cancels a worker and never writes
+// anything except the explicit enrollment record created by /spec-sentinel add.
+
+import { watch, mkdirSync, renameSync, readdirSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { join, resolve } from 'node:path';
+
+import { canonicalPackage } from './runtime.mjs';
+import { publicHint } from './monitor.mjs';
+import { collectWorkspace, renderWorkspace, enrollmentDirectory, readEnrollments, SENTINEL_LIMITS } from '../../../scripts/spec-observe/sentinel.mjs';
+
+export const SENTINEL_COALESCE_MS = 250;
+export const SENTINEL_RECONCILE_MS = 15000;
+export const SENTINEL_WIDGET_KEY = 'spec-sentinel';
+
+const USAGE = 'Usage: /spec-sentinel status | add /absolute/primary | inspect ID | off';
+const MAX_WATCHERS = 60;
+
+export function createSentinelObserver({ pi, context, agentDir, scope = null, ownPackages = [], indexDir = join(agentDir, 'spec-runtime'),
+  now = Date.now, watchDirectory = watch, setTimer = setTimeout, clearTimer = clearTimeout, repeat = setInterval, cancelRepeat = clearInterval }) {
+  let closed = false;
+  let hidden = false;
+  let latest = null;
+  let inFlight = null;
+  let coalesced;
+  let reconcileTimer;
+  let note = null;
+  const watchers = new Map();
+
+  const notify = (ctx, message, level = 'info') => {
+    try { (ctx ?? context)?.ui?.notify?.(message, level); } catch { /* UI failure must not affect observation. */ }
+  };
+
+  const clearWidgets = () => {
+    try { context?.ui?.setWidget?.(SENTINEL_WIDGET_KEY, []); } catch { /* UI failure must not affect observation. */ }
+    try { context?.ui?.setStatus?.(SENTINEL_WIDGET_KEY, ''); } catch { /* UI failure must not affect observation. */ }
+  };
+
+  function invalidate() {
+    if (closed || hidden || coalesced) return;
+    // Coalesce repeated invalidation events into one bounded refresh.
+    coalesced = setTimer(async () => {
+      coalesced = undefined;
+      await run(false);
+    }, SENTINEL_COALESCE_MS);
+    coalesced?.unref?.();
+  }
+
+  function syncWatchers(targets) {
+    const wanted = [];
+    for (const target of targets) {
+      const directory = resolve(target);
+      if (!wanted.includes(directory)) wanted.push(directory);
+    }
+    for (const [directory, watcher] of watchers) {
+      if (wanted.includes(directory)) continue;
+      watchers.delete(directory);
+      try { watcher.close?.(); } catch { /* Closing is best effort. */ }
+    }
+    for (const directory of wanted.slice(0, MAX_WATCHERS)) {
+      if (watchers.has(directory)) continue;
+      try {
+        const watcher = watchDirectory(directory, () => invalidate());
+        watcher?.on?.('error', () => {
+          // Watcher failure keeps last known facts; it never throws into the session.
+          note = 'Watcher unavailable; status reflects the last bounded read.';
+        });
+        watchers.set(directory, watcher);
+      } catch { /* A directory may vanish between reads; the next refresh re-syncs. */ }
+    }
+  }
+
+  function snapshotTargets(snapshot) {
+    const targets = [];
+    for (const root of snapshot?.roots ?? []) {
+      targets.push(root, join(root, '.specs'));
+    }
+    for (const run of snapshot?.runs ?? []) {
+      if (run?.package) targets.push(join(run.package, 'runtime', 'runs'));
+    }
+    return targets;
+  }
+
+  async function run(force = false) {
+    if (closed) return latest;
+    if (inFlight) return inFlight;
+    inFlight = (async () => {
+      if (hidden && !force) return latest;
+      try {
+        const enrolled = await readEnrollments({ agentDir, scope });
+        const snapshot = await collectWorkspace({
+          roots: enrolled.roots ?? [], packages: [...ownPackages], indexDir, agentDir, scope, now,
+        });
+        latest = { ...snapshot, roots: enrolled.roots ?? [] };
+        note = null;
+        syncWatchers(snapshotTargets(latest));
+        render();
+        return latest;
+      } catch (error) {
+        // Last known facts are kept; the failure becomes an explicit note.
+        note = `Sentinel workspace unavailable: ${publicHint(error?.message ?? String(error))}`;
+        render();
+        return latest;
+      } finally {
+        inFlight = null;
+      }
+    })();
+    return inFlight;
+  }
+
+  function render() {
+    if (closed || hidden || !context?.hasUI) return;
+    try {
+      const lines = latest ? renderWorkspace(latest) : [];
+      // One native run is already shown by its own widget; keep only the header.
+      if (latest?.runs?.length === 1) lines.splice(1);
+      if (note) lines.push(note);
+      context.ui.setWidget(SENTINEL_WIDGET_KEY, lines);
+      context.ui.setStatus(SENTINEL_WIDGET_KEY,
+        `sentinel ${latest?.coverage?.state ?? 'unknown'} · ${latest?.runs?.length ?? 0} run(s)`);
+    } catch { /* UI failure must not affect observation. */ }
+  }
+
+  function stopHandles() {
+    for (const watcher of watchers.values()) {
+      try { watcher.close?.(); } catch { /* Closing is best effort. */ }
+    }
+    watchers.clear();
+    if (coalesced !== undefined) { try { clearTimer(coalesced); } catch { /* Timer may already have run. */ } coalesced = undefined; }
+    if (reconcileTimer !== undefined) { try { cancelRepeat(reconcileTimer); } catch { /* Timer may already have run. */ } reconcileTimer = undefined; }
+  }
+
+  async function enroll(target) {
+    const directory = enrollmentDirectory({ agentDir, scope });
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const existing = await readEnrollments({ agentDir, scope });
+    let canonical;
+    let specs = null;
+    try { canonical = canonicalPackage(resolve(target)); }
+    catch {
+      // Otherwise the target is a primary root: use its first canonical package.
+      specs = join(resolve(target), '.specs');
+      const children = readdirSync(specs, { withFileTypes: true }).slice(0, 101).filter(entry => entry.isDirectory());
+      for (const entry of children) {
+        try { canonical = canonicalPackage(join(specs, entry.name)); break; }
+        catch { /* A linked worktree copy is never canonical. */ }
+      }
+    }
+    if (!canonical) throw new Error('Enrollment requires a primary checkout root containing a canonical .specs package; linked worktrees are not enrolled.');
+    const records = existing.records ?? [];
+    const counted = records.length;
+    const sameCommon = records.some(record => record.common === canonical.common);
+    if (counted >= SENTINEL_LIMITS.roots && !sameCommon) throw new Error(`Enrollment limit reached (${SENTINEL_LIMITS.roots} roots).`);
+    const file = join(directory, `${createHash('sha256').update(canonical.common).digest('hex')}.json`);
+    const temp = `${file}.${randomUUID()}.tmp`;
+    writeFileSync(temp, `${JSON.stringify({ version: 1, root: canonical.primary, common: canonical.common, enrolled_at: new Date(now()).toISOString() }, null, 2)}\n`, { mode: 0o600 });
+    renameSync(temp, file);
+    return canonical;
+  }
+
+  async function handler(args = '', ctx = context) {
+    try {
+      const [actionRaw, ...rest] = String(args ?? '').trim().split(/\s+/).filter(Boolean);
+      const action = (actionRaw ?? '').toLowerCase();
+      if (!action || action === 'status') {
+        const snapshot = await run(true);
+        if (!snapshot) { notify(ctx, 'Sentinel workspace unavailable.', 'error'); return; }
+        notify(ctx, renderWorkspace(snapshot).join('\n'), 'info');
+        return;
+      }
+      if (action === 'add') {
+        const target = rest.join(' ');
+        if (!target) throw new Error(USAGE);
+        const canonical = await enroll(target);
+        notify(ctx, `Enrolled ${canonical.primary} for read-only observation. Enrollment only grants reads; it never starts, stops or messages workers.`, 'info');
+        await run(true);
+        return;
+      }
+      if (action === 'inspect') {
+        const id = rest.join(' ');
+        if (!id) throw new Error(USAGE);
+        const snapshot = await run(true);
+        const matched = snapshot?.runs?.find(item => item.assignment_id === id || item.workflow_id === id || item.package === id
+          || item.package?.split('/').pop() === id
+          || item.conditions?.some(condition => condition.id === id || condition.kind === id));
+        if (!matched) { notify(ctx, `No observed run or condition matches ${id}.`, 'warning'); return; }
+        const condition = matched.conditions?.find(item => item.id === id || item.kind === id);
+        const lines = [
+          `${publicHint(matched.assignment_id)} · ${publicHint(matched.execution)}`,
+          `${publicHint(matched.repository)} · ${publicHint(matched.package)} · ${matched.checkout ? publicHint(matched.checkout) : 'checkout unknown'}`,
+          matched.coordinator_session ? `coordinator: ${publicHint(matched.coordinator_session)}` : 'coordinator: unknown',
+          `${matched.workflow_id ? `workflow ${publicHint(matched.workflow_id)} · ` : ''}${matched.obligation ? publicHint(matched.obligation) : 'obligation unknown'}`,
+          `activity: ${matched.activity ? publicHint(matched.activity) : 'activity unknown'}`,
+          `observed_at: ${publicHint(matched.observed_at)} · coverage ${matched.coverage.state}${matched.coverage.reasons.length ? ` (${matched.coverage.reasons.join(', ')})` : ''}`,
+          ...(matched.conditions ?? []).map(item => `${item.id} ${item.kind} [${item.severity}/${item.state}]`),
+          ...(matched.source_paths ?? []).map(file => `source: ${publicHint(file)}`),
+          ...(condition ? [`selected condition ${condition.id} ${condition.kind} [${condition.severity}/${condition.state}]`] : []),
+        ];
+        notify(ctx, lines.join('\n'), 'info');
+        return;
+      }
+      if (action === 'off') {
+        hidden = true;
+        stopHandles();
+        clearWidgets();
+        notify(ctx, 'Sentinel observation hidden for this session; no worker was stopped, changed or messaged.', 'info');
+        return;
+      }
+      throw new Error(USAGE);
+    } catch (error) {
+      notify(ctx, `Sentinel: ${error?.message ?? String(error)}`, 'error');
+    }
+  }
+
+  if (context?.hasUI && !closed) {
+    reconcileTimer = repeat(() => run(false), SENTINEL_RECONCILE_MS);
+    reconcileTimer?.unref?.();
+    run(false);
+  }
+
+  pi.registerCommand('spec-sentinel', {
+    description: 'Read-only workspace observation: status | add PATH | inspect ID | off',
+    handler,
+  });
+
+  return {
+    refresh: () => run(false),
+    close() {
+      if (closed) return;
+      closed = true;
+      stopHandles();
+      clearWidgets();
+    },
+  };
+}

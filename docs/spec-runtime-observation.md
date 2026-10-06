@@ -58,6 +58,24 @@ discovers sessions and reports timings, repeated calls and provider failures wit
 executing commands from transcripts. Use its package lookup for managed runs and its
 legacy discovery for older sessions. Missing cost or timing information stays unknown.
 
+## Workspace sentinel status
+
+For a bounded cross-repository status view, use the `spec-sentinel` skill or run
+`node ~/.agents/scripts/spec-observe/cli.mjs sentinel status [--package PATH]
+[--format text|json] [--agent-dir PATH]`. In Pi, `/spec-sentinel add
+/absolute/primary` writes one read-only enrollment record per root at
+`<agentDir>/spec-sentinel/<workspace-key>/enrollments/<sha256(common dir)>.json`
+(mode `0600`, `{ version, root, common, enrolled_at }`); nothing else writes it, and
+managed index pointers never enroll a repository. Status reports identity, execution,
+activity hints, coverage (`complete|partial|stale|unavailable`) and factual
+conditions; missing or replaced sources stay unknown or stale.
+
+Connected Pi sessions are the host: invalidation is coalesced at 250 ms and status
+reconciles every 15 s, and closing a session stops it so the next one reports the
+gap as unknown. Authority stays read-only — no continuation, cancellation, diagnosis
+or recovery, no transcript or model reads, and no acceptance claim from completion or
+silence.
+
 ## Workflow metrics
 
 For an aggregate report of the current coordinator session, run:

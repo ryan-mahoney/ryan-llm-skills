@@ -8,7 +8,7 @@
 import { createHash } from 'node:crypto';
 import { open, opendir, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, dirname, join, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
 import { canonicalPackage } from '../../pi/extensions/spec-runtime/runtime.mjs';
 import { publicHint } from '../../pi/extensions/spec-runtime/monitor.mjs';
@@ -56,6 +56,45 @@ export function workspaceKey({ agentDir, scope = null }) {
   return sha256(JSON.stringify([resolve(agentDir), scope ?? null]));
 }
 
+// Enrollment state is written only by the owning Pi session; the reader only
+// observes it. One directory per agent dir and routing scope.
+export function enrollmentDirectory({ agentDir, scope = null }) {
+  return join(resolve(agentDir), 'spec-sentinel', workspaceKey({ agentDir, scope }), 'enrollments');
+}
+
+// Bounded, read-only enrollment discovery. Unreadable or malformed state is a
+// reported fact, never a throw: status must survive corrupt enrollment.
+export async function readEnrollments({ agentDir, scope = null }, { limit = 100 } = {}) {
+  const directory = enrollmentDirectory({ agentDir, scope });
+  const budget = makeBudget();
+  const errors = [];
+  const records = [];
+  const roots = [];
+  const listed = await listDirectory(directory, limit, entry => entry.isFile() && entry.name.endsWith('.json'));
+  if (listed.entries === null) {
+    // Absent enrollment is an empty set, not an error.
+    if (listed.code !== 'ENOENT') errors.push({ path: directory, code: listed.code });
+    return { roots, records, errors };
+  }
+  if (listed.truncated) errors.push({ path: directory, code: 'ENROLLMENT_CAP' });
+  for (const entry of listed.entries) {
+    const file = join(directory, entry.name);
+    const result = await readJson(file, SENTINEL_LIMITS.smallJsonBytes, budget, {
+      prefix: 'enrollment', oversize: false,
+      allow: value => value && typeof value === 'object' && value.version === 1
+        && typeof value.root === 'string' && isAbsolute(value.root)
+        && typeof value.common === 'string' && isAbsolute(value.common)
+        ? { version: 1, root: value.root, common: value.common } : null,
+    });
+    if (result.outcome === 'read-budget') { errors.push({ path: file, code: 'READ_BUDGET' }); break; }
+    if (result.outcome === 'oversized') { errors.push({ path: file, code: 'ENROLLMENT_OVERSIZED' }); continue; }
+    if (result.outcome !== 'ok') { errors.push({ path: file, code: 'ENROLLMENT_INVALID' }); continue; }
+    records.push({ path: file, ...result.record });
+    if (!roots.includes(result.record.root)) roots.push(result.record.root);
+  }
+  return { roots, records, errors };
+}
+
 function clock(now) {
   return typeof now === 'function' ? now : () => now;
 }
@@ -94,7 +133,8 @@ async function readBounded(file, maxBytes, budget) {
     if (bytesRead > maxBytes) return { outcome: 'oversized', reason: null, bytes: bytesRead };
     return { outcome: 'ok', text: buffer.subarray(0, bytesRead).toString('utf8'), bytes: bytesRead };
   } catch (error) {
-    return { outcome: 'invalid', reason: `${codeOf(error)}: ${file}`, bytes: 0 };
+    // A vanished file is a missing fact, not corrupt evidence.
+    return { outcome: codeOf(error) === 'ENOENT' ? 'missing' : 'invalid', reason: `${codeOf(error)}: ${file}`, bytes: 0 };
   } finally {
     await handle?.close().catch(() => {});
   }
@@ -485,6 +525,11 @@ async function readStepIndex(fact, budget, mark) {
     },
   });
   if (result.outcome === 'read-budget') { mark(result.reason); fact.stepIndex = { steps: [], source: null, digest: null }; return fact.stepIndex; }
+  if (result.outcome === 'missing') {
+    // A package without a prepared step index is a legitimate absence.
+    fact.stepIndex = { steps: [], source: null, digest: null };
+    return fact.stepIndex;
+  }
   if (result.outcome === 'ok') {
     fact.sources.set('step-index', { file, digest: result.digest });
     fact.stepIndex = { steps: result.record, source: file, digest: result.digest };

@@ -871,6 +871,7 @@ spec_skills=(
   spec-branch
   spec-branch-worktree
   spec-run
+  spec-sentinel
   spec-step-run
   spec-branch-refine
   spec-branch-review

@@ -221,6 +221,38 @@ native stream and incremental file-change notifications. Large/incomplete histor
 events can be unavailable; legacy activity timestamps use stream modification time.
 The widget does not infer missing activity. No browser UI is involved.
 
+## Workspace sentinel status
+
+`/spec-sentinel status` shows a bounded read-only snapshot across enrolled
+repositories: repository common directory, canonical package, checkout, workflow
+id, assignment id, coordinator session, execution state, obligation, activity hint,
+coverage and factual conditions such as `reconciliation-pending` or `quiet-activity`.
+It is also the default when the command has no argument.
+
+`/spec-sentinel add /absolute/primary` validates a primary checkout and writes one
+enrollment record per root at
+`<agentDir>/spec-sentinel/<workspace-key>/enrollments/<sha256(common dir)>.json`,
+mode `0600`, containing `{ version, root, common, enrolled_at }`. Only this direct
+command writes that record; it grants read observation and nothing else. At most 20
+roots are recorded, and a `.specs` copy in a linked worktree is rejected. Managed
+index pointers and packages dispatched in the session are observation candidates
+only and never enroll a repository.
+
+The widget shows the workspace rows; when a single run is observed it collapses to
+the header line because that run's own widget already shows it. `/spec-sentinel
+inspect ID` names one run or condition by assignment id, workflow id, package or
+condition id/kind. Directory invalidation is coalesced at 250 ms and status is
+reconciled every 15 s. `/spec-sentinel off` hides the widget and status and disposes
+only this session's observers and timers; it never cancels, stops or messages
+workers. The CLI equivalent is `node
+~/.agents/scripts/spec-observe/cli.mjs sentinel status [--package PATH] [--format
+text|json] [--agent-dir PATH]`, which works without a Pi session.
+
+Coverage is `complete|partial|stale|unavailable` with explicit omission reasons;
+missing, oversized or replaced sources stay unknown or stale, never healthy. No
+model call, transcript read or recovery authority is introduced here: completion,
+exit and silence remain non-acceptance facts.
+
 ## Workflow metrics
 
 `/spec-metrics /absolute/canonical/package` displays a read-only aggregate from native
