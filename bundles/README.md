@@ -41,11 +41,14 @@ Includes the Augment CLI subagent adapter:
 
 - `augment/agents/spec-step-implementer.md`
 
-The bundle also ships `pi/agents/spec-step-owner.md` and
-`pi/agents/spec-step-editor.md`. Copy them to `~/.pi/agent/agents/` after extraction
-when using Pi; the portable installer has no Pi target. The editor uses OpenRouter
-`inception/mercury-2.5:high`. Pi retains owner/editor sessions across related steps
-with one writer, compact path-based handoffs, and a generated history index.
+The bundle ships the Pi profiles, managed spec runtime and its shared fact,
+observation, verification and Jev helpers. The portable installer has no Pi target.
+Merge the bundled skills, rules, scripts, docs and pi directories into `~/.agents/`,
+copy `pi/agents/*.md` to `~/.pi/agent/agents/`, and link the runtime directory into
+`~/.pi/agent/extensions/`. Follow the bundled runtime README for Jev dependencies,
+pi-intercom and trusted child extension paths. Restart an idle Pi session after setup.
+Pi retains owner/editor sessions across related steps with one writer, owner-run
+checks, compact handoffs and a generated history index.
 
 `spec-branch` and `spec-branch-worktree` ship as backwards-compatible convenience utilities; the
 end-to-end orchestrator manages ordinary branch/worktree setup directly.

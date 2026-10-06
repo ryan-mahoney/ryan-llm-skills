@@ -400,22 +400,19 @@ and its path resolver. Do not open a new editor or agent session for the handoff
 /spec-run <feature-slug or path-to-spec.md>
 ```
 
-This checks structural readiness once and implements steps sequentially with their evidence and QA artifacts. In Pi, retain a capable step owner and its nested Mercury editor across related steps, keeping one writer active. The editor uses OpenRouter `inception/mercury-2.5:high`.
+This checks structural readiness once and implements steps sequentially with their evidence and QA artifacts. In Pi, use the managed spec runtime to retain owner/editor disk sessions and one exclusive writer. The owner runs focused checks after editor return.
 
 Pass canonical card/index paths, outcomes, commits, and unresolved issues. Use the generated history index to locate original learning and review records. Run prepared focused acceptance checks; expand for actual failures, material departures, or acceptance gaps. Reviews report defects and material limitations without positive correctness narratives.
 Each step produces a coherent commit. When repository policy requires separate generated output, the step records both commits and binds evidence to its final HEAD.
-The runner also prepares later-phase procedures and assembles evidence for the independent audit.
+The runner also prepares later-phase procedures and assembles evidence from independent step reviews and their fixes.
 
-### 6. Refine The Whole Branch
+### 6. Complete Reviews And Reconcile The Base
 
-```bash
-/spec-branch-refine
-```
-
-Each iteration includes review and fixes. Direct invocation defaults to ten rounds;
-`spec-end-to-end` passes one round when step reviews are complete, otherwise two. Stop early on a clean review, or after
-verified final fixes at the cap. The completion record states whether the final fixes
-were independently re-reviewed; unresolved findings or failed checks block the tour.
+Finish every step review/fix cycle, including the last step. Reconcile the target base,
+refresh affected evidence, push within publication authority and collect configured
+required CI. Final fixes are not automatically independently re-reviewed.
+`/spec-branch-refine` remains optional for explicit requests or project policy;
+direct invocation defaults to ten bounded review/fix rounds.
 
 ### 7. Build And Open The Work Tour
 
@@ -439,7 +436,7 @@ merge claim; known failures that invalidate merge claims must still block them.
 /spec-pr
 ```
 
-This rebases first, refreshes any invalidated verification, requires a current passing audit and
+This rebases first, refreshes any invalidated verification, requires current step review/fix completion and
 ready tour, then pushes and publishes a concise PR explaining the problem and resulting change.
 Follow the bundled engineering-writing guide. Keep workflow metadata and inaccessible local
 references out of the PR; preserve the full verification record in supporting artifacts.
@@ -455,7 +452,7 @@ references out of the PR; preserve the full verification record in supporting ar
 /spec-write
 # top-level agent establishes a branch or worktree
 /spec-run <feature-slug>
-/spec-branch-refine <feature-slug>
+# reconcile the base and collect required CI within publication authority
 /spec-work-tour <feature-slug>
 /spec-pr
 ```
@@ -522,7 +519,7 @@ After that, use the normal engineering back half:
 /spec-write <feature-slug>
 # top-level agent establishes a branch or worktree
 /spec-run <feature-slug>
-/spec-branch-refine <feature-slug>
+# reconcile the base and collect required CI within publication authority
 /spec-work-tour <feature-slug>
 /spec-pr <feature-slug>
 ```
@@ -748,8 +745,8 @@ write_bundle_files() {
       done
     fi
     if [ -d "$bundle_dir/pi/agents" ]; then
-      printf '\n## Pi Agents\n\n'
-      printf 'The portable installer has no Pi target. Copy `pi/agents/spec-step-owner.md` and `pi/agents/spec-step-editor.md` to `~/.pi/agent/agents/` after extraction.\n'
+      printf '\n## Pi Runtime\n\n'
+      printf 'The portable installer has no Pi target. Merge the bundled skills, rules, scripts, docs and pi directories into `~/.agents/`, copy `pi/agents/*.md` to `~/.pi/agent/agents/`, and link `pi/extensions/spec-runtime` into `~/.pi/agent/extensions/`. Follow `pi/extensions/spec-runtime/README.md` for locked Jev dependencies, pi-intercom and trusted child extensions. Restart an idle Pi session after setup.\n'
     fi
     if [ "$name" = "spec-skills" ]; then
       write_spec_workflow_howto
@@ -800,11 +797,10 @@ write_bundle_files() {
     if [ -d "$bundle_dir/scripts" ]; then
       local scripts=()
       local script
-      for script in "$bundle_dir/scripts"/*; do
-        [ -f "$script" ] || continue
-        scripts+=("scripts/$(basename "$script")")
-      done
-      json_array "${scripts[@]}"
+      while IFS= read -r script; do
+        scripts+=("${script#"$bundle_dir"/}")
+      done < <(find "$bundle_dir/scripts" -type f | sort)
+      json_array ${scripts[@]+"${scripts[@]}"}
     else
       printf '[]'
     fi
@@ -830,10 +826,18 @@ build_bundle() {
 
   if [ "$name" = "spec-skills" ]; then
     copy_file "$bundle_dir" "augment/agents/spec-step-implementer.md" "augment/agents/spec-step-implementer.md"
-    copy_file "$bundle_dir" "pi/agents/spec-step-owner.md" "pi/agents/spec-step-owner.md"
-    copy_file "$bundle_dir" "pi/agents/spec-step-editor.md" "pi/agents/spec-step-editor.md"
+    local resource
+    while IFS= read -r resource; do
+      copy_file "$bundle_dir" "$resource" "$resource"
+    done < <(cd "$ROOT" && find pi/agents pi/extensions/spec-runtime scripts/spec-facts scripts/spec-observe scripts/verification -type f | sort)
+    for resource in "$ROOT"/scripts/jev/*.mjs "$ROOT"/scripts/jev/README.md "$ROOT"/scripts/jev/package.json "$ROOT"/scripts/jev/package-lock.json; do
+      resource="${resource#"$ROOT"/}"
+      copy_file "$bundle_dir" "$resource" "$resource"
+    done
     copy_file "$bundle_dir" "docs/spec-workflow.md" "docs/spec-workflow.md"
     copy_file "$bundle_dir" "docs/reviews.md" "docs/reviews.md"
+    copy_file "$bundle_dir" "docs/spec-runtime-observation.md" "docs/spec-runtime-observation.md"
+    copy_file "$bundle_dir" "docs/spec-workflow-efficiency.md" "docs/spec-workflow-efficiency.md"
     copy_rules "$bundle_dir"
   elif [ "$name" = "specops-skills" ]; then
     copy_scripts "$bundle_dir" "decompose-skeleton.mjs" "agent-docs.mjs" "commit-ledger.mjs"
