@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, symlinkSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -195,7 +195,7 @@ test('completion reconciles, ordinary startup and benign silence never become sp
   assert.deepEqual(reduceConditions(snapshot).runs.map(run => run.conditions), snapshot.runs.map(run => run.conditions));
 });
 
-test('a package without a prepared step index keeps coverage complete with an unknown obligation', async t => {
+test('a package without a prepared step index keeps coverage complete; a malformed one is explicit', async t => {
   const f = sandbox(t);
   const packagePath = pack(primary(f.dir, 'nosteps'));
   receipt(packagePath, { id: 'run-nosteps', assignment_id: 'assign-nosteps', state: 'running', started_at: ago(60000) });
@@ -207,4 +207,168 @@ test('a package without a prepared step index keeps coverage complete with an un
   assert.equal(run.coverage.state, 'complete');
   assert.equal(run.coverage.reasons.some(reason => reason.startsWith('step-index-invalid')), false);
   assert.equal(snapshot.coverage.reasons.some(reason => reason.startsWith('step-index-invalid')), false);
+
+  // Absence is legitimate, but a malformed index stays an explicit defect.
+  const broken = pack(primary(f.dir, 'brokensteps'));
+  writeFileSync(join(broken, 'spec-steps.json'), '{"steps":');
+  receipt(broken, { id: 'run-broken', assignment_id: 'assign-broken', state: 'running', started_at: ago(60000) });
+  const other = await collectWorkspace({ roots: [join(f.dir, 'brokensteps')], indexDir: f.indexDir, now });
+  const brokenRun = other.runs.find(item => item.assignment_id === 'assign-broken');
+  assert.ok(brokenRun);
+  assert.equal(brokenRun.coverage.state, 'partial');
+  assert.ok(brokenRun.coverage.reasons.some(reason => reason.startsWith('step-index-invalid')));
+  assert.ok(other.coverage.reasons.some(reason => reason.startsWith('step-index-invalid')));
+});
+
+test('populated managed index pointers share the reconciliation budget with package reads', async t => {
+  const f = sandbox(t);
+  const packagePath = pack(primary(f.dir, 'pointed'));
+  const receiptFile = receipt(packagePath, { id: 'run-pointed', assignment_id: 'assign-pointed', state: 'running', started_at: ago(60000) });
+  mkdirSync(f.indexDir, { recursive: true });
+  const pointerFile = join(f.indexDir, 'run-pointed.json');
+  writeFileSync(pointerFile, JSON.stringify({ run_id: 'run-pointed', package: packagePath }));
+
+  const snapshot = await collectWorkspace({ roots: [], packages: [], indexDir: f.indexDir, now });
+  const run = snapshot.runs.find(item => item.assignment_id === 'assign-pointed');
+  assert.ok(run);
+  assert.equal(snapshot.coverage.state, 'complete');
+  // Pointer bytes count against the same total as package reads.
+  assert.ok(snapshot.coverage.bytes_read >= statSync(pointerFile).size + statSync(receiptFile).size,
+    `bytes_read ${snapshot.coverage.bytes_read}`);
+});
+
+test('pointer reads that exhaust the total budget become an explicit unknown omission', async t => {
+  const f = sandbox(t);
+  mkdirSync(f.indexDir, { recursive: true });
+  // Valid ~60 KiB pointers charge the shared budget without producing
+  // per-file errors, so exhausting the 4 MiB workspace total is the visible
+  // outcome for managed discovery.
+  const pad = 'p'.repeat(61440 - 96);
+  for (let index = 0; index < 70; index++) {
+    writeFileSync(join(f.indexDir, `big-${String(index).padStart(2, '0')}.json`),
+      JSON.stringify({ run_id: `run-${index}`, package: '/canonical/package', pad }));
+  }
+
+  const snapshot = await collectWorkspace({ roots: [], packages: [], indexDir: f.indexDir, now });
+  assert.equal(snapshot.runs.length, 0);
+  assert.ok(snapshot.coverage.reasons.some(reason => reason.includes('READ_BUDGET')), JSON.stringify(snapshot.coverage.reasons.slice(0, 3)));
+  assert.equal(snapshot.coverage.omitted, null);
+  assert.ok(snapshot.coverage.bytes_read <= SENTINEL_LIMITS.totalBytes, `bytes_read ${snapshot.coverage.bytes_read}`);
+  assert.notEqual(snapshot.coverage.state, 'complete');
+});
+
+test('retained non-receipt entries cannot make the receipt walk unbounded', async t => {
+  const f = sandbox(t);
+  const packagePath = pack(primary(f.dir, 'retained'));
+  receipt(packagePath, { id: 'run-kept', assignment_id: 'assign-kept', state: 'running', started_at: ago(60000) });
+  const runsDir = join(packagePath, 'runtime', 'runs');
+  for (let index = 0; index < 450; index++) writeFileSync(join(runsDir, `retained-${String(index).padStart(3, '0')}.jsonl`), 'retained\n');
+
+  const snapshot = await collectWorkspace({ roots: [join(f.dir, 'retained')], indexDir: f.indexDir, now });
+  // The examination ceiling is an explicit unknown omission, never a silent
+  // full scan or a guessed complete set.
+  assert.ok(snapshot.coverage.reasons.some(reason => reason.startsWith('receipts-cap')), JSON.stringify(snapshot.coverage.reasons));
+  assert.equal(snapshot.coverage.omitted, null);
+  assert.ok(snapshot.runs.length <= 1);
+});
+
+test('special-file and symlinked sources are rejected without being opened or followed', async t => {
+  const f = sandbox(t);
+  const packagePath = pack(primary(f.dir, 'special'));
+  const lock = join(realpathSync(join(packagePath, '..', '..')), '.git', 'spec-runtime.lock');
+  mkdirSync(lock, { recursive: true });
+  execFileSync('mkfifo', [join(lock, 'lease.json')]);
+  const foreign = join(f.dir, 'foreign-steps.json');
+  writeFileSync(foreign, JSON.stringify({ steps: [{ step: 1, name: 'Foreign obligation' }] }));
+  symlinkSync(foreign, join(packagePath, 'spec-steps.json'));
+  receipt(packagePath, { id: 'run-link', assignment_id: 'assign-link', state: 'running',
+    started_at: ago(60000), lock });
+  receipt(packagePath, { id: 'run-plain', assignment_id: 'assign-plain', state: 'running', started_at: ago(60000) });
+
+  const snapshot = await collectWorkspace({ roots: [join(f.dir, 'special')], indexDir: f.indexDir, now });
+  const byAssignment = id => snapshot.runs.find(run => run.assignment_id === id);
+  const linked = byAssignment('assign-link');
+  assert.ok(linked);
+  // The FIFO lease and foreign symlinked step index are explicit unknowns;
+  // neither blocks the refresh nor supplies foreign facts.
+  assert.ok(linked.coverage.reasons.includes('lease-missing'));
+  assert.ok(linked.coverage.reasons.some(reason => reason.startsWith('step-index-invalid')));
+  assert.equal(linked.obligation, null);
+  const plain = byAssignment('assign-plain');
+  assert.ok(plain);
+  // Shared package metadata (the foreign step index) reaches this run too;
+  // the lease fact stays isolated to the run that recorded it.
+  assert.equal(plain.coverage.state, 'partial');
+  assert.ok(plain.coverage.reasons.some(reason => reason.startsWith('step-index-invalid')));
+  assert.equal(plain.coverage.reasons.includes('lease-missing'), false);
+  for (const text of [JSON.stringify(snapshot), renderWorkspace(snapshot).join('\n')]) {
+    assert.equal(text.includes('Foreign obligation'), false);
+  }
+});
+
+test('directory failures and truncation surface for every affected run', async t => {
+  const f = sandbox(t);
+  const packagePath = pack(primary(f.dir, 'dircaps'));
+  receipt(packagePath, { id: 'run-a', assignment_id: 'assign-a', state: 'running', started_at: ago(60000) });
+  receipt(packagePath, { id: 'run-b', assignment_id: 'assign-b', state: 'running', started_at: ago(90000) });
+  // Shared malformed metadata must reach both runs, not only the first reader.
+  writeFileSync(join(packagePath, 'spec-steps.json'), '{"steps":');
+  // A non-directory at the checkpoint location is an explicit unknown.
+  writeFileSync(join(packagePath, 'runtime', 'sentinel'), 'not a directory');
+  // A non-directory at one run's activity location is that run's unknown only.
+  writeFileSync(join(packagePath, 'runtime', 'runs', 'run-a-activity'), 'not a directory');
+
+  const snapshot = await collectWorkspace({ roots: [join(f.dir, 'dircaps')], indexDir: f.indexDir, now });
+  const byAssignment = id => snapshot.runs.find(run => run.assignment_id === id);
+  const a = byAssignment('assign-a');
+  const b = byAssignment('assign-b');
+  assert.ok(a && b);
+  for (const run of [a, b]) {
+    assert.equal(run.coverage.state, 'partial');
+    assert.ok(run.coverage.reasons.some(reason => reason.startsWith('step-index-invalid')), JSON.stringify(run.coverage.reasons));
+    assert.ok(run.coverage.reasons.some(reason => reason.startsWith('checkpoints-unavailable')));
+  }
+  assert.ok(a.coverage.reasons.some(reason => reason.startsWith('activity-unavailable')));
+  assert.equal(b.coverage.reasons.some(reason => reason.startsWith('activity-unavailable')), false);
+  assert.deepEqual(condition(a, 'activity-unreadable'), { ...condition(a, 'activity-unreadable'), severity: 'attention', state: 'unknown' });
+});
+
+test('checkout identity is validated against the package repository', async t => {
+  const f = sandbox(t);
+  const alpha = primary(f.dir, 'alpha');
+  const packagePath = pack(alpha);
+  const worktree = join(alpha, 'wt');
+  execFileSync('git', ['-C', alpha, 'worktree', 'add', '-q', worktree], { stdio: 'pipe' });
+  const beta = primary(f.dir, 'beta');
+  receipt(packagePath, { id: 'run-wt', assignment_id: 'assign-wt', state: 'running', started_at: ago(60000), checkout: worktree });
+  receipt(packagePath, { id: 'run-foreign', assignment_id: 'assign-foreign', state: 'running', started_at: ago(70000), checkout: beta });
+  receipt(packagePath, { id: 'run-gone', assignment_id: 'assign-gone', state: 'running', started_at: ago(80000), checkout: join(f.dir, 'gone') });
+
+  const snapshot = await collectWorkspace({ roots: [alpha], indexDir: f.indexDir, now });
+  const byAssignment = id => snapshot.runs.find(run => run.assignment_id === id);
+  const wt = byAssignment('assign-wt');
+  assert.equal(wt.checkout, realpathSync(worktree));
+  assert.equal(wt.coverage.state, 'complete');
+  const foreign = byAssignment('assign-foreign');
+  assert.equal(foreign.checkout, null);
+  assert.equal(foreign.coverage.state, 'stale');
+  assert.ok(foreign.coverage.reasons.some(reason => reason.startsWith('checkout-foreign')));
+  const gone = byAssignment('assign-gone');
+  assert.equal(gone.checkout, null);
+  assert.equal(gone.coverage.state, 'partial');
+  assert.ok(gone.coverage.reasons.some(reason => reason.startsWith('checkout-unavailable')));
+});
+
+test('an unrepresentable numeric activity time stays an explicit unknown', async t => {
+  const f = sandbox(t);
+  const packagePath = pack(primary(f.dir, 'hugetime'));
+  receipt(packagePath, { id: 'run-huge', assignment_id: 'assign-huge', state: 'running', started_at: ago(60000) });
+  activity(packagePath, 'run-huge', 'owner', { run_id: 'run-huge', role: 'owner', phase: 'working', activity: 'still working', last_activity: 1e100 });
+
+  const snapshot = await collectWorkspace({ roots: [join(f.dir, 'hugetime')], indexDir: f.indexDir, now });
+  const run = snapshot.runs.find(item => item.assignment_id === 'assign-huge');
+  assert.ok(run);
+  assert.ok(run.coverage.reasons.includes('activity-invalid: owner'));
+  assert.equal(run.observed_at, ago(60000));
+  assert.deepEqual(condition(run, 'activity-unreadable'), { ...condition(run, 'activity-unreadable'), severity: 'attention', state: 'unknown' });
 });

@@ -6,8 +6,10 @@
 // read. Observation is never acceptance (INV-2).
 
 import { createHash } from 'node:crypto';
-import { open, opendir, realpath } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
+import { open, opendir, lstat, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
+import { execFile } from 'node:child_process';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
 import { canonicalPackage } from '../../pi/extensions/spec-runtime/runtime.mjs';
@@ -20,6 +22,7 @@ export const SENTINEL_LIMITS = Object.freeze({
   packageChildren: 100,
   receiptFiles: 100,
   indexEntries: 1000,
+  directoryEntryFactor: 4,
   smallJsonBytes: 65536,
   activityBytes: 32768,
   totalBytes: 4 * 1024 * 1024,
@@ -35,6 +38,9 @@ const MAX_REASONS = 50;
 
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 const validTime = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : null;
+// A finite epoch value can still sit outside the representable Date range;
+// formatting must validate the parsed time, not only the input type.
+const isoOf = value => { const time = new Date(value).getTime(); return Number.isFinite(time) ? new Date(time).toISOString() : null; };
 const codeOf = error => error && typeof error.code === 'string' ? error.code : 'UNKNOWN';
 const messageOf = error => publicHint(error instanceof Error ? error.message : String(error));
 const digestOf = value => sha256(typeof value === 'string' ? value : JSON.stringify(value));
@@ -49,6 +55,13 @@ const samePath = async (left, right) => {
   if (resolve(left) === right) return true;
   return await realpath(left).catch(() => null) === right;
 };
+
+// Bounded read-only Git identity query; the mutating dispatch resolver is
+// never invoked for observation.
+const gitCommonDir = checkout => new Promise(settled => {
+  execFile('git', ['-C', checkout, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+    { timeout: 5000 }, (error, stdout) => settled(error || !stdout.trim() ? null : stdout.trim()));
+});
 
 // Additive identity helper: one hash formula for workspace directories and
 // condition identities. Scope separation keeps routed workspaces distinct.
@@ -76,11 +89,12 @@ export async function readEnrollments({ agentDir, scope = null }, { limit = 100 
     if (listed.code !== 'ENOENT') errors.push({ path: directory, code: listed.code });
     return { roots, records, errors };
   }
+  if (listed.code) errors.push({ path: directory, code: listed.code });
   if (listed.truncated) errors.push({ path: directory, code: 'ENROLLMENT_CAP' });
   for (const entry of listed.entries) {
     const file = join(directory, entry.name);
     const result = await readJson(file, SENTINEL_LIMITS.smallJsonBytes, budget, {
-      prefix: 'enrollment', oversize: false,
+      prefix: 'enrollment', oversize: false, within: directory,
       allow: value => value && typeof value === 'object' && value.version === 1
         && typeof value.root === 'string' && isAbsolute(value.root)
         && typeof value.common === 'string' && isAbsolute(value.common)
@@ -101,7 +115,7 @@ function clock(now) {
 
 function clockIso(now) {
   const value = typeof now === 'function' ? now() : now;
-  if (typeof value === 'number' && Number.isFinite(value)) return new Date(value).toISOString();
+  if (typeof value === 'number') { const iso = isoOf(value); if (iso) return iso; }
   return validTime(typeof value === 'string' ? value : null) ?? new Date().toISOString();
 }
 
@@ -112,21 +126,37 @@ function makeCoverage(state, reasons, omitted, bytes_read, observed_at) {
 // Reads are bounded twice: per file cap and one shared workspace byte budget.
 // A skipped read is a reported fact, never a guessed one.
 function makeBudget() {
-  return { bytes: 0 };
+  return { bytes: 0, cap: SENTINEL_LIMITS.totalBytes };
 }
 
-async function readBounded(file, maxBytes, budget) {
+// Sources are opened only as in-containment regular files: a special file or
+// a foreign symlink is an explicit uncertainty, never an open or a follow.
+const OPEN_REGULAR = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0);
+
+async function readBounded(file, maxBytes, budget, { within = null } = {}) {
   // The budget is checked before the read and enforced again on the actual
   // bytes so coverage.bytes_read can never exceed the workspace total.
-  if (budget.bytes + maxBytes > SENTINEL_LIMITS.totalBytes) {
+  if (budget.bytes + maxBytes > budget.cap) {
     return { outcome: 'read-budget', reason: `read-budget: ${file}`, bytes: 0 };
+  }
+  try {
+    const real = await realpath(file);
+    if (within && !insideDir(await realpath(within), real)) {
+      return { outcome: 'invalid', reason: `source-outside: ${file}`, bytes: 0 };
+    }
+    if (!(await lstat(file)).isFile()) {
+      return { outcome: 'invalid', reason: `source-not-regular: ${file}`, bytes: 0 };
+    }
+  } catch (error) {
+    // A vanished file is a missing fact, not corrupt evidence.
+    return { outcome: codeOf(error) === 'ENOENT' ? 'missing' : 'invalid', reason: `${codeOf(error)}: ${file}`, bytes: 0 };
   }
   let handle;
   try {
-    handle = await open(file, 'r');
+    handle = await open(file, OPEN_REGULAR);
     const buffer = Buffer.alloc(maxBytes + 1);
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    if (budget.bytes + bytesRead > SENTINEL_LIMITS.totalBytes) {
+    if (budget.bytes + bytesRead > budget.cap) {
       return { outcome: 'read-budget', reason: `read-budget: ${file}`, bytes: 0 };
     }
     budget.bytes += bytesRead;
@@ -141,8 +171,8 @@ async function readBounded(file, maxBytes, budget) {
 }
 
 // Read one bounded JSON file and allowlist only what callers may keep.
-async function readJson(file, maxBytes, budget, { prefix = 'read-error', oversize = true, allow } = {}) {
-  const result = await readBounded(file, maxBytes, budget);
+async function readJson(file, maxBytes, budget, { prefix = 'read-error', oversize = true, allow, within = null } = {}) {
+  const result = await readBounded(file, maxBytes, budget, { within });
   if (result.outcome !== 'ok') {
     return { ...result, reason: result.reason ?? (oversize ? `${prefix}-oversized: ${file}` : null) };
   }
@@ -154,26 +184,30 @@ async function readJson(file, maxBytes, budget, { prefix = 'read-error', oversiz
   return { outcome: 'ok', record, bytes: result.bytes, digest: digestOf(result.text) };
 }
 
-// Every directory walk stops at limit+1 so an unbounded directory can neither
-// stall the reader nor inflate the snapshot.
+// Every directory walk is bounded by examined entries, not only matching
+// candidates: retained non-matching names can neither stall the reader nor
+// inflate the snapshot, and an examination ceiling that prevents proving
+// completeness is reported as truncation.
 async function listDirectory(dir, limit, matcher = () => true) {
   let handle;
   try { handle = await opendir(dir); }
   catch (error) { return { entries: null, truncated: false, code: codeOf(error) }; }
   const entries = [];
   let truncated = false;
+  const examine = limit * SENTINEL_LIMITS.directoryEntryFactor;
+  let examined = 0;
   try {
-    while (entries.length < limit) {
+    while (examined < examine) {
       const entry = await handle.read();
       if (!entry) break;
+      examined++;
       if (!matcher(entry)) continue;
-      entries.push(entry);
+      if (entries.length < limit) entries.push(entry);
+      else { truncated = true; break; }
     }
-    if (entries.length >= limit) {
-      // Only another matching entry is a truncation; other names are not
-      // candidates this walk would have collected.
-      let next;
-      while ((next = await handle.read())) if (matcher(next)) { truncated = true; break; }
+    if (!truncated && examined >= examine && await handle.read()) {
+      // The examination ceiling prevents proving completeness.
+      truncated = true;
     }
   } catch (error) {
     return { entries, truncated, code: codeOf(error) };
@@ -222,7 +256,7 @@ function runConditions(run, snapshotObservedAt) {
     kind, severity, state, fact_ids,
   });
   if (run.activity === null) {
-    if (has('activity-oversized') || has('activity-invalid')) add('activity-unreadable', 'attention', 'unknown');
+    if (has('activity-oversized') || has('activity-invalid') || has('activity-unavailable') || has('activity-cap')) add('activity-unreadable', 'attention', 'unknown');
     else if (has('activity-mismatch')) add('activity-mismatch', 'attention', 'unknown');
     else add('activity-unknown', 'info', 'unknown');
   }
@@ -302,7 +336,7 @@ export async function collectWorkspace({ roots = [], packages = [], indexDir = j
   const addPackage = canonical => {
     let fact = facts.get(canonical.packagePath);
     if (!fact) {
-      fact = { ...canonical, sources: new Map(), checkpoints: null, stepIndex: null };
+      fact = { ...canonical, sources: new Map(), checkpoints: null, stepIndex: null, stepIndexNotes: [], checkpointNotes: [], checkouts: new Map() };
       facts.set(canonical.packagePath, fact);
     }
     return fact;
@@ -315,6 +349,11 @@ export async function collectWorkspace({ roots = [], packages = [], indexDir = j
       // Missing .specs is reported, never guessed around.
       reasons.push(`root-unavailable: ${specs} (${listed.code})`);
       continue;
+    }
+    if (listed.code) {
+      // A failed enumeration with partial entries cannot prove completeness.
+      reasons.push(`root-unavailable: ${specs} (${listed.code})`);
+      unknownOmission = true;
     }
     if (listed.truncated) {
       reasons.push(`package-cap: ${specs}`);
@@ -339,7 +378,7 @@ export async function collectWorkspace({ roots = [], packages = [], indexDir = j
   // Managed index pointers are discovery hints only: reading one never enrolls
   // a repository, and a pointer without its receipt stays an observed absence.
   let managed = { runs: [], discovery_errors: [], candidates_truncated: false, runs_truncated: false };
-  try { managed = await discoverManaged(indexDir, { limit: SENTINEL_LIMITS.indexEntries }); }
+  try { managed = await discoverManaged(indexDir, { limit: SENTINEL_LIMITS.indexEntries, budget }); }
   catch (error) {
     reasons.push(`index-unavailable: ${indexDir} (${codeOf(error)})`);
     unknownOmission = true;
@@ -366,8 +405,8 @@ export async function collectWorkspace({ roots = [], packages = [], indexDir = j
 
   const collected = [];
   let staleReceipts = false;
-  const note = reason => { if (reason) reasons.push(reason); };
-  const noteUnknown = reason => { if (reason) { reasons.push(reason); unknownOmission = true; } };
+  const note = reason => { if (reason && !reasons.includes(reason)) reasons.push(reason); };
+  const noteUnknown = reason => { if (reason && !reasons.includes(reason)) { reasons.push(reason); unknownOmission = true; } };
   for (const fact of facts.values()) {
     collected.push(...await collectPackage(fact, budget, note, noteUnknown));
     if (fact.staleReceipts) staleReceipts = true;
@@ -414,12 +453,13 @@ async function collectPackage(fact, budget, note, noteUnknown) {
     if (listed.code !== 'ENOENT') noteUnknown(`receipts-unavailable: ${runsDir} (${listed.code})`);
     return found;
   }
+  if (listed.code) noteUnknown(`receipts-unavailable: ${runsDir} (${listed.code})`);
   if (listed.truncated) noteUnknown(`receipts-cap: ${fact.packagePath}`);
   for (const entry of listed.entries) {
     const file = join(runsDir, entry.name);
     const id = entry.name.slice(0, -'.json'.length);
     const result = await readJson(file, SENTINEL_LIMITS.smallJsonBytes, budget, {
-      prefix: 'receipt', oversize: false,
+      prefix: 'receipt', oversize: false, within: fact.packagePath,
       // Only these receipt fields are observable; result, error, token and
       // usage/cost never enter the snapshot.
       allow: value => value && typeof value === 'object' && typeof value.id === 'string' ? value : null,
@@ -463,7 +503,10 @@ async function observeRun(candidate, budget, note, readTime) {
   };
   const source = [...(candidate.source ?? [])];
 
-  const steps = await readStepIndex(fact, runBudget, mark);
+  const steps = await readStepIndex(fact, runBudget);
+  // Shared package diagnostics reach every affected run, not only the first
+  // reader that populated the cache.
+  for (const reason of fact.stepIndexNotes) mark(reason);
   if (steps.source) source.push({ file: steps.source, digest: steps.digest });
 
   const activity = await readActivity(fact, candidate.id, runBudget, mark);
@@ -477,7 +520,8 @@ async function observeRun(candidate, budget, note, readTime) {
     source.push(...lease.sources);
   }
 
-  const checkpoints = await readCheckpoints(fact, runBudget, mark);
+  const checkpoints = await readCheckpoints(fact, runBudget);
+  for (const reason of fact.checkpointNotes) mark(reason);
   let workflow_id = null;
   let obligation = obligationForStep(receipt.step, steps.steps);
   for (const checkpoint of checkpoints) {
@@ -491,10 +535,26 @@ async function observeRun(candidate, budget, note, readTime) {
   }
 
   const observed_at = activity.observed ?? validTime(receipt.started_at ?? null) ?? readTime;
+  // The recorded checkout is a claim, not an identity: validate its Git common
+  // directory read-only against the package repository before asserting it.
+  let checkout = null;
+  if (typeof receipt.checkout === 'string') {
+    const key = resolve(receipt.checkout);
+    if (!fact.checkouts.has(key)) {
+      const real = await realpath(key).catch(() => null);
+      const commonDir = real ? await gitCommonDir(real) : null;
+      fact.checkouts.set(key, real && commonDir && await realpath(commonDir).catch(() => null) === fact.common
+        ? { ok: true, path: real }
+        : { ok: false, reason: real && commonDir ? `checkout-foreign: ${key}` : `checkout-unavailable: ${key}` });
+    }
+    const validated = fact.checkouts.get(key);
+    if (validated.ok) checkout = validated.path;
+    else mark(validated.reason, validated.reason.startsWith('checkout-foreign') ? 'stale' : undefined);
+  }
   return {
     repository: fact.common,
     package: fact.packagePath,
-    checkout: typeof receipt.checkout === 'string' ? receipt.checkout : null,
+    checkout,
     workflow_id,
     assignment_id: typeof receipt.assignment_id === 'string' ? receipt.assignment_id : candidate.id,
     coordinator_session: typeof receipt.parent_session === 'string' ? receipt.parent_session : null,
@@ -509,11 +569,11 @@ async function observeRun(candidate, budget, note, readTime) {
   };
 }
 
-async function readStepIndex(fact, budget, mark) {
+async function readStepIndex(fact, budget) {
   if (fact.stepIndex) return fact.stepIndex;
   const file = join(fact.packagePath, 'spec-steps.json');
   const result = await readJson(file, SENTINEL_LIMITS.smallJsonBytes, budget, {
-    prefix: 'step-index',
+    prefix: 'step-index', within: fact.packagePath,
     allow: value => {
       if (!value || typeof value !== 'object' || !Array.isArray(value.steps)) return null;
       const steps = [];
@@ -524,7 +584,7 @@ async function readStepIndex(fact, budget, mark) {
       return steps.sort((a, b) => a.step - b.step);
     },
   });
-  if (result.outcome === 'read-budget') { mark(result.reason); fact.stepIndex = { steps: [], source: null, digest: null }; return fact.stepIndex; }
+  if (result.outcome === 'read-budget') { fact.stepIndexNotes.push(result.reason); fact.stepIndex = { steps: [], source: null, digest: null }; return fact.stepIndex; }
   if (result.outcome === 'missing') {
     // A package without a prepared step index is a legitimate absence.
     fact.stepIndex = { steps: [], source: null, digest: null };
@@ -535,7 +595,7 @@ async function readStepIndex(fact, budget, mark) {
     fact.stepIndex = { steps: result.record, source: file, digest: result.digest };
   } else if (result.outcome === 'oversized' || result.outcome === 'invalid') {
     // A missing step index is not a defect; an unreadable or oversized one is.
-    mark(`step-index-invalid: ${fact.packagePath}`);
+    fact.stepIndexNotes.push(`step-index-invalid: ${fact.packagePath}`);
     fact.stepIndex = { steps: [], source: null, digest: null };
   } else {
     fact.stepIndex = { steps: [], source: null, digest: null };
@@ -546,7 +606,14 @@ async function readStepIndex(fact, budget, mark) {
 async function readActivity(fact, id, budget, mark) {
   const dir = join(fact.packagePath, 'runtime', 'runs', `${id}-activity`);
   const listed = await listDirectory(dir, ROLES.length, entry => entry.isFile() && entry.name.endsWith('.json'));
-  if (listed.entries === null) return { activity: null, observed: null, sources: [] };
+  if (listed.entries === null) {
+    // An absent activity directory is ordinary until a role starts; any other
+    // failure is an explicit unknown for this run.
+    if (listed.code !== 'ENOENT') mark(`activity-unavailable: ${id} (${listed.code})`);
+    return { activity: null, observed: null, sources: [] };
+  }
+  if (listed.code) mark(`activity-unavailable: ${id} (${listed.code})`);
+  if (listed.truncated) mark(`activity-cap: ${id}`);
   const present = new Set(listed.entries.map(entry => entry.name.slice(0, -'.json'.length)));
   const segments = [];
   const sources = [];
@@ -576,12 +643,18 @@ async function readActivity(fact, id, budget, mark) {
     const snapshot = result.record;
     // A replaced or foreign snapshot is a stale fact for this role only.
     if (snapshot.run_id && snapshot.run_id !== id) { mark(`activity-mismatch: ${role}`, 'stale'); continue; }
+    let last = validTime(typeof snapshot.last_activity === 'string' ? snapshot.last_activity : null);
+    if (last === null && typeof snapshot.last_activity === 'number') {
+      // A numeric time outside the representable Date range is invalid source
+      // metadata for this role, never a collection abort.
+      const iso = isoOf(snapshot.last_activity);
+      if (iso) last = iso;
+      else { mark(`activity-invalid: ${role}`); continue; }
+    }
     readable = true;
     sources.push({ file, digest: result.digest });
     const hint = publicHint(snapshot.hint || snapshot.activity || snapshot.phase);
     segments.push(`${role}: ${hint}`);
-    const last = validTime(typeof snapshot.last_activity === 'string' ? snapshot.last_activity : null)
-      ?? (Number.isFinite(snapshot.last_activity) ? new Date(snapshot.last_activity).toISOString() : null);
     if (last && (!observed || Date.parse(last) > Date.parse(observed))) observed = last;
   }
   return { activity: readable && segments.length ? segments.join(' · ') : null, observed, sources };
@@ -606,7 +679,7 @@ async function readLease(fact, receipt, id, budget, mark) {
   }
   const file = join(realLock, 'lease.json');
   const result = await readJson(file, SENTINEL_LIMITS.smallJsonBytes, budget, {
-    prefix: 'lease', oversize: false,
+    prefix: 'lease', oversize: false, within: fact.common,
     // Lease identity and revocation only. The token and any pid are never
     // retained, hashed or rendered.
     allow: value => value && typeof value === 'object'
@@ -620,16 +693,23 @@ async function readLease(fact, receipt, id, budget, mark) {
   return { sources };
 }
 
-async function readCheckpoints(fact, budget, mark) {
+async function readCheckpoints(fact, budget) {
   if (fact.checkpoints) return fact.checkpoints;
   fact.checkpoints = [];
   const dir = join(fact.packagePath, 'runtime', 'sentinel');
   const listed = await listDirectory(dir, SENTINEL_LIMITS.receiptFiles, entry => entry.isDirectory());
-  if (listed.entries === null) return fact.checkpoints;
+  if (listed.entries === null) {
+    // A package without sentinel checkpoints has none to observe; any other
+    // directory failure is an explicit unknown for every affected run.
+    if (listed.code !== 'ENOENT') fact.checkpointNotes.push(`checkpoints-unavailable: ${dir} (${listed.code})`);
+    return fact.checkpoints;
+  }
+  if (listed.code) fact.checkpointNotes.push(`checkpoints-unavailable: ${dir} (${listed.code})`);
+  if (listed.truncated) fact.checkpointNotes.push(`checkpoints-cap: ${dir}`);
   for (const entry of listed.entries) {
     const file = join(dir, entry.name, 'checkpoint.json');
     const result = await readJson(file, SENTINEL_LIMITS.smallJsonBytes, budget, {
-      prefix: 'checkpoint',
+      prefix: 'checkpoint', within: fact.packagePath,
       // Checkpoint observation is package, obligation summary and worker IDs.
       allow: value => {
         if (!value || typeof value !== 'object' || typeof value.package !== 'string') return null;
@@ -640,11 +720,11 @@ async function readCheckpoints(fact, budget, mark) {
         };
       },
     });
-    if (result.outcome === 'read-budget') { mark(result.reason); break; }
+    if (result.outcome === 'read-budget') { fact.checkpointNotes.push(result.reason); break; }
     if (result.outcome !== 'ok') {
       // Incident and action files are never read; an unreadable or oversized
       // checkpoint is reported and ignored.
-      mark(`checkpoint-invalid: ${entry.name}`);
+      fact.checkpointNotes.push(`checkpoint-invalid: ${entry.name}`);
       continue;
     }
     fact.sources.set(`checkpoint:${entry.name}`, { file, digest: result.digest });

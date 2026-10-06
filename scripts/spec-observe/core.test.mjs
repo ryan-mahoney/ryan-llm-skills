@@ -133,6 +133,22 @@ test('reports failed launches without sessions and separates runs sharing retain
   assert.equal(retained.runtime.records[1].first_editor_started_seconds, 10);
 });
 
+test('managed enumeration stops at the examined-entry ceiling despite retained junk', async t => {
+  const directory = await fixture(t);
+  for (let index = 0; index < 3; index++) {
+    await writeFile(path.join(directory, `pointer-${index}.json`), JSON.stringify({ run_id: `run-${index}`, package: '/canonical/package' }));
+  }
+  for (let index = 0; index < 4100; index++) {
+    await writeFile(path.join(directory, `retained-${String(index).padStart(4, '0')}.log`), 'retained\n');
+  }
+  const result = await discoverManaged(directory, { limit: 10 });
+  // The ceiling is reported as candidate truncation; entries beyond it are an
+  // unknown omission, never a full scan.
+  assert.equal(result.candidates_truncated, true);
+  assert.ok(result.runs.length <= 3);
+  assert.equal(result.discovery_errors.length, 0);
+});
+
 test('managed pointer discovery reports selection omission separately from candidate truncation', async t => {
   const directory = await fixture(t);
   for (let index = 0; index < 12; index++) {
