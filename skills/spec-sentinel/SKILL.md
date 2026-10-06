@@ -107,8 +107,7 @@ never resets consumed capacity. A duplicate same-kind/subject reservation return
 receipt without repeating the effect, and orphan/malformed/unfinished reservations stay
 spent and fail closed as unknown across restarts. `/spec-sentinel disable` revokes
 synchronously and reports a persistence failure while staying disarmed; `/spec-sentinel
-off` revokes then hides observation. Step 5 performs no continuation, cancellation,
-diagnosis or model effect.
+off` revokes then hides observation.
 
 ## Continuation
 
@@ -121,5 +120,30 @@ second settlement or reissued checkpoint with the same obligation does not conti
 again. An initial `canContinue === false` is not a veto. Shadow mode records one
 would-continue observation (terminal `blocked`, reason `shadow-would-continue`) and adds
 no message or turn. `requested` means proposed and `applied` means the requested turn
-started; neither is acceptance, and ambiguous requests are never retried. This skill
-grants no cancellation, diagnosis or recovery effect.
+started; neither is acceptance, and ambiguous requests are never retried.
+
+## Optional diagnosis
+
+Diagnosis is optional and separately enabled. It runs only for a complete
+repeated-failure incident with a complete fingerprint, using a bounded (at most 16 KiB)
+tool-free packet of IDs, hashes, counts, waits and coverage, one active job per
+coordinator, a five-minute cooldown and at most two attempts per incident generation.
+Its output is advisory bounded JSON text labeled `note_verified: false`; it never grants
+factual status, authority or a review verdict. Wrong or unknown fact IDs, malformed
+output, timeout, unavailable delegation or a stale incident abstain without a fallback
+model or retry.
+
+## Guarded cancellation
+
+Recover-mode cancellation is permitted only through a live, direct, scoped grant and
+only for the current repeated-failure incident whose retained positive
+`cancel-candidate` / `repeated-unchanged-failure` diagnosis matches the current complete
+checkout digest, reconciled input, nonblocking inbox, checkpoint worker/checkout and the
+exact original in-memory Runtime handle/lease, with the writer slot idle and effect
+capacity remaining. A durable cancel intent is reserved immediately before the existing
+`Runtime.cancel` entry; only confirmed process-group termination is `applied`. Failed or
+unknown termination retains the writer reservation as blocked/unknown and is never
+replayed. Shadow mode writes a terminal `shadow-would-cancel` observation and leaves the
+worker alive. `disable`/`off` revokes future authority but cannot undo a cancellation
+that already entered the Runtime. Status stays non-authoritative: enrollment, disk state,
+model output or a copied file never arms recovery.

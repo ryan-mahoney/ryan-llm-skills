@@ -7,8 +7,9 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { createSentinelObserver, SENTINEL_COALESCE_MS, SENTINEL_RECONCILE_MS, SENTINEL_WIDGET_KEY, readCheckpointRecord, recordCheckpoint, createSentinelAuthority, activatePolicy, createDiagnosisController, readDiagnosisAttempt } from './sentinel.mjs';
+import { createSentinelObserver, SENTINEL_COALESCE_MS, SENTINEL_RECONCILE_MS, SENTINEL_WIDGET_KEY, readCheckpointRecord, recordCheckpoint, createSentinelAuthority, activatePolicy, createDiagnosisController, readDiagnosisAttempt, disablePolicy, reserveIntent, finishIntent, considerCancellation, writeVerificationIncidents, buildDiagnosisPacket, readPolicyGuard, readInboxGuard, checkpointPath } from './sentinel.mjs';
 import { canonicalPackage } from './runtime.mjs';
+import { collectFacts } from '../../../scripts/jev/core.mjs';
 import { enrollmentDirectory, workspaceKey } from '../../../scripts/spec-observe/sentinel.mjs';
 
 // workspaceKey documents the same agentDir/scope hash the enrollment directory
@@ -1314,4 +1315,423 @@ test('sentinel delegation: the real adapter loads the profile and validates one 
   assert.equal(duplicate.launched, false);
   assert.equal(duplicate.state, 'duplicate');
   assert.equal(calls.length, 2);
+});
+
+// --- guarded cancellation core (step 8, no production wiring) ---
+
+function cancellationFixture(t, { mode = 'recover', actions = ['continue', 'cancel'], decision = 'cancel-candidate', reason = 'repeated-unchanged-failure', maxEffects = 2 } = {}) {
+  const dir = sandbox(t);
+  const { repo } = primary(dir, 'cancel-repo');
+  commit(repo);
+  const packagePath = pack(repo);
+  const canonical = canonicalPackage(packagePath);
+  const coordinatorSession = 'session-1';
+  const checkout = join(dir, 'cancel-checkout');
+  mkdirSync(checkout, { recursive: true });
+  recordCheckpoint({ package: canonical.packagePath, workflow_id: 'wf-cancel', expected_revision: 0, state: 'waiting-worker',
+    obligation: { key: 'impl:step-008', stage: 'implementation', summary: 'cancel candidate', artifacts: [] },
+    workers: [{ id: 'assign-1', kind: 'owner', state: 'working' }],
+    inbox: { items: [] }, reconciles_input_revision: 0, coordinator_session: coordinatorSession, checkout });
+  const authority = createSentinelAuthority();
+  const policyPath = join(dir, 'cancel-policy.json');
+  writeFileSync(policyPath, JSON.stringify({ version: 1, package: canonical.packagePath, workflow_id: 'wf-cancel',
+    checkout, coordinator_session: coordinatorSession, mode, actions,
+    expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    max_effects: maxEffects, max_diagnostics: 2, diagnosis: { model: 'test/diag' }, authority_reference: 'user:enable' }));
+  activatePolicy(authority, { policy_path: policyPath, coordinator_session: coordinatorSession, command: `enable ${policyPath}` });
+  const fingerprint = { command_sha256: 'a'.repeat(64), summary_sha256: 'b'.repeat(64), tree_digest: 'c'.repeat(64) };
+  const incident = { id: 'inc-1', kind: 'repeated-verification-failure', assignment_id: 'assign-1', package: canonical.packagePath,
+    workflow_id: 'wf-cancel', generation: 1, ...fingerprint };
+  const observedAt = new Date().toISOString();
+  writeVerificationIncidents(canonical.packagePath, { version: 1, package: canonical.packagePath, workflow_id: 'wf-cancel', updated_at: new Date().toISOString(),
+    assignments: { 'assign-1': { assignment_id: 'assign-1', checkout, count: 3, fingerprint, tool_call_ids: [], state: 'open',
+      generation: 1, incident_id: 'inc-1', linked_from: null, incident_fingerprint: fingerprint, observed_at: observedAt } } });
+  const record = { id: 'run-1', assignment_id: 'assign-1', package: canonical.packagePath, workflow_id: 'wf-cancel', checkout,
+    lock: join(dir, 'cancel-lock'), token: 'tok', state: 'running' };
+  // The cancel intent source_revision is the current packet hash, so the retained
+  // diagnosis attempt must carry the packet rebuilt from the same live inputs.
+  const guard = readPolicyGuard(authority, { workflow_id: 'wf-cancel', now: () => Date.now() });
+  const checkpoint = readCheckpointRecord(canonical.packagePath, 'wf-cancel');
+  const inboxGuard = readInboxGuard(canonical.packagePath, { priorItems: checkpoint?.inbox?.items ?? [], items: checkpoint?.inbox?.items ?? [],
+    priorDirectories: checkpoint?.inbox?.observed_directories ?? [], now: () => Date.now() });
+  const currentIncident = { id: 'inc-1', kind: 'repeated-verification-failure', assignment_id: 'assign-1', package: canonical.packagePath,
+    workflow_id: 'wf-cancel', generation: 1, count: 3, ...fingerprint, observed_at: observedAt };
+  const packetSha = createHash('sha256').update(buildDiagnosisPacket({ incident: currentIncident, record, checkpoint: { ...checkpoint, inbox_guard: inboxGuard }, policy: guard }).json).digest('hex');
+  const attemptDir = join(canonical.packagePath, 'runtime', 'sentinel', 'wf-cancel', 'diagnoses');
+  mkdirSync(attemptDir, { recursive: true });
+  const writeAttempt = (over = {}) => writeFileSync(join(attemptDir, 'inc-1.json'), JSON.stringify({ version: 1, workflow_id: 'wf-cancel',
+    package: canonical.packagePath, incident_id: 'inc-1', incident_generation: 1, assignment_id: 'assign-1', record_id: 'run-1',
+    model: 'test/diag', intent_id: 'intent-diag', state: 'applied', validation: 'valid', decision, fact_ids: ['incident.count'],
+    reason_code: reason, note: 'ok', note_verified: false, error: null, usage: null, usage_available: false,
+    packet_sha256: packetSha, packet_bytes: 10, completed_at: new Date().toISOString(), ...over }));
+  writeAttempt();
+  return { dir, packagePath: canonical.packagePath, canonical, authority, record, incident, checkout, writeAttempt, packetSha };
+}
+
+const cancellationOptions = (f, over = {}) => ({
+  authority: f.authority, record: f.record, incident: f.incident, packet_sha256: f.packetSha,
+  adapter: async () => ({ state: 'cancelled' }), idleWriter: () => {}, activeHandle: () => ({ record: f.record }),
+  inputGuard: () => ({ input_revision: 0, active_prompts: 0 }),
+  collect: async () => ({ working_tree_digest: 'c'.repeat(64), incomplete: false }), now: () => Date.now(), ...over,
+});
+
+// A fresh unprocessed inbox original blocks any automatic effect.
+function putCancellationInboxHold(packagePath) {
+  const id = '20260101T000000Z-hold1';
+  const inbox = join(packagePath, 'inbox');
+  mkdirSync(inbox, { recursive: true });
+  writeFileSync(join(inbox, `${id}.md`), `---\nid: ${id}\nrun: run-1\nsender: overseer\naudience: coordinator\nkind: hold\n---\n\nhold\n`);
+}
+
+test('sentinel cancellation: a current positive diagnosis reserves requested then applied once', { timeout: 15000 }, async t => {
+  const f = cancellationFixture(t);
+  let entered = false;
+  let adapterCalls = 0;
+  const result = await considerCancellation(cancellationOptions(f, {
+    adapter: async () => { adapterCalls += 1; return { state: 'cancelled' }; },
+    onEntered: () => { entered = true; },
+  }));
+  assert.equal(result.launched, true);
+  assert.equal(result.state, 'applied');
+  assert.equal(result.decision, 'cancelled');
+  assert.equal(adapterCalls, 1);
+  assert.equal(entered, true, 'the adapter was entered before outcome resolution');
+  // Duplicate same-incident call is non-permission and never re-enters the adapter.
+  const duplicate = await considerCancellation(cancellationOptions(f, { adapter: async () => { adapterCalls += 1; return { state: 'cancelled' }; } }));
+  assert.equal(duplicate.launched, false);
+  assert.equal(duplicate.state, 'duplicate');
+  assert.equal(adapterCalls, 1);
+});
+
+test('sentinel cancellation: unknown outcome retains the reservation without retry', { timeout: 15000 }, async t => {
+  const f = cancellationFixture(t);
+  let calls = 0;
+  const result = await considerCancellation(cancellationOptions(f, { adapter: async () => { calls += 1; throw new Error('unconfirmed'); } }));
+  assert.equal(result.launched, true);
+  assert.equal(result.state, 'unknown');
+  assert.equal(calls, 1);
+  assert.equal(result.intent_id != null, true);
+});
+
+test('sentinel cancellation: shadow records would-cancel without calling the adapter', { timeout: 15000 }, async t => {
+  const f = cancellationFixture(t, { mode: 'shadow' });
+  let calls = 0;
+  const result = await considerCancellation(cancellationOptions(f, { adapter: async () => { calls += 1; return { state: 'cancelled' }; } }));
+  assert.equal(result.state, 'shadow');
+  assert.equal(result.decision, 'would-cancel');
+  assert.equal(result.launched, false);
+  assert.equal(calls, 0, 'shadow never invokes the cancellation adapter');
+});
+
+test('sentinel cancellation: a hold arriving only after synchronous adapter entry cannot undo an issued effect', { timeout: 15000 }, async t => {
+  const f = cancellationFixture(t);
+  let entered = false;
+  const result = await considerCancellation(cancellationOptions(f, {
+    adapter: async () => ({ state: 'cancelled' }),
+    onEntered: () => { entered = true; putCancellationInboxHold(f.packagePath); },
+  }));
+  assert.equal(entered, true);
+  assert.equal(result.launched, true);
+  assert.equal(result.state, 'applied', 'the issued effect is not undone by a later hold');
+});
+
+test('sentinel cancellation: a fresh live authority cannot replay a retained unknown intent', { timeout: 15000 }, async t => {
+  const f = cancellationFixture(t);
+  let calls = 0;
+  const first = await considerCancellation(cancellationOptions(f, { adapter: async () => { calls += 1; throw new Error('unconfirmed'); } }));
+  assert.equal(first.state, 'unknown');
+  assert.equal(calls, 1);
+  // A fresh authority re-enables the same policy but never reconstructs the intent capability.
+  const restarted = createSentinelAuthority();
+  activatePolicy(restarted, { policy_path: join(f.dir, 'cancel-policy.json'), coordinator_session: 'session-1', command: 'enable' });
+  const replay = await considerCancellation({ ...cancellationOptions(f), authority: restarted, adapter: async () => { calls += 1; return { state: 'cancelled' }; } });
+  assert.equal(replay.launched, false);
+  assert.equal(calls, 1, 'the retained unknown intent blocks a replay without another adapter call');
+});
+
+test('sentinel cancellation: changed tree, stale incident/diagnosis, input, handle, idle and authority abstain', { timeout: 15000 }, async t => {
+  const f = cancellationFixture(t);
+  let calls = 0;
+  const adapter = async () => { calls += 1; return { state: 'cancelled' }; };
+  const refusal = async over => {
+    const result = await considerCancellation(cancellationOptions(f, { adapter, ...over }));
+    assert.equal(result.launched, false, `expected abstain for ${JSON.stringify(Object.keys(over))}`);
+  };
+  await refusal({ collect: async () => ({ working_tree_digest: 'e'.repeat(64), incomplete: false }) });
+  await refusal({ collect: async () => ({ working_tree_digest: 'c'.repeat(64), incomplete: true }) });
+  await refusal({ incident: { ...f.incident, generation: 2 } });
+  await refusal({ inputGuard: () => ({ input_revision: 5, active_prompts: 0 }) });
+  await refusal({ inputGuard: () => ({ input_revision: 0, active_prompts: 1 }) });
+  await refusal({ activeHandle: () => null });
+  await refusal({ activeHandle: () => ({ record: { id: 'not-the-record' } }) });
+  await refusal({ idleWriter: () => { throw new Error('busy'); } });
+  await refusal({ idleWriter: null });
+  await refusal({ adapter: null });
+  await refusal({ now: () => Date.now() + 2 * 60 * 60 * 1000 });
+  f.writeAttempt({ decision: 'observe' });
+  await refusal({});
+  f.writeAttempt({ decision: 'cancel-candidate', reason_code: 'insufficient-context' });
+  await refusal({});
+  f.writeAttempt({ packet_sha256: 'f'.repeat(64) });
+  await refusal({});
+  f.writeAttempt();
+  // A fresh hold blocks the effect.
+  const held = cancellationFixture(t);
+  putCancellationInboxHold(held.packagePath);
+  const heldResult = await considerCancellation(cancellationOptions(held, { adapter }));
+  assert.equal(heldResult.launched, false);
+  assert.equal(heldResult.state, 'blocked');
+  // A checkpoint change after diagnosis invalidates the retained packet hash.
+  const invalidated = cancellationFixture(t);
+  recordCheckpoint({ package: invalidated.packagePath, workflow_id: 'wf-cancel', expected_revision: 1, state: 'waiting-worker',
+    obligation: { key: 'impl:step-008', stage: 'implementation', summary: 'cancel candidate', artifacts: [] },
+    workers: [{ id: 'assign-1', kind: 'owner', state: 'working' }],
+    inbox: { items: [] }, reconciles_input_revision: 0, coordinator_session: 'session-1', checkout: invalidated.checkout });
+  const invalidatedResult = await considerCancellation(cancellationOptions(invalidated, { adapter }));
+  assert.equal(invalidatedResult.launched, false);
+  assert.equal(invalidatedResult.state, 'blocked');
+  // An exhausted effect cap refuses before the adapter.
+  const capped = cancellationFixture(t, { maxEffects: 1 });
+  reserveIntent(capped.authority, { workflow_id: 'wf-cancel', kind: 'cancel', subject_key: 'other-incident', source_revision: 'x', now: () => Date.now() });
+  const cappedResult = await considerCancellation(cancellationOptions(capped, { adapter }));
+  assert.equal(cappedResult.launched, false);
+  assert.equal(cappedResult.state, 'exhausted');
+  const disarmed = cancellationFixture(t);
+  disablePolicy(disarmed.authority);
+  const disarmedResult = await considerCancellation(cancellationOptions(disarmed, { adapter }));
+  assert.equal(disarmedResult.launched, false);
+  assert.equal(disarmedResult.state, 'disarmed');
+  assert.equal(calls, 0, 'no adapter call for any refusal');
+});
+
+// --- real-composition guarded cancellation (step 8, EV-8) ---
+
+const CANCEL_KIND = 'repeated-verification-failure';
+const cancelIntentId = (workflowId, incidentId) => createHash('sha256').update(`${workflowId}\u0000cancel\u0000${incidentId}`).digest('hex').slice(0, 32);
+
+// A fake owner process on a fixture-only PATH: it waits for a gate payload,
+// emits three same-fingerprint failed spec_verify events, then stays alive so
+// the real Runtime-owned group can be cancelled.
+const FAKE_PI_SOURCE = `#!/usr/bin/env node
+const fs = require('node:fs');
+const payloadPath = process.env.FAKE_PI_PAYLOAD;
+let sent = false;
+function emit(value) { process.stdout.write(JSON.stringify(value) + '\\n'); }
+setInterval(() => {
+  if (sent) return;
+  let payload;
+  try { payload = JSON.parse(fs.readFileSync(payloadPath, 'utf8')); } catch { return; }
+  const failure = { version: 1, complete: true, exit_code: 1, command_sha256: payload.command_sha256, summary_sha256: payload.summary_sha256, tree_digest: payload.tree_digest };
+  for (let i = 1; i <= 3; i += 1) emit({ type: 'tool_execution_end', toolName: 'spec_verify', toolCallId: 'fake-' + process.pid + '-' + i, isError: true, result: { details: { exit_code: 1, sentinel_failure: failure } } });
+  emit({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'spinning' }] } });
+  sent = true;
+}, 25);
+process.on('SIGTERM', () => process.exit(0));
+process.on('SIGINT', () => process.exit(0));
+setInterval(() => {}, 1000);
+`;
+
+async function waitForValue(predicate, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    let value;
+    try { value = predicate(); } catch { value = undefined; }
+    if (value) return value;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  return null;
+}
+
+const readRunFile = (packagePath, runId) => JSON.parse(readFileSync(join(packagePath, 'runtime', 'runs', `${runId}.json`), 'utf8'));
+const readIntentFile = (packagePath, workflowId, intentId) => JSON.parse(readFileSync(join(packagePath, 'runtime', 'sentinel', workflowId, 'intents', `${intentId}.json`), 'utf8'));
+
+function compositionFixture(t) {
+  const dir = sandbox(t);
+  // The real pi-subagents diagnosis profile must exist in the isolated agent dir.
+  mkdirSync(join(dir, 'agents'), { recursive: true });
+  writeFileSync(join(dir, 'agents', 'spec-sentinel-diagnostician.md'),
+    readFileSync(join(here, '..', '..', 'agents', 'spec-sentinel-diagnostician.md')));
+  const { repo } = primary(dir, 'cancel-comp-repo');
+  writeFileSync(join(repo, '.gitignore'), '.specs/\n');
+  writeFileSync(join(repo, 'README'), 'fixture\n');
+  execFileSync('git', ['-C', repo, 'add', 'README', '.gitignore'], { stdio: 'pipe' });
+  execFileSync('git', ['-C', repo, 'commit', '-qm', 'Initial fixture'], { stdio: 'pipe' });
+  const packagePath = pack(repo);
+  for (const name of ['context.md', 'spec.md', 'spec-prepare.md']) writeFileSync(join(packagePath, name), 'prepared');
+  writeFileSync(join(repo, '.specs', 'project-context.md'), 'authority');
+  writeFileSync(join(packagePath, 'evidence-plan.json'), '{}');
+  writeFileSync(join(packagePath, 'spec-steps.json'), JSON.stringify({ steps: [{ step: 1, difficulty: 'easy' }] }));
+  const step = join(packagePath, 'step-001-subspec.md');
+  writeFileSync(step, 'Implement the fixture step.');
+  const bin = join(dir, 'fake-bin');
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, 'pi'), FAKE_PI_SOURCE);
+  execFileSync('chmod', ['+x', join(bin, 'pi')]);
+  return { dir, repo, packagePath, step, bin };
+}
+
+// Loads the actual index.ts with the pi-subagents diagnosis path and a scripted
+// final provider, with the fixture bin prepended to PATH for the fake owner.
+async function loadComposition(t, fake, payloadFile) {
+  const originalPath = process.env.PATH;
+  const originalPayload = process.env.FAKE_PI_PAYLOAD;
+  t.after(() => {
+    if (originalPath === undefined) delete process.env.PATH; else process.env.PATH = originalPath;
+    if (originalPayload === undefined) delete process.env.FAKE_PI_PAYLOAD; else process.env.FAKE_PI_PAYLOAD = originalPayload;
+  });
+  process.env.PATH = `${fake.bin}:${originalPath}`;
+  process.env.FAKE_PI_PAYLOAD = payloadFile;
+  let diagnosisReply = '{}';
+  const provider = () => ({
+    name: 'Sentinel composition diagnosis', api: 'openai-completions', baseUrl: 'http://unused.invalid', apiKey: 'fixture',
+    models: [{ id: 'scripted', name: 'Scripted', input: ['text'], reasoning: false, contextWindow: 10000, maxTokens: 1000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
+    streamSimple(model) {
+      const stream = sdk.ai.createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = { role: 'assistant', content: [{ type: 'text', text: diagnosisReply }], api: model.api, provider: model.provider, model: model.id,
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+          stopReason: 'stop', timestamp: Date.now() };
+        stream.push({ type: 'done', reason: 'stop', message });
+        stream.end(message);
+      });
+      return stream;
+    },
+  });
+  const run = await loadExtension(t, { dir: fake.dir, providerFactory: provider, extraExtensionPaths: [piSubagentsPath] });
+  return { ...run, setDiagnosisReply: value => { diagnosisReply = value; } };
+}
+
+// Spawn a detached unrelated process that must survive sentinel cancellation.
+function unrelatedChild(t) {
+  const pid = Number(execFileSync('bash', ['-c', 'sleep 60 >/dev/null 2>&1 & echo $!'], { encoding: 'utf8' }).trim());
+  t.after(() => { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } });
+  return pid;
+}
+
+// Cancel only this fixture run when it is still nonterminal; already
+// cancelled/terminal or not-active results are tolerated.
+async function cancelFixtureRun(tools, ctx, fake, runId) {
+  try {
+    const record = readRunFile(fake.packagePath, runId);
+    if (['cancelled', 'completed', 'failed'].includes(record.state)) return record;
+  } catch { /* unreadable run is still attempted */ }
+  try {
+    const result = await tools.get('spec_dispatch').definition.execute('c-cleanup-cancel', {
+      action: 'cancel', package: fake.packagePath, run_id: runId }, undefined, undefined, ctx);
+    return result?.details ?? result;
+  } catch { return null; }
+}
+
+// A compact, fixture-scoped diagnostic assembled from the current run record,
+// diagnoses/intents, checkpoint and the newest owner stream tail. Never
+// preserves temp dirs or reads unrelated data.
+function compositionDiagnostic(fake, workflowId, runId, incidentId) {
+  const lines = [];
+  try { const r = readRunFile(fake.packagePath, runId); lines.push(`run state=${r.state} error=${r.error ?? 'none'}`); }
+  catch (error) { lines.push(`run unreadable: ${error?.message ?? error}`); }
+  const sentinelDir = join(fake.packagePath, 'runtime', 'sentinel', workflowId);
+  for (const name of ['diagnoses', 'intents']) {
+    const dir = join(sentinelDir, name);
+    try {
+      for (const file of readdirSync(dir)) {
+        if (!file.endsWith('.json')) continue;
+        try { const value = JSON.parse(readFileSync(join(dir, file), 'utf8'));
+          lines.push(`${name}/${file} state=${value.state ?? '?'} decision=${value.decision ?? ''} reason=${value.reason_code ?? ''} error=${value.error ?? ''}`); }
+        catch { lines.push(`${name}/${file} malformed`); }
+      }
+    } catch { /* directory absent */ }
+  }
+  try { const cp = JSON.parse(readFileSync(checkpointPath(fake.packagePath, workflowId), 'utf8'));
+    lines.push(`checkpoint state=${cp.state} obligation=${cp.obligation?.key} workers=${(cp.workers ?? []).map(worker => `${worker.id}:${worker.state}`).join(',')}`); }
+  catch { lines.push('checkpoint unreadable'); }
+  const runsDir = join(fake.packagePath, 'runtime', 'runs');
+  try {
+    for (const file of readdirSync(runsDir)) {
+      if (!file.startsWith(runId) || file.includes('-activity') || (!file.includes('owner') && !file.endsWith('.stderr'))) continue;
+      if (file.endsWith('.stderr')) lines.push(`${file}: ${readFileSync(join(runsDir, file), 'utf8').slice(-300)}`);
+    }
+  } catch { /* runs dir absent */ }
+  return `incident=${incidentId} | ${lines.join(' | ')}`.slice(0, 1500);
+}
+
+async function armComposition(t, mode) {
+  const fake = compositionFixture(t);
+  const payloadFile = join(fake.dir, 'fake-payload.json');
+  const run = await loadComposition(t, fake, payloadFile);
+  const tools = new Map(run.loader.getExtensions().extensions.flatMap(extension => [...extension.tools.entries()]));
+  const manager = run.sessionManager;
+  const identity = (typeof manager.getSessionFile === 'function' && manager.getSessionFile())
+    || (typeof manager.getSessionId === 'function' && manager.getSessionId()) || null;
+  assert.ok(identity, 'the native SDK session exposes a nonempty identity');
+  const ctx = { sessionManager: manager };
+  const assignmentId = 'assign-composition';
+  const workflowId = 'wf-composition';
+  const created = await tools.get('spec_checkpoint').definition.execute('c-checkpoint-1', {
+    package: fake.packagePath, workflow_id: workflowId, expected_revision: 0, state: 'ready',
+    obligation: { key: 'impl:step-008', stage: 'implementation', summary: 'cancel', artifacts: [] },
+    workers: [], inbox: { items: [] }, reconciles_input_revision: 0 }, undefined, undefined, ctx);
+  assert.equal(created.isError, false, JSON.stringify(created.details));
+  const dispatched = await tools.get('spec_dispatch').definition.execute('c-dispatch-1', {
+    action: 'start', package: fake.packagePath, step: fake.step, workflow_id: workflowId, assignment_id: assignmentId,
+    owner_model: 'sentinel-fixture/scripted', editor_model: 'sentinel-fixture/scripted' }, undefined, undefined, ctx);
+  assert.equal(dispatched.isError, false, JSON.stringify(dispatched.details));
+  const runId = dispatched.details.run_id;
+  const checkout = dispatched.details.checkout;
+  // Guarantee prompt fixture teardown for every exit path.
+  t.after(() => cancelFixtureRun(tools, ctx, fake, runId));
+  const policyPath = join(fake.dir, 'composition-policy.json');
+  writeFileSync(policyPath, JSON.stringify({ version: 1, package: fake.packagePath, workflow_id: workflowId,
+    checkout, coordinator_session: identity, mode, actions: ['continue', 'cancel'],
+    expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    max_effects: 2, max_diagnostics: 2, diagnosis: { model: 'sentinel-fixture/scripted' }, authority_reference: 'user:composition' }));
+  await run.session.prompt(`/spec-sentinel enable ${policyPath}`);
+  const treeDigest = (await collectFacts(checkout)).working_tree_digest;
+  assert.ok(typeof treeDigest === 'string' && treeDigest, 'the dispatch checkout has a complete digest');
+  const commandSha = 'a'.repeat(64);
+  const summarySha = 'b'.repeat(64);
+  const fingerprintKey = `${commandSha}:${summarySha}:${treeDigest}`;
+  const incidentId = createHash('sha256').update(`${fake.packagePath}\u0000${assignmentId}\u0000${CANCEL_KIND}\u0000${fingerprintKey}\u00001`).digest('hex').slice(0, 32);
+  run.setDiagnosisReply(JSON.stringify({ decision: 'cancel-candidate', fact_ids: ['incident.count'], reason_code: 'repeated-unchanged-failure',
+    incident_id: incidentId, incident_generation: 1, note: 'fixture' }));
+  writeFileSync(payloadFile, JSON.stringify({ command_sha256: commandSha, summary_sha256: summarySha, tree_digest: treeDigest }));
+  return { fake, run, tools, ctx, assignmentId, workflowId, runId, checkout, incidentId };
+}
+
+test('sentinel cancellation: confirmed cancellation of a diagnosed spinning dispatched worker', { skip: sdkSkip || delegationSkip, timeout: 15000 }, async t => {
+  const unrelated = unrelatedChild(t);
+  let f = null;
+  try {
+    f = await armComposition(t, 'recover');
+    const cancelled = await waitForValue(() => { const record = readRunFile(f.fake.packagePath, f.runId); return record.state === 'cancelled' ? record : null; }, 6000);
+    assert.ok(cancelled, `no cancellation within 6s: ${f ? compositionDiagnostic(f.fake, f.workflowId, f.runId, f.incidentId) : 'fixture not armed'}`);
+    const intent = readIntentFile(f.fake.packagePath, f.workflowId, cancelIntentId(f.workflowId, f.incidentId));
+    assert.equal(intent.state, 'applied');
+    assert.equal(intent.reason_code, 'cancelled');
+    assert.equal(cancelled.lock && existsSync(cancelled.lock), false, 'the lease is released only after confirmed cancellation');
+    const checkpoint = JSON.parse(readFileSync(checkpointPath(f.fake.packagePath, f.workflowId), 'utf8'));
+    assert.equal(checkpoint.obligation.key, `reconcile:${f.assignmentId}`, 'runtime completion reconciliation updated the checkpoint');
+    assert.doesNotThrow(() => process.kill(unrelated, 0), 'an unrelated fixture child remains alive');
+  } finally {
+    if (f) await cancelFixtureRun(f.tools, f.ctx, f.fake, f.runId);
+  }
+});
+
+test('sentinel shadow: a diagnosed spinning worker is not cancelled before explicit teardown', { skip: sdkSkip || delegationSkip, timeout: 15000 }, async t => {
+  let f = null;
+  try {
+    f = await armComposition(t, 'shadow');
+    const blocked = await waitForValue(() => {
+      try { const intent = readIntentFile(f.fake.packagePath, f.workflowId, cancelIntentId(f.workflowId, f.incidentId)); return intent.state === 'blocked' ? intent : null; } catch { return null; }
+    }, 6000);
+    assert.ok(blocked, `no shadow would-cancel within 6s: ${f ? compositionDiagnostic(f.fake, f.workflowId, f.runId, f.incidentId) : 'fixture not armed'}`);
+    assert.equal(blocked.reason_code, 'shadow-would-cancel');
+    const record = readRunFile(f.fake.packagePath, f.runId);
+    assert.equal(record.state, 'running', 'shadow never cancels the worker');
+    const teardown = await f.tools.get('spec_dispatch').definition.execute('c-cancel-1', {
+      action: 'cancel', package: f.fake.packagePath, run_id: f.runId }, undefined, undefined, f.ctx);
+    assert.equal(teardown.isError, false, JSON.stringify(teardown.details));
+    assert.equal(teardown.details.state, 'cancelled');
+  } finally {
+    if (f) await cancelFixtureRun(f.tools, f.ctx, f.fake, f.runId);
+  }
 });

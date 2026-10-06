@@ -324,6 +324,27 @@ with reason `shadow-would-continue` and no custom entry or extra turn is produce
 turn started (delivery only), never that work was accepted, and ambiguous requested
 effects are not retried.
 
+## Diagnosis and guarded cancellation
+
+Optional diagnosis and guarded cancellation are separate opt-ins under the same live
+scoped authority. Diagnosis runs only for a complete repeated-failure incident with a
+complete fingerprint through a bounded (at most 16 KiB) tool-free advisory packet, one
+active job per coordinator, a five-minute cooldown and at most two attempts per
+generation; its JSON is labelled `note_verified:false` and never grants authority.
+Recovery cancellation is permitted only for the current repeated-failure incident with a
+retained positive `cancel-candidate`/`repeated-unchanged-failure` diagnosis matching the
+current complete checkout digest, reconciled input, nonblocking inbox, checkpoint
+worker/checkout, the exact original in-memory Runtime handle/lease and an idle writer
+slot with remaining capacity. A durable cancel intent is reserved immediately before the
+existing `Runtime.cancel`; only confirmed process-group termination becomes `applied`,
+while failed/unknown termination keeps the writer reservation and is never replayed.
+Retained state lives under `runtime/sentinel/<workflow-id>/`: `verification-incidents.json`,
+`diagnoses/<incident-id>.json`, and `intents/<id>.json` with `effect-slots/` and
+`diagnostic-slots/`. A disk PID from another process is not an owned handle; the runtime
+never adopts it, deletes locks, transfers an owner or launches a replacement. Shadow mode
+writes `shadow-would-cancel` and leaves the worker alive. Cancellation/shadow notices are
+local UI-only, and no Sentinel model-visible custom message is added.
+
 ## Workflow metrics
 
 `/spec-metrics /absolute/canonical/package` displays a read-only aggregate from native

@@ -4,10 +4,10 @@ import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { randomUUID, createHash } from 'node:crypto';
 import { join, resolve, realpathSync } from 'node:path';
 import { homedir } from 'node:os';
-import { Runtime, loadRun, summary, assertLease, runEditor, runCommand, runVerification, runAdvice, runCompletion, canonicalPackage, event as runtimeEvent } from './runtime.mjs';
+import { Runtime, loadRun, summary, assertLease, runEditor, runCommand, runVerification, runAdvice, runCompletion, canonicalPackage, assertIdleWriter, event as runtimeEvent } from './runtime.mjs';
 import { createCommunication } from './communication.mjs';
 import { createMonitor } from './monitor.mjs';
-import { createSentinelObserver, createVerificationRecorder, recordCheckpoint, readInboxGuard, readCheckpointRecord, observeInput, reconcileRuntimeReturn, checkpointPath, createSentinelAuthority, createDiagnosisController, activatePolicy, disablePolicy, handleBeforeSettle, finishIntent } from './sentinel.mjs';
+import { createSentinelObserver, createVerificationRecorder, recordCheckpoint as recordSentinelCheckpoint, readInboxGuard, readCheckpointRecord, observeInput, reconcileRuntimeReturn, checkpointPath, createSentinelAuthority, createDiagnosisController, activatePolicy, disablePolicy, handleBeforeSettle, finishIntent, considerCancellation } from './sentinel.mjs';
 import { createScout, SCOUT_MODEL } from './scout.mjs';
 import { installProgressContext, recordCheckpoint, refreshProgress } from './completion.mjs';
 import { metrics, formatMetrics } from './metrics.mjs';
@@ -187,6 +187,7 @@ export default function (pi: any) {
   let diagnosisController: ReturnType<typeof createDiagnosisController> | null = null;
   let sentinelScope: any = null;
   let pendingContinuation: any = null;
+  let sessionCtx: any = null;
   // Session-local native-input guard and workflow->dispatch checkout bindings for
   // the coordinator branch. Interactive/RPC input advances the revision before
   // processing; extension-originated messages never do. Never model-supplied.
@@ -244,7 +245,7 @@ export default function (pi: any) {
           return result({ error: `reconciles_input_revision ${args.reconciles_input_revision} does not match the current native input revision ${inputGuard.input_revision}`, next: 'record the checkpoint against the current input revision; a stale value is refused' }, true);
         }
         const checkout = boundCheckout(args.package, args.workflow_id, dispatchBindings);
-        const receipt = recordCheckpoint({ package: args.package, workflow_id: args.workflow_id,
+        const receipt = recordSentinelCheckpoint({ package: args.package, workflow_id: args.workflow_id,
           expected_revision: args.expected_revision, state: args.state, obligation: args.obligation,
           workers: args.workers ?? [], inbox: args.inbox ?? {},
           reconciles_input_revision: args.reconciles_input_revision, coordinator_session, checkout });
@@ -271,6 +272,7 @@ export default function (pi: any) {
     // scope and any pending requested continuation before durable revocation.
     sentinelScope = null;
     pendingContinuation = null;
+    sessionCtx = ctx;
     diagnosisController?.close();
     diagnosisController = null;
     const authority = createSentinelAuthority();
@@ -382,12 +384,40 @@ export default function (pi: any) {
     pi.sendMessage({ customType: 'spec-runtime', content: JSON.stringify(value), display: true }, { triggerTurn: true });
   },
     onWorkerEvent: (record: any, event: any) => {
-      // Incident observation never affects the run lifecycle: the diagnosis is
-      // fire-and-forget and any failure is contained.
+      // Incident observation never affects run lifecycle: diagnosis is
+      // fire-and-forget and any failure is contained. An applied
+      // cancel-candidate offers guarded cancellation through the same serialized
+      // workflow path and the exact live identities.
       const observed = verificationRecorder.observe(record, event);
-      if (observed?.incident && diagnosisController) {
-        diagnosisController.diagnose(record, observed.incident).catch(() => {});
-      }
+      if (!observed?.incident || !diagnosisController || !sentinelAuthority || !sentinelScope) return;
+      const authority = sentinelAuthority;
+      const scope = sentinelScope;
+      const controller = diagnosisController;
+      const incident = observed.incident;
+      controller.diagnose(record, incident).then((attempt: any) => {
+        if (!attempt || attempt.launched !== true || attempt.state !== 'applied' || attempt.decision !== 'cancel-candidate') return;
+        return serializeWorkflow(async () => {
+          if (sentinelAuthority !== authority || sentinelScope !== scope || diagnosisController !== controller) return;
+          const result = await considerCancellation({
+            authority, record, incident, packet_sha256: attempt.packet_sha256,
+            adapter: (target: any) => runtime.cancel(target.package, target.id),
+            idleWriter: assertIdleWriter,
+            activeHandle: (target: any) => runtime.active.get(target.id) ?? null,
+            inputGuard: () => inputGuard,
+            now: Date.now,
+          });
+          // Surface only accepted shadow/applied/unknown transitions; duplicates
+          // and guard abstentions stay silent.
+          if (result.state === 'applied') {
+            try { runtime.notify(summary(loadRun(record.package, record.id))); } catch { /* Notification is best effort. */ }
+            try { sessionCtx?.ui?.notify(`Sentinel cancelled diagnosed work for ${scope.workflow_id}.`, 'warning'); } catch { /* UI failure contained. */ }
+          } else if (result.state === 'shadow') {
+            try { sessionCtx?.ui?.notify(`Sentinel shadow would-cancel diagnosed work for ${scope.workflow_id}; the worker stays alive.`, 'info'); } catch { /* UI failure contained. */ }
+          } else if (result.state === 'unknown') {
+            try { sessionCtx?.ui?.notify(`Sentinel cancellation outcome unknown for ${scope.workflow_id}; the writer lease is retained.`, 'warning'); } catch { /* UI failure contained. */ }
+          }
+        });
+      }).catch(() => { /* Diagnosis/cancellation failure never affects the lifecycle. */ });
     } });
   // Bounded continuation: only a live armed authority with an exact scope is
   // consulted, through the shared workflow serialization. A requested identity is
@@ -450,6 +480,7 @@ export default function (pi: any) {
     monitor.close();
     sentinel?.close();
     sentinel = undefined;
+    sessionCtx = null;
     diagnosisController?.close();
     diagnosisController = null;
     await Promise.allSettled([...runtime.active.values()].map(({ record }: any) => runtime.cancel(record.package, record.id)));
@@ -536,7 +567,7 @@ export default function (pi: any) {
           const workers = [...(existing.workers ?? [])].filter((worker: any) => worker.id !== assignmentId)
             .concat([{ id: assignmentId, kind: 'owner', state: 'working' }]);
           if (!alreadyBound) {
-            const updated = recordCheckpoint({ package: packagePath, workflow_id: workflowId,
+            const updated = recordSentinelCheckpoint({ package: packagePath, workflow_id: workflowId,
               expected_revision: existing.revision, state: 'waiting-worker', obligation: existing.obligation,
               workers, inbox: existing.inbox ?? { items: [] },
               reconciles_input_revision: existing.input_revision ?? 0, coordinator_session, checkout: boundCheckoutValue });

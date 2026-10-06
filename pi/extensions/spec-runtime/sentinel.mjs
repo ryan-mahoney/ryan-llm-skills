@@ -13,6 +13,7 @@ import { join, resolve, dirname, sep, relative, isAbsolute, basename } from 'nod
 import { canonicalPackage } from './runtime.mjs';
 import { publicHint } from './monitor.mjs';
 import { createOwnedLeaf } from './scout.mjs';
+import { collectFacts } from '../../../scripts/jev/core.mjs';
 import { collectWorkspace, renderWorkspace, enrollmentDirectory, readEnrollments, enrollmentReasons, SENTINEL_LIMITS } from '../../../scripts/spec-observe/sentinel.mjs';
 
 export const SENTINEL_COALESCE_MS = 250;
@@ -2641,4 +2642,148 @@ export function createDiagnosisController({
     },
     active() { return active !== null; },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Guarded cancellation (AC-5, AC-6, AC-15, AC-16). considerCancellation
+// revalidates every live dimension, reserves one cancel intent immediately
+// before the effect, and delegates revocation/termination/lease release to the
+// injected original Runtime adapter. It never deletes locks, transfers owners,
+// launches replacements or retries; ambiguous outcomes stay spent.
+// ---------------------------------------------------------------------------
+
+export async function considerCancellation({
+  authority,
+  record,
+  incident,
+  packet_sha256: packetSha = null,
+  adapter = null,
+  idleWriter = null,
+  activeHandle = null,
+  inputGuard = () => ({}),
+  onRequested = () => {},
+  onEntered = () => {},
+  collect = collectFacts,
+  now = Date.now,
+} = {}) {
+  const abstain = (state, reason, extra = {}) => ({ version: 1, launched: false, state, decision: 'abstain',
+    reason_code: reason, intent_id: null, incident_id: isPlainObject(incident) ? (incident.id ?? null) : null,
+    incident_generation: isPlainObject(incident) && Number.isInteger(incident.generation) ? incident.generation : null, ...extra });
+  if (!isPlainObject(record) || typeof record.package !== 'string' || typeof record.id !== 'string' || !record.id) return abstain('invalid', 'record-invalid');
+  if (!isPlainObject(incident) || typeof incident.id !== 'string' || !ID_SHAPE.test(incident.id)
+    || !Number.isInteger(incident.generation) || incident.generation < 1) return abstain('invalid', 'incident-invalid');
+  // A supplied current diagnosis packet hash is mandatory; never optional.
+  if (typeof packetSha !== 'string' || !HASH_SHAPE.test(packetSha)) return abstain('blocked', 'diagnosis-packet-missing');
+  let packagePath;
+  try { packagePath = canonicalPackage(record.package).packagePath; } catch { return abstain('skipped', 'package-unavailable'); }
+  if (incident.package != null) {
+    let incidentPackage;
+    try { incidentPackage = canonicalPackage(incident.package).packagePath; } catch { return abstain('blocked', 'incident-package-unavailable'); }
+    if (incidentPackage !== packagePath) return abstain('blocked', 'incident-package-mismatch');
+  }
+  // Exact identity equality between the live record and the incident.
+  if (typeof record.workflow_id !== 'string' || record.workflow_id !== incident.workflow_id) return abstain('blocked', 'workflow-mismatch');
+  if (typeof record.assignment_id !== 'string' || record.assignment_id !== incident.assignment_id) return abstain('blocked', 'assignment-mismatch');
+  const workflowId = record.workflow_id;
+  const assignmentId = record.assignment_id;
+  const checkout = typeof record.checkout === 'string' ? record.checkout : null;
+  if (!checkout) return abstain('skipped', 'checkout-unavailable');
+  // Asynchronous digest read first, then every effect guard is re-read synchronously below.
+  let digest;
+  try { digest = await collect(checkout); } catch { return abstain('unavailable', 'digest-unavailable'); }
+  const treeDigest = typeof digest?.working_tree_digest === 'string' ? digest.working_tree_digest : null;
+  if (!treeDigest || digest.incomplete !== false) return abstain('blocked', 'tree-unavailable');
+  let guard;
+  try { guard = readPolicyGuard(authority, { workflow_id: workflowId, now }); }
+  catch { guard = { armed: false, state: 'disarmed', blocking: false, allowed: [], reasons: [], mode: null }; }
+  if (!guard || guard.armed !== true) return abstain('disarmed', 'authority-disarmed');
+  if (guard.blocking) return abstain('blocked', (guard.reasons ?? []).join('; ') || 'policy-blocked');
+  if (guard.mode !== 'shadow' && guard.mode !== 'recover') return abstain('blocked', 'policy-mode-invalid');
+  if (!Array.isArray(guard.allowed) || !guard.allowed.includes('cancel')) return abstain('denied', 'cancel-not-permitted');
+  const checkpoint = readCheckpointRecord(packagePath, workflowId);
+  if (!checkpoint || checkpoint.package !== packagePath || checkpoint.workflow_id !== workflowId) return abstain('skipped', 'checkpoint-unavailable');
+  if (checkpoint.checkout != null && resolve(checkpoint.checkout) !== resolve(checkout)) return abstain('blocked', 'checkout-mismatch');
+  const snapshot = readVerificationIncidents(packagePath, workflowId);
+  const current = snapshot?.assignments?.[assignmentId] ?? null;
+  if (!current || current.state !== 'open' || !isPlainObject(current.fingerprint)) return abstain('blocked', 'incident-not-open');
+  if (current.incident_id !== incident.id || current.generation !== incident.generation) return abstain('blocked', 'stale-incident');
+  const fingerprint = current.fingerprint;
+  if (!Number.isInteger(current.count) || current.count < 1
+    || typeof fingerprint.command_sha256 !== 'string' || !HASH_SHAPE.test(fingerprint.command_sha256)
+    || typeof fingerprint.summary_sha256 !== 'string' || !HASH_SHAPE.test(fingerprint.summary_sha256)
+    || typeof fingerprint.tree_digest !== 'string' || !HASH_SHAPE.test(fingerprint.tree_digest)) return abstain('blocked', 'fingerprint-malformed');
+  if (current.replay_exhausted === true) return abstain('blocked', 'replay-exhausted');
+  if (current.incident_fingerprint != null) {
+    const retainedKey = `${current.incident_fingerprint.command_sha256}:${current.incident_fingerprint.summary_sha256}:${current.incident_fingerprint.tree_digest}`;
+    const currentKey = `${fingerprint.command_sha256}:${fingerprint.summary_sha256}:${fingerprint.tree_digest}`;
+    if (retainedKey !== currentKey) return abstain('blocked', 'incident-fingerprint-mismatch');
+  }
+  if (fingerprint.command_sha256 !== incident.command_sha256
+    || fingerprint.summary_sha256 !== incident.summary_sha256 || fingerprint.tree_digest !== incident.tree_digest) return abstain('blocked', 'stale-fingerprint');
+  if (treeDigest !== fingerprint.tree_digest) return abstain('blocked', 'tree-changed');
+  const input = typeof inputGuard === 'function' ? (inputGuard() ?? {}) : (inputGuard ?? {});
+  if (!Number.isInteger(input.input_revision) || input.input_revision !== checkpoint.input_revision) return abstain('blocked', 'input-unreconciled');
+  if (input.active_prompts !== 0) return abstain('blocked', 'prompt-active');
+  const inboxGuard = readInboxGuard(packagePath, { priorItems: checkpoint?.inbox?.items ?? [], items: checkpoint?.inbox?.items ?? [],
+    priorDirectories: checkpoint?.inbox?.observed_directories ?? [], now });
+  if (!inboxGuard || inboxGuard.blocking !== false) return abstain('blocked', 'inbox-blocking');
+  if (checkpoint.state !== 'waiting-worker') return abstain('blocked', 'stop-state');
+  // The declared working target is exactly as dispatch writes it: the explicit
+  // assignment worker when present, otherwise the live run UUID. Other workers
+  // (native reviewers, other assignments) never grant cancellation authority.
+  const targetWorkerId = Array.isArray(checkpoint.workers) && checkpoint.workers.some(worker => worker.id === record.assignment_id)
+    ? record.assignment_id : record.id;
+  if (!Array.isArray(checkpoint.workers) || !checkpoint.workers.some(worker => worker.id === targetWorkerId && worker.state === 'working')) return abstain('blocked', 'worker-not-working');
+  // Reconstruct the current incident from the retained open entry and re-derive
+  // the current packet hash with the fresh inbox; any checkpoint/policy/inbox/
+  // fingerprint change invalidates the retained advice.
+  const currentIncident = { id: current.incident_id, kind: 'repeated-verification-failure', assignment_id: assignmentId,
+    package: packagePath, workflow_id: workflowId, generation: current.generation, count: current.count, ...fingerprint,
+    ...(current.linked_from ? { linked_from: current.linked_from } : {}), observed_at: current.observed_at ?? null };
+  const rebuilt = buildDiagnosisPacket({ incident: currentIncident, record,
+    checkpoint: { ...checkpoint, inbox_guard: inboxGuard }, policy: guard });
+  const currentPacketHash = createHash('sha256').update(rebuilt.json).digest('hex');
+  const retained = readDiagnosisAttempt(packagePath, workflowId, incident.id);
+  if (!retained || retained.state !== 'applied' || retained.validation !== 'valid'
+    || retained.decision !== 'cancel-candidate' || retained.reason_code !== 'repeated-unchanged-failure'
+    || retained.incident_generation !== incident.generation || retained.assignment_id !== assignmentId
+    || retained.record_id !== record.id
+    || retained.packet_sha256 !== currentPacketHash
+    || (packetSha != null && packetSha !== currentPacketHash)) return abstain('blocked', 'diagnosis-invalid');
+  let live = null;
+  try { live = typeof activeHandle === 'function' ? activeHandle(record) : activeHandle; } catch { live = null; }
+  if (!live || live.record !== record) return abstain('blocked', 'no-live-handle');
+  if (record.state !== 'running') return abstain('blocked', 'record-not-running');
+  if (typeof idleWriter !== 'function') return abstain('blocked', 'idle-assertion-missing');
+  try { idleWriter(record); } catch { return abstain('blocked', 'writer-not-idle'); }
+  if (guard.mode === 'recover' && typeof adapter !== 'function') return abstain('blocked', 'adapter-missing');
+  const receiptBase = { incident_id: incident.id, incident_generation: incident.generation };
+  let reservation;
+  try { reservation = reserveIntent(authority, { workflow_id: workflowId, kind: 'cancel', subject_key: incident.id, source_revision: currentPacketHash, now }); }
+  catch (error) { return abstain('blocked', publicHint(String(error?.message ?? error)), receiptBase); }
+  if (!reservation || reservation.accepted !== true) {
+    return abstain(reservation?.duplicate ? 'duplicate' : (reservation?.state ?? 'blocked'),
+      (reservation?.reasons ?? []).join('; ') || null, { ...receiptBase, intent_id: reservation?.intent?.id ?? null });
+  }
+  const intentId = reservation.intent.id;
+  if (guard.mode === 'shadow') {
+    try { finishIntent(authority, { workflow_id: workflowId, intent_id: intentId, state: 'blocked', reason_code: 'shadow-would-cancel', now }); }
+    catch { return { ...receiptBase, version: 1, launched: false, state: 'blocked', decision: 'abstain', reason_code: 'receipt-unpersisted', intent_id: intentId }; }
+    return { ...receiptBase, version: 1, launched: false, state: 'shadow', decision: 'would-cancel', reason_code: 'shadow-would-cancel', intent_id: intentId };
+  }
+  try { finishIntent(authority, { workflow_id: workflowId, intent_id: intentId, state: 'requested', reason_code: 'requested', now }); }
+  catch { return { ...receiptBase, version: 1, launched: false, state: 'blocked', decision: 'abstain', reason_code: 'requested-unpersisted', intent_id: intentId }; }
+  try { onRequested({ id: intentId, incident_id: incident.id }); } catch { /* observation only. */ }
+  // Reservation/request are immediately adjacent to synchronous adapter entry.
+  let pending;
+  try { pending = adapter(record, { incident, intent_id: intentId }); } catch { pending = Promise.reject(new Error('adapter-threw')); }
+  try { onEntered({ id: intentId, incident_id: incident.id }); } catch { /* observation only; grants no veto. */ }
+  let outcome = null;
+  try { outcome = await pending; } catch { outcome = null; }
+  const cancelled = isPlainObject(outcome) && outcome.state === 'cancelled';
+  const finishState = cancelled ? 'applied' : (outcome == null ? 'unknown' : 'blocked');
+  const reason = cancelled ? 'cancelled' : (outcome == null ? 'unknown' : 'not-cancelled');
+  try { finishIntent(authority, { workflow_id: workflowId, intent_id: intentId, state: finishState, reason_code: reason, now }); }
+  catch { return { ...receiptBase, version: 1, launched: true, state: 'unknown', decision: 'abstain', reason_code: 'receipt-unpersisted', intent_id: intentId }; }
+  return { ...receiptBase, version: 1, launched: true, state: cancelled ? 'applied' : finishState, decision: cancelled ? 'cancelled' : 'abstain', reason_code: reason, intent_id: intentId };
 }

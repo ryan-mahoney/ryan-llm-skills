@@ -540,12 +540,20 @@ export async function runAdvice(record, task, input, { offline = false, signal, 
   });
 }
 
-async function withIdleWriter(record, action) {
+// The smallest synchronous idle-writer assertion owned by Runtime: a valid
+// lease, an unclaimed editor/verification slot, and no tracked non-owner managed
+// group. withIdleWriter still performs the atomic slot claim via mkdir.
+export function assertIdleWriter(record) {
   assertLease(record);
+  if (existsSync(join(record.lock, 'editor'))) throw new Error('An editor or verification command holds the writer slot.');
+  if (activeGroups(record).some(group => group.role !== 'owner')) throw new Error('Managed work remains active; resolve it before another writer.');
+}
+
+async function withIdleWriter(record, action) {
+  assertIdleWriter(record);
   const slot = join(record.lock, 'editor');
   try { mkdirSync(slot); } catch { throw new Error('Wait for the active editor or verification command to finish before verifying.'); }
   try {
-    if (activeGroups(record).some(group => group.role !== 'owner')) throw new Error('Managed work remains active; resolve it before verifying.');
     return await action();
   } finally { rmSync(slot, { recursive: true, force: true }); }
 }

@@ -76,6 +76,22 @@ gap as unknown. Authority stays read-only — no continuation, cancellation, dia
 or recovery, no transcript or model reads, and no acceptance claim from completion or
 silence.
 
+## Guarded recovery
+
+Observation and activation are separate. Status, enrollment and retained disk files
+never arm recovery; only a direct live `/spec-sentinel enable` grant for this coordinator
+session, canonical package, workflow and checkout can do so, and a fresh session always
+starts disarmed. When opt-in recovery is armed, inspect retained outcomes under
+`runtime/sentinel/<workflow-id>/`: `verification-incidents.json` (repeated-failure
+generations), `diagnoses/<incident-id>.json` (bounded advisory attempts), and
+`intents/<id>.json` plus `effect-slots/`/`diagnostic-slots/` (reserved capacity and the
+exact applied/blocked/unknown state). A `blocked` or `unknown` intent retains the writer
+reservation and is never replayed automatically; it requires explicit coordinator or
+human reconciliation before any later attempt. Do not treat a disk PID from another
+process as an owned handle, and never delete locks or transfer an owner to recover.
+Sentinel cancellation and would-cancel notices are local UI-only; they add no model turn
+or Sentinel custom message.
+
 ## Workflow metrics
 
 For an aggregate report of the current coordinator session, run:

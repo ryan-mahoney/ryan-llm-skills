@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { Runtime, launch, loadRun, summary, groupAlive, runEditor, runCommand, runVerification, runCompletion, runAdvice, activeGroups, spawnManaged, settleGroup, assertLease, canonicalPackage } from './runtime.mjs';
+import { Runtime, launch, loadRun, summary, groupAlive, runEditor, runCommand, runVerification, runCompletion, runAdvice, activeGroups, spawnManaged, settleGroup, assertLease, assertIdleWriter, canonicalPackage } from './runtime.mjs';
 import { createVerificationRecorder, readVerificationIncidents } from './sentinel.mjs';
 
 function fixture(t, source) {
@@ -590,4 +590,18 @@ test('runtime carries a validated workflow_id and stable assignment_id into the 
   assert.throws(() => runtime2.start({ ...g.input, workflow_id: 'bad id!' }), /workflow_id must be/);
   assert.equal(existsSync(join(g.packagePath, 'runtime')), false);
   assert.equal(g.pids.length, 0);
+});
+
+test('sentinel cancellation: assertIdleWriter rejects a claimed editor slot while the lease is valid', async t => {
+  const f = fixture(t, 'setInterval(()=>{},1000);');
+  const runtime = new Runtime(f.options);
+  const started = runtime.start(f.input);
+  const record = loadRun(f.packagePath, started.run_id);
+  assertIdleWriter(record);
+  const slot = join(record.lock, 'editor');
+  mkdirSync(slot);
+  assert.throws(() => assertIdleWriter(record), /editor or verification/);
+  rmSync(slot, { recursive: true, force: true });
+  assertIdleWriter(record);
+  await runtime.cancel(f.packagePath, started.run_id, 1000);
 });
