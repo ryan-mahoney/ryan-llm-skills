@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, statSync, existsSync, symlinkSync, realpathSync, renameSync, chmodSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, statSync, existsSync, symlinkSync, realpathSync, renameSync, chmodSync, lstatSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -70,6 +70,47 @@ test('sentinel repetition: replaying a toolCallId never advances the count', () 
   assert.equal(replay.incident, null);
   assert.equal(entry(replay.snapshot).count, 3);
   assert.equal(entry(replay.snapshot).generation, 1);
+});
+
+test('sentinel repetition: a replayed ID evicted from the display window never opens a new generation', () => {
+  let state = null;
+  // Nine distinct matching failures overflow the eight-ID display window.
+  for (let i = 1; i <= 9; i += 1) state = reduce(state, failureEvent(`call-${i}`)).snapshot;
+  const solved = reduce(state, successEvent('call-10'));
+  assert.equal(entry(solved.snapshot).state, 'resolved');
+  state = solved.snapshot;
+  // The earliest failure IDs are gone from the bounded display history...
+  const window = entry(state).tool_call_ids;
+  assert.equal(window.includes('call-1'), false);
+  assert.equal(window.includes('call-2'), false);
+  // ...but replaying them after recovery must still not count as new distinct
+  // failures or manufacture a repeated-failure candidate.
+  const first = reduce(state, failureEvent('call-1'));
+  assert.equal(first.snapshot, state);
+  assert.equal(first.incident, null);
+  const second = reduce(state, failureEvent('call-2'));
+  assert.equal(second.snapshot, state);
+  assert.equal(second.incident, null);
+  assert.equal(entry(second.snapshot).count, 0);
+  assert.equal(entry(second.snapshot).generation, 1);
+});
+
+test('sentinel repetition: exhausted replay coverage is marked and never manufactures new generations', () => {
+  let state = null;
+  // Enough distinct results to overflow the bounded assignment-wide replay
+  // set; the overflow is visible on the stored entry.
+  for (let i = 0; i < 200; i += 1) state = reduce(state, failureEvent(`call-${i}`)).snapshot;
+  assert.equal(entry(state).replay_exhausted, true);
+  state = reduce(state, successEvent('call-success')).snapshot;
+  assert.equal(entry(state).state, 'resolved');
+  // Genuinely new failures can no longer be distinguished from replays of the
+  // forgotten IDs, so this assignment is ineligible for further generations.
+  state = reduce(state, failureEvent('fresh-1')).snapshot;
+  state = reduce(state, failureEvent('fresh-2')).snapshot;
+  const third = reduce(state, failureEvent('fresh-3'));
+  assert.equal(third.incident, null);
+  assert.equal(entry(third.snapshot).generation, 1);
+  assert.equal(entry(third.snapshot).state, 'counting');
 });
 
 test('sentinel repetition: changed fingerprints and unknown evidence reset the count without resolving an open incident', () => {
@@ -176,6 +217,91 @@ test('sentinel fingerprint: incident snapshots round-trip atomically at the pack
   const throwing = createVerificationRecorder({ read: () => { throw new Error('read failed'); }, write: () => { throw new Error('write failed'); } });
   assert.equal(throwing.observe({ ...record, package: packagePath }, failureEvent('call-2')), null);
   assert.equal(throwing.observe({ assignment_id: 'no-package' }, failureEvent('call-3')), null);
+});
+
+test('sentinel fingerprint: the recorder filters irrelevant events before incident storage', () => {
+  let reads = 0;
+  let writes = 0;
+  const recorder = createVerificationRecorder({ read: () => { reads += 1; return null; }, write: () => { writes += 1; } });
+  assert.equal(recorder.observe(record, { type: 'message_end', message: { role: 'assistant' } }), null);
+  assert.equal(recorder.observe({ package: '/tmp/pkg' }, failureEvent('call-1')), null);
+  assert.equal(recorder.observe(record, { type: 'tool_execution_end', toolName: 'bash', toolCallId: 'call-1', isError: true }), null);
+  assert.equal(reads, 0);
+  assert.equal(writes, 0);
+  assert.ok(recorder.observe(record, failureEvent('call-1')));
+  assert.equal(reads, 1);
+  assert.equal(writes, 1);
+});
+
+test('sentinel fingerprint: incident snapshots reject nonregular and symlinked sources without blocking', t => {
+  const dir = sandbox(t);
+  const packagePath = join(dir, 'pkg');
+  const state = join(packagePath, 'runtime', 'sentinel');
+  mkdirSync(state, { recursive: true });
+  const snapshotFile = join(state, 'verification-incidents.json');
+
+  // A symlinked snapshot target is rejected before it is opened.
+  const externalSnapshot = join(dir, 'external-snapshot.json');
+  writeFileSync(externalSnapshot, JSON.stringify({ version: 1, package: packagePath, assignments: {} }));
+  symlinkSync(externalSnapshot, snapshotFile);
+  assert.equal(readVerificationIncidents(packagePath), null);
+  rmSync(snapshotFile);
+
+  // A FIFO passes a zero stat size but must never reach a blocking open: an
+  // isolated subprocess with a finite deadline proves the recorder returns
+  // instead of freezing the event loop, and publication refuses to replace it.
+  execFileSync('mkfifo', [snapshotFile]);
+  const moduleUrl = new URL('./sentinel.mjs', import.meta.url).href;
+  const script = `
+    const { readVerificationIncidents, createVerificationRecorder } = await import(${JSON.stringify(moduleUrl)});
+    const pkg = ${JSON.stringify(packagePath)};
+    const failure = { version: 1, command_sha256: 'a'.repeat(64), summary_sha256: 'b'.repeat(64), tree_digest: 'c'.repeat(64), complete: true, exit_code: 1 };
+    const read = readVerificationIncidents(pkg);
+    const recorder = createVerificationRecorder();
+    const observed = recorder.observe({ package: pkg, assignment_id: 'assign-1' },
+      { type: 'tool_execution_end', toolName: 'spec_verify', toolCallId: 'call-1', isError: true,
+        result: { details: { exit_code: 1, sentinel_failure: failure } } });
+    const irrelevant = recorder.observe({ package: pkg, assignment_id: 'assign-1' }, { type: 'message_end' });
+    console.log(JSON.stringify({ read, observed, irrelevant }));
+  `;
+  const output = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { timeout: 10000, encoding: 'utf8' }));
+  assert.equal(output.read, null);
+  assert.equal(output.observed, null);
+  assert.equal(output.irrelevant, null);
+  assert.equal(lstatSync(snapshotFile).isFIFO(), true);
+});
+
+test('sentinel fingerprint: incident publication refuses escaped state directories and symlinked destinations', t => {
+  const dir = sandbox(t);
+  const packagePath = join(dir, 'pkg');
+  mkdirSync(join(packagePath, 'runtime'), { recursive: true });
+  const external = join(dir, 'external');
+  mkdirSync(external);
+  const externalFile = join(external, 'verification-incidents.json');
+  writeFileSync(externalFile, 'untouched\n');
+  symlinkSync(external, join(packagePath, 'runtime', 'sentinel'));
+
+  // Reading through the symlinked ancestor is unavailable, never followed.
+  assert.equal(readVerificationIncidents(packagePath), null);
+  const recorder = createVerificationRecorder();
+  // A refused publication degrades observation to null; it never throws into
+  // the worker, and the external destination stays untouched.
+  assert.equal(recorder.observe({ ...record, package: packagePath }, failureEvent('call-1')), null);
+  assert.equal(readFileSync(externalFile, 'utf8'), 'untouched\n');
+  assert.deepEqual(readdirSync(external), ['verification-incidents.json']);
+
+  // A symlinked destination file is refused rather than replaced or followed.
+  const realPackage = join(dir, 'pkg2');
+  const realState = join(realPackage, 'runtime', 'sentinel');
+  mkdirSync(realState, { recursive: true });
+  const target = join(dir, 'target.json');
+  const targetPayload = JSON.stringify({ version: 1, package: realPackage, assignments: {} });
+  writeFileSync(target, targetPayload);
+  symlinkSync(target, join(realState, 'verification-incidents.json'));
+  assert.throws(() => writeVerificationIncidents(realPackage, { version: 1, package: realPackage, updated_at: null, assignments: {} }));
+  assert.equal(lstatSync(join(realState, 'verification-incidents.json')).isSymbolicLink(), true);
+  assert.equal(readFileSync(target, 'utf8'), targetPayload);
+  assert.equal(readVerificationIncidents(realPackage), null);
 });
 
 // --- checkpoint / inbox-guard fixtures (canonical package + disposable git) ---

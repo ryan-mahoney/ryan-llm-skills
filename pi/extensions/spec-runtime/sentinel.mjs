@@ -4,7 +4,7 @@
 // status. It never starts, stops, messages or cancels a worker and never writes
 // anything except the explicit enrollment record created by /spec-sentinel add.
 
-import { watch, mkdirSync, renameSync, readdirSync, writeFileSync, readFileSync, statSync, existsSync, lstatSync, realpathSync, openSync, closeSync, fsyncSync, unlinkSync, linkSync } from 'node:fs';
+import { watch, mkdirSync, renameSync, readdirSync, writeFileSync, readFileSync, statSync, existsSync, lstatSync, realpathSync, openSync, closeSync, fsyncSync, unlinkSync, linkSync, fstatSync, readSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { join, resolve, dirname, sep, relative, isAbsolute, basename } from 'node:path';
 
@@ -293,7 +293,16 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
 // identifiers are stored; command text, summaries and diffs are never retained.
 
 const VERIFICATION_INCIDENT_KIND = 'repeated-verification-failure';
+const INCIDENTS_FILE = 'verification-incidents.json';
+const INCIDENTS_MAX_BYTES = 65536;
 const MAX_TOOL_CALL_IDS = 8;
+// Replay protection is assignment-wide and independent of the bounded display
+// history above: IDs are retained as truncated digests so a replayed result can
+// never be counted as a new distinct failure after eviction from the display
+// window. The cap keeps the worst-case snapshot (20 assignments) inside the
+// bounded read; overflowing it marks coverage exhausted instead.
+const MAX_REPLAY_IDS = 96;
+const replayDigest = id => createHash('sha256').update(String(id)).digest('hex').slice(0, 16);
 const MAX_ASSIGNMENTS = 20;
 const HASH = /^[a-f0-9]{64}$/;
 const isoNow = value => {
@@ -331,14 +340,24 @@ function pruneAssignments(assignments) {
   return assignments;
 }
 
+// The recorder runs inside the runtime event seam: only a completed spec_verify
+// result for a known package/assignment is ever relevant. Shared by the reducer
+// and the recorder so irrelevant events are filtered before storage access.
+function verificationEventSubject({ record, event } = {}) {
+  if (!event || event.type !== 'tool_execution_end' || event.toolName !== 'spec_verify'
+      || typeof event.toolCallId !== 'string' || !event.toolCallId) return null;
+  const packagePath = record?.package;
+  const assignment = record?.assignment_id ?? record?.id;
+  if (typeof packagePath !== 'string' || typeof assignment !== 'string' || !assignment) return null;
+  return { packagePath, assignment };
+}
+
 // Only completed spec_verify results reduce; every other decoded event leaves
 // the snapshot reference untouched.
 export function reduceVerificationResult(snapshot, { record, event }, now = Date.now) {
-  if (!event || event.type !== 'tool_execution_end' || event.toolName !== 'spec_verify'
-      || typeof event.toolCallId !== 'string' || !event.toolCallId) return { snapshot, incident: null };
-  const packagePath = record?.package;
-  const assignment = record?.assignment_id ?? record?.id;
-  if (typeof packagePath !== 'string' || typeof assignment !== 'string' || !assignment) return { snapshot, incident: null };
+  const subject = verificationEventSubject({ record, event });
+  if (!subject) return { snapshot, incident: null };
+  const { packagePath, assignment } = subject;
   const observedAt = isoNow(now);
   const state = snapshot && snapshot.version === 1 && typeof snapshot.package === 'string'
     ? { ...snapshot, assignments: { ...snapshot.assignments } }
@@ -346,12 +365,28 @@ export function reduceVerificationResult(snapshot, { record, event }, now = Date
   state.package = packagePath;
   const previous = state.assignments[assignment] ?? {
     assignment_id: assignment, checkout: typeof record?.checkout === 'string' ? record.checkout : null,
-    count: 0, fingerprint: null, tool_call_ids: [], state: 'idle', generation: 0, incident_id: null, linked_from: null,
+    count: 0, fingerprint: null, tool_call_ids: [], replay_ids: [], replay_exhausted: false,
+    state: 'idle', generation: 0, incident_id: null, linked_from: null,
     incident_fingerprint: null, observed_at: observedAt,
   };
-  if (previous.tool_call_ids.includes(event.toolCallId)) return { snapshot, incident: null };
+  // Assignment-wide replay protection, seeded from the display window for
+  // snapshots written before the digest set existed.
+  const replayIds = Array.isArray(previous.replay_ids) ? [...previous.replay_ids]
+    : previous.tool_call_ids.map(id => replayDigest(id));
+  const digest = replayDigest(event.toolCallId);
+  if (replayIds.includes(digest)) return { snapshot, incident: null };
+  replayIds.push(digest);
+  let replayExhausted = previous.replay_exhausted === true;
+  if (replayIds.length > MAX_REPLAY_IDS) {
+    replayIds.splice(0, replayIds.length - MAX_REPLAY_IDS);
+    // Deduplication coverage is exhausted: forgotten IDs can no longer be
+    // distinguished from genuinely new results, so this assignment is
+    // permanently ineligible to open further incident generations.
+    replayExhausted = true;
+  }
 
-  const entry = { ...previous, tool_call_ids: [...previous.tool_call_ids, event.toolCallId].slice(-MAX_TOOL_CALL_IDS), observed_at: observedAt };
+  const entry = { ...previous, replay_ids: replayIds, replay_exhausted: replayExhausted,
+    tool_call_ids: [...previous.tool_call_ids, event.toolCallId].slice(-MAX_TOOL_CALL_IDS), observed_at: observedAt };
   const details = event.result?.details;
   const failure = details?.sentinel_failure;
   const outcome = validHashes(failure) ? 'failure'
@@ -371,9 +406,10 @@ export function reduceVerificationResult(snapshot, { record, event }, now = Date
     entry.state = entry.state === 'open' ? 'open' : 'counting';
     const incidentMatches = entry.state === 'open' && entry.incident_fingerprint
       && fingerprintKey(entry.incident_fingerprint) === fingerprintKey(fingerprint);
-    if (entry.count >= 3 && !incidentMatches) {
+    if (entry.count >= 3 && !incidentMatches && !entry.replay_exhausted) {
       // A third matching failure opens one incident for this fingerprint
-      // generation; the previous incident remains linked history.
+      // generation; the previous incident remains linked history. Exhausted
+      // replay coverage never manufactures a new generation.
       const linked = entry.incident_id;
       entry.generation = previous.generation + 1;
       entry.linked_from = linked;
@@ -409,24 +445,59 @@ export function reduceVerificationResult(snapshot, { record, event }, now = Date
 }
 
 export function verificationIncidentsPath(packagePath) {
-  return join(packagePath, 'runtime', 'sentinel', 'verification-incidents.json');
+  return join(packagePath, 'runtime', 'sentinel', INCIDENTS_FILE);
 }
 
+// Nonregular and symlinked sources are rejected before opening: a FIFO or
+// socket at the snapshot path must never reach a blocking open that freezes
+// the runtime event seam, and a symlink must not be followed outside the
+// package. The opened descriptor is validated itself and the bytes actually
+// read are bounded.
 export function readVerificationIncidents(packagePath) {
-  const file = verificationIncidentsPath(packagePath);
+  let fd;
   try {
-    if (statSync(file).size > 65536) return null;
-    const value = JSON.parse(readFileSync(file, 'utf8'));
+    // Resolve runtime/sentinel without following a symlinked or escaping
+    // component.
+    const directory = validatedStateDirectory(packagePath, ['runtime', 'sentinel']);
+    if (!directory) return null;
+    const file = join(directory, INCIDENTS_FILE);
+    let info;
+    try { info = lstatSync(file); } catch { return null; }
+    if (!info.isFile()) return null;
+    fd = openSync(file, 'r');
+    const opened = fstatSync(fd);
+    if (!opened.isFile() || opened.size > INCIDENTS_MAX_BYTES) return null;
+    const buffer = Buffer.alloc(INCIDENTS_MAX_BYTES + 1);
+    let total = 0;
+    while (total < buffer.length) {
+      const bytes = readSync(fd, buffer, total, buffer.length - total, null);
+      if (bytes === 0) break;
+      total += bytes;
+    }
+    if (total > INCIDENTS_MAX_BYTES) return null;
+    const value = JSON.parse(buffer.toString('utf8', 0, total));
     return value && value.version === 1 && value.package === packagePath && value.assignments
       && typeof value.assignments === 'object' ? value : null;
-  } catch { return null; }
+  } catch { return null; } finally {
+    if (fd !== undefined) { try { closeSync(fd); } catch { /* Closing is best effort. */ } }
+  }
 }
 
 export function writeVerificationIncidents(packagePath, snapshot) {
-  const file = verificationIncidentsPath(packagePath);
-  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  // Create/validate runtime/sentinel component-by-component so publication
+  // cannot follow a symlinked ancestor outside the canonical package, and
+  // refuse a nonregular destination rather than replacing it.
+  const directory = ensureStateDirectory(packagePath, ['runtime', 'sentinel'], 'sentinel incident state directory');
+  const file = join(directory, INCIDENTS_FILE);
+  let info;
+  try { info = lstatSync(file); } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+  if (info && !info.isFile()) throw new Error(`verification incident snapshot must be a regular non-symlink file: ${file}`);
+  const payload = `${JSON.stringify(snapshot)}\n`;
+  if (Buffer.byteLength(payload) > INCIDENTS_MAX_BYTES) throw new Error(`verification incident snapshot exceeds ${INCIDENTS_MAX_BYTES} bytes`);
   const temp = `${file}.${randomUUID()}.tmp`;
-  writeFileSync(temp, `${JSON.stringify(snapshot)}\n`, { mode: 0o600 });
+  writeFileSync(temp, payload, { mode: 0o600 });
   renameSync(temp, file);
 }
 
@@ -436,7 +507,11 @@ export function createVerificationRecorder({ now = Date.now, read = readVerifica
   return {
     observe(record, event) {
       try {
-        const current = read(record?.package) ?? emptySnapshot(record?.package);
+        // Irrelevant events are filtered before any storage access: the
+        // recorder must not add I/O — or a hostile blocking source — to
+        // ordinary decoded events.
+        if (!verificationEventSubject({ record, event })) return null;
+        const current = read(record.package) ?? emptySnapshot(record.package);
         const result = reduceVerificationResult(current, { record, event }, now);
         if (result.snapshot !== current) write(record.package, result.snapshot);
         return result;
@@ -619,13 +694,14 @@ function publishDurable(file, value, { exclusive = false, directory } = {}) {
   try { fsyncSync(dirFd); } catch { /* parent fsync is best effort on some FS */ } finally { closeSync(dirFd); }
 }
 
-// Read-side guard: resolve runtime/sentinel/<workflow-id> without following a
-// symlink at any component. Returns the validated directory or null when a
-// component is absent, non-directory, symlinked or resolves outside the package.
-function validatedCheckpointDirectory(packagePath, workflowId) {
-  const root = realpathSync(packagePath);
+// Read-side guard: resolve state components without following a symlink at
+// any component. Returns the validated directory or null when a component is
+// absent, non-directory, symlinked or resolves outside the package.
+function validatedStateDirectory(packagePath, components) {
+  let root;
+  try { root = realpathSync(packagePath); } catch { return null; }
   let current = root;
-  for (const component of ['runtime', 'sentinel', workflowId]) {
+  for (const component of components) {
     current = join(current, component);
     let info;
     try { info = lstatSync(current); } catch { return null; }
@@ -637,32 +713,41 @@ function validatedCheckpointDirectory(packagePath, workflowId) {
   return current;
 }
 
-// Write-side guard: create missing runtime/sentinel/<workflow-id> components one
-// at a time and refuse a symlinked, non-directory or escaping component before a
-// temp file is opened. Only the sentinel-owned subdirectories are created 0700.
-function ensureCheckpointDirectory(packagePath, workflowId) {
+function validatedCheckpointDirectory(packagePath, workflowId) {
+  return validatedStateDirectory(packagePath, ['runtime', 'sentinel', workflowId]);
+}
+
+// Write-side guard shared by checkpoint and incident publication: create
+// missing state components one at a time and refuse a symlinked,
+// non-directory or escaping component before a temp file is opened. Only the
+// sentinel-owned subdirectories are created 0700.
+function ensureStateDirectory(packagePath, components, label = 'checkpoint state directory') {
   const root = realpathSync(packagePath);
   let current = root;
-  for (const component of ['runtime', 'sentinel', workflowId]) {
+  for (const component of components) {
     current = join(current, component);
     let info = null;
     try { info = lstatSync(current); }
     catch (error) {
-      if (error?.code !== 'ENOENT') fail(`checkpoint state directory is unreadable: ${component} (${error?.code ?? 'error'})`, 'checkpoint-storage');
+      if (error?.code !== 'ENOENT') fail(`${label} is unreadable: ${component} (${error?.code ?? 'error'})`, 'checkpoint-storage');
       try { mkdirSync(current, { mode: 0o700 }); }
       catch (mkdirError) {
-        if (mkdirError?.code !== 'EEXIST') fail(`checkpoint state directory could not be created: ${component} (${mkdirError?.code ?? 'error'})`, 'checkpoint-storage');
+        if (mkdirError?.code !== 'EEXIST') fail(`${label} could not be created: ${component} (${mkdirError?.code ?? 'error'})`, 'checkpoint-storage');
       }
       try { info = lstatSync(current); }
-      catch (readError) { fail(`checkpoint state directory is unavailable: ${component} (${readError?.code ?? 'error'})`, 'checkpoint-storage'); }
+      catch (readError) { fail(`${label} is unavailable: ${component} (${readError?.code ?? 'error'})`, 'checkpoint-storage'); }
     }
-    if (info.isSymbolicLink()) fail(`checkpoint state directory must not be a symlink: ${component}`, 'checkpoint-symlink');
-    if (!info.isDirectory()) fail(`checkpoint state directory must be a directory: ${component}`, 'checkpoint-storage');
+    if (info.isSymbolicLink()) fail(`${label} must not be a symlink: ${component}`, 'checkpoint-symlink');
+    if (!info.isDirectory()) fail(`${label} must be a directory: ${component}`, 'checkpoint-storage');
     let real;
-    try { real = realpathSync(current); } catch (error) { fail(`checkpoint state directory is unreadable: ${component} (${error?.code ?? 'error'})`, 'checkpoint-storage'); }
-    if (real !== current) fail(`checkpoint state directory escapes the canonical package: ${component}`, 'checkpoint-storage');
+    try { real = realpathSync(current); } catch (error) { fail(`${label} is unreadable: ${component} (${error?.code ?? 'error'})`, 'checkpoint-storage'); }
+    if (real !== current) fail(`${label} escapes the canonical package: ${component}`, 'checkpoint-storage');
   }
   return current;
+}
+
+function ensureCheckpointDirectory(packagePath, workflowId) {
+  return ensureStateDirectory(packagePath, ['runtime', 'sentinel', workflowId]);
 }
 
 export function checkpointPath(packagePath, workflowId) {

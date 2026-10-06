@@ -199,10 +199,13 @@ export function launch(record, role, prompt, options = {}) {
       try {
         const value = JSON.parse(line);
         activity.event(value);
-        // A narrow observation seam: a bad observer degrades observation only.
-        try { options.onEvent?.(record, value); } catch { /* Observer failure must never affect the run. */ }
+        // Fatal lifecycle handling is independent of observation: the cleanup
+        // receipt is reported before any observer seam runs, so a hostile or
+        // blocking observer can never delay mandatory cancellation.
         if (value.type === 'tool_execution_end' && value.result?.details?.requires_cancellation)
           reportLifecycleFailure(value.result.details.error);
+        // A narrow observation seam: a bad observer degrades observation only.
+        try { options.onEvent?.(record, value); } catch { /* Observer failure must never affect the run. */ }
         if (value.type === 'message_end' && value.message?.role === 'assistant') {
           lastStop = value.message.stopReason;
           finalText = (value.message.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n');
