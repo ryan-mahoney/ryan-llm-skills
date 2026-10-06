@@ -4,7 +4,7 @@
 // status. It never starts, stops, messages or cancels a worker and never writes
 // anything except the explicit enrollment record created by /spec-sentinel add.
 
-import { watch, mkdirSync, renameSync, readdirSync, writeFileSync } from 'node:fs';
+import { watch, mkdirSync, renameSync, readdirSync, writeFileSync, readFileSync, statSync, existsSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { join, resolve, dirname, sep } from 'node:path';
 
@@ -284,6 +284,163 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
       closed = true;
       stopHandles();
       clearWidgets();
+    },
+  };
+}
+
+// Repeated verification failures are reduced from decoded tool events and
+// retained as compact package-owned incident snapshots. Only digests, counts and
+// identifiers are stored; command text, summaries and diffs are never retained.
+
+const VERIFICATION_INCIDENT_KIND = 'repeated-verification-failure';
+const MAX_TOOL_CALL_IDS = 8;
+const MAX_ASSIGNMENTS = 20;
+const HASH = /^[a-f0-9]{64}$/;
+const isoNow = value => {
+  const time = typeof value === 'function' ? value() : value;
+  return Number.isFinite(time) ? new Date(time).toISOString() : null;
+};
+
+const emptySnapshot = packagePath => ({
+  version: 1,
+  package: packagePath,
+  updated_at: null,
+  assignments: {},
+});
+
+const validHashes = fingerprint => fingerprint && fingerprint.version === 1 && fingerprint.complete === true
+  && HASH.test(fingerprint.command_sha256) && HASH.test(fingerprint.summary_sha256) && HASH.test(fingerprint.tree_digest)
+  && Number.isInteger(fingerprint.exit_code) && fingerprint.exit_code !== 0;
+
+const fingerprintKey = fingerprint => `${fingerprint.command_sha256}:${fingerprint.summary_sha256}:${fingerprint.tree_digest}`;
+
+// At most 20 assignment entries: oldest non-open work is forgotten first.
+function pruneAssignments(assignments) {
+  const keys = Object.keys(assignments);
+  if (keys.length <= MAX_ASSIGNMENTS) return assignments;
+  const oldest = list => list.sort((a, b) => String(assignments[a].observed_at ?? '').localeCompare(String(assignments[b].observed_at ?? '')));
+  const removable = oldest(keys.filter(key => assignments[key].state !== 'open'));
+  for (const key of removable) {
+    delete assignments[key];
+    if (Object.keys(assignments).length <= MAX_ASSIGNMENTS) return assignments;
+  }
+  for (const key of oldest(Object.keys(assignments))) {
+    delete assignments[key];
+    if (Object.keys(assignments).length <= MAX_ASSIGNMENTS) break;
+  }
+  return assignments;
+}
+
+// Only completed spec_verify results reduce; every other decoded event leaves
+// the snapshot reference untouched.
+export function reduceVerificationResult(snapshot, { record, event }, now = Date.now) {
+  if (!event || event.type !== 'tool_execution_end' || event.toolName !== 'spec_verify'
+      || typeof event.toolCallId !== 'string' || !event.toolCallId) return { snapshot, incident: null };
+  const packagePath = record?.package;
+  const assignment = record?.assignment_id ?? record?.id;
+  if (typeof packagePath !== 'string' || typeof assignment !== 'string' || !assignment) return { snapshot, incident: null };
+  const observedAt = isoNow(now);
+  const state = snapshot && snapshot.version === 1 && typeof snapshot.package === 'string'
+    ? { ...snapshot, assignments: { ...snapshot.assignments } }
+    : emptySnapshot(packagePath);
+  state.package = packagePath;
+  const previous = state.assignments[assignment] ?? {
+    assignment_id: assignment, checkout: typeof record?.checkout === 'string' ? record.checkout : null,
+    count: 0, fingerprint: null, tool_call_ids: [], state: 'idle', generation: 0, incident_id: null, linked_from: null,
+    incident_fingerprint: null, observed_at: observedAt,
+  };
+  if (previous.tool_call_ids.includes(event.toolCallId)) return { snapshot, incident: null };
+
+  const entry = { ...previous, tool_call_ids: [...previous.tool_call_ids, event.toolCallId].slice(-MAX_TOOL_CALL_IDS), observed_at: observedAt };
+  const details = event.result?.details;
+  const failure = details?.sentinel_failure;
+  const outcome = validHashes(failure) ? 'failure'
+    : details?.exit_code === 0 && !details.error && event.isError !== true ? 'success' : 'unknown';
+  let incident = null;
+
+  if (outcome === 'success') {
+    entry.count = 0;
+    entry.fingerprint = null;
+    if (entry.state === 'open') entry.state = 'resolved';
+    else if (entry.state !== 'resolved') entry.state = 'idle';
+  } else if (outcome === 'failure') {
+    const fingerprint = { command_sha256: failure.command_sha256, summary_sha256: failure.summary_sha256, tree_digest: failure.tree_digest };
+    const unchanged = previous.fingerprint && fingerprintKey(previous.fingerprint) === fingerprintKey(fingerprint);
+    entry.fingerprint = fingerprint;
+    entry.count = unchanged ? previous.count + 1 : 1;
+    entry.state = entry.state === 'open' ? 'open' : 'counting';
+    const incidentMatches = entry.state === 'open' && entry.incident_fingerprint
+      && fingerprintKey(entry.incident_fingerprint) === fingerprintKey(fingerprint);
+    if (entry.count >= 3 && !incidentMatches) {
+      // A third matching failure opens one incident for this fingerprint
+      // generation; the previous incident remains linked history.
+      const linked = entry.incident_id;
+      entry.generation = previous.generation + 1;
+      entry.linked_from = linked;
+      entry.incident_id = createHash('sha256')
+        .update(`${packagePath}\u0000${assignment}\u0000${VERIFICATION_INCIDENT_KIND}\u0000${fingerprintKey(fingerprint)}\u0000${entry.generation}`)
+        .digest('hex').slice(0, 32);
+      entry.state = 'open';
+      entry.incident_fingerprint = fingerprint;
+      incident = {
+        id: entry.incident_id,
+        kind: VERIFICATION_INCIDENT_KIND,
+        assignment_id: assignment,
+        package: packagePath,
+        generation: entry.generation,
+        linked_from: entry.linked_from,
+        ...fingerprint,
+        count: entry.count,
+        tool_call_ids: [...entry.tool_call_ids],
+        observed_at: observedAt,
+      };
+    }
+  } else {
+    // Incomplete evidence never resolves an open incident.
+    entry.count = 0;
+    entry.fingerprint = null;
+    if (entry.state !== 'open' && entry.state !== 'resolved') entry.state = 'idle';
+  }
+
+  state.assignments[assignment] = entry;
+  pruneAssignments(state.assignments);
+  state.updated_at = observedAt;
+  return { snapshot: state, incident };
+}
+
+export function verificationIncidentsPath(packagePath) {
+  return join(packagePath, 'runtime', 'sentinel', 'verification-incidents.json');
+}
+
+export function readVerificationIncidents(packagePath) {
+  const file = verificationIncidentsPath(packagePath);
+  try {
+    if (statSync(file).size > 65536) return null;
+    const value = JSON.parse(readFileSync(file, 'utf8'));
+    return value && value.version === 1 && value.package === packagePath && value.assignments
+      && typeof value.assignments === 'object' ? value : null;
+  } catch { return null; }
+}
+
+export function writeVerificationIncidents(packagePath, snapshot) {
+  const file = verificationIncidentsPath(packagePath);
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  const temp = `${file}.${randomUUID()}.tmp`;
+  writeFileSync(temp, `${JSON.stringify(snapshot)}\n`, { mode: 0o600 });
+  renameSync(temp, file);
+}
+
+// The recorder is the only writer; a read/write failure degrades observation and
+// never propagates into the runtime's event callback.
+export function createVerificationRecorder({ now = Date.now, read = readVerificationIncidents, write = writeVerificationIncidents } = {}) {
+  return {
+    observe(record, event) {
+      try {
+        const current = read(record?.package) ?? emptySnapshot(record?.package);
+        const result = reduceVerificationResult(current, { record, event }, now);
+        if (result.snapshot !== current) write(record.package, result.snapshot);
+        return result;
+      } catch { return null; }
     },
   };
 }

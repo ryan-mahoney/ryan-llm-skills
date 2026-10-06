@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { activityRecorder } from './monitor.mjs';
 import { SCOUT_MODEL } from './scout.mjs';
 import { createLogSummary } from '../../../scripts/spec-facts/core.mjs';
-import { decide } from '../../../scripts/jev/core.mjs';
+import { decide, collectFacts } from '../../../scripts/jev/core.mjs';
 import { preparedEntry } from './startup.mjs';
 import { submitCompletion, completionStatus, refreshProgress, revision, recordVerification, invalidateCompletion } from './completion.mjs';
 
@@ -199,6 +199,8 @@ export function launch(record, role, prompt, options = {}) {
       try {
         const value = JSON.parse(line);
         activity.event(value);
+        // A narrow observation seam: a bad observer degrades observation only.
+        try { options.onEvent?.(record, value); } catch { /* Observer failure must never affect the run. */ }
         if (value.type === 'tool_execution_end' && value.result?.details?.requires_cancellation)
           reportLifecycleFailure(value.result.details.error);
         if (value.type === 'message_end' && value.message?.role === 'assistant') {
@@ -233,8 +235,9 @@ export function launch(record, role, prompt, options = {}) {
 }
 
 export class Runtime {
-  constructor({ launchProcess = launch, isAlive = groupAlive, kill = (pid, signal) => process.kill(-pid, signal), notify = () => {}, indexDir = join(homedir(), '.pi/agent/spec-runtime') } = {}) {
+  constructor({ launchProcess = launch, isAlive = groupAlive, kill = (pid, signal) => process.kill(-pid, signal), notify = () => {}, indexDir = join(homedir(), '.pi/agent/spec-runtime'), onWorkerEvent = () => {} } = {}) {
     this.launchProcess = launchProcess; this.isAlive = isAlive; this.kill = kill; this.notify = notify; this.indexDir = indexDir; this.active = new Map(); this.cancellations = new Map();
+    this.onWorkerEvent = onWorkerEvent;
   }
   async startup(input, parentSession) {
     const requestedAt = timestamp();
@@ -289,7 +292,7 @@ export class Runtime {
     atomic(join(this.indexDir, `${id}.json`), { run_id: id, package: config.package, manifest: join(runtimeDir, 'runs', `${id}.json`), parent_session: parentSession });
     const prompt = `Implement this prepared step as its architect/owner using spec_editor.\nPACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\nRead the card and required policy. Choose the implementation approach yourself, then send a short Change/Edits/Preserve/Return packet for a bounded transformation. Name affected symbols, the chosen approach and preservation constraints; let the editor choose local implementation details and batch related edits. The editor does not run tests, compile/lint checks or other executable verification. After it returns, use spec_verify for necessary focused checks and diagnose failures before assigning bounded corrections. Do not check every packet automatically; reuse valid evidence. Read/search missing source facts directly. The editor normally reads and edits in one assignment; reserve facts-only requests for a specific blocking fact unavailable through your tools. Request compact results with artifact paths, not source inventories. Do not delegate architecture, whole-step restoration, or an entire acceptance suite with open-ended repairs. Reuse retained context. Assess each returned diff/result before the next packet; commit is a separate assignment after acceptance of the completed changes and required evidence. Use spec_scout only for a bounded discovery gap worth delegating; direct reads remain the default. Do not discover models, run startup suites, poll, or start other agents outside that scout tool. The runtime retains both sessions. Before ending, call spec_complete with decisions, introduced symbols, gaps and step-owned evidence assessments. It writes the canonical learning from verification receipts; an evidence log is not a learning. Commit via the editor first when complete. Missing handoffs remain unfinished obligations. This owner assignment ends after this step; independent review belongs to the coordinator.\n${input.instructions || ''}`;
     let task;
-    try { task = this.launchProcess(record, 'owner', `${prompt}\nEnvironment paths (observations, not setup approval): ${JSON.stringify(record.environment)}`); }
+    try { task = this.launchProcess(record, 'owner', `${prompt}\nEnvironment paths (observations, not setup approval): ${JSON.stringify(record.environment)}`, { onEvent: this.onWorkerEvent }); }
     catch (error) { record.state = 'failed'; record.error = error.message; save(record); release(record); throw error; }
     record.pid = task.child.pid;
     save(record); refreshProgress(record.package).catch(error => { record.progress_error = error.message; }); event(record, 'run_started', { dispatch_requested_at: requestedAt, owner_session: record.owner_session, editor_session: record.editor_session, parent_session: parentSession, pid: record.pid });
@@ -412,6 +415,35 @@ export async function runCompletion(record, input) {
   });
 }
 
+// Fingerprints record what was verified and how complete that evidence is; the
+// command and summary text themselves are never retained here.
+const normalizeCommand = command => String(command).replace(/\r\n/g, '\n').trim();
+const normalizeSummary = text => String(text ?? '').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\r\n/g, '\n');
+const sha256Hex = value => createHash('sha256').update(value).digest('hex');
+
+async function checkoutDigest(checkout) {
+  if (typeof checkout !== 'string') return { tree_digest: null, complete: false };
+  try {
+    const facts = await collectFacts(checkout);
+    return { tree_digest: typeof facts.working_tree_digest === 'string' ? facts.working_tree_digest : null,
+      complete: Boolean(facts.working_tree_digest) && facts.incomplete !== true };
+  } catch { return { tree_digest: null, complete: false }; }
+}
+
+async function verificationFingerprint(record, command, reply) {
+  const digest = await checkoutDigest(record?.checkout);
+  const exitCode = typeof reply?.exit_code === 'number' && Number.isFinite(reply.exit_code) ? reply.exit_code : null;
+  return {
+    version: 1,
+    command_sha256: sha256Hex(normalizeCommand(command)),
+    summary_sha256: sha256Hex(normalizeSummary(reply?.output)),
+    tree_digest: digest.tree_digest,
+    complete: reply?.output_truncated !== true && !reply?.error && !reply?.requires_cancellation
+      && digest.complete && exitCode !== null && exitCode !== 0,
+    exit_code: exitCode,
+  };
+}
+
 export async function runVerification(record, command, timeout = 120, signal, server) {
   return withIdleWriter(record, async () => {
     invalidateCompletion(record);
@@ -429,7 +461,8 @@ export async function runVerification(record, command, timeout = 120, signal, se
     }
     const receipt = recordVerification(record, command, before, revision(record), reply);
     event(record, 'verification_finished', { receipt_id: receipt.id, outcome: receipt.outcome });
-    return { ...reply, receipt_id: receipt.id, observed_revision: receipt.before };
+    if (typeof reply?.exit_code !== 'number' || reply.exit_code === 0) return { ...reply, receipt_id: receipt.id, observed_revision: receipt.before };
+    return { ...reply, receipt_id: receipt.id, observed_revision: receipt.before, sentinel_failure: await verificationFingerprint(record, command, reply) };
   });
 }
 

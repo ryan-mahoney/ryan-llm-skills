@@ -7,7 +7,7 @@ import { homedir } from 'node:os';
 import { Runtime, loadRun, summary, assertLease, runEditor, runCommand, runVerification, runAdvice, runCompletion, canonicalPackage, event as runtimeEvent } from './runtime.mjs';
 import { createCommunication } from './communication.mjs';
 import { createMonitor } from './monitor.mjs';
-import { createSentinelObserver } from './sentinel.mjs';
+import { createSentinelObserver, createVerificationRecorder } from './sentinel.mjs';
 import { createScout, SCOUT_MODEL } from './scout.mjs';
 import { installProgressContext, recordCheckpoint, refreshProgress } from './completion.mjs';
 import { metrics, formatMetrics } from './metrics.mjs';
@@ -148,7 +148,9 @@ export default function (pi: any) {
       catch { ctx.ui.notify('Cannot open that package runtime receipt. Use /spec-monitor /absolute/repo/.specs/feature', 'error'); }
     },
   });
-  const runtime = new Runtime({ notify: (value: any) => pi.sendMessage({ customType: 'spec-runtime', content: JSON.stringify(value), display: true }, { triggerTurn: true }) });
+  const verificationRecorder = createVerificationRecorder();
+  const runtime = new Runtime({ notify: (value: any) => pi.sendMessage({ customType: 'spec-runtime', content: JSON.stringify(value), display: true }, { triggerTurn: true }),
+    onWorkerEvent: (record: any, event: any) => verificationRecorder.observe(record, event) });
   pi.on('session_shutdown', async () => {
     monitor.close();
     sentinel?.close();

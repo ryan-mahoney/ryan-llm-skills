@@ -491,6 +491,10 @@ test('sentinel observer: a watcher-cap exclusion is reported, not hidden', async
 });
 
 test('sentinel status: the CLI reports a disposable package and preserves runs discovery', { timeout: 60000 }, async t => {
+  // A managed environment exports PI_INTERCOM_SCOPE_ID and PI_CODING_AGENT_DIR;
+  // both must be gone so the fixture and the CLI resolve one workspace.
+  const env = isolatedEnv(t);
+  env.delete('PI_CODING_AGENT_DIR');
   const dir = sandbox(t);
   const empty = join(dir, 'empty-agent');
   const emptyIndex = join(dir, 'empty-index');
