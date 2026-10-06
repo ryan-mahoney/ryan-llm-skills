@@ -127,6 +127,8 @@ the review role and compatible tools without fixing a model. Step fixes use the
 See [workflow efficiency](docs/spec-workflow-efficiency.md) for deterministic helpers,
 direct owner `spec_advice` calls to Jev, local Jev effectiveness reports, and optional
 Mercury clerical drafts through `spec-clerk`.
+The [process improvements](docs/spec-coding-process-improvements.md) explain implemented
+changes, observed results and the limits of current performance evidence.
 Owner/editor questions use pi-intercom's scoped channel: the editor waits while the
 owner answers, then continues in the same assignment with its writer reservation held.
 Handoffs carry canonical paths, outcomes,
