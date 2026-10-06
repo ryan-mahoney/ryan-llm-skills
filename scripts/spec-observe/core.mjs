@@ -1,5 +1,5 @@
 import { createReadStream } from 'node:fs';
-import { open, readFile, readdir, stat } from 'node:fs/promises';
+import { open, opendir, readFile, readdir, stat } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import path from 'node:path';
 
@@ -10,20 +10,36 @@ const safeNumber = (value) => typeof value === 'number' && Number.isFinite(value
 
 export async function discoverManaged(directory, { limit = 10 } = {}) {
   const errors = [];
-  let entries;
-  try { entries = await readdir(directory, { withFileTypes: true }); }
-  catch (error) { return { runs: [], discovery_errors: [{ path: directory, code: error.code }], candidates_truncated: false }; }
+  let directory_handle;
+  try { directory_handle = await opendir(directory); }
+  catch (error) { return { runs: [], discovery_errors: [{ path: directory, code: error.code }], candidates_truncated: false, runs_truncated: false }; }
   const candidates = [];
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
-    const file = path.join(directory, entry.name);
-    try { const metadata = await stat(file); candidates.push({ file, modified: metadata.mtimeMs }); }
-    catch (error) { errors.push({ path: file, code: error.code }); }
-  }
+  let candidates_truncated = false;
+  try {
+    // Bounded enumeration: at most 1000 examined *.json regular-file candidates.
+    while (candidates.length < 1000) {
+      const entry = await directory_handle.read();
+      if (!entry) break;
+      if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+      const file = path.join(directory, entry.name);
+      try { const metadata = await stat(file); candidates.push({ file, modified: metadata.mtimeMs }); }
+      catch (error) { errors.push({ path: file, code: error.code }); }
+    }
+    if (candidates.length >= 1000) {
+      // Only another matching candidate is a truncation; other names are not
+      // entries this pass would have examined.
+      let next;
+      while ((next = await directory_handle.read())) {
+        if (next.isFile() && next.name.endsWith('.json')) { candidates_truncated = true; break; }
+      }
+    }
+  } finally { await directory_handle.close(); }
   candidates.sort((a, b) => b.modified - a.modified);
   const runs = [];
+  let runs_truncated = false;
   // Small pointer files only; never follow the manifest or session transcript here.
-  for (const candidate of candidates.slice(0, 1000)) {
+  for (const candidate of candidates) {
+    if (runs.length >= limit) { runs_truncated = true; break; }
     let handle;
     try {
       handle = await open(candidate.file, 'r');
@@ -35,11 +51,10 @@ export async function discoverManaged(directory, { limit = 10 } = {}) {
       const safe = { run_id: record.run_id, package: record.package, indexed_at: new Date(candidate.modified).toISOString() };
       for (const key of ['manifest', 'parent_session']) if (typeof record[key] === 'string') safe[key] = record[key];
       runs.push(safe);
-      if (runs.length >= limit) break;
     } catch (error) { errors.push({ path: candidate.file, code: error.code ?? (error instanceof SyntaxError ? 'INVALID_JSON' : error.message) }); }
     finally { await handle?.close(); }
   }
-  return { runs, discovery_errors: errors, candidates_truncated: candidates.length > 1000 };
+  return { runs, discovery_errors: errors, candidates_truncated, runs_truncated };
 }
 
 // Headers are deliberately bounded. Discovery never prints or indexes message bodies.
