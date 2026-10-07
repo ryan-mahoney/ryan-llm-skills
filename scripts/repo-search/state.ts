@@ -1,3 +1,5 @@
+import { assertStateGrowth, MAX_COMMITTED_BYTES, MAX_TEMPORARY_BYTES, ownedTreeBytes, SQLITE_WRITE_HEADROOM } from "./core/resources";
+import { openCodeEmbeddingCache, DEFAULT_CODE_EMBEDDING_CACHE_MAX_ROWS } from "./core/codeEmbeddingCache";
 // Transactional immutable-generation state owner.
 //
 // State exclusively owns current rows, pins, writer/native claims, generation
@@ -334,6 +336,10 @@ function createSchema(db: Database): void {
       operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS enrollment_claims (
+      checkout_key TEXT PRIMARY KEY,
+      operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE
+    );
     CREATE TABLE IF NOT EXISTS native_claim (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
@@ -402,6 +408,15 @@ function createState(
   const generationsParentIdentity = ensureOwnedDirectory(join(root, "generations"), true);
   const generationsParent = generationsParentIdentity.path;
   const nowIso = () => new Date().toISOString();
+  const assertGrowth = (temporaryBytes = 0, committedBytes = 0) => {
+    assertIdentity(rootIdentity, "state root");
+    db.run("PRAGMA wal_checkpoint(PASSIVE)");
+    assertStateGrowth(root, temporaryBytes, committedBytes, { committed: MAX_COMMITTED_BYTES - SQLITE_WRITE_HEADROOM, temporary: MAX_TEMPORARY_BYTES });
+  };
+  const transaction = <T>(fn: () => T, cleanup = false): T => {
+    if (!cleanup) assertGrowth(0, SQLITE_WRITE_HEADROOM);
+    return txImmediate(db, fn);
+  };
 
   function generationPaths(id: string): { tempPath: string; finalPath: string } {
     return {
@@ -426,7 +441,7 @@ function createState(
     return operation;
   }
 
-  function beginOperation(input: OperationInput): {
+  function beginOperation(input: OperationInput, cleanup = false): {
     id: string;
     command: string;
     kind: string;
@@ -462,10 +477,13 @@ function createState(
       ensureOwnedDirectory(checkoutPath, true);
     }
 
-    txImmediate(db, () => {
+    transaction(() => {
       if (input.writer && checkoutKey) {
         const claim = get(db, "SELECT operation_id FROM writer_claims WHERE checkout_key = ?", checkoutKey);
         if (claim) throw new StateError("busy", `checkout already claimed: ${checkoutKey}`);
+        if (get(db, "SELECT 1 FROM enrollment_claims WHERE checkout_key = ?", checkoutKey)) {
+          throw new StateError("busy", "checkout enrollment is being edited");
+        }
       }
       if (input.native) {
         const claim = get(db, "SELECT operation_id FROM native_claim WHERE id = 1");
@@ -493,7 +511,7 @@ function createState(
       if (input.native) {
         run(db, "INSERT INTO native_claim (id, operation_id, created_at) VALUES (1, ?, ?)", id, createdAt);
       }
-    });
+    }, cleanup);
 
     return { id, command: input.command, kind: input.kind, checkoutKey, pid: process.pid, state: "active" };
   }
@@ -522,6 +540,7 @@ function createState(
     if (input.kind === "overlay" && (input.baseId == null || input.baseId.length === 0)) {
       throw new StateError("invalid-generation", "an overlay generation requires a base");
     }
+    assertGrowth(MAX_TEMPORARY_BYTES, SQLITE_WRITE_HEADROOM);
     const compatibilityJson = canonicalCompatibility(input.compatibility);
     const id = randomUUID();
     const { tempPath, finalPath } = generationPaths(id);
@@ -530,7 +549,7 @@ function createState(
     assertIdentity(rootIdentity, "state root");
     assertIdentity(generationsParentIdentity, "generations parent");
 
-    txImmediate(db, () => {
+    transaction(() => {
       assertActiveOperation(input.operationId);
       const claim = get(
         db,
@@ -619,7 +638,7 @@ function createState(
     base: GenerationRecord | null;
   } {
     const checkoutKey = assertCheckoutKey(input.checkoutKey);
-    return txImmediate(db, () => {
+    return transaction(() => {
       assertActiveOperation(input.operationId);
       const currentRow = get(db, "SELECT generation_id FROM current_generations WHERE checkout_key = ?", checkoutKey);
       if (!currentRow) return { current: null, base: null };
@@ -696,6 +715,9 @@ function createState(
     const tempDev = tempInfo.dev;
     const tempIno = tempInfo.ino;
 
+    assertStateGrowth(root, 0, ownedTreeBytes(generation.tempPath) + SQLITE_WRITE_HEADROOM,
+      undefined, undefined, SQLITE_WRITE_HEADROOM);
+
     // Validator runs outside any transaction; it must not mutate state metadata.
     const accepted = await input.validate(generation.tempPath);
     if (accepted === false) {
@@ -719,6 +741,9 @@ function createState(
     if (pathExists(generation.finalPath)) {
       throw new StateError("path-exists", `final generation path already exists: ${generation.finalPath}`);
     }
+
+    assertStateGrowth(root, 0, ownedTreeBytes(generation.tempPath) + SQLITE_WRITE_HEADROOM,
+      undefined, undefined, SQLITE_WRITE_HEADROOM);
 
     // Recheck immediately around the rename.
     const beforeRename = lstatOrNull(generation.tempPath);
@@ -753,7 +778,7 @@ function createState(
     }
 
     try {
-      txImmediate(db, () => {
+      transaction(() => {
         assertActiveOperation(input.operationId);
         const row = get(db, "SELECT * FROM generations WHERE id = ?", input.generationId);
         if (!row || row.status !== "staging" || row.operation_id !== input.operationId) {
@@ -812,12 +837,13 @@ function createState(
       run(db, "DELETE FROM pins WHERE operation_id = ?", operationId);
       run(db, "DELETE FROM writer_claims WHERE operation_id = ?", operationId);
       run(db, "DELETE FROM native_claim WHERE operation_id = ?", operationId);
+      run(db, "DELETE FROM enrollment_claims WHERE operation_id = ?", operationId);
     });
   }
 
   // Idempotent lazy native-slot acquisition for an already-active operation.
   function acquireNative(operationId: string): void {
-    txImmediate(db, () => {
+    transaction(() => {
       assertActiveOperation(operationId);
       const claim = get(db, "SELECT operation_id FROM native_claim WHERE id = 1");
       if (claim) {
@@ -900,6 +926,7 @@ function createState(
       run(db, "DELETE FROM pins WHERE operation_id = ?", operationId);
       run(db, "DELETE FROM writer_claims WHERE operation_id = ?", operationId);
       run(db, "DELETE FROM native_claim WHERE operation_id = ?", operationId);
+      run(db, "DELETE FROM enrollment_claims WHERE operation_id = ?", operationId);
       return {
         id: identity.id,
         pid: identity.pid,
@@ -1020,15 +1047,48 @@ function createState(
       });
     }
 
+    const cachePath = join(root, "embedding-cache.sqlite");
+    if (pathExists(cachePath) && Date.now() - startedAt < deadlineMs) {
+      const cache = openCodeEmbeddingCache({ filePath: cachePath });
+      try { cache.pruneUnused({ maxRows: DEFAULT_CODE_EMBEDDING_CACHE_MAX_ROWS, deadlineAt: startedAt + deadlineMs }); }
+      finally { cache.close(); }
+    }
     const retained = all(db, "SELECT id FROM generations").map((r) => r.id as string).sort();
+    assertStateGrowth(root);
     return { deleted: removed.slice().sort(), retained };
   }
 
+  // Serialize brief enrollment edits separately from long build writers. A
+  // check/configure may edit provenance while the prior generation is in use.
+  function mutateEnrollment<T>(checkoutKey: string, edit: () => T, operationId?: string, forgetting = false): T {
+    const key = assertCheckoutKey(checkoutKey);
+    const owned = operationId === undefined;
+    const operation = owned ? beginOperation({ command: "enrollment", kind: "metadata", checkoutKey: key }, forgetting) : { id: operationId! };
+    try {
+      transaction(() => {
+        assertActiveOperation(operation.id);
+        if (forgetting && get(db, "SELECT 1 FROM writer_claims WHERE checkout_key = ?", key)) {
+          throw new StateError("busy", "checkout has an active writer");
+        }
+        if (get(db, "SELECT 1 FROM enrollment_claims WHERE checkout_key = ?", key)) {
+          throw new StateError("busy", "checkout enrollment is being edited");
+        }
+        run(db, "INSERT INTO enrollment_claims (checkout_key, operation_id) VALUES (?, ?)", key, operation.id);
+      }, forgetting);
+      return edit();
+    } finally {
+      txImmediate(db, () => run(db, "DELETE FROM enrollment_claims WHERE checkout_key = ? AND operation_id = ?", key, operation.id));
+      if (owned) finishOperation(operation.id, "finished");
+    }
+  }
+
   function forgetCheckout(checkoutKey: string): void {
+    mutateEnrollment(checkoutKey, () => forgetEnrollment(checkoutKey), undefined, true);
+  }
+
+  function forgetEnrollment(checkoutKey: string): void {
     const key = assertCheckoutKey(checkoutKey);
     txImmediate(db, () => {
-      const claim = get(db, "SELECT operation_id FROM writer_claims WHERE checkout_key = ?", key);
-      if (claim) throw new StateError("busy", `checkout has an active writer: ${key}`);
       run(db, "DELETE FROM current_generations WHERE checkout_key = ?", key);
     });
 
@@ -1060,6 +1120,17 @@ function createState(
     } catch {
       // directory not empty or concurrently used; leave it in place
     }
+  }
+
+  function readBuildOperation(checkoutKey: string): {
+    operation: "idle" | "building" | "failed" | "interrupted";
+    operationId?: string;
+  } {
+    const row = get(db, `SELECT id, state FROM operations
+      WHERE checkout_key = ? AND kind IN ('build', 'update', 'reindex')
+      ORDER BY (state = 'active') DESC, created_at DESC, rowid DESC LIMIT 1`, assertCheckoutKey(checkoutKey));
+    if (!row || row.state === "finished") return { operation: "idle" };
+    return { operation: row.state === "active" ? "building" : row.state, operationId: row.id };
   }
 
   function readStatus(input: { checkoutKey?: string } = {}): {
@@ -1110,9 +1181,9 @@ function createState(
         sourceMoved: Boolean(r.source_moved),
         bytes: r.bytes,
       })),
-      operations: all(
-        db,
-        "SELECT id, command, kind, state FROM operations ORDER BY id LIMIT 1000",
+      operations: (checkoutKey
+        ? all(db, "SELECT id, command, kind, state FROM operations WHERE checkout_key = ? ORDER BY (state = 'active') DESC, created_at DESC, rowid DESC LIMIT 1000", checkoutKey)
+        : all(db, "SELECT id, command, kind, state FROM operations ORDER BY (state = 'active') DESC, created_at DESC, rowid DESC LIMIT 1000")
       ).map((r) => ({ id: r.id, command: r.command, kind: r.kind, state: r.state })),
     };
   }
@@ -1123,6 +1194,7 @@ function createState(
 
   return {
     stateRoot: root,
+    assertGrowth,
     beginOperation,
     beginGeneration,
     acquireCurrent,
@@ -1132,7 +1204,9 @@ function createState(
     recover,
     prune,
     forgetCheckout,
+    mutateEnrollment,
     readStatus,
+    readBuildOperation,
     close,
   };
 }
@@ -1153,6 +1227,7 @@ export function openState(
 
   // Pre-open containment: never follow a symlink into an external target.
   const existingDb = assertOwnedRegularFile(dbPath, "state database");
+  if (!existingDb) assertStateGrowth(root, 0, SQLITE_WRITE_HEADROOM);
   assertSafeSidecar(walPath, "state database WAL");
   assertSafeSidecar(shmPath, "state database shared memory");
 

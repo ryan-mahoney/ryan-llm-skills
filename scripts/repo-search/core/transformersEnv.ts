@@ -24,14 +24,22 @@ function isTransformersPackageDefaultModelPath(path: string): boolean {
  * The single writer of the Transformers.js global model-path singleton.
  *
  * Sets `env.allowRemoteModels = false` and `env.localModelPath = root` exactly
- * once. A second call with the same root is a no-op. A call with a different
+ * once. A second call with the same root reasserts local-only cache policy. A call with a different
  * root throws the collision error. If this helper has not configured a root yet
  * and `env.localModelPath` is the Transformers.js package default
  * (`node_modules/@huggingface/transformers/models`), the helper overwrites it.
  */
 export function configureTransformersLocalModelPath(root: string): void {
+  // Only the digest-verified local asset tree may supply model bytes. Library
+  // caches have precedence over localModelPath and are outside that contract.
+  env.useFSCache = false;
+  env.useBrowserCache = false;
+  env.useCustomCache = false;
+  env.allowRemoteModels = false;
+  env.allowLocalModels = true;
   if (configuredLocalModelPath !== undefined) {
     if (configuredLocalModelPath === root) {
+      env.localModelPath = root;
       return;
     }
     throw new Error(
@@ -60,7 +68,7 @@ export function configureTransformersLocalModelPath(root: string): void {
 /**
  * Test-only: clears the module's "configured" memo so a fresh test can
  * reconfigure. Does NOT touch `env`; tests must save/restore
- * `env.localModelPath` + `env.allowRemoteModels` themselves.
+ * all changed model-path/cache/remote settings themselves.
  */
 export function resetTransformersLocalModelPathForTests(): void {
   configuredLocalModelPath = undefined;

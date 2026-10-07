@@ -35,13 +35,18 @@ function removeGitOutputTerminator(output) {
 
 // Bounded, argv-only Git invocation with filesystem monitoring disabled. No
 // shell is involved and the child is capped by timeout and maxBuffer.
-function git(cwd, args) {
+function git(cwd, args, budget = {}) {
+  if (budget.signal?.aborted) return Promise.reject(Object.assign(new Error("identity canceled"), { code: "canceled" }));
+  const remaining = (budget.deadline ?? Infinity) - Date.now();
+  if (remaining <= 0) return Promise.reject(Object.assign(new Error("identity deadline expired"), { code: "timeout" }));
   return new Promise((resolveGit, rejectGit) => {
-    execFile(
+    let onAbort;
+    const child = execFile(
       "git",
       ["-c", "core.fsmonitor=false", "-C", cwd, ...args],
       {
-        timeout: GIT_TIMEOUT_MS,
+        timeout: Math.min(GIT_TIMEOUT_MS, remaining),
+        killSignal: "SIGKILL",
         maxBuffer: GIT_MAX_OUTPUT_BYTES,
         encoding: "utf8",
         windowsHide: true,
@@ -52,6 +57,7 @@ function git(cwd, args) {
         },
       },
       (error, stdout, stderr) => {
+        if (onAbort) budget.signal?.removeEventListener("abort", onAbort);
         if (error) {
           const detail =
             typeof stderr === "string" && stderr.trim()
@@ -65,14 +71,19 @@ function git(cwd, args) {
         resolveGit(removeGitOutputTerminator(stdout));
       },
     );
+    // execFile's callback waits for close when killed manually; its built-in
+    // AbortSignal reports before close and would release the caller too early.
+    onAbort = () => child.kill("SIGKILL");
+    budget.signal?.addEventListener("abort", onAbort, { once: true });
+    if (budget.signal?.aborted) onAbort();
   });
 }
 
 // HEAD is null only for a genuinely unborn repository (Git exits 1 under
 // --quiet). Any other failure is a real error and must not be masked.
-async function resolveHead(cwd) {
+async function resolveHead(cwd, budget) {
   try {
-    return await git(cwd, ["rev-parse", "--verify", "--quiet", "HEAD"]);
+    return await git(cwd, ["rev-parse", "--verify", "--quiet", "HEAD"], budget);
   } catch (error) {
     if (error && error.code === 1) return null;
     throw error;
@@ -97,9 +108,9 @@ function realDirectory(path, label) {
  * @param {string} root
  * @returns {Promise<CheckoutIdentity>}
  */
-export async function resolveCheckout(root) {
+export async function resolveCheckout(root, budget = {}) {
   const requested = resolve(String(root));
-  const topLevel = await git(requested, ["rev-parse", "--show-toplevel"]);
+  const topLevel = await git(requested, ["rev-parse", "--show-toplevel"], budget);
   if (!topLevel) throw new Error(`not a Git work tree: ${requested}`);
 
   const canonicalRoot = realDirectory(topLevel, "Git top level");
@@ -108,7 +119,7 @@ export async function resolveCheckout(root) {
       "rev-parse",
       "--path-format=absolute",
       "--git-common-dir",
-    ]),
+    ], budget),
     "Git common directory",
   );
   const gitDir = realDirectory(
@@ -116,7 +127,7 @@ export async function resolveCheckout(root) {
       "rev-parse",
       "--path-format=absolute",
       "--absolute-git-dir",
-    ]),
+    ], budget),
     "Git directory",
   );
 
@@ -128,7 +139,7 @@ export async function resolveCheckout(root) {
   }
 
   // HEAD is provenance only; null means an unborn repository.
-  const head = await resolveHead(canonicalRoot);
+  const head = await resolveHead(canonicalRoot, budget);
 
   const repoKey = sha256(commonDir);
   const checkoutKey = sha256(JSON.stringify([repoKey, gitDir, canonicalRoot]));

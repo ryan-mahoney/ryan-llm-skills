@@ -1,3 +1,4 @@
+import type { GrowthCheck } from "./resources";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
@@ -99,7 +100,7 @@ export async function readFileManifest(path: string): Promise<FileManifest | und
   }
 }
 
-export async function writeFileManifest(path: string, manifest: FileManifest): Promise<void> {
+export async function writeFileManifest(path: string, manifest: FileManifest, beforeWrite?: GrowthCheck): Promise<void> {
   const sortedFiles = createFileManifestEntries();
   for (const key of Object.keys(manifest.files).sort()) {
     sortedFiles[key] = manifest.files[key];
@@ -116,6 +117,7 @@ export async function writeFileManifest(path: string, manifest: FileManifest): P
 
   const tempPath = `${path}.tmp-${process.pid}-${Date.now()}`;
   try {
+    beforeWrite?.(Buffer.byteLength(text));
     await writeFile(tempPath, text);
     await rename(tempPath, path);
   } catch (error) {

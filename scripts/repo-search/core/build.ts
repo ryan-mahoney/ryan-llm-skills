@@ -1,3 +1,4 @@
+import { ResourceBudgetError, type GrowthCheck } from "./resources";
 // Captured-snapshot primary index builder.
 //
 // Consumes source.ts captured Snapshot buffers (never rereads checkout paths),
@@ -172,10 +173,12 @@ type ReplacementChunk = CodeChunk & { embedding: number[] };
 async function copyPriorStore(
   previousStoreDir: string,
   destinationDir: string,
+  beforeWrite?: GrowthCheck,
 ): Promise<void> {
   const previous = resolveCodeIndexStorePaths(previousStoreDir);
   const destination = resolveCodeIndexStorePaths(destinationDir);
   await mkdir(destinationDir, { recursive: true });
+  beforeWrite?.((await stat(previous.dumpPath)).size + (await stat(previous.metaPath)).size + (await stat(resolveManifestPath(previousStoreDir))).size);
   await copyFile(previous.dumpPath, destination.dumpPath);
   await copyFile(previous.metaPath, destination.metaPath);
   await copyFile(
@@ -209,6 +212,7 @@ async function embedReplacementChunks(input: {
   modelsRoot: string;
   model: VerifiedModel;
   cachePath?: string;
+  beforeWrite?: GrowthCheck;
   factory: BuildEmbeddingRuntimeFactory;
   signal?: AbortSignal;
   progress: BuildProgressReporter;
@@ -221,10 +225,14 @@ async function embedReplacementChunks(input: {
 
   if (texts.length > 0 && input.cachePath) {
     try {
-      cache = openCodeEmbeddingCache({ filePath: input.cachePath });
+      cache = openCodeEmbeddingCache({ filePath: input.cachePath, beforeWrite: input.beforeWrite });
       const { hits } = cache.getMany({ namespace, texts, nowMs: Date.now() });
       for (const [text, vector] of hits) vectors.set(text, vector);
-    } catch {
+    } catch (error) {
+      if (error instanceof ResourceBudgetError) {
+        try { cache?.close(); } catch { /* Preserve the budget failure. */ }
+        throw error;
+      }
       cacheDisabled = true;
       if (cache) {
         try {
@@ -266,7 +274,8 @@ async function embedReplacementChunks(input: {
             rows: misses.map((text) => ({ text, embedding: vectors.get(text) as number[] })),
             nowMs: Date.now(),
           });
-        } catch {
+        } catch (error) {
+          if (error instanceof ResourceBudgetError) throw error;
           cacheDisabled = true;
         }
       }
@@ -295,6 +304,7 @@ export async function buildCodeIndex(input: {
   model: VerifiedModel;
   modelsRoot: string;
   cachePath?: string;
+  beforeWrite?: GrowthCheck;
   signal?: AbortSignal;
   createEmbeddingRuntime?: BuildEmbeddingRuntimeFactory;
   progress?: BuildProgressReporter;
@@ -306,11 +316,11 @@ export async function buildCodeIndex(input: {
   progress({ type: "phase", phase: "restoring" });
   let runtime: CodeIndexRuntime;
   if (input.plan.previousStoreDir && input.plan.previousManifest) {
-    await copyPriorStore(input.plan.previousStoreDir, input.destinationDir);
-    runtime = await createCodeIndexRuntime(paths, { open: "restore" });
+    await copyPriorStore(input.plan.previousStoreDir, input.destinationDir, input.beforeWrite);
+    runtime = await createCodeIndexRuntime(paths, { open: "restore", beforeWrite: input.beforeWrite });
   } else {
     await mkdir(input.destinationDir, { recursive: true });
-    runtime = await createCodeIndexRuntime(paths, { open: "new" });
+    runtime = await createCodeIndexRuntime(paths, { open: "new", beforeWrite: input.beforeWrite });
   }
 
   throwIfAborted(input.signal);
@@ -357,6 +367,7 @@ export async function buildCodeIndex(input: {
     modelsRoot: input.modelsRoot,
     model: input.model,
     cachePath: input.cachePath,
+    beforeWrite: input.beforeWrite,
     factory,
     signal: input.signal,
     progress,
@@ -393,7 +404,7 @@ export async function buildCodeIndex(input: {
     dimensions: input.compatibility.dimensions,
     files,
   };
-  await writeFileManifest(resolveManifestPath(input.destinationDir), manifest);
+  await writeFileManifest(resolveManifestPath(input.destinationDir), manifest, input.beforeWrite);
 
   progress({ type: "phase", phase: "validating" });
   const validation = await validateCodeIndexBuild({
@@ -538,7 +549,7 @@ async function restoreBaseIndexCount(
     );
   } catch (error) {
     // Preserve the strict-restore unavailable contract; wrap other corruption.
-    if (error instanceof CodeIndexUnavailableError) throw error;
+    if (error instanceof CodeIndexUnavailableError || error instanceof ResourceBudgetError) throw error;
     throw new CodeIndexUnavailableError(
       `Base generation index is unavailable: ${baseStoreDir}`,
       error,
@@ -625,6 +636,7 @@ export async function buildOverlayIndex(input: {
   model: VerifiedModel;
   modelsRoot: string;
   cachePath?: string;
+  beforeWrite?: GrowthCheck;
   signal?: AbortSignal;
   createEmbeddingRuntime?: BuildEmbeddingRuntimeFactory;
   progress?: BuildProgressReporter;
@@ -645,6 +657,7 @@ export async function buildOverlayIndex(input: {
     model: input.model,
     modelsRoot: input.modelsRoot,
     cachePath: input.cachePath,
+    beforeWrite: input.beforeWrite,
     signal: input.signal,
     createEmbeddingRuntime: input.createEmbeddingRuntime,
     progress: input.progress,
@@ -673,7 +686,7 @@ export async function buildOverlayIndex(input: {
     files,
     tombstones: uniqueSorted(input.plan.tombstones),
   };
-  await writeOverlayManifest(input.destinationDir, overlayManifest);
+  await writeOverlayManifest(input.destinationDir, overlayManifest, input.beforeWrite);
 
   let derivedBytes = result.derivedBytes;
   derivedBytes += (await stat(resolveOverlayManifestPath(input.destinationDir))).size;

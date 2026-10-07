@@ -1559,3 +1559,41 @@ describe("finalized publication facts", () => {
     }
   });
 });
+
+test("quota failure preserves current and releases claims; prune works above quota", async () => {
+  const { closeSync, ftruncateSync, openSync } = await import("node:fs");
+  const { MAX_COMMITTED_BYTES, MAX_TEMPORARY_BYTES } = await import("./core/resources");
+  const root = makeStateRoot();
+  const state = openState(root);
+  try {
+    const first = state.beginOperation({ command: "build", kind: "build", checkoutKey: PRIMARY_KEY, writer: true });
+    const current = await publishGeneration(state, first.id, {});
+    state.finishOperation(first.id);
+    const next = state.beginOperation({ command: "reindex", kind: "reindex", checkoutKey: PRIMARY_KEY, writer: true });
+    const staging = state.beginGeneration({ operationId: next.id, ...metadata({}) } as any);
+    const fd = openSync(join(staging.tempPath, "oversized"), "w");
+    try { ftruncateSync(fd, MAX_TEMPORARY_BYTES + 1); } finally { closeSync(fd); }
+    await expect(state.publish({ operationId: next.id, generationId: staging.id, validate: () => true })).rejects.toMatchObject({ code: "budget-exceeded" });
+    expect(state.readStatus().current[0].generationId).toBe(current.id);
+    state.finishOperation(next.id, "failed");
+    expect((await state.prune()).deleted).toContain(staging.id);
+    const final = state.beginOperation({ command: "reindex", kind: "reindex", checkoutKey: PRIMARY_KEY, writer: true });
+    const orphan = state.beginGeneration({ operationId: final.id, ...metadata({}) } as any);
+    const orphanFile = join(orphan.tempPath, "huge");
+    const orphanFd = openSync(orphanFile, "w");
+    try { ftruncateSync(orphanFd, MAX_COMMITTED_BYTES + 1); } finally { closeSync(orphanFd); }
+    renameSync(orphan.tempPath, orphan.finalPath);
+    state.finishOperation(final.id, "failed");
+    state.close();
+    const reopened = openState(root);
+    try {
+      expect((await reopened.prune()).deleted).toContain(orphan.id);
+      expect(reopened.readStatus().current[0].generationId).toBe(current.id);
+      const retainedFd = openSync(join(current.finalPath, "retained-budget"), "w");
+      try { ftruncateSync(retainedFd, MAX_COMMITTED_BYTES + 1); } finally { closeSync(retainedFd); }
+      await expect(reopened.prune()).rejects.toMatchObject({ code: "budget-exceeded" });
+      expect(reopened.readStatus().current[0].generationId).toBe(current.id);
+      expect(existsSync(current.finalPath)).toBe(true);
+    } finally { reopened.close(); }
+  } finally { try { state.close(); } catch {} }
+});

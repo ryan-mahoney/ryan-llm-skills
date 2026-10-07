@@ -1,3 +1,4 @@
+import { normalizeContent } from "./chunkContract";
 import type { ChunkStrategy, CodeChunk } from "./chunkContract";
 
 export type RawAstChunk = {
@@ -19,9 +20,7 @@ const LINE_WINDOW_SIZE = 60;
 const LINE_WINDOW_OVERLAP = 10;
 const LINE_WINDOW_STEP = LINE_WINDOW_SIZE - LINE_WINDOW_OVERLAP;
 
-function normalizeContent(content: string): string {
-  return content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-}
+
 
 function isEmptyContent(content: string): boolean {
   return content.trim().length === 0;

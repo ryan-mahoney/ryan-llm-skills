@@ -1,4 +1,5 @@
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { MAX_DUMP_BYTES, ResourceBudgetError, type GrowthCheck } from "./resources";
+import { mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import {
   count as countDocuments,
@@ -63,6 +64,7 @@ export type CodeIndexRuntime = {
 
 export type CodeIndexRuntimeOpenOptions = {
   open: "new" | "restore";
+  beforeWrite?: GrowthCheck;
 };
 
 export class CodeIndexUnavailableError extends Error {
@@ -278,7 +280,7 @@ export async function createCodeIndexRuntime(
 
     async persist() {
       const meta = await createMeta(db);
-      await writeRuntimeFilesAtomically(paths.dumpPath, paths.metaPath, db, meta);
+      await writeRuntimeFilesAtomically(paths.dumpPath, paths.metaPath, db, meta, options.beforeWrite);
     },
 
     async remove(ids) {
@@ -384,6 +386,7 @@ async function writeRuntimeFilesAtomically(
   metaPath: string,
   db: CodeIndexDatabase,
   meta: CodeIndexPersistenceMeta,
+  beforeWrite?: GrowthCheck,
 ): Promise<void> {
   await Promise.all([
     mkdir(dirname(dumpPath), { recursive: true }),
@@ -394,7 +397,8 @@ async function writeRuntimeFilesAtomically(
   const metaTempPath = `${metaPath}.tmp-${process.pid}-${Date.now()}`;
 
   try {
-    await persistBinaryDumpToFile(db, dumpTempPath);
+    await persistBinaryDumpToFile(db, dumpTempPath, beforeWrite);
+    beforeWrite?.(Buffer.byteLength(JSON.stringify(meta, null, 2)));
     await writeFile(metaTempPath, JSON.stringify(meta, null, 2));
     await rename(dumpTempPath, dumpPath);
     await rename(metaTempPath, metaPath);
@@ -410,6 +414,7 @@ async function writeRuntimeFilesAtomically(
 async function persistBinaryDumpToFile(
   db: CodeIndexDatabase,
   dumpPath: string,
+  beforeWrite?: GrowthCheck,
 ): Promise<void> {
   const dbExport = await save(db);
   const msgpack = encode(dbExport, { maxDepth: CODE_INDEX_BINARY_MAX_DEPTH });
@@ -418,6 +423,8 @@ async function persistBinaryDumpToFile(
     msgpack.byteOffset,
     msgpack.byteLength,
   );
+  if (dumpBuffer.length > MAX_DUMP_BYTES) throw new ResourceBudgetError("index dump exceeds 512 MiB");
+  beforeWrite?.(dumpBuffer.length);
   await writeFile(dumpPath, dumpBuffer);
 }
 
@@ -425,7 +432,21 @@ async function restoreBinaryDumpFromFile(
   dumpPath: string,
 ): Promise<CodeIndexDatabase> {
   const db = createEmptyDatabase();
-  load(db, decode(await readFile(dumpPath)) as RawData);
+  const handle = await open(dumpPath, "r");
+  try {
+    const info = await handle.stat();
+    if (!info.isFile() || info.size > MAX_DUMP_BYTES) throw new ResourceBudgetError("index dump exceeds 512 MiB or is not regular");
+    const bytes = Buffer.alloc(info.size);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const result = await handle.read(bytes, offset, bytes.length - offset, offset);
+      if (!result.bytesRead) throw new Error("index dump shrank during read");
+      offset += result.bytesRead;
+    }
+    const extra = await handle.read(Buffer.alloc(1), 0, 1, offset);
+    if (extra.bytesRead) throw new ResourceBudgetError("index dump grew during bounded read");
+    load(db, decode(bytes) as RawData);
+  } finally { await handle.close(); }
   return db;
 }
 
@@ -458,6 +479,7 @@ async function restoreRuntimeStrict(
     }
     return db;
   } catch (error) {
+    if (error instanceof ResourceBudgetError) throw error;
     throw new CodeIndexUnavailableError(undefined, error);
   }
 }

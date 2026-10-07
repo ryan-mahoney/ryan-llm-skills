@@ -461,6 +461,7 @@ function makeSearchResponse(): any {
     requestedRoot: `/Users/operator/${'very-long-root/'.repeat(20)}`,
     actualRoot: `/Users/operator/${'actual-long-root/'.repeat(20)}`,
     observedHead: "c".repeat(40),
+    observedAt: "2026-10-07T12:00:00.000Z",
     generationId: "11111111-1111-4111-8111-111111111111",
     baseId: "22222222-2222-4222-8222-222222222222",
     coverage: {
@@ -489,6 +490,7 @@ describe("format: bounded public search output", () => {
     expect(parsed.freshness).toBe(response.freshness);
     expect(parsed.operation).toBe(response.operation);
     expect(parsed.mode).toBe(response.mode);
+    expect(parsed.observedAt).toBe(response.observedAt);
     expect(parsed.repoKey).toBe(response.repoKey);
     expect(parsed.checkoutKey).toBe(response.checkoutKey);
     expect(parsed.generationId).toBe(response.generationId);
@@ -519,6 +521,9 @@ describe("format: bounded public search output", () => {
     expect(parsed.repoKey).toBe(response.repoKey);
     expect(parsed.checkoutKey).toBe(response.checkoutKey);
     expect(parsed.scopeOmitted).toBe(true);
+    const repeated = JSON.parse(formatSearchJson(parsed));
+    expect(repeated.scopeOmitted).toBe(true);
+    expect(repeated.reason).toBe("output-budget");
   });
 });
 
@@ -599,4 +604,72 @@ describe("public Node CLI composition (BM25, no models)", () => {
       fixture.state.close();
     }
   });
+});
+
+describe("review regressions: byte excerpts and generation compatibility", () => {
+  test("bare CR and CRLF excerpts follow chunk line numbers from verified bytes", async () => {
+    for (const newline of ["\r", "\r\n"]) {
+      const lines = Array.from({ length: 120 }, (_, i) => i === 80 ? "needleCarriageReturn" : `line ${i + 1}`);
+      const fixture = await buildPrimaryFixture(makeTempRoot(), { "notes.txt": lines.join(newline) });
+      try {
+        const session = await createSearchSession({ identity: fixture.identity, state: fixture.state });
+        try {
+          const result = await session.search("needleCarriageReturn", "bm25", 10);
+          const hit = result.hits.find((entry) => entry.startLine > 1)!;
+          expect(hit).toBeDefined();
+          expect(hit.excerpt).toContain("needleCarriageReturn");
+          expect(hit.excerpt).toBe(lines.slice(hit.startLine - 1, hit.endLine).join("\n"));
+          expect(hit.fileHash).toBe(hashFile(fixture.repo, "notes.txt"));
+        } finally { await session.dispose(); }
+      } finally { fixture.state.close(); }
+    }
+  });
+
+  test("BM25 rejects obsolete policy, chunks and runtime without loading a model", async () => {
+    const fixture = await buildPrimaryFixture(makeTempRoot(), FULL_FILES);
+    const { Database } = await import("bun:sqlite");
+    const db = new Database(join(fixture.stateRoot, "state.sqlite"));
+    try {
+      const row = db.query("SELECT id, compatibility FROM generations WHERE status = 'ready'").get() as any;
+      for (const key of ["policyVersion", "chunkVersion", "runtimeVersion"]) {
+        const compatibility = { ...JSON.parse(row.compatibility), [key]: "obsolete-v0" };
+        db.query("UPDATE generations SET compatibility = ? WHERE id = ?").run(JSON.stringify(compatibility), row.id);
+        await expect(createSearchSession({ identity: fixture.identity, state: fixture.state,
+          deps: { createEmbeddingRuntime: async () => { throw new Error("must not load inference"); } },
+        })).rejects.toMatchObject({ code: "incompatible" });
+      }
+    } finally { db.close(); fixture.state.close(); }
+  });
+});
+
+test("status exposes the checkout recovery operation and BM25 reports an active or failed refresh", async () => {
+  const fixture = await buildPrimaryFixture(makeTempRoot(), FULL_FILES);
+  const { readCheckoutStatus } = await import("./lifecycle");
+  const writer = fixture.state.beginOperation({ command: "update", kind: "update", checkoutKey: fixture.identity.checkoutKey, writer: true, native: true });
+  const metadataOperation = fixture.state.beginOperation({ command: "enrollment", kind: "metadata", checkoutKey: fixture.identity.checkoutKey });
+  const otherWriter = fixture.state.beginOperation({ command: "update", kind: "update", checkoutKey: "9".repeat(64), writer: true });
+  try {
+    expect(fixture.state.readStatus({ checkoutKey: fixture.identity.checkoutKey }).operations.some((entry: any) => entry.id === otherWriter.id)).toBe(false);
+    const status = readCheckoutStatus({ identity: fixture.identity, state: fixture.state });
+    expect(status.activeOperations.map((operation) => operation.id)).toContain(metadataOperation.id);
+    expect(status.activeOperations.map((operation) => operation.id)).not.toContain(otherWriter.id);
+    expect(status).toMatchObject({ operation: "building", operationId: writer.id, availability: "ready", enrolled: true, specUse: false });
+    const session = await createSearchSession({ identity: fixture.identity, state: fixture.state });
+    try {
+      expect(await session.search("alphaBm25Token", "bm25", 10)).toMatchObject({ operation: "building", operationId: writer.id, availability: "ready" });
+      // Use the installed Node executable independently of Bun's test process.
+      const cli = spawnSync("node", [join(import.meta.dir, "cli.mjs"), "status", "--root", fixture.repo, "--state", fixture.stateRoot], { encoding: "utf8", timeout: 10000 });
+      expect(cli.status).toBe(0);
+      expect(cli.stdout).toContain(`operationId: ${writer.id}`);
+      expect(cli.stdout).toContain("operation: building");
+      expect(cli.stdout).toContain(`activeOperation: ${metadataOperation.id} (enrollment)`);
+      fixture.state.finishOperation(writer.id, "failed");
+      expect(readCheckoutStatus({ identity: fixture.identity, state: fixture.state })).toMatchObject({ operation: "failed", operationId: writer.id, availability: "ready" });
+      expect(await session.search("alphaBm25Token", "bm25", 10)).toMatchObject({ operation: "failed", availability: "ready" });
+    } finally { await session.dispose(); }
+  } finally {
+    fixture.state.finishOperation(otherWriter.id);
+    fixture.state.finishOperation(metadataOperation.id);
+    fixture.state.close();
+  }
 });

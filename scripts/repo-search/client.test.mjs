@@ -815,3 +815,62 @@ test("corrupt and symlinked state return structured corrupt receipts", { timeout
   assert.equal(symlinkReceipt.status, "unavailable");
   assert.equal(symlinkReceipt.reason, "corrupt");
 });
+
+test("already canceled commands and owned processes never spawn", async () => {
+  const { runOwnedProcess, searchRepository } = await import("./client.mjs");
+  const controller = new AbortController(); controller.abort();
+  let spawns = 0;
+  const spawn = () => { spawns++; throw new Error("must not spawn"); };
+  assert.equal((await runCommand("prune", { signal: controller.signal, spawn })).reason, "canceled");
+  assert.equal((await runOwnedProcess(spawn, process.execPath, [], { signal: controller.signal })).reason, "canceled");
+  assert.equal((await searchRepository({ usage: "spec", root: "/missing", query: "test", signal: controller.signal })).reason, "canceled");
+  assert.equal(spawns, 0);
+});
+
+test("timeout kills a resistant descendant even after its parent closes", { timeout: 10000 }, async () => {
+  const { runOwnedProcess } = await import("./client.mjs");
+  const dir = await makeTemp("repo-search-grandchild-");
+  const ready = join(dir, "ready");
+  const grandchild = `process.on('SIGTERM', () => {}); require('fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid)); setInterval(() => {}, 1000);`;
+  const parent = `require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(grandchild)}], {stdio:'ignore'}); setInterval(() => {}, 1000);`;
+  const unrelated = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore", detached: true });
+  spawnedPids.push(unrelated.pid);
+  let descendant;
+  try {
+    const outcome = await runOwnedProcess(spawn, process.execPath, ["-e", parent], { timeoutMs: 500 });
+    descendant = Number(await readFile(ready, "utf8"));
+    assert.equal(outcome.reason, "timeout", outcome.message);
+    assert.throws(() => process.kill(descendant, 0), { code: "ESRCH" });
+    assert.doesNotThrow(() => process.kill(unrelated.pid, 0));
+  } finally {
+    if (descendant) { try { process.kill(descendant, "SIGKILL"); } catch {} }
+    try { process.kill(-unrelated.pid, "SIGKILL"); } catch {}
+  }
+});
+
+test("spec identity lookup shares the caller deadline and waits for canceled Git exit", { timeout: 10000 }, async () => {
+  const { searchRepository } = await import("./client.mjs");
+  const dir = await makeTemp("repo-search-deadline-");
+  const repo = join(dir, "repo"); await initRepoAt(repo);
+  const bin = join(dir, "bin"); await mkdir(bin);
+  const calls = join(dir, "calls");
+  const shim = `#!${process.execPath}\nconst fs=require('fs'); fs.appendFileSync(${JSON.stringify(calls)}, process.pid+'\\n'); setTimeout(() => { const args=process.argv; process.stdout.write(args.includes('--show-toplevel') ? ${JSON.stringify(repo)}+'\\n' : ${JSON.stringify(join(repo, '.git'))}+'\\n'); }, 500);`;
+  await writeFile(join(bin, "git"), shim); await chmod(join(bin, "git"), 0o700);
+  const oldPath = process.env.PATH;
+  process.env.PATH = `${bin}:${oldPath}`;
+  try {
+    const started = Date.now();
+    const result = await searchRepository({ usage: "spec", root: repo, query: "test", timeoutMs: 800 });
+    assert.equal(result.reason, "timeout");
+    assert.ok(Date.now() - started < 2500);
+    const pids = (await readFile(calls, "utf8")).trim().split("\n").map(Number);
+    assert.ok(pids.length <= 2);
+    for (const pid of pids) assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+    const controller = new AbortController();
+    const pending = searchRepository({ usage: "spec", root: repo, query: "test", timeoutMs: 5000, signal: controller.signal });
+    setTimeout(() => controller.abort(), 50);
+    assert.equal((await pending).reason, "canceled");
+    const allPids = (await readFile(calls, "utf8")).trim().split("\n").map(Number);
+    for (const pid of allPids) assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+  } finally { if (oldPath === undefined) delete process.env.PATH; else process.env.PATH = oldPath; }
+});

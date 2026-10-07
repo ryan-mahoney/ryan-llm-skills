@@ -150,6 +150,12 @@ function humanSummary(command, receipt) {
       lines.push(`current: ${inner.currentGenerationId ?? "none"}`);
     }
     if (inner.operation) lines.push(`operation: ${escapeControl(inner.operation)}`);
+    if (inner.operationId) lines.push(`operationId: ${escapeControl(inner.operationId)}`);
+    for (const operation of inner.activeOperations ?? []) {
+      if (operation.id !== inner.operationId) lines.push(`activeOperation: ${escapeControl(operation.id)} (${escapeControl(operation.command)})`);
+    }
+    if (typeof inner.enrolled === "boolean") lines.push(`enrolled: ${inner.enrolled}`);
+    if (typeof inner.specUse === "boolean") lines.push(`specUse: ${inner.specUse}`);
     if (Array.isArray(inner.deleted)) lines.push(`deleted: ${inner.deleted.length}`);
     if (Array.isArray(inner.retained)) lines.push(`retained: ${inner.retained.length}`);
   }

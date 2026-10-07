@@ -328,46 +328,25 @@ function boundedExcerpt(text) {
 
 async function settleOwnedGroup(child) {
   if (!child || typeof child.pid !== "number" || child.pid <= 0) return;
-  let killError = null;
-  const killGroup = (signal) => {
-    try {
-      process.kill(-child.pid, signal);
-    } catch (error) {
-      if (error && error.code === "ESRCH") return;
-      killError = error;
-      throw error;
+  const signalGroup = (signal) => {
+    try { process.kill(-child.pid, signal); return true; }
+    catch (error) {
+      if (error?.code === "ESRCH") return false;
+      throw new Error(`failed to settle owned process group ${child.pid}: ${errorMessage(error)}`);
     }
   };
-
-  const closed = new Promise((resolve) => {
-    if (child.exitCode !== undefined && child.exitCode !== null) {
-      resolve();
-      return;
+  // A direct-child close says nothing about descendants retaining this group.
+  if (!signalGroup("SIGTERM")) return;
+  const escalationAt = Date.now() + SETTLE_GRACE_MS;
+  const deadline = escalationAt + SETTLE_GRACE_MS;
+  let escalated = false;
+  while (signalGroup(0)) {
+    if (Date.now() >= deadline) throw new Error(`owned process group ${child.pid} did not settle`);
+    if (!escalated && Date.now() >= escalationAt) {
+      if (!signalGroup("SIGKILL")) return;
+      escalated = true;
     }
-    if (typeof child.once !== "function") {
-      resolve();
-      return;
-    }
-    child.once("close", () => resolve());
-  });
-
-  killGroup("SIGTERM");
-  const timer = setTimeout(() => {
-    try {
-      killGroup("SIGKILL");
-    } catch {
-      // surfaced after close (or already ESRCH)
-    }
-  }, SETTLE_GRACE_MS);
-  try {
-    await closed;
-  } finally {
-    clearTimeout(timer);
-  }
-  if (killError) {
-    throw new Error(
-      `failed to terminate owned process group ${child.pid}: ${errorMessage(killError)}`,
-    );
+    await new Promise((resolve) => setTimeout(resolve, 25));
   }
 }
 
@@ -401,6 +380,10 @@ export async function runOwnedProcess(spawnImpl, file, args, options = {}) {
     maxOutputBytes = MAX_STDOUT_BYTES,
   } = options;
 
+  if (signal?.aborted || timeoutMs <= 0) return {
+    complete: false, reason: signal?.aborted ? "canceled" : "timeout",
+    exitCode: signal?.aborted ? 130 : 124, stdout: "", stderr: "",
+  };
   let child;
   try {
     child = spawnImpl(file, args, {
@@ -503,7 +486,15 @@ function mapWorkerExit(code, parsed) {
   return parsed && parsed.status === "ok" ? 0 : 1;
 }
 
+function interruptionReceipt(command, signal, deadline) {
+  const reason = signal?.aborted ? "canceled" : Date.now() >= deadline ? "timeout" : null;
+  return reason ? { version: 1, command, status: "failed", reason, exitCode: reason === "canceled" ? 130 : 124 } : null;
+}
+
 export async function runCommand(command, options = {}) {
+  const deadline = Date.now() + (options.timeoutMs ?? CEILINGS_MS[command]);
+  const interrupted = interruptionReceipt(command, options.signal, deadline);
+  if (interrupted) return interrupted;
   // Explicit --models always wins; otherwise a configured state root supplies
   // the saved model root to the same worker request. Asset verification still
   // happens inside the worker before any model use.
@@ -522,7 +513,9 @@ export async function runCommand(command, options = {}) {
   if (!bunPath) return unavailableReceipt(command, "runtime-unavailable");
   if (!hasDependencies(packageDir)) return unavailableReceipt(command, "dependencies-unavailable");
 
-  const timeoutMs = options.timeoutMs ?? CEILINGS_MS[command];
+  const preSpawnInterruption = interruptionReceipt(command, options.signal, deadline);
+  if (preSpawnInterruption) return preSpawnInterruption;
+  const timeoutMs = Math.max(1, deadline - Date.now());
   const request = buildRequest(command, effectiveOptions);
   const spawnImpl = options.spawn ?? spawn;
   const sampleRss = options.rssSampler ?? defaultSampleChildRss;
@@ -847,10 +840,10 @@ function readEnrollmentNode(identity, stateRoot) {
   }
 }
 
-async function specPreflight(root, stateRoot) {
+async function specPreflight(root, stateRoot, budget) {
   let identity;
   try {
-    identity = await resolveCheckout(root);
+    identity = await resolveCheckout(root, budget);
   } catch {
     return { ok: false, reason: "invalid-root" };
   }
@@ -872,8 +865,15 @@ export async function searchRepository(input = {}) {
   if (input.usage !== "operator" && input.usage !== "spec") {
     return usageReceipt("search", "usage must be operator|spec");
   }
+  const timeoutMs = input.timeoutMs ?? (input.usage === "spec" ? 15000 : CEILINGS_MS.search);
+  if (!Number.isInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > CEILINGS_MS.search) return usageReceipt("search", "invalid timeoutMs");
+  const deadline = Date.now() + Math.min(timeoutMs, input.usage === "spec" ? 15000 : CEILINGS_MS.search);
+  const interrupted = interruptionReceipt("search", input.signal, deadline);
+  if (interrupted) return interrupted;
   if (input.usage === "spec") {
-    const preflight = await specPreflight(input.root, input.stateRoot);
+    const preflight = await specPreflight(input.root, input.stateRoot, { deadline, signal: input.signal });
+    const interrupted = interruptionReceipt("search", input.signal, deadline);
+    if (interrupted) return interrupted;
     if (!preflight.ok) return unavailableReceipt("search", preflight.reason);
   }
   return runCommand("search", {
@@ -883,7 +883,7 @@ export async function searchRepository(input = {}) {
     limit: input.limit,
     state: input.stateRoot,
     models: input.modelsRoot,
-    timeoutMs: input.timeoutMs,
+    timeoutMs: Math.max(1, deadline - Date.now()),
     signal: input.signal,
   });
 }

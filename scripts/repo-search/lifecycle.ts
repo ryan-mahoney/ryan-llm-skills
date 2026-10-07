@@ -1,3 +1,4 @@
+import { ResourceBudgetError } from "./core/resources";
 // Step 4 primary lifecycle orchestration.
 //
 // Wires captured source snapshots (source.ts), the core builder (core/build),
@@ -117,6 +118,7 @@ export type OperationReceipt = {
 export type CheckReceipt = {
   version: 1;
   command: "check";
+  operationId?: string;
   availability: LifecycleAvailability;
   operation: LifecycleOperationState;
   freshness: LifecycleFreshness;
@@ -134,6 +136,11 @@ export type CheckReceipt = {
 export type CheckoutStatusReceipt = {
   version: 1;
   command: "status";
+  enrolled: boolean;
+  activeOperations: Array<{ id: string; command: string; kind: string; state: string }>;
+  specUse: boolean;
+  operation: LifecycleOperationState;
+  operationId?: string;
   availability: LifecycleAvailability;
   freshness: LifecycleFreshness;
   repoKey: string;
@@ -461,15 +468,18 @@ function updateEnrollment(
 // Re-read and identity-validate the latest record, then merge the patch so
 // unrelated specUse/lastCheck fields are never overwritten from a stale copy.
 function mergeEnrollment(
-  stateRoot: string,
+  state: LifecycleState,
   checkoutKey: string,
   identity: CheckoutIdentityLike,
   patch: Partial<Pick<EnrollmentRecord, "head" | "lastBuild" | "lastCheck">>,
+  operationId?: string,
 ): void {
-  const latest = readEnrollment(stateRoot, checkoutKey);
-  if (latest) assertEnrollmentIdentity(latest, identity);
-  const base = latest ?? createEnrollment(identity);
-  writeEnrollment(stateRoot, checkoutKey, updateEnrollment(base, patch));
+  state.mutateEnrollment(checkoutKey, () => {
+    const latest = readEnrollment(state.stateRoot, checkoutKey);
+    if (!latest) throw new LifecycleError("unenrolled", "checkout is no longer enrolled");
+    assertEnrollmentIdentity(latest, identity);
+    writeEnrollment(state.stateRoot, checkoutKey, updateEnrollment(latest, patch));
+  }, operationId);
 }
 
 async function resolveBuildInputs(
@@ -506,15 +516,6 @@ export async function buildPrimary(input: {
     throw new LifecycleError("primary-required", "primary build requires a primary checkout identity");
   }
 
-  const existing = readEnrollment(state.stateRoot, identity.checkoutKey);
-  if (existing) {
-    assertEnrollmentIdentity(existing, identity);
-  } else if (kind !== "build") {
-    throw new LifecycleError("unenrolled", "checkout is not enrolled");
-  }
-  const enrollment = existing ?? createEnrollment(identity);
-  if (!existing) writeEnrollment(state.stateRoot, identity.checkoutKey, enrollment);
-
   const operation = state.beginOperation({
     command: kind,
     kind,
@@ -524,6 +525,12 @@ export async function buildPrimary(input: {
   });
   let finished = false;
   try {
+    state.mutateEnrollment(identity.checkoutKey, () => {
+      const existing = readEnrollment(state.stateRoot, identity.checkoutKey);
+      if (existing) assertEnrollmentIdentity(existing, identity);
+      else if (kind !== "build") throw new LifecycleError("unenrolled", "checkout is not enrolled");
+      else writeEnrollment(state.stateRoot, identity.checkoutKey, createEnrollment(identity));
+    }, operation.id);
     throwIfAborted(input.signal);
     const { model, compatibility } = await resolveBuildInputs(modelsRoot, deps);
     const acquired = state.acquireCurrent({
@@ -585,10 +592,10 @@ export async function buildPrimary(input: {
         compatibility,
         snapshot: captured,
       });
-      mergeEnrollment(state.stateRoot, identity.checkoutKey, identity, {
+      mergeEnrollment(state, identity.checkoutKey, identity, {
         head: identity.head,
         lastCheck: null,
-      });
+      }, operation.id);
       state.finishOperation(operation.id, "finished");
       finished = true;
       return {
@@ -629,7 +636,7 @@ export async function buildPrimary(input: {
       signal: input.signal,
     });
 
-    mergeEnrollment(state.stateRoot, identity.checkoutKey, identity, {
+    mergeEnrollment(state, identity.checkoutKey, identity, {
       head: identity.head,
       lastBuild: {
         at: nowIso(),
@@ -641,7 +648,7 @@ export async function buildPrimary(input: {
       // A refreshed current generation clears stale check provenance; a moved
       // generation that preserves prior current keeps that prior provenance.
       ...(built.sourceMoved ? {} : { lastCheck: null }),
-    });
+    }, operation.id);
     state.finishOperation(operation.id, "finished");
     finished = true;
 
@@ -667,7 +674,7 @@ export async function buildPrimary(input: {
         // release best-effort; underlying error propagates
       }
       try {
-        mergeEnrollment(state.stateRoot, identity.checkoutKey, identity, {
+        mergeEnrollment(state, identity.checkoutKey, identity, {
           lastBuild: {
             at: nowIso(),
             kind,
@@ -718,7 +725,7 @@ export async function checkCheckout(input: {
     const captured = await capture(identity, input.signal);
     const matchesGeneration = current !== null && current.snapshotDigest === captured.digest;
     const at = nowIso();
-    mergeEnrollment(state.stateRoot, identity.checkoutKey, identity, {
+    mergeEnrollment(state, identity.checkoutKey, identity, {
       lastCheck: { at, snapshotDigest: captured.digest, matchesGeneration },
     });
     state.finishOperation(operation.id, "finished");
@@ -727,7 +734,7 @@ export async function checkCheckout(input: {
       version: 1,
       command: "check",
       availability: current ? "ready" : "missing",
-      operation: "idle",
+      ...state.readBuildOperation(identity.checkoutKey),
       freshness: matchesGeneration ? "unknown" : "stale",
       reason: matchesGeneration ? "matches" : "changed",
       repoKey: identity.repoKey,
@@ -769,6 +776,10 @@ export function readCheckoutStatus(input: {
   return {
     version: 1,
     command: "status",
+    enrolled: enrollment !== null,
+    activeOperations: status.operations.filter((operation) => operation.state === "active"),
+    specUse: enrollment?.specUse ?? false,
+    ...state.readBuildOperation(identity.checkoutKey),
     availability: current ? "ready" : "missing",
     freshness,
     repoKey: identity.repoKey,
@@ -879,6 +890,7 @@ async function performFullBuild(input: {
     model,
     modelsRoot,
     cachePath: join(state.stateRoot, "embedding-cache.sqlite"),
+    beforeWrite: state.assertGrowth,
     signal: input.signal,
     createEmbeddingRuntime: deps.createEmbeddingRuntime,
   });
@@ -949,6 +961,7 @@ async function performOverlayBuild(input: {
     model,
     modelsRoot,
     cachePath: join(state.stateRoot, "embedding-cache.sqlite"),
+    beforeWrite: state.assertGrowth,
     signal: input.signal,
     createEmbeddingRuntime: deps.createEmbeddingRuntime,
   });
@@ -1003,15 +1016,6 @@ export async function buildWorktree(input: {
     throw new LifecycleError("worktree-required", "buildWorktree requires a linked worktree identity");
   }
 
-  const existing = readEnrollment(state.stateRoot, identity.checkoutKey);
-  if (existing) {
-    assertEnrollmentIdentity(existing, identity);
-  } else if (kind !== "build") {
-    throw new LifecycleError("unenrolled", "checkout is not enrolled");
-  }
-  const enrollment = existing ?? createEnrollment(identity);
-  if (!existing) writeEnrollment(state.stateRoot, identity.checkoutKey, enrollment);
-
   const operation = state.beginOperation({
     command: kind,
     kind,
@@ -1021,6 +1025,12 @@ export async function buildWorktree(input: {
   });
   let finished = false;
   try {
+    state.mutateEnrollment(identity.checkoutKey, () => {
+      const existing = readEnrollment(state.stateRoot, identity.checkoutKey);
+      if (existing) assertEnrollmentIdentity(existing, identity);
+      else if (kind !== "build") throw new LifecycleError("unenrolled", "checkout is not enrolled");
+      else writeEnrollment(state.stateRoot, identity.checkoutKey, createEnrollment(identity));
+    }, operation.id);
     throwIfAborted(input.signal);
     const { model, compatibility } = await resolveBuildInputs(modelsRoot, deps);
     const worktreeAcq = state.acquireCurrent({
@@ -1102,7 +1112,7 @@ export async function buildWorktree(input: {
           compatibility,
         });
       } catch (error) {
-        if (error instanceof CodeIndexUnavailableError) throw error;
+        if (error instanceof CodeIndexUnavailableError || error instanceof ResourceBudgetError) throw error;
         throw new CodeIndexUnavailableError(
           "Current overlay generation is unavailable.",
           error,
@@ -1164,7 +1174,7 @@ export async function buildWorktree(input: {
       }
     }
 
-    mergeEnrollment(state.stateRoot, identity.checkoutKey, identity, {
+    mergeEnrollment(state, identity.checkoutKey, identity, {
       head: identity.head,
       lastBuild: {
         at: nowIso(),
@@ -1174,7 +1184,7 @@ export async function buildWorktree(input: {
         snapshotDigest: built.snapshotDigest,
       },
       ...(built.sourceMoved ? {} : { lastCheck: null }),
-    });
+    }, operation.id);
     state.finishOperation(operation.id, "finished");
     finished = true;
 
@@ -1200,7 +1210,7 @@ export async function buildWorktree(input: {
         // release best-effort; underlying error propagates
       }
       try {
-        mergeEnrollment(state.stateRoot, identity.checkoutKey, identity, {
+        mergeEnrollment(state, identity.checkoutKey, identity, {
           lastBuild: { at: nowIso(), kind, status: "failed", reason: errorMessage(error) },
         });
       } catch {
@@ -1245,11 +1255,11 @@ export async function updateCheckout(input: {
 // ---- configureSpecUse -----------------------------------------------------
 
 // Operator-only spec-use preference. Requires an existing enrollment, writes
-// the full record atomically through the existing writer, and never touches
+// the full record atomically through the state mutation claim, and never touches
 // generations or current state.
 export function configureSpecUse(input: {
   identity: CheckoutIdentityLike;
-  stateRoot: string;
+  state: LifecycleState;
   specUse: boolean;
 }): {
   version: 1;
@@ -1261,13 +1271,16 @@ export function configureSpecUse(input: {
   actualRoot: string;
   observedAt: string;
 } {
-  const { identity, stateRoot, specUse } = input;
-  const enrollment = readEnrollment(stateRoot, identity.checkoutKey);
-  if (!enrollment) {
-    throw new LifecycleError("unenrolled", "checkout is not enrolled");
-  }
-  assertEnrollmentIdentity(enrollment, identity);
-  writeEnrollment(stateRoot, identity.checkoutKey, { ...enrollment, specUse });
+  const { identity, state, specUse } = input;
+  state.mutateEnrollment(identity.checkoutKey, () => {
+    const stateRoot = state.stateRoot;
+    const enrollment = readEnrollment(stateRoot, identity.checkoutKey);
+    if (!enrollment) {
+      throw new LifecycleError("unenrolled", "checkout is not enrolled");
+    }
+    assertEnrollmentIdentity(enrollment, identity);
+    writeEnrollment(stateRoot, identity.checkoutKey, { ...enrollment, specUse });
+  });
   return {
     version: 1,
     command: "configure",

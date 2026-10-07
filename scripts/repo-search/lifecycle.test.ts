@@ -1,3 +1,4 @@
+import { captureSnapshot } from "./source";
 // Test-first acceptance boundary for Step 4 primary lifecycle/build.
 //
 // Production `./lifecycle` and `./core/build.ts` do not exist yet: these cases
@@ -22,6 +23,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -47,9 +49,9 @@ import {
 } from "./core/codeModelAssets";
 import { readFileManifest, resolveManifestPath } from "./core/fileManifest";
 import { languageForPath, routeStrategy } from "./core/route";
-import { resolveCheckout, resolveStateRoot } from "./identity.mjs";
+import { resolveCheckout, resolveStateRoot, enrollmentPath } from "./identity.mjs";
 import { openState } from "./state";
-import { buildPrimary, checkCheckout, readCheckoutStatus } from "./lifecycle";
+import { buildPrimary, checkCheckout, readCheckoutStatus, configureSpecUse } from "./lifecycle";
 
 const tempRoots: string[] = [];
 
@@ -768,4 +770,37 @@ describe("enrollment ancestor-symlink containment", () => {
       state.close();
     }
   });
+});
+
+
+test("check cannot recreate enrollment forgotten during capture, and metadata stays available during a build", async () => {
+  const base = makeTempRoot();
+  const repo = join(base, "repo");
+  mkdirSync(repo, { recursive: true });
+  git(repo, "init", "-q");
+  write(repo, "file.txt", "hello");
+  git(repo, "add", ".");
+  const identity = await resolveCheckout(repo);
+  const state = openState(join(base, "state"));
+  const model = makeModelFixture(base);
+  try {
+    await buildPrimary({ identity, state, modelsRoot: model.modelsRoot, kind: "build",
+      deps: { modelAssets: model.specs, createEmbeddingRuntime: fakeRuntimeFactory({ embeds: 0, embeddedText: [] }) } });
+    const writer = state.beginOperation({ command: "update", kind: "update", checkoutKey: identity.checkoutKey, writer: true, native: true });
+    try {
+      configureSpecUse({ identity, state, specUse: true });
+      expect((await checkCheckout({ identity, state })).matchesGeneration).toBe(true);
+      expect(JSON.parse(readFileSync(enrollmentPath(state.stateRoot, identity.checkoutKey), "utf8")).specUse).toBe(true);
+      expect(() => state.forgetCheckout(identity.checkoutKey)).toThrow("active writer");
+    } finally { state.finishOperation(writer.id); }
+    await expect(checkCheckout({ identity, state, deps: {
+      captureSnapshot: async (target, signal) => {
+        const snapshot = await captureSnapshot(target, {}, signal);
+        state.forgetCheckout(identity.checkoutKey);
+        return snapshot;
+      },
+    } })).rejects.toMatchObject({ code: "unenrolled" });
+    expect(existsSync(enrollmentPath(state.stateRoot, identity.checkoutKey))).toBe(false);
+    expect(state.readStatus().current).toHaveLength(0);
+  } finally { state.close(); }
 });

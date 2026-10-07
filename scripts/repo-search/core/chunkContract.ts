@@ -11,3 +11,7 @@ export type CodeChunk = {
   language: string;           // "" when unknown
   chunkIndex: number;         // 0-based, sequential within the file
 };
+
+export function normalizeContent(content: string): string {
+  return content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}

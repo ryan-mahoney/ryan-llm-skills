@@ -1,3 +1,4 @@
+import { SQLITE_WRITE_HEADROOM, type GrowthCheck } from "./resources";
 import { createHash } from "node:crypto";
 import {
   closeSync,
@@ -39,7 +40,7 @@ export type CodeEmbeddingCache = {
     rows: readonly CodeEmbeddingCachePutRow[];
     nowMs: number;
   }): void;
-  pruneUnused(input: { maxRows: number }): number;
+  pruneUnused(input: { maxRows: number; deadlineAt?: number }): number;
   close(): void;
 };
 
@@ -172,7 +173,13 @@ function assertSafeSidecar(path: string): void {
 export function openCodeEmbeddingCache(options: {
   filePath: string;
   beforeDatabaseOpen?: () => void;
+  beforeWrite?: GrowthCheck;
+  maxRows?: number;
 }): CodeEmbeddingCache {
+  const maxRows = Math.min(options.maxRows ?? DEFAULT_CODE_EMBEDDING_CACHE_MAX_ROWS, DEFAULT_CODE_EMBEDDING_CACHE_MAX_ROWS);
+  validateMaxRows(maxRows);
+  const beforeWrite = () => options.beforeWrite?.(0, SQLITE_WRITE_HEADROOM);
+  beforeWrite();
   const dir = ensureOwnedCacheDir(dirname(options.filePath));
   const filePath = options.filePath;
   const walPath = `${filePath}-wal`;
@@ -272,13 +279,25 @@ export function openCodeEmbeddingCache(options: {
     `SELECT COUNT(*) AS count FROM code_embedding_cache`,
   );
 
+  const prune = (limit: number, maxDeletes = 100) => {
+    validateMaxRows(limit);
+    const overflow = (countStmt.get() as { count: number }).count - limit;
+    if (overflow <= 0) return 0;
+    return db.query(`DELETE FROM code_embedding_cache WHERE rowid IN (
+      SELECT rowid FROM code_embedding_cache
+      ORDER BY last_used_at ASC, created_at ASC, namespace ASC, text_sha256 ASC LIMIT ?
+    )`).run(Math.min(overflow, maxDeletes)).changes;
+  };
+  const checkpoint = () => db.run("PRAGMA wal_checkpoint(TRUNCATE)");
+
   return {
     getMany(input) {
       const uniqueTexts = uniqueStrings(input.texts);
       const hits = new Map<string, number[]>();
       let invalidRows = 0;
 
-      for (const text of uniqueTexts) {
+      for (const [index, text] of uniqueTexts.entries()) {
+        if (index % 16 === 0) { checkpoint(); beforeWrite(); }
         const textSha256 = sha256Text(text);
         const row = selectStmt.get(input.namespace, textSha256) as CacheRow | null;
         if (row === null) continue;
@@ -303,41 +322,40 @@ export function openCodeEmbeddingCache(options: {
         updateUsageStmt.run(input.nowMs, input.namespace, textSha256);
       }
 
+      checkpoint();
       return { hits, invalidRows };
     },
 
     putMany(input) {
-      for (const row of input.rows) {
-        const vectorBlob = encodeEmbeddingVector(row.embedding);
-        upsertStmt.run(
-          input.namespace,
-          sha256Text(row.text),
-          CODE_INDEX_DIMENSIONS,
-          vectorBlob,
-          input.nowMs,
-          input.nowMs,
-        );
+      this.pruneUnused({ maxRows });
+      // Bounded transactions constrain WAL growth; trim in the same transaction
+      // so no observer can see a cache above its declared row capacity.
+      for (let offset = 0; offset < input.rows.length; offset += 16) {
+        checkpoint();
+        beforeWrite();
+        db.transaction(() => {
+          for (const row of input.rows.slice(offset, offset + 16)) {
+            const vectorBlob = encodeEmbeddingVector(row.embedding);
+            upsertStmt.run(input.namespace, sha256Text(row.text), CODE_INDEX_DIMENSIONS,
+              vectorBlob, input.nowMs, input.nowMs);
+          }
+          prune(maxRows);
+        }).immediate();
       }
+      checkpoint();
     },
 
     pruneUnused(input) {
-      validateMaxRows(input.maxRows);
-      const row = countStmt.get() as { count: number };
-      const overflow = row.count - input.maxRows;
-      if (overflow <= 0) return 0;
-
-      const result = db
-        .prepare(
-          `DELETE FROM code_embedding_cache
-           WHERE rowid IN (
-             SELECT rowid
-             FROM code_embedding_cache
-             ORDER BY last_used_at ASC, created_at ASC, namespace ASC, text_sha256 ASC
-             LIMIT ?
-           )`,
-        )
-        .run(overflow);
-      return result.changes;
+      beforeWrite();
+      let removed = 0;
+      while (Date.now() < (input.deadlineAt ?? Infinity)) {
+        const count = db.transaction(() => prune(Math.min(input.maxRows, maxRows))).immediate();
+        removed += count;
+        checkpoint();
+        if (count === 0) break;
+        beforeWrite();
+      }
+      return removed;
     },
 
     close() {

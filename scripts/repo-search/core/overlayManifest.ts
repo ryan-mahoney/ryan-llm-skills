@@ -1,3 +1,4 @@
+import type { GrowthCheck } from "./resources";
 // Overlay manifest owner.
 //
 // An overlay manifest records the immutable base generation it overlays, the
@@ -147,6 +148,7 @@ export async function readOverlayManifest(storeDir: string): Promise<OverlayMani
 export async function writeOverlayManifest(
   storeDir: string,
   manifest: OverlayManifest,
+  beforeWrite?: GrowthCheck,
 ): Promise<void> {
   const sortedFiles = createFileManifestEntries();
   for (const key of Object.keys(manifest.files).sort()) sortedFiles[key] = manifest.files[key];
@@ -163,7 +165,9 @@ export async function writeOverlayManifest(
   await mkdir(dirname(path), { recursive: true });
   const temp = `${path}.tmp-${process.pid}-${Date.now()}`;
   try {
-    await writeFile(temp, JSON.stringify(serialized, null, 2));
+    const text = JSON.stringify(serialized, null, 2);
+    beforeWrite?.(Buffer.byteLength(text));
+    await writeFile(temp, text);
     await rename(temp, path);
   } catch (error) {
     await unlink(temp).catch(() => undefined);

@@ -1,3 +1,5 @@
+import { ResourceBudgetError } from "./core/resources";
+import { normalizeContent } from "./core/chunkContract";
 // Finite repository search session owner.
 //
 // Acquires and pins current/base generations through state.ts, strictly
@@ -27,6 +29,7 @@ import {
   type VerifiedModel,
 } from "./core/codeModelAssets";
 import {
+  CODE_INDEX_MODEL_ID,
   codeSearchCompatibilityEqual,
   createCodeSearchCompatibility,
   type CodeSearchCompatibility,
@@ -99,6 +102,7 @@ export type SearchResult = {
   availability: "ready" | "missing" | "unavailable";
   freshness: "unknown" | "stale";
   operation: "idle" | "building" | "failed" | "interrupted";
+  operationId?: string;
   repoKey: string;
   checkoutKey: string;
   requestedRoot: string;
@@ -157,7 +161,7 @@ async function defaultEmbeddingRuntime(input: {
 
 function excerptLines(bytes: Buffer, startLine: number, endLine: number): string {
   const text = new TextDecoder("utf-8").decode(bytes);
-  const lines = text.split("\n");
+  const lines = normalizeContent(text).split("\n");
   const start = Math.max(0, startLine - 1);
   const end = Math.min(lines.length, endLine);
   return lines.slice(start, end).join("\n");
@@ -193,6 +197,13 @@ export async function createSearchSession(input: {
     if (!current || current.status !== "ready") {
       throw new SearchError("no-current", "no ready generation for search");
     }
+    const packageCompatibility = createCodeSearchCompatibility({
+      modelId: CODE_INDEX_MODEL_ID,
+      assetDigest: current.compatibility.assetDigest,
+    });
+    if (!codeSearchCompatibilityEqual(current.compatibility, packageCompatibility)) {
+      throw new SearchError("incompatible", "generation package/policy compatibility mismatch; reindex required");
+    }
     const isOverlay = current.kind === "overlay";
     const base = acquired.base as GenerationRecord | null;
     if (isOverlay) {
@@ -214,6 +225,7 @@ export async function createSearchSession(input: {
         { open: "restore" },
       );
     } catch (error) {
+      if (error instanceof ResourceBudgetError) throw error;
       throw new SearchError("corrupt", `current generation is unavailable: ${(error as Error).message}`);
     }
 
@@ -241,6 +253,7 @@ export async function createSearchSession(input: {
           { open: "restore" },
         );
       } catch (error) {
+        if (error instanceof ResourceBudgetError) throw error;
         throw new SearchError("corrupt", `overlay base is unavailable: ${(error as Error).message}`);
       }
       currentManifest = overlayManifest.files;
@@ -455,7 +468,7 @@ export async function createSearchSession(input: {
         mode,
         availability: "ready",
         freshness: staleHits > 0 ? "stale" : "unknown",
-        operation: "idle",
+        ...state.readBuildOperation(identity.checkoutKey),
         repoKey: identity.repoKey,
         checkoutKey: identity.checkoutKey,
         requestedRoot: identity.root,

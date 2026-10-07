@@ -388,7 +388,7 @@ export async function runWorker(request: unknown): Promise<WorkerResponse> {
       case "configure": {
         const receipt = lifecycle.configureSpecUse({
           identity,
-          stateRoot: state.stateRoot,
+          state,
           specUse: req.specUse as boolean,
         });
         return { ...base, status: "ok", receipt };
