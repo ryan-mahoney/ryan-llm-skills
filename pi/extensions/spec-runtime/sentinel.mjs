@@ -2286,9 +2286,18 @@ export function buildDiagnosisPacket({ incident, record = null, checkpoint = nul
   const reasons = [];
   const items = [];
   const policyFacts = [];
+  const omitted = [];
+  const coverageReasons = [];
   const add = (target, id, category, value) => {
     const bounded = boundedDiagnosisValue(value);
     if (bounded === undefined) return;
+    // A sliced string is a bounded-value truncation: it is tracked like the
+    // initial collection caps so coverage never presents partial values as
+    // the complete evidence set.
+    if (typeof value === 'string' && value.length > DIAGNOSIS_MAX_VALUE) {
+      omitted.push('truncated-values');
+      coverageReasons.push('values-truncated');
+    }
     target.push({ id, category, value: bounded });
   };
 
@@ -2314,6 +2323,7 @@ export function buildDiagnosisPacket({ incident, record = null, checkpoint = nul
   add(base, 'checkpoint.observed_at', 'wait', checkpoint?.observed_at);
 
   const artifactList = Array.isArray(checkpoint?.obligation?.artifacts) ? checkpoint.obligation.artifacts : [];
+  const artifactsOmitted = artifactList.length > 16;
   artifactList.slice(0, 16).forEach((entry, index) => add(artifacts, `artifact.${index}.sha256`, 'hash', entry?.sha256));
 
   const workerList = Array.isArray(checkpoint?.workers) ? checkpoint.workers : [];
@@ -2336,11 +2346,13 @@ export function buildDiagnosisPacket({ incident, record = null, checkpoint = nul
     const category = String(reason).split(':')[0];
     reasonCategories.set(category, (reasonCategories.get(category) ?? 0) + 1);
   }
-  [...reasonCategories.entries()].slice(0, 12).forEach(([category, count]) => add(reasons, `inbox.reason.${category}`, 'count', count));
+  const reasonEntries = [...reasonCategories.entries()];
+  const reasonsOmitted = reasonEntries.length > 12;
+  reasonEntries.slice(0, 12).forEach(([category, count]) => add(reasons, `inbox.reason.${category}`, 'count', count));
   const heldOrBlocking = guardItems
-    .filter(item => item?.state === 'held' || item?.state === 'blocking' || item?.state === 'unknown')
-    .slice(0, 12);
-  heldOrBlocking.forEach((item, index) => {
+    .filter(item => item?.state === 'held' || item?.state === 'blocking' || item?.state === 'unknown');
+  const itemsOmitted = heldOrBlocking.length > 12;
+  heldOrBlocking.slice(0, 12).forEach((item, index) => {
     add(items, `inbox.item.${index}.id`, 'hold', item?.id);
     add(items, `inbox.item.${index}.sha256`, 'hash', item?.sha256);
   });
@@ -2350,9 +2362,13 @@ export function buildDiagnosisPacket({ incident, record = null, checkpoint = nul
   add(policyFacts, 'policy.max_diagnostics', 'count', policy?.max_diagnostics);
   add(policyFacts, 'policy.expires_at', 'wait', policy?.expires_at);
 
-  const omitted = [];
-  const coverageReasons = [];
+  // Every initial slice and bounded-value truncation is tracked independently
+  // of byte/fact overflow, so a packet below the byte and fact limits can never
+  // present silently truncated evidence as complete.
   if (workersOmitted) { omitted.push('workers'); coverageReasons.push('workers-omitted'); }
+  if (artifactsOmitted) { omitted.push('artifact-hashes'); coverageReasons.push('artifact-hashes-omitted'); }
+  if (reasonsOmitted) { omitted.push('reason-categories'); coverageReasons.push('reason-categories-omitted'); }
+  if (itemsOmitted) { omitted.push('inbox-items'); coverageReasons.push('inbox-items-omitted'); }
   const groups = { base, artifacts, workers, inbox, reasons, items, policy: policyFacts };
   const assemble = () => {
     const facts = [...groups.base, ...groups.artifacts, ...groups.workers, ...groups.inbox,
@@ -2467,9 +2483,26 @@ export async function diagnoseIncident({
   let packagePath;
   try { packagePath = canonicalPackage(record?.package ?? incident.package).packagePath; }
   catch { return abstain('skipped', 'checkpoint-unavailable'); }
+  // The record, incident and retained checkpoint must agree with the live
+  // authority's complete canonical scope before any packet or reservation: a
+  // workflow ID registered independently in another canonical package never
+  // spends this authority's budget or sends that package's facts to the model.
+  if (incident.package != null) {
+    let incidentPackage;
+    try { incidentPackage = canonicalPackage(incident.package).packagePath; } catch { return abstain('blocked', 'incident-package-unavailable'); }
+    if (incidentPackage !== packagePath) return abstain('blocked', 'incident-package-mismatch');
+  }
+  const liveScope = authorityState(authority);
+  if (packagePath !== liveScope.packagePath) return abstain('blocked', 'package-mismatch');
+  if (record?.assignment_id != null && incident.assignment_id != null && record.assignment_id !== incident.assignment_id) {
+    return abstain('blocked', 'assignment-mismatch');
+  }
   const checkpoint = readCheckpointRecord(packagePath, scopedWorkflow);
   if (!checkpoint || checkpoint.workflow_id !== scopedWorkflow || checkpoint.package !== packagePath) {
     return abstain('skipped', 'checkpoint-unavailable');
+  }
+  if (checkpoint.checkout != null && resolve(checkpoint.checkout) !== liveScope.checkout) {
+    return abstain('blocked', 'checkout-mismatch');
   }
   if (!events) return abstain('unavailable', 'delegation-unavailable');
 
@@ -2561,20 +2594,27 @@ export async function diagnoseIncident({
     retainedPath = null;
     persistenceError = publicHint(String(error?.message ?? error));
   }
+  // A diagnosis whose attempt could not be retained is never applied: the
+  // intent keeps an unresolved unknown outcome so the storage failure disables
+  // further automation for this workflow while the spent diagnostic slot is
+  // retained, and the caller sees abstention instead of a decision (AC-11).
+  const published = retainedPath != null;
+  const outcomeState = published ? attemptState : 'unknown';
+  const outcomeReason = published ? reasonCode : 'attempt-retention-failed';
   try {
-    finishIntent(authority, { workflow_id: scopedWorkflow, intent_id: intentIdValue, state: attemptState,
-      reason_code: reasonCode, ...(applied ? { result_reference: `${DIAGNOSIS_FILE}/${incident.id}.json` } : {}), now });
+    finishIntent(authority, { workflow_id: scopedWorkflow, intent_id: intentIdValue, state: outcomeState,
+      reason_code: outcomeReason, ...(applied && published ? { result_reference: `${DIAGNOSIS_FILE}/${incident.id}.json` } : {}), now });
   } catch (error) {
     persistenceError = persistenceError ?? publicHint(String(error?.message ?? error));
   }
   return {
     version: 1,
     launched: true,
-    state: attemptState,
-    decision: applied ? validation.result.decision : 'abstain',
-    fact_ids: applied ? validation.result.fact_ids : [],
-    reason_code: applied ? validation.result.reason_code : (validation.code ?? reasonCode),
-    note: applied ? validation.result.note : null,
+    state: outcomeState,
+    decision: applied && published ? validation.result.decision : 'abstain',
+    fact_ids: applied && published ? validation.result.fact_ids : [],
+    reason_code: applied && published ? validation.result.reason_code : (published ? (validation.code ?? reasonCode) : outcomeReason),
+    note: applied && published ? validation.result.note : null,
     note_verified: false,
     usage,
     usage_available: usage != null,

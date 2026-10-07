@@ -1641,6 +1641,45 @@ test('sentinel diagnosis: packet drops secrets and bounds large checkpoints', ()
   assert.ok(large.packet.coverage.omitted.length > 0);
 });
 
+test('sentinel diagnosis: packet coverage marks each initial cap and value truncation independently', () => {
+  const incident = diagnosisIncident('/pkg');
+  const build = (checkpoint, record = null) => buildDiagnosisPacket({ incident, record, checkpoint, policy: null });
+  const item = (id, state) => ({ id, sha256: id[0].repeat(64), state });
+  // 17 supported artifacts with every other collection below its cap.
+  const artifactsPacket = build({ obligation: { key: 'impl:key', stage: 'implementation',
+    artifacts: Array.from({ length: 17 }, (_, i) => ({ path: `a-${i}.md`, sha256: String(i).repeat(64) })) } });
+  assert.equal(artifactsPacket.packet.facts.filter(fact => fact.id.startsWith('artifact.')).length, 16);
+  assert.equal(artifactsPacket.packet.facts.some(fact => fact.id === 'artifact.16.sha256'), false);
+  assert.deepEqual(artifactsPacket.packet.coverage.omitted, ['artifact-hashes']);
+  assert.ok(artifactsPacket.packet.coverage.reasons.includes('artifact-hashes-omitted'));
+  assert.equal(artifactsPacket.packet.coverage.state, 'partial');
+  // 13 reason categories with items and workers below their caps.
+  const reasonsPacket = build({ inbox_guard: { state: 'blocking', blocking: true,
+    reasons: Array.from({ length: 13 }, (_, i) => `cat-${i}:detail`), items: [] } });
+  assert.equal(reasonsPacket.packet.facts.filter(fact => fact.id.startsWith('inbox.reason.')).length, 12);
+  assert.deepEqual(reasonsPacket.packet.coverage.omitted, ['reason-categories']);
+  assert.equal(reasonsPacket.packet.coverage.state, 'partial');
+  // 13 held/blocking items with reasons and workers below their caps.
+  const itemsPacket = build({ inbox_guard: { state: 'blocking', blocking: true, reasons: [],
+    items: Array.from({ length: 13 }, (_, i) => item(`item-${i}`, i % 2 ? 'held' : 'blocking')) } });
+  assert.equal(itemsPacket.packet.facts.filter(fact => fact.id.startsWith('inbox.item.')).length, 24);
+  assert.deepEqual(itemsPacket.packet.coverage.omitted, ['inbox-items']);
+  assert.equal(itemsPacket.packet.coverage.state, 'partial');
+  // A bounded value sliced to the per-fact cap is a tracked truncation.
+  const truncated = build({}, { checkout: 'c'.repeat(200) });
+  assert.equal(truncated.packet.facts.find(fact => fact.id === 'record.checkout').value.length, 160);
+  assert.deepEqual(truncated.packet.coverage.omitted, ['truncated-values']);
+  assert.equal(truncated.packet.coverage.state, 'partial');
+  // Everything below every cap stays complete with no omission markers.
+  const complete = build({ obligation: { key: 'impl:key', stage: 'implementation',
+      artifacts: Array.from({ length: 4 }, (_, i) => ({ path: `a-${i}.md`, sha256: String(i).repeat(64) })) },
+    workers: [{ id: 'w-0', kind: 'owner', state: 'working' }, { id: 'w-1', kind: 'owner', state: 'working' }],
+    inbox_guard: { state: 'blocking', blocking: true, reasons: ['c:1', 'd:2', 'e:3'],
+      items: [item('item-0', 'held'), item('item-1', 'blocking'), item('item-2', 'held')] } },
+    { id: 'run-diag', checkout: '/repo', assignment_id: 'assign-1' });
+  assert.deepEqual(complete.packet.coverage, { state: 'complete', omitted: [], reasons: [] });
+});
+
 test('sentinel diagnosis: validator enforces the exact six-key response contract', () => {
   const incident = { id: 'd'.repeat(32), generation: 2 };
   const factIds = ['incident.id', 'incident.count'];
@@ -1681,6 +1720,48 @@ test('sentinel diagnosis: preconditions abstain without a leaf launch', async t 
   assert.equal(existsSync(join(packagePath, 'runtime', 'sentinel', 'wf-1', 'diagnoses')), false);
 });
 
+test('sentinel diagnosis: a foreign package sharing the workflow ID is rejected before any reservation', async t => {
+  const own = canonicalFixture(t);
+  const other = canonicalFixture(t);
+  const { authority } = armDiagnosis(own.packagePath, own.base);
+  // The other canonical package registers and dispatches the same workflow ID
+  // independently; both checkpoints are valid inside their own scope.
+  recordCheckpoint(baseCheckpoint(other.packagePath));
+  const foreignIncident = diagnosisIncident(other.packagePath);
+  const foreignRecord = diagnosisRecord(other.packagePath, other.base);
+  const ownIncident = diagnosisIncident(own.packagePath);
+  const harness = leafHarness([{ result: diagnosisReply(ownIncident) }]);
+  const foreign = await diagnoseIncident({ authority, incident: foreignIncident, record: foreignRecord,
+    workflow_id: 'wf-1', events: {}, createLeaf: harness.createLeaf, now: () => FIXED });
+  assert.equal(foreign.launched, false);
+  assert.equal(foreign.state, 'blocked');
+  assert.equal(foreign.error, 'package-mismatch');
+  // A foreign incident attached to this package's own record is rejected too.
+  const mixed = await diagnoseIncident({ authority, incident: foreignIncident, record: diagnosisRecord(own.packagePath, own.base),
+    workflow_id: 'wf-1', events: {}, createLeaf: harness.createLeaf, now: () => FIXED });
+  assert.equal(mixed.launched, false);
+  assert.equal(mixed.state, 'blocked');
+  assert.equal(mixed.error, 'incident-package-mismatch');
+  // A record/incident assignment disagreement inside the canonical scope.
+  const assignment = await diagnoseIncident({ authority, incident: diagnosisIncident(own.packagePath, { assignment_id: 'assign-other' }),
+    record: diagnosisRecord(own.packagePath, own.base), workflow_id: 'wf-1', events: {}, createLeaf: harness.createLeaf, now: () => FIXED });
+  assert.equal(assignment.launched, false);
+  assert.equal(assignment.state, 'blocked');
+  assert.equal(assignment.error, 'assignment-mismatch');
+  assert.equal(harness.calls.length, 0, 'no rejected scope ever launches a leaf');
+  // Nothing was reserved, retained or spent in either package.
+  for (const pkg of [own.packagePath, other.packagePath]) {
+    for (const leaf of ['intents', 'diagnoses', 'diagnostic-slots']) {
+      assert.equal(existsSync(join(pkg, 'runtime', 'sentinel', 'wf-1', leaf)), false, `${leaf} must not exist in ${pkg}`);
+    }
+  }
+  // The authority's own scope still diagnoses after the rejections.
+  const applied = await diagnoseIncident({ authority, incident: ownIncident, record: diagnosisRecord(own.packagePath, own.base),
+    workflow_id: 'wf-1', events: {}, createLeaf: harness.createLeaf, now: () => FIXED });
+  assert.equal(applied.state, 'applied');
+  assert.equal(harness.calls.length, 1);
+});
+
 test('sentinel diagnosis: a valid reply applies and retains one bounded attempt', async t => {
   const { packagePath, base } = canonicalFixture(t);
   const { authority } = armDiagnosis(packagePath, base);
@@ -1716,6 +1797,46 @@ test('sentinel diagnosis: a valid reply applies and retains one bounded attempt'
   assert.equal(duplicate.launched, false);
   assert.equal(duplicate.state, 'duplicate');
   assert.equal(harness.calls.length, 1);
+});
+
+test('sentinel diagnosis: failed attempt retention keeps an unknown blocking outcome and the spent slot', async t => {
+  const { packagePath, base } = canonicalFixture(t);
+  const { authority } = armDiagnosis(packagePath, base);
+  const incident = diagnosisIncident(packagePath);
+  const record = diagnosisRecord(packagePath, base);
+  // A non-directory at the diagnoses publication path leaves the intents and
+  // budget directories writable, so only the retention guard can fail here.
+  mkdirSync(join(packagePath, 'runtime', 'sentinel', 'wf-1'), { recursive: true });
+  writeFileSync(join(packagePath, 'runtime', 'sentinel', 'wf-1', 'diagnoses'), 'not a directory');
+  const harness = leafHarness([{ result: diagnosisReply(incident), usage: { input: 2 } }]);
+  const result = await diagnoseIncident({ authority, incident, record, workflow_id: 'wf-1', events: {}, createLeaf: harness.createLeaf, now: () => FIXED });
+  assert.equal(result.launched, true);
+  assert.equal(result.state, 'unknown');
+  assert.equal(result.decision, 'abstain');
+  assert.equal(result.reason_code, 'attempt-retention-failed');
+  assert.equal(result.note, null);
+  assert.equal(result.fact_ids.length, 0);
+  assert.equal(result.attempt_path, null);
+  assert.ok(result.error, 'the storage failure is surfaced');
+  assert.equal(readDiagnosisAttempt(packagePath, 'wf-1', incident.id), null);
+  const intentsDirectory = join(packagePath, 'runtime', 'sentinel', 'wf-1', 'intents');
+  const [intentFile] = readdirSync(intentsDirectory);
+  const intent = JSON.parse(readFileSync(join(intentsDirectory, intentFile), 'utf8'));
+  assert.equal(intent.state, 'unknown');
+  assert.equal(intent.reason_code, 'attempt-retention-failed');
+  assert.equal('result_reference' in intent, false);
+  // The consumed diagnostic slot is retained and stays spent.
+  assert.equal(readdirSync(join(packagePath, 'runtime', 'sentinel', 'wf-1', 'diagnostic-slots')).length, 1);
+  // Every later reservation for this workflow stays blocked, in either pool.
+  const blocked = reserveIntent(authority, { workflow_id: 'wf-1', kind: 'continue', subject_key: 'impl:s1',
+    source_revision: 'rev-1', now: () => FIXED });
+  assert.equal(blocked.accepted, false);
+  assert.equal(blocked.state, 'blocked');
+  assert.ok(blocked.reasons.some(reason => reason.startsWith('intent-unknown-outcome:')));
+  const again = await diagnoseIncident({ authority, incident, record, workflow_id: 'wf-1', events: {}, createLeaf: harness.createLeaf, now: () => FIXED });
+  assert.equal(again.launched, false);
+  assert.equal(again.state, 'unknown');
+  assert.equal(harness.calls.length, 1, 'no second launch after the retention failure');
 });
 
 test('sentinel diagnosis: missing usage stays unavailable and never zero', async t => {
