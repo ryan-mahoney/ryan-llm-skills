@@ -1,0 +1,20 @@
+repo-search
+===========
+
+Provenance
+----------
+This package extracts core code-index sources from rearrange-writer
+@ a8ed68577d7d559013b351e62faac3f89d3b28f1
+(git@github.com:ryan-mahoney/rearrange-writer.git).
+The source project declares license "UNLICENSED"; no public license grant is
+claimed here. See SOURCE.md for the full mapping and transformations.
+
+Third-party dependencies
+------------------------
+License identifiers below are read from each dependency's package.json
+`license` field; no license text is reproduced or invented.
+
+- @orama/orama (3.1.18) — Apache-2.0
+- @msgpack/msgpack (3.1.3) — ISC
+- @huggingface/transformers (4.2.0) — Apache-2.0
+- code-chunk (0.1.14) — MIT
