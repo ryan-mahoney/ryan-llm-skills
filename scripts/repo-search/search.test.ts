@@ -338,6 +338,56 @@ describe("overlay candidate refill and exhaustion", () => {
       fixture.state.close();
     }
   });
+
+  test("validates the complete bounded union before selecting surviving hits", async () => {
+    const base = makeTempRoot();
+    const staleSource = Array.from(
+      { length: 4_500 },
+      (_, index) => `export const hiddenCandidateToken${index} = "hiddenCandidateToken";`,
+    ).join("\n");
+    const fixture = await buildPrimaryFixture(base, { "src/base.txt": staleSource });
+    const seam = runtimeSeam();
+    try {
+      const worktree = join(base, "wt", "feature");
+      addWorktree(fixture.repo, worktree, "wt-feature");
+      write(worktree, "src/overlay.txt", staleSource);
+      write(
+        worktree,
+        "src/survivor.txt",
+        "surviving candidate hiddenCandidateToken\n",
+      );
+      git(worktree, "add", "-A");
+      const wtIdentity = await resolveCheckout(worktree);
+      await buildWorktree({
+        identity: wtIdentity,
+        state: fixture.state,
+        modelsRoot: fixture.modelsRoot,
+        kind: "build",
+        primaryIdentity: fixture.identity,
+        deps: { modelAssets: fixture.specs, createEmbeddingRuntime: seam.factory },
+      });
+
+      write(worktree, "src/base.txt", "stale base\n");
+      write(worktree, "src/overlay.txt", "stale overlay\n");
+
+      const session = await createSearchSession({
+        identity: wtIdentity,
+        state: fixture.state,
+        modelsRoot: fixture.modelsRoot,
+        deps: { modelAssets: fixture.specs, createEmbeddingRuntime: seam.factory },
+      });
+      try {
+        const result = await session.search("hiddenCandidateToken", "bm25", 1);
+        expect(result.hits.map((hit) => hit.path)).toEqual(["src/survivor.txt"]);
+        expect(result.coverage.staleHits).toBe(2);
+        expect(result.coverage.omittedHits).toBeGreaterThanOrEqual(160);
+      } finally {
+        await session.dispose();
+      }
+    } finally {
+      fixture.state.close();
+    }
+  });
 });
 
 describe("stale-source hit omission", () => {
@@ -508,6 +558,43 @@ describe("public Node CLI composition (BM25, no models)", () => {
       expect(hit.fileHash).toBe(hashFile(fixture.repo, "src/alpha.ts"));
       expect(hit.excerpt).toContain("alphaBm25Token");
       expect(["unknown", "partial"]).toContain(parsed.coverage.completeness);
+    } finally {
+      fixture.state.close();
+    }
+  });
+
+  test("cli.mjs bounds a valid large search excerpt before worker transport", async () => {
+    const base = makeTempRoot();
+    const largeLine = `export const oversizedTransportToken = "${"x".repeat(100 * 1024)}";\n`;
+    const fixture = await buildPrimaryFixture(base, { "src/large.ts": largeLine });
+    try {
+      const cliPath = fileURLToPath(new URL("./cli.mjs", import.meta.url));
+      const result = spawnSync(
+        "node",
+        [
+          cliPath,
+          "search",
+          "--root",
+          fixture.repo,
+          "--state",
+          fixture.stateRoot,
+          "--query",
+          "oversizedTransportToken",
+          "--mode",
+          "bm25",
+          "--limit",
+          "1",
+          "--json",
+        ],
+        { encoding: "utf8", maxBuffer: 1024 * 1024, timeout: 30_000 },
+      );
+      expect(result.status).toBe(0);
+      const stdout = result.stdout ?? "";
+      expect(Buffer.byteLength(stdout, "utf8")).toBeLessThanOrEqual(4096);
+      const parsed = JSON.parse(stdout);
+      expect(parsed.status).toBe("ok");
+      expect(parsed.hits.map((hit) => hit.path)).toEqual(["src/large.ts"]);
+      expect(parsed.hits[0].excerpt).toEndWith("\u2026");
     } finally {
       fixture.state.close();
     }

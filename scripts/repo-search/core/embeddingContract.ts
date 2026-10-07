@@ -53,3 +53,16 @@ export function createCodeSearchCompatibility(input: {
     policyVersion: input.policyVersion ?? CODE_SEARCH_POLICY_VERSION,
   };
 }
+
+export function codeSearchCompatibilityEqual(
+  a: CodeSearchCompatibility,
+  b: CodeSearchCompatibility,
+): boolean {
+  const key = (value: CodeSearchCompatibility): string =>
+    JSON.stringify(
+      Object.keys(value)
+        .sort()
+        .map((name) => [name, (value as unknown as Record<string, unknown>)[name]]),
+    );
+  return key(a) === key(b);
+}

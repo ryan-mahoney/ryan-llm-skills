@@ -28,6 +28,7 @@ import {
 } from "./core/build";
 import { CodeIndexUnavailableError } from "./core/codeIndexRuntime";
 import {
+  codeSearchCompatibilityEqual,
   createCodeSearchCompatibility,
   type CodeSearchCompatibility,
 } from "./core/embeddingContract";
@@ -182,19 +183,6 @@ function throwIfAborted(signal?: AbortSignal): void {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function compatibilityEqual(
-  a: CodeSearchCompatibility,
-  b: CodeSearchCompatibility,
-): boolean {
-  const key = (value: CodeSearchCompatibility): string =>
-    JSON.stringify(
-      Object.keys(value)
-        .sort()
-        .map((name) => [name, (value as unknown as Record<string, unknown>)[name]]),
-    );
-  return key(a) === key(b);
 }
 
 function coverageFor(snapshot: Snapshot): Coverage {
@@ -545,7 +533,7 @@ export async function buildPrimary(input: {
     const current = acquired.current as GenerationRecord | null;
 
     if (kind === "build" && current) {
-      if (!compatibilityEqual(current.compatibility, compatibility)) {
+      if (!codeSearchCompatibilityEqual(current.compatibility, compatibility)) {
         throw new LifecycleError("incompatible", "existing generation is incompatible; reindex required");
       }
       await validateCodeIndexStore({
@@ -582,7 +570,7 @@ export async function buildPrimary(input: {
       if (!current || current.status !== "ready" || current.kind !== "full") {
         throw new LifecycleError("no-current", "update requires a ready full current generation");
       }
-      if (!compatibilityEqual(current.compatibility, compatibility)) {
+      if (!codeSearchCompatibilityEqual(current.compatibility, compatibility)) {
         throw new LifecycleError("incompatible", "current generation compatibility mismatch");
       }
     }
@@ -1043,7 +1031,7 @@ export async function buildWorktree(input: {
     const currentBase = worktreeAcq.base as GenerationRecord | null;
 
     if (kind === "build" && current) {
-      if (!compatibilityEqual(current.compatibility, compatibility)) {
+      if (!codeSearchCompatibilityEqual(current.compatibility, compatibility)) {
         throw new LifecycleError("incompatible", "existing generation is incompatible; reindex required");
       }
       if (current.kind === "full") {
@@ -1086,7 +1074,7 @@ export async function buildWorktree(input: {
     const isExistingOverlay = current !== null && current.status === "ready" && current.kind === "overlay";
 
     if (kind === "update" && isExistingFull) {
-      if (!compatibilityEqual(current!.compatibility, compatibility)) {
+      if (!codeSearchCompatibilityEqual(current!.compatibility, compatibility)) {
         throw new LifecycleError("incompatible", "current full generation compatibility mismatch");
       }
       built = await performFullBuild({
@@ -1102,7 +1090,7 @@ export async function buildWorktree(input: {
         base.status !== "ready" ||
         base.kind !== "full" ||
         base.repoKey !== identity.repoKey ||
-        !compatibilityEqual(base.compatibility, compatibility)
+        !codeSearchCompatibilityEqual(base.compatibility, compatibility)
       ) {
         throw new LifecycleError("base-missing", "overlay base is not usable or compatible");
       }
@@ -1158,7 +1146,7 @@ export async function buildWorktree(input: {
               "selected primary base is not a usable full primary generation",
             );
           }
-          if (compatibilityEqual(primaryCurrent.compatibility, compatibility)) {
+          if (codeSearchCompatibilityEqual(primaryCurrent.compatibility, compatibility)) {
             selected = primaryCurrent;
           }
         }

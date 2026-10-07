@@ -290,6 +290,48 @@ test("usage and invalid-root failures write no lifecycle state", { timeout: 6000
   assert.equal(existsSync(state), false);
 });
 
+test("search rejects unsupported command options before spawning", { timeout: 60000 }, async () => {
+  const repo = await initFixtureRepo();
+  const stateParent = await makeTemp("repo-search-state-");
+  const shimDir = await makeTemp("repo-search-bin-");
+  const bunShim = join(shimDir, "bun");
+  await writeFile(
+    bunShim,
+    "#!/bin/sh\ntouch \"$REPO_SEARCH_TEST_SPAWN_MARKER\"\nexit 1\n",
+    "utf8",
+  );
+  await chmod(bunShim, 0o755);
+
+  for (const unsupported of [["--spec-use", "on"], ["--operation", "operation-id"]]) {
+    const state = join(stateParent, unsupported[0].slice(2));
+    const marker = join(shimDir, `${unsupported[0].slice(2)}.spawned`);
+    const result = await runCli(
+      [
+        "search",
+        "--root",
+        repo,
+        "--state",
+        state,
+        "--query",
+        "hello",
+        "--mode",
+        "bm25",
+        ...unsupported,
+      ],
+      {
+        env: {
+          PATH: `${shimDir}:${process.env.PATH ?? ""}`,
+          REPO_SEARCH_TEST_SPAWN_MARKER: marker,
+        },
+      },
+    );
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /Unknown option for search/);
+    assert.equal(existsSync(marker), false);
+    assert.equal(existsSync(state), false);
+  }
+});
+
 test("owned timeout/abort settles only the owned group", { timeout: 60000 }, async () => {
   const state = await makeTemp("repo-search-state-");
   const models = await makeTemp("repo-search-models-");

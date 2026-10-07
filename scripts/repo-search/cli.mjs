@@ -3,7 +3,7 @@
 // prints one JSON line with --json or a short human summary, and sets the exit
 // code from the receipt. Progress never goes to stdout.
 
-import { runCommand, searchRepository } from "./client.mjs";
+import { runCommand, searchRepository, validateCommandOptions } from "./client.mjs";
 import { formatSearchHuman, formatSearchJson } from "./format.mjs";
 
 const COMMANDS = new Set([
@@ -141,6 +141,13 @@ function humanSummary(command, receipt) {
 async function main() {
   const parsed = parseArgs(process.argv.slice(2));
   if (parsed === null) return;
+  if (parsed.command === "search") {
+    const grammar = validateCommandOptions(parsed.command, parsed.options);
+    if (!grammar.ok) {
+      usage(grammar.message);
+      return;
+    }
+  }
 
   // Own terminal signals for the duration of the owned child so cancellation
   // settles the detached worker group before this process returns.

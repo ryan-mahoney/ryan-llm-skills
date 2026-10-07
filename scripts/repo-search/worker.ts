@@ -5,6 +5,8 @@
 // lifecycle command, and prints exactly one JSON line when run as the entry.
 // All progress goes to stderr; stdout carries only the final response.
 
+import { formatSearchJson } from "./format.mjs";
+
 export type WorkerCommand =
   | "status"
   | "check"
@@ -332,7 +334,7 @@ export async function runWorker(request: unknown): Promise<WorkerResponse> {
         limit: req.limit,
         modelsRoot: req.models,
       });
-      return { ...base, status: "ok", receipt };
+      return JSON.parse(formatSearchJson({ ...base, status: "ok", receipt })) as WorkerResponse;
     }
 
     const lifecycle = await import("./lifecycle.ts");

@@ -81,7 +81,7 @@ function unavailableReceipt(command, reason) {
   };
 }
 
-function validateGrammar(command, options) {
+export function validateCommandOptions(command, options) {
   if (typeof command !== "string" || !Object.prototype.hasOwnProperty.call(COMMAND_OPTIONS, command)) {
     return { ok: false, message: `Unknown command: ${String(command)}` };
   }
@@ -310,7 +310,7 @@ function mapWorkerExit(code, parsed) {
 }
 
 export async function runCommand(command, options = {}) {
-  const grammar = validateGrammar(command, options);
+  const grammar = validateCommandOptions(command, options);
   if (!grammar.ok) return usageReceipt(command, grammar.message);
 
   const packageDir = options.packageDir ?? defaultPackageDir();

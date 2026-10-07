@@ -27,6 +27,7 @@ import {
   type VerifiedModel,
 } from "./core/codeModelAssets";
 import {
+  codeSearchCompatibilityEqual,
   createCodeSearchCompatibility,
   type CodeSearchCompatibility,
 } from "./core/embeddingContract";
@@ -138,16 +139,6 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function compatibilityEqual(a: CodeSearchCompatibility, b: CodeSearchCompatibility): boolean {
-  const key = (value: CodeSearchCompatibility): string =>
-    JSON.stringify(
-      Object.keys(value)
-        .sort()
-        .map((name) => [name, (value as unknown as Record<string, unknown>)[name]]),
-    );
-  return key(a) === key(b);
-}
-
 async function defaultEmbeddingRuntime(input: {
   modelsRoot: string;
   model: VerifiedModel;
@@ -211,7 +202,7 @@ export async function createSearchSession(input: {
       if (base.status !== "ready" || base.kind !== "full") {
         throw new SearchError("base-unavailable", "overlay base is not a ready full generation");
       }
-      if (!compatibilityEqual(base.compatibility, current.compatibility)) {
+      if (!codeSearchCompatibilityEqual(base.compatibility, current.compatibility)) {
         throw new SearchError("incompatible", "overlay/base compatibility mismatch");
       }
     }
@@ -288,7 +279,7 @@ export async function createSearchSession(input: {
           modelId: verified.modelId,
           assetDigest: verified.assetDigest,
         });
-        if (!compatibilityEqual(compatibility, current.compatibility)) {
+        if (!codeSearchCompatibilityEqual(compatibility, current.compatibility)) {
           throw new SearchError("incompatible", "model compatibility does not match the generation");
         }
         state.acquireNative(operation.id);
@@ -446,7 +437,10 @@ export async function createSearchSession(input: {
           }
           perSource.push(collected);
         }
-        const fused = reciprocalRankFuse(perSource, CANDIDATE_CAP_PER_SOURCE);
+        const fused = reciprocalRankFuse(
+          perSource,
+          perSource.reduce((total, candidates) => total + candidates.length, 0),
+        );
         const ordered = await validateRound(fused);
         hits = ordered.slice(0, limit);
         if (budgetExhausted) candidateLimitReached = true;
