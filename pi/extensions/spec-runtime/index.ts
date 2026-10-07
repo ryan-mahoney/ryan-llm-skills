@@ -193,7 +193,7 @@ export default function (pi: any) {
       catch (error: any) { return result({ error: error.message }, true); }
     } });
   // Session-local sentinel observation: read-only, and only for packages this
-  // session explicitly dispatched plus explicitly enrolled primaries.
+  // session explicitly dispatched plus discovered and optionally pinned primaries.
   const ownPackages: string[] = [];
   let sentinel: ReturnType<typeof createSentinelObserver> | undefined;
   let sentinelAuthority: ReturnType<typeof createSentinelAuthority> | null = null;
@@ -491,7 +491,7 @@ export default function (pi: any) {
   });
   pi.on('session_shutdown', async () => {
     monitor.close();
-    sentinel?.close();
+    await sentinel?.close();
     sentinel = undefined;
     sessionCtx = null;
     diagnosisController?.close();

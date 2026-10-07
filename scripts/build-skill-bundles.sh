@@ -746,7 +746,7 @@ write_bundle_files() {
     fi
     if [ -d "$bundle_dir/pi/agents" ]; then
       printf '\n## Pi Runtime\n\n'
-      printf 'The portable installer has no Pi target. Merge the bundled skills, rules, scripts, docs and pi directories into `~/.agents/`, copy `pi/agents/*.md` to `~/.pi/agent/agents/`, and link `pi/extensions/spec-runtime` into `~/.pi/agent/extensions/`. Follow `pi/extensions/spec-runtime/README.md` for locked Jev dependencies, pi-intercom and trusted child extensions. Restart an idle Pi session after setup.\n'
+      printf 'The portable installer has no Pi target. Merge the bundled skills, rules, scripts, docs and pi directories into `~/.agents/`, copy `pi/agents/*.md` to `~/.pi/agent/agents/`, and link `pi/extensions/spec-runtime` into `~/.pi/agent/extensions/`. Follow `pi/extensions/spec-runtime/README.md` for locked watcher/Jev dependencies, pi-intercom and trusted child extensions. Restart an idle Pi session after setup.\n'
     fi
     if [ "$name" = "spec-skills" ]; then
       write_spec_workflow_howto
@@ -829,7 +829,7 @@ build_bundle() {
     local resource
     while IFS= read -r resource; do
       copy_file "$bundle_dir" "$resource" "$resource"
-    done < <(cd "$ROOT" && find pi/agents pi/extensions/spec-runtime scripts/spec-facts scripts/spec-observe scripts/verification -type f | sort)
+    done < <(cd "$ROOT" && find pi/agents pi/extensions/spec-runtime scripts/spec-facts scripts/spec-observe scripts/verification -name node_modules -prune -o -type f -print | sort)
     for resource in "$ROOT"/scripts/jev/*.mjs "$ROOT"/scripts/jev/README.md "$ROOT"/scripts/jev/package.json "$ROOT"/scripts/jev/package-lock.json; do
       resource="${resource#"$ROOT"/}"
       copy_file "$bundle_dir" "$resource" "$resource"

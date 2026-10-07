@@ -7,16 +7,23 @@ contents. Node.js is the only dependency.
 ## Workspace sentinel status
 
 ```bash
-node ~/.agents/scripts/spec-observe/cli.mjs sentinel status [--package PATH] [--format text|json] [--agent-dir PATH]
+node ~/.agents/scripts/spec-observe/cli.mjs sentinel status [--root PATH | --package PATH] [--format text|json] [--agent-dir PATH]
 ```
 
 Text output is the default. `--agent-dir` defaults to `PI_CODING_AGENT_DIR` or
-`~/.pi/agent`; without `--package` the command reads the enrolled workspace for
-that agent directory and the current `PI_INTERCOM_SCOPE_ID` scope. Empty enrollment
-prints `No enrolled roots. Add one in Pi with /spec-sentinel add /absolute/primary.`
-The report is read-only: bounded receipts and role snapshots only, with no
-transcript, metrics or model reads. Existing `list|runs|report|metrics` commands are
-unchanged.
+`~/.pi/agent`. Without `--package`, repositories are discovered recursively beneath
+`~/Documents` or the root saved with `/spec-sentinel root ~/Projects` in Pi. Nested
+repositories are included; no per-repository enrollment is required. `--root PATH`
+overrides discovery for one CLI call. Existing enrollments and managed run pointers
+supplement discovery; `--package` skips the directory scan.
+
+Pi caches discovery for five minutes and uses the managed run index and receipts for
+frequent updates. The index is read, not watched. Chokidar watches only canonical
+`.specs` trees recursively without following symlinks outside them. Directory scans skip hidden, dependency/build/cache and symlink
+children and are bounded by depth, entries, directory count and cooperative elapsed
+budget. Incomplete coverage is reported. The reader validates canonical primary
+packages; observation never grants recovery authority or makes a model call. Existing
+`list|runs|report|metrics` commands are unchanged.
 
 ## Workflow metrics
 

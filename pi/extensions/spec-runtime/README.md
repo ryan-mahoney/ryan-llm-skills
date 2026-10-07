@@ -5,6 +5,12 @@ still chooses the step and owner tier, evaluates the result, requests independen
 review, and advances the package. No model discovery, baseline test suite, generated
 workflow script, or separate editor reconnaissance pass is part of startup.
 
+Install the pinned watcher dependency before loading the extension:
+
+```sh
+npm ci --prefix ~/.agents/pi/extensions/spec-runtime --ignore-scripts
+```
+
 `~/.agents/sync.sh` links this directory into Pi's extension directory. Restart or
 reload Pi to load it. Existing unmanaged subagents are outside its lifecycle control;
 finish or stop those workers before assigning their checkout to this runtime.
@@ -223,29 +229,39 @@ The widget does not infer missing activity. No browser UI is involved.
 
 ## Workspace sentinel status
 
-`/spec-sentinel status` shows a bounded read-only snapshot across enrolled
+`/spec-sentinel status` shows a bounded read-only snapshot across automatically discovered
 repositories: repository common directory, canonical package, checkout, workflow
 id, assignment id, coordinator session, execution state, obligation, activity hint,
 coverage and factual conditions such as `reconciliation-pending` or `quiet-activity`.
-It is also the default when the command has no argument.
+It is also the default when the command has no argument. Startup and reload are
+silent and dormant: no scans, watchers, timers or sentinel UI until an explicit
+`status`, `root`, `add` or `inspect` command. Activation is never restored from settings.
+After `off`, explicit status/inspect reads remain available without restarting watchers.
 
-`/spec-sentinel add /absolute/primary` validates a primary checkout and writes one
-enrollment record per root at
-`<agentDir>/spec-sentinel/<workspace-key>/enrollments/<sha256(common dir)>.json`,
-mode `0600`, containing `{ version, root, common, enrolled_at }`. Only this direct
-command writes that record; it grants read observation and nothing else. At most 20
-roots are recorded, and a `.specs` copy in a linked worktree is rejected. Managed
-index pointers and packages dispatched in the session are observation candidates
-only and never enroll a repository.
+Repositories are discovered beneath `~/Documents`, including grouped and nested
+repositories. No registration is required. `/spec-sentinel root ~/Projects` saves a
+different search folder in `<agentDir>/spec-sentinel/discovery.json`. The root can itself
+be a repository. Optional legacy `add` enrollments still supplement discovery.
+
+Frequent updates use the managed run index and runtime receipts; directory discovery is
+cached for five minutes per session. The index is read during bounded reconciliation,
+never watched. Chokidar recursively watches only canonical `.specs` trees with symlink
+following disabled; repository roots and source trees are not watched. Discovery
+reads directory metadata, skips hidden/dependency/build/cache folders and symlinks, and
+has caps of eight levels, 2,000 directories, 20,000 entries and a two-second cooperative
+budget. Limits and unreadable paths remain explicit coverage gaps. Canonical validation
+still rejects linked-worktree spec copies. Repository identity queries are asynchronous,
+time-limited and shared across sibling packages within each refresh to avoid blocking
+Pi's main thread with repeated synchronous Git calls. Discovery grants no intervention authority.
 
 The widget shows the workspace rows; when a single run is observed it collapses to
 the header line because that run's own widget already shows it. `/spec-sentinel
 inspect ID` names one run or condition by assignment id, workflow id, package or
-condition id/kind. Directory invalidation is coalesced at 250 ms and status is
+condition id/kind. Chokidar events are coalesced at 250 ms and status is
 reconciled every 15 s. `/spec-sentinel off` hides the widget and status and disposes
 only this session's observers and timers; it never cancels, stops or messages
 workers. The CLI equivalent is `node
-~/.agents/scripts/spec-observe/cli.mjs sentinel status [--package PATH] [--format
+~/.agents/scripts/spec-observe/cli.mjs sentinel status [--root PATH | --package PATH] [--format
 text|json] [--agent-dir PATH]`, which works without a Pi session.
 
 Coverage is `complete|partial|stale|unavailable` with explicit omission reasons;
