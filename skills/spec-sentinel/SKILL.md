@@ -127,7 +127,8 @@ started; neither is acceptance, and ambiguous requests are never retried.
 Diagnosis is optional and separately enabled. It runs only for a complete
 repeated-failure incident with a complete fingerprint, using a bounded (at most 16 KiB)
 tool-free packet of IDs, hashes, counts, waits and coverage, one active job per
-coordinator, a five-minute cooldown and at most two attempts per incident generation.
+coordinator, a five-minute cooldown, one attempt per incident generation and at most two
+attempts per workflow.
 Its output is advisory bounded JSON text labeled `note_verified: false`; it never grants
 factual status, authority or a review verdict. Wrong or unknown fact IDs, malformed
 output, timeout, unavailable delegation or a stale incident abstain without a fallback

@@ -1546,7 +1546,7 @@ export function createSentinelAuthority() {
   const state = { armed: false, policy: null, policyHash: null, sourcePath: null,
     packagePath: null, workflowId: null, checkout: null, coordinatorSession: null,
     provenance: null, grant: null, activatedAt: null, activationId: null, activationPath: null,
-    activationCommand: null, createdIntents: new Set() };
+    activationCommand: null, createdIntents: new Set(), unpublishedIntents: new Set() };
   const authority = {};
   Object.defineProperty(authority, AUTHORITY_STATE, { value: state, enumerable: false });
   return Object.freeze(authority);
@@ -1913,7 +1913,7 @@ function resolveReservationDirectory(packagePath, workflowId, leaf) {
 // accepted/requested intents not created by the live authority all block and
 // stay spent. The intent/slot graph is validated in both directions and
 // capacity is never reclaimed.
-function readReservationState(packagePath, workflowId, liveIntentIds) {
+function readReservationState(packagePath, workflowId, liveIntentIds, unpublishedIntentIds = null) {
   const result = { blocking: false, reasons: [], spent: { effect: 0, diagnostic: 0 }, slotted: new Set(), intentSlots: new Map(), slotCounts: new Map(), lastDiagnosticAt: null };
   const push = reason => { if (!result.reasons.includes(reason)) result.reasons.push(reason); };
   const enumerated = new Set();
@@ -1938,9 +1938,14 @@ function readReservationState(packagePath, workflowId, liveIntentIds) {
       }
       // An explicitly unknown outcome is unresolved uncertainty: it blocks
       // further automation for this workflow regardless of live ownership,
-      // until an authorized reconciliation finishes it terminally (AC-11).
+      // until an authorized reconciliation finishes it terminally (AC-11). A
+      // live intent whose terminal receipt publication failed is the same
+      // unresolved uncertainty: the authority retains it as unpublished, so
+      // live unfinished-intent ownership never bypasses the fence.
       if (intent.state === 'unknown') {
         result.blocking = true; push(`intent-unknown-outcome:${intent.id}`);
+      } else if (unpublishedIntentIds?.has(intent.id) === true) {
+        result.blocking = true; push(`intent-unpublished-outcome:${intent.id}`);
       } else if ((intent.state === 'accepted' || intent.state === 'requested') && !liveIntentIds.has(intent.id)) {
         result.blocking = true; push(`intent-unreconciled:${intent.id}`);
       }
@@ -2015,8 +2020,15 @@ export function reserveIntent(authority, {
   if (kind === 'diagnose' && !guard.diagnosis) return { accepted: false, state: 'denied', blocking: true, reasons: ['diagnosis is not permitted by the guarded policy'] };
   const nowMs = typeof now === 'function' ? now() : now;
   const id = intentId(state.workflowId, kind, subjectKey);
-  const reservation = readReservationState(state.packagePath, state.workflowId, state.createdIntents);
+  const reservation = readReservationState(state.packagePath, state.workflowId, state.createdIntents, state.unpublishedIntents);
   const existing = readIntentRecord(state.packagePath, state.workflowId, id);
+  if (existing && state.unpublishedIntents.has(id)) {
+    // A retained intent whose terminal receipt could not be published is an
+    // unresolved unknown outcome: it never becomes duplicate permission or a
+    // fresh acceptance; only an authorized reconciliation can clear it.
+    return { accepted: false, state: 'unknown', blocking: true, intent: existing,
+      reasons: [`intent ${id} is retained with an unpublished outcome; reconcile it before further automation`] };
+  }
   if (existing) {
     // An explicitly unknown outcome never becomes duplicate permission or a
     // fresh acceptance: only an authorized reconciliation can clear it.
@@ -2094,7 +2106,7 @@ export function finishIntent(authority, {
   if (!existing) fail(`intent ${requestedIntentId} is missing`, 'intent-missing');
   if (existing.coordinator_session !== state.coordinatorSession) fail('intent is bound to another session', 'intent-owner');
   // A terminal update requires the matching durable slot link by ID/kind/workflow.
-  const reservation = readReservationState(state.packagePath, state.workflowId, state.createdIntents);
+  const reservation = readReservationState(state.packagePath, state.workflowId, state.createdIntents, state.unpublishedIntents);
   if (!reservation.intentSlots.has(requestedIntentId)) fail(`intent ${requestedIntentId} has no matching durable slot`, 'intent-missing');
   // Lifecycle: accepted -> requested|terminal, requested -> terminal; an
   // unknown outcome may be reconciled to a definite terminal state by its
@@ -2109,13 +2121,27 @@ export function finishIntent(authority, {
         : false;
   if (!allowed) {
     if (existing.state === finishState && (existing.reason_code ?? '') === reasonCode
-      && (existing.result_reference ?? undefined) === (resultReference ?? undefined)) return existing;
+      && (existing.result_reference ?? undefined) === (resultReference ?? undefined)) {
+      state.unpublishedIntents.delete(requestedIntentId);
+      return existing;
+    }
     fail(`intent ${requestedIntentId} cannot transition ${existing.state} -> ${finishState}; refusing a conflicting or backward rewrite`, 'intent-owner');
   }
   const updated = { ...existing, state: finishState, reason_code: String(reasonCode),
     ...(resultReference === undefined ? {} : { result_reference: String(resultReference) }) };
   const directory = ensureStateDirectory(state.packagePath, ['runtime', 'sentinel', state.workflowId, 'intents'], 'sentinel intent directory');
-  publishDurable(join(directory, `${requestedIntentId}.json`), updated, { directory, requireParentFsync: true });
+  try {
+    publishDurable(join(directory, `${requestedIntentId}.json`), updated, { directory, requireParentFsync: true });
+  } catch (error) {
+    // The terminal receipt could not be published: the durable intent stays
+    // unfinished while this authority knows its outcome is unresolved, so it
+    // is retained as unpublished and blocks further automation for this
+    // workflow — including by this live authority — until an authorized
+    // reconciliation finishes it terminally (AC-11).
+    state.unpublishedIntents.add(requestedIntentId);
+    throw error;
+  }
+  state.unpublishedIntents.delete(requestedIntentId);
   return updated;
 }
 
@@ -2728,6 +2754,19 @@ export async function considerCancellation({
   const assignmentId = record.assignment_id;
   const checkout = typeof record.checkout === 'string' ? record.checkout : null;
   if (!checkout) return abstain('skipped', 'checkout-unavailable');
+  // The target record, incident and checkpoint must agree with the live
+  // authority's complete canonical package/workflow/checkout/session scope
+  // before any digest collection, packet rebuilding or reservation: a workflow
+  // ID registered independently in another canonical package never spends this
+  // authority's budget or cancels that package's work, even when one Runtime
+  // owns both runs and only one package holds the recovery grant.
+  let liveScope;
+  try { liveScope = authorityState(authority); } catch { return abstain('disarmed', 'authority-disarmed'); }
+  if (liveScope.armed !== true || liveScope.packagePath == null) return abstain('disarmed', 'authority-disarmed');
+  if (packagePath !== liveScope.packagePath) return abstain('blocked', 'package-mismatch');
+  if (workflowId !== liveScope.workflowId) return abstain('blocked', 'workflow-mismatch');
+  if (resolve(checkout) !== liveScope.checkout) return abstain('blocked', 'checkout-mismatch');
+  if (typeof record.coordinator_session === 'string' && record.coordinator_session !== liveScope.coordinatorSession) return abstain('blocked', 'session-mismatch');
   // Asynchronous digest read first, then every effect guard is re-read synchronously below.
   let digest;
   try { digest = await collect(checkout); } catch { return abstain('unavailable', 'digest-unavailable'); }
@@ -2743,6 +2782,7 @@ export async function considerCancellation({
   const checkpoint = readCheckpointRecord(packagePath, workflowId);
   if (!checkpoint || checkpoint.package !== packagePath || checkpoint.workflow_id !== workflowId) return abstain('skipped', 'checkpoint-unavailable');
   if (checkpoint.checkout != null && resolve(checkpoint.checkout) !== resolve(checkout)) return abstain('blocked', 'checkout-mismatch');
+  if (checkpoint.coordinator_session != null && checkpoint.coordinator_session !== liveScope.coordinatorSession) return abstain('blocked', 'session-mismatch');
   const snapshot = readVerificationIncidents(packagePath, workflowId);
   const current = snapshot?.assignments?.[assignmentId] ?? null;
   if (!current || current.state !== 'open' || !isPlainObject(current.fingerprint)) return abstain('blocked', 'incident-not-open');

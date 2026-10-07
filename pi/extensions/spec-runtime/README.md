@@ -329,8 +329,9 @@ effects are not retried.
 Optional diagnosis and guarded cancellation are separate opt-ins under the same live
 scoped authority. Diagnosis runs only for a complete repeated-failure incident with a
 complete fingerprint through a bounded (at most 16 KiB) tool-free advisory packet, one
-active job per coordinator, a five-minute cooldown and at most two attempts per
-generation; its JSON is labelled `note_verified:false` and never grants authority.
+active job per coordinator, a five-minute cooldown, one attempt per incident generation
+and at most two attempts per workflow; its JSON is labelled `note_verified:false` and
+never grants authority.
 Recovery cancellation is permitted only for the current repeated-failure incident with a
 retained positive `cancel-candidate`/`repeated-unchanged-failure` diagnosis matching the
 current complete checkout digest, reconciled input, nonblocking inbox, checkpoint

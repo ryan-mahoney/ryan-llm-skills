@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync, realpathSync, statSync, renameSync, unlinkSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync, realpathSync, statSync, renameSync, unlinkSync, symlinkSync, chmodSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -1449,6 +1449,94 @@ test('sentinel cancellation: a fresh live authority cannot replay a retained unk
   assert.equal(calls, 1, 'the retained unknown intent blocks a replay without another adapter call');
 });
 
+test('sentinel cancellation: a second owned package sharing the workflow ID is outside the recovery grant', { timeout: 15000 }, async t => {
+  const granted = cancellationFixture(t);
+  const other = cancellationFixture(t);
+  let adapterCalls = 0;
+  const adapter = async () => { adapterCalls += 1; return { state: 'cancelled' }; };
+  // The same Runtime owns both runs, so the ungranted target's handle and lease
+  // are live; only the live authority's canonical scope separates the packages.
+  const foreign = await considerCancellation(cancellationOptions(other, {
+    authority: granted.authority, activeHandle: () => ({ record: other.record }), adapter,
+  }));
+  assert.equal(foreign.launched, false);
+  assert.equal(foreign.state, 'blocked');
+  assert.equal(foreign.reason_code, 'package-mismatch');
+  assert.equal(adapterCalls, 0);
+  // No cancellation entry, budget spend or receipt write happened for the
+  // ungranted target or the granting package.
+  for (const fixture of [granted, other]) {
+    assert.equal(existsSync(join(fixture.packagePath, 'runtime', 'sentinel', 'wf-cancel', 'intents')), false);
+    assert.equal(existsSync(join(fixture.packagePath, 'runtime', 'sentinel', 'wf-cancel', 'effect-slots')), false);
+  }
+  // The granting package's own diagnosed work still cancels through its authority.
+  const own = await considerCancellation(cancellationOptions(granted, { adapter }));
+  assert.equal(own.state, 'applied');
+  assert.equal(adapterCalls, 1);
+});
+
+test('sentinel cancellation: a failed requested-receipt publication fences later reservations until reconciliation', { timeout: 15000 }, async t => {
+  const f = cancellationFixture(t);
+  const intentsDirectory = join(f.packagePath, 'runtime', 'sentinel', 'wf-cancel', 'intents');
+  // Reserve exactly as considerCancellation does immediately before its
+  // adjacent requested receipt, then fail that publication.
+  const reservation = reserveIntent(f.authority, { workflow_id: 'wf-cancel', kind: 'cancel',
+    subject_key: f.incident.id, source_revision: f.packetSha, now: () => Date.now() });
+  assert.equal(reservation.accepted, true);
+  chmodSync(intentsDirectory, 0o500);
+  assert.throws(() => finishIntent(f.authority, { workflow_id: 'wf-cancel', intent_id: reservation.intent.id,
+    state: 'requested', reason_code: 'requested', now: () => Date.now() }));
+  // Ordinary I/O returns, yet further workflow automation stays rejected.
+  chmodSync(intentsDirectory, 0o755);
+  const fenced = reserveIntent(f.authority, { workflow_id: 'wf-cancel', kind: 'cancel',
+    subject_key: 'other-incident', source_revision: 'rev-1', now: () => Date.now() });
+  assert.equal(fenced.accepted, false);
+  assert.equal(fenced.state, 'blocked');
+  assert.ok(fenced.reasons.some(reason => reason.startsWith('intent-unpublished-outcome:')));
+  // The same subject never becomes duplicate permission while fenced.
+  const replay = reserveIntent(f.authority, { workflow_id: 'wf-cancel', kind: 'cancel',
+    subject_key: f.incident.id, source_revision: f.packetSha, now: () => Date.now() });
+  assert.equal(replay.accepted, false);
+  assert.equal(replay.state, 'unknown');
+  // The durable receipt was never written; the intent stays unfinished on disk.
+  const durable = JSON.parse(readFileSync(join(intentsDirectory, `${reservation.intent.id}.json`), 'utf8'));
+  assert.equal(durable.state, 'accepted');
+  // An explicit terminal reconciliation reopens automation.
+  finishIntent(f.authority, { workflow_id: 'wf-cancel', intent_id: reservation.intent.id,
+    state: 'failed', reason_code: 'reconciled', now: () => Date.now() });
+  const reopened = reserveIntent(f.authority, { workflow_id: 'wf-cancel', kind: 'cancel',
+    subject_key: 'other-incident', source_revision: 'rev-1', now: () => Date.now() });
+  assert.equal(reopened.accepted, true);
+});
+
+test('sentinel cancellation: a failed final receipt publication fences later reservations until reconciliation', { timeout: 15000 }, async t => {
+  const f = cancellationFixture(t);
+  const intentsDirectory = join(f.packagePath, 'runtime', 'sentinel', 'wf-cancel', 'intents');
+  // The adapter confirms termination, then storage fails before the final receipt.
+  const result = await considerCancellation(cancellationOptions(f, {
+    adapter: async () => { chmodSync(intentsDirectory, 0o500); return { state: 'cancelled' }; },
+  }));
+  assert.equal(result.launched, true);
+  assert.equal(result.state, 'unknown');
+  assert.equal(result.reason_code, 'receipt-unpersisted');
+  assert.equal(result.intent_id != null, true);
+  // Ordinary I/O returns, yet a fresh subject is still refused without reconciliation.
+  chmodSync(intentsDirectory, 0o755);
+  const fenced = reserveIntent(f.authority, { workflow_id: 'wf-cancel', kind: 'cancel',
+    subject_key: 'other-incident', source_revision: 'rev-1', now: () => Date.now() });
+  assert.equal(fenced.accepted, false);
+  assert.equal(fenced.state, 'blocked');
+  assert.ok(fenced.reasons.some(reason => reason.startsWith('intent-unpublished-outcome:')));
+  const durable = JSON.parse(readFileSync(join(intentsDirectory, `${result.intent_id}.json`), 'utf8'));
+  assert.equal(durable.state, 'requested');
+  // An explicit terminal reconciliation reopens automation.
+  finishIntent(f.authority, { workflow_id: 'wf-cancel', intent_id: result.intent_id,
+    state: 'applied', reason_code: 'reconciled', now: () => Date.now() });
+  const reopened = reserveIntent(f.authority, { workflow_id: 'wf-cancel', kind: 'cancel',
+    subject_key: 'other-incident', source_revision: 'rev-1', now: () => Date.now() });
+  assert.equal(reopened.accepted, true);
+});
+
 test('sentinel cancellation: changed tree, stale incident/diagnosis, input, handle, idle and authority abstain', { timeout: 15000 }, async t => {
   const f = cancellationFixture(t);
   let calls = 0;
@@ -1460,6 +1548,7 @@ test('sentinel cancellation: changed tree, stale incident/diagnosis, input, hand
   await refusal({ collect: async () => ({ working_tree_digest: 'e'.repeat(64), incomplete: false }) });
   await refusal({ collect: async () => ({ working_tree_digest: 'c'.repeat(64), incomplete: true }) });
   await refusal({ incident: { ...f.incident, generation: 2 } });
+  await refusal({ record: { ...f.record, coordinator_session: 'session-other' } });
   await refusal({ inputGuard: () => ({ input_revision: 5, active_prompts: 0 }) });
   await refusal({ inputGuard: () => ({ input_revision: 0, active_prompts: 1 }) });
   await refusal({ activeHandle: () => null });
