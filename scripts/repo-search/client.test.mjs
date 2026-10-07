@@ -8,14 +8,14 @@ import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import { runCommand } from "./client.mjs";
-import { resolveCheckout } from "./identity.mjs";
+import { resolveCheckout, resolvePrimaryCheckout } from "./identity.mjs";
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 const cliPath = join(moduleDir, "cli.mjs");
@@ -46,6 +46,8 @@ after(async () => {
   for (const dir of tempDirs) {
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
+  // A package-relative resolution regression would create this under the module.
+  await rm(join(moduleDir, "relative-state"), { recursive: true, force: true }).catch(() => {});
 });
 
 function findBun() {
@@ -89,8 +91,8 @@ function runCli(args, extras = {}) {
   });
 }
 
-async function initFixtureRepo() {
-  const dir = await makeTemp("repo-search-repo-");
+async function initRepoAt(dir) {
+  await mkdir(dir, { recursive: true });
   await execFileP("git", ["init", "-q"], { cwd: dir });
   await execFileP("git", ["config", "user.email", "test@example.com"], { cwd: dir });
   await execFileP("git", ["config", "user.name", "Test User"], { cwd: dir });
@@ -98,6 +100,15 @@ async function initFixtureRepo() {
   await execFileP("git", ["add", "file.txt"], { cwd: dir });
   await execFileP("git", ["commit", "-q", "-m", "initial"], { cwd: dir });
   return dir;
+}
+
+async function initFixtureRepo() {
+  return initRepoAt(await makeTemp("repo-search-repo-"));
+}
+
+async function addLinkedWorktree(repo, path, branch) {
+  await execFileP("git", ["worktree", "add", "-q", "-b", branch, path, "HEAD"], { cwd: repo });
+  return path;
 }
 
 async function writeEnrollmentFixture(stateRoot, identity) {
@@ -230,6 +241,25 @@ test("cheap unavailable preflight leaves state and source untouched", { timeout:
   assert.equal(missingDeps.exitCode, 3);
   assert.equal(existsSync(state), false);
 
+  const partialPackage = await makeTemp("repo-search-pkg-");
+  await mkdir(join(partialPackage, "node_modules", "@orama", "orama"), { recursive: true });
+  let partialSpawned = false;
+  const partialDeps = await runCommand("status", {
+    root: repo,
+    state,
+    packageDir: partialPackage,
+    bunPath: realBun,
+    spawn: () => {
+      partialSpawned = true;
+      throw new Error("partial dependency preflight spawned the worker");
+    },
+  });
+  assert.equal(partialDeps.status, "unavailable");
+  assert.equal(partialDeps.reason, "dependencies-unavailable");
+  assert.equal(partialDeps.exitCode, 3);
+  assert.equal(partialSpawned, false);
+  assert.equal(existsSync(state), false);
+
   assert.deepEqual(await hashTree(repo), beforeHash);
 });
 
@@ -325,6 +355,119 @@ test("owned timeout/abort settles only the owned group", { timeout: 60000 }, asy
   }
 });
 
+test("sampled child RSS ceiling stops and settles the owned group", { timeout: 60000 }, async () => {
+  const state = await makeTemp("repo-search-state-");
+  let lastSleeperPid = null;
+  const fakeSpawn = () => {
+    const sleeper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      detached: true,
+      stdio: "ignore",
+    });
+    lastSleeperPid = sleeper.pid;
+    spawnedPids.push(sleeper.pid);
+    return makeFakeChild(sleeper);
+  };
+
+  const withinBudget = await runCommand("prune", {
+    state,
+    timeoutMs: 200,
+    spawn: fakeSpawn,
+    rssSampler: () => 1024 * 1024,
+  });
+  assert.equal(withinBudget.reason, "timeout");
+
+  const overCeiling = 2 * 1024 * 1024 * 1024 + 1;
+  const exceeded = await runCommand("prune", {
+    state,
+    timeoutMs: 10000,
+    spawn: fakeSpawn,
+    rssSampler: () => overCeiling,
+  });
+  assert.equal(exceeded.status, "unavailable");
+  assert.equal(exceeded.reason, "budget-exceeded");
+  assert.equal(exceeded.exitCode, 3);
+  assert.equal(exceeded.observedRssBytes, overCeiling);
+  assert.ok(lastSleeperPid !== null);
+  assert.throws(
+    () => process.kill(lastSleeperPid, 0),
+    (error) => error.code === "ESRCH",
+  );
+});
+
+test("CLI termination signals settle the owned worker group before exit", { timeout: 60000 }, async () => {
+  const repo = await initFixtureRepo();
+  const stateParent = await makeTemp("repo-search-state-parent-");
+  const state = join(stateParent, "state");
+  const shimDir = await makeTemp("repo-search-bin-");
+  const bunShim = join(shimDir, "bun");
+  await writeFile(
+    bunShim,
+    "#!/bin/sh\necho $$ > \"$REPO_SEARCH_TEST_PID_FILE\"\nexec sleep 300\n",
+    "utf8",
+  );
+  await chmod(bunShim, 0o755);
+
+  const unrelated = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    detached: true,
+    stdio: "ignore",
+  });
+  unrelated.unref();
+  spawnedPids.push(unrelated.pid);
+
+  try {
+    for (const signal of ["SIGINT", "SIGTERM"]) {
+      const pidFile = join(shimDir, `${signal}.pid`);
+      const cli = spawn(
+        process.execPath,
+        [cliPath, "status", "--root", repo, "--state", state, "--json"],
+        {
+          cwd: unrelatedCwd,
+          env: {
+            ...process.env,
+            PATH: `${shimDir}:${process.env.PATH ?? ""}`,
+            REPO_SEARCH_TEST_PID_FILE: pidFile,
+          },
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+      let stdout = "";
+      cli.stdout.on("data", (chunk) => {
+        stdout += chunk;
+      });
+
+      const deadline = Date.now() + 10000;
+      while (!existsSync(pidFile) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      assert.ok(existsSync(pidFile), `controlled bun shim did not start for ${signal}`);
+      const childPid = Number.parseInt((await readFile(pidFile, "utf8")).trim(), 10);
+      spawnedPids.push(childPid);
+
+      cli.kill(signal);
+      const closed = await new Promise((resolve) => {
+        cli.once("close", (code) => resolve(code));
+      });
+      assert.equal(closed, 130, stdout);
+      const receipt = JSON.parse(stdout.trim());
+      assert.equal(receipt.status, "unavailable");
+      assert.equal(receipt.reason, "canceled");
+      assert.equal(receipt.exitCode, 130);
+      assert.throws(
+        () => process.kill(childPid, 0),
+        (error) => error.code === "ESRCH",
+      );
+      assert.doesNotThrow(() => process.kill(unrelated.pid, 0));
+      assert.equal(existsSync(state), false);
+    }
+  } finally {
+    try {
+      process.kill(-unrelated.pid, "SIGKILL");
+    } catch {
+      // already gone
+    }
+  }
+});
+
 test("root and default-state ownership", { timeout: 60000 }, async () => {
   const repo = await initFixtureRepo();
   const stateA = await makeTemp("repo-search-state-a-");
@@ -359,4 +502,131 @@ test("root and default-state ownership", { timeout: 60000 }, async () => {
   const generationsDir = join(stateA, "generations");
   assert.ok(existsSync(generationsDir));
   assert.equal((await readdir(generationsDir)).length, 0);
+});
+
+test("relative root and state resolve against the caller cwd", { timeout: 60000 }, async () => {
+  const workspace = await makeTemp("repo-search-workspace-");
+  const repo = await initRepoAt(join(workspace, "repo"));
+  const identity = await resolveCheckout(repo);
+
+  const status = await runCli(["status", "--root", "repo", "--state", "relative-state", "--json"], {
+    cwd: workspace,
+  });
+  assert.equal(status.code, 0, status.stderr);
+  const receipt = JSON.parse(status.stdout.trim());
+  assert.equal(receipt.checkoutKey, identity.checkoutKey);
+  assert.equal(receipt.actualRoot, identity.root);
+  assert.ok(existsSync(join(workspace, "relative-state", "state.sqlite")));
+  assert.equal(existsSync(join(moduleDir, "relative-state")), false);
+});
+
+function existingModelsRoot() {
+  const value = process.env.REPO_SEARCH_MODELS;
+  return typeof value === "string" && value.length > 0 && existsSync(value) ? value : null;
+}
+
+test(
+  "relative models resolve against the caller cwd",
+  { timeout: 60000, skip: existingModelsRoot() === null ? "REPO_SEARCH_MODELS is not set" : false },
+  async () => {
+    const modelsRoot = existingModelsRoot();
+    const workspace = await makeTemp("repo-search-workspace-");
+    const repo = await initRepoAt(join(workspace, "repo"));
+    await symlink(modelsRoot, join(workspace, "relative-models"), "dir");
+
+    const build = await runCli(
+      ["build", "--root", "repo", "--state", "relative-state", "--models", "relative-models", "--json"],
+      { cwd: workspace },
+    );
+    assert.equal(build.code, 0, build.stderr);
+    const receipt = JSON.parse(build.stdout.trim());
+    assert.equal(receipt.status, "ok");
+    assert.equal(receipt.receipt.generationKind, "full");
+  },
+);
+
+test("resolvePrimaryCheckout resolves the canonical primary for a linked worktree", { timeout: 60000 }, async () => {
+  const repo = await initFixtureRepo();
+  const worktreeParent = await makeTemp("repo-search-wt-");
+  const linked = await addLinkedWorktree(repo, join(worktreeParent, "feature"), "feature");
+
+  const primaryIdentity = await resolveCheckout(repo);
+  const linkedIdentity = await resolveCheckout(linked);
+  assert.equal(linkedIdentity.primary, false);
+
+  const resolved = await resolvePrimaryCheckout(linkedIdentity);
+  assert.equal(resolved.primary, true);
+  assert.equal(resolved.root, primaryIdentity.root);
+  assert.equal(resolved.checkoutKey, primaryIdentity.checkoutKey);
+
+  const self = await resolvePrimaryCheckout(primaryIdentity);
+  assert.equal(self.checkoutKey, primaryIdentity.checkoutKey);
+});
+
+test(
+  "public linked build reuses an eligible primary base and falls back without one",
+  { timeout: 120000, skip: existingModelsRoot() === null ? "REPO_SEARCH_MODELS is not set" : false },
+  async () => {
+    const modelsRoot = existingModelsRoot();
+    const repo = await initFixtureRepo();
+    const worktreeParent = await makeTemp("repo-search-wt-");
+    const linked = await addLinkedWorktree(repo, join(worktreeParent, "feature"), "feature");
+    await writeFile(join(linked, "file.txt"), "hello linked world\n", "utf8");
+
+    const state = await makeTemp("repo-search-state-");
+    const primaryBuild = await runCli([
+      "build", "--root", repo, "--state", state, "--models", modelsRoot, "--json",
+    ]);
+    assert.equal(primaryBuild.code, 0, primaryBuild.stderr);
+    assert.equal(JSON.parse(primaryBuild.stdout.trim()).receipt.generationKind, "full");
+
+    const status = await runCli(["status", "--root", repo, "--state", state, "--json"]);
+    assert.equal(status.code, 0, status.stderr);
+    const primaryGenerationId = JSON.parse(status.stdout.trim()).receipt.currentGenerationId;
+    assert.equal(typeof primaryGenerationId, "string");
+
+    const linkedBuild = await runCli([
+      "build", "--root", linked, "--state", state, "--models", modelsRoot, "--json",
+    ]);
+    assert.equal(linkedBuild.code, 0, linkedBuild.stderr);
+    const linkedReceipt = JSON.parse(linkedBuild.stdout.trim()).receipt;
+    assert.equal(linkedReceipt.generationKind, "overlay");
+    assert.equal(linkedReceipt.baseId, primaryGenerationId);
+
+    const noBaseState = await makeTemp("repo-search-state-");
+    const fallback = await runCli([
+      "build", "--root", linked, "--state", noBaseState, "--models", modelsRoot, "--json",
+    ]);
+    assert.equal(fallback.code, 0, fallback.stderr);
+    assert.equal(JSON.parse(fallback.stdout.trim()).receipt.generationKind, "full");
+  },
+);
+
+test("corrupt and symlinked state return structured corrupt receipts", { timeout: 60000 }, async () => {
+  const repo = await initFixtureRepo();
+  const state = await makeTemp("repo-search-state-");
+  const dbPath = join(state, "state.sqlite");
+  await writeFile(dbPath, "not a sqlite database\n", { mode: 0o600 });
+  await chmod(dbPath, 0o600);
+
+  for (const args of [
+    ["status", "--root", repo, "--state", state, "--json"],
+    ["prune", "--state", state, "--json"],
+  ]) {
+    const result = await runCli(args);
+    assert.equal(result.code, 3, result.stderr);
+    const receipt = JSON.parse(result.stdout.trim());
+    assert.equal(receipt.status, "unavailable");
+    assert.equal(receipt.reason, "corrupt");
+  }
+
+  const symlinkState = await makeTemp("repo-search-state-");
+  const target = await makeTemp("repo-search-target-");
+  await writeFile(join(target, "elsewhere.sqlite"), "not a database\n", { mode: 0o600 });
+  await symlink(join(target, "elsewhere.sqlite"), join(symlinkState, "state.sqlite"));
+  const symlinked = await runCli(["status", "--root", repo, "--state", symlinkState, "--json"]);
+  assert.equal(symlinked.code, 3, symlinked.stderr);
+  const symlinkReceipt = JSON.parse(symlinked.stdout.trim());
+  assert.equal(symlinkReceipt.status, "unavailable");
+  assert.equal(symlinkReceipt.reason, "corrupt");
 });

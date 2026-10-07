@@ -2,7 +2,7 @@
 // settlement, and structured receipts. Node standard library only; never
 // imports Bun/TS or Pi runtime code.
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import {
   accessSync,
   closeSync,
@@ -13,7 +13,7 @@ import {
   openSync,
   readFileSync,
 } from "node:fs";
-import { dirname, delimiter, join } from "node:path";
+import { dirname, delimiter, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -49,8 +49,11 @@ const COMMAND_OPTIONS = {
   recover: ["state", "timeoutMs", "operation"],
 };
 
-const TRANSPORT_OPTIONS = new Set(["packageDir", "bunPath", "spawn", "signal"]);
+const TRANSPORT_OPTIONS = new Set(["packageDir", "bunPath", "spawn", "rssSampler", "signal"]);
 const MAX_STDOUT_BYTES = 64 * 1024;
+const MAX_CHILD_RSS_BYTES = 2 * 1024 * 1024 * 1024;
+const RSS_SAMPLE_INTERVAL_MS = 1000;
+const RSS_SAMPLE_TIMEOUT_MS = 2000;
 const SETTLE_GRACE_MS = 2000;
 
 function errorMessage(error) {
@@ -183,18 +186,51 @@ function resolveBun(override) {
   return null;
 }
 
+function defaultSampleChildRss(pid) {
+  if (process.platform === "linux") {
+    try {
+      const status = readFileSync(`/proc/${pid}/status`, "utf8");
+      const match = /^VmRSS:\s+(\d+)\s+kB$/m.exec(status);
+      if (!match) return null;
+      return Number.parseInt(match[1], 10) * 1024;
+    } catch {
+      return null;
+    }
+  }
+  if (process.platform === "darwin") {
+    try {
+      const output = execFileSync("ps", ["-o", "rss=", "-p", String(pid)], {
+        encoding: "utf8",
+        timeout: RSS_SAMPLE_TIMEOUT_MS,
+        windowsHide: true,
+      });
+      const kib = Number.parseInt(output.trim(), 10);
+      return Number.isFinite(kib) ? kib * 1024 : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+const REQUIRED_DEPENDENCIES = [
+  "@huggingface/transformers",
+  "@msgpack/msgpack",
+  "@orama/orama",
+  "code-chunk",
+];
+
 function hasDependencies(packageDir) {
-  return (
-    existsSync(join(packageDir, "node_modules")) &&
-    existsSync(join(packageDir, "node_modules", "@orama", "orama"))
+  return REQUIRED_DEPENDENCIES.every((dependency) =>
+    existsSync(join(packageDir, "node_modules", dependency)),
   );
 }
 
 function buildRequest(command, options) {
   const request = { version: 1, command };
-  if (options.root !== undefined) request.root = options.root;
-  if (options.state !== undefined) request.state = options.state;
-  if (options.models !== undefined) request.models = options.models;
+  if (options.root !== undefined) request.root = resolve(options.root);
+  if (options.state !== undefined) request.state = resolve(options.state);
+  if (options.models !== undefined) request.models = resolve(options.models);
   if (options.timeoutMs !== undefined) request.timeoutMs = options.timeoutMs;
   if (options.specUse !== undefined) request.specUse = options.specUse;
   if (options.operation !== undefined) request.operation = options.operation;
@@ -285,6 +321,7 @@ export async function runCommand(command, options = {}) {
   const timeoutMs = options.timeoutMs ?? CEILINGS_MS[command];
   const request = buildRequest(command, options);
   const spawnImpl = options.spawn ?? spawn;
+  const sampleRss = options.rssSampler ?? defaultSampleChildRss;
 
   let child;
   try {
@@ -334,12 +371,15 @@ export async function runCommand(command, options = {}) {
 
   let timer = null;
   let abortListener = null;
+  let rssTimer = null;
+  let observedRssBytes = null;
   const outcome = await new Promise((resolve) => {
     let done = false;
     const finish = (result) => {
       if (done) return;
       done = true;
       if (timer) clearTimeout(timer);
+      if (rssTimer) clearInterval(rssTimer);
       if (options.signal && abortListener) {
         options.signal.removeEventListener("abort", abortListener);
       }
@@ -356,9 +396,23 @@ export async function runCommand(command, options = {}) {
       abortListener = () => finish({ kind: "abort" });
       options.signal.addEventListener("abort", abortListener, { once: true });
     }
+    const sample = () => {
+      if (done || typeof child.pid !== "number" || child.pid <= 0) return;
+      let sampled = null;
+      try {
+        sampled = sampleRss(child.pid);
+      } catch {
+        sampled = null;
+      }
+      if (typeof sampled !== "number" || !Number.isFinite(sampled) || sampled <= 0) return;
+      if (observedRssBytes === null || sampled > observedRssBytes) observedRssBytes = sampled;
+      if (sampled >= MAX_CHILD_RSS_BYTES) finish({ kind: "rss" });
+    };
+    rssTimer = setInterval(sample, RSS_SAMPLE_INTERVAL_MS);
+    sample();
   });
 
-  if (outcome.kind === "timeout" || outcome.kind === "abort") {
+  if (outcome.kind === "timeout" || outcome.kind === "abort" || outcome.kind === "rss") {
     try {
       await settleOwnedGroup(child);
     } catch (error) {
@@ -369,6 +423,17 @@ export async function runCommand(command, options = {}) {
         reason: "cleanup-failed",
         exitCode: 1,
         message: errorMessage(error),
+      };
+    }
+    if (outcome.kind === "rss") {
+      return {
+        version: 1,
+        command,
+        status: "unavailable",
+        reason: "budget-exceeded",
+        exitCode: 3,
+        message: `worker exceeded the ${MAX_CHILD_RSS_BYTES}-byte child RSS ceiling`,
+        observedRssBytes,
       };
     }
     if (outcome.kind === "timeout") {

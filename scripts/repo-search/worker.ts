@@ -109,12 +109,17 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+const SQLITE_CORRUPT_CODES: ReadonlySet<string> = new Set(["SQLITE_NOTADB", "SQLITE_CORRUPT"]);
+const SQLITE_BUSY_CODES: ReadonlySet<string> = new Set(["SQLITE_BUSY", "SQLITE_LOCKED"]);
+
 function normalizeReason(code: string): string {
   if (code === "enrollment-corrupt") return "corrupt";
   if (code === "enrollment-path" || code === "enrollment-unavailable") return "corrupt";
   if (code === "code-model-unavailable") return "model-unavailable";
   if (code === "code-index-unavailable") return "corrupt";
   if (code === "state-unavailable") return "corrupt";
+  if (SQLITE_CORRUPT_CODES.has(code)) return "corrupt";
+  if (SQLITE_BUSY_CODES.has(code)) return "busy";
   if (code === "invalid-query") return "usage";
   if (code === "disposed") return "usage";
   return code;
@@ -251,13 +256,20 @@ export async function runWorker(request: unknown): Promise<WorkerResponse> {
 
   // Engine owners load only after the request is known-valid. The search route
   // must not load lifecycle/build modules.
-  const stateModule = await import("./state.ts");
-  const identityModule = await import("./identity.mjs");
+  let stateModule: typeof import("./state.ts");
+  let identityModule: typeof import("./identity.mjs");
+  try {
+    stateModule = await import("./state.ts");
+    identityModule = await import("./identity.mjs");
+  } catch (error) {
+    return classifyWorkerError(req.command, error);
+  }
 
   if (req.command === "prune" || req.command === "recover") {
     // No identity work for state-only commands; open owned state directly.
-    const state = stateModule.openState(req.state);
+    let state: ReturnType<typeof stateModule.openState> | null = null;
     try {
+      state = stateModule.openState(req.state);
       if (req.command === "prune") {
         const receipt = await state.prune({
           maxGenerations: 100,
@@ -270,10 +282,12 @@ export async function runWorker(request: unknown): Promise<WorkerResponse> {
     } catch (error) {
       return classifyWorkerError(req.command, error);
     } finally {
-      try {
-        state.close();
-      } catch {
-        // best-effort release
+      if (state) {
+        try {
+          state.close();
+        } catch {
+          // best-effort release
+        }
       }
     }
   }
@@ -292,7 +306,12 @@ export async function runWorker(request: unknown): Promise<WorkerResponse> {
     };
   }
 
-  const state = stateModule.openState(req.state);
+  let state: ReturnType<typeof stateModule.openState>;
+  try {
+    state = stateModule.openState(req.state);
+  } catch (error) {
+    return classifyWorkerError(req.command, error);
+  }
   const base = {
     version: 1 as const,
     command: req.command,
@@ -357,7 +376,14 @@ export async function runWorker(request: unknown): Promise<WorkerResponse> {
         } else if (kind === "update") {
           receipt = await lifecycle.updateCheckout({ identity, state, modelsRoot });
         } else {
-          receipt = await lifecycle.buildWorktree({ identity, state, modelsRoot, kind });
+          const primaryIdentity = await identityModule.resolvePrimaryCheckout(identity);
+          receipt = await lifecycle.buildWorktree({
+            identity,
+            state,
+            modelsRoot,
+            kind,
+            primaryIdentity: primaryIdentity ?? undefined,
+          });
         }
         return { ...base, status: "ok", receipt };
       }
@@ -399,14 +425,25 @@ async function main(): Promise<void> {
     } catch {
       parseFailed = true;
     }
-    response = parseFailed
-      ? {
+    if (parseFailed) {
+      response = {
+        version: 1,
+        status: "failed",
+        reason: "usage",
+        message: "Request must be valid JSON.",
+      };
+    } else {
+      try {
+        response = await runWorker(parsed);
+      } catch (error) {
+        response = {
           version: 1,
           status: "failed",
-          reason: "usage",
-          message: "Request must be valid JSON.",
-        }
-      : await runWorker(parsed);
+          reason: "failed",
+          message: errorMessage(error),
+        };
+      }
+    }
   }
   process.stdout.write(JSON.stringify(response) + "\n");
   process.exitCode = responseExitCode(response);

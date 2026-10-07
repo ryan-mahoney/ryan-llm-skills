@@ -142,32 +142,47 @@ async function main() {
   const parsed = parseArgs(process.argv.slice(2));
   if (parsed === null) return;
 
-  if (parsed.command === "search") {
-    const receipt = await searchRepository({
-      root: parsed.options.root,
-      query: parsed.options.query,
-      usage: "operator",
-      stateRoot: parsed.options.state,
-      modelsRoot: parsed.options.models,
-      mode: parsed.options.mode,
-      limit: parsed.options.limit,
-      timeoutMs: parsed.options.timeoutMs,
-    });
-    const output = parsed.json ? formatSearchJson(receipt) : formatSearchHuman(receipt);
-    // Formatter output is written exactly once; the human formatter owns its
-    // trailing newline and JSON must not gain an extra byte.
-    process.stdout.write(output);
-    process.exitCode = receipt.exitCode ?? 1;
-    return;
-  }
+  // Own terminal signals for the duration of the owned child so cancellation
+  // settles the detached worker group before this process returns.
+  const controller = new AbortController();
+  const onTermination = () => controller.abort();
+  process.on("SIGINT", onTermination);
+  process.on("SIGTERM", onTermination);
+  try {
+    if (parsed.command === "search") {
+      const receipt = await searchRepository({
+        root: parsed.options.root,
+        query: parsed.options.query,
+        usage: "operator",
+        stateRoot: parsed.options.state,
+        modelsRoot: parsed.options.models,
+        mode: parsed.options.mode,
+        limit: parsed.options.limit,
+        timeoutMs: parsed.options.timeoutMs,
+        signal: controller.signal,
+      });
+      const output = parsed.json ? formatSearchJson(receipt) : formatSearchHuman(receipt);
+      // Formatter output is written exactly once; the human formatter owns its
+      // trailing newline and JSON must not gain an extra byte.
+      process.stdout.write(output);
+      process.exitCode = receipt.exitCode ?? 1;
+      return;
+    }
 
-  const receipt = await runCommand(parsed.command, parsed.options);
-  if (parsed.json) {
-    process.stdout.write(`${JSON.stringify(receipt)}\n`);
-  } else {
-    process.stdout.write(humanSummary(parsed.command, receipt));
+    const receipt = await runCommand(parsed.command, {
+      ...parsed.options,
+      signal: controller.signal,
+    });
+    if (parsed.json) {
+      process.stdout.write(`${JSON.stringify(receipt)}\n`);
+    } else {
+      process.stdout.write(humanSummary(parsed.command, receipt));
+    }
+    process.exitCode = receipt.exitCode ?? 1;
+  } finally {
+    process.removeListener("SIGINT", onTermination);
+    process.removeListener("SIGTERM", onTermination);
   }
-  process.exitCode = receipt.exitCode ?? 1;
 }
 
 main().catch((error) => {
