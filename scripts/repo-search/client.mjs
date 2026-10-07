@@ -3,9 +3,25 @@
 // imports Bun/TS or Pi runtime code.
 
 import { spawn } from "node:child_process";
-import { accessSync, constants, existsSync } from "node:fs";
+import {
+  accessSync,
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+} from "node:fs";
 import { dirname, delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import {
+  checkoutStatePath,
+  enrollmentPath,
+  resolveCheckout,
+  resolveStateRoot,
+} from "./identity.mjs";
 
 const CEILINGS_MS = {
   status: 10000,
@@ -13,6 +29,7 @@ const CEILINGS_MS = {
   build: 1800000,
   update: 1800000,
   reindex: 1800000,
+  search: 120000,
   configure: 10000,
   forget: 10000,
   prune: 30000,
@@ -25,6 +42,7 @@ const COMMAND_OPTIONS = {
   build: ["root", "state", "models", "timeoutMs"],
   update: ["root", "state", "models", "timeoutMs"],
   reindex: ["root", "state", "models", "timeoutMs"],
+  search: ["root", "query", "mode", "limit", "state", "models", "timeoutMs"],
   configure: ["root", "state", "timeoutMs", "specUse"],
   forget: ["root", "state", "timeoutMs"],
   prune: ["state", "timeoutMs"],
@@ -92,6 +110,25 @@ function validateGrammar(command, options) {
       }
       continue;
     }
+    if (key === "mode") {
+      if (options.mode !== "vector" && options.mode !== "bm25") {
+        return { ok: false, message: "mode must be vector or bm25." };
+      }
+      continue;
+    }
+    if (key === "limit") {
+      if (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 20) {
+        return { ok: false, message: "limit must be an integer 1..20." };
+      }
+      continue;
+    }
+    if (key === "query") {
+      const codePoints = typeof options.query === "string" ? [...options.query].length : 0;
+      if (codePoints === 0 || codePoints > 2000) {
+        return { ok: false, message: "query must be 1..2000 Unicode code points." };
+      }
+      continue;
+    }
     if (typeof options[key] !== "string" || options[key].length === 0) {
       return { ok: false, message: `${key} must be a non-empty string.` };
     }
@@ -100,7 +137,10 @@ function validateGrammar(command, options) {
   if (allowed.has("root") && typeof options.root !== "string") {
     return { ok: false, message: `${command} requires --root.` };
   }
-  if (allowed.has("models") && typeof options.models !== "string") {
+  if (
+    ["build", "update", "reindex"].includes(command) &&
+    typeof options.models !== "string"
+  ) {
     return { ok: false, message: `${command} requires --models.` };
   }
   if (allowed.has("specUse") && typeof options.specUse !== "boolean") {
@@ -108,6 +148,9 @@ function validateGrammar(command, options) {
   }
   if (allowed.has("operation") && typeof options.operation !== "string") {
     return { ok: false, message: "recover requires --operation." };
+  }
+  if (command === "search" && typeof options.query !== "string") {
+    return { ok: false, message: "search requires query." };
   }
   return { ok: true };
 }
@@ -155,6 +198,9 @@ function buildRequest(command, options) {
   if (options.timeoutMs !== undefined) request.timeoutMs = options.timeoutMs;
   if (options.specUse !== undefined) request.specUse = options.specUse;
   if (options.operation !== undefined) request.operation = options.operation;
+  if (options.query !== undefined) request.query = options.query;
+  if (options.mode !== undefined) request.mode = options.mode;
+  if (options.limit !== undefined) request.limit = options.limit;
   return request;
 }
 
@@ -373,4 +419,202 @@ export async function runCommand(command, options = {}) {
   }
 
   return { ...parsed, exitCode: mapWorkerExit(outcome.code, parsed) };
+}
+
+// ---- Spec-usage preflight (Node-only, no Bun/ONNX) -------------------------
+
+function corruptEnrollment(message) {
+  const error = new Error(message);
+  error.reason = "corrupt";
+  return error;
+}
+
+function ownedDirectoryNode(path) {
+  let info;
+  try {
+    info = lstatSync(path);
+  } catch (error) {
+    if (error && error.code === "ENOENT") return null;
+    throw corruptEnrollment(`metadata directory is unavailable: ${path}`);
+  }
+  if (info.isSymbolicLink() || !info.isDirectory()) {
+    throw corruptEnrollment(`metadata path is not a stable directory: ${path}`);
+  }
+  if (typeof process.getuid === "function" && info.uid !== process.getuid()) {
+    throw corruptEnrollment(`metadata path is not owned by the current user: ${path}`);
+  }
+  if ((info.mode & 0o077) !== 0) {
+    throw corruptEnrollment(`metadata path has group/world permissions: ${path}`);
+  }
+  return { path, dev: info.dev, ino: info.ino };
+}
+
+function assertDirectoryNode(identity, label) {
+  let info;
+  try {
+    info = lstatSync(identity.path);
+  } catch {
+    throw corruptEnrollment(`${label} is unavailable`);
+  }
+  if (
+    info.isSymbolicLink() ||
+    !info.isDirectory() ||
+    info.dev !== identity.dev ||
+    info.ino !== identity.ino
+  ) {
+    throw corruptEnrollment(`${label} changed`);
+  }
+}
+
+function readEnrollmentNode(identity, stateRoot) {
+  const stateBase = resolveStateRoot(stateRoot);
+  const stateIdentity = ownedDirectoryNode(stateBase);
+  if (!stateIdentity) return null;
+  const checkoutsParent = join(stateBase, "checkouts");
+  const parentIdentity = ownedDirectoryNode(checkoutsParent);
+  if (!parentIdentity) return null;
+
+  const checkoutDir = checkoutStatePath(stateBase, identity.checkoutKey);
+  if (dirname(checkoutDir) !== checkoutsParent) {
+    throw corruptEnrollment("checkout state path escapes the owned checkouts parent");
+  }
+  const dirIdentity = ownedDirectoryNode(checkoutDir);
+  if (!dirIdentity) return null;
+
+  const file = enrollmentPath(stateBase, identity.checkoutKey);
+  if (dirname(file) !== checkoutDir) {
+    throw corruptEnrollment("enrollment path escapes its checkout directory");
+  }
+
+  let fd = null;
+  try {
+    try {
+      fd = openSync(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    } catch (error) {
+      if (error && error.code === "ENOENT") return null;
+      throw corruptEnrollment("enrollment record is unavailable");
+    }
+    const descriptor = fstatSync(fd);
+    if (!descriptor.isFile()) {
+      throw corruptEnrollment("enrollment record is not a regular file");
+    }
+    if (typeof process.getuid === "function" && descriptor.uid !== process.getuid()) {
+      throw corruptEnrollment("enrollment record is not owned by the current user");
+    }
+    if ((descriptor.mode & 0o077) !== 0) {
+      throw corruptEnrollment("enrollment record has group/world permissions");
+    }
+    if (descriptor.size > 64 * 1024) {
+      throw corruptEnrollment("enrollment record exceeds 64 KiB");
+    }
+    const descriptorDev = descriptor.dev;
+    const descriptorIno = descriptor.ino;
+    const descriptorSize = descriptor.size;
+    const before = lstatSync(file);
+    if (
+      before.isSymbolicLink() ||
+      before.dev !== descriptorDev ||
+      before.ino !== descriptorIno
+    ) {
+      throw corruptEnrollment("enrollment record changed before read");
+    }
+    let raw;
+    try {
+      raw = readFileSync(fd, "utf8");
+    } catch {
+      throw corruptEnrollment("enrollment record is corrupt");
+    }
+    const afterDescriptor = fstatSync(fd);
+    if (
+      afterDescriptor.dev !== descriptorDev ||
+      afterDescriptor.ino !== descriptorIno ||
+      afterDescriptor.size !== descriptorSize
+    ) {
+      throw corruptEnrollment("enrollment record changed during read");
+    }
+    const after = lstatSync(file);
+    if (
+      after.isSymbolicLink() ||
+      after.dev !== descriptorDev ||
+      after.ino !== descriptorIno
+    ) {
+      throw corruptEnrollment("enrollment record changed during read");
+    }
+    assertDirectoryNode(stateIdentity, "state root");
+    assertDirectoryNode(parentIdentity, "checkouts parent");
+    assertDirectoryNode(dirIdentity, "checkout state directory");
+
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw corruptEnrollment("enrollment record is corrupt");
+    }
+    const record = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+    const identityRecord = record && record.identity;
+    if (
+      !record ||
+      record.version !== 1 ||
+      typeof record.specUse !== "boolean" ||
+      !identityRecord ||
+      identityRecord.repoKey !== identity.repoKey ||
+      identityRecord.checkoutKey !== identity.checkoutKey ||
+      identityRecord.root !== identity.root ||
+      identityRecord.commonDir !== identity.commonDir ||
+      identityRecord.gitDir !== identity.gitDir ||
+      identityRecord.primary !== identity.primary
+    ) {
+      throw corruptEnrollment("enrollment record is corrupt or mismatched");
+    }
+    return record;
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {
+        // best-effort close
+      }
+    }
+  }
+}
+
+async function specPreflight(root, stateRoot) {
+  let identity;
+  try {
+    identity = await resolveCheckout(root);
+  } catch {
+    return { ok: false, reason: "invalid-root" };
+  }
+  try {
+    const enrollment = readEnrollmentNode(identity, stateRoot);
+    if (!enrollment) return { ok: false, reason: "unenrolled" };
+    if (enrollment.specUse !== true) return { ok: false, reason: "disabled" };
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, reason: (error && error.reason) || "corrupt" };
+  }
+}
+
+/**
+ * Public search entry. `usage` must be `operator` or `spec`; spec usage
+ * validates enrollment locally before any Bun child is spawned.
+ */
+export async function searchRepository(input = {}) {
+  if (input.usage !== "operator" && input.usage !== "spec") {
+    return usageReceipt("search", "usage must be operator|spec");
+  }
+  if (input.usage === "spec") {
+    const preflight = await specPreflight(input.root, input.stateRoot);
+    if (!preflight.ok) return unavailableReceipt("search", preflight.reason);
+  }
+  return runCommand("search", {
+    root: input.root,
+    query: input.query,
+    mode: input.mode,
+    limit: input.limit,
+    state: input.stateRoot,
+    models: input.modelsRoot,
+    timeoutMs: input.timeoutMs,
+    signal: input.signal,
+  });
 }

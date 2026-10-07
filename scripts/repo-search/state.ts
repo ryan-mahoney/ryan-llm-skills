@@ -815,6 +815,24 @@ function createState(
     });
   }
 
+  // Idempotent lazy native-slot acquisition for an already-active operation.
+  function acquireNative(operationId: string): void {
+    txImmediate(db, () => {
+      assertActiveOperation(operationId);
+      const claim = get(db, "SELECT operation_id FROM native_claim WHERE id = 1");
+      if (claim) {
+        if (claim.operation_id === operationId) return;
+        throw new StateError("busy", "native slot already claimed");
+      }
+      run(
+        db,
+        "INSERT INTO native_claim (id, operation_id, created_at) VALUES (1, ?, ?)",
+        operationId,
+        nowIso(),
+      );
+    });
+  }
+
   // Conservative recovery: probe the recorded process outside any transaction,
   // refuse live/unknown owners, and only release a dead owner whose immutable
   // operation identity is unchanged and still active.
@@ -1110,6 +1128,7 @@ function createState(
     acquireCurrent,
     publish,
     finishOperation,
+    acquireNative,
     recover,
     prune,
     forgetCheckout,

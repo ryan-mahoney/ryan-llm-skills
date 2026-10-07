@@ -11,6 +11,7 @@ export type WorkerCommand =
   | "build"
   | "update"
   | "reindex"
+  | "search"
   | "configure"
   | "forget"
   | "prune"
@@ -25,6 +26,9 @@ export type WorkerRequest = {
   timeoutMs?: number;
   specUse?: boolean;
   operation?: string;
+  query?: string;
+  mode?: "vector" | "bm25";
+  limit?: number;
 };
 
 export type WorkerResponse = {
@@ -47,6 +51,7 @@ const WORKER_COMMANDS: ReadonlySet<string> = new Set([
   "build",
   "update",
   "reindex",
+  "search",
   "configure",
   "forget",
   "prune",
@@ -62,6 +67,9 @@ const ALLOWED_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "timeoutMs",
   "specUse",
   "operation",
+  "query",
+  "mode",
+  "limit",
 ]);
 
 const ROOT_COMMANDS: ReadonlySet<string> = new Set([
@@ -70,6 +78,7 @@ const ROOT_COMMANDS: ReadonlySet<string> = new Set([
   "build",
   "update",
   "reindex",
+  "search",
   "configure",
   "forget",
 ]);
@@ -93,6 +102,7 @@ const UNAVAILABLE_REASONS: ReadonlySet<string> = new Set([
   "budget-exceeded",
   "source-raced",
   "output-budget",
+  "unavailable",
 ]);
 
 function errorMessage(error: unknown): string {
@@ -105,6 +115,8 @@ function normalizeReason(code: string): string {
   if (code === "code-model-unavailable") return "model-unavailable";
   if (code === "code-index-unavailable") return "corrupt";
   if (code === "state-unavailable") return "corrupt";
+  if (code === "invalid-query") return "usage";
+  if (code === "disposed") return "usage";
   return code;
 }
 
@@ -169,6 +181,24 @@ function validateWorkerRequest(request: unknown): ValidationResult {
   if (record.specUse !== undefined && typeof record.specUse !== "boolean") {
     return { ok: false, command, message: "specUse must be a boolean." };
   }
+  if (record.mode !== undefined && record.mode !== "vector" && record.mode !== "bm25") {
+    return { ok: false, command, message: "mode must be vector or bm25." };
+  }
+  if (
+    record.limit !== undefined &&
+    (!Number.isInteger(record.limit) || (record.limit as number) < 1 || (record.limit as number) > 20)
+  ) {
+    return { ok: false, command, message: "limit must be an integer 1..20." };
+  }
+  if (record.query !== undefined) {
+    if (typeof record.query !== "string") {
+      return { ok: false, command, message: "query must be a string." };
+    }
+    const codePoints = [...record.query].length;
+    if (codePoints === 0 || codePoints > 2000) {
+      return { ok: false, command, message: "query must be 1..2000 Unicode code points." };
+    }
+  }
 
   if (ROOT_COMMANDS.has(command) && typeof record.root !== "string") {
     return { ok: false, command, message: `${command} requires root.` };
@@ -182,6 +212,9 @@ function validateWorkerRequest(request: unknown): ValidationResult {
   if (command === "recover" && typeof record.operation !== "string") {
     return { ok: false, command, message: "recover requires operation." };
   }
+  if (command === "search" && typeof record.query !== "string") {
+    return { ok: false, command, message: "search requires query." };
+  }
 
   return {
     ok: true,
@@ -194,6 +227,9 @@ function validateWorkerRequest(request: unknown): ValidationResult {
       timeoutMs: record.timeoutMs as number | undefined,
       specUse: record.specUse as boolean | undefined,
       operation: record.operation as string | undefined,
+      query: record.query as string | undefined,
+      mode: record.mode as "vector" | "bm25" | undefined,
+      limit: record.limit as number | undefined,
     },
   };
 }
@@ -213,8 +249,8 @@ export async function runWorker(request: unknown): Promise<WorkerResponse> {
   }
   const req = validation.value;
 
-  // Engine owners load only after the request is known-valid.
-  const lifecycle = await import("./lifecycle.ts");
+  // Engine owners load only after the request is known-valid. The search route
+  // must not load lifecycle/build modules.
   const stateModule = await import("./state.ts");
   const identityModule = await import("./identity.mjs");
 
@@ -267,6 +303,20 @@ export async function runWorker(request: unknown): Promise<WorkerResponse> {
   };
 
   try {
+    if (req.command === "search") {
+      const searchModule = await import("./search.ts");
+      const receipt = await searchModule.searchCheckout({
+        identity,
+        state,
+        query: req.query as string,
+        mode: req.mode,
+        limit: req.limit,
+        modelsRoot: req.models,
+      });
+      return { ...base, status: "ok", receipt };
+    }
+
+    const lifecycle = await import("./lifecycle.ts");
     switch (req.command) {
       case "status": {
         const receipt = lifecycle.readCheckoutStatus({ identity, state });

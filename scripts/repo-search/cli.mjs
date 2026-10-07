@@ -3,7 +3,8 @@
 // prints one JSON line with --json or a short human summary, and sets the exit
 // code from the receipt. Progress never goes to stdout.
 
-import { runCommand } from "./client.mjs";
+import { runCommand, searchRepository } from "./client.mjs";
+import { formatSearchHuman, formatSearchJson } from "./format.mjs";
 
 const COMMANDS = new Set([
   "status",
@@ -11,6 +12,7 @@ const COMMANDS = new Set([
   "build",
   "update",
   "reindex",
+  "search",
   "configure",
   "forget",
   "prune",
@@ -24,6 +26,9 @@ const VALUE_FLAGS = new Set([
   "--timeout-ms",
   "--spec-use",
   "--operation",
+  "--query",
+  "--mode",
+  "--limit",
 ]);
 
 const BOOLEAN_FLAGS = new Set(["--json"]);
@@ -90,6 +95,20 @@ function parseArgs(argv) {
       options.specUse = value === "on";
     } else if (flag === "--operation") {
       options.operation = value;
+    } else if (flag === "--query") {
+      options.query = value;
+    } else if (flag === "--mode") {
+      if (value !== "vector" && value !== "bm25") {
+        usage(`--mode requires vector|bm25`);
+        return null;
+      }
+      options.mode = value;
+    } else if (flag === "--limit") {
+      if (!/^[1-9]\d*$/.test(value)) {
+        usage(`--limit requires a positive integer`);
+        return null;
+      }
+      options.limit = Number.parseInt(value, 10);
     } else if (flag === "--root") {
       options.root = value;
     } else if (flag === "--state") {
@@ -122,6 +141,26 @@ function humanSummary(command, receipt) {
 async function main() {
   const parsed = parseArgs(process.argv.slice(2));
   if (parsed === null) return;
+
+  if (parsed.command === "search") {
+    const receipt = await searchRepository({
+      root: parsed.options.root,
+      query: parsed.options.query,
+      usage: "operator",
+      stateRoot: parsed.options.state,
+      modelsRoot: parsed.options.models,
+      mode: parsed.options.mode,
+      limit: parsed.options.limit,
+      timeoutMs: parsed.options.timeoutMs,
+    });
+    const output = parsed.json ? formatSearchJson(receipt) : formatSearchHuman(receipt);
+    // Formatter output is written exactly once; the human formatter owns its
+    // trailing newline and JSON must not gain an extra byte.
+    process.stdout.write(output);
+    process.exitCode = receipt.exitCode ?? 1;
+    return;
+  }
+
   const receipt = await runCommand(parsed.command, parsed.options);
   if (parsed.json) {
     process.stdout.write(`${JSON.stringify(receipt)}\n`);
