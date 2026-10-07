@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { renameSync, symlinkSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -200,6 +201,37 @@ describe("code embedding cache", () => {
 
     expect(() => openCodeEmbeddingCache({ filePath: cachePath })).toThrow();
     expect((await readFile(external)).equals(before)).toBe(true);
+  });
+
+  test("rejects a cache database replaced at the opening boundary without touching it", async () => {
+    const dir = await makeTempDir();
+    const cacheDir = join(dir, "cache");
+    await mkdir(cacheDir, { recursive: true, mode: 0o700 });
+    const cachePath = join(cacheDir, "embeddings.sqlite");
+    openCodeEmbeddingCache({ filePath: cachePath }).close();
+
+    const external = join(dir, "external.sqlite");
+    const externalDb = new Database(external);
+    externalDb.exec("CREATE TABLE sentinel(value TEXT); INSERT INTO sentinel VALUES ('keep');");
+    externalDb.close();
+    const before = await readFile(external);
+
+    expect(() =>
+      openCodeEmbeddingCache({
+        filePath: cachePath,
+        beforeDatabaseOpen() {
+          renameSync(cachePath, `${cachePath}.owned`);
+          symlinkSync(external, cachePath, "file");
+        },
+      }),
+    ).toThrow();
+
+    expect((await readFile(external)).equals(before)).toBe(true);
+    const check = new Database(external);
+    expect(
+      (check.query("SELECT value FROM sentinel").get() as { value: string }).value,
+    ).toBe("keep");
+    check.close();
   });
 });
 

@@ -27,6 +27,7 @@ import {
   resolveStateRoot,
 } from "./identity.mjs";
 import type { CodeSearchCompatibility } from "./core/embeddingContract";
+import { openAnchoredSqlite } from "./core/sqliteOpen";
 
 export type StateErrorCode =
   | "busy"
@@ -1119,7 +1120,11 @@ function createState(
 
 export function openState(
   stateRoot?: string,
-  options: { processProbe?: ProcessProbe; afterRename?: AfterRenameHook } = {},
+  options: {
+    processProbe?: ProcessProbe;
+    afterRename?: AfterRenameHook;
+    beforeDatabaseOpen?: () => void;
+  } = {},
 ) {
   const root = resolveStateRoot(stateRoot);
   const rootIdentity = ensureOwnedDirectory(root, true);
@@ -1149,35 +1154,40 @@ export function openState(
     expectedDbIdentity = { path: dbPath, dev: created.dev, ino: created.ino };
   }
 
-  const db = new Database(dbPath);
-  try {
-    db.exec("PRAGMA journal_mode = WAL;");
-    db.exec("PRAGMA foreign_keys = ON;");
-    db.exec("PRAGMA busy_timeout = 5000;");
-    createSchema(db);
-    // Owner-only database file; a failure here fails opening.
-    chmodSync(dbPath, 0o600);
+  const db = openAnchoredSqlite({
+    directory: rootIdentity,
+    file: expectedDbIdentity,
+    fileName: "state.sqlite",
+    beforeOpen: options.beforeDatabaseOpen,
+    error: (message, cause) => {
+      const error = new StateError("state-unavailable", message);
+      if (cause !== undefined) (error as { cause?: unknown }).cause = cause;
+      return error;
+    },
+    initialize(database) {
+      // These relative checks and all writes stay beneath the anchored root.
+      assertSafeSidecar("state.sqlite-wal", "state database WAL");
+      assertSafeSidecar("state.sqlite-shm", "state database shared memory");
+      database.exec("PRAGMA journal_mode = WAL;");
+      database.exec("PRAGMA foreign_keys = ON;");
+      database.exec("PRAGMA busy_timeout = 5000;");
+      createSchema(database);
+      chmodSync("state.sqlite", 0o600);
 
-    // Revalidate identity and sidecars after SQLite/schema initialization.
-    const dbInfo = lstatSync(dbPath);
-    if (
-      dbInfo.isSymbolicLink() ||
-      !dbInfo.isFile() ||
-      dbInfo.dev !== expectedDbIdentity.dev ||
-      dbInfo.ino !== expectedDbIdentity.ino
-    ) {
-      throw new StateError("state-unavailable", "state database changed during initialization");
-    }
-    assertSafeSidecar(walPath, "state database WAL");
-    assertSafeSidecar(shmPath, "state database shared memory");
+      assertIdentity(rootIdentity, "state root");
+      const dbInfo = lstatSync("state.sqlite");
+      if (
+        dbInfo.isSymbolicLink() ||
+        !dbInfo.isFile() ||
+        dbInfo.dev !== expectedDbIdentity.dev ||
+        dbInfo.ino !== expectedDbIdentity.ino
+      ) {
+        throw new StateError("state-unavailable", "state database changed during initialization");
+      }
+      assertSafeSidecar("state.sqlite-wal", "state database WAL");
+      assertSafeSidecar("state.sqlite-shm", "state database shared memory");
+    },
+  });
 
-    return createState(root, rootIdentity, db, options);
-  } catch (error) {
-    try {
-      db.close();
-    } catch {
-      // connection already closed by the failed setup
-    }
-    throw error;
-  }
+  return createState(root, rootIdentity, db, options);
 }

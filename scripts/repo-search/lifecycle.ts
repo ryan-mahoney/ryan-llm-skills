@@ -21,7 +21,9 @@ import {
   planCodeIndexBuild,
   planOverlayBuild,
   validateCodeIndexBuild,
+  validateCodeIndexStore,
   validateOverlayBuild,
+  validateOverlayStore,
   type BuildEmbeddingRuntimeFactory,
 } from "./core/build";
 import {
@@ -545,6 +547,10 @@ export async function buildPrimary(input: {
       if (!compatibilityEqual(current.compatibility, compatibility)) {
         throw new LifecycleError("incompatible", "existing generation is incompatible; reindex required");
       }
+      await validateCodeIndexStore({
+        destinationDir: current.finalPath,
+        compatibility,
+      });
       state.finishOperation(operation.id, "finished");
       finished = true;
       return {
@@ -585,6 +591,11 @@ export async function buildPrimary(input: {
 
     // Unchanged compatible update: stop before generation/store/runtime work.
     if (kind === "update" && current && captured.digest === current.snapshotDigest) {
+      await validateCodeIndexBuild({
+        destinationDir: current.finalPath,
+        compatibility,
+        snapshot: captured,
+      });
       mergeEnrollment(state.stateRoot, identity.checkoutKey, identity, {
         head: identity.head,
         lastCheck: null,
@@ -1033,6 +1044,22 @@ export async function buildWorktree(input: {
     if (kind === "build" && current) {
       if (!compatibilityEqual(current.compatibility, compatibility)) {
         throw new LifecycleError("incompatible", "existing generation is incompatible; reindex required");
+      }
+      if (current.kind === "full") {
+        await validateCodeIndexStore({
+          destinationDir: current.finalPath,
+          compatibility,
+        });
+      } else {
+        if (!currentBase || currentBase.id !== current.baseId) {
+          throw new LifecycleError("base-missing", "overlay base is no longer available");
+        }
+        await validateOverlayStore({
+          destinationDir: current.finalPath,
+          baseStoreDir: currentBase.finalPath,
+          baseId: currentBase.id,
+          compatibility,
+        });
       }
       state.finishOperation(operation.id, "finished");
       finished = true;

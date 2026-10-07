@@ -28,6 +28,7 @@ import {
   renameSync,
   rmSync,
   symlinkSync,
+  unlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -334,6 +335,142 @@ describe("primary build and incremental update", () => {
       fake.embeds = 0;
       await buildPrimary({ identity, state, modelsRoot, kind: "update", deps });
       expect(fake.embeds).toBe(0);
+    } finally {
+      state.close();
+    }
+  });
+
+  test("unchanged no-work paths reject corrupt stores and reindex recovers", async () => {
+    const base = makeTempRoot();
+    const corruptions = [
+      {
+        name: "missing-dump",
+        corrupt(storeDir: string) {
+          unlinkSync(resolveCodeIndexStorePaths(storeDir).dumpPath);
+        },
+      },
+      {
+        name: "corrupt-meta",
+        corrupt(storeDir: string) {
+          writeFileSync(resolveCodeIndexStorePaths(storeDir).metaPath, "{invalid");
+        },
+      },
+      {
+        name: "corrupt-manifest",
+        corrupt(storeDir: string) {
+          writeFileSync(resolveManifestPath(storeDir), "{invalid");
+        },
+      },
+    ];
+
+    for (const corruption of corruptions) {
+      const fixtureRoot = join(base, corruption.name);
+      mkdirSync(fixtureRoot, { recursive: true });
+      const { identity, state, stateRoot, modelsRoot, specs } =
+        await openFixture(fixtureRoot);
+      const fake: FakeRuntimeState = { embeds: 0, embeddedText: [] };
+      const deps = {
+        modelAssets: specs,
+        createEmbeddingRuntime: fakeRuntimeFactory(fake),
+      };
+      try {
+        const initial = await buildPrimary({
+          identity,
+          state,
+          modelsRoot,
+          kind: "build",
+          deps,
+        });
+        const storeDir = join(
+          resolveStateRoot(stateRoot),
+          "generations",
+          initial.generationId,
+        );
+        corruption.corrupt(storeDir);
+        fake.embeds = 0;
+
+        await expect(
+          buildPrimary({ identity, state, modelsRoot, kind: "update", deps }),
+        ).rejects.toThrow();
+        await expect(
+          buildPrimary({ identity, state, modelsRoot, kind: "build", deps }),
+        ).rejects.toThrow();
+        expect(fake.embeds).toBe(0);
+
+        const recovered = await buildPrimary({
+          identity,
+          state,
+          modelsRoot,
+          kind: "reindex",
+          deps,
+        });
+        expect(recovered.generationId).not.toBe(initial.generationId);
+        const runtime = await restoreGeneration(stateRoot, recovered.generationId);
+        expect(await runtime.count()).toBe(await expectedChunkCount(BASE_FILES));
+      } finally {
+        state.close();
+      }
+    }
+  });
+
+  test("publishes and updates a tracked root __proto__ file", async () => {
+    const base = makeTempRoot();
+    const { repo, identity, state, stateRoot, modelsRoot, specs } =
+      await openFixture(base);
+    const fake: FakeRuntimeState = { embeds: 0, embeddedText: [] };
+    const deps = {
+      modelAssets: specs,
+      createEmbeddingRuntime: fakeRuntimeFactory(fake),
+    };
+    try {
+      write(repo, "__proto__", "prototypeInitialMarker\n");
+      git(repo, "add", "__proto__");
+      const initial = await buildPrimary({
+        identity,
+        state,
+        modelsRoot,
+        kind: "build",
+        deps,
+      });
+      const initialStore = join(
+        resolveStateRoot(stateRoot),
+        "generations",
+        initial.generationId,
+      );
+      const initialManifest = await readFileManifest(resolveManifestPath(initialStore));
+      expect(Object.prototype.hasOwnProperty.call(initialManifest?.files, "__proto__")).toBe(
+        true,
+      );
+      const initialRuntime = await restoreGeneration(stateRoot, initial.generationId);
+      expect(await searchPaths(initialRuntime, "prototypeInitialMarker")).toEqual([
+        "__proto__",
+      ]);
+
+      write(repo, "__proto__", "prototypeUpdatedMarker\n");
+      git(repo, "add", "__proto__");
+      const updated = await buildPrimary({
+        identity,
+        state,
+        modelsRoot,
+        kind: "update",
+        deps,
+      });
+      const updatedStore = join(
+        resolveStateRoot(stateRoot),
+        "generations",
+        updated.generationId,
+      );
+      const updatedManifest = await readFileManifest(resolveManifestPath(updatedStore));
+      expect(Object.prototype.hasOwnProperty.call(updatedManifest?.files, "__proto__")).toBe(
+        true,
+      );
+      expect(updatedManifest?.files["__proto__"]?.hash).toBe(
+        createHash("sha256").update("prototypeUpdatedMarker\n").digest("hex"),
+      );
+      const updatedRuntime = await restoreGeneration(stateRoot, updated.generationId);
+      expect(await searchPaths(updatedRuntime, "prototypeUpdatedMarker")).toEqual([
+        "__proto__",
+      ]);
     } finally {
       state.close();
     }

@@ -9,7 +9,10 @@
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
-import type { FileManifestEntry } from "./fileManifest";
+import {
+  createFileManifestEntries,
+  type FileManifestEntry,
+} from "./fileManifest";
 
 export const OVERLAY_MANIFEST_VERSION = "code-overlay-manifest-v1";
 
@@ -145,7 +148,7 @@ export async function writeOverlayManifest(
   storeDir: string,
   manifest: OverlayManifest,
 ): Promise<void> {
-  const sortedFiles: Record<string, FileManifestEntry> = {};
+  const sortedFiles = createFileManifestEntries();
   for (const key of Object.keys(manifest.files).sort()) sortedFiles[key] = manifest.files[key];
   const serialized: OverlayManifest = {
     version: OVERLAY_MANIFEST_VERSION,

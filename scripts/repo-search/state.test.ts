@@ -4,7 +4,7 @@
 // disposable owner-only state roots and real Bun SQLite/filesystem state.
 //
 // API exercised here:
-//   openState(stateRoot,{processProbe?,afterRename?}) -> State
+//   openState(stateRoot,{processProbe?,afterRename?,beforeDatabaseOpen?}) -> State
 //   beginOperation({command,kind,checkoutKey?,writer?,native?}) -> { id }
 //   beginGeneration({operationId,checkoutKey,repoKey,kind,baseId,compatibility,
 //     snapshotDigest,capturedAt,observedHead,sourceMoved,bytes})
@@ -1194,6 +1194,58 @@ describe("F1: state database path containment", () => {
     }).toThrow();
     expect(readFileSync(wal, "utf8")).toBe("wal-sentinel");
     expect(readFileSync(shm, "utf8")).toBe("shm-sentinel");
+  });
+
+  test("rejects an owned root replaced at the opening boundary without external writes or chmod", () => {
+    const base = makeStateRoot();
+    const stateRoot = join(base, "state");
+    openState(stateRoot).close();
+
+    const externalRoot = join(base, "external-state");
+    mkdirSync(externalRoot, { recursive: true, mode: 0o700 });
+    const externalPath = join(externalRoot, "state.sqlite");
+    const externalDb = new Database(externalPath);
+    externalDb.exec("CREATE TABLE sentinel(value TEXT); INSERT INTO sentinel VALUES ('keep');");
+    externalDb.close();
+    chmodSync(externalPath, 0o640);
+    const bytesBefore = readFileSync(externalPath);
+    const modeBefore = statSync(externalPath).mode & 0o777;
+
+    const movedRoot = join(base, "owned-state");
+    expect(() =>
+      openState(stateRoot, {
+        beforeDatabaseOpen() {
+          renameSync(stateRoot, movedRoot);
+          symlinkSync(externalRoot, stateRoot, "dir");
+        },
+      }),
+    ).toThrow();
+
+    expect(readFileSync(externalPath).equals(bytesBefore)).toBe(true);
+    expect(statSync(externalPath).mode & 0o777).toBe(modeBefore);
+    const check = new Database(externalPath);
+    expect(
+      (check.query("SELECT value FROM sentinel").get() as { value: string }).value,
+    ).toBe("keep");
+    check.close();
+  });
+
+  test("rejects a WAL sidecar replaced at the opening boundary without external writes", () => {
+    const base = makeStateRoot();
+    const stateRoot = join(base, "state");
+    openState(stateRoot).close();
+    const external = join(base, "external-wal");
+    writeFileSync(external, "wal-sentinel");
+    const before = readFileSync(external);
+
+    expect(() =>
+      openState(stateRoot, {
+        beforeDatabaseOpen() {
+          symlinkSync(external, join(stateRoot, "state.sqlite-wal"));
+        },
+      }),
+    ).toThrow();
+    expect(readFileSync(external).equals(before)).toBe(true);
   });
 });
 

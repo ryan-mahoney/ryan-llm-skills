@@ -6,13 +6,14 @@ import {
   mkdirSync,
   openSync,
 } from "node:fs";
-import { dirname } from "node:path";
+import { basename, dirname } from "node:path";
 import { Database } from "bun:sqlite";
 
 import {
   CODE_INDEX_DIMENSIONS,
   type CodeSearchCompatibility,
 } from "./embeddingContract";
+import { openAnchoredSqlite } from "./sqliteOpen";
 
 export const CODE_EMBEDDING_CACHE_SCHEMA_VERSION = "code-embedding-cache-v1";
 export const DEFAULT_CODE_EMBEDDING_CACHE_MAX_ROWS = 100_000;
@@ -170,6 +171,7 @@ function assertSafeSidecar(path: string): void {
 
 export function openCodeEmbeddingCache(options: {
   filePath: string;
+  beforeDatabaseOpen?: () => void;
 }): CodeEmbeddingCache {
   const dir = ensureOwnedCacheDir(dirname(options.filePath));
   const filePath = options.filePath;
@@ -209,33 +211,39 @@ export function openCodeEmbeddingCache(options: {
   const expectedDev = initial.dev;
   const expectedIno = initial.ino;
 
-  const db = new Database(filePath, { create: true });
-  try {
-    db.run("PRAGMA journal_mode = WAL;");
-    db.run("PRAGMA busy_timeout = 5000;");
-    createSchema(db);
+  const db = openAnchoredSqlite({
+    directory: dir,
+    file: { path: filePath, dev: expectedDev, ino: expectedIno },
+    fileName: basename(filePath),
+    beforeOpen: options.beforeDatabaseOpen,
+    error: (message, cause) => {
+      const error = new Error(message);
+      if (cause !== undefined) (error as { cause?: unknown }).cause = cause;
+      return error;
+    },
+    initialize(database) {
+      // These relative checks run while the directory descriptor owns cwd.
+      assertSafeSidecar(`${basename(filePath)}-wal`);
+      assertSafeSidecar(`${basename(filePath)}-shm`);
+      database.run("PRAGMA journal_mode = WAL;");
+      database.run("PRAGMA busy_timeout = 5000;");
+      createSchema(database);
 
-    // Revalidate the owned directory, database identity and sidecars.
-    assertCacheDirIdentity(dir);
-    const after = lstatSync(filePath);
-    if (
-      after.isSymbolicLink() ||
-      !after.isFile() ||
-      after.dev !== expectedDev ||
-      after.ino !== expectedIno
-    ) {
-      throw new Error(`Embedding cache file changed during initialization: ${filePath}`);
-    }
-    assertSafeSidecar(walPath);
-    assertSafeSidecar(shmPath);
-  } catch (error) {
-    try {
-      db.close();
-    } catch {
-      // connection already closed by the failed setup
-    }
-    throw error;
-  }
+      // Revalidate the public path, database identity and anchored sidecars.
+      assertCacheDirIdentity(dir);
+      const after = lstatSync(basename(filePath));
+      if (
+        after.isSymbolicLink() ||
+        !after.isFile() ||
+        after.dev !== expectedDev ||
+        after.ino !== expectedIno
+      ) {
+        throw new Error(`Embedding cache file changed during initialization: ${filePath}`);
+      }
+      assertSafeSidecar(`${basename(filePath)}-wal`);
+      assertSafeSidecar(`${basename(filePath)}-shm`);
+    },
+  });
 
   const selectStmt = db.prepare(
     `SELECT dimensions, vector_blob

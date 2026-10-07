@@ -20,6 +20,7 @@ import {
   type CodeIndexUpsertRow,
 } from "./codeIndexRuntime";
 import {
+  createFileManifestEntries,
   diffManifest,
   readFileManifest,
   resolveManifestPath,
@@ -371,7 +372,7 @@ export async function buildCodeIndex(input: {
   progress({ type: "phase", phase: "persisting" });
   await runtime.persist();
 
-  const files: Record<string, FileManifestEntry> = {};
+  const files = createFileManifestEntries();
   if (input.plan.previousManifest) {
     for (const [path, entry] of Object.entries(input.plan.previousManifest.files)) {
       if (input.plan.deleted.includes(path) || input.plan.changed.includes(path)) continue;
@@ -429,19 +430,7 @@ export async function validateCodeIndexBuild(input: {
   compatibility: CodeSearchCompatibility;
   snapshot: Snapshot;
 }): Promise<CodeIndexBuildValidation> {
-  const manifest = await readFileManifest(resolveManifestPath(input.destinationDir));
-  if (manifest === undefined) {
-    throw new Error(`Generation manifest is missing or corrupt: ${input.destinationDir}`);
-  }
-  if (manifest.version !== CODE_INDEX_MANIFEST_VERSION) {
-    throw new Error(`Unexpected manifest version: ${manifest.version}`);
-  }
-  if (manifest.modelId !== input.compatibility.modelId) {
-    throw new Error(`Manifest model mismatch: ${manifest.modelId}`);
-  }
-  if (manifest.dimensions !== input.compatibility.dimensions) {
-    throw new Error(`Manifest dimensions mismatch: ${manifest.dimensions}`);
-  }
+  const { manifest, count, chunks } = await validateCodeIndexStore(input);
 
   const manifestPaths = Object.keys(manifest.files).sort();
   const snapshotPaths = [...input.snapshot.files.keys()].sort();
@@ -457,6 +446,26 @@ export async function validateCodeIndexBuild(input: {
       throw new Error(`Manifest hash mismatch for ${path}.`);
     }
   }
+  return { count, chunks };
+}
+
+export async function validateCodeIndexStore(input: {
+  destinationDir: string;
+  compatibility: CodeSearchCompatibility;
+}): Promise<CodeIndexBuildValidation & { manifest: FileManifest }> {
+  const manifest = await readFileManifest(resolveManifestPath(input.destinationDir));
+  if (manifest === undefined) {
+    throw new Error(`Generation manifest is missing or corrupt: ${input.destinationDir}`);
+  }
+  if (manifest.version !== CODE_INDEX_MANIFEST_VERSION) {
+    throw new Error(`Unexpected manifest version: ${manifest.version}`);
+  }
+  if (manifest.modelId !== input.compatibility.modelId) {
+    throw new Error(`Manifest model mismatch: ${manifest.modelId}`);
+  }
+  if (manifest.dimensions !== input.compatibility.dimensions) {
+    throw new Error(`Manifest dimensions mismatch: ${manifest.dimensions}`);
+  }
 
   const runtime = await createCodeIndexRuntime(
     resolveCodeIndexStorePaths(input.destinationDir),
@@ -470,7 +479,7 @@ export async function validateCodeIndexBuild(input: {
   if (count !== chunks) {
     throw new Error(`Restored count ${count} does not match manifest chunks ${chunks}.`);
   }
-  return { count, chunks };
+  return { manifest, count, chunks };
 }
 
 // ---- Overlay builds -------------------------------------------------------
@@ -645,7 +654,7 @@ export async function buildOverlayIndex(input: {
   if (changedManifest === undefined) {
     throw new Error("Overlay staging manifest is missing or corrupt.");
   }
-  const files: Record<string, FileManifestEntry> = {};
+  const files = createFileManifestEntries();
   for (const [path, entry] of Object.entries(input.plan.baseManifest.files)) {
     if (input.plan.unchanged.includes(path)) files[path] = entry;
   }
@@ -669,6 +678,89 @@ export async function buildOverlayIndex(input: {
   let derivedBytes = result.derivedBytes;
   derivedBytes += (await stat(resolveOverlayManifestPath(input.destinationDir))).size;
   return { ...result, derivedBytes };
+}
+
+/** Strict-restore an existing overlay and its immutable base without source inference. */
+export async function validateOverlayStore(input: {
+  destinationDir: string;
+  baseStoreDir: string;
+  baseId: string;
+  compatibility: CodeSearchCompatibility;
+}): Promise<OverlayBuildValidation> {
+  const baseManifest = await readValidatedBaseManifest(
+    input.baseStoreDir,
+    input.compatibility,
+  );
+  const baseCount = await restoreBaseIndexCount(input.baseStoreDir, baseManifest);
+  const overlayManifest = await readOverlayManifest(input.destinationDir);
+  if (overlayManifest === undefined) {
+    throw new Error("Overlay manifest is missing or corrupt.");
+  }
+  if (overlayManifest.baseId !== input.baseId) {
+    throw new Error("Overlay base identity mismatch.");
+  }
+  if (
+    overlayManifest.modelId !== input.compatibility.modelId ||
+    overlayManifest.dimensions !== input.compatibility.dimensions
+  ) {
+    throw new Error("Overlay compatibility mismatch.");
+  }
+
+  const changed = await validateCodeIndexStore({
+    destinationDir: input.destinationDir,
+    compatibility: input.compatibility,
+  });
+  const tombstones = new Set(overlayManifest.tombstones);
+  const expectedPaths = new Set<string>();
+
+  for (const [path, entry] of Object.entries(baseManifest.files)) {
+    if (!tombstones.has(path)) {
+      expectedPaths.add(path);
+      const complete = overlayManifest.files[path];
+      if (
+        !complete ||
+        complete.hash !== entry.hash ||
+        complete.chunkCount !== entry.chunkCount
+      ) {
+        throw new Error(`Overlay base manifest entry mismatch for ${path}.`);
+      }
+    }
+  }
+  for (const [path, entry] of Object.entries(changed.manifest.files)) {
+    expectedPaths.add(path);
+    if (baseManifest.files[path] && !tombstones.has(path)) {
+      throw new Error(`Overlay changed base path is not tombstoned: ${path}.`);
+    }
+    const complete = overlayManifest.files[path];
+    if (
+      !complete ||
+      complete.hash !== entry.hash ||
+      complete.chunkCount !== entry.chunkCount
+    ) {
+      throw new Error(`Overlay changed manifest entry mismatch for ${path}.`);
+    }
+  }
+  for (const path of tombstones) {
+    if (!baseManifest.files[path]) {
+      throw new Error(`Overlay tombstone does not identify a base path: ${path}.`);
+    }
+  }
+  const completePaths = Object.keys(overlayManifest.files);
+  if (
+    completePaths.length !== expectedPaths.size ||
+    completePaths.some((path) => !expectedPaths.has(path))
+  ) {
+    throw new Error("Overlay manifest paths do not match its base and changed stores.");
+  }
+
+  const chunks = Object.values(overlayManifest.files).reduce(
+    (sum, entry) => sum + entry.chunkCount,
+    0,
+  );
+  if (chunks > MAX_TOTAL_CHUNKS) {
+    throw new Error(`Merged chunks ${chunks} exceed the ${MAX_TOTAL_CHUNKS} chunk ceiling.`);
+  }
+  return { baseCount, overlayCount: changed.count, chunks };
 }
 
 /** Strict-validate both the base and overlay stores against the worktree snapshot. */

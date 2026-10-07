@@ -20,6 +20,10 @@ export type ManifestDiff = {
   unchanged: string[];
 };
 
+export function createFileManifestEntries(): Record<string, FileManifestEntry> {
+  return Object.create(null) as Record<string, FileManifestEntry>;
+}
+
 export function hashContent(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex");
 }
@@ -96,7 +100,7 @@ export async function readFileManifest(path: string): Promise<FileManifest | und
 }
 
 export async function writeFileManifest(path: string, manifest: FileManifest): Promise<void> {
-  const sortedFiles: Record<string, FileManifestEntry> = {};
+  const sortedFiles = createFileManifestEntries();
   for (const key of Object.keys(manifest.files).sort()) {
     sortedFiles[key] = manifest.files[key];
   }
