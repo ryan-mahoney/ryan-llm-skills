@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, symlinkSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import childProcess, { execFileSync } from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
 
 import { SENTINEL_LIMITS, collectWorkspace, reduceConditions, renderWorkspace, enrollmentReasons } from './sentinel.mjs';
 
@@ -52,6 +53,28 @@ function activity(packagePath, id, role, state) {
 }
 
 const condition = (run, kind) => run.conditions.find(item => item.kind === kind);
+
+test('workspace identity uses asynchronous Git once per repository per refresh', async t => {
+  const f = sandbox(t);
+  const repo = primary(f.dir, 'shared-primary');
+  const one = pack(repo, 'one'), two = pack(repo, 'two');
+  receipt(one, { id: 'one', assignment_id: 'one', state: 'completed' });
+  receipt(two, { id: 'two', assignment_id: 'two', state: 'completed' });
+  const exec = childProcess.execFile;
+  let queries = 0;
+  t.mock.method(childProcess, 'execFile', (...args) => { queries++; return exec(...args); });
+  t.mock.method(childProcess, 'execFileSync', () => { throw new Error('Synchronous Git blocks the host'); });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+
+  const input = { roots: [repo], packages: [one, one, two], indexDir: f.indexDir, now };
+  const first = await collectWorkspace(input);
+  assert.equal(first.runs.length, 2);
+  assert.equal(first.coverage.state, 'complete');
+  assert.equal(queries, 1, 'sibling packages and repeated pointers share identity');
+  await collectWorkspace(input);
+  assert.equal(queries, 2, 'the next refresh revalidates repository identity');
+});
 
 test('same-basename packages keep distinct identities and a linked-worktree copy is not canonical', async t => {
   const f = sandbox(t);

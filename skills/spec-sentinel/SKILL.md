@@ -18,6 +18,11 @@ no transcript, metrics, model call, raw command, lease token or cost is read.
 
 ## Commands (Pi)
 
+Sentinel stays dormant on startup and reload: no discovery, watches, timers,
+widgets or notifications. Explicit `status` (including the bare command), `root`,
+`add` or `inspect` starts observation for this session. Saved settings do not enable it.
+After `off`, status and inspect remain one-shot reads without restarting observation.
+
 - `/spec-sentinel status` — print a read-only workspace snapshot. This is also the
   default when the command is invoked without arguments.
 - `/spec-sentinel root ~/Projects` — optionally save a different search folder.
@@ -92,9 +97,9 @@ replaced sources stay unknown or stale; they are never reported as healthy.
 
 ## Host lifetime
 
-Connected Pi sessions are the host. The observer coalesces directory invalidation
+Explicitly activated Pi sessions are the host. The observer coalesces directory invalidation
 at 250 ms and reconciles every 15 seconds. Closing the session stops it; the next
-session reports the unobserved interval as unknown. There is no daemon and no
+session stays dormant until invoked and reports unobserved intervals as unknown. There is no daemon and no
 collection while no session is open.
 
 ## Authority

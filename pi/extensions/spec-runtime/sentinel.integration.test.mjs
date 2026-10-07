@@ -431,6 +431,45 @@ test('sentinel enrollment: add writes one canonical record and rejects linked wo
   assert.equal(count(), 1);
 });
 
+test('sentinel status: loading the native extension is silent until explicitly invoked', { skip: sdkSkip, timeout: 60000 }, async t => {
+  const dir = sandbox(t);
+  const { repo } = primary(dir, 'silent-startup');
+  const packagePath = pack(repo);
+  receipt(packagePath, { id: 'failed-run', assignment_id: 'failed-assignment', state: 'failed' });
+  const { session, captured, requests } = await loadExtension(t, { dir });
+  assert.deepEqual(captured.widgets.filter(item => item.key === SENTINEL_WIDGET_KEY), []);
+  assert.deepEqual(captured.statuses.filter(item => item.key === SENTINEL_WIDGET_KEY), []);
+  assert.deepEqual(captured.notes, []);
+  assert.equal(requests.length, 0);
+
+  await session.prompt('/spec-sentinel status');
+  assert.match(lastWidget(captured).content.join('\n'), /failed-assignment/);
+  assert.ok(captured.notes.some(item => item.type === 'warning'));
+});
+
+test('sentinel observer: startup and ordinary refresh stay dormant even with failed runs', async t => {
+  const f = observerFixture(t, { state: 'failed' });
+  assert.equal(await f.observer.refresh(), null);
+  assert.equal(f.watchers.length, 0);
+  assert.equal(f.timers.size, 0);
+  assert.equal(f.repeats.size, 0);
+  assert.deepEqual(f.captures.widgets, []);
+  assert.deepEqual(f.captures.statuses, []);
+  assert.deepEqual(f.captures.notes, []);
+
+  await f.handler('status');
+  assert.ok(f.watchers.length > 0);
+  assert.equal(f.repeats.size, 1);
+  assert.match(lastWidget(f.captures).content.join('\n'), /assign-focus/);
+  assert.ok(f.captures.notes.some(item => item.type === 'warning'));
+
+  const dormant = observerFixture(t);
+  await dormant.observer.close();
+  assert.deepEqual(dormant.captures.widgets, []);
+  assert.deepEqual(dormant.captures.statuses, []);
+  assert.deepEqual(dormant.captures.notes, []);
+});
+
 test('sentinel observer: coalesced invalidation, missed-event reconciliation and clean disposal', async t => {
   const dir = sandbox(t);
   const { repo } = primary(dir, 'observer-repo');
@@ -472,7 +511,7 @@ test('sentinel observer: coalesced invalidation, missed-event reconciliation and
   t.after(() => observer.close());
   assert.deepEqual(registered.map(item => item.name), ['spec-sentinel']);
 
-  await observer.refresh();
+  await registered[0].spec.handler('status', context);
   assert.ok(watchers.length > 0);
   assert.deepEqual(watchers.filter(w => !w.closed).map(w => w.dir), [dirname(packagePath)], 'only the canonical .specs tree is watched');
   receipt(packagePath, { id: 'run-observer-1', assignment_id: 'assign-observer-1', state: 'running', started_at: new Date(Date.now() - 60000).toISOString() });
@@ -542,7 +581,7 @@ test('sentinel observer: coalesced invalidation, missed-event reconciliation and
 
 test('sentinel observer: repeated failures notify once and missing incident or action sources remain unknown', async t => {
   const f = observerFixture(t);
-  await f.observer.refresh();
+  await f.handler('status');
   const record = { package: f.packagePath, id: 'run-focus', assignment_id: 'assign-focus', workflow_id: 'wf-notice' };
   const recorder = createVerificationRecorder();
   const failure = id => recorder.observe(record, { type: 'tool_execution_end', toolName: 'spec_verify', toolCallId: id,
@@ -598,14 +637,14 @@ test('sentinel observer: repeated failures notify once and missing incident or a
 test('sentinel observer: off and close during pending reads never install disposed handles', async t => {
   // close() racing a pending read must not resurrect handles afterwards.
   const closing = observerFixture(t);
-  const closingRead = closing.observer.refresh();
+  const closingRead = closing.handler('status');
   closing.observer.close();
   await closingRead;
   assert.equal(closing.watchers.length, 0);
 
   // off() racing a pending read likewise leaves no live handles.
   const offing = observerFixture(t);
-  const offingRead = offing.observer.refresh();
+  const offingRead = offing.handler('status');
   await offing.handler('off');
   await offingRead;
   assert.equal(offing.watchers.length, 0);
@@ -621,7 +660,7 @@ test('sentinel observer: off and close during pending reads never install dispos
 
 test('sentinel observer: discovery preserves facts when a legacy enrollment becomes unreadable', async t => {
   const f = observerFixture(t);
-  await f.observer.refresh();
+  await f.handler('status');
   assert.match(lastWidget(f.captures).content[0], /1 run\(s\)/);
   assert.match(lastWidget(f.captures).content.join('\n'), /assign-focus/);
 
@@ -638,7 +677,7 @@ test('sentinel observer: discovery preserves facts when a legacy enrollment beco
 
 test('sentinel observer: indexed activity stays current when repository discovery becomes unavailable', async t => {
   const f = observerFixture(t);
-  await f.observer.refresh();
+  await f.handler('status');
   rmSync(f.enrollmentFile);
   writeFileSync(discoveryConfigPath(f.dir), JSON.stringify({ version: 1, root: join(f.dir, 'missing') }));
   const index = join(f.dir, 'spec-runtime');
@@ -654,7 +693,7 @@ test('sentinel observer: indexed activity stays current when repository discover
 test('sentinel observer: an external single run keeps details; only the natively displayed run collapses', async t => {
   let native = null;
   const f = observerFixture(t, { state: 'failed', nativeRun: () => native });
-  await f.observer.refresh();
+  await f.handler('status');
   // No native monitor is attached to a fresh coordinator: an enrolled external
   // failure stays fully visible in the persistent widget.
   const external = lastWidget(f.captures).content.join('\n');
@@ -675,7 +714,7 @@ test('sentinel observer: an external single run keeps details; only the natively
 
 test('sentinel observer: a watcher-cap exclusion is reported, not hidden', async t => {
   const f = observerFixture(t, { maxWatchers: 0 });
-  await f.observer.refresh();
+  await f.handler('status');
   assert.match(lastWidget(f.captures).content.join('\n'), /Watcher cap reached \(0 of \d+ directories\)/);
   assert.match(lastStatus(f.captures).text, /stale/);
 });

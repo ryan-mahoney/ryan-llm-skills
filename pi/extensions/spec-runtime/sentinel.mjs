@@ -30,6 +30,8 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
   nativeRun = null, maxWatchers = MAX_WATCHERS, enablePolicy = null, disablePolicy: disableAuthority = null }) {
   let closed = false;
   let hidden = false;
+  let active = false;
+  let displayed = false;
   let latest = null;
   let inFlight = null;
   let coalesced;
@@ -44,6 +46,8 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
   };
 
   const clearWidgets = () => {
+    if (!displayed) return;
+    displayed = false;
     try { context?.ui?.setWidget?.(SENTINEL_WIDGET_KEY, []); } catch { /* UI failure must not affect observation. */ }
     try { context?.ui?.setStatus?.(SENTINEL_WIDGET_KEY, ''); } catch { /* UI failure must not affect observation. */ }
   };
@@ -99,7 +103,7 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
   }
 
   function invalidate() {
-    if (closed || hidden || coalesced) return;
+    if (closed || !active || hidden || coalesced) return;
     // Coalesce repeated invalidation events into one bounded refresh.
     coalesced = setTimer(async () => {
       coalesced = undefined;
@@ -153,7 +157,7 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
   }
 
   async function run(force = false) {
-    if (closed) return latest;
+    if (closed || (!force && (!active || hidden))) return latest;
     if (inFlight) return inFlight;
     inFlight = (async () => {
       if (hidden && !force) return latest;
@@ -171,14 +175,14 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
           latest = { ...latest, roots, coverage: { ...latest.coverage, state: 'stale', omitted: null,
             reasons: [...new Set([...latest.coverage.reasons, ...enrollmentReasons(enrollmentErrors), ...discovery.reasons])] } };
           note = 'Repository discovery or enrollment unreadable; status reflects the last bounded read.';
-          if (!closed && !hidden) render();
+          if (!closed && active && !hidden) render();
           return latest;
         }
         latest = { ...retainMissingSummaries(snapshot), roots };
         note = null;
         // Lifecycle fence: off or close during the asynchronous reads must
         // never install handles or render into a hidden/disposed view.
-        if (!closed && !hidden) {
+        if (!closed && active && !hidden) {
           syncWatchers(snapshotTargets(latest));
           render();
           notifyConditions(latest);
@@ -187,7 +191,7 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
       } catch (error) {
         // Last known facts are kept; the failure becomes an explicit note.
         note = `Sentinel workspace unavailable: ${publicHint(error?.message ?? String(error))}`;
-        if (!closed && !hidden) render();
+        if (!closed && active && !hidden) render();
         return latest;
       } finally {
         inFlight = null;
@@ -197,7 +201,7 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
   }
 
   function render() {
-    if (closed || hidden || !context?.hasUI) return;
+    if (closed || !active || hidden || !context?.hasUI) return;
     try {
       // A failed read or watch keeps the last facts but displays stale coverage.
       const shown = note && latest ? { ...latest, coverage: { ...latest.coverage, state: 'stale' } } : latest;
@@ -212,6 +216,7 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
         lines.splice(1, 1);
       }
       if (note) lines.push(note);
+      displayed = true;
       context.ui.setWidget(SENTINEL_WIDGET_KEY, lines);
       context.ui.setStatus(SENTINEL_WIDGET_KEY,
         `sentinel ${shown?.coverage?.state ?? 'unknown'} · ${shown?.runs?.length ?? 0} run(s)`);
@@ -267,6 +272,7 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
         return;
       }
       if (!action || action === 'status') {
+        activate();
         const snapshot = await run(true);
         if (!snapshot) { notify(ctx, 'Sentinel workspace unavailable.', 'error'); return; }
         // Explicit status carries the retained-read uncertainty too, not only
@@ -279,6 +285,7 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
         if (!target) throw new Error(USAGE);
         const root = await saveDiscoveryRoot(agentDir, target);
         notify(ctx, `Sentinel will discover repositories beneath ${root}, including nested repositories.`, 'info');
+        activate();
         await run(true);
         return;
       }
@@ -287,12 +294,14 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
         if (!target) throw new Error(USAGE);
         const canonical = await enroll(target);
         notify(ctx, `Enrolled ${canonical.primary} for read-only observation. Enrollment only grants reads; it never starts, stops or messages workers.`, 'info');
+        activate();
         await run(true);
         return;
       }
       if (action === 'inspect') {
         const id = rest.join(' ');
         if (!id) throw new Error(USAGE);
+        activate();
         const snapshot = await run(true);
         const matched = snapshot?.runs?.find(item => item.assignment_id === id || item.workflow_id === id || item.package === id
           || item.package?.split('/').pop() === id
@@ -368,10 +377,15 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
     }
   }
 
-  if (context?.hasUI && !closed) {
-    reconcileTimer = repeat(() => run(false), SENTINEL_RECONCILE_MS);
-    reconcileTimer?.unref?.();
-    run(false);
+  // Registration is inert. Observation starts only after an explicit command,
+  // never from startup, reload, saved discovery settings or an ordinary refresh.
+  function activate() {
+    if (closed || hidden || active) return;
+    active = true;
+    if (context?.hasUI) {
+      reconcileTimer = repeat(() => run(false), SENTINEL_RECONCILE_MS);
+      reconcileTimer?.unref?.();
+    }
   }
 
   pi.registerCommand('spec-sentinel', {

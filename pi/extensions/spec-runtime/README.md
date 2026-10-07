@@ -233,7 +233,10 @@ The widget does not infer missing activity. No browser UI is involved.
 repositories: repository common directory, canonical package, checkout, workflow
 id, assignment id, coordinator session, execution state, obligation, activity hint,
 coverage and factual conditions such as `reconciliation-pending` or `quiet-activity`.
-It is also the default when the command has no argument.
+It is also the default when the command has no argument. Startup and reload are
+silent and dormant: no scans, watchers, timers or sentinel UI until an explicit
+`status`, `root`, `add` or `inspect` command. Activation is never restored from settings.
+After `off`, explicit status/inspect reads remain available without restarting watchers.
 
 Repositories are discovered beneath `~/Documents`, including grouped and nested
 repositories. No registration is required. `/spec-sentinel root ~/Projects` saves a
@@ -247,7 +250,9 @@ following disabled; repository roots and source trees are not watched. Discovery
 reads directory metadata, skips hidden/dependency/build/cache folders and symlinks, and
 has caps of eight levels, 2,000 directories, 20,000 entries and a two-second cooperative
 budget. Limits and unreadable paths remain explicit coverage gaps. Canonical validation
-still rejects linked-worktree spec copies. Discovery grants no intervention authority.
+still rejects linked-worktree spec copies. Repository identity queries are asynchronous,
+time-limited and shared across sibling packages within each refresh to avoid blocking
+Pi's main thread with repeated synchronous Git calls. Discovery grants no intervention authority.
 
 The widget shows the workspace rows; when a single run is observed it collapses to
 the header line because that run's own widget already shows it. `/spec-sentinel

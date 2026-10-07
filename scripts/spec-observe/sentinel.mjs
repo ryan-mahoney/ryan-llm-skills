@@ -7,12 +7,11 @@
 
 import { createHash } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
-import { open, opendir, lstat, realpath } from 'node:fs/promises';
+import { open, opendir, lstat, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { execFile } from 'node:child_process';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
-import { canonicalPackage } from '../../pi/extensions/spec-runtime/runtime.mjs';
 import { publicHint } from '../../pi/extensions/spec-runtime/monitor.mjs';
 import { discoverManaged } from './core.mjs';
 
@@ -371,6 +370,26 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
     knownOmitted += enrolled.length - SENTINEL_LIMITS.roots;
   }
 
+  // Keep observation off the host's synchronous Git path. Cache repository
+  // identity only for this read, so sibling packages and duplicate index entries
+  // share one bounded query without hiding repository changes on later reads.
+  const identities = new Map();
+  const canonicalPackage = async path => {
+    const target = await realpath(path);
+    const packagePath = (await stat(target)).isFile() && basename(target) === 'spec.md' ? dirname(target) : target;
+    if (!(await stat(packagePath)).isDirectory()) throw new Error('package must be a feature directory or its spec.md');
+    const specs = dirname(packagePath);
+    if (basename(specs) !== '.specs') throw new Error('package must be a direct child of the primary checkout .specs directory');
+    const primary = await realpath(dirname(specs));
+    if (!identities.has(primary)) {
+      const found = await gitCommonDir(primary);
+      identities.set(primary, found ? await realpath(found).catch(() => null) : null);
+    }
+    const common = identities.get(primary);
+    if (common !== join(primary, '.git')) throw new Error('package must belong to the primary checkout, not a linked worktree; Git identity may be unavailable');
+    return { packagePath, primary, common };
+  };
+
   const facts = new Map();
   const addPackage = canonical => {
     let fact = facts.get(canonical.packagePath);
@@ -383,7 +402,7 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
 
   for (const requested of Array.isArray(packages) ? packages : []) {
     if (typeof requested !== 'string') continue;
-    try { addPackage(canonicalPackage(requested)); }
+    try { addPackage(await canonicalPackage(requested)); }
     catch (error) { reasons.push(`package-noncanonical: ${resolve(requested)} (${messageOf(error)})`); }
   }
 
@@ -409,7 +428,7 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
   for (const pointer of managed.runs) {
     // A pointer only names a package to observe; it never becomes a run row.
     // A noncanonical pointer is reported and dropped.
-    try { addPackage(canonicalPackage(pointer.package)); }
+    try { addPackage(await canonicalPackage(pointer.package)); }
     catch (error) {
       reasons.push(`index-entry-invalid: ${pointer.run_id} (${messageOf(error)})`);
     }
@@ -435,7 +454,7 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
     }
     for (const entry of listed.entries) {
       const child = join(specs, entry.name);
-      try { addPackage(canonicalPackage(child)); }
+      try { addPackage(await canonicalPackage(child)); }
       catch (error) {
         // A throw (including linked-worktree rejection) is a fact, never a package.
         reasons.push(`package-noncanonical: ${child} (${messageOf(error)})`);
