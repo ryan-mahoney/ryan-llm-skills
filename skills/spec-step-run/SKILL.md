@@ -149,6 +149,13 @@ copy prototype-only fixtures, dependencies, shell UI, or fake data wiring.
   plausibly needed for a coherent outcome.
 - Preserve unrelated working code and user changes.
 - Follow repository conventions and use the prepared edit sequence when it still fits.
+- For changes to shared helpers, test fixtures, or process owners, apply the shared
+  caller/safety contract in the Reuse section of
+  [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
+  Inspect nearest real callers and relevant modes before changing their contract or
+  adding a lower-level path; pass the existing owner and required protection in the
+  editor's `Edits`/`Preserve` packet. Reuse representative unaffected-path evidence,
+  closing concrete gaps with focused checks after coherent edits, not per edit.
 - Reuse before writing: stop at the highest rung of the necessity ladder that holds
   (`~/.agents/rules/minimal-implementation.md`). Prefer the shortest working diff
   consistent with the spec; add no abstraction the spec does not require. Before
@@ -192,6 +199,13 @@ establishes reachability; add a bounded smoke check only for missing runtime evi
 An internal fake or manually constructed, unwired component cannot establish a claimed
 production path. Library-only steps may exercise their public entrypoint; a named later
 integration owner is valid when the current objective does not promise runtime wiring.
+
+For expensive journeys or runtime checks with fixture/setup dependencies, apply
+[Verification fixtures and journey readiness](references/verification-fixtures.md).
+Reuse the repository's real lifecycle/configuration and establish the required seeded
+application state with a bounded assertion before full interaction. Diagnose the first
+failing boundary; do not repeat an unchanged full journey for the same setup failure.
+This is targeted verification scheduling, not a prerequisite for every simple test.
 
 Stop when the assigned checks pass and known relevant gaps are resolved. Do not rerun
 passing checks without an affected change or named uncertainty, or add another harness

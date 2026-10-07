@@ -34,7 +34,12 @@ another writer and notifies the coordinator.
    screenshot requirement; do not classify it as a generic browser screenshot fallback.
 3. Reuse the repository's Playwright configuration and fixture helpers. Run only an affected
    automated journey when the changed behavior needs browser evidence; do not launch the full
-   suite for a capture. Use direct browser interaction and capture for capabilities that improve
+   suite for a capture. For an expensive journey with setup or live-state dependencies,
+   apply [Verification fixtures and journey readiness](verification-fixtures.md): reuse
+   the real fixture lifecycle, establish bounded application/worker readiness, and
+   diagnose the first failing boundary before repeating the journey. The managed server's
+   HTTP readiness alone does not establish the required live UI state.
+   Use direct browser interaction and capture for capabilities that improve
    the observation: existing authentication or data fixtures, and
    interaction-driven states that `uishot` cannot create directly, such as hover, drag,
    form entry, or opening a transient surface. When those helpers can establish a stable

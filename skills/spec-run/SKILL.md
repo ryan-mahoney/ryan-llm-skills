@@ -140,7 +140,11 @@ commits and acceptance evidence still apply; a filename alone does not prove com
 Resume interrupted/checkpoint work when its gap is still owned by that step, or carry
 the explicit later-owner handoff forward. Do not replay completed steps or reviews.
 
-For each remaining assigned step in ascending order:
+Normally select remaining assigned steps in ascending order. Before dispatch, use their prepared dependency boundaries and current producer evidence to determine which are executable. When a known outside dependency blocks the earliest step's implementation or required gate, preserve that step's ID, learning/checkpoint, acceptance obligations, and blocked/pending evidence; select only an already prepared independent step whose contracts and proof do not rely on the missing producer. Pass that exact canonical card to dispatch instead of relying on startup's first-unfinished selection. Do not renumber steps, re-plan a speculative dependency graph, overlap writers, or expand this package to build the outside producer.
+
+Record the missing contract/capability, authoritative producer, availability evidence needed, blocked gates, and next reconciliation action in the existing ledger/learning. An unchanged pending prerequisite remains blocked; neither elapsed time nor another worker's exit establishes it. Do not repeat a knowingly impossible gate or use a fabricated mock/adapter as proof of an unavailable real transport. Reconcile new authoritative producer evidence before returning to dependent work. When no prepared independent work remains, report the concrete blocker and required external evidence without claiming completion.
+
+For each selected executable step:
 
 1. Wait for the prior implementation assignment and its editor to finish. Run completed
    review fixes before assigning the next step; never overlap writers.
@@ -232,6 +236,19 @@ review skill's legacy format on resumed runs. Do not copy findings into prompts.
 
 **Fix between steps.** The fix owner applies Jev review-triage once to each actionable
 findings set before deciding repairs; the coordinator does not duplicate that call.
+Select the fix model for each reviewed step before launching its fixer. An explicit
+user fix-model override takes precedence; otherwise use that step's recorded effective
+owner selector, including any strong-owner selection, promotion, or per-step pin.
+Use the owner of the corresponding reviewed step, not the currently running step,
+editor, reviewer, or coordinator. Record the exact selector and its source in the
+existing ledger and pass it explicitly on every fixer launch, retry, and resume.
+Preserve all provider/model segments and the thinking suffix exactly; never shorten
+or reconstruct a selector from a model basename. If the recorded owner is missing,
+resolve it from that step's dispatch receipt or existing assignment before launching;
+if it cannot be resolved, report the missing assignment instead of inheriting a default.
+Fixers do not use cheap-first escalation, model inventory probes, or automatic fallback.
+An unavailable selected model is a launch/configuration error; preserve the assignment
+and diagnose it under the existing setup-error policy.
 Before dispatching the next step, take each completed step review
 with `verdict: needs-fix` and no `step-<NNN>-fix.md`, oldest first. Run
 `spec-branch-fix review=<spec-dir>/reviews/step-<NNN>-review.md` and wait for it to
@@ -263,8 +280,11 @@ an explicit checkout `cwd`, and the provider extension available. Never use the 
 read-only `worker` for a fixer. The known profile retains edit/write and apply_patch;
 do not probe it before each launch. A missing tool reported at runtime is a launch
 error, not authority to switch the assigned model. Pass the role's
-assigned model as `model` (`provider/id[:thinking]`); otherwise the agent default
-applies. Give reviews `timeoutMs: 2700000`. Give fixers the step-worker budget and
+assigned model as `model` (`provider/model[:thinking]`, preserving any additional
+provider/model segments). Every fixer launch must include `model` with the selector
+chosen above; omission would inherit an unrelated agent or coordinator default and
+is a launch configuration defect. Keep reviewer and fixer sessions separate even
+when their assigned model selectors match. Give reviews `timeoutMs: 2700000`. Give fixers the step-worker budget and
 `checkpointBeforeDeadlineMs`. Don't call `bg_wait` for reviewers, because Pi wakes the
 parent when a child completes. After a resume, check
 `subagent({ action: "status" })` against the ledger's run IDs before relaunching.

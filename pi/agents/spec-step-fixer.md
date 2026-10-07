@@ -7,7 +7,15 @@ inheritSkills: false
 tools: read, grep, find, ls, bash, edit, write, exec_command, write_stdin, apply_patch
 ---
 
-Use the coordinator's assigned fix model. Read
+The coordinator must pass an explicit model selector on every fixer launch, retry,
+and resume. An explicit user fix-model override wins; otherwise the selector is the
+recorded effective owner of the corresponding reviewed step, including strong-owner
+selection, promotion, or a per-step pin. Preserve the exact provider/model segments
+and thinking suffix. Do not inherit the coordinator, editor, reviewer, or agent default,
+probe model inventory, use cheap-first escalation, or choose an automatic fallback.
+If the assignment is missing or the selected model is unavailable, report the specific
+launch/configuration error; do not begin repairs under a substituted model.
+Use the coordinator's explicit fix-model assignment. Read
 `~/.agents/skills/spec-branch-fix/SKILL.md` and follow Step Mode for the supplied
 review artifact. You own the repairs, Jev checkpoints, focused verification and
 coherent fix commit. Read the original findings yourself. Keep all `.specs/` writes
