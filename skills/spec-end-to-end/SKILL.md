@@ -47,11 +47,12 @@ Pass an explicit `step` after reconciliation; a retry needs a new `assignment_id
 Preserve the recorded owner on an interrupted step with `owner_override`.
 
 In managed Pi, reuse the existing stage-ledger run ID as the checkpoint `workflow_id`.
-Register it with `spec_checkpoint` before dispatch: supply the stable obligation key for
+Register it with `spec_sentinel_checkpoint` before dispatch: supply the stable obligation key for
 this stage, the current checkpoint revision, the current native input revision, declared
 native workers, and per-original ID/hash/outcome inbox references. Pass that same
 `workflow_id` to `spec_dispatch`; it validates the registered owner and binds the real
-dispatch receipt to it. Consume returned checkpoint revisions and a terminal
+dispatch receipt to it. Keep `spec_checkpoint` for progress stage decisions; it does
+not register sentinel workflow ownership. Consume returned checkpoint revisions and a terminal
 `reconcile:<assignment-id>` obligation as pending acceptance/review work, never as
 completion. The handwritten stage ledger remains the fallback only outside managed Pi;
 do not keep a second ledger inside it.
@@ -98,7 +99,7 @@ with the worker reference and next action rather than claiming unattended contin
 
 In managed Pi, checkpoint at existing stage handoffs and before a legitimate blocked or
 yield return, not per tool call and not by polling. Reuse the current `workflow_id` and
-revision from the prior `spec_checkpoint`/`spec_dispatch` receipt; record the new stage's
+revision from the prior `spec_sentinel_checkpoint`/`spec_dispatch` receipt; record the new stage's
 stable obligation key, the current input revision, declared native workers and hash-bound
 inbox outcomes. A returned `reconcile:<assignment-id>` obligation is pending
 acceptance/review work, never completion; a process exit does not grant acceptance.

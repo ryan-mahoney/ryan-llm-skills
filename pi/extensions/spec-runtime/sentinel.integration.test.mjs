@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { createSentinelObserver, SENTINEL_COALESCE_MS, SENTINEL_RECONCILE_MS, SENTINEL_WIDGET_KEY, readCheckpointRecord, recordCheckpoint, createSentinelAuthority, activatePolicy, createDiagnosisController, readDiagnosisAttempt, disablePolicy, reserveIntent, finishIntent, considerCancellation, writeVerificationIncidents, buildDiagnosisPacket, readPolicyGuard, readInboxGuard, checkpointPath } from './sentinel.mjs';
+import { createSentinelObserver, createVerificationRecorder, SENTINEL_COALESCE_MS, SENTINEL_RECONCILE_MS, SENTINEL_WIDGET_KEY, readCheckpointRecord, recordCheckpoint, createSentinelAuthority, activatePolicy, createDiagnosisController, readDiagnosisAttempt, disablePolicy, reserveIntent, finishIntent, considerCancellation, writeVerificationIncidents, buildDiagnosisPacket, readPolicyGuard, readInboxGuard, checkpointPath } from './sentinel.mjs';
 import { canonicalPackage } from './runtime.mjs';
 import { collectFacts } from '../../../scripts/jev/core.mjs';
 import { enrollmentDirectory, workspaceKey } from '../../../scripts/spec-observe/sentinel.mjs';
@@ -312,15 +312,15 @@ async function loadExtension(t, { dir, role, recordFile, providerFactory = scrip
     sessionManager,
     tools: [],
   });
+  t.after(async () => {
+    // Native session disposal disconnects the agent, but does not emit shutdown.
+    // Exercise the host lifecycle so progress watchers and runtime handles close,
+    // including when setup or an assertion fails after a dispatch.
+    try { await session.extensionRunner.emit({ type: 'session_shutdown', reason: 'quit' }); }
+    finally { session.dispose(); }
+  });
   await session.bindExtensions({ uiContext: captured.ui, mode: 'rpc', onError: error => errors.push(error) });
   await session.setModel(modelRuntime.getModel('sentinel-fixture', 'scripted'));
-  if (role) t.after(() => session.dispose());
-  else t.after(async () => {
-    // Always dispose observer handles first, or the open reconcile timer keeps
-    // the test process alive past its deadline.
-    try { await session.prompt('/spec-sentinel off'); } catch { /* Observer may already be absent. */ }
-    session.dispose();
-  });
   return { session, sessionManager, loader, captured, requests, errors, modelRuntime, settingsManager };
 }
 
@@ -514,6 +514,61 @@ test('sentinel observer: coalesced invalidation, missed-event reconciliation and
   observer.close();
 });
 
+test('sentinel observer: repeated failures notify once and missing incident or action sources remain unknown', async t => {
+  const f = observerFixture(t);
+  await f.observer.refresh();
+  const record = { package: f.packagePath, id: 'run-focus', assignment_id: 'assign-focus', workflow_id: 'wf-notice' };
+  const recorder = createVerificationRecorder();
+  const failure = id => recorder.observe(record, { type: 'tool_execution_end', toolName: 'spec_verify', toolCallId: id,
+    result: { details: { exit_code: 1, sentinel_failure: { version: 1, command_sha256: 'a'.repeat(64),
+      summary_sha256: 'b'.repeat(64), tree_digest: 'c'.repeat(64), complete: true, exit_code: 1 } } } });
+  for (const id of ['one', 'two', 'three']) failure(id);
+  const directory = join(f.packagePath, 'runtime', 'sentinel', 'wf-notice');
+  const incidentPath = join(directory, 'verification-incidents.json');
+  const incidentText = readFileSync(incidentPath, 'utf8');
+  writeFileSync(join(directory, 'checkpoint.json'), JSON.stringify({ package: f.packagePath,
+    obligation: { summary: 'Reconcile the owner result' }, workers: [{ id: 'assign-focus' }] }));
+  const actionPath = join(directory, 'intents', 'action-one.json');
+  mkdirSync(dirname(actionPath), { recursive: true });
+  writeFileSync(actionPath, JSON.stringify({ version: 1, id: 'action-one', package: f.packagePath, workflow_id: 'wf-notice',
+    kind: 'cancel', subject_key: 'incident-one', state: 'applied', reason_code: 'cancelled' }));
+  const open = await f.observer.refresh();
+  assert.equal(open.runs[0].conditions.find(item => item.kind === 'repeated-verification-failure').state, 'open');
+  const warnings = () => f.captures.notes.filter(item => item.type === 'warning');
+  assert.equal(warnings().length, 1);
+  assert.match(warnings()[0].message, /Repeated verification failures/);
+  const activityDir = join(f.packagePath, 'runtime', 'runs', 'run-focus-activity');
+  mkdirSync(activityDir);
+  writeFileSync(join(activityDir, 'owner.json'), JSON.stringify({ run_id: 'run-focus', hint: 'Reading source' }));
+  await f.observer.refresh();
+  assert.equal(warnings().length, 1, 'activity changes do not repeat the incident notice');
+
+  unlinkSync(incidentPath);
+  unlinkSync(actionPath);
+  const missing = await f.observer.refresh();
+  assert.equal(missing.coverage.state, 'partial');
+  assert.equal(missing.runs[0].conditions.find(item => item.kind === 'repeated-verification-failure').state, 'unknown');
+  assert.equal(missing.runs[0].conditions.find(item => item.kind === 'action-outcome-unknown').state, 'unknown');
+  assert.equal(missing.runs[0].actions[0].state, 'unknown');
+  writeFileSync(incidentPath, incidentText);
+  await f.observer.refresh();
+  assert.equal(warnings().length, 1, 'source loss and recovery do not reannounce the same incident');
+
+  recorder.observe(record, { type: 'tool_execution_end', toolName: 'spec_verify', toolCallId: 'success', result: { details: { exit_code: 0 } } });
+  const resolved = await f.observer.refresh();
+  assert.equal(resolved.runs[0].conditions.find(item => item.kind === 'repeated-verification-failure').state, 'resolved');
+  for (const id of ['four', 'five', 'six']) failure(id);
+  await f.observer.refresh();
+  assert.equal(warnings().length, 2, 'a new incident generation is announced');
+  receipt(f.packagePath, { id: 'run-focus', assignment_id: 'assign-focus', state: 'failed' });
+  await f.observer.refresh();
+  await f.observer.refresh();
+  assert.equal(warnings().length, 3, 'execution failure is announced only once');
+  f.observer.close();
+  await f.observer.refresh();
+  assert.equal(warnings().length, 3, 'closed observers never announce');
+});
+
 test('sentinel observer: off and close during pending reads never install disposed handles', async t => {
   // close() racing a pending read must not resurrect handles afterwards.
   const closing = observerFixture(t);
@@ -669,7 +724,9 @@ test('sentinel checkpoint: sentinel role worker load has no checkpoint tool and 
   assert.match(note.message, /coverage complete/);
   const commands = coordinator.loader.getExtensions().extensions.flatMap(extension => [...extension.commands.keys()]);
   assert.ok(commands.includes('spec-sentinel'));
-  assert.deepEqual(coordinator.loader.getExtensions().extensions.flatMap(extension => [...extension.tools.keys()]).filter(name => /sentinel/i.test(name)), []);
+  // Observe-only means no control/authority tools; the checkpoint recorder is a
+  // coordinator-only journal tool and grants no recovery authority.
+  assert.deepEqual(coordinator.loader.getExtensions().extensions.flatMap(extension => [...extension.tools.keys()]).filter(name => /sentinel/i.test(name) && name !== 'spec_sentinel_checkpoint'), []);
   assert.equal(coordinator.requests.length, 0);
 });
 
@@ -680,7 +737,8 @@ test('sentinel checkpoint: the actual coordinator tool registers and refuses a s
   const canonical = canonicalPackage(packagePath);
   const { loader } = await loadExtension(t, { dir });
   const tools = new Map(loader.getExtensions().extensions.flatMap(extension => [...extension.tools.entries()]));
-  assert.ok(tools.has('spec_sentinel_checkpoint'), 'coordinator registers spec_checkpoint');
+  assert.ok(tools.has('spec_checkpoint'), 'coordinator retains the progress checkpoint tool');
+  assert.ok(tools.has('spec_sentinel_checkpoint'), 'coordinator registers the distinct sentinel checkpoint tool');
   // Identity is read from the live session manager, never the model arguments.
   const ctx = { sessionManager: { getSessionFile: () => join(dir, 'sessions', 'coord.jsonl'), getSessionId: () => 'coord-session' } };
   const checkpoint = tools.get('spec_sentinel_checkpoint');
@@ -770,7 +828,7 @@ test('sentinel checkpoint: successive dispatches under one workflow bind sequent
   const { loader } = await loadExtension(t, { dir });
   const tools = new Map(loader.getExtensions().extensions.flatMap(extension => [...extension.tools.entries()]));
   const ctx = { sessionManager: { getSessionFile: () => join(dir, 'sessions', 'coord.jsonl'), getSessionId: () => 'coord-session' } };
-  await tools.get('spec_checkpoint').definition.execute('call-0', { package: canonical.packagePath, workflow_id: 'wf-seq',
+  await tools.get('spec_sentinel_checkpoint').definition.execute('call-0', { package: canonical.packagePath, workflow_id: 'wf-seq',
     expected_revision: 0, state: 'ready', obligation: { key: 'impl:step-001', stage: 'implementation', summary: 'work', artifacts: [] },
     workers: [], inbox: { items: [] }, reconciles_input_revision: 0 }, undefined, undefined, ctx);
 
@@ -831,7 +889,7 @@ test('sentinel checkpoint: successive dispatches under one workflow bind sequent
   assert.deepEqual(after.workers.find(worker => worker.id === 'run-seq-c'), { id: 'run-seq-c', kind: 'owner', state: 'working' });
 });
 
-test('sentinel checkpoint: an unregistered workflow is refused before any dispatch mutation', { skip: sdkSkip, timeout: 60000 }, async t => {
+test('sentinel checkpoint: progress checkpoint does not register sentinel workflow ownership', { skip: sdkSkip, timeout: 60000 }, async t => {
   const dir = sandbox(t);
   const { repo } = primary(dir, 'unregistered-repo');
   commit(repo);
@@ -840,13 +898,25 @@ test('sentinel checkpoint: an unregistered workflow is refused before any dispat
   const { loader } = await loadExtension(t, { dir });
   const tools = new Map(loader.getExtensions().extensions.flatMap(extension => [...extension.tools.entries()]));
   const ctx = { sessionManager: { getSessionFile: () => join(dir, 'sessions', 'coord.jsonl'), getSessionId: () => 'coord-session' } };
-  // No spec_sentinel_checkpoint registration exists: dispatch must refuse before it can
-  // create a run directory, lease, assignment record or worktree.
+  writeFileSync(join(packagePath, 'spec.md'), '# Isolated progress fixture\n');
+  const progress = await tools.get('spec_checkpoint').definition.execute('call-progress', {
+    package: canonical.packagePath, stage: 'implementation', status: 'running',
+    next: 'register sentinel workflow before dispatch', decisions: [], artifacts: [],
+  });
+  assert.equal(progress.isError, false, JSON.stringify(progress.details));
+  assert.equal(progress.details.stage, 'implementation');
+  assert.ok(existsSync(join(packagePath, 'runtime', 'stages', 'implementation.json')));
+  assert.equal(readCheckpointRecord(canonical.packagePath, 'wf-unregistered'), null);
+  // Progress stage decisions do not register sentinel ownership: dispatch must
+  // refuse before it creates a run, lease, assignment record or worktree.
   const refused = await tools.get('spec_dispatch').definition.execute('call-1', { action: 'startup', package: canonical.packagePath,
     workflow_id: 'wf-unregistered' }, undefined, undefined, ctx);
   assert.equal(refused.isError, true);
   assert.match(refused.details.error, /no registered checkpoint/);
-  assert.equal(existsSync(join(packagePath, 'runtime')), false);
+  assert.match(refused.details.next, /spec_sentinel_checkpoint/);
+  assert.equal(existsSync(join(packagePath, 'runtime', 'runs')), false);
+  assert.equal(existsSync(join(packagePath, 'runtime', 'assignments')), false);
+  assert.equal(existsSync(join(packagePath, 'runtime', 'sentinel')), false);
 });
 
 test('sentinel checkpoint: workflow dispatch refuses an unreconciled native input revision before runtime', { skip: sdkSkip, timeout: 60000 }, async t => {
@@ -1053,7 +1123,7 @@ test('sentinel policy: disable and off revoke at command entry behind pending wo
 
 // The native SDK boundary fixture: real extension hook, deterministic provider,
 // canonical checkpoint/grant paths. The decisive ready checkpoint is reconciled
-// through the registered production spec_checkpoint tool at native input revision
+// through the registered production spec_sentinel_checkpoint tool at native input revision
 // 0, and all model prompts use {source:'extension'} so the native input guard
 // stays exactly reconciled.
 async function continuationFixture(t, { mode = 'recover', actions = ['continue'], factories = [] } = {}) {
@@ -1081,7 +1151,7 @@ async function continuationFixture(t, { mode = 'recover', actions = ['continue']
   // The decisive ready checkpoint comes through the registered production tool,
   // not a direct fixture write (the earlier record is checkout prebinding only).
   const tools = new Map(run.loader.getExtensions().extensions.flatMap(extension => [...extension.tools.entries()]));
-  const checkpointTool = tools.get('spec_checkpoint');
+  const checkpointTool = tools.get('spec_sentinel_checkpoint');
   assert.ok(checkpointTool, 'the production checkpoint tool is registered');
   const ctx = { sessionManager: manager };
   const created = await checkpointTool.definition.execute('call-checkpoint-1', { package: canonical.packagePath,
@@ -1755,7 +1825,7 @@ async function armComposition(t, mode) {
   const ctx = { sessionManager: manager };
   const assignmentId = 'assign-composition';
   const workflowId = 'wf-composition';
-  const created = await tools.get('spec_checkpoint').definition.execute('c-checkpoint-1', {
+  const created = await tools.get('spec_sentinel_checkpoint').definition.execute('c-checkpoint-1', {
     package: fake.packagePath, workflow_id: workflowId, expected_revision: 0, state: 'ready',
     obligation: { key: 'impl:step-008', stage: 'implementation', summary: 'cancel', artifacts: [] },
     workers: [], inbox: { items: [] }, reconciles_input_revision: 0 }, undefined, undefined, ctx);
@@ -1793,7 +1863,15 @@ test('sentinel cancellation: confirmed cancellation of a diagnosed spinning disp
     f = await armComposition(t, 'recover');
     const cancelled = await waitForValue(() => { const record = readRunFile(f.fake.packagePath, f.runId); return record.state === 'cancelled' ? record : null; }, 6000);
     assert.ok(cancelled, `no cancellation within 6s: ${f ? compositionDiagnostic(f.fake, f.workflowId, f.runId, f.incidentId) : 'fixture not armed'}`);
-    const intent = readIntentFile(f.fake.packagePath, f.workflowId, cancelIntentId(f.workflowId, f.incidentId));
+    // The runtime writes cancelled before the asynchronous sentinel adapter
+    // publishes its final receipt. Observe that receipt rather than racing it.
+    const intent = await waitForValue(() => {
+      try {
+        const current = readIntentFile(f.fake.packagePath, f.workflowId, cancelIntentId(f.workflowId, f.incidentId));
+        return current.state !== 'requested' && current.state !== 'reserved' ? current : null;
+      } catch { return null; }
+    }, 6000);
+    assert.ok(intent, `no final cancellation receipt within 6s: ${compositionDiagnostic(f.fake, f.workflowId, f.runId, f.incidentId)}`);
     assert.equal(intent.state, 'applied');
     assert.equal(intent.reason_code, 'cancelled');
     assert.equal(cancelled.lock && existsSync(cancelled.lock), false, 'the lease is released only after confirmed cancellation');

@@ -407,3 +407,90 @@ test('enrollment read failures project into workspace coverage, never healthy em
   assert.deepEqual(enrollmentReasons([{ path: '/a', code: 'ENROLLMENT_CAP' }, { path: '/a', code: 'ENROLLMENT_CAP' }]),
     ['enrollment-cap: /a (ENROLLMENT_CAP)']);
 });
+
+test('metadata-heavy checkpoints cannot exceed the shared reconciliation byte ceiling', async t => {
+  const f = sandbox(t);
+  const repo = primary(f.dir, 'metadata-budget');
+  const packagePath = pack(repo);
+  receipt(packagePath, { id: 'one', state: 'running' });
+  for (let index = 0; index < 80; index++) {
+    const dir = join(packagePath, 'runtime', 'sentinel', `workflow-${index}`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'checkpoint.json'), JSON.stringify({ package: packagePath, workers: [], padding: 'x'.repeat(60000) }));
+  }
+  const snapshot = await collectWorkspace({ roots: [repo], indexDir: f.indexDir, now });
+  assert.ok(snapshot.coverage.bytes_read <= SENTINEL_LIMITS.totalBytes);
+  assert.equal(snapshot.coverage.state, 'partial');
+  assert.ok(snapshot.coverage.reasons.some(reason => reason.startsWith('read-budget:')));
+});
+
+test('external activity ancestor symlinks remain unknown instead of importing foreign hints', async t => {
+  const f = sandbox(t);
+  const repo = primary(f.dir, 'activity-ancestor');
+  const packagePath = pack(repo);
+  receipt(packagePath, { id: 'one', state: 'running' });
+  const foreign = join(f.dir, 'foreign');
+  mkdirSync(foreign);
+  writeFileSync(join(foreign, 'owner.json'), JSON.stringify({ run_id: 'one', hint: 'FOREIGN SOURCE' }));
+  symlinkSync(foreign, join(packagePath, 'runtime', 'runs', 'one-activity'));
+  const snapshot = await collectWorkspace({ roots: [repo], indexDir: f.indexDir, now });
+  assert.equal(snapshot.runs[0].activity, null);
+  assert.equal(snapshot.coverage.state, 'partial');
+  assert.equal(condition(snapshot.runs[0], 'activity-unreadable').state, 'unknown');
+  assert.ok(!renderWorkspace(snapshot).join('\n').includes('FOREIGN SOURCE'));
+});
+
+test('production retained incidents and action outcomes appear as bounded source-backed conditions', async t => {
+  const { createVerificationRecorder } = await import('../../pi/extensions/spec-runtime/sentinel.mjs');
+  const f = sandbox(t);
+  const repo = primary(f.dir, 'incident-facts');
+  const packagePath = pack(repo);
+  const workflow = 'workflow-one';
+  const assignment = join(packagePath, 'step-1-subspec.md');
+  receipt(packagePath, { id: 'one', assignment_id: assignment, state: 'running' });
+  const options = { roots: [repo], indexDir: f.indexDir, now };
+  const before = await collectWorkspace(options);
+  const recorder = createVerificationRecorder({ now });
+  const record = { id: 'one', assignment_id: assignment, package: packagePath, workflow_id: workflow };
+  for (let index = 1; index <= 3; index++) recorder.observe(record, {
+    type: 'tool_execution_end', toolName: 'spec_verify', toolCallId: `call-${index}`,
+    result: { details: { exit_code: 1, sentinel_failure: { version: 1, complete: true,
+      command_sha256: 'a'.repeat(64), summary_sha256: 'b'.repeat(64), tree_digest: 'c'.repeat(64), exit_code: 1 } } },
+  });
+  const dir = join(packagePath, 'runtime', 'sentinel', workflow);
+  writeFileSync(join(dir, 'checkpoint.json'), JSON.stringify({ package: packagePath, workers: [{ id: 'one' }] }));
+  mkdirSync(join(dir, 'intents'));
+  const actionFile = join(dir, 'intents', 'intent-one.json');
+  writeFileSync(actionFile, JSON.stringify({ version: 1, id: 'intent-one', package: packagePath,
+    workflow_id: workflow, kind: 'cancel', subject_key: 'PRIVATE SUBJECT / spaces', state: 'unknown', reason_code: 'receipt-unpersisted',
+    result_reference: 'PRIVATE TEXT MUST NOT APPEAR' }));
+  const after = await collectWorkspace(options);
+  const run = after.runs[0];
+  assert.equal(condition(before.runs[0], 'repeated-verification-failure'), undefined);
+  assert.equal(run.incidents[0].count, 3);
+  assert.equal(condition(run, 'repeated-verification-failure').state, 'open');
+  assert.equal(condition(run, 'repeated-verification-failure').severity, 'attention');
+  assert.equal(condition(run, 'action-outcome-unknown').state, 'unknown');
+  assert.equal(condition(run, 'action-outcome-unknown').action_id, 'intent-one');
+  assert.equal(run.incidents[0].assignment_id, assignment);
+  assert.ok(!JSON.stringify(after).includes('PRIVATE SUBJECT'));
+  const retainedUnknown = reduceConditions({ ...after, runs: [{ ...run, incidents: [{ ...run.incidents[0], state: 'unknown' }] }] });
+  assert.equal(condition(retainedUnknown.runs[0], 'repeated-verification-failure').state, 'unknown');
+  assert.equal(condition(retainedUnknown.runs[0], 'repeated-verification-failure').severity, 'attention');
+  assert.ok(renderWorkspace({ ...after, runs: [{ ...run, actions: [
+    { id: 'applied', kind: 'cancel', state: 'applied' }, { id: 'shadow', kind: 'continue', state: 'blocked' },
+  ] }] }).join('\n').includes('actions: cancel [applied] · continue [blocked]'));
+  assert.ok(run.source_paths.includes(actionFile));
+  assert.equal(run.source_paths.length, run.source_hashes.length);
+  assert.ok(!JSON.stringify(after).includes('PRIVATE TEXT'));
+  assert.deepEqual(reduceConditions(after), after);
+  // Actual retained success resolves; mere absence or corrupt data cannot do so.
+  recorder.observe(record, { type: 'tool_execution_end', toolName: 'spec_verify', toolCallId: 'success', result: { details: { exit_code: 0 } } });
+  const resolved = await collectWorkspace(options);
+  assert.equal(condition(resolved.runs[0], 'repeated-verification-failure').state, 'resolved');
+  assert.equal(condition(resolved.runs[0], 'repeated-verification-failure').id, condition(run, 'repeated-verification-failure').id);
+  writeFileSync(join(dir, 'verification-incidents.json'), '{bad');
+  const invalid = await collectWorkspace(options);
+  assert.equal(invalid.coverage.state, 'partial');
+  assert.equal(condition(invalid.runs[0], 'repeated-verification-failure'), undefined);
+});

@@ -165,7 +165,7 @@ For each remaining assigned step in ascending order:
 
 In managed Pi, checkpoint at the existing dispatch, completion, review, fix and
 publication handoffs, not per tool call and not by polling. Reuse the run ID as the
-`workflow_id`: `spec_checkpoint` records the stable implementation/review/fix/publish
+`workflow_id`: `spec_sentinel_checkpoint` records the stable implementation/review/fix/publish
 obligation key, the current revision and input revision, declared native workers and
 hash-bound inbox outcomes, while `spec_dispatch` carries that ID so its receipt and any
 terminal `reconcile:<assignment-id>` obligation stay bound. A `reconcile:<assignment-id>`

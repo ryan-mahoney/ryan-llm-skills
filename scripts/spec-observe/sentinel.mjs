@@ -22,6 +22,8 @@ export const SENTINEL_LIMITS = Object.freeze({
   packageChildren: 100,
   receiptFiles: 100,
   indexEntries: 1000,
+  incidentEntries: 20,
+  actionFiles: 64,
   directoryEntryFactor: 4,
   smallJsonBytes: 65536,
   activityBytes: 32768,
@@ -276,6 +278,18 @@ function runConditions(run, snapshotObservedAt) {
     else if (has('activity-mismatch')) add('activity-mismatch', 'attention', 'unknown');
     else add('activity-unknown', 'info', 'unknown');
   }
+  for (const incident of run.incidents ?? []) {
+    if (!['open', 'resolved', 'unknown'].includes(incident.state)) continue;
+    conditions.push({
+      id: sha256(JSON.stringify([run.package, run.assignment_id, incident.id, incident.generation, CONDITION_GENERATION])).slice(0, 32),
+      kind: 'repeated-verification-failure', severity: incident.state === 'resolved' ? 'info' : 'attention',
+      state: incident.state, incident_id: incident.id, generation: incident.generation, fact_ids,
+    });
+  }
+  for (const action of run.actions ?? []) if (action.state === 'unknown') conditions.push({
+    id: sha256(JSON.stringify([run.package, action.id, 'action-outcome-unknown'])).slice(0, 32),
+    kind: 'action-outcome-unknown', severity: 'attention', state: 'unknown', action_id: action.id, fact_ids,
+  });
   if (run.execution === 'completed') add('reconciliation-pending', 'info', 'open');
   else if (run.execution === 'failed') add('execution-failed', 'attention', 'open');
   else if (run.execution === 'blocked') add('execution-blocked', 'attention', 'open');
@@ -321,6 +335,9 @@ export function renderWorkspace(snapshot) {
       + `${run.checkout ? basename(run.checkout) : 'checkout unknown'} · ${run.obligation || 'obligation unknown'} · ${run.activity || 'activity unknown'}`));
     if (run.coverage.state !== 'complete' || run.coverage.reasons.length) {
       lines.push(renderDetail('    ', `coverage ${run.coverage.state} (${run.coverage.reasons.join(', ')})`));
+    }
+    if (run.actions?.length) {
+      lines.push(renderDetail('    ', `actions: ${run.actions.map(action => `${action.kind} [${action.state}]`).join(' · ')}`));
     }
     if (run.conditions?.length) {
       lines.push(renderDetail('    ', run.conditions.map(condition => `${condition.kind} [${condition.severity}/${condition.state}]`).join(' · ')));
@@ -508,6 +525,7 @@ async function observeRun(candidate, budget, note, readTime) {
   // Package-level reads are shared; this wrapper attributes them to the first
   // selected run that uses them so each run reports its own bytes_read.
   const runBudget = {
+    get cap() { return budget.cap; },
     get bytes() { return budget.bytes; },
     set bytes(value) { runBytes.value += value - budget.bytes; budget.bytes = value; },
   };
@@ -554,6 +572,11 @@ async function observeRun(candidate, budget, note, readTime) {
     break;
   }
 
+  const assignment = receipt.assignment_id ?? candidate.id;
+  const incidents = fact.incidents.filter(item => item.assignment_id === assignment);
+  const actions = fact.actions.filter(item => item.workflow_id === workflow_id);
+  for (const item of [...incidents, ...actions]) source.push(item.source);
+
   const observed_at = activity.observed ?? validTime(receipt.started_at ?? null) ?? readTime;
   // The recorded checkout is a claim, not an identity: validate its Git common
   // directory read-only against the package repository before asserting it.
@@ -581,6 +604,8 @@ async function observeRun(candidate, budget, note, readTime) {
     execution,
     obligation,
     activity: activity.activity,
+    incidents: incidents.map(({ source, ...item }) => item),
+    actions: actions.map(({ source, ...item }) => item),
     source_paths: source.map(entry => entry.file),
     source_hashes: source.map(entry => entry.digest),
     observed_at,
@@ -647,7 +672,7 @@ async function readActivity(fact, id, budget, mark) {
       continue;
     }
     const result = await readJson(file, SENTINEL_LIMITS.activityBytes, budget, {
-      prefix: 'activity', oversize: false,
+      prefix: 'activity', oversize: false, within: fact.packagePath,
       // Role snapshots are identity plus public progress hints only.
       allow: value => value && typeof value === 'object' && (typeof value.run_id === 'undefined' || typeof value.run_id === 'string')
         ? { run_id: typeof value.run_id === 'string' ? value.run_id : null,
@@ -716,7 +741,10 @@ async function readLease(fact, receipt, id, budget, mark) {
 async function readCheckpoints(fact, budget) {
   if (fact.checkpoints) return fact.checkpoints;
   fact.checkpoints = [];
+  fact.incidents = [];
+  fact.actions = [];
   const dir = join(fact.packagePath, 'runtime', 'sentinel');
+  await readIncidentSummary(fact, dir, null, budget);
   const listed = await listDirectory(dir, SENTINEL_LIMITS.receiptFiles, entry => entry.isDirectory());
   if (listed.entries === null) {
     // A package without sentinel checkpoints has none to observe; any other
@@ -727,6 +755,8 @@ async function readCheckpoints(fact, budget) {
   if (listed.code) fact.checkpointNotes.push(`checkpoints-unavailable: ${dir} (${listed.code})`);
   if (listed.truncated) fact.checkpointNotes.push(`checkpoints-cap: ${dir}`);
   for (const entry of listed.entries) {
+    await readIncidentSummary(fact, join(dir, entry.name), entry.name, budget);
+    await readActionSummaries(fact, join(dir, entry.name), entry.name, budget);
     const file = join(dir, entry.name, 'checkpoint.json');
     const result = await readJson(file, SENTINEL_LIMITS.smallJsonBytes, budget, {
       prefix: 'checkpoint', within: fact.packagePath,
@@ -742,8 +772,7 @@ async function readCheckpoints(fact, budget) {
     });
     if (result.outcome === 'read-budget') { fact.checkpointNotes.push(result.reason); break; }
     if (result.outcome !== 'ok') {
-      // Incident and action files are never read; an unreadable or oversized
-      // checkpoint is reported and ignored.
+      // An unreadable or oversized checkpoint is reported and ignored.
       fact.checkpointNotes.push(`checkpoint-invalid: ${entry.name}`);
       continue;
     }
@@ -751,4 +780,62 @@ async function readCheckpoints(fact, budget) {
     fact.checkpoints.push({ workflow: entry.name, ...result.record });
   }
   return fact.checkpoints;
+}
+
+// Observe retained projections only; never re-evaluate recovery eligibility.
+const SUMMARY_ID = /^[A-Za-z0-9_-]{1,128}$/;
+const SUMMARY_TOKEN = /^[a-z0-9-]{1,100}$/;
+async function readIncidentSummary(fact, directory, workflow, budget) {
+  const file = join(directory, 'verification-incidents.json');
+  const result = await readJson(file, SENTINEL_LIMITS.smallJsonBytes, budget, {
+    prefix: 'incidents', within: fact.packagePath,
+    allow: value => {
+      if (!value || value.version !== 1 || value.package !== fact.packagePath
+          || (value.workflow_id ?? null) !== workflow || !value.assignments || typeof value.assignments !== 'object'
+          || Array.isArray(value.assignments)) return null;
+      const entries = Object.entries(value.assignments);
+      if (entries.length > SENTINEL_LIMITS.incidentEntries) return null;
+      const summaries = [];
+      for (const [assignment, entry] of entries) {
+        if (!assignment || !entry || entry.assignment_id !== assignment
+            || !['idle', 'counting', 'open', 'resolved'].includes(entry.state)
+            || !Number.isSafeInteger(entry.count) || entry.count < 0
+            || !Number.isSafeInteger(entry.generation) || entry.generation < 0) return null;
+        if (!entry.incident_id) continue;
+        if (!/^[a-f0-9]{32}$/.test(entry.incident_id) || entry.generation < 1) return null;
+        summaries.push({ id: entry.incident_id, generation: entry.generation, workflow_id: workflow,
+          assignment_id: assignment, count: entry.count, state: entry.state, observed_at: validTime(entry.observed_at) });
+      }
+      return summaries;
+    },
+  });
+  if (result.outcome === 'missing') return;
+  if (result.outcome !== 'ok') { fact.checkpointNotes.push(result.reason ?? `incidents-invalid: ${file}`); return; }
+  for (const item of result.record) fact.incidents.push({ ...item, source: { file, digest: result.digest } });
+}
+async function readActionSummaries(fact, directory, workflow, budget) {
+  const dir = join(directory, 'intents');
+  const listed = await listDirectory(dir, SENTINEL_LIMITS.actionFiles, entry => entry.isFile() && entry.name.endsWith('.json'));
+  if (listed.entries === null) {
+    if (listed.code !== 'ENOENT') fact.checkpointNotes.push(`actions-unavailable: ${dir} (${listed.code})`);
+    return;
+  }
+  if (listed.code) fact.checkpointNotes.push(`actions-unavailable: ${dir} (${listed.code})`);
+  if (listed.truncated) fact.checkpointNotes.push(`actions-cap: ${dir}`);
+  for (const entry of listed.entries) {
+    const file = join(dir, entry.name);
+    const result = await readJson(file, SENTINEL_LIMITS.smallJsonBytes, budget, {
+      prefix: 'action', within: fact.packagePath,
+      allow: value => value && value.version === 1 && value.package === fact.packagePath
+        && value.workflow_id === workflow && SUMMARY_ID.test(value.id) && entry.name === `${value.id}.json`
+        && ['continue', 'cancel', 'diagnose'].includes(value.kind)
+        && ['accepted', 'requested', 'applied', 'blocked', 'failed', 'unknown'].includes(value.state)
+        && typeof value.subject_key === 'string' && value.subject_key.length > 0 && value.subject_key.length <= 160
+        && typeof value.reason_code === 'string' && value.reason_code.trim().length > 0
+        ? { id: value.id, workflow_id: workflow, kind: value.kind,
+            state: value.state, reason_code: SUMMARY_TOKEN.test(value.reason_code) ? value.reason_code : null } : null,
+    });
+    if (result.outcome !== 'ok') { fact.checkpointNotes.push(result.reason ?? `action-invalid: ${file}`); if (result.outcome === 'read-budget') break; continue; }
+    fact.actions.push({ ...result.record, source: { file, digest: result.digest } });
+  }
 }

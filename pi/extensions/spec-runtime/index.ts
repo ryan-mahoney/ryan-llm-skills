@@ -197,7 +197,7 @@ export default function (pi: any) {
   // every disable/off command entry and session reset, so an activation still
   // queued behind workflow work can never re-arm behind a revocation.
   let disableEpoch = 0;
-  // spec_checkpoint and spec_dispatch share checkpoint/mapping state; serialize
+  // spec_sentinel_checkpoint and spec_dispatch share checkpoint/mapping state; serialize
   // their tool execution so concurrent calls cannot interleave reads and writes.
   let workflowQueue: Promise<unknown> = Promise.resolve();
   const serializeWorkflow = <T>(task: () => Promise<T>): Promise<T> => {
@@ -371,7 +371,7 @@ export default function (pi: any) {
             return_state: v.state,
             workers: record?.workers ?? [],
             // The live input revision is deliberately not passed: only a successful
-            // spec_checkpoint acknowledges native input, so reconciliation preserves
+            // spec_sentinel_checkpoint acknowledges native input, so reconciliation preserves
             // the checkpoint's stored input_revision.
             coordinator_session: mapped.coordinator_session,
             checkout: mapped.checkout,
@@ -490,7 +490,7 @@ export default function (pi: any) {
       strong_owner_model: optional('Optional STRONG_OWNER; startup routes prepared hard steps here'), owner_override: optional('Explicit owner for the selected step; takes precedence over owner_model in start and startup, including tier routing'),
       step: optional('Absolute canonical prepared subspec path; required for start'), owner_model: optional('provider/model[:thinking]; required unless owner_override is supplied'), editor_model: optional('provider/model[:thinking]; required for start'), scout_model: optional('SCOUT_AGENT selector as provider/model[:thinking]; default openai-codex/gpt-6-luna:low'),
       checkout: optional('Existing checkout or desired new worktree path'), branch: optional('Requested worktree branch'), base: optional('Start ref for a new branch, default HEAD'),
-      assignment_id: optional('Stable ID for this step attempt. Omit to use step path. Use a new ID only for an intentional subsequent attempt.'), run_id: optional('Existing run ID, otherwise latest'), workflow_id: optional('Registered workflow ID from a prior spec_checkpoint; binds this real dispatch to its checkpoint'),
+      assignment_id: optional('Stable ID for this step attempt. Omit to use step path. Use a new ID only for an intentional subsequent attempt.'), run_id: optional('Existing run ID, otherwise latest'), workflow_id: optional('Registered workflow ID from a prior spec_sentinel_checkpoint; binds this real dispatch to its checkpoint'),
       instructions: optional('Scoped task direction, acceptance constraints and publication authority'), timeout_ms: Type.Optional(Type.Number({ minimum: 1000, maximum: 86400000, description: 'Whole assignment deadline, default 7200000 (2 hours)' })), child_extensions: Type.Optional(Type.Array(Type.String({ description: 'Explicit trusted pi-intercom and provider/compat extension paths; discovery is disabled in managed children' }))) }),
     async execute(_id: string, args: any, _signal: AbortSignal, _update: any, ctx: any) {
       return serializeWorkflow(async () => {
@@ -507,7 +507,7 @@ export default function (pi: any) {
         if (workflowId) {
           registeredWorkflow = readCheckpointRecord(canonicalPackage(args.package).packagePath, workflowId);
           if (!registeredWorkflow) {
-            return result({ error: `workflow ${workflowId} has no registered checkpoint; spec_dispatch never mints workflow ownership`, next: 'register the workflow with spec_checkpoint first' }, true);
+            return result({ error: `workflow ${workflowId} has no registered checkpoint; spec_dispatch never mints workflow ownership`, next: 'register the workflow with spec_sentinel_checkpoint first' }, true);
           }
           if (registeredWorkflow.coordinator_session !== coordinatorIdentity(ctx)) {
             return result({ error: `workflow ${workflowId} is owned by another coordinator session; refusing an unowned mapping`, next: 'do not overwrite workflow ownership' }, true);
@@ -516,7 +516,7 @@ export default function (pi: any) {
             return result({ error: `workflow ${workflowId} is bound to checkout ${registeredWorkflow.checkout}; refusing a different requested checkout`, next: 'omit checkout to reuse the registered one or use a new workflow_id' }, true);
           }
           if ((registeredWorkflow.input_revision ?? 0) !== inputGuard.input_revision) {
-            return result({ error: `workflow ${workflowId} has unreconciled native input: checkpoint revision ${registeredWorkflow.input_revision ?? 0} does not match the current native input revision ${inputGuard.input_revision}`, next: 'record a successful spec_checkpoint for the current input revision before dispatch' }, true);
+            return result({ error: `workflow ${workflowId} has unreconciled native input: checkpoint revision ${registeredWorkflow.input_revision ?? 0} does not match the current native input revision ${inputGuard.input_revision}`, next: 'record a successful spec_sentinel_checkpoint for the current input revision before dispatch' }, true);
           }
           if (typeof args.assignment_id === 'string' && !/^[A-Za-z0-9_-]{1,128}$/.test(args.assignment_id)) {
             return result({ error: 'assignment_id must be 1-128 ASCII letters/digits/underscore/hyphen; the checkpoint worker identity validates it', next: 'supply a valid stable attempt ID or omit it to use the run identity' }, true);
@@ -528,7 +528,7 @@ export default function (pi: any) {
           // per-run notification mappings stay retained.
           const conflict = activeAssignmentConflict(canonicalPackage(args.package).packagePath, registeredWorkflow, args);
           if (conflict) {
-            return result({ error: `workflow ${workflowId} still has active assignment ${conflict.id} (run state ${conflict.state}); refusing a concurrent dispatch`, next: 'await its completion or confirmed cancellation, or reconcile the assignment with spec_checkpoint before dispatching the next one' }, true);
+            return result({ error: `workflow ${workflowId} still has active assignment ${conflict.id} (run state ${conflict.state}); refusing a concurrent dispatch`, next: 'await its completion or confirmed cancellation, or reconcile the assignment with spec_sentinel_checkpoint before dispatching the next one' }, true);
           }
         }
         const configFile = join(homedir(), '.pi/agent/spec-runtime.json');
@@ -549,7 +549,7 @@ export default function (pi: any) {
           const packagePath = canonicalPackage(args.package).packagePath;
           const existing: any = readCheckpointRecord(packagePath, workflowId);
           if (!existing) {
-            return result({ error: `workflow ${workflowId} has no registered checkpoint; spec_dispatch never mints workflow ownership`, next: 'register the workflow with spec_checkpoint first' }, true);
+            return result({ error: `workflow ${workflowId} has no registered checkpoint; spec_dispatch never mints workflow ownership`, next: 'register the workflow with spec_sentinel_checkpoint first' }, true);
           }
           if (existing.coordinator_session !== coordinator_session) {
             return result({ error: `workflow ${workflowId} is owned by another coordinator session; refusing an unowned mapping`, next: 'do not overwrite workflow ownership' }, true);

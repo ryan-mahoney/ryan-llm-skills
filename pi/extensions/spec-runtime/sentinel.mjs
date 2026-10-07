@@ -14,7 +14,7 @@ import { canonicalPackage } from './runtime.mjs';
 import { publicHint } from './monitor.mjs';
 import { createOwnedLeaf } from './scout.mjs';
 import { collectFacts } from '../../../scripts/jev/core.mjs';
-import { collectWorkspace, renderWorkspace, enrollmentDirectory, readEnrollments, enrollmentReasons, SENTINEL_LIMITS } from '../../../scripts/spec-observe/sentinel.mjs';
+import { collectWorkspace, reduceConditions, renderWorkspace, enrollmentDirectory, readEnrollments, enrollmentReasons, SENTINEL_LIMITS } from '../../../scripts/spec-observe/sentinel.mjs';
 
 export const SENTINEL_COALESCE_MS = 250;
 export const SENTINEL_RECONCILE_MS = 15000;
@@ -34,6 +34,7 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
   let reconcileTimer;
   let note = null;
   const watchers = new Map();
+  let noticeSeverities = new Map();
 
   const notify = (ctx, message, level = 'info') => {
     try { (ctx ?? context)?.ui?.notify?.(message, level); } catch { /* UI failure must not affect observation. */ }
@@ -43,6 +44,56 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
     try { context?.ui?.setWidget?.(SENTINEL_WIDGET_KEY, []); } catch { /* UI failure must not affect observation. */ }
     try { context?.ui?.setStatus?.(SENTINEL_WIDGET_KEY, ''); } catch { /* UI failure must not affect observation. */ }
   };
+
+  function retainMissingSummaries(snapshot) {
+    for (const run of snapshot.runs) {
+      const prior = latest?.runs?.find(item => item.package === run.package && item.assignment_id === run.assignment_id);
+      if (!prior) continue;
+      const missing = [];
+      for (const field of ['incidents', 'actions']) {
+        run[field] ??= [];
+        let retained = 0;
+        for (const item of prior[field] ?? []) {
+          // A newer retained generation is decisive evidence for this assignment;
+          // losing its source entirely is uncertainty, never resolution.
+          if (run[field].some(current => current.id === item.id || (field === 'incidents'
+            && current.workflow_id === item.workflow_id && current.generation > item.generation))) continue;
+          if (field === 'incidents' && item.state === 'resolved') continue;
+          if (retained >= SENTINEL_LIMITS.receiptFiles) { missing.push(`${field}-history-cap`); break; }
+          run[field].push({ ...item, state: 'unknown' });
+          retained++;
+          missing.push(`${field}-source-unavailable: ${item.id}`);
+        }
+      }
+      if (missing.length) {
+        run.coverage = { ...run.coverage, state: run.coverage.state === 'complete' ? 'partial' : run.coverage.state,
+          reasons: [...new Set([...run.coverage.reasons, ...missing])] };
+        snapshot.coverage = { ...snapshot.coverage, state: snapshot.coverage.state === 'complete' ? 'partial' : snapshot.coverage.state,
+          reasons: [...new Set([...snapshot.coverage.reasons, ...missing])].slice(0, SENTINEL_LIMITS.receiptFiles) };
+      }
+    }
+    return reduceConditions(snapshot);
+  }
+
+  function notifyConditions(snapshot) {
+    const next = new Map();
+    for (const run of snapshot.runs) {
+      for (const condition of run.conditions) {
+        if (!['repeated-verification-failure', 'execution-failed'].includes(condition.kind)) continue;
+        const key = `${run.package}\u0000${run.assignment_id}\u0000${condition.kind}\u0000${condition.incident_id ?? ''}`;
+        const previous = noticeSeverities.get(key);
+        // Unknown sources retain notice history; rereading or activity changes
+        // cannot manufacture another severity transition.
+        const severity = condition.state === 'unknown' ? previous : condition.state === 'open' ? condition.severity : null;
+        next.set(key, severity);
+        if (condition.state === 'open' && severity === 'attention' && severity !== previous) {
+          const problem = condition.kind === 'repeated-verification-failure' ? 'Repeated verification failures' : 'Execution failed';
+          notify(null, `${problem}: ${run.package} (${run.assignment_id}). Inspect workspace status for recorded sources.`, 'warning');
+        }
+      }
+    }
+    noticeSeverities = next;
+  }
 
   function invalidate() {
     if (closed || hidden || coalesced) return;
@@ -134,13 +185,14 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
         const snapshot = await collectWorkspace({
           roots, packages: [...ownPackages], enrollmentErrors, indexDir, agentDir, scope, now,
         });
-        latest = { ...snapshot, roots };
+        latest = { ...retainMissingSummaries(snapshot), roots };
         note = null;
         // Lifecycle fence: off or close during the asynchronous reads must
         // never install handles or render into a hidden/disposed view.
         if (!closed && !hidden) {
           syncWatchers(snapshotTargets(latest));
           render();
+          notifyConditions(latest);
         }
         return latest;
       } catch (error) {
@@ -1546,7 +1598,7 @@ export function createSentinelAuthority() {
   const state = { armed: false, policy: null, policyHash: null, sourcePath: null,
     packagePath: null, workflowId: null, checkout: null, coordinatorSession: null,
     provenance: null, grant: null, activatedAt: null, activationId: null, activationPath: null,
-    activationCommand: null, createdIntents: new Set(), unpublishedIntents: new Set() };
+    activationCommand: null, createdIntents: new Map(), liveIntents: new Set(), unpublishedIntents: new Set() };
   const authority = {};
   Object.defineProperty(authority, AUTHORITY_STATE, { value: state, enumerable: false });
   return Object.freeze(authority);
@@ -1738,6 +1790,7 @@ export function activatePolicy(authority, {
   publishDurable(join(activationDirectory, `${activationId}.json`), activation, { exclusive: true, directory: activationDirectory, requireParentFsync: true });
   const grant = { ...activation, revoked: false, activation_path: `activations/${activationId}.json` };
   publishDurable(join(directory, 'grant.json'), grant, { directory, requireParentFsync: true });
+  if (state.packagePath !== packagePath || state.workflowId !== workflowId || state.coordinatorSession !== coordinatorSession) state.liveIntents.clear();
   // Arm only now that durable provenance and grant exist.
   state.armed = true;
   state.policy = policy;
@@ -1765,6 +1818,9 @@ export function disablePolicy(authority, { now = Date.now, reason = 'disabled' }
   const state = authorityState(authority);
   const previous = { armed: state.armed, packagePath: state.packagePath, workflowId: state.workflowId, coordinatorSession: state.coordinatorSession };
   state.armed = false;
+  // Ownership remains available for reconciliation, but revocation abandons
+  // every unfinished request exemption before any persistence can fail.
+  state.liveIntents.clear();
   state.policy = null;
   state.policyHash = null;
   state.sourcePath = null;
@@ -2020,7 +2076,7 @@ export function reserveIntent(authority, {
   if (kind === 'diagnose' && !guard.diagnosis) return { accepted: false, state: 'denied', blocking: true, reasons: ['diagnosis is not permitted by the guarded policy'] };
   const nowMs = typeof now === 'function' ? now() : now;
   const id = intentId(state.workflowId, kind, subjectKey);
-  const reservation = readReservationState(state.packagePath, state.workflowId, state.createdIntents, state.unpublishedIntents);
+  const reservation = readReservationState(state.packagePath, state.workflowId, state.liveIntents, state.unpublishedIntents);
   const existing = readIntentRecord(state.packagePath, state.workflowId, id);
   if (existing && state.unpublishedIntents.has(id)) {
     // A retained intent whose terminal receipt could not be published is an
@@ -2040,12 +2096,12 @@ export function reserveIntent(authority, {
       // A complete duplicate never repeats the effect: terminal intents stay
       // idempotent across restart; unfinished live ones return the retained
       // receipt, while an unfinished intent from another authority blocks.
-      if ((existing.state === 'accepted' || existing.state === 'requested') && !state.createdIntents.has(id)) {
+      if ((existing.state === 'accepted' || existing.state === 'requested') && !state.liveIntents.has(id)) {
         return { accepted: false, state: 'unknown', blocking: true, intent: existing, reasons: [`intent ${id} is retained unfinished from a previous authority`] };
       }
       return { accepted: false, duplicate: true, state: existing.state, intent: existing, slot: reservation.intentSlots.get(id) ?? null };
     }
-    if (!state.createdIntents.has(id) && (existing.state === 'accepted' || existing.state === 'requested')) {
+    if (!state.liveIntents.has(id) && (existing.state === 'accepted' || existing.state === 'requested')) {
       return { accepted: false, state: 'unknown', blocking: true, intent: existing, reasons: [`intent ${id} is retained unfinished from a previous authority`] };
     }
     return { accepted: false, state: 'blocked', blocking: true, intent: existing, reasons: [`intent ${id} is retained without a complete durable slot`] };
@@ -2081,7 +2137,8 @@ export function reserveIntent(authority, {
     // The slot is retained without an intent: it stays spent and blocking.
     return { accepted: false, state: 'blocked', blocking: true, reasons: [error?.message ?? String(error)] };
   }
-  state.createdIntents.add(id);
+  state.createdIntents.set(id, { packagePath: state.packagePath, workflowId: state.workflowId, coordinatorSession: state.coordinatorSession });
+  state.liveIntents.add(id);
   return { accepted: true, duplicate: false, intent, slot };
 }
 
@@ -2101,13 +2158,23 @@ export function finishIntent(authority, {
   validateId(requestedIntentId, 'intent_id');
   if (finishState !== 'requested' && !FINISH_STATES.has(finishState)) fail(`finish state is unrecognized: ${finishState}`, 'intent-invalid');
   if (typeof reasonCode !== 'string' || !reasonCode.trim()) fail('a terminal update requires a nonempty reason_code', 'intent-invalid');
-  if (!state.createdIntents.has(requestedIntentId)) fail(`intent ${requestedIntentId} is not owned by the live authority`, 'intent-owner');
-  const existing = readIntentRecord(state.packagePath, state.workflowId, requestedIntentId);
-  if (!existing) fail(`intent ${requestedIntentId} is missing`, 'intent-missing');
-  if (existing.coordinator_session !== state.coordinatorSession) fail('intent is bound to another session', 'intent-owner');
-  // A terminal update requires the matching durable slot link by ID/kind/workflow.
-  const reservation = readReservationState(state.packagePath, state.workflowId, state.createdIntents, state.unpublishedIntents);
-  if (!reservation.intentSlots.has(requestedIntentId)) fail(`intent ${requestedIntentId} has no matching durable slot`, 'intent-missing');
+  const ownedScope = state.createdIntents.get(requestedIntentId);
+  if (!ownedScope || ownedScope.packagePath !== state.packagePath || ownedScope.workflowId !== state.workflowId
+    || ownedScope.coordinatorSession !== state.coordinatorSession) fail(`intent ${requestedIntentId} is not owned by the live authority`, 'intent-owner');
+  let existing;
+  try {
+    existing = readIntentRecord(state.packagePath, state.workflowId, requestedIntentId);
+    if (!existing) fail(`intent ${requestedIntentId} is missing`, 'intent-missing');
+    if (existing.coordinator_session !== state.coordinatorSession) fail('intent is bound to another session', 'intent-owner');
+    // A terminal update requires the matching durable slot link by ID/kind/workflow.
+    const reservation = readReservationState(state.packagePath, state.workflowId, state.liveIntents, state.unpublishedIntents);
+    if (!reservation.intentSlots.has(requestedIntentId)) fail(`intent ${requestedIntentId} has no matching durable slot`, 'intent-missing');
+  } catch (error) {
+    // Failed reads or slot validation leave the owned effect outcome uncertain,
+    // just as failed publication does, even after storage becomes readable.
+    state.unpublishedIntents.add(requestedIntentId);
+    throw error;
+  }
   // Lifecycle: accepted -> requested|terminal, requested -> terminal; an
   // unknown outcome may be reconciled to a definite terminal state by its
   // owning live authority; an exact same-state replay is idempotent and any
@@ -2122,15 +2189,15 @@ export function finishIntent(authority, {
   if (!allowed) {
     if (existing.state === finishState && (existing.reason_code ?? '') === reasonCode
       && (existing.result_reference ?? undefined) === (resultReference ?? undefined)) {
-      state.unpublishedIntents.delete(requestedIntentId);
+      if (['applied', 'blocked', 'failed'].includes(finishState)) state.unpublishedIntents.delete(requestedIntentId);
       return existing;
     }
     fail(`intent ${requestedIntentId} cannot transition ${existing.state} -> ${finishState}; refusing a conflicting or backward rewrite`, 'intent-owner');
   }
   const updated = { ...existing, state: finishState, reason_code: String(reasonCode),
     ...(resultReference === undefined ? {} : { result_reference: String(resultReference) }) };
-  const directory = ensureStateDirectory(state.packagePath, ['runtime', 'sentinel', state.workflowId, 'intents'], 'sentinel intent directory');
   try {
+    const directory = ensureStateDirectory(state.packagePath, ['runtime', 'sentinel', state.workflowId, 'intents'], 'sentinel intent directory');
     publishDurable(join(directory, `${requestedIntentId}.json`), updated, { directory, requireParentFsync: true });
   } catch (error) {
     // The terminal receipt could not be published: the durable intent stays
@@ -2141,7 +2208,7 @@ export function finishIntent(authority, {
     state.unpublishedIntents.add(requestedIntentId);
     throw error;
   }
-  state.unpublishedIntents.delete(requestedIntentId);
+  if (['applied', 'blocked', 'failed'].includes(finishState)) state.unpublishedIntents.delete(requestedIntentId);
   return updated;
 }
 

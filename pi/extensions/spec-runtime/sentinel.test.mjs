@@ -1342,6 +1342,68 @@ test('sentinel intent: an explicit unknown outcome blocks automation until recon
   assert.equal(after.accepted, true);
 });
 
+test('sentinel intent: disable abandons unfinished exemptions while retaining reconciliation and spent slots', t => {
+  const { packagePath, base } = canonicalFixture(t);
+  const { authority, file } = armFixture(packagePath, base, { mode: 'recover', actions: ['continue'] });
+  const reserve = subject => reserveIntent(authority, { kind: 'continue', subject_key: subject, source_revision: 'r', now: () => FIXED });
+  const first = reserve('abandoned');
+  finishIntent(authority, { intent_id: first.intent.id, state: 'requested', reason_code: 'queued' });
+  disablePolicy(authority, { now: () => FIXED });
+  activatePolicy(authority, activateArgs(packagePath, file));
+  const blocked = reserve('next');
+  assert.equal(blocked.accepted, false);
+  assert.ok(blocked.reasons.some(reason => reason.startsWith('intent-unreconciled:')));
+  assert.equal(reserve('abandoned').state, 'unknown');
+  finishIntent(authority, { intent_id: first.intent.id, state: 'failed', reason_code: 'reconciled-veto' });
+  assert.equal(reserve('next').accepted, true);
+  assert.equal(reserve('third').accepted, false);
+});
+
+test('sentinel intent: reactivation in another package cannot finish a matching foreign intent ID', t => {
+  const firstPackage = canonicalFixture(t);
+  const secondPackage = canonicalFixture(t);
+  const first = armFixture(firstPackage.packagePath, firstPackage.base, { mode: 'recover', actions: ['continue'] });
+  const second = armFixture(secondPackage.packagePath, secondPackage.base, { mode: 'recover', actions: ['continue'] });
+  const input = { kind: 'continue', subject_key: 'same-subject', source_revision: 'r', now: () => FIXED };
+  const owned = reserveIntent(first.authority, input);
+  const foreign = reserveIntent(second.authority, input);
+  assert.equal(owned.intent.id, foreign.intent.id);
+  disablePolicy(first.authority, { now: () => FIXED });
+  activatePolicy(first.authority, activateArgs(secondPackage.packagePath, second.file));
+  assert.throws(() => finishIntent(first.authority, { intent_id: foreign.intent.id, state: 'failed', reason_code: 'foreign' }), /not owned by the live authority/);
+  assert.equal(reserveIntent(first.authority, input).state, 'unknown');
+});
+
+for (const failure of ['intent read', 'slot validation']) {
+  test(`sentinel storage: failed ${failure} fences an owned request until terminal reconciliation`, t => {
+    const { packagePath, base } = canonicalFixture(t);
+    const { authority } = armFixture(packagePath, base, { mode: 'recover', actions: ['continue'] });
+    const reserve = subject => reserveIntent(authority, { kind: 'continue', subject_key: subject, source_revision: 'r', now: () => FIXED });
+    const first = reserve('uncertain');
+    const update = (state, reason_code) => finishIntent(authority, { intent_id: first.intent.id, state, reason_code });
+    update('requested', 'queued');
+    const directory = join(packagePath, 'runtime', 'sentinel', 'wf-1');
+    const path = failure === 'intent read'
+      ? join(directory, 'intents', `${first.intent.id}.json`)
+      : join(directory, 'effect-slots', '0.json');
+    const retained = readFileSync(path);
+    try {
+      if (failure === 'intent read') writeFileSync(path, '{invalid');
+      else unlinkSync(path);
+      assert.throws(() => update('applied', 'delivered'));
+    } finally { writeFileSync(path, retained); }
+    assert.equal(reserve('next').accepted, false);
+    assert.equal(reserve('uncertain').state, 'unknown');
+    // Replaying the old requested receipt cannot certify an outcome.
+    assert.equal(update('requested', 'queued').state, 'requested');
+    assert.equal(reserve('next').accepted, false);
+    assert.equal(update('failed', 'reconciled-failure').state, 'failed');
+    assert.equal(update('failed', 'reconciled-failure').state, 'failed');
+    assert.equal(reserve('next').accepted, true);
+    assert.equal(reserve('third').accepted, false);
+  });
+}
+
 test('sentinel storage: the reservation graph is validated in both directions and invalid state blocks either pool', t => {
   const { packagePath, base } = canonicalFixture(t);
   const { authority } = armFixture(packagePath, base, { mode: 'recover', actions: ['continue'], diagnosis: { model: 'test/diag' }, max_effects: 2, max_diagnostics: 2 });

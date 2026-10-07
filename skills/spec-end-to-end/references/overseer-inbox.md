@@ -106,7 +106,7 @@ supersession, not timestamps alone. Later arrivals wait for the next checkpoint.
    entry, then forward its stable archived path. Archive before forwarding so
    recipients never depend on a disappearing inbox path.
 
-In managed Pi, each `spec_checkpoint` projects every retained original by ID, hash and
+In managed Pi, each `spec_sentinel_checkpoint` projects every retained original by ID, hash and
 outcome; it reads only and never moves, edits or archives files. Archiving an original
 into `processed/` never releases a hold. A hold is released only when the matching later
 `kind: direction` original explicitly names the held ID and the checkpoint supplies the
