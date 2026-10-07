@@ -186,7 +186,7 @@ export function launch(record, role, prompt, options = {}) {
     ...(selector.thinking ? ['--thinking', selector.thinking] : []), '--no-extensions', '--no-skills', '--no-prompt-templates',
     ...((record.child_extensions || []).flatMap(path => ['--extension', path])),
     ...(role === 'owner' ? ['--extension', join(homedir(), '.pi/agent/npm/node_modules/pi-subagents/index.js')] : []),
-    '--extension', join(here, 'index.ts'), '--tools', role === 'owner' ? 'read,grep,find,ls,spec_editor,spec_answer,spec_verify,spec_scout,spec_advice,spec_complete' : 'read,grep,find,ls,edit,write,bash,spec_question',
+    '--extension', join(here, 'index.ts'), '--tools', role === 'owner' ? 'read,grep,find,ls,spec_editor,spec_answer,spec_verify,spec_scout,spec_search,spec_advice,spec_complete' : 'read,grep,find,ls,edit,write,bash,spec_question',
     '--append-system-prompt', profile, '--', prompt ];
   const child = spawnManaged(record, role, options.command || 'pi', args);
   const activity = activityRecorder(record, role);

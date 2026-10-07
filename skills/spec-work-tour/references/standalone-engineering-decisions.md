@@ -18,6 +18,15 @@ display", "build the feature worktree path"), not only a likely symbol name. Oth
 search (`rg`) for several plausible names, distinctive literals, and the API calls the helper
 would make. Read each plausible hit before deciding. This is a bounded lookup, not a survey.
 
+**Optional semantic search.** When the repository is opted in and the owner
+`spec_search` tool is available, use one bounded semantic query for a genuine
+behavioral discovery gap — query the responsibility, not a guessed symbol. Read
+the returned candidate files before deciding. Fall back to exact `rg`/direct
+reads for literals, symbols, and known files, and whenever search is disabled,
+unenrolled, unavailable, busy or timed out. Empty or partial candidate results
+are never absence. This uses no extra model conversation, and `spec_scout`
+remains independent.
+
 **A duplicate is the same responsibility under the same contract.** Textual similarity alone is
 not duplication; two helpers that serve deliberately different contracts may coexist. Copying or
 re-deriving another module's private helper is duplication, even when it matches a sibling

@@ -10,6 +10,7 @@ import { createCommunication } from './communication.mjs';
 import { createMonitor } from './monitor.mjs';
 import { createSentinelObserver, createVerificationRecorder, recordCheckpoint as recordSentinelCheckpoint, readInboxGuard, readCheckpointRecord, observeInput, reconcileRuntimeReturn, checkpointPath, createSentinelAuthority, createDiagnosisController, activatePolicy, disablePolicy, handleBeforeSettle, finishIntent, considerCancellation } from './sentinel.mjs';
 import { createScout, SCOUT_MODEL } from './scout.mjs';
+import { registerRepositorySearch } from './search.mjs';
 import { installProgressContext, recordCheckpoint, refreshProgress } from './completion.mjs';
 import { metrics, formatMetrics } from './metrics.mjs';
 
@@ -92,7 +93,7 @@ export default function (pi: any) {
     const record = JSON.parse(readFileSync(process.env.SPEC_RUNTIME_RECORD!, 'utf8'));
     installProgressContext(pi, { record, role });
     const communication = createCommunication(pi, record, role, { onEvent: (name: string, detail: any) => runtimeEvent(record, name, detail) });
-    const allowed = role === 'owner' ? ['read', 'grep', 'find', 'ls', 'spec_editor', 'spec_answer', 'spec_verify', 'spec_scout', 'spec_advice', 'spec_complete'] : ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', 'spec_question'];
+    const allowed = role === 'owner' ? ['read', 'grep', 'find', 'ls', 'spec_editor', 'spec_answer', 'spec_verify', 'spec_scout', 'spec_search', 'spec_advice', 'spec_complete'] : ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', 'spec_question'];
     pi.on('session_shutdown', () => communication.close());
     pi.on('session_start', (_event: any, ctx: any) => {
       // Apply the process guard only to an authenticated managed worker lease.
@@ -150,6 +151,7 @@ export default function (pi: any) {
             return result({ ...reply, result: truncated ? reply.result.slice(0, 7000) + `\n[Truncated: read ${path}; do not repeat scouting.]` : reply.result, result_truncated: truncated, full_result_path: path });
           } catch (error: any) { return result({ error: error.message, next: 'Use direct source reads or diagnose this scout failure; do not switch models.' }, true); }
         } });
+      registerRepositorySearch(pi, record);
       pi.registerTool({ name: 'spec_verify', label: 'Verify step', description: 'Owner runs a necessary focused check or diagnostic after the editor returns. Never edit source, commit, or run broad suites through this tool. Reuse valid evidence; do not check every packet automatically. Commands are bounded and cannot overlap editor work. Build/test artifacts and canonical evidence output are allowed. Pipelines preserve failures; raw output is retained, so omit tail/tee wrappers. For UI capture supply server {command, ready_url, readiness_timeout}: runtime starts it, waits, runs command, and cleans up before returning. Never start a server in a separate background call.',
         parameters: Type.Object({ command: Type.String(), timeout: Type.Optional(Type.Number({ minimum: 1, maximum: 600 })), server: Type.Optional(Type.Object({ command: Type.String({ description: 'Foreground dev server command; no nohup or background ampersand. Runtime owns startup and cleanup.' }), ready_url: Type.String({ description: 'Loopback HTTP(S) readiness URL on an owned free port' }), readiness_timeout: Type.Optional(Type.Number({ minimum: 1, maximum: 600 })) })) }),
         async execute(_id: string, args: any, signal: AbortSignal) {
