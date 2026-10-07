@@ -17,8 +17,11 @@ import { dirname, join } from "node:path";
 
 import {
   buildCodeIndex,
+  buildOverlayIndex,
   planCodeIndexBuild,
+  planOverlayBuild,
   validateCodeIndexBuild,
+  validateOverlayBuild,
   type BuildEmbeddingRuntimeFactory,
 } from "./core/build";
 import {
@@ -88,6 +91,7 @@ export type OperationReceipt = {
   version: 1;
   command: "build" | "update" | "reindex";
   kind: "build" | "update" | "reindex";
+  generationKind?: "full" | "overlay";
   availability: LifecycleAvailability;
   operation: LifecycleOperationState;
   freshness: LifecycleFreshness;
@@ -547,6 +551,7 @@ export async function buildPrimary(input: {
         version: 1,
         command: kind,
         kind,
+        generationKind: "full",
         availability: "ready",
         operation: "idle",
         freshness: "unknown",
@@ -590,6 +595,7 @@ export async function buildPrimary(input: {
         version: 1,
         command: kind,
         kind,
+        generationKind: "full",
         availability: "ready",
         operation: "idle",
         freshness: "unknown",
@@ -609,54 +615,18 @@ export async function buildPrimary(input: {
       };
     }
 
-    const plan = await planCodeIndexBuild({
-      snapshot: captured,
-      previousStoreDir: kind === "update" ? (current as GenerationRecord).finalPath : undefined,
-      signal: input.signal,
-    });
-
-    const generation = state.beginGeneration({
+    const built = await performFullBuild({
+      identity,
+      state,
       operationId: operation.id,
-      checkoutKey: identity.checkoutKey,
-      repoKey: identity.repoKey,
-      kind: "full",
-      baseId: null,
-      compatibility,
-      snapshotDigest: captured.digest,
-      capturedAt: captured.observedAt,
-      observedHead: identity.head,
-      sourceMoved: false,
-      bytes: 0,
-    });
-
-    const buildResult = await buildCodeIndex({
-      plan,
-      snapshot: captured,
-      destinationDir: generation.tempPath,
-      compatibility,
+      kind,
+      current,
       model,
+      compatibility,
       modelsRoot,
-      cachePath: join(state.stateRoot, "embedding-cache.sqlite"),
+      deps,
+      capture,
       signal: input.signal,
-      createEmbeddingRuntime: deps.createEmbeddingRuntime,
-    });
-
-    throwIfAborted(input.signal);
-    const post = await capture(identity, input.signal);
-    const sourceMoved = post.digest !== captured.digest;
-
-    await state.publish({
-      operationId: operation.id,
-      generationId: generation.id,
-      validate: async (tempPath: string) => {
-        await validateCodeIndexBuild({
-          destinationDir: tempPath,
-          compatibility,
-          snapshot: captured,
-        });
-        return true;
-      },
-      finalize: { sourceMoved, bytes: buildResult.derivedBytes },
     });
 
     mergeEnrollment(state.stateRoot, identity.checkoutKey, identity, {
@@ -665,37 +635,30 @@ export async function buildPrimary(input: {
         at: nowIso(),
         kind,
         status: "ready",
-        generationId: generation.id,
-        snapshotDigest: captured.digest,
+        generationId: built.generationId,
+        snapshotDigest: built.snapshotDigest,
       },
       // A refreshed current generation clears stale check provenance; a moved
       // generation that preserves prior current keeps that prior provenance.
-      ...(sourceMoved ? {} : { lastCheck: null }),
+      ...(built.sourceMoved ? {} : { lastCheck: null }),
     });
     state.finishOperation(operation.id, "finished");
     finished = true;
 
-    return {
-      version: 1,
-      command: kind,
+    return makeReceipt({
+      identity,
       kind,
-      availability: sourceMoved && current === null ? "missing" : "ready",
-      operation: "idle",
-      freshness: sourceMoved ? "stale" : "unknown",
-      reason: sourceMoved ? "source-moved" : undefined,
-      repoKey: identity.repoKey,
-      checkoutKey: identity.checkoutKey,
-      requestedRoot: identity.root,
-      actualRoot: identity.root,
-      observedHead: identity.head,
-      generationId: generation.id,
+      generationKind: "full",
+      generationId: built.generationId,
       baseId: null,
-      snapshotDigest: captured.digest,
-      sourceMoved,
-      observedAt: nowIso(),
-      coverage: coverageFor(captured),
-      timing: { elapsedMs: Date.now() - startedAt },
-    };
+      snapshotDigest: built.snapshotDigest,
+      sourceMoved: built.sourceMoved,
+      availability: built.sourceMoved && current === null ? "missing" : "ready",
+      freshness: built.sourceMoved ? "stale" : "unknown",
+      reason: built.sourceMoved ? "source-moved" : undefined,
+      startedAt,
+      captured: built.captured,
+    });
   } catch (error) {
     if (!finished) {
       try {
@@ -814,4 +777,437 @@ export function readCheckoutStatus(input: {
     lastCheck,
     observedAt: nowIso(),
   };
+}
+
+// ---- Shared full/overlay build helpers ------------------------------------
+
+type CaptureFn = (
+  identity: CheckoutIdentityLike,
+  signal?: AbortSignal,
+) => Promise<Snapshot>;
+
+type BuiltGeneration = {
+  captured: Snapshot;
+  generationId: string;
+  snapshotDigest: string;
+  sourceMoved: boolean;
+  derivedBytes: number;
+  baseId: string | null;
+};
+
+function makeReceipt(input: {
+  identity: CheckoutIdentityLike;
+  kind: "build" | "update" | "reindex";
+  generationKind: "full" | "overlay";
+  generationId: string;
+  baseId: string | null;
+  snapshotDigest: string;
+  sourceMoved?: boolean;
+  availability: LifecycleAvailability;
+  freshness: LifecycleFreshness;
+  reason?: string;
+  startedAt: number;
+  captured?: Snapshot;
+}): OperationReceipt {
+  return {
+    version: 1,
+    command: input.kind,
+    kind: input.kind,
+    generationKind: input.generationKind,
+    availability: input.availability,
+    operation: "idle",
+    freshness: input.freshness,
+    reason: input.reason,
+    repoKey: input.identity.repoKey,
+    checkoutKey: input.identity.checkoutKey,
+    requestedRoot: input.identity.root,
+    actualRoot: input.identity.root,
+    observedHead: input.identity.head,
+    generationId: input.generationId,
+    baseId: input.baseId,
+    snapshotDigest: input.snapshotDigest,
+    sourceMoved: input.sourceMoved,
+    observedAt: nowIso(),
+    coverage: input.captured
+      ? coverageFor(input.captured)
+      : coverageFor({ files: new Map(), excluded: {} } as unknown as Snapshot),
+    timing: { elapsedMs: Date.now() - input.startedAt },
+  };
+}
+
+// Full generation: new/reindex opens an empty store; update clones the prior
+// derived store. Captured bytes and the bounded post snapshot are real.
+async function performFullBuild(input: {
+  identity: CheckoutIdentityLike;
+  state: LifecycleState;
+  operationId: string;
+  kind: "build" | "update" | "reindex";
+  current: GenerationRecord | null;
+  model: VerifiedModel;
+  compatibility: CodeSearchCompatibility;
+  modelsRoot: string;
+  deps: LifecycleDependencies;
+  capture: CaptureFn;
+  signal?: AbortSignal;
+}): Promise<BuiltGeneration> {
+  const { identity, state, operationId, kind, current, model, compatibility, modelsRoot, deps, capture } = input;
+  const captured = await capture(identity, input.signal);
+  throwIfAborted(input.signal);
+  const plan = await planCodeIndexBuild({
+    snapshot: captured,
+    previousStoreDir: kind === "update" && current ? current.finalPath : undefined,
+    signal: input.signal,
+  });
+  const generation = state.beginGeneration({
+    operationId,
+    checkoutKey: identity.checkoutKey,
+    repoKey: identity.repoKey,
+    kind: "full",
+    baseId: null,
+    compatibility,
+    snapshotDigest: captured.digest,
+    capturedAt: captured.observedAt,
+    observedHead: identity.head,
+    sourceMoved: false,
+    bytes: 0,
+  });
+  const buildResult = await buildCodeIndex({
+    plan,
+    snapshot: captured,
+    destinationDir: generation.tempPath,
+    compatibility,
+    model,
+    modelsRoot,
+    cachePath: join(state.stateRoot, "embedding-cache.sqlite"),
+    signal: input.signal,
+    createEmbeddingRuntime: deps.createEmbeddingRuntime,
+  });
+  throwIfAborted(input.signal);
+  const post = await capture(identity, input.signal);
+  const sourceMoved = post.digest !== captured.digest;
+  await state.publish({
+    operationId,
+    generationId: generation.id,
+    validate: async (tempPath: string) => {
+      await validateCodeIndexBuild({ destinationDir: tempPath, compatibility, snapshot: captured });
+      return true;
+    },
+    finalize: { sourceMoved, bytes: buildResult.derivedBytes },
+  });
+  return {
+    captured,
+    generationId: generation.id,
+    snapshotDigest: captured.digest,
+    sourceMoved,
+    derivedBytes: buildResult.derivedBytes,
+    baseId: null,
+  };
+}
+
+// Overlay generation: always a fresh empty changed-only store; the immutable
+// base is only read/validated and never cloned or mutated.
+async function performOverlayBuild(input: {
+  identity: CheckoutIdentityLike;
+  state: LifecycleState;
+  operationId: string;
+  baseId: string;
+  baseStoreDir: string;
+  model: VerifiedModel;
+  compatibility: CodeSearchCompatibility;
+  modelsRoot: string;
+  deps: LifecycleDependencies;
+  capture: CaptureFn;
+  signal?: AbortSignal;
+}): Promise<BuiltGeneration> {
+  const { identity, state, operationId, baseId, baseStoreDir, model, compatibility, modelsRoot, deps, capture } = input;
+  const captured = await capture(identity, input.signal);
+  throwIfAborted(input.signal);
+  const plan = await planOverlayBuild({
+    snapshot: captured,
+    baseId,
+    baseStoreDir,
+    compatibility,
+    signal: input.signal,
+  });
+  const generation = state.beginGeneration({
+    operationId,
+    checkoutKey: identity.checkoutKey,
+    repoKey: identity.repoKey,
+    kind: "overlay",
+    baseId,
+    compatibility,
+    snapshotDigest: captured.digest,
+    capturedAt: captured.observedAt,
+    observedHead: identity.head,
+    sourceMoved: false,
+    bytes: 0,
+  });
+  const buildResult = await buildOverlayIndex({
+    plan,
+    destinationDir: generation.tempPath,
+    compatibility,
+    model,
+    modelsRoot,
+    cachePath: join(state.stateRoot, "embedding-cache.sqlite"),
+    signal: input.signal,
+    createEmbeddingRuntime: deps.createEmbeddingRuntime,
+  });
+  throwIfAborted(input.signal);
+  const post = await capture(identity, input.signal);
+  const sourceMoved = post.digest !== captured.digest;
+  await state.publish({
+    operationId,
+    generationId: generation.id,
+    validate: async (tempPath: string) => {
+      await validateOverlayBuild({
+        destinationDir: tempPath,
+        baseStoreDir,
+        baseId,
+        compatibility,
+        snapshot: captured,
+        expectedTombstones: plan.tombstones,
+      });
+      return true;
+    },
+    finalize: { sourceMoved, bytes: buildResult.derivedBytes },
+  });
+  return {
+    captured,
+    generationId: generation.id,
+    snapshotDigest: captured.digest,
+    sourceMoved,
+    derivedBytes: buildResult.derivedBytes,
+    baseId,
+  };
+}
+
+// ---- buildWorktree --------------------------------------------------------
+
+export async function buildWorktree(input: {
+  identity: CheckoutIdentityLike;
+  state: LifecycleState;
+  modelsRoot: string;
+  kind: "build" | "update" | "reindex";
+  primaryIdentity?: CheckoutIdentityLike;
+  signal?: AbortSignal;
+  deps?: LifecycleDependencies;
+}): Promise<OperationReceipt> {
+  const startedAt = Date.now();
+  const { identity, state, modelsRoot, kind } = input;
+  const deps = input.deps ?? {};
+  const capture: CaptureFn =
+    deps.captureSnapshot ??
+    ((target, signal) => defaultCaptureSnapshot(target, {}, signal));
+
+  if (identity.primary) {
+    throw new LifecycleError("worktree-required", "buildWorktree requires a linked worktree identity");
+  }
+
+  const existing = readEnrollment(state.stateRoot, identity.checkoutKey);
+  if (existing) {
+    assertEnrollmentIdentity(existing, identity);
+  } else if (kind !== "build") {
+    throw new LifecycleError("unenrolled", "checkout is not enrolled");
+  }
+  const enrollment = existing ?? createEnrollment(identity);
+  if (!existing) writeEnrollment(state.stateRoot, identity.checkoutKey, enrollment);
+
+  const operation = state.beginOperation({
+    command: kind,
+    kind,
+    checkoutKey: identity.checkoutKey,
+    writer: true,
+    native: true,
+  });
+  let finished = false;
+  try {
+    throwIfAborted(input.signal);
+    const { model, compatibility } = await resolveBuildInputs(modelsRoot, deps);
+    const worktreeAcq = state.acquireCurrent({
+      operationId: operation.id,
+      checkoutKey: identity.checkoutKey,
+    });
+    const current = worktreeAcq.current as GenerationRecord | null;
+    const currentBase = worktreeAcq.base as GenerationRecord | null;
+
+    if (kind === "build" && current) {
+      if (!compatibilityEqual(current.compatibility, compatibility)) {
+        throw new LifecycleError("incompatible", "existing generation is incompatible; reindex required");
+      }
+      state.finishOperation(operation.id, "finished");
+      finished = true;
+      return makeReceipt({
+        identity,
+        kind,
+        generationKind: current.kind,
+        generationId: current.id,
+        baseId: current.baseId,
+        snapshotDigest: current.snapshotDigest,
+        sourceMoved: current.sourceMoved,
+        availability: "ready",
+        freshness: "unknown",
+        reason: "already-built",
+        startedAt,
+      });
+    }
+
+    let built: BuiltGeneration;
+    let generationKind: "full" | "overlay";
+
+    const isExistingFull = current !== null && current.status === "ready" && current.kind === "full";
+    const isExistingOverlay = current !== null && current.status === "ready" && current.kind === "overlay";
+
+    if (kind === "update" && isExistingFull) {
+      if (!compatibilityEqual(current!.compatibility, compatibility)) {
+        throw new LifecycleError("incompatible", "current full generation compatibility mismatch");
+      }
+      built = await performFullBuild({
+        identity, state, operationId: operation.id, kind, current, model, compatibility, modelsRoot, deps, capture, signal: input.signal,
+      });
+      generationKind = "full";
+    } else if (kind === "update" && isExistingOverlay) {
+      const base = currentBase;
+      if (!base || base.id !== current!.baseId) {
+        throw new LifecycleError("base-missing", "overlay base is no longer available");
+      }
+      if (
+        base.status !== "ready" ||
+        base.kind !== "full" ||
+        base.repoKey !== identity.repoKey ||
+        !compatibilityEqual(base.compatibility, compatibility)
+      ) {
+        throw new LifecycleError("base-missing", "overlay base is not usable or compatible");
+      }
+      built = await performOverlayBuild({
+        identity, state, operationId: operation.id, baseId: base.id, baseStoreDir: base.finalPath, model, compatibility, modelsRoot, deps, capture, signal: input.signal,
+      });
+      generationKind = "overlay";
+    } else if (kind === "update") {
+      throw new LifecycleError("no-current", "update requires an existing ready generation");
+    } else {
+      let selected: GenerationRecord | null = null;
+      if (input.primaryIdentity) {
+        const primary = input.primaryIdentity;
+        if (!primary.primary) {
+          throw new LifecycleError("primary-required", "primaryIdentity must be a primary checkout");
+        }
+        if (primary.repoKey !== identity.repoKey) {
+          throw new LifecycleError("repo-mismatch", "primaryIdentity must be from the same repository");
+        }
+        if (primary.checkoutKey === identity.checkoutKey) {
+          throw new LifecycleError("primary-required", "primaryIdentity must differ from the worktree");
+        }
+        const primaryAcq = state.acquireCurrent({
+          operationId: operation.id,
+          checkoutKey: primary.checkoutKey,
+        });
+        const primaryCurrent = primaryAcq.current as GenerationRecord | null;
+        if (primaryCurrent) {
+          // Contradictory repo identity or a non-full primary generation fails
+          // closed; an incompatible ready full base is simply not eligible and
+          // falls back to an explicit full generation for build/reindex.
+          if (
+            primaryCurrent.status !== "ready" ||
+            primaryCurrent.kind !== "full" ||
+            primaryCurrent.repoKey !== identity.repoKey
+          ) {
+            throw new LifecycleError(
+              "base-unavailable",
+              "selected primary base is not a usable full primary generation",
+            );
+          }
+          if (compatibilityEqual(primaryCurrent.compatibility, compatibility)) {
+            selected = primaryCurrent;
+          }
+        }
+      }
+      if (selected) {
+        built = await performOverlayBuild({
+          identity, state, operationId: operation.id, baseId: selected.id, baseStoreDir: selected.finalPath, model, compatibility, modelsRoot, deps, capture, signal: input.signal,
+        });
+        generationKind = "overlay";
+      } else {
+        built = await performFullBuild({
+          identity, state, operationId: operation.id, kind, current, model, compatibility, modelsRoot, deps, capture, signal: input.signal,
+        });
+        generationKind = "full";
+      }
+    }
+
+    mergeEnrollment(state.stateRoot, identity.checkoutKey, identity, {
+      head: identity.head,
+      lastBuild: {
+        at: nowIso(),
+        kind,
+        status: "ready",
+        generationId: built.generationId,
+        snapshotDigest: built.snapshotDigest,
+      },
+      ...(built.sourceMoved ? {} : { lastCheck: null }),
+    });
+    state.finishOperation(operation.id, "finished");
+    finished = true;
+
+    return makeReceipt({
+      identity,
+      kind,
+      generationKind,
+      generationId: built.generationId,
+      baseId: built.baseId,
+      snapshotDigest: built.snapshotDigest,
+      sourceMoved: built.sourceMoved,
+      availability: built.sourceMoved && current === null ? "missing" : "ready",
+      freshness: built.sourceMoved ? "stale" : "unknown",
+      reason: built.sourceMoved ? "source-moved" : undefined,
+      startedAt,
+      captured: built.captured,
+    });
+  } catch (error) {
+    if (!finished) {
+      try {
+        state.finishOperation(operation.id, "failed");
+      } catch {
+        // release best-effort; underlying error propagates
+      }
+      try {
+        mergeEnrollment(state.stateRoot, identity.checkoutKey, identity, {
+          lastBuild: { at: nowIso(), kind, status: "failed", reason: errorMessage(error) },
+        });
+      } catch {
+        // metadata failure must not mask the underlying error
+      }
+    }
+    throw error;
+  }
+}
+
+// ---- updateCheckout -------------------------------------------------------
+
+export async function updateCheckout(input: {
+  identity: CheckoutIdentityLike;
+  state: LifecycleState;
+  modelsRoot: string;
+  primaryIdentity?: CheckoutIdentityLike;
+  signal?: AbortSignal;
+  deps?: LifecycleDependencies;
+}): Promise<OperationReceipt> {
+  if (input.identity.primary) {
+    return buildPrimary({
+      identity: input.identity,
+      state: input.state,
+      modelsRoot: input.modelsRoot,
+      kind: "update",
+      signal: input.signal,
+      deps: input.deps,
+    });
+  }
+  return buildWorktree({
+    identity: input.identity,
+    state: input.state,
+    modelsRoot: input.modelsRoot,
+    kind: "update",
+    primaryIdentity: input.primaryIdentity,
+    signal: input.signal,
+    deps: input.deps,
+  });
 }

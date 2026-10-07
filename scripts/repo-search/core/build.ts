@@ -12,6 +12,7 @@ import { chunkFile } from "./chunk";
 import type { CodeChunk } from "./chunkContract";
 import { languageForPath, routeStrategy } from "./route";
 import {
+  CodeIndexUnavailableError,
   createCodeIndexRuntime,
   makeCodeChunkId,
   resolveCodeIndexStorePaths,
@@ -37,12 +38,19 @@ import {
   type CodeSearchCompatibility,
 } from "./embeddingContract";
 import type { VerifiedModel } from "./codeModelAssets";
-import type { Snapshot } from "../source";
+import type { CapturedFile, Snapshot } from "../source";
 import {
   createBoundedBuildReporter,
   NOOP_BUILD_PROGRESS,
   type BuildProgressReporter,
 } from "./buildProgress";
+import {
+  OVERLAY_MANIFEST_VERSION,
+  readOverlayManifest,
+  resolveOverlayManifestPath,
+  writeOverlayManifest,
+  type OverlayManifest,
+} from "./overlayManifest";
 
 export const CODE_INDEX_MANIFEST_VERSION = "code-index-files-v1";
 export const MAX_CHANGED_BYTES = 100 * 1024 * 1024;
@@ -463,4 +471,330 @@ export async function validateCodeIndexBuild(input: {
     throw new Error(`Restored count ${count} does not match manifest chunks ${chunks}.`);
   }
   return { count, chunks };
+}
+
+// ---- Overlay builds -------------------------------------------------------
+
+export type OverlayBuildPlan = {
+  baseId: string;
+  baseStoreDir: string;
+  baseManifest: FileManifest;
+  changed: string[];
+  deleted: string[];
+  unchanged: string[];
+  tombstones: string[];
+  changedSnapshot: Snapshot;
+  changedBytes: number;
+};
+
+export type OverlayBuildValidation = {
+  baseCount: number;
+  overlayCount: number;
+  chunks: number;
+};
+
+function uniqueSorted(values: string[]): string[] {
+  return [...new Set(values)].sort();
+}
+
+async function readValidatedBaseManifest(
+  baseStoreDir: string,
+  compatibility: CodeSearchCompatibility,
+): Promise<FileManifest> {
+  const manifest = await readFileManifest(resolveManifestPath(baseStoreDir));
+  if (manifest === undefined) {
+    throw new CodeIndexUnavailableError(
+      `Base generation manifest is missing or corrupt: ${baseStoreDir}`,
+    );
+  }
+  if (
+    manifest.version !== CODE_INDEX_MANIFEST_VERSION ||
+    manifest.modelId !== compatibility.modelId ||
+    manifest.dimensions !== compatibility.dimensions
+  ) {
+    throw new CodeIndexUnavailableError("Base generation compatibility mismatch.");
+  }
+  return manifest;
+}
+
+async function restoreBaseIndexCount(
+  baseStoreDir: string,
+  manifest: FileManifest,
+): Promise<number> {
+  let runtime: CodeIndexRuntime;
+  try {
+    runtime = await createCodeIndexRuntime(
+      resolveCodeIndexStorePaths(baseStoreDir),
+      { open: "restore" },
+    );
+  } catch (error) {
+    // Preserve the strict-restore unavailable contract; wrap other corruption.
+    if (error instanceof CodeIndexUnavailableError) throw error;
+    throw new CodeIndexUnavailableError(
+      `Base generation index is unavailable: ${baseStoreDir}`,
+      error,
+    );
+  }
+  const count = await runtime.count();
+  const expected = Object.values(manifest.files).reduce(
+    (sum, entry) => sum + entry.chunkCount,
+    0,
+  );
+  if (count !== expected) {
+    throw new CodeIndexUnavailableError(
+      `Base generation count ${count} does not match manifest chunks ${expected}.`,
+    );
+  }
+  return count;
+}
+
+function changedSnapshotOf(snapshot: Snapshot, changed: string[]): Snapshot {
+  const files = new Map<string, CapturedFile>();
+  for (const path of changed) {
+    const file = snapshot.files.get(path);
+    if (file) files.set(path, file);
+  }
+  return { ...snapshot, files };
+}
+
+/**
+ * Diff the full worktree snapshot against an immutable base generation. Only
+ * added/changed files form the overlay-changed snapshot; tombstones cover every
+ * changed base path plus every deleted/now-excluded base path.
+ */
+export async function planOverlayBuild(input: {
+  snapshot: Snapshot;
+  baseId: string;
+  baseStoreDir: string;
+  compatibility: CodeSearchCompatibility;
+  signal?: AbortSignal;
+}): Promise<OverlayBuildPlan> {
+  throwIfAborted(input.signal);
+  const baseManifest = await readValidatedBaseManifest(input.baseStoreDir, input.compatibility);
+  await restoreBaseIndexCount(input.baseStoreDir, baseManifest);
+
+  const diff = diffManifest(baseManifest, snapshotEntries(input.snapshot));
+  const basePaths = new Set(Object.keys(baseManifest.files));
+  const tombstones = uniqueSorted([
+    ...diff.deleted,
+    ...diff.changed.filter((path) => basePaths.has(path)),
+  ]);
+
+  let changedBytes = 0;
+  for (const path of diff.changed) {
+    const file = input.snapshot.files.get(path);
+    if (file) changedBytes += file.bytes.length;
+  }
+  if (changedBytes > MAX_CHANGED_BYTES) {
+    throw new Error(
+      `Changed bytes ${changedBytes} exceed the ${MAX_CHANGED_BYTES} byte ceiling.`,
+    );
+  }
+
+  return {
+    baseId: input.baseId,
+    baseStoreDir: input.baseStoreDir,
+    baseManifest,
+    changed: diff.changed,
+    deleted: diff.deleted,
+    unchanged: diff.unchanged,
+    tombstones,
+    changedSnapshot: changedSnapshotOf(input.snapshot, diff.changed),
+    changedBytes,
+  };
+}
+
+/**
+ * Build an overlay generation from only the changed-file snapshot, compose the
+ * complete worktree manifest, enforce the merged chunk ceiling, and write the
+ * overlay manifest. A clean worktree yields a valid empty overlay index.
+ */
+export async function buildOverlayIndex(input: {
+  plan: OverlayBuildPlan;
+  destinationDir: string;
+  compatibility: CodeSearchCompatibility;
+  model: VerifiedModel;
+  modelsRoot: string;
+  cachePath?: string;
+  signal?: AbortSignal;
+  createEmbeddingRuntime?: BuildEmbeddingRuntimeFactory;
+  progress?: BuildProgressReporter;
+}): Promise<CodeIndexBuildResult> {
+  const plan: CodeIndexBuildPlan = {
+    previousManifest: undefined,
+    previousStoreDir: undefined,
+    changed: input.plan.changed,
+    deleted: [],
+    unchanged: [],
+    changedBytes: input.plan.changedBytes,
+  };
+  const result = await buildCodeIndex({
+    plan,
+    snapshot: input.plan.changedSnapshot,
+    destinationDir: input.destinationDir,
+    compatibility: input.compatibility,
+    model: input.model,
+    modelsRoot: input.modelsRoot,
+    cachePath: input.cachePath,
+    signal: input.signal,
+    createEmbeddingRuntime: input.createEmbeddingRuntime,
+    progress: input.progress,
+  });
+
+  const changedManifest = await readFileManifest(resolveManifestPath(input.destinationDir));
+  if (changedManifest === undefined) {
+    throw new Error("Overlay staging manifest is missing or corrupt.");
+  }
+  const files: Record<string, FileManifestEntry> = {};
+  for (const [path, entry] of Object.entries(input.plan.baseManifest.files)) {
+    if (input.plan.unchanged.includes(path)) files[path] = entry;
+  }
+  for (const [path, entry] of Object.entries(changedManifest.files)) {
+    files[path] = entry;
+  }
+  const mergedChunks = Object.values(files).reduce((sum, entry) => sum + entry.chunkCount, 0);
+  if (mergedChunks > MAX_TOTAL_CHUNKS) {
+    throw new Error(`Merged chunks ${mergedChunks} exceed the ${MAX_TOTAL_CHUNKS} chunk ceiling.`);
+  }
+  const overlayManifest: OverlayManifest = {
+    version: OVERLAY_MANIFEST_VERSION,
+    baseId: input.plan.baseId,
+    modelId: input.compatibility.modelId,
+    dimensions: input.compatibility.dimensions,
+    files,
+    tombstones: uniqueSorted(input.plan.tombstones),
+  };
+  await writeOverlayManifest(input.destinationDir, overlayManifest);
+
+  let derivedBytes = result.derivedBytes;
+  derivedBytes += (await stat(resolveOverlayManifestPath(input.destinationDir))).size;
+  return { ...result, derivedBytes };
+}
+
+/** Strict-validate both the base and overlay stores against the worktree snapshot. */
+export async function validateOverlayBuild(input: {
+  destinationDir: string;
+  baseStoreDir: string;
+  baseId: string;
+  compatibility: CodeSearchCompatibility;
+  snapshot: Snapshot;
+  expectedTombstones: string[];
+}): Promise<OverlayBuildValidation> {
+  const baseManifest = await readValidatedBaseManifest(input.baseStoreDir, input.compatibility);
+  const baseCount = await restoreBaseIndexCount(input.baseStoreDir, baseManifest);
+
+  const overlayManifest = await readOverlayManifest(input.destinationDir);
+  if (overlayManifest === undefined) {
+    throw new Error("Overlay manifest is missing or corrupt.");
+  }
+  if (overlayManifest.baseId !== input.baseId) {
+    throw new Error("Overlay base identity mismatch.");
+  }
+  if (
+    overlayManifest.modelId !== input.compatibility.modelId ||
+    overlayManifest.dimensions !== input.compatibility.dimensions
+  ) {
+    throw new Error("Overlay compatibility mismatch.");
+  }
+  const snapshotHashByPath = new Map(
+    [...input.snapshot.files.entries()].map(([path, file]) => [path, file.sha256]),
+  );
+  const recomputedTombstones = uniqueSorted(
+    Object.entries(baseManifest.files)
+      .filter(([path, entry]) => {
+        const nextHash = snapshotHashByPath.get(path);
+        return nextHash === undefined || nextHash !== entry.hash;
+      })
+      .map(([path]) => path),
+  );
+  const expectedCanonical = uniqueSorted(input.expectedTombstones);
+  if (JSON.stringify(recomputedTombstones) !== JSON.stringify(expectedCanonical)) {
+    throw new Error("Overlay tombstones do not match the expected set.");
+  }
+  if (JSON.stringify(overlayManifest.tombstones) !== JSON.stringify(recomputedTombstones)) {
+    throw new Error("Overlay manifest tombstones are not canonical.");
+  }
+
+  const manifestPaths = Object.keys(overlayManifest.files).sort();
+  const snapshotPaths = [...input.snapshot.files.keys()].sort();
+  if (
+    manifestPaths.length !== snapshotPaths.length ||
+    manifestPaths.some((path, index) => path !== snapshotPaths[index])
+  ) {
+    throw new Error("Overlay worktree manifest paths do not match the captured snapshot.");
+  }
+  for (const [path, entry] of Object.entries(overlayManifest.files)) {
+    const file = input.snapshot.files.get(path);
+    if (!file || file.sha256 !== entry.hash) {
+      throw new Error(`Overlay manifest hash mismatch for ${path}.`);
+    }
+  }
+
+  const changedManifest = await readFileManifest(resolveManifestPath(input.destinationDir));
+  if (changedManifest === undefined) {
+    throw new Error("Overlay staging manifest is missing or corrupt.");
+  }
+  if (
+    changedManifest.version !== CODE_INDEX_MANIFEST_VERSION ||
+    changedManifest.modelId !== input.compatibility.modelId ||
+    changedManifest.dimensions !== input.compatibility.dimensions
+  ) {
+    throw new Error("Overlay changed manifest compatibility mismatch.");
+  }
+  const overlayRuntime = await createCodeIndexRuntime(
+    resolveCodeIndexStorePaths(input.destinationDir),
+    { open: "restore" },
+  );
+  const overlayCount = await overlayRuntime.count();
+  const overlayChunks = Object.values(changedManifest.files).reduce(
+    (sum, entry) => sum + entry.chunkCount,
+    0,
+  );
+  if (overlayCount !== overlayChunks) {
+    throw new Error("Overlay index count does not match its changed manifest.");
+  }
+
+  const changedPaths = Object.keys(changedManifest.files).sort();
+  const expectedChanged = [...input.snapshot.files.keys()]
+    .filter((path) => {
+      const base = baseManifest.files[path];
+      return base === undefined || base.hash !== input.snapshot.files.get(path)!.sha256;
+    })
+    .sort();
+  if (JSON.stringify(changedPaths) !== JSON.stringify(expectedChanged)) {
+    throw new Error("Overlay changed rows do not match the worktree diff.");
+  }
+
+  // Every expected changed/added path must carry the exact captured hash in
+  // both the changed-only manifest and the complete overlay manifest.
+  for (const path of expectedChanged) {
+    const nextHash = snapshotHashByPath.get(path);
+    const changedEntry = changedManifest.files[path];
+    if (!changedEntry || changedEntry.hash !== nextHash) {
+      throw new Error(`Overlay changed manifest hash mismatch for ${path}.`);
+    }
+    const completeEntry = overlayManifest.files[path];
+    if (!completeEntry || completeEntry.hash !== nextHash) {
+      throw new Error(`Overlay complete manifest hash mismatch for ${path}.`);
+    }
+  }
+
+  // Each complete worktree chunkCount must equal its exact source entry.
+  for (const [path, entry] of Object.entries(overlayManifest.files)) {
+    const base = baseManifest.files[path];
+    const nextHash = snapshotHashByPath.get(path);
+    const source = base && base.hash === nextHash ? base : changedManifest.files[path];
+    if (!source || source.chunkCount !== entry.chunkCount) {
+      throw new Error(`Overlay chunk count mismatch for ${path}.`);
+    }
+  }
+
+  const mergedChunks = Object.values(overlayManifest.files).reduce(
+    (sum, entry) => sum + entry.chunkCount,
+    0,
+  );
+  if (mergedChunks > MAX_TOTAL_CHUNKS) {
+    throw new Error(`Merged chunks ${mergedChunks} exceed the ${MAX_TOTAL_CHUNKS} chunk ceiling.`);
+  }
+  return { baseCount, overlayCount, chunks: mergedChunks };
 }
