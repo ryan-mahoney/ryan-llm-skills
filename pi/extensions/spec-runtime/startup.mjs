@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { join, dirname } from 'node:path';
 import { buildHistoryIndex } from '../../../skills/spec-run/scripts/build-history-index.mjs';
 
+import { splitModelSelector } from './model-selector.mjs';
+
 const read = path => JSON.parse(readFileSync(path, 'utf8'));
 const entries = path => existsSync(path) ? readdirSync(path).filter(name => !name.startsWith('.')) : [];
 
@@ -38,7 +40,8 @@ export async function preparedEntry(packagePath, input) {
   if (!['easy', 'medium', 'hard'].includes(selected.difficulty) && input.strong_owner_model && !input.owner_override)
     throw new Error('Recorded step difficulty is absent/unknown; supply owner_override from the existing routing policy without re-planning');
   const owner = input.owner_override || (selected.difficulty === 'hard' && input.strong_owner_model) || input.owner_model;
-  if (!owner || !input.editor_model) throw new Error('owner_model and editor_model are required');
+  splitModelSelector(owner);
+  splitModelSelector(input.editor_model);
   for (const name of ['inbox', 'processed']) mkdirSync(join(packagePath, name), { recursive: true });
   if (!existsSync(artifacts['history-index.json'])) {
     const index = await buildHistoryIndex(packagePath);

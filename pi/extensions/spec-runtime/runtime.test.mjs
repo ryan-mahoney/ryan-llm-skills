@@ -605,3 +605,59 @@ test('sentinel cancellation: assertIdleWriter rejects a claimed editor slot whil
   assertIdleWriter(record);
   await runtime.cancel(f.packagePath, started.run_id, 1000);
 });
+
+test('editor latches deterministic model failure across retained records without revoking lease or retrying', async t => {
+  const f = fixture(t, 'setInterval(()=>{},1000);');
+  const runtime = new Runtime(f.options);
+  runtime.start({ ...f.input, editor_model: 'vendor/team/exact-model:high' });
+  let launches = 0;
+  const failedLaunch = () => {
+    launches++;
+    return { child: { pid: undefined }, done: Promise.resolve({ error: '404 This model cannot be used with the chat/completions endpoint (adapter DeepInfraBatchAdapter)' }) };
+  };
+  try {
+    const first = await runEditor(loadRun(f.packagePath), 'Apply edits', undefined, failedLaunch);
+    assert.equal(first.coordinator_action_required, true);
+    assert.match(first.error, /vendor\/team\/exact-model:high/);
+    const repeated = await runEditor(loadRun(f.packagePath), 'Try again', undefined, failedLaunch);
+    assert.equal(repeated.coordinator_action_required, true);
+    assert.equal(launches, 1);
+    assertLease(loadRun(f.packagePath));
+    assert.equal(existsSync(join(loadRun(f.packagePath).lock, 'editor')), false);
+    const corrected = { ...loadRun(f.packagePath), editor_model: 'vendor/team/corrected-model:high' };
+    await runEditor(corrected, 'Corrected selector', undefined, () => ({ child: { pid: undefined }, done: Promise.resolve({ result: 'done' }) }));
+  } finally { await runtime.cancel(f.packagePath); }
+});
+
+test('editor transient and undiagnosed HTTP errors remain retryable', async t => {
+  const f = fixture(t, 'setInterval(()=>{},1000);');
+  const runtime = new Runtime(f.options); runtime.start(f.input);
+  let launches = 0;
+  try {
+    for (const error of ['404 Not Found', 'ECONNRESET', '429 Too Many Requests']) {
+      const launchFailure = () => { launches++; return { child: { pid: undefined }, done: Promise.resolve({ error }) }; };
+      assert.equal((await runEditor(loadRun(f.packagePath), 'Retry packet', undefined, launchFailure)).error, error);
+    }
+    assert.equal(launches, 3);
+    assertLease(loadRun(f.packagePath));
+  } finally { await runtime.cancel(f.packagePath); }
+});
+
+test('launch passes exact nested model and thinking separately and captures selector mismatch diagnostics', async t => {
+  const f = fixture(t, `if(process.env.SPEC_RUNTIME_ROLE==='owner')setInterval(()=>{},1000); else { console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:JSON.stringify(process.argv.slice(2))}]}})); }`);
+  const runtime = new Runtime(f.options); runtime.start({ ...f.input, editor_model: 'openrouter/deepseek/deepseek-v4.1-flash:high' });
+  try {
+    const record = loadRun(f.packagePath);
+    const reply = await runEditor(record, 'Apply', undefined, f.options.launchProcess);
+    const args = JSON.parse(reply.result);
+    assert.equal(args[args.indexOf('--provider') + 1], 'openrouter');
+    assert.equal(args[args.indexOf('--model') + 1], 'deepseek/deepseek-v4.1-flash');
+    assert.equal(args[args.indexOf('--thinking') + 1], 'high');
+    const mismatchScript = join(f.dir, 'mismatch.cjs');
+    writeFileSync(mismatchScript, "process.stderr.write('SPEC_MODEL_SELECTOR_MISMATCH: requested exact model; selected variant\\n');process.exitCode=78;");
+    const failure = await runEditor(record, 'Apply', undefined, (run, role, prompt) => launch(run, role, prompt, { command: process.execPath, prefix: [mismatchScript] }));
+    assert.equal(failure.coordinator_action_required, true);
+    assert.match(failure.error, /selected variant/);
+    assertLease(record);
+  } finally { await runtime.cancel(f.packagePath); }
+});

@@ -16,8 +16,7 @@ responsibility. This policy adds no planning stage or implementation reviewer.
 
 Record exact provider/model/thinking selectors in the existing ledger and pass them on
 launch. Omitted `STRONG_OWNER` preserves single-owner behavior; do not discover or invent
-an upgrade. Identical selectors share one session and offer no model promotion. Editor, review, and review-fix roles
-keep their existing assignments. Launch errors follow the existing setup-error policy,
+an upgrade. Identical selectors share one session and offer no model promotion. Editor and independent review roles keep their existing assignments. Review-fix work defaults to the relevant step's recorded implementation owner, including a promoted stronger owner; an explicit fixer override takes precedence. Do not revert review fixes to the ordinary owner merely because implementation has ended. Launch errors follow the existing setup-error policy,
 not the difficulty-escalation route.
 
 ## Select at dispatch
@@ -29,7 +28,7 @@ On resumption, preserve the recorded owner and promotion state; do not reclassif
 interrupted work back to the default owner or reset its promotion allowance.
 The stronger owner is available proactively for consequential design, contract,
 concurrency or recovery judgment and poor choices that focused tests may miss.
-Do not require a test failure before choosing it. Missing authority retains the
+At preparation, judge remaining atomicity, cross-process ownership, check/use races, lifetime identity across cancellation/restart, recovery after partial failure, and hidden coupling with substantial consequences that focused tests may miss. When those choices remain consequential, select the stronger owner upfront; a settled mechanical application of verified precedent need not be hard. Reuse the existing grounded difficulty and Jev batch, without a classifier, probe, or dispatch-time delay. Do not require a test failure before choosing it. Missing authority retains the
 existing planning-blocker route.
 
 ## Retain pairs and transfer work

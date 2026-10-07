@@ -9,10 +9,16 @@ The managed runtime records each assignment in the canonical feature package:
 | `runtime/events.jsonl` | Append-only timestamped lifecycle events |
 | `runtime/sessions/<pair-id>/` | Retained owner/editor session files |
 | `runtime/runs/<id>-activity/{owner,editor}.json` | Bounded live activity snapshots for the monitor |
+| `runtime/runs/<id>-editor-configuration.json` | Diagnosed model configuration failure that blocks identical editor retries |
+| `runtime/progress.json` | Derived worker/handoff facts, stage decisions and artifact locations |
+| `runtime/stages/<stage>.json` | Coordinator decisions recorded by `spec_checkpoint` |
 
-These records track execution. The existing stage ledger still owns stage decisions,
-review outcomes, publication and acceptance. Process completion alone does not establish
-that a step met its acceptance criteria.
+Runtime facts track execution; `spec_complete` records the owner's handoff and
+`spec_checkpoint` records coordinator stage judgments. Canonical review/fix artifacts
+still own independent findings. Process completion alone does not establish acceptance
+or ready publication. Checkpoint aliases share completion guards; `publication-draft`
+records draft progress without claiming ready publication. After human input, older
+stage decisions are marked for reconciliation without automatically releasing holds.
 
 ## Live Pi monitor
 

@@ -141,7 +141,11 @@ Treat workflow modifiers in the request as run-wide constraints. Examples includ
 Record role model assignments in the ledger as exact `provider/id[:thinking]` values
 and pass each one on every launch for that role. Preserve explicit provider/model
 selectors and resolve known role names directly; do not enumerate or test all models
-and agents before implementation. Actual launch validates availability. Use discovery
+and agents before implementation. In `<model>[:thinking] from <provider>`, prepend
+the provider to the entire model identifier; preserve every slash and model variant.
+For example, `deepseek/deepseek-v4.1-flash:high from openrouter` becomes
+`openrouter/deepseek/deepseek-v4.1-flash:high`, not a shortened model name.
+Actual launch validates availability. Use discovery
 only for an ambiguous selector or a concrete launch error, without silently substituting
 a model. The Pi step editor defaults to `openrouter/inception/mercury-2.5:high`; other
 unassigned roles use agent/settings defaults. A legacy step-implementation assignment
@@ -153,7 +157,9 @@ assignments. Supplying a stronger owner enables difficulty routing for implement
 steps under [Step owner routing](../spec-run/references/owner-routing.md). Pass these
 assignments and any explicit step overrides to `spec-run`; it owns selection and
 escalation. Without a stronger assignment, preserve single-owner execution. Routing
-does not change the models assigned to editors, reviewers, or review fixers.
+does not change editor or reviewer assignments. Unless the user assigns a fix model,
+review fixes use the effective owner of the reviewed step; pass that selector explicitly
+on every fixer launch so it cannot inherit the coordinator's model.
 
 Honor explicit directives over the defaults below. Use delegation only when the user requests it,
 a leaf skill requires it, or the active harness instructions independently require it. The

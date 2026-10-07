@@ -242,7 +242,7 @@ export function buildDifficultyQuestions(input, lib) {
     [`tier_${i}`, lib.choice(`Classify step ${step.id} by remaining implementation judgment, not size, file count or risk labels. Product intent or authority ambiguity cannot be resolved here. When genuinely uncertain between medium and hard, prefer hard.`, {
       easy: 'Explicit settled route with direct precedent, mechanical choices and focused evidence that exposes credible mistakes.',
       medium: 'Established route with bounded adaptation, settled contracts and ownership, and observable error paths.',
-      hard: 'Consequential remaining design, contract, concurrency or recovery judgment; or poor choices with substantial consequences likely missed by focused tests.',
+      hard: 'Consequential remaining design or contract judgment, including operation atomicity, cross-process ownership/check-use races, lifetime identity through cancellation or restart, partial-failure recovery and hidden coupling; or poor choices with substantial consequences likely missed by focused tests. Settled mechanical precedent is not hard merely because concurrency is present.',
       unclear: 'Missing or contradictory facts, unresolved product intent or authority, or unable to distinguish tiers.'
     })]
   ]));

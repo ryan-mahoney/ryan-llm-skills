@@ -43,6 +43,23 @@ When current consumers need a new shared component, place it in the established 
 library; keep feature-specific composition local. Visual similarity alone does not justify
 merging different behavior contracts or creating speculative component APIs.
 
+**Preserve shared callers and safety contracts.** When changing a common helper,
+test fixture, or process owner, inspect its nearest real callers and the relevant
+ordinary/alternate modes at the affected revision. Identify what existing callers
+must retain, including lifecycle and cleanup protection. Before adding a parallel
+helper or lower-level path, locate the existing owner and its safety contract. For
+example, process termination that validates both PID and start identity must not be
+replaced by signalling a numeric PID after closing a handle; the PID may be reused.
+Carry the owning symbol/path and these constraints into the editor's existing
+`Edits`/`Preserve` packet, not a separate inventory.
+
+A passing new-path test may exit before changed shared behavior is reached. Reuse
+existing focused coverage of a representative unaffected caller/mode; if that path
+has a concrete coverage gap, exercise the smallest existing test or add a focused
+case that reaches it. For example, a discovery-only fake may pass while its ordinary
+message emitter still calls a deleted helper. Schedule checks after coherent edits
+under the shared verification policy, not per edit or through a broad suite.
+
 Stage obligations:
 
 - **Architecture and specification:** identify the relevant helper, shared-value, and component
@@ -59,7 +76,11 @@ Stage obligations:
 - **Step review:** check new or changed responsibilities against their named owners and a
   bounded precedent search at the reviewed revision. Confirm the same contract and concrete
   drift or maintenance harm before flagging a duplicate. Do not survey the whole repository
-  or defer this check to a final branch audit.
+  or defer this check to a final branch audit. For shared helpers/fixtures, trace a
+  representative existing caller and mode the new evidence does not reach. Check for
+  deleted-but-still-called behavior and lower-level bypasses of lifecycle/identity
+  protection. Report a concrete defect or material evidence gap through the existing
+  finding schema; a passing new-path test does not discharge an unaffected contract.
 - **Explicit branch audit and fix:** check both directions. A new helper may duplicate an existing one,
   and a changed helper may have copies that still carry the old behavior. When a fix corrects a
   helper's logic, search for copies with the same defect and correct or consolidate them, or

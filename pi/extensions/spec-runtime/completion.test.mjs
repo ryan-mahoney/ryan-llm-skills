@@ -117,3 +117,83 @@ test('coordinator session binding survives compaction and restores next action w
   assert.equal(persisted.length, 1);
   await handlers.session_shutdown();
 });
+
+test('skill stage aliases retain completion guards while draft publication remains a checkpoint', async t => {
+  const f = fixture(t);
+  await refreshProgress(f.pkg);
+  for (const stage of ['spec-run', 'spec-step-run', 'spec-pr']) {
+    assert.throws(() => recordCheckpoint(f.pkg, { stage, status: 'complete', next: 'Continue', decisions: [], artifacts: ['spec.md'] }), /Unfinished/);
+  }
+  assert.equal(recordCheckpoint(f.pkg, { stage: 'publication-draft', status: 'complete', next: 'Wait for review and CI', decisions: [], artifacts: ['spec.md'] }).stage, 'publication-draft');
+  assert.equal(recordCheckpoint(f.pkg, { stage: 'spec-run', status: 'running', next: 'Finish', decisions: [], artifacts: ['spec.md'] }).stage, 'implementation');
+});
+
+test('artifact references accept canonical package forms and reject escapes or future evidence', t => {
+  const f = fixture(t);
+  for (const path of ['spec.md', '.specs/feature/spec.md', join(f.pkg, 'spec.md')]) {
+    assert.equal(recordCheckpoint(f.pkg, { stage: 'preparation', status: 'complete', next: 'Implement', decisions: [], artifacts: [path] }).status, 'complete');
+  }
+  for (const artifact of ['evidence/check.txt', '.specs/feature/evidence/check.txt', f.evidence]) {
+    assert.equal(submitCompletion(f.r, { ...f.input, evidence: [{ ...f.input.evidence[0], artifact }] }).status, 'recorded');
+  }
+  mkdirSync(join(f.root, 'evidence')); writeFileSync(join(f.root, 'evidence/check.txt'), 'different checkout artifact');
+  assert.throws(() => submitCompletion(f.r, { ...f.input, evidence: [{ ...f.input.evidence[0], artifact: 'evidence/check.txt' }] }), /Ambiguous evidence/);
+  assert.throws(() => recordCheckpoint(f.pkg, { stage: 'preparation', status: 'running', next: 'Implement', decisions: [], artifacts: ['../outside.md'] }), /canonical root/);
+  assert.throws(() => recordCheckpoint(f.pkg, { stage: 'preparation', status: 'running', next: 'Implement', decisions: [], artifacts: ['runtime/future-editor.jsonl'] }), /existing artifact/);
+  assert.throws(() => submitCompletion(f.r, { ...f.input, evidence: [{ ...f.input.evidence[0], artifact: 'evidence/future.txt' }] }), /actual evidence or report pending/);
+});
+
+test('new human input marks stale stage decisions for reconciliation after resume without releasing holds', async t => {
+  const f = fixture(t), handlers = {}, persisted = [];
+  const pi = { on: (event, fn) => { handlers[event] = fn; }, appendEntry: (customType, data) => persisted.push({ type: 'custom', customType, data }) };
+  const hooks = installProgressContext(pi); hooks.attach(f.pkg);
+  recordCheckpoint(f.pkg, { stage: 'implementation', status: 'blocked', next: 'Await human decision', decisions: ['Hold implementation'], artifacts: ['spec.md'] });
+  await refreshProgress(f.pkg);
+  handlers.input({ type: 'input', source: 'interactive', text: 'Here is more context' });
+  const inputRecords = persisted.filter(entry => entry.customType === 'spec-progress-input');
+  handlers.input({ type: 'input', source: 'extension', text: 'Automated follow-up' });
+  handlers.input({ type: 'input', source: 'tool', text: 'Tool output' });
+  assert.equal(persisted.filter(entry => entry.customType === 'spec-progress-input').length, inputRecords.length);
+  const context = () => handlers.context({ messages: [] }).messages.at(-1).content;
+  assert.match(context(), /implementation=blocked.*recorded before latest user input/);
+  assert.match(context(), /holds remain until explicitly resolved/);
+  await handlers.session_shutdown();
+  installProgressContext(pi); handlers.session_start({}, { sessionManager: { getBranch: () => persisted } });
+  assert.match(context(), /recorded before latest user input/);
+  const recorded = JSON.parse(readFileSync(join(f.pkg, 'runtime/stages/implementation.json')));
+  assert.equal(recorded.status, 'blocked'); assert.deepEqual(recorded.decisions, ['Hold implementation']);
+  await handlers.session_shutdown();
+});
+
+test('progress reconciles historical stage aliases by newest checkpoint and retains latest hold', async t => {
+  const f = fixture(t);
+  const directory = join(f.pkg, 'runtime/stages'); mkdirSync(directory);
+  const checkpoint = { status: 'complete', next: 'Continue', artifacts: ['spec.md'], decisions: [] };
+  writeFileSync(join(directory, 'spec-run.json'), JSON.stringify({ ...checkpoint, stage: 'spec-run', recorded_at: '2026-01-01T00:00:00Z' }));
+  writeFileSync(join(directory, 'implementation.json'), JSON.stringify({ ...checkpoint, stage: 'implementation', status: 'blocked', next: 'Hold for decision', recorded_at: '2026-01-02T00:00:00Z' }));
+  let progress = await refreshProgress(f.pkg);
+  assert.equal(progress.stages.length, 1);
+  assert.equal(progress.stages[0].stage, 'implementation');
+  assert.equal(progress.stages[0].status, 'blocked');
+  writeFileSync(join(directory, 'spec-run.json'), JSON.stringify({ ...checkpoint, stage: 'spec-run', status: 'running', next: 'Explicitly resume', recorded_at: '2026-01-03T00:00:00Z' }));
+  progress = await refreshProgress(f.pkg);
+  assert.equal(progress.stages.length, 1);
+  assert.equal(progress.stages[0].next, 'Explicitly resume');
+  assert.equal(recordCheckpoint(f.pkg, { ...checkpoint, stage: 'spec-write' }).stage, 'preparation');
+});
+
+test('session restore clears input and package bindings from the previous branch', async t => {
+  const f = fixture(t), handlers = {}, entries = [];
+  const pi = { on: (event, fn) => { handlers[event] = fn; }, appendEntry: (customType, data) => entries.push({ type: 'custom', customType, data }) };
+  const hooks = installProgressContext(pi); hooks.attach(f.pkg);
+  recordCheckpoint(f.pkg, { stage: 'preparation', status: 'blocked', next: 'Await decision', decisions: [], artifacts: ['spec.md'] });
+  await refreshProgress(f.pkg);
+  handlers.input({ source: 'rpc', text: 'A new direction' });
+  assert.match(handlers.context({ messages: [] }).messages[0].content, /recorded before latest user input/);
+  const binding = entries.filter(entry => entry.customType === 'spec-progress-binding');
+  handlers.session_start({}, { sessionManager: { getBranch: () => binding } });
+  assert.doesNotMatch(handlers.context({ messages: [] }).messages[0].content, /recorded before latest user input/);
+  handlers.session_tree({}, { sessionManager: { getBranch: () => [] } });
+  assert.equal(handlers.context({ messages: [] }), undefined);
+  await handlers.session_shutdown();
+});

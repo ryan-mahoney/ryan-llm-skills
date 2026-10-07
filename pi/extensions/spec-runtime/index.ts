@@ -5,6 +5,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { join, resolve, realpathSync } from 'node:path';
 import { homedir } from 'node:os';
 import { Runtime, loadRun, summary, assertLease, runEditor, runCommand, runVerification, runAdvice, runCompletion, canonicalPackage, assertIdleWriter, event as runtimeEvent } from './runtime.mjs';
+import { assertModelSelector } from './model-selector.mjs';
 import { createCommunication } from './communication.mjs';
 import { createMonitor } from './monitor.mjs';
 import { createSentinelObserver, createVerificationRecorder, recordCheckpoint as recordSentinelCheckpoint, readInboxGuard, readCheckpointRecord, observeInput, reconcileRuntimeReturn, checkpointPath, createSentinelAuthority, createDiagnosisController, activatePolicy, disablePolicy, handleBeforeSettle, finishIntent, considerCancellation } from './sentinel.mjs';
@@ -93,7 +94,19 @@ export default function (pi: any) {
     const communication = createCommunication(pi, record, role, { onEvent: (name: string, detail: any) => runtimeEvent(record, name, detail) });
     const allowed = role === 'owner' ? ['read', 'grep', 'find', 'ls', 'spec_editor', 'spec_answer', 'spec_verify', 'spec_scout', 'spec_advice', 'spec_complete'] : ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', 'spec_question'];
     pi.on('session_shutdown', () => communication.close());
-    pi.on('session_start', () => pi.setActiveTools(allowed));
+    pi.on('session_start', (_event: any, ctx: any) => {
+      // Apply the process guard only to an authenticated managed worker lease.
+      if (!['owner', 'editor'].includes(role) || !record.id || !record.token) return;
+      assertLease(record);
+      try { assertModelSelector(record[`${role}_model`], ctx.model); }
+      catch (error: any) {
+        // Extension hook errors are caught by Pi. Exit this managed child before
+        // an API request can use a fuzzy match or a restored session's model.
+        process.stderr.write(`${error.message}\n`);
+        process.exit(78);
+      }
+      pi.setActiveTools(allowed);
+    });
     pi.on('tool_call', (event: any) => {
       try {
         assertLease(record);
@@ -103,7 +116,7 @@ export default function (pi: any) {
       } catch (error: any) { return { block: true, reason: error.message }; }
     });
     if (role === 'owner') {
-      pi.registerTool({ name: 'spec_complete', label: 'Record step handoff', description: 'After edits, focused checks and any commit, record the step outcome and material judgments. Runtime writes canonical learning, supplies HEAD and verification receipts, and refreshes progress/history. Does not accept independent review or certify evidence. Supply exactly the prepared step-owned EV IDs; use spec_verify receipt_id for observed checks, applicability for earlier/dirty revisions. External evidence requires command, observedCommit, applicability and artifact. Use checkpoint for unresolved required merge evidence. Empty decisions/gaps/findings/introduced arrays are allowed; do not add process narration.',
+      pi.registerTool({ name: 'spec_complete', label: 'Record step handoff', description: 'After edits, focused checks and any commit, record the step outcome and material judgments. Runtime writes canonical learning, supplies HEAD and verification receipts, and refreshes progress/history. Does not accept independent review or certify evidence. Supply exactly the prepared step-owned EV IDs; use spec_verify receipt_id for observed checks, applicability for earlier/dirty revisions. External evidence requires command, observedCommit, applicability and artifact. Use checkpoint for unresolved required merge evidence. introduced lists reusable implementation code in checkout-relative paths; use [] for evidence helpers or package artifacts. Evidence paths accept canonical absolute, .specs repo-relative, or existing package-relative paths. Empty decisions/gaps/findings/introduced arrays are allowed; do not add process narration.',
         parameters: Type.Object({ outcome: Type.Union(['as-specified', 'adapted', 'checkpoint', 'no-artifact', 'decision-required', 'needs-spec-correction'].map(v => Type.Literal(v))),
           strategy: Type.Union([Type.Literal('test-first'), Type.Literal('implementation-first')]),
           fix_attempts: Type.Optional(Type.Number({ minimum: 0 })),
@@ -173,8 +186,8 @@ export default function (pi: any) {
   }
   const progress = installProgressContext(pi);
   const monitor = createMonitor();
-  pi.registerTool({ name: 'spec_checkpoint', label: 'Record workflow decision', description: 'Record the current stage, next action and material decisions in the managed workflow ledger. Runtime records worker/check/review-arrival facts automatically; do not transcribe those. Complete is a coordinator assessment backed by artifact references, never inferred from worker exit. Preserve human holds and unresolved obligations.',
-    parameters: Type.Object({ package: Type.String(), stage: Type.String(), status: Type.Union(['pending', 'running', 'complete', 'blocked'].map(v => Type.Literal(v))), next: Type.String(), decisions: Type.Array(Type.String()), artifacts: Type.Array(Type.String({ description: 'Canonical package-relative evidence/decision artifact paths' })) }),
+  pi.registerTool({ name: 'spec_checkpoint', label: 'Record workflow decision', description: 'Record the current stage, next action and material decisions in the managed workflow ledger. Runtime records worker/check/review-arrival facts automatically; do not transcribe those. Complete is a coordinator assessment backed by artifact references, never inferred from worker exit. Known skill stage names are normalized (spec-run to implementation, spec-pr to publication). Complete implementation/publication requires finished workers and complete handoffs; use publication-draft for a draft checkpoint, never ready publication. Preserve human holds and unresolved obligations.',
+    parameters: Type.Object({ package: Type.String(), stage: Type.String(), status: Type.Union(['pending', 'running', 'complete', 'blocked'].map(v => Type.Literal(v))), next: Type.String(), decisions: Type.Array(Type.String()), artifacts: Type.Array(Type.String({ description: 'Existing package-relative, .specs repo-relative, or canonical absolute artifact paths; future session/evidence paths are not evidence' })) }),
     async execute(_id: string, args: any) {
       try { const { packagePath } = canonicalPackage(args.package); await refreshProgress(packagePath); const receipt = recordCheckpoint(packagePath, args); progress.attach(packagePath); await refreshProgress(packagePath); return result(receipt); }
       catch (error: any) { return result({ error: error.message }, true); }

@@ -173,3 +173,38 @@ Coordinators use `spec_checkpoint` for stage decisions and next actions, without
 ledger. State-derived context reminders survive compaction without polling models or generating
 extra turns. These changes address an observed missing-learning/index-refresh failure; they do not
 establish compaction as its cause or guarantee all semantic process judgments are correct.
+
+## Corrections from recent implementation runs
+
+Managed workers now receive separate provider, complete model ID and reasoning settings.
+The runtime rejects a different resolved model before the worker makes an API request.
+An editor failure with an explicit model/provider configuration diagnosis is retained for
+that assignment; identical retries return the original cause for coordinator action.
+Ordinary network failures and an unexplained HTTP status do not trigger that block.
+This prevents repeated known configuration failures without probing model inventories or
+silently switching assignments. Fixer launches must explicitly select the reviewed step's
+recorded effective owner, unless the user supplies a fix-model override.
+
+Checkpoint skill aliases use the same stage completion guards as canonical names. Artifact
+references accept canonical, package-relative and repository-relative `.specs` paths while
+preserving confinement and existence checks. Draft publication remains distinct from ready
+publication. New human input marks earlier stage decisions for reconciliation; it does not
+release a hold or imply approval. Expected future session files are not evidence.
+
+Verification guidance reuses maintained fixtures and the existing managed server lifecycle.
+A journey checks its relevant seeded/application state before expensive interactions; HTTP
+success alone does not establish live-worker readiness. A setup failure sends diagnosis to
+the first failing boundary instead of repeating an unchanged whole journey. Shared-helper
+changes also account for existing callers and modes that a new test does not reach, including
+identity and lifecycle protections already owned by a central helper.
+
+Known dependency gaps remain explicit obligations. Coordinators may advance already-prepared
+independent work while preserving step identities and deferring gates whose real producer is
+unavailable. Preparation and its existing batched Jev advice now name atomicity, cross-process
+ownership, cancellation/restart identity and partial-failure recovery as possible sources of
+remaining hard judgment. This strengthens upfront routing without adding dispatch-time
+classification or treating every concurrency-related edit as hard.
+
+These corrections address observed failure patterns. Focused synthetic runtime checks and
+instruction changes do not establish a measured reduction in live duration, cost or defects;
+subsequent runs still need comparison against their actual obligations and environment.

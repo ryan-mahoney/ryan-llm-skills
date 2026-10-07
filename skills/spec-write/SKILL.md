@@ -304,6 +304,8 @@ Each step's `Covers:`, `Complexity:`, `Visual:`, and (when the step owns evidenc
 | `medium` | Established route with bounded adaptation, settled contracts and ownership, and observable error paths. |
 | `hard` | Consequential remaining design, contract, concurrency or recovery judgment; or poor choices with substantial consequences likely missed by focused tests. |
 
+Judge concurrency and recovery from the operations and consequences already grounded for the step: whether ownership acquisition and publication must be atomic; whether another process can race the same read/check/write boundary; whether identity survives restart, cancellation, or retained-session reuse; and who owns locks, pending work, and recovery after partial failure. Remaining choices at these boundaries favor `hard` when a wrong choice can permit overlapping writers, release a live owner's lock, lose durable work, or silently accept stale evidence, especially when focused tests exercise only one process or a successful lifetime. Hidden coupling between these operations is remaining judgment even when each individual edit looks small. A settled mechanical application of a verified ownership/lifetime contract can remain `easy` or `medium`; the presence of concurrency alone does not make it hard.
+
 Size, file count, novelty and a risk label alone do not determine the tier. A large explicit propagation can be easy; a small consequential design decision can be hard. When genuinely uncertain between medium and hard, favor hard: stronger judgment upfront can prevent subtle poor choices even when tests pass. Product intent or authority ambiguity remains a planning blocker, never a difficulty guess.
 
 These initial estimates set the normal grounding budget. Preparation may refine the same canonical `Complexity:` field from the facts it already gathered, with bounded Jev advice as described in [Ground Execution Cards And Publish The Package](references/prepare-package.md). Preserve completed grounding; do not restart preparation after a tier correction.
@@ -322,6 +324,8 @@ Step constraints:
 Step ordering:
 
 - Order granular objectives by actual dependencies, naming each stable handoff.
+- Name external/package prerequisites in the affected step and evidence gate: the exact contract or capability, its authoritative producer, the evidence needed to establish availability, and which implementation or proof is blocked without it. An installed dependency or producer's stated intent is not proof that its required runtime contract exists. If the producer is outside this scope, do not assign its implementation to this package.
+- Separate already independent work from dependency-bound proof where the existing objective permits it. Retain stable step and gate IDs; state the boundary so later scheduling can proceed on prepared independent work without claiming the blocked gate passed. A required merge prerequisite with no available contract/evidence is a preparation blocker; do not mark its card ready using fabricated mocks or an unowned future producer. Authorized later-phase procedures retain explicit pending handoffs rather than pretending availability.
 - Keep integration explicit in its owning step; do not enlarge every prerequisite into
   an end-to-end feature merely to make it self-contained.
 
