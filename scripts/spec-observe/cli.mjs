@@ -4,6 +4,7 @@ import path from 'node:path';
 import { discover, discoverManaged, discoverPackage, report } from './core.mjs';
 import { metrics, formatMetrics } from './metrics.mjs';
 import { collectWorkspace, renderWorkspace, readEnrollments } from './sentinel.mjs';
+import { createRepositoryDiscovery } from './discovery.mjs';
 
 const args = process.argv.slice(2);
 const command = args.shift();
@@ -17,7 +18,7 @@ const usage = `Usage: node scripts/spec-observe/cli.mjs list|runs|report|metrics
   --all-sessions         Metrics across all recorded coordinator sessions, including pauses
   runs                 List managed run pointers without reading any transcripts
   --index-root PATH     Managed index (default ~/.pi/agent/spec-runtime; runs only)
-  sentinel status [--package PATH] [--format text|json] [--agent-dir PATH]  Read-only enrolled workspace status (text default)
+  sentinel status [--root PATH | --package PATH] [--format text|json] [--agent-dir PATH]  Discover workspace repositories (default ~/Documents)
   --sessions-root PATH  Default: ~/.pi/agent/sessions
   --package PATH        Discover managed runtime records and linked parent/owner/editor sessions
   --cwd PATH            Filter root sessions by exact recorded working directory
@@ -34,7 +35,7 @@ try {
     const key = args.shift();
     if (key === '--all-sessions' && command === 'metrics') { options[key] = true; continue; }
     const allowed = ['--sessions-root', '--index-root', '--package', '--cwd', '--limit', '--session', '--max-mb',
-      ...(command === 'metrics' ? ['--format'] : []), ...(command === 'sentinel' ? ['--format', '--agent-dir'] : [])];
+      ...(command === 'metrics' ? ['--format'] : []), ...(command === 'sentinel' ? ['--format', '--agent-dir', '--root'] : [])];
     if (!allowed.includes(key) || !args.length) throw new Error(`Unknown option or missing value: ${key}`);
     options[key] = args.shift();
   }
@@ -54,7 +55,8 @@ try {
     process.exit(0);
   }
   if (command === 'sentinel') {
-    if (Object.keys(options).some(key => !['--package', '--format', '--agent-dir'].includes(key))) throw new Error('sentinel status accepts only --package, --format and --agent-dir.');
+    if (Object.keys(options).some(key => !['--package', '--format', '--agent-dir', '--root'].includes(key))) throw new Error('sentinel status accepts only --root, --package, --format and --agent-dir.');
+    if (options['--package'] && options['--root']) throw new Error('Choose --root or --package.');
     const format = options['--format'] ?? 'text';
     if (!['text', 'json'].includes(format)) throw new Error('format must be text or json');
     const agentDir = options['--agent-dir'] ?? process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), '.pi/agent');
@@ -62,16 +64,20 @@ try {
     let roots = [];
     const packages = [];
     let enrollmentErrors = [];
+    let discovery;
     if (options['--package']) packages.push(options['--package']);
-    else ({ roots, errors: enrollmentErrors } = await readEnrollments({ agentDir, scope }));
-    const snapshot = await collectWorkspace({ roots, packages, enrollmentErrors, indexDir: path.join(agentDir, 'spec-runtime'), agentDir, scope });
+    else {
+      ({ roots, errors: enrollmentErrors } = await readEnrollments({ agentDir, scope }));
+      discovery = await createRepositoryDiscovery({ agentDir, root: options['--root'] }).read();
+      roots = [...new Set([...roots, ...discovery.roots])];
+    }
+    const snapshot = await collectWorkspace({ roots, packages, enrollmentErrors, discovery, indexDir: path.join(agentDir, 'spec-runtime'), agentDir, scope });
     if (format === 'json') {
       await print(JSON.stringify(enrollmentErrors.length ? { ...snapshot, enrollment_errors: enrollmentErrors } : snapshot, null, 2));
       process.exit(0);
     }
     const lines = renderWorkspace(snapshot);
     for (const error of enrollmentErrors) lines.push(`Enrollment unavailable: ${error.path} (${error.code})`);
-    if (!roots.length && !packages.length && !enrollmentErrors.length) lines.push('No enrolled roots. Add one in Pi with /spec-sentinel add /absolute/primary.');
     await print(lines.join('\n'));
     process.exit(0);
   }

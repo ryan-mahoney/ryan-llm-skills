@@ -1,18 +1,18 @@
 ---
 name: spec-sentinel
-description: "Read-only workspace status for spec runs across enrolled repositories: bounded receipts, activity, coverage and factual conditions. Use for 'workspace status', 'sentinel status', 'enrolled repositories', or 'is any spec run stuck'. Observation only; it never starts, stops, changes or messages a worker."
-argument-hint: "[status | add /absolute/primary | inspect ID | enable /absolute/policy.json | disable | off]"
+description: "Read-only workspace status for spec runs across automatically discovered repositories: bounded receipts, activity, coverage and factual conditions. Use for 'workspace status', 'sentinel status', 'discover repositories', or 'is any spec run stuck'. Observation only; it never starts, stops, changes or messages a worker."
+argument-hint: "[status | root /absolute/search-folder | inspect ID | enable /absolute/policy.json | disable | off]"
 disable-model-invocation: false
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "1"
+  version: "2"
 ---
 
 # Spec sentinel workspace status
 
-Report what is actually recorded about spec runs in enrolled repositories. Every
+Report what is actually recorded about spec runs in discovered repositories. Every
 fact comes from bounded runtime receipts and role snapshots. Status is read-only:
 no transcript, metrics, model call, raw command, lease token or cost is read.
 
@@ -20,9 +20,10 @@ no transcript, metrics, model call, raw command, lease token or cost is read.
 
 - `/spec-sentinel status` — print a read-only workspace snapshot. This is also the
   default when the command is invoked without arguments.
-- `/spec-sentinel add /absolute/primary` — validate a primary checkout, write one
-  enrollment record, and grant read observation only. Enrollment never grants any
-  ability to start, stop, change or message a worker.
+- `/spec-sentinel root ~/Projects` — optionally save a different search folder.
+  The default is `~/Documents`; no repository registration is required.
+- `/spec-sentinel add /absolute/primary` — optionally pin an extra primary outside
+  the search tree; existing enrollment records remain supported.
 - `/spec-sentinel inspect ID` — show one observed run or condition, matched by
   assignment id, workflow id, package path, package name, or condition id/kind.
 - `/spec-sentinel enable /absolute/policy.json` — arm a live, session-local scoped
@@ -37,29 +38,38 @@ no transcript, metrics, model call, raw command, lease token or cost is read.
 ## Commands (CLI, no Pi session)
 
 ```bash
-node ~/.agents/scripts/spec-observe/cli.mjs sentinel status [--package PATH] [--format text|json] [--agent-dir PATH]
+node ~/.agents/scripts/spec-observe/cli.mjs sentinel status [--root PATH | --package PATH] [--format text|json] [--agent-dir PATH]
 ```
 
 - Text output is the default; `--format json` prints the snapshot object.
-- Without `--package`, the command reads the enrolled workspace for
-  `PI_CODING_AGENT_DIR` (default `~/.pi/agent`) and the current
-  `PI_INTERCOM_SCOPE_ID` scope. With `--package PATH`, only that package is
-  observed and no enrollment is read.
-- Empty enrollment prints the instruction to add a root in Pi.
+- Without `--package`, discover repositories beneath the saved root (default
+  `~/Documents`) and use the managed run index plus optional legacy enrollments.
+  `--root PATH` overrides the search folder for that CLI call without saving it.
+  `--package PATH` skips repository discovery and observes that package plus existing
+  managed-index candidates.
 - The existing `list|runs|report|metrics` commands are unchanged.
 
-## Enrollment
+## Automatic discovery
 
-- One record per root at
-  `<agentDir>/spec-sentinel/<workspace-key>/enrollments/<sha256(common dir)>.json`,
-  mode `0600`, containing `{ version, root, common, enrolled_at }`.
-- Only the direct `/spec-sentinel add` command writes this record. Nothing else in
-  this skill or its reader writes state.
-- At most 20 roots are recorded; beyond that the command reports the limit.
-- A `.specs` copy in a linked worktree is rejected: it is not a canonical package.
-- Managed-index pointers and packages dispatched in a session are observation
-  candidates only. Reading a pointer or dispatching a step never enrolls a
-  repository.
+Discovery descends through grouping folders and through repositories to find nested
+repositories. Candidates have `.git` and `.specs`; the existing reader validates primary
+checkout/package identity, so worktree copies are never accepted as canonical specs.
+Hidden children, dependency/build/cache folders and directory symlinks are skipped.
+The root can itself be a repository. The saved setting is
+`<agentDir>/spec-sentinel/discovery.json`, shared across workspace scopes; changing it
+never changes intervention authority.
+
+The managed run index and runtime receipts supply frequent activity updates, including
+indexed work outside the search folder. Chokidar watches only canonical `.specs`
+trees recursively, with symlink following disabled. Repository roots, source trees
+and the Pi index receive no watches. A 15-second bounded reconciliation reads the
+index and handles missed events. Repository discovery is cached for five minutes
+per Pi session, with at most eight directory levels, 2,000 directories, 20,000 entries,
+and a two-second cooperative scan budget. Scan limits and unreadable locations produce
+explicit partial/unavailable coverage. The existing reader's repository/run/byte caps
+still apply. No source or transcript is scanned and no model is called for discovery.
+
+Existing explicit enrollments supplement discovery; they are no longer required.
 
 ## What status shows
 
@@ -90,8 +100,8 @@ collection while no session is open.
 ## Authority
 
 This skill grants no continuation, cancellation, diagnosis or recovery by itself. It
-writes no product state beyond the single enrollment record created by an explicit
-`add` command. Observation never establishes accepted work.
+writes no product state. The optional `root` and legacy `add` commands save only
+local observation settings. Observation never establishes accepted work.
 
 The optional `/spec-sentinel enable /absolute/policy.json` command arms a live,
 session-local capability for this coordinator session only. It validates an absolute

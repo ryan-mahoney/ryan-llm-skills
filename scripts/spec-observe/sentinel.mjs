@@ -344,11 +344,12 @@ export function renderWorkspace(snapshot) {
     }
   }
   if (!runs.length) lines.push('  No observed runs.');
+  if (snapshot.discovery?.root) lines.push(renderLine(`Repository discovery: ${snapshot.discovery.root} (nested repositories included)`));
   if (coverage.reasons.length) lines.push(renderLine(`Coverage notes: ${coverage.reasons.join(', ')}`));
   return lines;
 }
 
-export async function collectWorkspace({ roots = [], packages = [], enrollmentErrors = [], indexDir = join(homedir(), '.pi/agent/spec-runtime'),
+export async function collectWorkspace({ roots = [], packages = [], enrollmentErrors = [], discovery = null, indexDir = join(homedir(), '.pi/agent/spec-runtime'),
   now = Date.now, agentDir, scope } = {}) {
   const tick = clock(now);
   const readTime = clockIso(tick);
@@ -361,8 +362,9 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
     reasons.push(reason);
     unknownOmission = true;
   }
+  for (const reason of discovery?.reasons ?? []) { reasons.push(reason); unknownOmission = true; }
 
-  // Roots are explicit enrollment: strings only, resolved, deduplicated, sorted.
+  // Discovered candidates and optional explicit roots share canonical validation.
   const enrolled = sortPaths(Array.isArray(roots) ? roots.filter(value => typeof value === 'string') : []);
   if (enrolled.length > SENTINEL_LIMITS.roots) {
     reasons.push(`roots-cap: selected ${SENTINEL_LIMITS.roots} of ${enrolled.length}`);
@@ -378,33 +380,6 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
     }
     return fact;
   };
-
-  for (const root of enrolled.slice(0, SENTINEL_LIMITS.roots)) {
-    const specs = join(root, '.specs');
-    const listed = await listDirectory(specs, SENTINEL_LIMITS.packageChildren, entry => entry.isDirectory());
-    if (listed.entries === null) {
-      // Missing .specs is reported, never guessed around.
-      reasons.push(`root-unavailable: ${specs} (${listed.code})`);
-      continue;
-    }
-    if (listed.code) {
-      // A failed enumeration with partial entries cannot prove completeness.
-      reasons.push(`root-unavailable: ${specs} (${listed.code})`);
-      unknownOmission = true;
-    }
-    if (listed.truncated) {
-      reasons.push(`package-cap: ${specs}`);
-      unknownOmission = true;
-    }
-    for (const entry of listed.entries) {
-      const child = join(specs, entry.name);
-      try { addPackage(canonicalPackage(child)); }
-      catch (error) {
-        // A throw (including linked-worktree rejection) is a fact, never a package.
-        reasons.push(`package-noncanonical: ${child} (${messageOf(error)})`);
-      }
-    }
-  }
 
   for (const requested of Array.isArray(packages) ? packages : []) {
     if (typeof requested !== 'string') continue;
@@ -440,6 +415,34 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
     }
   }
 
+  // Observe indexed/current packages first; discovery supplements that fast path.
+  for (const root of enrolled.slice(0, SENTINEL_LIMITS.roots)) {
+    const specs = join(root, '.specs');
+    const listed = await listDirectory(specs, SENTINEL_LIMITS.packageChildren, entry => entry.isDirectory());
+    if (listed.entries === null) {
+      // Missing .specs is reported, never guessed around.
+      reasons.push(`root-unavailable: ${specs} (${listed.code})`);
+      continue;
+    }
+    if (listed.code) {
+      // A failed enumeration with partial entries cannot prove completeness.
+      reasons.push(`root-unavailable: ${specs} (${listed.code})`);
+      unknownOmission = true;
+    }
+    if (listed.truncated) {
+      reasons.push(`package-cap: ${specs}`);
+      unknownOmission = true;
+    }
+    for (const entry of listed.entries) {
+      const child = join(specs, entry.name);
+      try { addPackage(canonicalPackage(child)); }
+      catch (error) {
+        // A throw (including linked-worktree rejection) is a fact, never a package.
+        reasons.push(`package-noncanonical: ${child} (${messageOf(error)})`);
+      }
+    }
+  }
+
   const collected = [];
   let staleReceipts = false;
   const note = reason => { if (reason && !reasons.includes(reason)) reasons.push(reason); };
@@ -464,7 +467,7 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
   let state;
   if (!packageRequested && !facts.size && !reasons.length) {
     state = 'complete';
-    if (!reasons.length) reasons.push('no enrolled roots');
+    if (!reasons.length) reasons.push(discovery ? 'no repositories with spec packages discovered' : 'no enrolled roots');
   } else if (!facts.size && (packageRequested || knownOmitted || unknownOmission || reasons.length)) {
     // Nothing could be canonicalized while something was asked for or omitted.
     state = 'unavailable';
@@ -475,7 +478,7 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
       : (knownOmitted || reasons.length || unknownOmission) ? 'partial' : 'complete';
   }
   const coverage = makeCoverage(state, reasons, unknownOmission ? null : knownOmitted, budget.bytes, readTime);
-  return reduceConditions({ version: 1, workspace, coverage, runs });
+  return reduceConditions({ version: 1, workspace, coverage, runs, spec_roots: [...new Set([...facts.values()].map(f => dirname(f.packagePath)))], ...(discovery ? { discovery } : {}) });
 }
 
 // Receipts are examined in one bounded pass: identity mismatches are stale

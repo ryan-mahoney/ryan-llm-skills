@@ -10,6 +10,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createSentinelObserver, createVerificationRecorder, SENTINEL_COALESCE_MS, SENTINEL_RECONCILE_MS, SENTINEL_WIDGET_KEY, readCheckpointRecord, recordCheckpoint, createSentinelAuthority, activatePolicy, createDiagnosisController, readDiagnosisAttempt, disablePolicy, reserveIntent, finishIntent, considerCancellation, writeVerificationIncidents, buildDiagnosisPacket, readPolicyGuard, readInboxGuard, checkpointPath } from './sentinel.mjs';
 import { canonicalPackage } from './runtime.mjs';
 import { collectFacts } from '../../../scripts/jev/core.mjs';
+import { discoveryConfigPath, saveDiscoveryRoot } from '../../../scripts/spec-observe/discovery.mjs';
 import { enrollmentDirectory, workspaceKey } from '../../../scripts/spec-observe/sentinel.mjs';
 
 // workspaceKey documents the same agentDir/scope hash the enrollment directory
@@ -58,6 +59,8 @@ function isolatedEnv(t) {
 function sandbox(t) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'sentinel-integration-')));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
+  mkdirSync(join(dir, 'spec-sentinel'), { recursive: true });
+  writeFileSync(discoveryConfigPath(dir), JSON.stringify({ version: 1, root: dir }));
   return dir;
 }
 
@@ -328,6 +331,29 @@ function cli(args, cwd) {
   return execFileSync(process.execPath, [cliPath, ...args], { cwd, encoding: 'utf8' });
 }
 
+test('sentinel discovery: native root command and CLI find nested repositories without enrollment', { skip: sdkSkip, timeout: 60000 }, async t => {
+  const dir = sandbox(t);
+  const search = join(dir, 'Projects with spaces');
+  const { repo } = primary(search, 'group/outer');
+  const outer = pack(repo);
+  const inner = pack(primary(repo, 'packages/inner').repo);
+  for (const [packagePath, id] of [[outer, 'outer'], [inner, 'inner']])
+    receipt(packagePath, { id, assignment_id: id, state: 'running', started_at: new Date().toISOString() });
+  const { session, captured, requests } = await loadExtension(t, { dir });
+  await session.prompt('/spec-sentinel root ' + search);
+  await session.prompt('/spec-sentinel status');
+  assert.match(lastNote(captured).message, /outer/);
+  assert.match(lastNote(captured).message, /inner/);
+  assert.equal(requests.length, 0);
+  assert.equal(existsSync(enrollmentDirectory({ agentDir: dir })), false);
+  const snapshot = JSON.parse(cli(['sentinel', 'status', '--agent-dir', dir, '--format', 'json'], dir));
+  assert.deepEqual(snapshot.runs.map(run => run.assignment_id).sort(), ['inner', 'outer']);
+  assert.equal(snapshot.discovery.root, search);
+  const override = JSON.parse(cli(['sentinel', 'status', '--agent-dir', dir, '--root', join(repo, 'packages'), '--format', 'json'], dir));
+  assert.deepEqual(override.runs.map(run => run.assignment_id), ['inner']);
+  assert.equal(JSON.parse(readFileSync(discoveryConfigPath(dir))).root, search);
+});
+
 test('sentinel status: actual index.ts serves enrolled workspace facts with zero provider calls', { skip: sdkSkip, timeout: 60000 }, async t => {
   const dir = sandbox(t);
   const { repo } = primary(dir, 'status-repo');
@@ -448,6 +474,7 @@ test('sentinel observer: coalesced invalidation, missed-event reconciliation and
 
   await observer.refresh();
   assert.ok(watchers.length > 0);
+  assert.deepEqual(watchers.filter(w => !w.closed).map(w => w.dir), [dirname(packagePath)], 'only the canonical .specs tree is watched');
   receipt(packagePath, { id: 'run-observer-1', assignment_id: 'assign-observer-1', state: 'running', started_at: new Date(Date.now() - 60000).toISOString() });
   receipt(packagePath, { id: 'run-observer-2', assignment_id: 'assign-observer-2', state: 'running', started_at: new Date(Date.now() - 50000).toISOString() });
 
@@ -467,8 +494,7 @@ test('sentinel observer: coalesced invalidation, missed-event reconciliation and
   assert.match(lastWidget(captures).content[0], /3 run\(s\)/);
 
   // Nested activity snapshots replace atomically inside <run-id>-activity
-  // directories; nonrecursive watching means those directories carry their
-  // own invalidation watches.
+  // directories; one recursive .specs watch covers their creation and changes.
   const activityDirectory = join(packagePath, 'runtime', 'runs', 'run-observer-1-activity');
   mkdirSync(activityDirectory, { recursive: true });
   writeFileSync(join(activityDirectory, 'owner.json'), JSON.stringify({ run_id: 'run-observer-1', role: 'owner', phase: 'working', hint: 'editing source files', last_activity: new Date().toISOString() }));
@@ -476,8 +502,8 @@ test('sentinel observer: coalesced invalidation, missed-event reconciliation and
   const [activityRefresh] = [...timers.values()];
   timers.clear();
   await activityRefresh.callback();
-  const activityWatcher = watchers.find(watcher => !watcher.closed && watcher.dir.endsWith('run-observer-1-activity'));
-  assert.ok(activityWatcher, 'the nested activity directory is watched');
+  const activityWatcher = watchers.find(watcher => !watcher.closed && watcher.dir === dirname(packagePath));
+  assert.ok(activityWatcher, 'the canonical .specs tree is watched recursively');
 
   // Replacing the role snapshot atomically, with no top-level receipt change,
   // still invalidates the workspace observer through the nested watch.
@@ -492,7 +518,7 @@ test('sentinel observer: coalesced invalidation, missed-event reconciliation and
 
   // A failed watch is disposed, displayed as stale coverage and retried on
   // the next reconciliation instead of staying silently dead.
-  const failed = watchers.find(watcher => !watcher.closed && watcher.dir.endsWith(join('runtime', 'runs')));
+  const failed = watchers.find(watcher => !watcher.closed && watcher.dir === dirname(packagePath));
   failed.fail(new Error('watch failed'));
   assert.ok(failed.closed);
   assert.ok(lastWidget(captures).content.some(line => line.includes('Watcher unavailable')));
@@ -593,22 +619,36 @@ test('sentinel observer: off and close during pending reads never install dispos
   assert.equal(offing.watchers.length, 0);
 });
 
-test('sentinel observer: unreadable enrollment retains prior facts as stale', async t => {
+test('sentinel observer: discovery preserves facts when a legacy enrollment becomes unreadable', async t => {
   const f = observerFixture(t);
   await f.observer.refresh();
   assert.match(lastWidget(f.captures).content[0], /1 run\(s\)/);
   assert.match(lastWidget(f.captures).content.join('\n'), /assign-focus/);
 
   // The only enrollment record becoming malformed must not turn the workspace
-  // into healthy emptiness: prior facts are retained and shown stale.
+  // into healthy emptiness: discovery still supplies facts with partial coverage.
   writeFileSync(f.enrollmentFile, '{not json');
   await f.observer.refresh();
   const retained = lastWidget(f.captures).content.join('\n');
   assert.match(retained, /assign-focus/);
-  assert.match(retained, /coverage stale/);
+  assert.match(retained, /coverage partial/);
   assert.match(retained, /enrollment-invalid/);
-  assert.match(retained, /Enrollment unreadable/);
-  assert.match(lastStatus(f.captures).text, /stale/);
+  assert.match(lastStatus(f.captures).text, /partial/);
+});
+
+test('sentinel observer: indexed activity stays current when repository discovery becomes unavailable', async t => {
+  const f = observerFixture(t);
+  await f.observer.refresh();
+  rmSync(f.enrollmentFile);
+  writeFileSync(discoveryConfigPath(f.dir), JSON.stringify({ version: 1, root: join(f.dir, 'missing') }));
+  const index = join(f.dir, 'spec-runtime');
+  mkdirSync(index, { recursive: true });
+  writeFileSync(join(index, 'run-focus.json'), JSON.stringify({ run_id: 'run-focus', package: f.packagePath }));
+  receipt(f.packagePath, { id: 'run-focus', assignment_id: 'assign-focus', state: 'completed', started_at: new Date().toISOString() });
+  const snapshot = await f.observer.refresh();
+  assert.equal(snapshot.runs[0].execution, 'completed');
+  assert.equal(snapshot.coverage.state, 'partial');
+  assert.ok(snapshot.coverage.reasons.some(reason => reason.startsWith('discovery-unavailable:')));
 });
 
 test('sentinel observer: an external single run keeps details; only the natively displayed run collapses', async t => {
@@ -634,9 +674,9 @@ test('sentinel observer: an external single run keeps details; only the natively
 });
 
 test('sentinel observer: a watcher-cap exclusion is reported, not hidden', async t => {
-  const f = observerFixture(t, { maxWatchers: 1 });
+  const f = observerFixture(t, { maxWatchers: 0 });
   await f.observer.refresh();
-  assert.match(lastWidget(f.captures).content.join('\n'), /Watcher cap reached \(1 of \d+ directories\)/);
+  assert.match(lastWidget(f.captures).content.join('\n'), /Watcher cap reached \(0 of \d+ directories\)/);
   assert.match(lastStatus(f.captures).text, /stale/);
 });
 
@@ -649,6 +689,7 @@ test('sentinel status: the CLI reports a disposable package and preserves runs d
   const empty = join(dir, 'empty-agent');
   const emptyIndex = join(dir, 'empty-index');
   mkdirSync(empty, { recursive: true });
+  await saveDiscoveryRoot(empty, empty);
   mkdirSync(emptyIndex, { recursive: true });
   const { repo } = primary(dir, 'cli-repo');
   const packagePath = pack(repo);
@@ -685,7 +726,9 @@ test('sentinel status: the CLI reports a disposable package and preserves runs d
     Array.from({ length: 50 }, (unused, index) => `assign-many-${index + 1}`).sort());
 
   const emptyOut = cli(['sentinel', 'status', '--agent-dir', empty], dir);
-  assert.match(emptyOut, /No enrolled roots\. Add one in Pi with \/spec-sentinel add \/absolute\/primary\./);
+  assert.match(emptyOut, /No observed runs/);
+  assert.match(emptyOut, /Repository discovery:/);
+  assert.doesNotMatch(emptyOut, /Add one in Pi/);
 
   // Unreadable enrollment is an explicit unknown in the CLI too, never a
   // healthy empty workspace.

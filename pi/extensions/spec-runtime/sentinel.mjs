@@ -2,29 +2,31 @@
 //
 // Observation is read-only: it collects bounded workspace facts and renders them
 // as plain status, and never starts, stops, messages or cancels a worker. Its only
-// writes are the explicit enrollment record created by /spec-sentinel add and the
+// writes are discovery settings, optional explicit enrollments and the
 // explicit native policy/authority storage created by /spec-sentinel enable (with
 // /spec-sentinel disable revocation), which arms a session-local capability only.
 
-import { watch, mkdirSync, renameSync, readdirSync, writeFileSync, readFileSync, statSync, existsSync, lstatSync, realpathSync, openSync, closeSync, fsyncSync, unlinkSync, linkSync, fstatSync, readSync, opendirSync } from 'node:fs';
+import { mkdirSync, renameSync, readdirSync, writeFileSync, readFileSync, statSync, existsSync, lstatSync, realpathSync, openSync, closeSync, fsyncSync, unlinkSync, linkSync, fstatSync, readSync, opendirSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { join, resolve, dirname, sep, relative, isAbsolute, basename } from 'node:path';
 
 import { canonicalPackage } from './runtime.mjs';
+import { watchSpecTree } from './spec-watcher.mjs';
 import { publicHint } from './monitor.mjs';
 import { createOwnedLeaf } from './scout.mjs';
 import { collectFacts } from '../../../scripts/jev/core.mjs';
 import { collectWorkspace, reduceConditions, renderWorkspace, enrollmentDirectory, readEnrollments, enrollmentReasons, SENTINEL_LIMITS } from '../../../scripts/spec-observe/sentinel.mjs';
+import { createRepositoryDiscovery, saveDiscoveryRoot } from '../../../scripts/spec-observe/discovery.mjs';
 
 export const SENTINEL_COALESCE_MS = 250;
 export const SENTINEL_RECONCILE_MS = 15000;
 export const SENTINEL_WIDGET_KEY = 'spec-sentinel';
 
-const USAGE = 'Usage: /spec-sentinel status | add /absolute/primary | inspect ID | enable /absolute/policy.json | disable | off';
+const USAGE = 'Usage: /spec-sentinel status | root /absolute/search-folder | add /absolute/primary | inspect ID | enable /absolute/policy.json | disable | off';
 const MAX_WATCHERS = 60;
 
 export function createSentinelObserver({ pi, context, agentDir, scope = null, ownPackages = [], indexDir = join(agentDir, 'spec-runtime'),
-  now = Date.now, watchDirectory = watch, setTimer = setTimeout, clearTimer = clearTimeout, repeat = setInterval, cancelRepeat = clearInterval,
+  now = Date.now, watchDirectory = watchSpecTree, setTimer = setTimeout, clearTimer = clearTimeout, repeat = setInterval, cancelRepeat = clearInterval,
   nativeRun = null, maxWatchers = MAX_WATCHERS, enablePolicy = null, disablePolicy: disableAuthority = null }) {
   let closed = false;
   let hidden = false;
@@ -35,6 +37,7 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
   let note = null;
   const watchers = new Map();
   let noticeSeverities = new Map();
+  const repositoryDiscovery = createRepositoryDiscovery({ agentDir, now });
 
   const notify = (ctx, message, level = 'info') => {
     try { (ctx ?? context)?.ui?.notify?.(message, level); } catch { /* UI failure must not affect observation. */ }
@@ -114,7 +117,7 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
     for (const [directory, watcher] of watchers) {
       if (wanted.includes(directory)) continue;
       watchers.delete(directory);
-      try { watcher.close?.(); } catch { /* Closing is best effort. */ }
+      try { Promise.resolve(watcher.close?.()).catch(() => {}); } catch { /* Closing is best effort. */ }
     }
     const selected = wanted.slice(0, maxWatchers);
     if (wanted.length > selected.length) {
@@ -130,7 +133,7 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
           // reconciliation; last known facts are kept and the coverage loss
           // is displayed, never silently swallowed.
           watchers.delete(directory);
-          try { watcher.close?.(); } catch { /* Closing is best effort. */ }
+          try { Promise.resolve(watcher.close?.()).catch(() => {}); } catch { /* Closing is best effort. */ }
           if (error?.code === 'ENOENT') return;
           note = 'Watcher unavailable; status reflects the last bounded read.';
           render();
@@ -145,23 +148,8 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
   }
 
   function snapshotTargets(snapshot) {
-    const targets = [];
-    for (const root of snapshot?.roots ?? []) {
-      targets.push(root, join(root, '.specs'));
-    }
-    for (const run of snapshot?.runs ?? []) {
-      if (!run?.package) continue;
-      const runtimeDirectory = join(run.package, 'runtime');
-      targets.push(join(runtimeDirectory, 'runs'));
-      // Node directory watches are nonrecursive: every nested directory that
-      // actually holds observed sources (activity roles, checkpoint
-      // workflows) needs its own invalidation watch.
-      for (const source of run.source_paths ?? []) {
-        if (typeof source !== 'string' || !source.startsWith(`${runtimeDirectory}${sep}`)) continue;
-        targets.push(dirname(source));
-      }
-    }
-    return targets;
+    // These roots come only from canonical packages accepted by the reader.
+    return snapshot?.spec_roots ?? [];
   }
 
   async function run(force = false) {
@@ -171,20 +159,21 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
       if (hidden && !force) return latest;
       try {
         const enrolled = await readEnrollments({ agentDir, scope });
+        const discovery = await repositoryDiscovery.read();
         const enrollmentErrors = enrolled.errors ?? [];
-        const roots = enrolled.roots ?? [];
-        if (!roots.length && enrollmentErrors.length && latest) {
+        const roots = [...new Set([...(enrolled.roots ?? []), ...discovery.roots])];
+        const snapshot = await collectWorkspace({
+          roots, packages: [...ownPackages], enrollmentErrors, discovery, indexDir, agentDir, scope, now,
+        });
+        if (!snapshot.runs.length && !roots.length && (enrollmentErrors.length || discovery.reasons.length) && latest) {
           // Unreadable enrollment retains the last known facts as stale
           // instead of replacing them with an unobserved empty workspace.
           latest = { ...latest, roots, coverage: { ...latest.coverage, state: 'stale', omitted: null,
-            reasons: [...new Set([...latest.coverage.reasons, ...enrollmentReasons(enrollmentErrors)])] } };
-          note = 'Enrollment unreadable; status reflects the last bounded read.';
+            reasons: [...new Set([...latest.coverage.reasons, ...enrollmentReasons(enrollmentErrors), ...discovery.reasons])] } };
+          note = 'Repository discovery or enrollment unreadable; status reflects the last bounded read.';
           if (!closed && !hidden) render();
           return latest;
         }
-        const snapshot = await collectWorkspace({
-          roots, packages: [...ownPackages], enrollmentErrors, indexDir, agentDir, scope, now,
-        });
         latest = { ...retainMissingSummaries(snapshot), roots };
         note = null;
         // Lifecycle fence: off or close during the asynchronous reads must
@@ -230,12 +219,14 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
   }
 
   function stopHandles() {
+    const closing = [];
     for (const watcher of watchers.values()) {
-      try { watcher.close?.(); } catch { /* Closing is best effort. */ }
+      try { closing.push(Promise.resolve(watcher.close?.()).catch(() => {})); } catch { /* Closing is best effort. */ }
     }
     watchers.clear();
     if (coalesced !== undefined) { try { clearTimer(coalesced); } catch { /* Timer may already have run. */ } coalesced = undefined; }
     if (reconcileTimer !== undefined) { try { cancelRepeat(reconcileTimer); } catch { /* Timer may already have run. */ } reconcileTimer = undefined; }
+    return Promise.all(closing);
   }
 
   async function enroll(target) {
@@ -271,7 +262,7 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
       const [actionRaw, ...rest] = String(args ?? '').trim().split(/\s+/).filter(Boolean);
       const action = (actionRaw ?? '').toLowerCase();
       // A replaced or shut-down observer must not retain or re-arm authority.
-      if (closed && ['enable', 'disable', 'off', 'add'].includes(action)) {
+      if (closed && ['enable', 'disable', 'off', 'add', 'root'].includes(action)) {
         notify(ctx, 'Sentinel observer is closed; this command is refused.', 'error');
         return;
       }
@@ -281,6 +272,14 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
         // Explicit status carries the retained-read uncertainty too, not only
         // the unrendered observer note.
         notify(ctx, [...renderWorkspace(snapshot), ...(note ? [note] : [])].join('\n'), 'info');
+        return;
+      }
+      if (action === 'root') {
+        const target = rest.join(' ');
+        if (!target) throw new Error(USAGE);
+        const root = await saveDiscoveryRoot(agentDir, target);
+        notify(ctx, `Sentinel will discover repositories beneath ${root}, including nested repositories.`, 'info');
+        await run(true);
         return;
       }
       if (action === 'add') {
@@ -356,7 +355,7 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
           catch (error) { revocation = { revoked: false, persisted: false, was_armed: true, error: error?.message ?? String(error) }; }
         }
         hidden = true;
-        stopHandles();
+        await stopHandles();
         clearWidgets();
         const armed = revocation.was_armed ? 'Sentinel authority revoked' : 'No live sentinel authority was armed';
         const persisted = revocation.persisted === false ? `; revocation persistence failed: ${revocation.error}` : '';
@@ -385,8 +384,9 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
     close() {
       if (closed) return;
       closed = true;
-      stopHandles();
+      const closing = stopHandles();
       clearWidgets();
+      return closing;
     },
   };
 }
