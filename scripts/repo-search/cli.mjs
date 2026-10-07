@@ -5,8 +5,12 @@
 
 import { runCommand, searchRepository, validateCommandOptions } from "./client.mjs";
 import { formatSearchHuman, formatSearchJson } from "./format.mjs";
+import { runInstall } from "./setup.mjs";
+
+const INSTALL_TIMEOUT_CEILING_MS = 600000;
 
 const COMMANDS = new Set([
+  "install",
   "status",
   "check",
   "build",
@@ -33,6 +37,8 @@ const VALUE_FLAGS = new Set([
 
 const BOOLEAN_FLAGS = new Set(["--json"]);
 
+const INSTALL_FLAGS = new Set(["--models", "--state", "--timeout-ms", "--json"]);
+
 function usage(message) {
   process.stderr.write(`${message}\n`);
   process.exitCode = 2;
@@ -57,6 +63,10 @@ function parseArgs(argv) {
   const seen = new Set();
   for (let index = 1; index < argv.length; index += 1) {
     const flag = argv[index];
+    if (command === "install" && !INSTALL_FLAGS.has(flag)) {
+      usage(`Unknown option for install: ${flag}`);
+      return null;
+    }
     if (BOOLEAN_FLAGS.has(flag)) {
       if (seen.has(flag)) {
         usage(`Duplicate option: ${flag}`);
@@ -117,6 +127,14 @@ function parseArgs(argv) {
       options.models = value;
     }
   }
+  if (
+    command === "install" &&
+    options.timeoutMs !== undefined &&
+    options.timeoutMs > INSTALL_TIMEOUT_CEILING_MS
+  ) {
+    usage(`--timeout-ms exceeds the install ceiling of ${INSTALL_TIMEOUT_CEILING_MS}ms`);
+    return null;
+  }
   return { command, options, json };
 }
 
@@ -134,6 +152,24 @@ function humanSummary(command, receipt) {
     if (inner.operation) lines.push(`operation: ${escapeControl(inner.operation)}`);
     if (Array.isArray(inner.deleted)) lines.push(`deleted: ${inner.deleted.length}`);
     if (Array.isArray(inner.retained)) lines.push(`retained: ${inner.retained.length}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function installSummary(receipt) {
+  const lines = ["command: install", `status: ${receipt.status ?? "unknown"}`];
+  if (receipt.reason) lines.push(`reason: ${escapeControl(receipt.reason)}`);
+  const install = receipt.receipt && receipt.receipt.install;
+  if (install) {
+    lines.push(`packageDir: ${escapeControl(install.packageDir)}`);
+    lines.push(`argv: ${install.argv.join(" ")}`);
+    lines.push(`install exitCode: ${install.exitCode}`);
+  }
+  const model = receipt.receipt && receipt.receipt.model;
+  if (model) {
+    lines.push(`modelsRoot: ${escapeControl(model.modelsRoot)}`);
+    lines.push(`assetDigest: ${escapeControl(model.assetDigest)}`);
+    lines.push(`alreadyConfigured: ${model.alreadyConfigured}`);
   }
   return `${lines.join("\n")}\n`;
 }
@@ -156,6 +192,22 @@ async function main() {
   process.on("SIGINT", onTermination);
   process.on("SIGTERM", onTermination);
   try {
+    if (parsed.command === "install") {
+      const receipt = await runInstall({
+        modelsRoot: parsed.options.models,
+        stateRoot: parsed.options.state,
+        timeoutMs: parsed.options.timeoutMs,
+        signal: controller.signal,
+      });
+      if (parsed.json) {
+        process.stdout.write(`${JSON.stringify(receipt)}\n`);
+      } else {
+        process.stdout.write(installSummary(receipt));
+      }
+      process.exitCode = receipt.exitCode ?? 1;
+      return;
+    }
+
     if (parsed.command === "search") {
       const receipt = await searchRepository({
         root: parsed.options.root,

@@ -31,6 +31,7 @@ const CEILINGS_MS = {
   reindex: 1800000,
   search: 120000,
   configure: 10000,
+  "configure-model": 60000,
   forget: 10000,
   prune: 30000,
   recover: 10000,
@@ -47,6 +48,7 @@ const COMMAND_OPTIONS = {
   forget: ["root", "state", "timeoutMs"],
   prune: ["state", "timeoutMs"],
   recover: ["state", "timeoutMs", "operation"],
+  "configure-model": ["state", "models", "modelAssets", "timeoutMs"],
 };
 
 const TRANSPORT_OPTIONS = new Set(["packageDir", "bunPath", "spawn", "rssSampler", "signal"]);
@@ -132,6 +134,12 @@ export function validateCommandOptions(command, options) {
       }
       continue;
     }
+    if (key === "modelAssets") {
+      if (!Array.isArray(options.modelAssets)) {
+        return { ok: false, message: "modelAssets must be an array." };
+      }
+      continue;
+    }
     if (typeof options[key] !== "string" || options[key].length === 0) {
       return { ok: false, message: `${key} must be a non-empty string.` };
     }
@@ -186,6 +194,10 @@ function resolveBun(override) {
   return null;
 }
 
+export function resolveBunPath(override) {
+  return resolveBun(override);
+}
+
 function defaultSampleChildRss(pid) {
   if (process.platform === "linux") {
     try {
@@ -237,6 +249,7 @@ function buildRequest(command, options) {
   if (options.query !== undefined) request.query = options.query;
   if (options.mode !== undefined) request.mode = options.mode;
   if (options.limit !== undefined) request.limit = options.limit;
+  if (options.modelAssets !== undefined) request.modelAssets = options.modelAssets;
   return request;
 }
 
@@ -297,6 +310,128 @@ async function settleOwnedGroup(child) {
       `failed to terminate owned process group ${child.pid}: ${errorMessage(killError)}`,
     );
   }
+}
+
+function beginCapture(target, maxOutputBytes) {
+  let text = "";
+  let bytes = 0;
+  const onData = (chunk) => {
+    if (bytes >= maxOutputBytes) return;
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+    const slice = buffer.subarray(0, maxOutputBytes - bytes);
+    text += slice.toString("utf8");
+    bytes += slice.length;
+  };
+  return { onData, read: () => text };
+}
+
+/**
+ * Spawn one owned child and settle its process group on timeout/abort, mirroring
+ * runCommand's detached-group semantics. Used by setup.mjs for the package
+ * manager and by any caller that needs the same containment without the worker
+ * JSON contract. Returns `{complete:true, code, stdout, stderr}` on close, or
+ * `{complete:false, reason, exitCode, stdout, stderr, message?}` when the child
+ * could not complete/clean up.
+ */
+export async function runOwnedProcess(spawnImpl, file, args, options = {}) {
+  const {
+    cwd = process.cwd(),
+    env = process.env,
+    timeoutMs = 600000,
+    signal,
+    maxOutputBytes = MAX_STDOUT_BYTES,
+  } = options;
+
+  let child;
+  try {
+    child = spawnImpl(file, args, {
+      cwd,
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+      env,
+    });
+  } catch (error) {
+    return {
+      complete: false,
+      reason: "spawn-failed",
+      exitCode: 1,
+      stdout: "",
+      stderr: "",
+      message: errorMessage(error),
+    };
+  }
+
+  const stdout = beginCapture("stdout", maxOutputBytes);
+  const stderr = beginCapture("stderr", maxOutputBytes);
+  if (child.stdout && typeof child.stdout.on === "function") {
+    child.stdout.on("data", stdout.onData);
+  }
+  if (child.stderr && typeof child.stderr.on === "function") {
+    child.stderr.on("data", stderr.onData);
+  }
+
+  let timer = null;
+  let abortListener = null;
+  const outcome = await new Promise((resolve) => {
+    let done = false;
+    const finish = (result) => {
+      if (done) return;
+      done = true;
+      if (timer) clearTimeout(timer);
+      if (signal && abortListener) signal.removeEventListener("abort", abortListener);
+      resolve(result);
+    };
+    timer = setTimeout(() => finish({ kind: "timeout" }), timeoutMs);
+    child.once("close", (code) => finish({ kind: "closed", code }));
+    child.once("error", (error) => finish({ kind: "error", error }));
+    if (signal) {
+      if (signal.aborted) {
+        finish({ kind: "abort" });
+        return;
+      }
+      abortListener = () => finish({ kind: "abort" });
+      signal.addEventListener("abort", abortListener, { once: true });
+    }
+  });
+
+  if (outcome.kind === "timeout" || outcome.kind === "abort") {
+    try {
+      await settleOwnedGroup(child);
+    } catch (error) {
+      return {
+        complete: false,
+        reason: "cleanup-failed",
+        exitCode: 1,
+        stdout: stdout.read(),
+        stderr: stderr.read(),
+        message: errorMessage(error),
+      };
+    }
+    return {
+      complete: false,
+      reason: outcome.kind === "timeout" ? "timeout" : "canceled",
+      exitCode: outcome.kind === "timeout" ? 124 : 130,
+      stdout: stdout.read(),
+      stderr: stderr.read(),
+    };
+  }
+  if (outcome.kind === "error") {
+    return {
+      complete: false,
+      reason: "process-error",
+      exitCode: 1,
+      stdout: stdout.read(),
+      stderr: stderr.read(),
+      message: errorMessage(outcome.error),
+    };
+  }
+  return {
+    complete: true,
+    code: outcome.code ?? 1,
+    stdout: stdout.read(),
+    stderr: stderr.read(),
+  };
 }
 
 function mapWorkerExit(code, parsed) {

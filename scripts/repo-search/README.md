@@ -29,6 +29,27 @@ contains `jinaai/jina-embeddings-v2-base-code/` with the six files pinned in
 file's byte digest; only all-matching assets produce an `assetDigest`, which the
 cache and index compatibility identity include.
 
+## Setup
+
+Explicitly install this package's locked dependencies and optionally register an
+existing local model root:
+
+```
+node cli.mjs install [--models <existing-root>] [--state <root>]
+```
+
+- `install` runs `bun install --frozen-lockfile` in this package directory only.
+- `--models` requires pre-existing local assets at
+  `<models-root>/jinaai/jina-embeddings-v2-base-code/`. All six pinned digests in
+  `core/codeModelAssets.ts` are verified before `<state>/settings.json` is
+  written atomically (mode 0600).
+- Repeated runs are idempotent: the same canonical root and digest report
+  `alreadyConfigured` without rewriting settings.
+- Invalid or truncated assets preserve the previous `settings.json` and return
+  `model-unavailable`.
+- Install never downloads model assets, enrolls a checkout, indexes source, or
+  enables spec use.
+
 ## Focused tests
 
 ```

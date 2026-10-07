@@ -15,6 +15,7 @@ export type WorkerCommand =
   | "reindex"
   | "search"
   | "configure"
+  | "configure-model"
   | "forget"
   | "prune"
   | "recover";
@@ -31,6 +32,7 @@ export type WorkerRequest = {
   query?: string;
   mode?: "vector" | "bm25";
   limit?: number;
+  modelAssets?: Array<{ path: string; sha256: string }>;
 };
 
 export type WorkerResponse = {
@@ -55,6 +57,7 @@ const WORKER_COMMANDS: ReadonlySet<string> = new Set([
   "reindex",
   "search",
   "configure",
+  "configure-model",
   "forget",
   "prune",
   "recover",
@@ -72,6 +75,7 @@ const ALLOWED_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "query",
   "mode",
   "limit",
+  "modelAssets",
 ]);
 
 const ROOT_COMMANDS: ReadonlySet<string> = new Set([
@@ -206,6 +210,32 @@ function validateWorkerRequest(request: unknown): ValidationResult {
       return { ok: false, command, message: "query must be 1..2000 Unicode code points." };
     }
   }
+  if (record.modelAssets !== undefined) {
+    if (command !== "configure-model") {
+      return { ok: false, command, message: "modelAssets is only valid for configure-model." };
+    }
+    if (!Array.isArray(record.modelAssets)) {
+      return { ok: false, command, message: "modelAssets must be an array." };
+    }
+    for (const entry of record.modelAssets) {
+      const asset = entry as Record<string, unknown> | null;
+      if (
+        asset === null ||
+        typeof asset !== "object" ||
+        Array.isArray(asset) ||
+        typeof asset.path !== "string" ||
+        asset.path.length === 0 ||
+        typeof asset.sha256 !== "string" ||
+        !/^[0-9a-f]{64}$/.test(asset.sha256)
+      ) {
+        return {
+          ok: false,
+          command,
+          message: "modelAssets entries must be {path: non-empty string, sha256: 64 lowercase hex}.",
+        };
+      }
+    }
+  }
 
   if (ROOT_COMMANDS.has(command) && typeof record.root !== "string") {
     return { ok: false, command, message: `${command} requires root.` };
@@ -222,6 +252,9 @@ function validateWorkerRequest(request: unknown): ValidationResult {
   if (command === "search" && typeof record.query !== "string") {
     return { ok: false, command, message: "search requires query." };
   }
+  if (command === "configure-model" && typeof record.models !== "string") {
+    return { ok: false, command, message: "configure-model requires models." };
+  }
 
   return {
     ok: true,
@@ -237,6 +270,7 @@ function validateWorkerRequest(request: unknown): ValidationResult {
       query: record.query as string | undefined,
       mode: record.mode as "vector" | "bm25" | undefined,
       limit: record.limit as number | undefined,
+      modelAssets: record.modelAssets as Array<{ path: string; sha256: string }> | undefined,
     },
   };
 }
@@ -265,6 +299,10 @@ export async function runWorker(request: unknown): Promise<WorkerResponse> {
     identityModule = await import("./identity.mjs");
   } catch (error) {
     return classifyWorkerError(req.command, error);
+  }
+
+  if (req.command === "configure-model") {
+    return runConfigureModel(req, identityModule);
   }
 
   if (req.command === "prune" || req.command === "recover") {
@@ -399,6 +437,118 @@ export async function runWorker(request: unknown): Promise<WorkerResponse> {
       // best-effort release
     }
   }
+}
+
+async function runConfigureModel(
+  req: WorkerRequest,
+  identityModule: typeof import("./identity.mjs"),
+): Promise<WorkerResponse> {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const assets = await import("./core/codeModelAssets.ts");
+
+  let canonicalRoot: string;
+  try {
+    canonicalRoot = fs.realpathSync(req.models as string);
+    if (!fs.statSync(canonicalRoot).isDirectory()) {
+      throw new Error("models root is not a directory");
+    }
+  } catch {
+    return {
+      version: 1,
+      command: "configure-model",
+      status: "unavailable",
+      reason: "model-unavailable",
+    };
+  }
+
+  let verified: Awaited<ReturnType<typeof assets.verifyModel>>;
+  try {
+    verified = await assets.verifyModel(
+      canonicalRoot,
+      req.modelAssets ?? assets.PINNED_CODE_MODEL_ASSETS,
+    );
+  } catch (error) {
+    return classifyWorkerError("configure-model", error);
+  }
+
+  const stateRoot = identityModule.resolveStateRoot(req.state);
+  try {
+    fs.mkdirSync(stateRoot, { recursive: true, mode: 0o700 });
+    const info = fs.lstatSync(stateRoot);
+    if (info.isSymbolicLink() || !info.isDirectory()) {
+      throw new Error("state root is not a stable directory");
+    }
+    if (typeof process.getuid === "function" && info.uid !== process.getuid()) {
+      throw new Error("state root is not owned by the current user");
+    }
+    if ((info.mode & 0o077) !== 0) {
+      throw new Error("state root has group/world permissions");
+    }
+  } catch (error) {
+    return classifyWorkerError("configure-model", error);
+  }
+
+  const settingsPath = path.join(stateRoot, "settings.json");
+  let existing: Record<string, unknown> | null = null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      existing = parsed as Record<string, unknown>;
+    }
+  } catch {
+    existing = null;
+  }
+
+  if (
+    existing !== null &&
+    existing.version === 1 &&
+    existing.modelsRoot === canonicalRoot &&
+    existing.assetDigest === verified.assetDigest
+  ) {
+    return {
+      version: 1,
+      command: "configure-model",
+      status: "ok",
+      receipt: {
+        modelsRoot: canonicalRoot,
+        assetDigest: verified.assetDigest,
+        saved: false,
+        alreadyConfigured: true,
+      },
+    };
+  }
+
+  const record = {
+    version: 1,
+    modelsRoot: canonicalRoot,
+    assetDigest: verified.assetDigest,
+    configuredAt: new Date().toISOString(),
+  };
+  const temp = `${settingsPath}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    fs.writeFileSync(temp, JSON.stringify(record, null, 2), { flag: "wx", mode: 0o600 });
+    fs.renameSync(temp, settingsPath);
+  } catch (error) {
+    try {
+      fs.unlinkSync(temp);
+    } catch {
+      // best-effort temp cleanup
+    }
+    return classifyWorkerError("configure-model", error);
+  }
+
+  return {
+    version: 1,
+    command: "configure-model",
+    status: "ok",
+    receipt: {
+      modelsRoot: canonicalRoot,
+      assetDigest: verified.assetDigest,
+      saved: true,
+      alreadyConfigured: false,
+    },
+  };
 }
 
 function responseExitCode(response: WorkerResponse): number {
