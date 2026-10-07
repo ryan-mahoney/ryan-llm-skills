@@ -303,6 +303,47 @@ describe("overlay: same-basename worktrees publish independent overlays", () => 
       state.close();
     }
   });
+
+  test("retains an unchanged base path named __proto__ in the complete overlay manifest", async () => {
+    const base = makeTempRoot();
+    const fixture = openFixture(base);
+    const { repo, state, stateRoot, modelsRoot, deps } = fixture;
+    try {
+      write(repo, "__proto__", "prototypeBaseMarker\n");
+      commitAll(repo, "add prototype-named path");
+      const primaryIdentity = await resolveCheckout(repo);
+      const primary = await buildPrimary({
+        identity: primaryIdentity,
+        state,
+        modelsRoot,
+        kind: "build",
+        deps,
+      });
+
+      const worktree = join(base, "prototype-parent", "feature");
+      addWorktree(repo, worktree, "prototype-feature");
+      write(worktree, "src/shared.ts", "export const sharedSymbol = 44;\n");
+      const wtIdentity = await resolveCheckout(worktree);
+      const overlay = await buildWorktree({
+        identity: wtIdentity,
+        state,
+        modelsRoot,
+        kind: "build",
+        primaryIdentity,
+        deps,
+      });
+
+      expect(overlay.baseId).toBe(primary.generationId);
+      const manifest = await readOverlayManifest(
+        overlayStoreDir(stateRoot, overlay.generationId!),
+      );
+      expect(Object.prototype.hasOwnProperty.call(manifest?.files, "__proto__")).toBe(true);
+      expect(manifest?.files["__proto__"]?.hash).toBe(hashOf("prototypeBaseMarker\n"));
+      expect(manifest?.tombstones).not.toContain("__proto__");
+    } finally {
+      state.close();
+    }
+  });
 });
 
 describe("overlay: change/delete/exclude/revert recompute against an immutable base", () => {
@@ -479,6 +520,88 @@ describe("overlay: unavailable base and explicit isolated full generation", () =
       ).toBe(full.generationId);
     } finally {
       state.close();
+    }
+  });
+
+  test("corrupt current overlay manifest or dump rejects update until explicit reindex", async () => {
+    const base = makeTempRoot();
+    const corruptions = [
+      {
+        name: "manifest",
+        corrupt(storeDir: string) {
+          writeFileSync(join(storeDir, "code-index-overlay.json"), "{invalid");
+        },
+      },
+      {
+        name: "dump",
+        corrupt(storeDir: string) {
+          rmSync(resolveCodeIndexStorePaths(storeDir).dumpPath, { force: true });
+        },
+      },
+    ];
+
+    for (const corruption of corruptions) {
+      const fixtureRoot = join(base, corruption.name);
+      mkdirSync(fixtureRoot, { recursive: true });
+      const fixture = openFixture(fixtureRoot);
+      const { repo, state, stateRoot, modelsRoot, deps } = fixture;
+      try {
+        const primaryIdentity = await resolveCheckout(repo);
+        await buildPrimary({
+          identity: primaryIdentity,
+          state,
+          modelsRoot,
+          kind: "build",
+          deps,
+        });
+        const worktree = join(fixtureRoot, "wt-parent", "feature");
+        addWorktree(repo, worktree, `corrupt-${corruption.name}`);
+        write(worktree, "src/shared.ts", "export const sharedSymbol = 20;\n");
+        const wtIdentity = await resolveCheckout(worktree);
+        const initial = await buildWorktree({
+          identity: wtIdentity,
+          state,
+          modelsRoot,
+          kind: "build",
+          primaryIdentity,
+          deps,
+        });
+        const initialStore = overlayStoreDir(stateRoot, initial.generationId!);
+        corruption.corrupt(initialStore);
+        write(worktree, "src/shared.ts", "export const sharedSymbol = 21;\n");
+
+        await expect(
+          updateCheckout({
+            identity: wtIdentity,
+            state,
+            modelsRoot,
+            primaryIdentity,
+            deps,
+          }),
+        ).rejects.toMatchObject({ code: "code-index-unavailable" });
+        expect(
+          state.readStatus({ checkoutKey: wtIdentity.checkoutKey }).current[0]?.generationId,
+        ).toBe(initial.generationId);
+
+        const recovered = await buildWorktree({
+          identity: wtIdentity,
+          state,
+          modelsRoot,
+          kind: "reindex",
+          primaryIdentity,
+          deps,
+        });
+        expect(recovered.generationId).not.toBe(initial.generationId);
+        expect(recovered.generationKind).toBe("overlay");
+        const recoveredManifest = await readOverlayManifest(
+          overlayStoreDir(stateRoot, recovered.generationId!),
+        );
+        expect(recoveredManifest?.files["src/shared.ts"].hash).toBe(
+          hashOf("export const sharedSymbol = 21;\n"),
+        );
+      } finally {
+        state.close();
+      }
     }
   });
 });

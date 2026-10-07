@@ -26,6 +26,7 @@ import {
   validateOverlayStore,
   type BuildEmbeddingRuntimeFactory,
 } from "./core/build";
+import { CodeIndexUnavailableError } from "./core/codeIndexRuntime";
 import {
   createCodeSearchCompatibility,
   type CodeSearchCompatibility,
@@ -1104,6 +1105,20 @@ export async function buildWorktree(input: {
         !compatibilityEqual(base.compatibility, compatibility)
       ) {
         throw new LifecycleError("base-missing", "overlay base is not usable or compatible");
+      }
+      try {
+        await validateOverlayStore({
+          destinationDir: current!.finalPath,
+          baseStoreDir: base.finalPath,
+          baseId: base.id,
+          compatibility,
+        });
+      } catch (error) {
+        if (error instanceof CodeIndexUnavailableError) throw error;
+        throw new CodeIndexUnavailableError(
+          "Current overlay generation is unavailable.",
+          error,
+        );
       }
       built = await performOverlayBuild({
         identity, state, operationId: operation.id, baseId: base.id, baseStoreDir: base.finalPath, model, compatibility, modelsRoot, deps, capture, signal: input.signal,
