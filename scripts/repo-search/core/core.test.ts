@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -184,6 +184,22 @@ describe("code embedding cache", () => {
     cache.close();
 
     expect(DEFAULT_CODE_EMBEDDING_CACHE_MAX_ROWS).toBe(100_000);
+  });
+
+  test("rejects a cache path symlinked to an external file without touching it", async () => {
+    const dir = await makeTempDir();
+    const external = join(dir, "external.sqlite");
+    const sentinel = Buffer.from("external cache sentinel bytes\n");
+    await writeFile(external, sentinel);
+    const before = await readFile(external);
+
+    const cacheDir = join(dir, "cache");
+    await mkdir(cacheDir, { recursive: true, mode: 0o700 });
+    const cachePath = join(cacheDir, "embeddings.sqlite");
+    await symlink(external, cachePath, "file");
+
+    expect(() => openCodeEmbeddingCache({ filePath: cachePath })).toThrow();
+    expect((await readFile(external)).equals(before)).toBe(true);
   });
 });
 

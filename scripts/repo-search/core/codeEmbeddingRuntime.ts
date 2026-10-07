@@ -43,7 +43,7 @@ export type CodeEmbeddingRuntimeOptions = {
 
 const codeEmbeddingDimensions = CODE_INDEX_DIMENSIONS;
 
-export const CPU_CODE_EMBED_BATCH_SIZE = 16;
+export { CPU_CODE_EMBED_BATCH_SIZE } from "./embeddingContract";
 
 const CPU_EXECUTION_PROVIDERS = ["cpu"] as const;
 

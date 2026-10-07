@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import {
+  closeSync,
+  constants as fsConstants,
+  lstatSync,
+  mkdirSync,
+  openSync,
+} from "node:fs";
 import { dirname } from "node:path";
 import { Database } from "bun:sqlite";
 
@@ -103,14 +109,133 @@ export function decodeEmbeddingVector(
   return vector;
 }
 
+type CacheDirIdentity = { path: string; dev: number | bigint; ino: number | bigint };
+
+function assertOwnerOnly(info: { uid: number; mode: number }, path: string): void {
+  if (typeof process.getuid === "function" && info.uid !== process.getuid()) {
+    throw new Error(`Embedding cache path is not owned by the current user: ${path}`);
+  }
+  if ((info.mode & 0o077) !== 0) {
+    throw new Error(`Embedding cache path has group/world permissions: ${path}`);
+  }
+}
+
+function ensureOwnedCacheDir(path: string): CacheDirIdentity {
+  let info;
+  try {
+    info = lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw new Error(`Embedding cache directory is unavailable: ${path}`);
+    }
+    mkdirSync(path, { mode: 0o700 });
+    info = lstatSync(path);
+  }
+  if (info.isSymbolicLink() || !info.isDirectory()) {
+    throw new Error(`Embedding cache directory is not a stable directory: ${path}`);
+  }
+  assertOwnerOnly(info, path);
+  return { path, dev: info.dev, ino: info.ino };
+}
+
+function assertCacheDirIdentity(identity: CacheDirIdentity): void {
+  let info;
+  try {
+    info = lstatSync(identity.path);
+  } catch {
+    throw new Error(`Embedding cache directory changed: ${identity.path}`);
+  }
+  if (
+    info.isSymbolicLink() ||
+    !info.isDirectory() ||
+    info.dev !== identity.dev ||
+    info.ino !== identity.ino
+  ) {
+    throw new Error(`Embedding cache directory changed: ${identity.path}`);
+  }
+}
+
+function assertSafeSidecar(path: string): void {
+  let info;
+  try {
+    info = lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw new Error(`Embedding cache sidecar is unavailable: ${path}`);
+  }
+  if (info.isSymbolicLink() || !info.isFile()) {
+    throw new Error(`Embedding cache sidecar is not a safe regular file: ${path}`);
+  }
+}
+
 export function openCodeEmbeddingCache(options: {
   filePath: string;
 }): CodeEmbeddingCache {
-  mkdirSync(dirname(options.filePath), { recursive: true });
-  const db = new Database(options.filePath, { create: true });
-  db.run("PRAGMA journal_mode = WAL;");
-  db.run("PRAGMA busy_timeout = 5000;");
-  createSchema(db);
+  const dir = ensureOwnedCacheDir(dirname(options.filePath));
+  const filePath = options.filePath;
+  const walPath = `${filePath}-wal`;
+  const shmPath = `${filePath}-shm`;
+
+  let existing;
+  try {
+    existing = lstatSync(filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw new Error(`Embedding cache file is unavailable: ${filePath}`);
+    }
+    existing = null;
+  }
+  if (existing) {
+    if (existing.isSymbolicLink() || !existing.isFile()) {
+      throw new Error(`Embedding cache file is not a regular file: ${filePath}`);
+    }
+    assertOwnerOnly(existing, filePath);
+  } else {
+    // Exclusive, no-follow 0600 precreation before SQLite opens the file.
+    const fd = openSync(
+      filePath,
+      fsConstants.O_CREAT |
+        fsConstants.O_EXCL |
+        fsConstants.O_WRONLY |
+        (fsConstants.O_NOFOLLOW ?? 0),
+      0o600,
+    );
+    closeSync(fd);
+  }
+  assertSafeSidecar(walPath);
+  assertSafeSidecar(shmPath);
+
+  const initial = lstatSync(filePath);
+  const expectedDev = initial.dev;
+  const expectedIno = initial.ino;
+
+  const db = new Database(filePath, { create: true });
+  try {
+    db.run("PRAGMA journal_mode = WAL;");
+    db.run("PRAGMA busy_timeout = 5000;");
+    createSchema(db);
+
+    // Revalidate the owned directory, database identity and sidecars.
+    assertCacheDirIdentity(dir);
+    const after = lstatSync(filePath);
+    if (
+      after.isSymbolicLink() ||
+      !after.isFile() ||
+      after.dev !== expectedDev ||
+      after.ino !== expectedIno
+    ) {
+      throw new Error(`Embedding cache file changed during initialization: ${filePath}`);
+    }
+    assertSafeSidecar(walPath);
+    assertSafeSidecar(shmPath);
+  } catch (error) {
+    try {
+      db.close();
+    } catch {
+      // connection already closed by the failed setup
+    }
+    throw error;
+  }
 
   const selectStmt = db.prepare(
     `SELECT dimensions, vector_blob

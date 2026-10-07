@@ -27,6 +27,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   renameSync,
   rmSync,
   statSync,
@@ -1144,6 +1145,363 @@ describe("generation ownership", () => {
       const pruned = await state.prune({});
       expect(pruned.deleted).toEqual([staged.id]);
       expect(pruned.retained).toEqual([base.id]);
+    } finally {
+      state.close();
+    }
+  });
+});
+
+describe("F1: state database path containment", () => {
+  test("rejects a symlinked state.sqlite without touching the external database", () => {
+    const base = makeStateRoot();
+    const stateRoot = join(base, "state");
+    mkdirSync(stateRoot, { recursive: true, mode: 0o700 });
+    const external = join(base, "external.sqlite");
+    const externalDb = new Database(external);
+    externalDb.exec("CREATE TABLE sentinel(value TEXT); INSERT INTO sentinel VALUES ('keep');");
+    externalDb.close();
+    const bytesBefore = readFileSync(external);
+    const modeBefore = statSync(external).mode & 0o777;
+
+    symlinkSync(external, join(stateRoot, "state.sqlite"));
+    expect(() => {
+      const opened = openState(stateRoot);
+      opened.close();
+    }).toThrow();
+
+    const check = new Database(external);
+    const row = check.query("SELECT value FROM sentinel").get() as any;
+    expect(row?.value).toBe("keep");
+    check.close();
+    expect(readFileSync(external).equals(bytesBefore)).toBe(true);
+    expect(statSync(external).mode & 0o777).toBe(modeBefore);
+  });
+
+  test("rejects symlinked state.sqlite-wal/state.sqlite-shm sidecars", () => {
+    const base = makeStateRoot();
+    const stateRoot = join(base, "state");
+    mkdirSync(stateRoot, { recursive: true, mode: 0o700 });
+    const wal = join(base, "external-wal");
+    const shm = join(base, "external-shm");
+    writeFileSync(wal, "wal-sentinel");
+    writeFileSync(shm, "shm-sentinel");
+    symlinkSync(wal, join(stateRoot, "state.sqlite-wal"));
+    symlinkSync(shm, join(stateRoot, "state.sqlite-shm"));
+
+    expect(() => {
+      const opened = openState(stateRoot);
+      opened.close();
+    }).toThrow();
+    expect(readFileSync(wal, "utf8")).toBe("wal-sentinel");
+    expect(readFileSync(shm, "utf8")).toBe("shm-sentinel");
+  });
+});
+
+describe("F2: resumed overlay deletion and base reference", () => {
+  test("resumed overlay deletion preserves its base until the next prune", async () => {
+    const root = makeStateRoot();
+    const state: any = openState(resolveStateRoot(root));
+    try {
+      const primaryWriter = state.beginOperation({
+        command: "build",
+        kind: "build",
+        checkoutKey: PRIMARY_KEY,
+        writer: true,
+      }).id;
+      const base = await publishGeneration(state, primaryWriter, {
+        snapshotDigest: "1".repeat(64),
+        bytes: 10,
+      });
+      state.finishOperation(primaryWriter);
+
+      const builder = state.beginOperation({
+        command: "build",
+        kind: "build",
+        checkoutKey: WORKTREE_KEY,
+        writer: true,
+      }).id;
+      const acquired = state.acquireCurrent({
+        operationId: builder,
+        checkoutKey: PRIMARY_KEY,
+      });
+      expect(acquired.current?.id).toBe(base.id);
+      const overlay = await publishGeneration(state, builder, {
+        checkoutKey: WORKTREE_KEY,
+        kind: "overlay",
+        baseId: base.id,
+        snapshotDigest: "2".repeat(64),
+        bytes: 20,
+      });
+      state.finishOperation(builder);
+
+      state.forgetCheckout(PRIMARY_KEY);
+      state.forgetCheckout(WORKTREE_KEY);
+
+      // Simulate an interrupted overlay prune through the real database.
+      const raw = new Database(join(root, "state.sqlite"));
+      raw.query("UPDATE generations SET status = 'deleting' WHERE id = ?").run(overlay.id);
+      raw.close();
+
+      const first = await state.prune({});
+      expect(first.deleted).toEqual([overlay.id]);
+      expect(first.retained).toEqual([base.id]);
+      expect(existsSync(overlay.finalPath)).toBe(false);
+      expect(existsSync(base.finalPath)).toBe(true);
+
+      const second = await state.prune({});
+      expect(second.deleted).toEqual([base.id]);
+      expect(second.retained).toEqual([]);
+      expect(existsSync(base.finalPath)).toBe(false);
+    } finally {
+      state.close();
+    }
+  });
+});
+
+describe("F3: publish revalidates the temp path after async validation", () => {
+  test("rejects a temp directory replaced during an async validator", async () => {
+    const root = makeStateRoot();
+    const state: any = openState(resolveStateRoot(root));
+    try {
+      const writer = state.beginOperation({
+        command: "build",
+        kind: "build",
+        checkoutKey: PRIMARY_KEY,
+        writer: true,
+      }).id;
+      const g1 = await publishGeneration(state, writer, {
+        snapshotDigest: "1".repeat(64),
+        bytes: 10,
+      });
+      const g2 = state.beginGeneration({
+        operationId: writer,
+        ...metadata({ snapshotDigest: "2".repeat(64), bytes: 20 }),
+      });
+      mkdirSync(g2.tempPath, { recursive: true });
+      writeFileSync(join(g2.tempPath, "manifest.json"), "{}");
+
+      let startValidation!: () => void;
+      let releaseValidation!: () => void;
+      const validationStarted = new Promise<void>((resolve) => {
+        startValidation = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        releaseValidation = resolve;
+      });
+      const publishing = state.publish({
+        operationId: writer,
+        generationId: g2.id,
+        validate: async () => {
+          startValidation();
+          await gate;
+          return true;
+        },
+      });
+
+      await validationStarted;
+      rmSync(g2.tempPath, { recursive: true, force: true });
+      mkdirSync(g2.tempPath, { recursive: true, mode: 0o700 });
+      writeFileSync(join(g2.tempPath, "replacement.txt"), "replacement");
+      releaseValidation();
+
+      await expect(publishing).rejects.toThrow();
+      const current = state.acquireCurrent({ operationId: writer, checkoutKey: PRIMARY_KEY });
+      expect(current.current?.id).toBe(g1.id);
+      expect(existsSync(g2.finalPath)).toBe(false);
+      expect(
+        state.readStatus().generations.find((entry: any) => entry.id === g2.id)?.status,
+      ).toBe("staging");
+
+      state.finishOperation(writer, "failed");
+    } finally {
+      state.close();
+    }
+  });
+
+  test("rejects a temp path swapped to an external symlink during async validation", async () => {
+    const base = makeStateRoot();
+    const state: any = openState(base);
+    try {
+      const writer = state.beginOperation({
+        command: "build",
+        kind: "build",
+        checkoutKey: PRIMARY_KEY,
+        writer: true,
+      }).id;
+      const g1 = await publishGeneration(state, writer, {
+        snapshotDigest: "1".repeat(64),
+        bytes: 10,
+      });
+      const g2 = state.beginGeneration({
+        operationId: writer,
+        ...metadata({ snapshotDigest: "2".repeat(64), bytes: 20 }),
+      });
+      mkdirSync(g2.tempPath, { recursive: true });
+      writeFileSync(join(g2.tempPath, "manifest.json"), "{}");
+
+      let startValidation!: () => void;
+      let releaseValidation!: () => void;
+      const validationStarted = new Promise<void>((resolve) => {
+        startValidation = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        releaseValidation = resolve;
+      });
+      const publishing = state.publish({
+        operationId: writer,
+        generationId: g2.id,
+        validate: async () => {
+          startValidation();
+          await gate;
+          return true;
+        },
+      });
+
+      await validationStarted;
+      const external = join(base, "external-swap");
+      mkdirSync(external, { recursive: true });
+      writeFileSync(join(external, "sentinel.txt"), "external");
+      rmSync(g2.tempPath, { recursive: true, force: true });
+      symlinkSync(external, g2.tempPath, "dir");
+      releaseValidation();
+
+      await expect(publishing).rejects.toThrow();
+      expect(existsSync(join(external, "sentinel.txt"))).toBe(true);
+      const current = state.acquireCurrent({ operationId: writer, checkoutKey: PRIMARY_KEY });
+      expect(current.current?.id).toBe(g1.id);
+      expect(existsSync(g2.finalPath)).toBe(false);
+
+      state.finishOperation(writer, "failed");
+    } finally {
+      state.close();
+    }
+  });
+});
+
+describe("F4: recover refuses malformed operation identity without probing", () => {
+  test("a negative stored pid refuses recovery and preserves state, pins and claims", async () => {
+    const root = makeStateRoot();
+    let probeCalls = 0;
+    const state: any = openState(resolveStateRoot(root), {
+      processProbe: () => {
+        probeCalls += 1;
+        return "alive";
+      },
+    });
+    try {
+      const operation = state.beginOperation({
+        command: "build",
+        kind: "build",
+        checkoutKey: PRIMARY_KEY,
+        writer: true,
+        native: true,
+      }).id;
+      const g1 = await publishGeneration(state, operation, {
+        snapshotDigest: "1".repeat(64),
+        bytes: 10,
+      });
+      const pin = state.acquireCurrent({ operationId: operation, checkoutKey: PRIMARY_KEY });
+      expect(pin.current?.id).toBe(g1.id);
+      const g2 = await publishGeneration(state, operation, {
+        snapshotDigest: "2".repeat(64),
+        bytes: 20,
+      });
+
+      // Corruption setup only: bypass check constraints and store an invalid pid.
+      const raw = new Database(join(root, "state.sqlite"));
+      raw.exec("PRAGMA ignore_check_constraints = ON;");
+      raw.query("UPDATE operations SET pid = ? WHERE id = ?").run(-12345, operation);
+      raw.close();
+
+      let recoverError: any = null;
+      try {
+        await state.recover(operation);
+      } catch (error) {
+        recoverError = error;
+      }
+      expect(recoverError).not.toBeNull();
+      expect(recoverError?.code).toBe("operation-unknown");
+      expect(probeCalls).toBe(0);
+
+      expect(
+        state.readStatus().operations.find((entry: any) => entry.id === operation)?.state,
+      ).toBe("active");
+      expect(() =>
+        state.beginOperation({
+          command: "build",
+          kind: "build",
+          checkoutKey: PRIMARY_KEY,
+          writer: true,
+        }),
+      ).toThrow();
+      expect(() =>
+        state.beginOperation({
+          command: "build",
+          kind: "build",
+          checkoutKey: WORKTREE_KEY,
+          native: true,
+        }),
+      ).toThrow();
+
+      // The pinned, non-current G1 must survive prune.
+      const pruned = await state.prune({});
+      expect(pruned.deleted).toEqual([]);
+      expect([...pruned.retained].sort()).toEqual([g1.id, g2.id].sort());
+    } finally {
+      state.close();
+    }
+  });
+});
+
+describe("finalized publication facts", () => {
+  test("publish finalize overrides sourceMoved/bytes without advancing current", async () => {
+    const root = makeStateRoot();
+    const state: any = openState(resolveStateRoot(root));
+    try {
+      const writer = state.beginOperation({
+        command: "build",
+        kind: "build",
+        checkoutKey: PRIMARY_KEY,
+        writer: true,
+      }).id;
+      const g1 = await publishGeneration(state, writer, {
+        snapshotDigest: "1".repeat(64),
+        bytes: 10,
+      });
+
+      const g2 = state.beginGeneration({
+        operationId: writer,
+        ...metadata({
+          snapshotDigest: "2".repeat(64),
+          bytes: 0,
+          sourceMoved: false,
+        }),
+      });
+      mkdirSync(g2.tempPath, { recursive: true });
+      writeFileSync(join(g2.tempPath, "manifest.json"), "{}");
+      await state.publish({
+        operationId: writer,
+        generationId: g2.id,
+        validate: () => true,
+        finalize: { sourceMoved: true, bytes: 4321 },
+      });
+
+      // Finalized facts are observable as ready generation metadata.
+      const row = state
+        .readStatus()
+        .generations.find((entry: any) => entry.id === g2.id);
+      expect(row?.status).toBe("ready");
+      expect(row?.sourceMoved).toBe(true);
+      expect(row?.bytes).toBe(4321);
+
+      // The finalized moved generation never advances current.
+      const acquired = state.acquireCurrent({
+        operationId: writer,
+        checkoutKey: PRIMARY_KEY,
+      });
+      expect(acquired.current?.id).toBe(g1.id);
+
+      state.finishOperation(writer);
     } finally {
       state.close();
     }

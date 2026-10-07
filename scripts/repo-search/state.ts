@@ -9,8 +9,11 @@ import { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import {
   chmodSync,
+  closeSync,
+  constants as fsConstants,
   lstatSync,
   mkdirSync,
+  openSync,
   renameSync,
   rmSync,
   rmdirSync,
@@ -164,6 +167,44 @@ function assertIdentity(identity: DirIdentity, label: string): void {
   }
 }
 
+function lstatOrNull(path: string): ReturnType<typeof lstatSync> | null {
+  try {
+    return lstatSync(path);
+  } catch {
+    return null;
+  }
+}
+
+// A pre-existing database must be an owned, owner-only regular file; a symlink
+// is never followed. Returns null when the path does not exist.
+function assertOwnedRegularFile(path: string, label: string): DirIdentity | null {
+  let info;
+  try {
+    info = lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw new StateError("state-unavailable", `${label} is unavailable: ${path}`);
+  }
+  if (info.isSymbolicLink() || !info.isFile()) {
+    throw new StateError("state-unavailable", `${label} is not a regular file: ${path}`);
+  }
+  assertOwnedMode(info, path);
+  return { path, dev: info.dev, ino: info.ino };
+}
+
+function assertSafeSidecar(path: string, label: string): void {
+  let info;
+  try {
+    info = lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw new StateError("state-unavailable", `${label} is unavailable: ${path}`);
+  }
+  if (info.isSymbolicLink() || !info.isFile()) {
+    throw new StateError("state-unavailable", `${label} is not a safe regular file: ${path}`);
+  }
+}
+
 const COMPATIBILITY_KEYS = [
   "format",
   "modelId",
@@ -253,7 +294,7 @@ function createSchema(db: Database): void {
       command TEXT NOT NULL,
       kind TEXT NOT NULL,
       checkout_key TEXT,
-      pid INTEGER NOT NULL,
+      pid INTEGER NOT NULL CHECK (pid > 0),
       state TEXT NOT NULL CHECK (state IN ('active','finished','failed','interrupted')),
       created_at TEXT NOT NULL,
       finished_at TEXT
@@ -613,6 +654,7 @@ function createState(
     operationId: string;
     generationId: string;
     validate: (tempPath: string) => boolean | void | Promise<boolean | void>;
+    finalize?: { sourceMoved: boolean; bytes: number };
   }): Promise<void> {
     const generation = selectGeneration(input.generationId);
     if (!generation) {
@@ -630,6 +672,17 @@ function createState(
       throw new StateError("state-mismatch", "generation paths are not state-owned direct children");
     }
 
+    // Facts learned only after writing (post-build snapshot) are validated
+    // before any filesystem publication.
+    if (input.finalize !== undefined) {
+      if (typeof input.finalize.sourceMoved !== "boolean") {
+        throw new StateError("invalid-generation", "finalize.sourceMoved must be a boolean");
+      }
+      if (!Number.isInteger(input.finalize.bytes) || input.finalize.bytes < 0) {
+        throw new StateError("invalid-generation", "finalize.bytes must be a nonnegative integer");
+      }
+    }
+
     let tempInfo;
     try {
       tempInfo = lstatSync(generation.tempPath);
@@ -639,11 +692,25 @@ function createState(
     if (tempInfo.isSymbolicLink() || !tempInfo.isDirectory()) {
       throw new StateError("validation-failed", "generation temp path is not a stable directory");
     }
+    const tempDev = tempInfo.dev;
+    const tempIno = tempInfo.ino;
 
     // Validator runs outside any transaction; it must not mutate state metadata.
     const accepted = await input.validate(generation.tempPath);
     if (accepted === false) {
       throw new StateError("validation-failed", `generation failed validation: ${generation.id}`);
+    }
+
+    // Recheck the exact staging directory identity after the validator.
+    const afterValidation = lstatOrNull(generation.tempPath);
+    if (
+      !afterValidation ||
+      afterValidation.isSymbolicLink() ||
+      !afterValidation.isDirectory() ||
+      afterValidation.dev !== tempDev ||
+      afterValidation.ino !== tempIno
+    ) {
+      throw new StateError("validation-failed", "generation temp path changed during validation");
     }
 
     assertIdentity(rootIdentity, "state root");
@@ -652,7 +719,17 @@ function createState(
       throw new StateError("path-exists", `final generation path already exists: ${generation.finalPath}`);
     }
 
-    // Complete the owned directory first; metadata publication follows.
+    // Recheck immediately around the rename.
+    const beforeRename = lstatOrNull(generation.tempPath);
+    if (
+      !beforeRename ||
+      beforeRename.isSymbolicLink() ||
+      !beforeRename.isDirectory() ||
+      beforeRename.dev !== tempDev ||
+      beforeRename.ino !== tempIno
+    ) {
+      throw new StateError("validation-failed", "generation temp path changed before rename");
+    }
     renameSync(generation.tempPath, generation.finalPath);
     if (afterRename) {
       await afterRename({
@@ -663,6 +740,16 @@ function createState(
     }
     assertIdentity(rootIdentity, "state root");
     assertIdentity(generationsParentIdentity, "generations parent");
+    const finalInfo = lstatOrNull(generation.finalPath);
+    if (
+      !finalInfo ||
+      finalInfo.isSymbolicLink() ||
+      !finalInfo.isDirectory() ||
+      finalInfo.dev !== tempDev ||
+      finalInfo.ino !== tempIno
+    ) {
+      throw new StateError("state-mismatch", "published generation directory changed after rename");
+    }
 
     try {
       txImmediate(db, () => {
@@ -683,8 +770,18 @@ function createState(
             "checkout writer ownership was lost before publication",
           );
         }
-        run(db, "UPDATE generations SET status = 'ready' WHERE id = ?", input.generationId);
-        if (!generation.sourceMoved) {
+        const effectiveSourceMoved =
+          input.finalize !== undefined ? input.finalize.sourceMoved : generation.sourceMoved;
+        const effectiveBytes =
+          input.finalize !== undefined ? input.finalize.bytes : generation.bytes;
+        run(
+          db,
+          "UPDATE generations SET status = 'ready', source_moved = ?, bytes = ? WHERE id = ?",
+          effectiveSourceMoved ? 1 : 0,
+          effectiveBytes,
+          input.generationId,
+        );
+        if (!effectiveSourceMoved) {
           run(
             db,
             `INSERT INTO current_generations (checkout_key, generation_id, updated_at) VALUES (?, ?, ?)
@@ -745,6 +842,13 @@ function createState(
       pid: operation.pid as number,
       createdAt: operation.created_at as string,
     };
+
+    if (!Number.isSafeInteger(identity.pid) || identity.pid <= 0) {
+      throw new StateError(
+        "operation-unknown",
+        `operation owner identity is not recoverable: ${operationId}`,
+      );
+    }
 
     const status = await probe(identity.pid);
     if (status === "alive") {
@@ -809,10 +913,12 @@ function createState(
     const marked = txImmediate(db, () => {
       const rows = all(db, "SELECT id, status, operation_id FROM generations");
       const currentIds = new Set(all(db, "SELECT generation_id FROM current_generations").map((r) => r.generation_id));
+      // A base is retained while any generation row, including a deleting one,
+      // still references it; the referencing overlay is removed first.
       const baseIds = new Set(
         all(
           db,
-          "SELECT base_id FROM generations WHERE base_id IS NOT NULL AND status IN ('ready','staging')",
+          "SELECT base_id FROM generations WHERE base_id IS NOT NULL",
         ).map((r) => r.base_id),
       );
       const pinnedIds = new Set(all(db, "SELECT generation_id FROM pins").map((r) => r.generation_id));
@@ -820,6 +926,7 @@ function createState(
 
       const candidates: string[] = [];
       for (const row of rows) {
+        if (baseIds.has(row.id)) continue;
         if (row.status === "deleting") {
           candidates.push(row.id);
           continue;
@@ -936,27 +1043,53 @@ function createState(
     }
   }
 
-  function readStatus(): {
+  function readStatus(input: { checkoutKey?: string } = {}): {
     stateRoot: string;
     current: Array<{ checkoutKey: string; generationId: string }>;
-    generations: Array<{ id: string; checkoutKey: string; kind: string; status: string; baseId: string | null }>;
+    generations: Array<{
+      id: string;
+      checkoutKey: string;
+      kind: string;
+      status: string;
+      baseId: string | null;
+      sourceMoved: boolean;
+      bytes: number;
+    }>;
     operations: Array<{ id: string; command: string; kind: string; state: string }>;
   } {
+    const checkoutKey =
+      input.checkoutKey !== undefined ? assertCheckoutKey(input.checkoutKey) : null;
     return {
       stateRoot: root,
-      current: all(
-        db,
-        "SELECT checkout_key, generation_id FROM current_generations ORDER BY checkout_key LIMIT 1000",
+      current: (checkoutKey
+        ? all(
+            db,
+            "SELECT checkout_key, generation_id FROM current_generations WHERE checkout_key = ? ORDER BY checkout_key",
+            checkoutKey,
+          )
+        : all(
+            db,
+            "SELECT checkout_key, generation_id FROM current_generations ORDER BY checkout_key LIMIT 1000",
+          )
       ).map((r) => ({ checkoutKey: r.checkout_key, generationId: r.generation_id })),
-      generations: all(
-        db,
-        "SELECT id, checkout_key, kind, status, base_id FROM generations ORDER BY id LIMIT 1000",
+      generations: (checkoutKey
+        ? all(
+            db,
+            "SELECT id, checkout_key, kind, status, base_id, source_moved, bytes FROM generations WHERE checkout_key = ? ORDER BY id",
+            checkoutKey,
+          )
+        : all(
+            db,
+            "SELECT id, checkout_key, kind, status, base_id, source_moved, bytes FROM generations ORDER BY id LIMIT 1000",
+          )
       ).map((r) => ({
         id: r.id,
         checkoutKey: r.checkout_key,
         kind: r.kind,
         status: r.status,
         baseId: r.base_id ?? null,
+        sourceMoved: Boolean(r.source_moved),
+        bytes: r.bytes,
       })),
       operations: all(
         db,
@@ -991,6 +1124,31 @@ export function openState(
   const root = resolveStateRoot(stateRoot);
   const rootIdentity = ensureOwnedDirectory(root, true);
   const dbPath = join(root, "state.sqlite");
+  const walPath = `${dbPath}-wal`;
+  const shmPath = `${dbPath}-shm`;
+
+  // Pre-open containment: never follow a symlink into an external target.
+  const existingDb = assertOwnedRegularFile(dbPath, "state database");
+  assertSafeSidecar(walPath, "state database WAL");
+  assertSafeSidecar(shmPath, "state database shared memory");
+
+  let expectedDbIdentity: DirIdentity;
+  if (existingDb) {
+    expectedDbIdentity = existingDb;
+  } else {
+    const fd = openSync(
+      dbPath,
+      fsConstants.O_CREAT |
+        fsConstants.O_EXCL |
+        fsConstants.O_WRONLY |
+        (fsConstants.O_NOFOLLOW ?? 0),
+      0o600,
+    );
+    closeSync(fd);
+    const created = lstatSync(dbPath);
+    expectedDbIdentity = { path: dbPath, dev: created.dev, ino: created.ino };
+  }
+
   const db = new Database(dbPath);
   try {
     db.exec("PRAGMA journal_mode = WAL;");
@@ -999,6 +1157,20 @@ export function openState(
     createSchema(db);
     // Owner-only database file; a failure here fails opening.
     chmodSync(dbPath, 0o600);
+
+    // Revalidate identity and sidecars after SQLite/schema initialization.
+    const dbInfo = lstatSync(dbPath);
+    if (
+      dbInfo.isSymbolicLink() ||
+      !dbInfo.isFile() ||
+      dbInfo.dev !== expectedDbIdentity.dev ||
+      dbInfo.ino !== expectedDbIdentity.ino
+    ) {
+      throw new StateError("state-unavailable", "state database changed during initialization");
+    }
+    assertSafeSidecar(walPath, "state database WAL");
+    assertSafeSidecar(shmPath, "state database shared memory");
+
     return createState(root, rootIdentity, db, options);
   } catch (error) {
     try {

@@ -9,6 +9,7 @@ export const CODE_EMBEDDING_DTYPE = "q8";
 export const CODE_EMBEDDING_POOLING = "mean";
 export const CODE_EMBEDDING_NORMALIZE = true;
 export const CODE_EMBEDDING_MAX_CHARS = 2000;
+export const CPU_CODE_EMBED_BATCH_SIZE = 16;
 export const CODE_EMBEDDING_CONTEXTUALIZED_TEXT_VERSION =
   "code-contextualized-text-v1";
 export const CODE_EMBEDDING_RUNTIME_VERSION = "code-embedding-runtime-v1";

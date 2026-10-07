@@ -302,7 +302,7 @@ function normalizeRow(row: CodeIndexUpsertRow): CodeIndexStoredRow {
   const subwords = tokenizeCodeText(row.contextualizedText + " " + symbol + " " + row.path);
 
   return {
-    id: makeChunkId(row.path, row.chunkIndex),
+    id: makeCodeChunkId(row.path, row.chunkIndex),
     embedding: row.embedding,
     path: row.path,
     startLine: row.startLine,
@@ -316,7 +316,7 @@ function normalizeRow(row: CodeIndexUpsertRow): CodeIndexStoredRow {
   };
 }
 
-function makeChunkId(path: string, chunkIndex: number): string {
+export function makeCodeChunkId(path: string, chunkIndex: number): string {
   return `${path}#${chunkIndex}`;
 }
 
