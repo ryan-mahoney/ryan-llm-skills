@@ -198,6 +198,65 @@ export function resolveBunPath(override) {
   return resolveBun(override);
 }
 
+// Commands that consume model assets and may fall back to the saved setting.
+const MODEL_SETTINGS_COMMANDS = new Set(["build", "update", "reindex", "search"]);
+const MAX_SETTINGS_BYTES = 64 * 1024;
+
+// Read the selected state root's saved model root (written by the worker's
+// configure-model route). An explicit --models is resolved by the caller before
+// this helper runs, so the saved record is only a fallback. The record is
+// operator-owned derived state: read it without following links and treat any
+// unreadable or malformed record as absent, leaving the command's own usage or
+// model-unavailable outcome in charge.
+function readConfiguredModelsRoot(stateRoot) {
+  const settingsPath = join(resolveStateRoot(stateRoot), "settings.json");
+  let info;
+  try {
+    info = lstatSync(settingsPath);
+  } catch {
+    return null;
+  }
+  if (info.isSymbolicLink() || !info.isFile()) return null;
+  if (typeof process.getuid === "function" && info.uid !== process.getuid()) return null;
+  if ((info.mode & 0o077) !== 0) return null;
+  if (info.size > MAX_SETTINGS_BYTES) return null;
+
+  let fd = null;
+  try {
+    fd = openSync(settingsPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    const descriptor = fstatSync(fd);
+    if (
+      !descriptor.isFile() ||
+      descriptor.dev !== info.dev ||
+      descriptor.ino !== info.ino ||
+      descriptor.size > MAX_SETTINGS_BYTES
+    ) {
+      return null;
+    }
+    const parsed = JSON.parse(readFileSync(fd, "utf8"));
+    const record = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+    if (
+      !record ||
+      record.version !== 1 ||
+      typeof record.modelsRoot !== "string" ||
+      record.modelsRoot.length === 0
+    ) {
+      return null;
+    }
+    return record.modelsRoot;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {
+        // best-effort close
+      }
+    }
+  }
+}
+
 function defaultSampleChildRss(pid) {
   if (process.platform === "linux") {
     try {
@@ -445,7 +504,17 @@ function mapWorkerExit(code, parsed) {
 }
 
 export async function runCommand(command, options = {}) {
-  const grammar = validateCommandOptions(command, options);
+  // Explicit --models always wins; otherwise a configured state root supplies
+  // the saved model root to the same worker request. Asset verification still
+  // happens inside the worker before any model use.
+  let effectiveOptions = options;
+  if (options.models === undefined && MODEL_SETTINGS_COMMANDS.has(command)) {
+    const savedModelsRoot = readConfiguredModelsRoot(options.state);
+    if (savedModelsRoot !== null) {
+      effectiveOptions = { ...options, models: savedModelsRoot };
+    }
+  }
+  const grammar = validateCommandOptions(command, effectiveOptions);
   if (!grammar.ok) return usageReceipt(command, grammar.message);
 
   const packageDir = options.packageDir ?? defaultPackageDir();
@@ -454,7 +523,7 @@ export async function runCommand(command, options = {}) {
   if (!hasDependencies(packageDir)) return unavailableReceipt(command, "dependencies-unavailable");
 
   const timeoutMs = options.timeoutMs ?? CEILINGS_MS[command];
-  const request = buildRequest(command, options);
+  const request = buildRequest(command, effectiveOptions);
   const spawnImpl = options.spawn ?? spawn;
   const sampleRss = options.rssSampler ?? defaultSampleChildRss;
 

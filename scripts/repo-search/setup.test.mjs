@@ -85,6 +85,21 @@ function makeFakeExitChild(code) {
   return child;
 }
 
+function makeDelayedExitChild(delayMs, code) {
+  const child = new EventEmitter();
+  child.pid = 960000 + Math.floor(Math.random() * 1000);
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.exitCode = null;
+  setTimeout(() => {
+    child.stdout.end();
+    child.stderr.end();
+    child.exitCode = code;
+    child.emit("close", code, null);
+  }, delayMs);
+  return child;
+}
+
 function makeInstallSpawn(realSpawn) {
   const calls = [];
   const fake = (file, args, options) => {
@@ -225,6 +240,38 @@ test("repeated model configuration is idempotent and preserves prior settings", 
   const hashesAfter = await fixtureHashes(modelsRoot);
   assert.notDeepEqual(hashesAfter["config.json"], hashesBefore["config.json"]);
   assert.equal(hashesAfter["weights.bin"], hashesBefore["weights.bin"]);
+});
+
+test("configuration cannot restart the install deadline", { timeout: 60000 }, async () => {
+  const packageDir = moduleDir;
+  const modelsRoot = await makeTemp("repo-search-deadline-models-");
+  const stateRoot = join(await makeTemp("repo-search-deadline-state-"), "state");
+  const calls = [];
+  const fakeSpawn = (file, args) => {
+    calls.push({ args: [...args], at: Date.now() });
+    if (args[0] === "install") return makeDelayedExitChild(700, 0);
+    return makeDelayedExitChild(500, 0);
+  };
+
+  const result = await runInstall({
+    packageDir,
+    bunPath: realBun,
+    spawn: fakeSpawn,
+    modelsRoot,
+    stateRoot,
+    timeoutMs: 1000,
+  });
+
+  assert.equal(calls.length, 2);
+  assert.ok(calls[1].args.some((arg) => arg.endsWith("worker.ts")));
+  assert.ok(
+    calls[1].at - calls[0].at >= 650,
+    `configuration started before the install phase finished: ${calls[1].at - calls[0].at}ms`,
+  );
+  assert.equal(result.status, "unavailable");
+  assert.equal(result.reason, "timeout");
+  assert.equal(result.exitCode, 124);
+  assert.equal(result.receipt.install.exitCode, 0);
 });
 
 test("install without models creates no lifecycle state", { timeout: 60000 }, async () => {

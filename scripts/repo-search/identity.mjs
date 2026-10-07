@@ -146,23 +146,25 @@ export async function resolveCheckout(root) {
 
 /**
  * Resolve the canonical primary checkout identity for a linked worktree.
- * Git lists the main working tree first in --porcelain output. A repository
- * whose main working tree is bare has no primary checkout and resolves to
- * null so callers fall back to the explicit full-generation path.
+ * Git lists the main working tree first in --porcelain output. The -z form
+ * NUL-delimits records and their fields and never quotes pathnames, so unusual
+ * primary paths survive verbatim. A repository whose main working tree is bare
+ * has no primary checkout and resolves to null so callers fall back to the
+ * explicit full-generation path.
  * @param {CheckoutIdentity} identity
  * @returns {Promise<CheckoutIdentity|null>}
  */
 export async function resolvePrimaryCheckout(identity) {
   if (identity.primary) return identity;
 
-  const listed = await git(identity.root, ["worktree", "list", "--porcelain"]);
-  const firstEntry = listed.split("\n\n")[0] ?? "";
-  const lines = firstEntry.split("\n");
-  if (lines.includes("bare")) return null;
-  const worktreeLine = lines.find((line) => line.startsWith("worktree "));
-  if (!worktreeLine) return null;
+  const listed = await git(identity.root, ["worktree", "list", "--porcelain", "-z"]);
+  const firstEntry = listed.split("\0\0")[0] ?? "";
+  const fields = firstEntry.split("\0");
+  if (fields.includes("bare")) return null;
+  const worktreeField = fields.find((field) => field.startsWith("worktree "));
+  if (!worktreeField) return null;
 
-  const primary = await resolveCheckout(worktreeLine.slice("worktree ".length));
+  const primary = await resolveCheckout(worktreeField.slice("worktree ".length));
   if (!primary.primary || primary.repoKey !== identity.repoKey) return null;
   return primary;
 }

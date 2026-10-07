@@ -56,6 +56,9 @@ export async function runInstall(input = {}) {
     input.timeoutMs !== undefined
       ? Math.min(input.timeoutMs, INSTALL_TIMEOUT_MS)
       : INSTALL_TIMEOUT_MS;
+  // One absolute deadline covers the whole public install budget; the optional
+  // model configuration receives only the time left by the package-manager phase.
+  const deadline = Date.now() + timeoutMs;
 
   const install = await runOwnedProcess(spawnImpl, bunPath, INSTALL_ARGV, {
     cwd: packageDir,
@@ -96,10 +99,11 @@ export async function runInstall(input = {}) {
     return { status: "ok", exitCode: 0, receipt };
   }
 
-  const modelTimeoutMs =
-    input.timeoutMs !== undefined
-      ? Math.min(input.timeoutMs, CONFIGURE_MODEL_CEILING_MS)
-      : undefined;
+  const remainingMs = deadline - Date.now();
+  if (remainingMs <= 0) {
+    return { status: "unavailable", reason: "timeout", exitCode: 124, receipt };
+  }
+  const modelTimeoutMs = Math.min(remainingMs, CONFIGURE_MODEL_CEILING_MS);
 
   const worker = await runCommand("configure-model", {
     models: input.modelsRoot,

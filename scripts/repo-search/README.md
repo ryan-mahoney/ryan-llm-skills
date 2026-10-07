@@ -49,6 +49,9 @@ node cli.mjs install [--models <existing-root>] [--state <root>]
   `model-unavailable`.
 - Install never downloads model assets, enrolls a checkout, indexes source, or
   enables spec use.
+- `build`, `update`, `reindex`, and vector `search` use `<state>/settings.json`
+  when `--models` is omitted; an explicit `--models` always takes precedence,
+  and the worker still verifies the assets before use.
 
 ## Focused tests
 

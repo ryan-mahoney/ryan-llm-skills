@@ -138,6 +138,40 @@ async function writeEnrollmentFixture(stateRoot, identity) {
   await chmod(recordPath, 0o600);
 }
 
+async function writeSettingsFixture(stateRoot, modelsRoot) {
+  await mkdir(stateRoot, { recursive: true, mode: 0o700 });
+  await chmod(stateRoot, 0o700);
+  const record = {
+    version: 1,
+    modelsRoot,
+    assetDigest: "0".repeat(64),
+    configuredAt: new Date().toISOString(),
+  };
+  await writeFile(join(stateRoot, "settings.json"), JSON.stringify(record, null, 2), {
+    mode: 0o600,
+  });
+  await chmod(join(stateRoot, "settings.json"), 0o600);
+}
+
+function makeCapturedSpawn(requests) {
+  return (file, args) => {
+    const request = JSON.parse(args[args.length - 1]);
+    requests.push(request);
+    const child = new EventEmitter();
+    child.pid = 990000 + Math.floor(Math.random() * 1000);
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.exitCode = null;
+    setImmediate(() => {
+      child.stdout.end(`${JSON.stringify({ version: 1, command: request.command, status: "ok", receipt: {} })}\n`);
+      child.stderr.end();
+      child.exitCode = 0;
+      child.emit("close", 0, null);
+    });
+    return child;
+  };
+}
+
 async function hashTree(root, skip = new Set([".git"])) {
   const hashes = {};
   async function walk(dir, rel) {
@@ -604,6 +638,115 @@ test("resolvePrimaryCheckout resolves the canonical primary for a linked worktre
   const self = await resolvePrimaryCheckout(primaryIdentity);
   assert.equal(self.checkoutKey, primaryIdentity.checkoutKey);
 });
+
+test("resolvePrimaryCheckout resolves primary pathnames needing Git quoting", { timeout: 60000 }, async () => {
+  const parent = await makeTemp("repo-search-special-");
+  const repo = await initRepoAt(join(parent, 'pri"mary\ncheckout'));
+  const worktreeParent = await makeTemp("repo-search-wt-");
+  const linked = await addLinkedWorktree(repo, join(worktreeParent, "feature"), "feature");
+
+  const primaryIdentity = await resolveCheckout(repo);
+  const linkedIdentity = await resolveCheckout(linked);
+  assert.equal(linkedIdentity.primary, false);
+
+  const resolved = await resolvePrimaryCheckout(linkedIdentity);
+  assert.equal(resolved.root, primaryIdentity.root);
+  assert.equal(resolved.checkoutKey, primaryIdentity.checkoutKey);
+});
+
+test("saved model settings supply build/search while explicit models take precedence", { timeout: 60000 }, async () => {
+  const repo = await initFixtureRepo();
+  const state = await makeTemp("repo-search-state-owned-");
+  const savedModels = await makeTemp("repo-search-models-saved-");
+  const explicitModels = await makeTemp("repo-search-models-explicit-");
+  await writeSettingsFixture(state, savedModels);
+
+  const requests = [];
+  const fakeSpawn = makeCapturedSpawn(requests);
+  const transport = { spawn: fakeSpawn, rssSampler: () => null };
+
+  const build = await runCommand("build", { root: repo, state, ...transport });
+  assert.equal(build.status, "ok");
+  assert.equal(requests.at(-1).models, savedModels);
+
+  const search = await runCommand("search", {
+    root: repo,
+    query: "hello",
+    mode: "vector",
+    state,
+    ...transport,
+  });
+  assert.equal(search.status, "ok");
+  assert.equal(requests.at(-1).models, savedModels);
+
+  const override = await runCommand("build", {
+    root: repo,
+    state,
+    models: explicitModels,
+    ...transport,
+  });
+  assert.equal(override.status, "ok");
+  assert.equal(requests.at(-1).models, explicitModels);
+
+  const unconfigured = await runCommand("build", {
+    root: repo,
+    state: await makeTemp("repo-search-state-unconfigured-"),
+    ...transport,
+  });
+  assert.equal(unconfigured.status, "failed");
+  assert.equal(unconfigured.reason, "usage");
+  assert.equal(unconfigured.exitCode, 2);
+  assert.equal(requests.length, 3);
+});
+
+test("real CLI build without --models consumes saved settings and still verifies assets", { timeout: 60000 }, async () => {
+  const repo = await initFixtureRepo();
+  const state = await makeTemp("repo-search-state-");
+  const models = await makeTemp("repo-search-models-empty-");
+  await writeSettingsFixture(state, models);
+
+  const build = await runCli(["build", "--root", repo, "--state", state, "--json"]);
+  assert.equal(build.code, 3, build.stderr);
+  const receipt = JSON.parse(build.stdout.trim());
+  assert.equal(receipt.status, "unavailable");
+  assert.equal(receipt.reason, "model-unavailable");
+});
+
+test(
+  "configured models drive real build and vector search without --models",
+  { timeout: 300000, skip: existingModelsRoot() === null ? "REPO_SEARCH_MODELS is not set" : false },
+  async () => {
+    const repo = await initFixtureRepo();
+    const state = await makeTemp("repo-search-state-configured-");
+    const configured = await runCommand("configure-model", {
+      models: existingModelsRoot(),
+      state,
+      packageDir: moduleDir,
+      bunPath: realBun,
+    });
+    assert.equal(configured.status, "ok", JSON.stringify(configured));
+
+    const build = await runCli(["build", "--root", repo, "--state", state, "--json"]);
+    assert.equal(build.code, 0, build.stderr);
+    assert.equal(JSON.parse(build.stdout.trim()).status, "ok");
+
+    const search = await runCli([
+      "search", "--root", repo, "--state", state, "--query", "hello world", "--mode", "vector", "--json",
+    ]);
+    assert.equal(search.code, 0, search.stderr);
+    const searchReceipt = JSON.parse(search.stdout.trim());
+    assert.equal(searchReceipt.status, "ok");
+    assert.ok(Array.isArray(searchReceipt.hits));
+    assert.ok(searchReceipt.hits.length > 0);
+
+    const empty = await makeTemp("repo-search-models-empty-");
+    const override = await runCli([
+      "build", "--root", repo, "--state", state, "--models", empty, "--json",
+    ]);
+    assert.equal(override.code, 3, override.stderr);
+    assert.equal(JSON.parse(override.stdout.trim()).reason, "model-unavailable");
+  },
+);
 
 test(
   "public linked build reuses an eligible primary base and falls back without one",
