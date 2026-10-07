@@ -56,11 +56,25 @@ function gatesFor(r) {
   if (!Array.isArray(plan.gates)) throw new Error('evidence-plan.json must contain gates; repair preparation rather than invent evidence obligations');
   return plan.gates.filter(g => Number(g.ownerStep) === stepNumber(r));
 }
+// Package artifacts accept canonical absolute, repo-relative .specs, or package-relative paths.
+function packageArtifactPath(packagePath, path) {
+  if (typeof path !== 'string' || !path.trim()) throw new Error('Artifact path is required');
+  const root = resolve(packagePath);
+  const target = isAbsolute(path) ? path : path.startsWith('.specs/')
+    ? resolve(dirname(dirname(root)), path) : resolve(root, path);
+  return safePath(root, target);
+}
 function artifactPath(r, path) {
   if (typeof path !== 'string' || !path.trim()) throw new Error('Evidence artifact path is required');
-  const absolute = isAbsolute(path) ? path : path.startsWith('.specs/') ? resolve(r.primary, path) : resolve(r.checkout, path);
-  const root = absolute.startsWith(r.package + '/') ? r.package : r.checkout;
-  return safePath(root, absolute);
+  if (isAbsolute(path) || path.startsWith('.specs/')) {
+    const absolute = isAbsolute(path) ? path : resolve(r.primary, path);
+    return safePath(absolute.startsWith(r.package + '/') ? r.package : r.checkout, absolute);
+  }
+  const packageTarget = safePath(r.package, path);
+  const checkoutTarget = safePath(r.checkout, path);
+  if (existsSync(packageTarget) && existsSync(checkoutTarget) && packageTarget !== checkoutTarget)
+    throw new Error(`Ambiguous evidence artifact: ${path}; use a canonical absolute or .specs repo-relative path`);
+  return existsSync(checkoutTarget) ? checkoutTarget : packageTarget;
 }
 // JSON-quoted scalars are YAML scalars too; fixed indentation remains compatible
 // with existing history/evidence readers without a second schema or YAML dependency.
@@ -103,7 +117,7 @@ export function submitCompletion(r, input) {
     const entry = { id: gate.id, status: e.status, phase: gate.phase, artifact: e.artifact || gate.artifact, rejects: gate.rejects, proof_boundary: e.proof_boundary };
     if (e.status === 'passed') {
       const path = artifactPath(r, entry.artifact);
-      if (!existsSync(path) || !lstatSync(path).isFile() || lstatSync(path).size === 0) throw new Error(`${e.id}: passed evidence artifact missing or empty`);
+      if (!existsSync(path) || !lstatSync(path).isFile() || lstatSync(path).size === 0) throw new Error(`${e.id}: passed evidence artifact missing or empty: ${path}; create the actual evidence or report pending/blocked`);
       const receipt = receipts.find(v => v.id === e.receipt_id);
       if (e.receipt_id && !receipt) throw new Error(`${e.id}: unknown verification receipt`);
       if (receipt) {
@@ -163,6 +177,14 @@ export function refreshProgress(packagePath) {
     const ledger = { version: 1, observed_at: now(), purpose: 'Runtime facts, not acceptance or publication authority', runs,
       stages: existsSync(join(packagePath, 'runtime/stages')) ? readdirSync(join(packagePath, 'runtime/stages')).filter(n => n.endsWith('.json')).map(n => read(join(packagePath, 'runtime/stages', n))) : [],
       artifacts: index.records.map(({ path, kind, step }) => ({ path, kind, step, assessment: 'inspect source; presence is not approval' })) };
+    const latestStages = new Map();
+    for (const entry of ledger.stages) {
+      const stage = stageAliases[entry.stage] || entry.stage;
+      const previous = latestStages.get(stage);
+      if (!previous || (entry.recorded_at || '') > (previous.recorded_at || '') ||
+          entry.recorded_at === previous.recorded_at && entry.status === 'blocked') latestStages.set(stage, { ...entry, stage });
+    }
+    ledger.stages = [...latestStages.values()];
     atomic(safePath(packagePath, join(packagePath, 'runtime/progress.json')), ledger);
     return ledger;
   });
@@ -211,11 +233,15 @@ export function watchProgress(packagePath, onError = () => {}, onFresh = () => {
   return () => { closed = true; clearTimeout(queued); clearInterval(timer); for (const w of watchers.values()) w.close(); return refreshes.get(packagePath)?.catch(() => {}); };
 }
 
+const stageAliases = { 'spec-run': 'implementation', 'spec-step-run': 'implementation', 'spec-pr': 'publication',
+  'spec-prepare': 'preparation', 'spec-write': 'preparation', 'spec-architect-initial': 'architecture',
+  'spec-branch-refine': 'review', 'spec-work-tour': 'work-tour' };
 export function recordCheckpoint(packagePath, input) {
+  input = { ...input, stage: stageAliases[input.stage] || input.stage };
   if (!/^[a-z][a-z0-9-]{0,63}$/.test(input.stage) || !['pending', 'running', 'complete', 'blocked'].includes(input.status)) throw new Error('Invalid stage or status');
   if (typeof input.next !== 'string' || !input.next.trim() || input.next.length > 2000) throw new Error('A concise next action is required');
   strings(input.decisions, 'decisions'); strings(input.artifacts, 'artifacts');
-  for (const path of input.artifacts) if (!existsSync(safePath(packagePath, path))) throw new Error(`Missing stage artifact: ${path}`);
+  for (const path of input.artifacts) if (!existsSync(packageArtifactPath(packagePath, path))) throw new Error(`Missing stage artifact: ${path} (resolved to ${packageArtifactPath(packagePath, path)}); reference an existing artifact, not an expected future file`);
   if (input.status === 'complete' && !input.artifacts.length) throw new Error('A complete stage must reference its actual artifacts');
   if (input.status === 'complete' && ['implementation', 'publication'].includes(input.stage)) {
     const progress = read(join(packagePath, 'runtime/progress.json'));
@@ -233,6 +259,7 @@ export function recordCheckpoint(packagePath, input) {
 // of appending messages, starting turns, or asking the model to reread every skill.
 export function installProgressContext(pi, { record, role, onError = () => {} } = {}) {
   const packages = new Map();
+  let latestInputAt = null;
   const attach = (packagePath, persist = true) => {
     if (packages.has(packagePath)) return;
     const item = { error: null, close: null };
@@ -240,11 +267,24 @@ export function installProgressContext(pi, { record, role, onError = () => {} } 
     packages.set(packagePath, item);
     if (persist) pi.appendEntry('spec-progress-binding', { package: packagePath });
   };
-  if (!record) pi.on('session_start', (_event, ctx) => {
+  if (!record) pi.on('input', event => {
+    if (!['interactive', 'rpc'].includes(event.source)) return;
+    latestInputAt = now();
+    pi.appendEntry('spec-progress-input', { observed_at: latestInputAt });
+  });
+  const restoreBranch = (_event, ctx) => {
+    latestInputAt = null;
+    for (const item of packages.values()) item.close();
+    packages.clear();
     for (const entry of ctx.sessionManager.getBranch()) {
+      if (entry.type === 'custom' && entry.customType === 'spec-progress-input' && entry.data?.observed_at) latestInputAt = entry.data.observed_at;
       if (entry.type === 'custom' && entry.customType === 'spec-progress-binding' && entry.data?.package) attach(entry.data.package, false);
     }
-  });
+  };
+  if (!record) {
+    pi.on('session_start', restoreBranch);
+    pi.on('session_tree', restoreBranch);
+  }
   pi.on('context', event => {
     let content;
     if (record) {
@@ -259,7 +299,7 @@ export function installProgressContext(pi, { record, role, onError = () => {} } 
           const progress = read(join(packagePath, 'runtime/progress.json'));
           const latest = new Map(progress.runs.map(r => [r.step, r]));
           const missing = [...latest.values()].filter(r => r.handoff.status !== 'recorded');
-          items.push(`${packagePath}: ${progress.runs.length} attempts; ${missing.length} without structured handoff. ${missing.slice(-4).map(r => `${basename(r.step)} ${r.execution}: ${r.handoff.missing.join(', ')}`).join('; ')}. Stages: ${(progress.stages || []).map(s => `${s.stage}=${s.status}, next: ${s.next.slice(0, 240)}`).join(', ') || 'not recorded'}.${item.error ? ' Refresh error: ' + item.error : ''}`);
+          items.push(`${packagePath}: ${progress.runs.length} attempts; ${missing.length} without structured handoff. ${missing.slice(-4).map(r => `${basename(r.step)} ${r.execution}: ${r.handoff.missing.join(', ')}`).join('; ')}. Stages: ${(progress.stages || []).map(s => `${s.stage}=${s.status}${latestInputAt && (!s.recorded_at || s.recorded_at <= latestInputAt) ? ' (recorded before latest user input; reconcile that input before following this next action; holds remain until explicitly resolved)' : ''}, next: ${s.next.slice(0, 240)}`).join(', ') || 'not recorded'}.${item.error ? ' Refresh error: ' + item.error : ''}`);
         } catch (error) { items.push(`${packagePath}: progress unavailable (${error.message}); do not infer completion.`); }
       }
       if (!items.length) return;

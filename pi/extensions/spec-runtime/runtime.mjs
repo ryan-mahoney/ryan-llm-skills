@@ -9,6 +9,7 @@ import { SCOUT_MODEL } from './scout.mjs';
 import { createLogSummary } from '../../../scripts/spec-facts/core.mjs';
 import { decide } from '../../../scripts/jev/core.mjs';
 import { preparedEntry } from './startup.mjs';
+import { splitModelSelector, configurationFailure, configurationAction } from './model-selector.mjs';
 import { submitCompletion, completionStatus, refreshProgress, revision, recordVerification, invalidateCompletion } from './completion.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -147,7 +148,7 @@ export function resolveInput(input) {
   input = { ...input, owner_model: input.owner_override || input.owner_model,
     routing_reason: input.owner_override ? 'explicit step override' : input.routing_reason };
   const { packagePath, primary, common } = canonicalPackage(input.package);
-  for (const key of ['owner_model', 'editor_model']) if (!input[key] || /[\r\n]/.test(input[key])) throw new Error(`${key} is required as provider/model[:thinking]`);
+  for (const key of ['owner_model', 'editor_model']) splitModelSelector(input[key]);
   const step = realpathSync(input.step);
   if (!inside(packagePath, step)) throw new Error('step must be inside the canonical package');
   const branch = input.branch || `spec-${basename(packagePath)}`;
@@ -179,8 +180,10 @@ export function launch(record, role, prompt, options = {}) {
   const stream = join(record.package, 'runtime/runs', `${record.id}-${role}-${randomUUID()}.jsonl`);
   const errors = `${stream}.stderr`;
   const profile = resolve(here, '../../agents', role === 'owner' ? 'spec-step-owner.md' : 'spec-step-editor.md');
+  const selector = splitModelSelector(record[`${role}_model`]);
   const args = [ ...(options.prefix || []), '--print', '--mode', 'json', '--session', session,
-    '--model', record[`${role}_model`], '--no-extensions', '--no-skills', '--no-prompt-templates',
+    '--provider', selector.provider, '--model', selector.model,
+    ...(selector.thinking ? ['--thinking', selector.thinking] : []), '--no-extensions', '--no-skills', '--no-prompt-templates',
     ...((record.child_extensions || []).flatMap(path => ['--extension', path])),
     ...(role === 'owner' ? ['--extension', join(homedir(), '.pi/agent/npm/node_modules/pi-subagents/index.js')] : []),
     '--extension', join(here, 'index.ts'), '--tools', role === 'owner' ? 'read,grep,find,ls,spec_editor,spec_answer,spec_verify,spec_scout,spec_advice,spec_complete' : 'read,grep,find,ls,edit,write,bash,spec_question',
@@ -189,7 +192,7 @@ export function launch(record, role, prompt, options = {}) {
   const activity = activityRecorder(record, role);
   let reportLifecycleFailure;
   const lifecycleFailure = new Promise(resolveFailure => { reportLifecycleFailure = resolveFailure; });
-  let pending = '', finalText = '', lastStop, failure;
+  let pending = '', finalText = '', lastStop, failure, stderr = '';
   child.stdout.on('data', chunk => {
     appendFileSync(stream, chunk, { mode: 0o600 });
     pending += chunk.toString();
@@ -211,7 +214,7 @@ export function launch(record, role, prompt, options = {}) {
       } catch { /* preserve non-JSON diagnostics on disk */ }
     }
   });
-  child.stderr.on('data', chunk => appendFileSync(errors, chunk, { mode: 0o600 }));
+  child.stderr.on('data', chunk => { appendFileSync(errors, chunk, { mode: 0o600 }); stderr = (stderr + chunk.toString()).slice(-8000); });
   const done = new Promise(resolveDone => {
     child.on('error', error => { failure = error.message; });
     child.on('close', (code, signal) => {
@@ -223,7 +226,7 @@ export function launch(record, role, prompt, options = {}) {
         const truncated = finalText.length > 8000;
         const notice = `\n[Result truncated. Read the needed portion of ${fullResultPath}; do not repeat the assignment.]`;
         resolveDone({ code, signal, result: truncated ? finalText.slice(0, Math.max(0, 8000 - notice.length)) + notice : finalText,
-          result_truncated: truncated, full_result_path: fullResultPath, stream, errors, error });
+          result_truncated: truncated, full_result_path: fullResultPath, stream, errors, error, configuration_failure: configurationFailure(error) || (error ? configurationFailure(stderr) : undefined) });
       } catch (cause) {
         resolveDone({ code, signal, stream, errors, error: `Cannot preserve full result: ${cause.message}${error ? `; ${error}` : ''}` });
       }
@@ -363,6 +366,11 @@ export class Runtime {
 
 export async function runEditor(record, assignment, signal, launchProcess = launch, { stopGroup = terminateGroup } = {}) {
   assertLease(record);
+  const configFile = join(record.package, 'runtime/runs', `${record.id}-editor-configuration.json`);
+  if (existsSync(configFile)) {
+    const failure = read(configFile);
+    if (failure.selector === record.editor_model) return { error: configurationAction(failure.selector, failure.cause), configuration_failure: failure, coordinator_action_required: true };
+  }
   const editorLock = join(record.lock, 'editor');
   try { mkdirSync(editorLock); } catch { throw new Error('An editor assignment is already active; await its result.'); }
   let task;
@@ -395,6 +403,15 @@ export async function runEditor(record, assignment, signal, launchProcess = laun
       revoke(record);
       result.error = 'Editor or command descendants remain alive. Lease revoked; coordinator must cancel this run before replacing the editor.';
       result.requires_cancellation = true;
+    }
+    const configFailure = !result.requires_cancellation && (result.configuration_failure || configurationFailure(result.error));
+    if (configFailure) {
+      const failure = { ...configFailure, selector: record.editor_model, run_id: record.id, timestamp: timestamp() };
+      atomic(configFile, failure);
+      result.configuration_failure = failure;
+      result.error = configurationAction(failure.selector, failure.cause);
+      result.coordinator_action_required = true;
+      event(record, 'editor_configuration_failed', failure);
     }
     event(record, 'editor_finished', { state: result.error ? 'failed' : 'completed', error: result.error });
     return result;
