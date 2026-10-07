@@ -1,0 +1,367 @@
+// Step 6 finite Bun worker.
+//
+// Validates the request shape strictly before importing lifecycle/state owners,
+// resolves checkout identity before opening owned state, dispatches the
+// lifecycle command, and prints exactly one JSON line when run as the entry.
+// All progress goes to stderr; stdout carries only the final response.
+
+export type WorkerCommand =
+  | "status"
+  | "check"
+  | "build"
+  | "update"
+  | "reindex"
+  | "configure"
+  | "forget"
+  | "prune"
+  | "recover";
+
+export type WorkerRequest = {
+  version: 1;
+  command: WorkerCommand;
+  root?: string;
+  state?: string;
+  models?: string;
+  timeoutMs?: number;
+  specUse?: boolean;
+  operation?: string;
+};
+
+export type WorkerResponse = {
+  version: 1;
+  command?: string;
+  status: "ok" | "unavailable" | "failed";
+  reason?: string;
+  repoKey?: string;
+  checkoutKey?: string;
+  requestedRoot?: string;
+  actualRoot?: string;
+  receipt?: unknown;
+  message?: string;
+  exitCode?: number;
+};
+
+const WORKER_COMMANDS: ReadonlySet<string> = new Set([
+  "status",
+  "check",
+  "build",
+  "update",
+  "reindex",
+  "configure",
+  "forget",
+  "prune",
+  "recover",
+]);
+
+const ALLOWED_REQUEST_KEYS: ReadonlySet<string> = new Set([
+  "version",
+  "command",
+  "root",
+  "state",
+  "models",
+  "timeoutMs",
+  "specUse",
+  "operation",
+]);
+
+const ROOT_COMMANDS: ReadonlySet<string> = new Set([
+  "status",
+  "check",
+  "build",
+  "update",
+  "reindex",
+  "configure",
+  "forget",
+]);
+
+const MODELS_COMMANDS: ReadonlySet<string> = new Set(["build", "update", "reindex"]);
+
+const UNAVAILABLE_REASONS: ReadonlySet<string> = new Set([
+  "unenrolled",
+  "incompatible",
+  "no-current",
+  "base-missing",
+  "base-unavailable",
+  "model-unavailable",
+  "busy",
+  "corrupt",
+  "invalid-root",
+  "runtime-unavailable",
+  "dependencies-unavailable",
+  "disabled",
+  "timeout",
+  "budget-exceeded",
+  "source-raced",
+  "output-budget",
+]);
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function normalizeReason(code: string): string {
+  if (code === "enrollment-corrupt") return "corrupt";
+  if (code === "enrollment-path" || code === "enrollment-unavailable") return "corrupt";
+  if (code === "code-model-unavailable") return "model-unavailable";
+  if (code === "code-index-unavailable") return "corrupt";
+  if (code === "state-unavailable") return "corrupt";
+  return code;
+}
+
+function reasonForError(error: unknown): { reason: string; message: string } {
+  const message = errorMessage(error);
+  const code = (error as { code?: unknown } | null)?.code;
+  if (typeof code === "string" && code.length > 0) {
+    return { reason: normalizeReason(code), message };
+  }
+  return { reason: "failed", message };
+}
+
+function classifyWorkerError(command: string | undefined, error: unknown): WorkerResponse {
+  const { reason, message } = reasonForError(error);
+  const unavailable = UNAVAILABLE_REASONS.has(reason);
+  return {
+    version: 1,
+    command,
+    status: unavailable ? "unavailable" : "failed",
+    reason,
+    message,
+  };
+}
+
+type ValidationResult =
+  | { ok: true; value: WorkerRequest }
+  | { ok: false; command?: string; message: string };
+
+function validateWorkerRequest(request: unknown): ValidationResult {
+  if (typeof request !== "object" || request === null || Array.isArray(request)) {
+    return { ok: false, message: "Request must be a JSON object." };
+  }
+  const record = request as Record<string, unknown>;
+  const command = typeof record.command === "string" ? record.command : undefined;
+
+  for (const key of Object.keys(record)) {
+    if (!ALLOWED_REQUEST_KEYS.has(key)) {
+      return { ok: false, command, message: `Unknown request field: ${key}` };
+    }
+  }
+
+  if (record.version !== 1) {
+    return { ok: false, command, message: "Request version must be 1." };
+  }
+  if (command === undefined || !WORKER_COMMANDS.has(command)) {
+    return { ok: false, command, message: "Unknown or missing command." };
+  }
+
+  const stringFields = ["root", "state", "models", "operation"] as const;
+  for (const field of stringFields) {
+    const value = record[field];
+    if (value !== undefined && (typeof value !== "string" || value.length === 0)) {
+      return { ok: false, command, message: `${field} must be a non-empty string.` };
+    }
+  }
+  if (
+    record.timeoutMs !== undefined &&
+    (!Number.isInteger(record.timeoutMs) || (record.timeoutMs as number) <= 0)
+  ) {
+    return { ok: false, command, message: "timeoutMs must be a positive integer." };
+  }
+  if (record.specUse !== undefined && typeof record.specUse !== "boolean") {
+    return { ok: false, command, message: "specUse must be a boolean." };
+  }
+
+  if (ROOT_COMMANDS.has(command) && typeof record.root !== "string") {
+    return { ok: false, command, message: `${command} requires root.` };
+  }
+  if (MODELS_COMMANDS.has(command) && typeof record.models !== "string") {
+    return { ok: false, command, message: `${command} requires models.` };
+  }
+  if (command === "configure" && typeof record.specUse !== "boolean") {
+    return { ok: false, command, message: "configure requires specUse." };
+  }
+  if (command === "recover" && typeof record.operation !== "string") {
+    return { ok: false, command, message: "recover requires operation." };
+  }
+
+  return {
+    ok: true,
+    value: {
+      version: 1,
+      command: command as WorkerCommand,
+      root: record.root as string | undefined,
+      state: record.state as string | undefined,
+      models: record.models as string | undefined,
+      timeoutMs: record.timeoutMs as number | undefined,
+      specUse: record.specUse as boolean | undefined,
+      operation: record.operation as string | undefined,
+    },
+  };
+}
+
+export async function runWorker(request: unknown): Promise<WorkerResponse> {
+  process.umask(0o077);
+
+  const validation = validateWorkerRequest(request);
+  if (!validation.ok) {
+    return {
+      version: 1,
+      command: validation.command,
+      status: "failed",
+      reason: "usage",
+      message: validation.message,
+    };
+  }
+  const req = validation.value;
+
+  // Engine owners load only after the request is known-valid.
+  const lifecycle = await import("./lifecycle.ts");
+  const stateModule = await import("./state.ts");
+  const identityModule = await import("./identity.mjs");
+
+  if (req.command === "prune" || req.command === "recover") {
+    // No identity work for state-only commands; open owned state directly.
+    const state = stateModule.openState(req.state);
+    try {
+      if (req.command === "prune") {
+        const receipt = await state.prune({
+          maxGenerations: 100,
+          deadlineMs: req.timeoutMs ?? 30_000,
+        });
+        return { version: 1, command: req.command, status: "ok", receipt };
+      }
+      const receipt = await state.recover(req.operation as string);
+      return { version: 1, command: req.command, status: "ok", receipt };
+    } catch (error) {
+      return classifyWorkerError(req.command, error);
+    } finally {
+      try {
+        state.close();
+      } catch {
+        // best-effort release
+      }
+    }
+  }
+
+  // Resolve identity before opening state so invalid roots never create state.
+  let identity: Awaited<ReturnType<typeof identityModule.resolveCheckout>>;
+  try {
+    identity = await identityModule.resolveCheckout(req.root as string);
+  } catch (error) {
+    return {
+      version: 1,
+      command: req.command,
+      status: "unavailable",
+      reason: "invalid-root",
+      message: errorMessage(error),
+    };
+  }
+
+  const state = stateModule.openState(req.state);
+  const base = {
+    version: 1 as const,
+    command: req.command,
+    repoKey: identity.repoKey,
+    checkoutKey: identity.checkoutKey,
+    requestedRoot: identity.root,
+    actualRoot: identity.root,
+  };
+
+  try {
+    switch (req.command) {
+      case "status": {
+        const receipt = lifecycle.readCheckoutStatus({ identity, state });
+        return { ...base, status: "ok", receipt };
+      }
+      case "check": {
+        const receipt = await lifecycle.checkCheckout({ identity, state });
+        return { ...base, status: "ok", receipt };
+      }
+      case "configure": {
+        const receipt = lifecycle.configureSpecUse({
+          identity,
+          stateRoot: state.stateRoot,
+          specUse: req.specUse as boolean,
+        });
+        return { ...base, status: "ok", receipt };
+      }
+      case "forget": {
+        state.forgetCheckout(identity.checkoutKey);
+        return {
+          ...base,
+          status: "ok",
+          receipt: {
+            version: 1,
+            command: "forget",
+            repoKey: identity.repoKey,
+            checkoutKey: identity.checkoutKey,
+          },
+        };
+      }
+      default: {
+        // build | update | reindex
+        const kind = req.command as "build" | "update" | "reindex";
+        const modelsRoot = req.models as string;
+        let receipt: Awaited<ReturnType<typeof lifecycle.buildPrimary>>;
+        if (identity.primary) {
+          receipt = await lifecycle.buildPrimary({ identity, state, modelsRoot, kind });
+        } else if (kind === "update") {
+          receipt = await lifecycle.updateCheckout({ identity, state, modelsRoot });
+        } else {
+          receipt = await lifecycle.buildWorktree({ identity, state, modelsRoot, kind });
+        }
+        return { ...base, status: "ok", receipt };
+      }
+    }
+  } catch (error) {
+    return classifyWorkerError(req.command, error);
+  } finally {
+    try {
+      state.close();
+    } catch {
+      // best-effort release
+    }
+  }
+}
+
+function responseExitCode(response: WorkerResponse): number {
+  if (response.reason === "usage") return 2;
+  if (response.status === "ok") return 0;
+  if (response.status === "unavailable") return 3;
+  return 1;
+}
+
+async function main(): Promise<void> {
+  process.umask(0o077);
+  const raw = process.argv[2];
+  let response: WorkerResponse;
+  if (typeof raw !== "string" || raw.length === 0) {
+    response = {
+      version: 1,
+      status: "failed",
+      reason: "usage",
+      message: "Missing request JSON argument.",
+    };
+  } else {
+    let parsed: unknown;
+    let parseFailed = false;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      parseFailed = true;
+    }
+    response = parseFailed
+      ? {
+          version: 1,
+          status: "failed",
+          reason: "usage",
+          message: "Request must be valid JSON.",
+        }
+      : await runWorker(parsed);
+  }
+  process.stdout.write(JSON.stringify(response) + "\n");
+  process.exitCode = responseExitCode(response);
+}
+
+if (import.meta.main) {
+  await main();
+}

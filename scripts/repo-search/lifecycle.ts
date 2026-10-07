@@ -1253,3 +1253,41 @@ export async function updateCheckout(input: {
     deps: input.deps,
   });
 }
+
+// ---- configureSpecUse -----------------------------------------------------
+
+// Operator-only spec-use preference. Requires an existing enrollment, writes
+// the full record atomically through the existing writer, and never touches
+// generations or current state.
+export function configureSpecUse(input: {
+  identity: CheckoutIdentityLike;
+  stateRoot: string;
+  specUse: boolean;
+}): {
+  version: 1;
+  command: "configure";
+  specUse: boolean;
+  repoKey: string;
+  checkoutKey: string;
+  requestedRoot: string;
+  actualRoot: string;
+  observedAt: string;
+} {
+  const { identity, stateRoot, specUse } = input;
+  const enrollment = readEnrollment(stateRoot, identity.checkoutKey);
+  if (!enrollment) {
+    throw new LifecycleError("unenrolled", "checkout is not enrolled");
+  }
+  assertEnrollmentIdentity(enrollment, identity);
+  writeEnrollment(stateRoot, identity.checkoutKey, { ...enrollment, specUse });
+  return {
+    version: 1,
+    command: "configure",
+    specUse,
+    repoKey: identity.repoKey,
+    checkoutKey: identity.checkoutKey,
+    requestedRoot: identity.root,
+    actualRoot: identity.root,
+    observedAt: nowIso(),
+  };
+}
