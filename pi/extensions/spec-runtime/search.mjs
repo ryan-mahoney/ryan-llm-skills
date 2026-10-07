@@ -11,7 +11,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const DEFAULT_BUDGET_MS = 15000;
-const MAX_RESPONSE_BYTES = 8192;
+const CLEANUP_RESERVE_MS = 1000;
+const MIN_QUERY_BUDGET_MS = 500;
 const FALLBACK_TEXT =
   "Use rg for exact literals or read known files directly; do not treat this as absence.";
 
@@ -80,41 +81,51 @@ async function resolveClient(deps) {
   return null;
 }
 
-function compactHit(hit) {
-  return {
-    path: hit?.path,
-    startLine: hit?.startLine,
-    endLine: hit?.endLine,
-    symbol: hit?.symbol ?? "",
-    score: hit?.score ?? 0,
-    excerpt: typeof hit?.excerpt === "string" ? hit.excerpt.slice(0, 240) : undefined,
-  };
-}
-
-function boundResponse(value) {
-  if (JSON.stringify(value).length <= MAX_RESPONSE_BYTES) return value;
-  const hits = Array.isArray(value.hits) ? value.hits.slice(0, 10) : [];
-  return { ...value, hits, truncated: true };
-}
-
+// The optional client already formats its receipt through the package's
+// format.mjs owner, which bounds public output and preserves mandatory scope.
+// Keep that receipt intact instead of re-trimming it, and add only the
+// adapter's own state markers so identity, freshness and coverage stay visible.
 function mapResult(result) {
   const status = result?.status;
   const reason = result?.reason;
   if (status === "ok") {
-    return boundResponse({
-      status: "ok",
-      hits: Array.isArray(result.hits) ? result.hits.slice(0, 20).map(compactHit) : [],
-      coverage: result.coverage ?? {},
-      generationId: result.generationId,
-      observedHead: result.observedHead ?? null,
-    });
+    const receipt = { ...result, hits: Array.isArray(result.hits) ? result.hits : [] };
+    if (receipt.freshness === "stale") {
+      return { ...receipt, reason: "stale", fallback: FALLBACK_TEXT };
+    }
+    return receipt;
   }
   if (status === "unavailable") {
-    if (reason === "unenrolled" || reason === "disabled") return skipped(reason);
-    return unavailable(reason ?? "unavailable");
+    if (reason === "unenrolled" || reason === "disabled") return { ...result, ...skipped(reason) };
+    return { ...result, ...unavailable(reason ?? "unavailable") };
   }
-  if (status === "failed") return unavailable(reason ?? "failed");
+  if (status === "failed") return { ...result, ...unavailable(reason ?? "failed") };
   return unavailable("failed");
+}
+
+function deadlineRemainingMs(record) {
+  const startedAt = Date.parse(record?.started_at ?? "");
+  const timeoutMs = record?.timeout_ms;
+  if (
+    !Number.isFinite(startedAt) ||
+    typeof timeoutMs !== "number" ||
+    !Number.isFinite(timeoutMs) ||
+    timeoutMs <= 0
+  ) {
+    return undefined;
+  }
+  return startedAt + timeoutMs - Date.now();
+}
+
+// min(15s, remaining caller budget minus the cleanup second). An unmanaged
+// record without an assignment deadline keeps the default spec budget.
+function queryBudgetMs(record, deps) {
+  const remaining =
+    typeof deps.remainingMs === "number" && Number.isFinite(deps.remainingMs)
+      ? deps.remainingMs
+      : deadlineRemainingMs(record);
+  if (remaining === undefined) return DEFAULT_BUDGET_MS;
+  return Math.max(0, Math.floor(Math.min(DEFAULT_BUDGET_MS, remaining - CLEANUP_RESERVE_MS)));
 }
 
 async function runSpecSearch(record, args, signal, deps) {
@@ -132,9 +143,13 @@ async function runSpecSearch(record, args, signal, deps) {
     if (!client || typeof client.searchRepository !== "function") {
       return unavailable("package-unavailable");
     }
-    const remaining =
-      typeof deps.remainingMs === "number" ? deps.remainingMs : DEFAULT_BUDGET_MS;
-    const timeoutMs = Math.max(0, Math.min(DEFAULT_BUDGET_MS, remaining));
+    // The assignment deadline is absolute and preflight time counts against it:
+    // compute the live remainder after client resolution, reserve the cleanup
+    // second, and skip rather than start a worker the caller cannot own.
+    const timeoutMs = queryBudgetMs(record, deps);
+    if (timeoutMs < MIN_QUERY_BUDGET_MS) {
+      return skipped("budget-exceeded");
+    }
     const result = await client.searchRepository({
       root: record.checkout,
       query: args.query,

@@ -226,6 +226,44 @@ test("registered callback searches record.checkout and rejects a caller root", {
   assert.ok(rejected.details.fallback);
 });
 
+test("a stale-only registered result keeps identity and returns exact fallback", { timeout: 600000 }, async () => {
+  const repo = await initFixtureRepo();
+  const stateRoot = await makeTemp("spec-search-stale-state-");
+  const modelsBase = await makeTemp("spec-search-stale-models-");
+  const { modelsRoot, manifestPath } = await makeFixtureModels(modelsBase);
+  const generationId = await buildFixtureGeneration(repo, stateRoot, modelsRoot, manifestPath);
+  const configure = run(process.execPath, [sourceCli, "configure", "--root", repo, "--state", stateRoot, "--spec-use", "on", "--json"]);
+  assert.equal(configure.status, 0, configure.stderr);
+
+  // Change the indexed file without rebuilding: BM25 still returns the old
+  // candidate, and source-hash validation must omit it as stale.
+  await writeFile(join(repo, "src", "uniqueTokenFile.ts"), `export const marker = "${TOKEN}";\n// edited after build\n`, "utf8");
+  const identity = await resolveCheckout(repo);
+
+  const pi = fakePi();
+  registerRepositorySearch(pi, { id: "run-stale", checkout: repo });
+  const response = await pi.tools.get("spec_search").execute(
+    "call-stale",
+    { query: TOKEN, mode: "bm25", state: stateRoot },
+    new AbortController().signal,
+  );
+  const details = response.details;
+  assert.equal(details.status, "ok", JSON.stringify(details));
+  assert.equal(details.freshness, "stale");
+  assert.equal(details.reason, "stale");
+  assert.ok(details.fallback);
+  assert.deepEqual(details.hits, []);
+  assert.equal(details.repoKey, identity.repoKey);
+  assert.equal(details.checkoutKey, identity.checkoutKey);
+  assert.equal(details.requestedRoot, identity.root);
+  assert.equal(details.actualRoot, identity.root);
+  assert.equal(details.observedHead, identity.head);
+  assert.equal(details.generationId, generationId);
+  assert.equal(details.baseId, null);
+  assert.ok(details.coverage.staleHits >= 1, JSON.stringify(details.coverage));
+  assert.ok(details.timing.elapsedMs >= 0);
+});
+
 test("disabled, unenrolled and missing-package paths fall back without state changes", { timeout: 120000 }, async () => {
   const repo = await initFixtureRepo();
   const identity = await resolveCheckout(repo);
@@ -290,7 +328,7 @@ test("timeout and busy results return fallback without build or install calls", 
     assert.equal(response.details.reason, reason);
     assert.ok(response.details.fallback);
     assert.equal(client.calls.length, 1);
-    assert.ok(client.calls[0].timeoutMs <= 15000);
+    assert.ok(client.calls[0].timeoutMs <= 14000);
     assert.deepEqual(Object.keys(client).filter((key) => key !== "calls"), ["searchRepository"]);
   }
 });
@@ -311,7 +349,20 @@ test("the adapter bounds the budget to 15s or remaining caller time", { timeout:
     remainingMs: 5000,
   });
   await piRemaining.tools.get("spec_search").execute("call", { query: TOKEN }, new AbortController().signal);
-  assert.equal(remainingClient.calls[0].timeoutMs, 5000);
+  assert.equal(remainingClient.calls[0].timeoutMs, 4000);
+
+  // Less than 500ms of query budget remains: skip before any worker starts.
+  const skipClient = fakeClient({ status: "ok", hits: [], coverage: {} });
+  const piSkip = fakePi();
+  registerRepositorySearch(piSkip, { id: "run-b4", checkout: "/fixture" }, {
+    resolveClient: () => skipClient,
+    remainingMs: 1200,
+  });
+  const skipped = await piSkip.tools.get("spec_search").execute("call", { query: TOKEN }, new AbortController().signal);
+  assert.equal(skipped.details.status, "skipped");
+  assert.equal(skipped.details.reason, "budget-exceeded");
+  assert.ok(skipped.details.fallback);
+  assert.equal(skipClient.calls.length, 0);
 
   for (const call of [...defaultClient.calls, ...remainingClient.calls]) {
     assert.notEqual(call.timeoutMs, 120000);
@@ -324,6 +375,60 @@ test("the adapter bounds the budget to 15s or remaining caller time", { timeout:
     resolveClient: () => idleClient,
   });
   assert.equal(idleClient.calls.length, 0);
+});
+
+test("the adapter derives the live assignment budget from the runtime deadline", { timeout: 60000 }, async () => {
+  const cappedClient = fakeClient({ status: "ok", hits: [], coverage: {} });
+  const piCapped = fakePi();
+  registerRepositorySearch(piCapped, {
+    id: "run-capped", checkout: "/fixture",
+    started_at: new Date().toISOString(), timeout_ms: 7200000,
+  }, { resolveClient: () => cappedClient });
+  await piCapped.tools.get("spec_search").execute("call", { query: TOKEN }, new AbortController().signal);
+  assert.equal(cappedClient.calls[0].timeoutMs, 15000);
+
+  // An exhausted assignment deadline skips before any worker is launched.
+  const exhaustedClient = fakeClient({ status: "ok", hits: [], coverage: {} });
+  const piExhausted = fakePi();
+  registerRepositorySearch(piExhausted, {
+    id: "run-exhausted", checkout: "/fixture",
+    started_at: new Date(Date.now() - 20000).toISOString(), timeout_ms: 20000,
+  }, { resolveClient: () => exhaustedClient });
+  const exhausted = await piExhausted.tools.get("spec_search").execute("call", { query: TOKEN }, new AbortController().signal);
+  assert.equal(exhausted.details.status, "skipped");
+  assert.equal(exhausted.details.reason, "budget-exceeded");
+  assert.ok(exhausted.details.fallback);
+  assert.equal(exhaustedClient.calls.length, 0);
+
+  // The production registration (no injected dependencies) must reach the same
+  // skip from the record deadline without loading a search worker.
+  const piProduction = fakePi();
+  registerRepositorySearch(piProduction, {
+    id: "run-production", checkout: checkoutRoot,
+    started_at: new Date(Date.now() - 20000).toISOString(), timeout_ms: 20000,
+  });
+  const production = await piProduction.tools.get("spec_search").execute("call", { query: TOKEN }, new AbortController().signal);
+  assert.equal(production.details.status, "skipped");
+  assert.equal(production.details.reason, "budget-exceeded");
+  assert.ok(production.details.fallback);
+
+  // Near the deadline the query budget charges preflight elapsed time and
+  // reserves the cleanup second instead of restarting at the 15s cap.
+  const liveClient = fakeClient({ status: "ok", hits: [], coverage: {} });
+  const piLive = fakePi();
+  registerRepositorySearch(piLive, {
+    id: "run-live", checkout: "/fixture",
+    started_at: new Date(Date.now() - 5000).toISOString(), timeout_ms: 20000,
+  }, {
+    resolveClient: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      return liveClient;
+    },
+  });
+  await piLive.tools.get("spec_search").execute("call", { query: TOKEN }, new AbortController().signal);
+  assert.equal(liveClient.calls.length, 1);
+  assert.ok(liveClient.calls[0].timeoutMs > 0);
+  assert.ok(liveClient.calls[0].timeoutMs <= 13500, `expected a preflight-charged budget, got ${liveClient.calls[0].timeoutMs}`);
 });
 
 test("wiring parity and import hygiene", { timeout: 60000 }, async () => {
