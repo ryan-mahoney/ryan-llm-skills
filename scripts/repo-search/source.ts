@@ -6,7 +6,7 @@
 // root/ancestor/file identity before and after. identity.mjs remains the sole
 // identity owner; callers pass a resolved CheckoutIdentity in.
 
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
@@ -21,6 +21,7 @@ export const ENUMERATION_STDOUT_LIMIT = 16 * 1024 * 1024;
 
 const GIT_TIMEOUT_MS = 5000;
 const READ_CHUNK_BYTES = 64 * 1024;
+const SINGLE_PATH_OUTPUT_LIMIT = 64 * 1024;
 
 export type CheckoutIdentity = {
   repoKey: string;
@@ -345,7 +346,10 @@ async function enumerateTrackedPaths(
       if (record.length === 0) return;
       let relPath: string;
       try {
-        relPath = new TextDecoder("utf-8", { fatal: true }).decode(record);
+        relPath = new TextDecoder("utf-8", {
+          fatal: true,
+          ignoreBOM: true,
+        }).decode(record);
       } catch {
         countExcluded(excluded, "invalid-utf8-name");
         return;
@@ -453,6 +457,87 @@ async function enumerateTrackedPaths(
 type ReadResult = CapturedFile | { excluded: ExclusionReason };
 
 type AncestorIdentity = { path: string; dev: number | bigint; ino: number | bigint };
+
+// Verify one caller-supplied path without enumerating the tree. Literal pathspec
+// mode prevents wildcard or magic interpretation, and exact output comparison
+// ensures Git confirmed this path rather than a prefix or neighboring entry.
+async function assertTrackedPath(
+  root: string,
+  relPath: string,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  throwIfAborted(signal);
+  const expected = Buffer.concat([
+    Buffer.from(relPath, "utf8"),
+    Buffer.from([0]),
+  ]);
+  if (expected.length > SINGLE_PATH_OUTPUT_LIMIT) {
+    throw new SourceCaptureError(
+      "source-unavailable",
+      `source path exceeds the tracked path check limit: ${relPath}`,
+    );
+  }
+
+  return new Promise<void>((resolveTracked, rejectTracked) => {
+    execFile(
+      "git",
+      [
+        "-c",
+        "core.fsmonitor=false",
+        "-C",
+        root,
+        "--literal-pathspecs",
+        "ls-files",
+        "--error-unmatch",
+        "-z",
+        "--",
+        relPath,
+      ],
+      {
+        env: {
+          ...process.env,
+          GIT_OPTIONAL_LOCKS: "0",
+          GIT_TERMINAL_PROMPT: "0",
+        },
+        encoding: "buffer",
+        killSignal: "SIGKILL",
+        maxBuffer: SINGLE_PATH_OUTPUT_LIMIT,
+        signal,
+        timeout: GIT_TIMEOUT_MS,
+        windowsHide: true,
+      },
+      (error, stdout, stderr) => {
+        if (error) {
+          if (error.name === "AbortError") {
+            rejectTracked(error);
+            return;
+          }
+          const detail = Buffer.from(stderr).toString("utf8").trim();
+          rejectTracked(
+            new SourceCaptureError(
+              "source-unavailable",
+              detail
+                ? `path is not tracked: ${relPath}: ${detail}`
+                : `tracked path check failed: ${relPath}`,
+            ),
+          );
+          return;
+        }
+        const output = Buffer.from(stdout);
+        if (!output.equals(expected)) {
+          rejectTracked(
+            new SourceCaptureError(
+              "source-unavailable",
+              `tracked path check did not return the exact path: ${relPath}`,
+            ),
+          );
+          return;
+        }
+        resolveTracked();
+      },
+    );
+  });
+}
 
 async function readEligibleBytes(
   identity: CheckoutIdentity,
@@ -641,6 +726,7 @@ export async function readEligibleFile(
     );
   }
   throwIfAborted(signal);
+  await assertTrackedPath(identity.root, relPath, signal);
   const result = await readEligibleBytes(
     identity,
     relPath,
@@ -660,6 +746,7 @@ export async function readEligibleFile(
       `source content is not eligible: ${relPath}`,
     );
   }
+  await assertTrackedPath(identity.root, relPath, signal);
   return result;
 }
 

@@ -185,6 +185,19 @@ describe("resolveCheckout", () => {
     expect(aliased.head).toBe(primary.head);
   });
 
+  test("preserves trailing whitespace in the requested checkout path", async () => {
+    const base = makeTempRoot();
+    const trimmedSibling = makeRepo(base, "checkout");
+    const requested = makeRepo(base, "checkout ");
+
+    const requestedIdentity = await resolveCheckout(requested);
+    const siblingIdentity = await resolveCheckout(trimmedSibling);
+
+    expect(requestedIdentity.root).toBe(realpathSync(requested));
+    expect(requestedIdentity.gitDir).toBe(realpathSync(join(requested, ".git")));
+    expect(requestedIdentity.checkoutKey).not.toBe(siblingIdentity.checkoutKey);
+  });
+
   test("resolves a detached HEAD without using it as an identity key", async () => {
     const base = makeTempRoot();
     const repo = makeRepo(base, "primary");
@@ -300,6 +313,43 @@ describe("captureSnapshot", () => {
     // Identical content yields an identical deterministic digest.
     const again = await captureSnapshot(identity, {});
     expect(again.digest).toBe(snapshot.digest);
+  });
+
+  test("preserves a leading BOM character in a tracked filename", async () => {
+    const base = makeTempRoot();
+    const repo = makeEligibleRepo(base);
+    const bomPath = "\ufeffcode.ts";
+    const content = "export const bomOnly = true;\n";
+    track(repo, bomPath, content);
+    commitAll(repo);
+    const identity = await resolveCheckout(repo);
+
+    const snapshot = await captureSnapshot(identity, {});
+    expect([...snapshot.files.keys()]).toEqual([bomPath]);
+    expect(snapshot.files.get(bomPath)?.sha256).toBe(
+      sha256(Buffer.from(content, "utf8")),
+    );
+  });
+
+  test("keeps BOM-prefixed and plain tracked filenames distinct", async () => {
+    const base = makeTempRoot();
+    const repo = makeEligibleRepo(base);
+    const bomPath = "\ufeffcode.ts";
+    const bomContent = "export const variant = 'bom';\n";
+    const plainContent = "export const variant = 'plain';\n";
+    track(repo, bomPath, bomContent);
+    track(repo, "code.ts", plainContent);
+    commitAll(repo);
+    const identity = await resolveCheckout(repo);
+
+    const snapshot = await captureSnapshot(identity, {});
+    expect(snapshot.files.size).toBe(2);
+    expect(snapshot.files.get(bomPath)?.sha256).toBe(
+      sha256(Buffer.from(bomContent, "utf8")),
+    );
+    expect(snapshot.files.get("code.ts")?.sha256).toBe(
+      sha256(Buffer.from(plainContent, "utf8")),
+    );
   });
 
   test("changed same-HEAD bytes with backdated mtime change hashes and digest", async () => {
@@ -498,6 +548,46 @@ describe("captureSnapshot", () => {
     expect(Buffer.from(captured.bytes).toString("utf8")).toBe(content);
     expect(captured.sha256).toBe(sha256(Buffer.from(content, "utf8")));
     await expect(readEligibleFile(identity, "../escape.ts")).rejects.toThrow();
+  });
+
+  test("readEligibleFile treats tracked pathspec characters literally", async () => {
+    const base = makeTempRoot();
+    const repo = makeEligibleRepo(base);
+    const literalContent = "export const literal = true;\n";
+    track(repo, "literal-*.ts", literalContent);
+    track(repo, "literal-match.ts", "export const match = true;\n");
+    commitAll(repo);
+    const identity = await resolveCheckout(repo);
+
+    const captured = await readEligibleFile(identity, "literal-*.ts");
+    expect(captured.path).toBe("literal-*.ts");
+    expect(captured.sha256).toBe(sha256(Buffer.from(literalContent, "utf8")));
+  });
+
+  test("readEligibleFile refuses an untracked ordinary file", async () => {
+    const base = makeTempRoot();
+    const repo = makeEligibleRepo(base);
+    track(repo, "tracked.ts", "export const tracked = true;\n");
+    commitAll(repo);
+    track(repo, "untracked.ts", "export const untracked = true;\n");
+    const identity = await resolveCheckout(repo);
+
+    await expect(readEligibleFile(identity, "untracked.ts")).rejects.toThrow();
+  });
+
+  test("readEligibleFile refuses a retained file removed from the index", async () => {
+    const base = makeTempRoot();
+    const repo = makeEligibleRepo(base);
+    const content = "export const formerlyTracked = true;\n";
+    track(repo, "removed.ts", content);
+    commitAll(repo);
+    const identity = await resolveCheckout(repo);
+    const indexed = await readEligibleFile(identity, "removed.ts");
+    expect(indexed.sha256).toBe(sha256(Buffer.from(content, "utf8")));
+
+    git(repo, "rm", "--cached", "--", "removed.ts");
+    expect(Buffer.from(indexed.bytes).toString("utf8")).toBe(content);
+    await expect(readEligibleFile(identity, "removed.ts")).rejects.toThrow();
   });
 
   test("treats a regular file replaced by an out-of-root symlink as a source race", async () => {

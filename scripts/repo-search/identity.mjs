@@ -29,6 +29,10 @@ function sha256(value) {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
+function removeGitOutputTerminator(output) {
+  return output.endsWith("\n") ? output.slice(0, -1) : output;
+}
+
 // Bounded, argv-only Git invocation with filesystem monitoring disabled. No
 // shell is involved and the child is capped by timeout and maxBuffer.
 function git(cwd, args) {
@@ -58,7 +62,7 @@ function git(cwd, args) {
           rejectGit(failure);
           return;
         }
-        resolveGit(stdout.trim());
+        resolveGit(removeGitOutputTerminator(stdout));
       },
     );
   });
