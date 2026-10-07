@@ -221,6 +221,131 @@ native stream and incremental file-change notifications. Large/incomplete histor
 events can be unavailable; legacy activity timestamps use stream modification time.
 The widget does not infer missing activity. No browser UI is involved.
 
+## Workspace sentinel status
+
+`/spec-sentinel status` shows a bounded read-only snapshot across enrolled
+repositories: repository common directory, canonical package, checkout, workflow
+id, assignment id, coordinator session, execution state, obligation, activity hint,
+coverage and factual conditions such as `reconciliation-pending` or `quiet-activity`.
+It is also the default when the command has no argument.
+
+`/spec-sentinel add /absolute/primary` validates a primary checkout and writes one
+enrollment record per root at
+`<agentDir>/spec-sentinel/<workspace-key>/enrollments/<sha256(common dir)>.json`,
+mode `0600`, containing `{ version, root, common, enrolled_at }`. Only this direct
+command writes that record; it grants read observation and nothing else. At most 20
+roots are recorded, and a `.specs` copy in a linked worktree is rejected. Managed
+index pointers and packages dispatched in the session are observation candidates
+only and never enroll a repository.
+
+The widget shows the workspace rows; when a single run is observed it collapses to
+the header line because that run's own widget already shows it. `/spec-sentinel
+inspect ID` names one run or condition by assignment id, workflow id, package or
+condition id/kind. Directory invalidation is coalesced at 250 ms and status is
+reconciled every 15 s. `/spec-sentinel off` hides the widget and status and disposes
+only this session's observers and timers; it never cancels, stops or messages
+workers. The CLI equivalent is `node
+~/.agents/scripts/spec-observe/cli.mjs sentinel status [--package PATH] [--format
+text|json] [--agent-dir PATH]`, which works without a Pi session.
+
+Coverage is `complete|partial|stale|unavailable` with explicit omission reasons;
+missing, oversized or replaced sources stay unknown or stale, never healthy. No
+model call, transcript read or recovery authority is introduced here: completion,
+exit and silence remain non-acceptance facts.
+
+## Scoped authority (enable/disable)
+
+`/spec-sentinel enable /absolute/policy.json` arms a live, session-local capability
+for the coordinator session; `/spec-sentinel disable` revokes it and `/spec-sentinel
+off` revokes it before hiding observation. Only this native command can arm it: a
+fresh session, reload, checkpoint, model output or copied/forged file never arms it.
+The policy file must be an absolute regular non-symlink JSON file of at most 16 KiB
+with exactly this schema:
+
+```json
+{
+  "version": 1,
+  "package": "/repo/.specs/feature",
+  "workflow_id": "wf-example",
+  "checkout": "/worktrees/feature",
+  "coordinator_session": "<native SDK session identity>",
+  "mode": "shadow",
+  "actions": ["continue"],
+  "expires_at": "2026-01-01T00:00:00.000Z",
+  "max_effects": 1,
+  "max_diagnostics": 1,
+  "diagnosis": { "model": "provider/model:thinking" },
+  "authority_reference": "user:enable"
+}
+```
+
+The package, workflow, checkout and native session must match the retained checkpoint.
+`expires_at` must be a future exact ISO-8601 UTC timestamp no later than eight hours.
+`max_effects` and `max_diagnostics` are integers 0..2; `actions` holds unique
+`continue`/`cancel`; `cancel` requires a diagnosis selector and a diagnosis selector
+requires a nonzero diagnostic budget. `diagnose` is reported only when configured.
+
+Budgets are finite and retained per workflow: two effect slots (continue/cancel share
+them) and two diagnostic slots, at most one continuation per obligation revision and
+one cancellation per incident generation, plus at most one diagnosis per incident
+generation with a five-minute cooldown. Re-enabling never resets consumed capacity. A
+duplicate same-kind/subject reservation returns its retained receipt without repeating
+the effect. Reservations are published durably (slot first, then an immutable intent,
+with every newly created state directory linked to its parent by fsync before any
+effect); an orphan/malformed/corrupt record, an invalid state directory, an intent
+missing its slot link or an unfinished intent from a previous authority stays spent
+and blocks as unknown, as does an explicitly unknown outcome until its owning live
+authority reconciles it to a terminal state. `/spec-sentinel disable` revokes
+the live capability synchronously at command entry — never queued behind workflow
+work — and reports a persistence failure while remaining
+disarmed; `/spec-sentinel off` revokes first and then hides observation, reporting both
+facts. Step 5 performs no continuation, cancellation, diagnosis or model effect; any
+actual effect belongs to later steps under this guarded authority.
+
+## Bounded continuation
+
+When explicitly enabled in recover mode, the coordinator may propose exactly one
+additional model turn at the Pi settle boundary. The handler admits only a completed
+settlement with a ready open obligation, an exactly reconciled native input revision,
+zero UI prompt depth, no `context.pendingMessages`, a nonblocking inbox, no nonterminal
+or malformed declared worker, no active managed Runtime handle, and an armed unexpired
+policy that permits `continue`; prior handlers' `continue:true` and every explicit stop
+state veto. It re-reads all guards and requires the same checkpoint/obligation revision,
+then durably reserves the continuation (one per obligation revision) before returning
+`{entries:[...event.entries, visible custom_message], continue:true}`. The visible
+`custom_message` has `customType: "spec-sentinel"` and `display:true`, names the
+workflow, obligation key/summary, the actual checkpoint path and revisions, a source
+digest and an artifact count, and instructs reconciliation before acting. An initial
+`event.context.canContinue === false` is not a veto; Pi recomputes eligibility after the
+proposed entries. A second settlement with the same obligation is a duplicate and does
+not refill the budget. In shadow mode the reservation is recorded as terminal `blocked`
+with reason `shadow-would-continue` and no custom entry or extra turn is produced. A
+`requested` record means the continuation was proposed; `applied` means the requested
+turn started (delivery only), never that work was accepted, and ambiguous requested
+effects are not retried.
+
+## Diagnosis and guarded cancellation
+
+Optional diagnosis and guarded cancellation are separate opt-ins under the same live
+scoped authority. Diagnosis runs only for a complete repeated-failure incident with a
+complete fingerprint through a bounded (at most 16 KiB) tool-free advisory packet, one
+active job per coordinator, a five-minute cooldown, one attempt per incident generation
+and at most two attempts per workflow; its JSON is labelled `note_verified:false` and
+never grants authority.
+Recovery cancellation is permitted only for the current repeated-failure incident with a
+retained positive `cancel-candidate`/`repeated-unchanged-failure` diagnosis matching the
+current complete checkout digest, reconciled input, nonblocking inbox, checkpoint
+worker/checkout, the exact original in-memory Runtime handle/lease and an idle writer
+slot with remaining capacity. A durable cancel intent is reserved immediately before the
+existing `Runtime.cancel`; only confirmed process-group termination becomes `applied`,
+while failed/unknown termination keeps the writer reservation and is never replayed.
+Retained state lives under `runtime/sentinel/<workflow-id>/`: `verification-incidents.json`,
+`diagnoses/<incident-id>.json`, and `intents/<id>.json` with `effect-slots/` and
+`diagnostic-slots/`. A disk PID from another process is not an owned handle; the runtime
+never adopts it, deletes locks, transfers an owner or launches a replacement. Shadow mode
+writes `shadow-would-cancel` and leaves the worker alive. Cancellation/shadow notices are
+local UI-only, and no Sentinel model-visible custom message is added.
+
 ## Workflow metrics
 
 `/spec-metrics /absolute/canonical/package` displays a read-only aggregate from native

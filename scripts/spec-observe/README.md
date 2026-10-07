@@ -4,6 +4,20 @@ This read-only CLI finds Pi sessions and measures orchestration without sending 
 requests, executing logged commands, changing workers, or printing prompts and source
 contents. Node.js is the only dependency.
 
+## Workspace sentinel status
+
+```bash
+node ~/.agents/scripts/spec-observe/cli.mjs sentinel status [--package PATH] [--format text|json] [--agent-dir PATH]
+```
+
+Text output is the default. `--agent-dir` defaults to `PI_CODING_AGENT_DIR` or
+`~/.pi/agent`; without `--package` the command reads the enrolled workspace for
+that agent directory and the current `PI_INTERCOM_SCOPE_ID` scope. Empty enrollment
+prints `No enrolled roots. Add one in Pi with /spec-sentinel add /absolute/primary.`
+The report is read-only: bounded receipts and role snapshots only, with no
+transcript, metrics or model reads. Existing `list|runs|report|metrics` commands are
+unchanged.
+
 ## Workflow metrics
 
 ```bash

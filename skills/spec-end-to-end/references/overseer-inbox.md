@@ -106,6 +106,16 @@ supersession, not timestamps alone. Later arrivals wait for the next checkpoint.
    entry, then forward its stable archived path. Archive before forwarding so
    recipients never depend on a disappearing inbox path.
 
+In managed Pi, each `spec_sentinel_checkpoint` projects every retained original by ID, hash and
+outcome; it reads only and never moves, edits or archives files. Archiving an original
+into `processed/` never releases a hold. A hold is released only when the matching later
+`kind: direction` original explicitly names the held ID and the checkpoint supplies the
+hold item's `release_source_id` referencing that direction's ID. Both the hold item's
+and the direction item's outcomes and hashes must be applied/bound: the hold's applied
+outcome and hash, and the direction's applied outcome and hash, must all match their
+observed originals. Malformed sources, hash mismatches, symlinks and missing retained
+history stay blocking/unknown; archiving or a later timestamp never makes them healthy.
+
 `processed/` means intake recorded, not action complete. Pending delivery and action
 remain visible in the ledger even after archiving. Only the parent updates those
 records from recipient reports.

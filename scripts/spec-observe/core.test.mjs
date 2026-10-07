@@ -132,3 +132,43 @@ test('reports failed launches without sessions and separates runs sharing retain
   assert.equal(retained.runtime.records[0].first_editor_started_seconds, 5);
   assert.equal(retained.runtime.records[1].first_editor_started_seconds, 10);
 });
+
+test('managed enumeration stops at the examined-entry ceiling despite retained junk', async t => {
+  const directory = await fixture(t);
+  for (let index = 0; index < 3; index++) {
+    await writeFile(path.join(directory, `pointer-${index}.json`), JSON.stringify({ run_id: `run-${index}`, package: '/canonical/package' }));
+  }
+  for (let index = 0; index < 4100; index++) {
+    await writeFile(path.join(directory, `retained-${String(index).padStart(4, '0')}.log`), 'retained\n');
+  }
+  const result = await discoverManaged(directory, { limit: 10 });
+  // The ceiling is reported as candidate truncation; entries beyond it are an
+  // unknown omission, never a full scan.
+  assert.equal(result.candidates_truncated, true);
+  assert.ok(result.runs.length <= 3);
+  assert.equal(result.discovery_errors.length, 0);
+});
+
+test('managed pointer discovery reports selection omission separately from candidate truncation', async t => {
+  const directory = await fixture(t);
+  for (let index = 0; index < 12; index++) {
+    await writeFile(path.join(directory, `pointer-${String(index).padStart(4, '0')}.json`),
+      JSON.stringify({ run_id: `run-${index}`, package: '/canonical/package' }));
+  }
+  const capped = await discoverManaged(directory, { limit: 5 });
+  assert.equal(capped.runs.length, 5);
+  assert.equal(capped.runs_truncated, true);
+  assert.equal(capped.candidates_truncated, false);
+  const complete = await discoverManaged(directory, { limit: 12 });
+  assert.equal(complete.runs.length, 12);
+  assert.equal(complete.runs_truncated, false);
+  assert.equal(complete.candidates_truncated, false);
+  for (let index = 12; index < 1005; index++) {
+    await writeFile(path.join(directory, `pointer-${String(index).padStart(4, '0')}.json`),
+      JSON.stringify({ run_id: `run-${index}`, package: '/canonical/package' }));
+  }
+  const flooded = await discoverManaged(directory, { limit: 5 });
+  assert.equal(flooded.candidates_truncated, true);
+  assert.equal(flooded.runs.length, 5);
+  assert.equal(flooded.runs_truncated, true);
+});

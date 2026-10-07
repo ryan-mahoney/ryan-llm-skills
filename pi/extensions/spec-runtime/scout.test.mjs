@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createScout } from './scout.mjs';
+import { createScout, createOwnedLeaf } from './scout.mjs';
 
 function bus() {
   const listeners = new Map();
@@ -52,4 +52,33 @@ test('missing delegation extension and failed scouts return errors without a fal
   events.on(requestEvent, value => events.emit(responseEvent, { ...value, status: 'failed', error: 'Selected model unavailable' }));
   await assert.rejects(scout.run('Find entry.'), /Selected model unavailable/);
   assert.equal(starts, 2); scout.close();
+});
+
+test('diagnosis leaves carry budget, skill and artifact flags while the scout facade omits them', async () => {
+  const events = bus(); const requests = [];
+  events.on(requestEvent, value => { requests.push(value); });
+  events.on(cancelEvent, () => { events.emit(responseEvent, { ...requests.at(-1), status: 'completed', result: { kind: 'text', text: 'too late' } }); });
+  const leaf = createOwnedLeaf(events, {
+    ownerRunId: 'owner', nodeId: 'diagnostician', agent: 'spec-sentinel-diagnostician', cwd: '/repo',
+    model: 'test/diag:high', toolBudget: { hard: 0, block: '*' }, skill: false, artifacts: false, label: 'Diagnosis',
+  });
+  const pending = leaf.run('Diagnose the repeated failure.');
+  assert.equal(requests.length, 1);
+  const request = requests[0];
+  assert.equal(request.nodeId, 'diagnostician'); assert.equal(request.agent, 'spec-sentinel-diagnostician');
+  assert.equal(request.cwd, '/repo');
+  assert.equal(request.model, 'test/diag'); assert.equal(request.thinking, 'high');
+  assert.deepEqual(request.toolBudget, { hard: 0, block: '*' });
+  assert.equal(request.skill, false); assert.equal(request.artifacts, false);
+  assert.equal(request.context, 'fresh');
+  assert.deepEqual(request.intercomBridge, { mode: 'off' });
+  assert.deepEqual(request.result, { kind: 'text' });
+  await assert.rejects(leaf.run('Duplicate'), /already active/);
+  leaf.close();
+  await assert.rejects(pending, /closed/);
+
+  const scout = createScout(events, { ownerRunId: 'owner', cwd: '/repo', model: 'openai-codex/gpt-6-luna:low' });
+  const scoutPending = scout.run('Find callers.'); scout.close();
+  await assert.rejects(scoutPending, /closed/);
+  assert.equal('toolBudget' in requests.at(-1), false);
 });

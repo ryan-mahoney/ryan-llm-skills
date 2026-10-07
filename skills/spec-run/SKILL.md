@@ -167,6 +167,17 @@ For each selected executable step:
    independent background review, and continue. Within publication authority, push useful
    coherent checkpoints through `spec-pr mode=draft` so CI runs alongside remaining work.
 
+In managed Pi, checkpoint at the existing dispatch, completion, review, fix and
+publication handoffs, not per tool call and not by polling. Reuse the run ID as the
+`workflow_id`: `spec_sentinel_checkpoint` records the stable implementation/review/fix/publish
+obligation key, the current revision and input revision, declared native workers and
+hash-bound inbox outcomes, while `spec_dispatch` carries that ID so its receipt and any
+terminal `reconcile:<assignment-id>` obligation stay bound. A `reconcile:<assignment-id>`
+obligation is pending review/fix work, never a completed or accepted step. Before a
+legitimate blocked or yield return, checkpoint the current obligation and worker states so
+the next coordinator resumes without replaying work; do not keep a second ledger inside
+managed Pi.
+
 Read `spec-step-run` once per implementation session and reload only changed guidance.
 The prepared card owns planned verification; execution expands it for a concrete new
 failure or gap, not for a risk-label checklist. Keep the owner responsible for decisions

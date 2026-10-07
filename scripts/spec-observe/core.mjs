@@ -1,5 +1,5 @@
-import { createReadStream } from 'node:fs';
-import { open, readFile, readdir, stat } from 'node:fs/promises';
+import { constants as fsConstants, createReadStream } from 'node:fs';
+import { open, opendir, readFile, readdir, stat } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import path from 'node:path';
 
@@ -8,38 +8,65 @@ const validTime = (value) => Number.isFinite(Date.parse(value)) ? value : null;
 const seconds = (start, end) => start && end ? Math.round((Date.parse(end) - Date.parse(start)) / 10) / 100 : null;
 const safeNumber = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 
-export async function discoverManaged(directory, { limit = 10 } = {}) {
+const CANDIDATE_LIMIT = 1000;
+const POINTER_BUFFER = 65537;
+// Enumeration is bounded by examined entries, not only matching candidates:
+// retained non-matching names cannot make discovery unbounded.
+const EXAMINE_LIMIT = CANDIDATE_LIMIT * 4;
+const OPEN_FLAGS = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0);
+
+export async function discoverManaged(directory, { limit = 10, budget = null } = {}) {
   const errors = [];
-  let entries;
-  try { entries = await readdir(directory, { withFileTypes: true }); }
-  catch (error) { return { runs: [], discovery_errors: [{ path: directory, code: error.code }], candidates_truncated: false }; }
+  let directory_handle;
+  try { directory_handle = await opendir(directory); }
+  catch (error) { return { runs: [], discovery_errors: [{ path: directory, code: error.code }], candidates_truncated: false, runs_truncated: false }; }
   const candidates = [];
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
-    const file = path.join(directory, entry.name);
-    try { const metadata = await stat(file); candidates.push({ file, modified: metadata.mtimeMs }); }
-    catch (error) { errors.push({ path: file, code: error.code }); }
-  }
+  let candidates_truncated = false;
+  let examined = 0;
+  try {
+    // Bounded enumeration: at most 4000 examined entries and 1000 candidate
+    // *.json regular files; non-matching names and failed stats count against
+    // the examination ceiling.
+    while (examined < EXAMINE_LIMIT) {
+      const entry = await directory_handle.read();
+      if (!entry) break;
+      examined++;
+      if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+      if (candidates.length >= CANDIDATE_LIMIT) { candidates_truncated = true; break; }
+      const file = path.join(directory, entry.name);
+      try { const metadata = await stat(file); candidates.push({ file, modified: metadata.mtimeMs }); }
+      catch (error) { errors.push({ path: file, code: error.code }); }
+    }
+    if (!candidates_truncated && examined >= EXAMINE_LIMIT && await directory_handle.read()) {
+      // The examination ceiling itself prevents proving candidate completeness.
+      candidates_truncated = true;
+    }
+  } finally { await directory_handle.close(); }
   candidates.sort((a, b) => b.modified - a.modified);
   const runs = [];
+  let runs_truncated = false;
   // Small pointer files only; never follow the manifest or session transcript here.
-  for (const candidate of candidates.slice(0, 1000)) {
+  for (const candidate of candidates) {
+    if (runs.length >= limit) { runs_truncated = true; break; }
+    // Pointer reads share the caller's reconciliation budget, including
+    // invalid and oversized records, so the total cap still binds.
+    if (budget && budget.bytes + POINTER_BUFFER > budget.cap) { errors.push({ path: candidate.file, code: 'READ_BUDGET' }); break; }
     let handle;
     try {
-      handle = await open(candidate.file, 'r');
-      const buffer = Buffer.alloc(65537);
+      handle = await open(candidate.file, OPEN_FLAGS);
+      const buffer = Buffer.alloc(POINTER_BUFFER);
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-      if (bytesRead > 65536) throw new Error('OVERSIZED_INDEX_RECORD');
+      if (budget) budget.bytes += bytesRead;
+      if (bytesRead > POINTER_BUFFER - 1) throw new Error('OVERSIZED_INDEX_RECORD');
       const record = JSON.parse(buffer.subarray(0, bytesRead).toString('utf8'));
       if (typeof record.run_id !== 'string' || typeof record.package !== 'string') throw new Error('INVALID_INDEX_RECORD');
       const safe = { run_id: record.run_id, package: record.package, indexed_at: new Date(candidate.modified).toISOString() };
       for (const key of ['manifest', 'parent_session']) if (typeof record[key] === 'string') safe[key] = record[key];
       runs.push(safe);
-      if (runs.length >= limit) break;
     } catch (error) { errors.push({ path: candidate.file, code: error.code ?? (error instanceof SyntaxError ? 'INVALID_JSON' : error.message) }); }
     finally { await handle?.close(); }
   }
-  return { runs, discovery_errors: errors, candidates_truncated: candidates.length > 1000 };
+  return { runs, discovery_errors: errors, candidates_truncated, runs_truncated };
 }
 
 // Headers are deliberately bounded. Discovery never prints or indexes message bodies.

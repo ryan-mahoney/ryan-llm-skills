@@ -33,13 +33,14 @@ test('installed Pi loads completion/checkpoint tools and restores obligation hoo
     const ext = loaded.extensions[0]; extensions.push(ext);
     assert.equal(ext.tools.has('spec_complete'), role === 'owner');
     assert.equal(ext.tools.has('spec_checkpoint'), !role);
+    assert.equal(ext.tools.has('spec_sentinel_checkpoint'), !role);
     assert.ok(ext.handlers.has('context'));
     if (!role) {
       const hooks = ext.handlers.get('input');
-      assert.equal(hooks.length, 1);
       // The installed SDK's InputEvent uses source + text, not message role.
-      await hooks[0]({ type: 'input', text: 'Human RPC follow-up', source: 'rpc', streamingBehavior: 'followUp' }, {});
-      await hooks[0]({ type: 'input', text: 'Automated continuation', source: 'extension', streamingBehavior: 'steer' }, {});
+      // Deliver to every registered consumer, including sentinel's input guard.
+      for (const hook of hooks) await hook({ type: 'input', text: 'Human RPC follow-up', source: 'rpc', streamingBehavior: 'followUp' }, {});
+      for (const hook of hooks) await hook({ type: 'input', text: 'Automated continuation', source: 'extension', streamingBehavior: 'steer' }, {});
       assert.equal(persisted.filter(entry => entry.customType === 'spec-progress-input').length, 1);
     }
     if (role) {

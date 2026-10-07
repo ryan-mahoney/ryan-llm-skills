@@ -5,14 +5,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { Runtime, launch, loadRun, groupAlive, runEditor, runCommand, runVerification, runCompletion, runAdvice, activeGroups, spawnManaged, settleGroup, assertLease, canonicalPackage } from './runtime.mjs';
+import { Runtime, launch, loadRun, summary, groupAlive, runEditor, runCommand, runVerification, runCompletion, runAdvice, activeGroups, spawnManaged, settleGroup, assertLease, assertIdleWriter, canonicalPackage } from './runtime.mjs';
+import { createVerificationRecorder, readVerificationIncidents } from './sentinel.mjs';
 
 function fixture(t, source) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'spec-runtime-test-')));
   const repo = join(dir, 'repo'); mkdirSync(repo);
   const git = (...args) => execFileSync('git', ['-C', repo, ...args], { stdio: 'pipe' });
   git('init', '-q'); git('config', 'user.name', 'Runtime Test'); git('config', 'user.email', 'runtime@example.invalid');
-  writeFileSync(join(repo, 'README'), 'fixture\n'); git('add', 'README'); git('commit', '-qm', 'Initial fixture');
+  writeFileSync(join(repo, 'README'), 'fixture\n');
+  writeFileSync(join(repo, '.gitignore'), '.specs/\n');
+  git('add', 'README', '.gitignore'); git('commit', '-qm', 'Initial fixture');
   const packagePath = join(repo, '.specs/feature'); mkdirSync(packagePath, { recursive: true });
   const step = join(packagePath, 'step-001-subspec.md'); writeFileSync(step, 'Prepared step');
   const fake = join(dir, 'fake-pi.cjs');
@@ -20,8 +23,8 @@ function fixture(t, source) {
   const pids = [];
   let notified;
   const finished = new Promise(resolve => { notified = resolve; });
-  const options = { indexDir: join(dir, 'index'), notify: notified, launchProcess: (record, role, prompt) => {
-    const task = launch(record, role, prompt, { command: process.execPath, prefix: [fake] }); pids.push(task.child.pid); return task;
+  const options = { indexDir: join(dir, 'index'), notify: notified, launchProcess: (record, role, prompt, launchOptions = {}) => {
+    const task = launch(record, role, prompt, { command: process.execPath, prefix: [fake], ...launchOptions }); pids.push(task.child.pid); return task;
   } };
   t.after(() => { for (const pid of pids) { try { process.kill(-pid, 'SIGKILL'); } catch {} } rmSync(dir, { recursive: true, force: true }); });
   return { dir, repo, packagePath, step, options, finished, pids, input: { package: packagePath, step, checkout: repo, owner_model: 'test/owner', editor_model: 'test/editor' } };
@@ -237,8 +240,16 @@ test('verification preserves pipeline failures including literal nested Bash wra
   runtime.start(f.input);
   try {
     const record = loadRun(f.packagePath);
-    for (const command of ['false | tail -1', "bash -lc 'false | tail -1'"])
-      assert.equal((await runVerification(record, command)).exit_code, 1);
+    const fingerprints = [];
+    for (const command of ['false | tail -1', "bash -lc 'false | tail -1'"]) {
+      const reply = await runVerification(record, command);
+      assert.equal(reply.exit_code, 1);
+      assert.equal(reply.sentinel_failure.complete, true);
+      assert.equal(reply.sentinel_failure.exit_code, 1);
+      fingerprints.push(reply.sentinel_failure);
+    }
+    // An unchanged checkout keeps the same structured failure.
+    assert.deepEqual((await runVerification(record, 'false | tail -1')).sentinel_failure, fingerprints[0]);
   } finally { await runtime.cancel(f.packagePath); }
 });
 
@@ -290,6 +301,86 @@ test('fatal cleanup receipt wakes the coordinator and cancels the managed owner'
   assert.equal(result.state, 'cancelled');
   assert.match(notifications[0].error, /cleanup unconfirmed/);
   assert.equal(groupAlive(f.pids[0]), false);
+});
+
+test('fatal cleanup receipt survives a throwing observer callback', async t => {
+  const f = fixture(t, `console.log(JSON.stringify({type:'tool_execution_end',result:{details:{requires_cancellation:true,error:'fixture cleanup unconfirmed'}}})); setInterval(()=>{},1000);`);
+  const notifications = [];
+  let resolveCancelled;
+  const cancelled = new Promise(resolve => { resolveCancelled = resolve; });
+  const runtime = new Runtime({ ...f.options,
+    onWorkerEvent: () => { throw new Error('observer failed'); },
+    notify: value => { notifications.push(value); if (value.state === 'cancelled') resolveCancelled(value); } });
+  runtime.start(f.input);
+  const result = await cancelled;
+  // A throwing observer neither suppresses lifecycle cancellation nor replaces
+  // the worker result.
+  assert.equal(result.state, 'cancelled');
+  assert.match(notifications[0].error, /cleanup unconfirmed/);
+  assert.equal(groupAlive(f.pids[0]), false);
+});
+
+test('sentinel fingerprint: failed verification carries complete hashes, success omits it, and only surrounding whitespace is ignored', async t => {
+  const f = fixture(t, 'setInterval(()=>{},1000);'), runtime = new Runtime(f.options);
+  runtime.start(f.input);
+  try {
+    const record = loadRun(f.packagePath);
+    const HEX = /^[a-f0-9]{64}$/;
+    const failed = await runVerification(record, 'printf focused; exit 7');
+    assert.equal(failed.exit_code, 7);
+    assert.deepEqual({ ...failed.sentinel_failure, command_sha256: 0, summary_sha256: 0, tree_digest: 0 },
+      { ...failed.sentinel_failure, command_sha256: 0, summary_sha256: 0, tree_digest: 0, version: 1, exit_code: 7, complete: true });
+    for (const key of ['command_sha256', 'summary_sha256', 'tree_digest']) assert.match(failed.sentinel_failure[key], HEX);
+
+    const padded = await runVerification(record, '  printf focused; exit 7 \n');
+    assert.equal(padded.sentinel_failure.command_sha256, failed.sentinel_failure.command_sha256);
+    assert.equal(padded.sentinel_failure.summary_sha256, failed.sentinel_failure.summary_sha256);
+    assert.equal(padded.sentinel_failure.tree_digest, failed.sentinel_failure.tree_digest);
+
+    const spaced = await runVerification(record, 'printf  focused; exit 7');
+    assert.notEqual(spaced.sentinel_failure.command_sha256, failed.sentinel_failure.command_sha256);
+
+    const passed = await runVerification(record, 'true');
+    assert.equal(passed.exit_code, 0);
+    assert.equal(passed.sentinel_failure, undefined);
+
+    writeFileSync(join(f.repo, 'untracked-fixture.txt'), 'changed working tree\n');
+    const changed = await runVerification(record, 'printf focused; exit 7');
+    assert.equal(changed.sentinel_failure.complete, true);
+    assert.notEqual(changed.sentinel_failure.tree_digest, failed.sentinel_failure.tree_digest);
+
+    const loud = join(f.dir, 'loud.txt');
+    writeFileSync(loud, 'x'.repeat(20000));
+    const truncated = await runVerification(record, `cat '${loud}'; exit 7`);
+    assert.equal(truncated.exit_code, 7);
+    assert.equal(truncated.sentinel_failure.complete, false);
+  } finally { await runtime.cancel(f.packagePath); }
+});
+
+test('sentinel repetition: three distinct owner spec_verify events open one incident and a replay does not advance it', async t => {
+  const failure = { version: 1, command_sha256: 'a'.repeat(64), summary_sha256: 'b'.repeat(64), tree_digest: 'c'.repeat(64), complete: true, exit_code: 1 };
+  const event = id => JSON.stringify({ type: 'tool_execution_end', toolName: 'spec_verify', toolCallId: id, isError: true,
+    result: { details: { exit_code: 1, sentinel_failure: failure } } });
+  const source = [event('verify-1'), event('verify-2'), event('verify-2'), event('verify-3')]
+    .map(line => `console.log(${JSON.stringify(line)});`).join('')
+    + `setTimeout(() => { console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'Verification failed repeatedly.'}]}})); }, 50);`;
+  const f = fixture(t, source);
+  const recorder = createVerificationRecorder();
+  const runtime = new Runtime({ ...f.options, onWorkerEvent: (record, value) => recorder.observe(record, value) });
+  runtime.start(f.input);
+  await f.finished;
+  const snapshot = readVerificationIncidents(f.packagePath);
+  assert.equal(snapshot.version, 1);
+  const entries = Object.values(snapshot.assignments);
+  assert.equal(entries.length, 1);
+  const entry = entries[0];
+  assert.equal(entry.count, 3);
+  assert.equal(entry.state, 'open');
+  assert.equal(entry.generation, 1);
+  assert.deepEqual(entry.tool_call_ids, ['verify-1', 'verify-2', 'verify-3']);
+  assert.match(entry.incident_id, /^[a-f0-9]{32}$/);
+  assert.deepEqual(entry.fingerprint, { command_sha256: 'a'.repeat(64), summary_sha256: 'b'.repeat(64), tree_digest: 'c'.repeat(64) });
+  await runtime.cancel(f.packagePath, undefined, 1000);
 });
 
 const quote = text => `'${text.replaceAll("'", "'\\''")}'`;
@@ -436,6 +527,12 @@ test('historical assignment IDs remain idempotent after another step and reject 
   assert.equal(runtime.start({ ...f.input, assignment_id: 'A' }).run_id, first.run_id);
   assert.equal(f.pids.length, 2);
   assert.throws(() => runtime.start({ ...f.input, assignment_id: 'A', owner_model: 'test/strong' }), /different launch contract/);
+  // A supplied workflow_id joins the launch contract: the same assignment cannot
+  // be reused under a workflow (or under a different workflow).
+  assert.throws(() => runtime.start({ ...f.input, assignment_id: 'A', workflow_id: 'wf-contract' }), /different launch contract/);
+  const workflowDone = new Promise(resolve => { notify = resolve; });
+  runtime.start({ ...f.input, assignment_id: 'C', workflow_id: 'wf-contract' }); await workflowDone;
+  assert.throws(() => runtime.start({ ...f.input, assignment_id: 'C', workflow_id: 'wf-other' }), /different launch contract/);
 });
 
 test('concurrent cancellation requests share one terminal outcome without recreating a blocked run', async t => {
@@ -471,6 +568,42 @@ test('owner completion persists learning from real verification and releases the
   assert.equal(finished.handoff.status, 'recorded'); assert.match(finished.handoff.acceptance, /review/);
   assert.equal(existsSync(r.lock), false);
   assert.equal(JSON.parse(readFileSync(join(f.packagePath, 'runtime/progress.json'))).runs[0].execution, 'completed');
+});
+
+test('runtime carries a validated workflow_id and stable assignment_id into the record and summary', async t => {
+  const f = fixture(t), runtime = new Runtime(f.options);
+  const started = runtime.start({ ...f.input, workflow_id: 'wf-runtime-int', assignment_id: 'assign-runtime-int' });
+  assert.equal(started.workflow_id, 'wf-runtime-int');
+  assert.equal(started.assignment_id, 'assign-runtime-int');
+  const record = loadRun(f.packagePath, started.run_id);
+  assert.equal(record.workflow_id, 'wf-runtime-int');
+  assert.equal(record.assignment_id, 'assign-runtime-int');
+  assert.equal(summary(record).workflow_id, 'wf-runtime-int');
+  assert.equal(summary(record).assignment_id, 'assign-runtime-int');
+  await f.finished;
+  // The persisted record keeps the identity after completion for the terminal
+  // notification fallback; it is never inferred from the run id or step.
+  assert.equal(summary(loadRun(f.packagePath, started.run_id)).workflow_id, 'wf-runtime-int');
+
+  // A malformed supplied workflow_id is refused before any run/lease side effect.
+  const g = fixture(t), runtime2 = new Runtime(g.options);
+  assert.throws(() => runtime2.start({ ...g.input, workflow_id: 'bad id!' }), /workflow_id must be/);
+  assert.equal(existsSync(join(g.packagePath, 'runtime')), false);
+  assert.equal(g.pids.length, 0);
+});
+
+test('sentinel cancellation: assertIdleWriter rejects a claimed editor slot while the lease is valid', async t => {
+  const f = fixture(t, 'setInterval(()=>{},1000);');
+  const runtime = new Runtime(f.options);
+  const started = runtime.start(f.input);
+  const record = loadRun(f.packagePath, started.run_id);
+  assertIdleWriter(record);
+  const slot = join(record.lock, 'editor');
+  mkdirSync(slot);
+  assert.throws(() => assertIdleWriter(record), /editor or verification/);
+  rmSync(slot, { recursive: true, force: true });
+  assertIdleWriter(record);
+  await runtime.cancel(f.packagePath, started.run_id, 1000);
 });
 
 test('editor latches deterministic model failure across retained records without revoking lease or retrying', async t => {
