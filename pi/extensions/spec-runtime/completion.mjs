@@ -36,11 +36,19 @@ export function verificationReceipts(r) {
   const file = runFile(r, 'verification');
   return existsSync(file) ? read(file).receipts : [];
 }
-export function recordVerification(r, command, before, after, result) {
+export function recordVerification(r, command, before, after, result, timing = {}) {
   const receipts = verificationReceipts(r);
   const receipt = { id: randomUUID(), command, observed_at: now(), before, after,
     exit_code: result.exit_code ?? null, error: result.error || null, artifact: result.full_output_path || null,
-    outcome: result.error || result.exit_code !== 0 ? 'fail' : 'pass' };
+    outcome: result.error || result.exit_code !== 0 ? 'fail' : 'pass',
+    started_at: timing.started_at ?? null,
+    elapsed_ms: Number.isFinite(timing.elapsed_ms) && timing.elapsed_ms >= 0 ? timing.elapsed_ms : null };
+  receipt.summary_artifact = safePath(r.package, join(r.package, 'runtime/runs', `${r.id}-verification-${receipt.id}.md`));
+  // Mechanical facts come from the execution receipt, never file mtimes or an
+  // owner's reconstructed timestamp. Judgment remains in the gate assessment.
+  atomic(receipt.summary_artifact, '# Verification execution\n\n'
+    + 'Command outcome only; gate acceptance and applicability require owner assessment.\n\n'
+    + '```json\n' + JSON.stringify({ ...receipt, checkout: r.checkout }, null, 2) + '\n```\n', true);
   receipts.push(receipt);
   atomic(safePath(r.package, runFile(r, 'verification')), { version: 1, run_id: r.id, receipts });
   return receipt;
@@ -109,7 +117,9 @@ export function submitCompletion(r, input) {
   if (!['test-first', 'implementation-first'].includes(input.strategy)) throw new Error('strategy must be test-first or implementation-first');
   if (!Array.isArray(input.evidence) || new Set(input.evidence.map(e => e.id)).size !== input.evidence.length || input.evidence.length !== gates.length || input.evidence.some(e => !gates.some(g => g.id === e.id)))
     throw new Error(`Supply exactly the step-owned evidence IDs: ${gates.map(g => g.id).join(', ') || 'none'}`);
-  const commands = receipts.map(v => ({ command: v.command, phase: 'verify', outcome: v.outcome, observedCommit: v.before.commit, receipt: v.id }));
+  const commands = receipts.map(v => ({ command: v.command, phase: 'verify', outcome: v.outcome, observedCommit: v.before.commit, receipt: v.id,
+    observed_at: v.observed_at, started_at: v.started_at ?? null, elapsed_ms: v.elapsed_ms ?? null,
+    exit_code: v.exit_code, artifact: v.summary_artifact ?? v.artifact }));
   const evidence = input.evidence.map(e => {
     const gate = gates.find(g => g.id === e.id);
     if (!['passed', 'failed', 'blocked', 'pending'].includes(e.status) || typeof e.proof_boundary !== 'string' || !e.proof_boundary.trim()) throw new Error(`${e.id}: status and proof_boundary required`);

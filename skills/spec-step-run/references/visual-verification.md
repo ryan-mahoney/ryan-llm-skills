@@ -56,6 +56,12 @@ another writer and notifies the coordinator.
    validation, focus, overflow, or responsive behavior when those are part of the
    change. When the reference is executable, capture reference and production at
    matching states and viewport sizes.
+   With nested scroll containers, a full-page capture may omit the changed panel.
+   Capture the panel element or scroll its required sections into view and inspect
+   them. Measure overflow on the actual scrolling container as well as the document;
+   off-screen bounding boxes establish layout position, not visual readability.
+   Exercise narrow-screen reveal/focus and changed navigation actions when required,
+   and scan accessibility in the affected states rather than only the initial page.
 5. Inspect every screenshot through the eyes established by the `see` skill: view the
    image directly under `host-vision`, or relay it through `see`'s `codex-see` under
    `codex-relay`. Establish that mode once, before the first inspection, instead of

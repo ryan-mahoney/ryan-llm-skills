@@ -50,6 +50,26 @@ test('test command results distinguish pending submissions, failed tools and str
   assert.equal(a.test_commands_with_exit, 1);
 });
 
+test('mise exec commands and native verification receipts count real submissions and failures', async t => {
+  assert.deepEqual(testCommands('PGHOST=127.0.0.1 mise exec -- mix test test/search_test.exs'), ['mix test']);
+  assert.deepEqual(testCommands('/opt/bin/mise x elixir@1.18 -- mix test'), ['mix test']);
+  for (const command of ['mise run test', 'mise exec mix test', 'echo "mise exec -- mix test"', 'mise exec -- echo "mix test"', 'mise exec "$TOOLS" -- mix test'])
+    assert.deepEqual(testCommands(command), [], command);
+  const dir = await fixture(t), file = path.join(dir, 'session.jsonl');
+  await log(file, [header('mise'),
+    assistant(1, 0, [call('failure', 'spec_verify', 'mise exec -- mix test')]),
+    result('failure', 2, { content: [{ type: 'text', text: JSON.stringify({ receipt_id: 'r1', exit_code: 1 }) }] }),
+    assistant(3, 2, [call('success', 'spec_verify', 'mise exec -- mix test')]),
+    result('success', 4, { content: [{ type: 'text', text: JSON.stringify({ receipt_id: 'r2', exit_code: 0 }) }] }),
+    assistant(5, 4, [call('untrusted', 'bash', 'mise exec -- mix test')]),
+    result('untrusted', 6, { content: [{ type: 'text', text: '{"receipt_id":"r3","exit_code":1}' }] })]);
+  const a = (await readMetrics({ file, role: 'owner' })).agents[0];
+  assert.equal(a.test_command_calls, 3);
+  assert.equal(a.test_command_results, 3);
+  assert.equal(a.test_command_failures, 1);
+  assert.equal(a.test_commands_with_exit, 2);
+});
+
 test('startup counts stop at dispatch; transport errors and successful checkout edits stay distinct', async t => {
   const dir = await fixture(t), file = path.join(dir, 'session.jsonl');
   await log(file, [header('startup'), message('user', 0, {}),

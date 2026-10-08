@@ -578,7 +578,17 @@ test('completed packages leave monitoring but unfinished steps and reopened pack
   const live = await collectWorkspace(input);
   assert.deepEqual(live.runs.map(run => run.package), [unfinished], 'a completed worker is not a completed workflow');
   assert.equal(live.activity_filter.hidden_completed_packages, 2);
+  assert.deepEqual(live.recently_completed.map(run => [run.package, run.completed_at, run.completion_basis]), [
+    [done, ago(1000), 'workflow-checkpoint'], [legacy, ago(1000), 'ready-pr'],
+  ]);
+  assert.ok(live.recently_completed.every(run => run.conditions.length === 0), 'history is outside recovery reduction');
   assert.equal((await collectWorkspace({ ...input, includeInactive: true })).runs.length, 3);
+  const unreadable = join(done, 'runtime', 'runs', 'unreadable.json');
+  writeFileSync(unreadable, '{');
+  const uncertain = await collectWorkspace(input);
+  assert.ok(uncertain.runs.some(run => run.package === done), 'unreadable later work prevents confirmed completion');
+  assert.ok(!uncertain.recently_completed.some(run => run.package === done));
+  rmSync(unreadable);
   writeFileSync(join(legacy, 'work-tour.json'), JSON.stringify({ verdict: 'ready', commit: 'b'.repeat(40) }));
   assert.equal((await collectWorkspace(input)).activity_filter.hidden_completed_packages, 1, 'mismatched publication cannot hide work');
   writeFileSync(join(legacy, 'work-tour.json'), JSON.stringify({ verdict: 'ready', commit }));
@@ -587,7 +597,51 @@ test('completed packages leave monitoring but unfinished steps and reopened pack
   assert.equal((await collectWorkspace(input)).runs.length, 2);
   // A later dispatch also overrides older publication evidence.
   receipt(legacy, { id: 'new', state: 'running', started_at: ago(0) });
-  assert.equal((await collectWorkspace(input)).activity_filter.hidden_completed_packages, 0);
+  const reopened = await collectWorkspace(input);
+  assert.equal(reopened.activity_filter.hidden_completed_packages, 0);
+  assert.deepEqual(reopened.recently_completed, []);
+});
+
+test('completion history uses recorded dates past the activity window, includes receipt-free workflows, and expires after seven days', async t => {
+  const { readdirSync, utimesSync } = await import('node:fs');
+  const f = sandbox(t), repo = primary(f.dir, 'completion-dates');
+  const week = SENTINEL_LIMITS.recentCompletionMs;
+  function ageTree(path) {
+    if (statSync(path).isDirectory()) for (const name of readdirSync(path)) ageTree(join(path, name));
+    utimesSync(path, new Date(FIXED - week * 2), new Date(FIXED - week * 2));
+  }
+  for (const [name, elapsed, workers] of [['older', week + 1, []], ['boundary', week, []],
+    ['recent', 2 * 86400000, []], ['future', -1000, []], ['unfinished', 1000, [{ id: 'fixer', state: 'working' }]]]) {
+    const path = pack(repo, name), dir = join(path, 'runtime', 'sentinel', 'workflow');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'checkpoint.json'), JSON.stringify({ version: 1, workflow_id: 'workflow',
+      package: path, state: 'complete', observed_at: ago(elapsed), workers }));
+    // A restored checkout's mtime must not redefine when the spec completed.
+    ageTree(path);
+  }
+  const snapshot = await collectWorkspace({ roots: [repo], indexDir: f.indexDir, now });
+  assert.deepEqual(snapshot.runs, []);
+  assert.deepEqual(snapshot.recently_completed.map(r => r.package.split('/').pop()), ['recent', 'boundary']);
+  assert.equal(snapshot.completion_history.cutoff, ago(week));
+  assert.equal(snapshot.completion_history.omitted, 0);
+  assert.equal(snapshot.coverage.state, 'complete');
+});
+
+test('completion history caps packages independently of monitored assignments and reports omitted history', async t => {
+  const f = sandbox(t), repo = primary(f.dir, 'completion-cap');
+  const active = pack(repo, 'active');
+  receipt(active, { id: 'running', state: 'running', started_at: ago(1000) });
+  for (let i = 0; i < SENTINEL_LIMITS.completedPackages + 1; i++) {
+    const path = pack(repo, `done-${String(i).padStart(2, '0')}`), dir = join(path, 'runtime', 'sentinel', 'workflow');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'checkpoint.json'), JSON.stringify({ version: 1, workflow_id: 'workflow',
+      package: path, state: 'complete', observed_at: ago(i * 1000), workers: [] }));
+  }
+  const snapshot = await collectWorkspace({ roots: [repo], indexDir: f.indexDir, now });
+  assert.deepEqual(snapshot.runs.map(r => r.package), [active]);
+  assert.equal(snapshot.recently_completed.length, SENTINEL_LIMITS.completedPackages);
+  assert.equal(snapshot.completion_history.omitted, 1);
+  assert.ok(snapshot.recently_completed[0].package.endsWith('done-00'));
 });
 
 test('spec progress uses sparse index position without accepting completed workers', async t => {
@@ -637,6 +691,27 @@ test('worker completion retains the current unfinished workflow without activati
   assert.equal(current.workflow_state, 'ready');
   assert.equal(current.is_current_assignment, true);
   assert.equal(snapshot.runs.find(r => r.assignment_id === 'old').is_current_assignment, false);
+});
+
+test('completed implementation exposes recorded repair workers and explicit attempt reasons without inferring acceptance', async t => {
+  const f = sandbox(t), repo = primary(f.dir, 'repair'), packagePath = pack(repo);
+  receipt(packagePath, { id: 'done', state: 'completed', started_at: ago(60000),
+    attempt_kind: 'verification-continuation', handoff: { outcome: 'checkpoint' } });
+  const dir = join(packagePath, 'runtime/sentinel/workflow'); mkdirSync(dir, { recursive: true });
+  const checkpoint = { version: 1, workflow_id: 'workflow', package: packagePath, state: 'waiting-worker', observed_at: ago(1000),
+    workers: [{ id: 'done', kind: 'owner', state: 'complete' }, { id: 'repair-4', kind: 'fixer', state: 'working' }] };
+  writeFileSync(join(dir, 'checkpoint.json'), JSON.stringify(checkpoint));
+  const input = { roots: [repo], indexDir: f.indexDir, now };
+  const snapshot = await collectWorkspace(input), run = snapshot.runs[0];
+  assert.equal(run.execution, 'completed');
+  assert.deepEqual(run.workflow_workers, [{ id: 'repair-4', kind: 'fixer', state: 'working' }]);
+  assert.equal(run.workflow_observed_at, ago(1000));
+  assert.equal(run.timing.attempts[0].attempt_kind, 'verification-continuation');
+  assert.equal(run.timing.attempts[0].handoff_outcome, 'checkpoint');
+  assert.match(renderWorkspace(snapshot).join('\n'), /Recorded worker: fixer repair-4/);
+  checkpoint.workers[1].state = 'complete';
+  writeFileSync(join(dir, 'checkpoint.json'), JSON.stringify(checkpoint));
+  assert.deepEqual((await collectWorkspace(input)).runs[0].workflow_workers, []);
 });
 
 test('spec timing retains the earliest dispatch and every attempt across assignment caps', async t => {

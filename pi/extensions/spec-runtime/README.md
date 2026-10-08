@@ -46,6 +46,16 @@ ID with a changed model, checkout, extension list, step, or instructions is an e
 assignment ID for an intentional correction/retry, or an owner transfer. A different
 step is a new assignment. Never use a new ID to bypass an active lease.
 
+Optional `attempt_kind` records why an assignment exists: `implementation`,
+`verification-continuation`, `implementation-repair`, `review-repair`, or `launch-retry`.
+It does not authorize another attempt. Omitted legacy reasons remain unknown.
+Optional `session_scope: "step"` separates retained owner/editor sessions by canonical
+step while retaining context across that step's retries. The default `"package"`
+preserves existing session reuse. Opt in only at a step boundary with a concise
+dependency handoff; changing scope or a supplied attempt kind changes the launch
+contract and cannot reuse an existing assignment ID. Models and thinking effort
+are never changed by this option. No existing transcript is removed or rewritten.
+
 The returned receipt contains the run ID, state, checkout, session files, event log,
 and next action. Return control and await the completion message. `status` is an
 explicit recovery operation, not a polling loop:
@@ -451,6 +461,13 @@ New assignments carry `completion_contract: 1`. `spec_complete` is an owner-only
 with editing/verification. It writes `learnings/step-NNN-learning.md` and a per-attempt structured
 receipt. The owner supplies judgments (outcome, strategy, decisions, reusable symbols, gaps,
 subsequent-step findings and EV assessments); the runtime supplies HEAD and recorded commands.
+Each new verification receipt also generates a Markdown execution summary returned
+as `verification_artifact`. It contains the command, observed revisions, exit status,
+raw-log path, UTC `started_at`/`observed_at` and monotonic `elapsed_ms` (including any
+managed server lifecycle). The learning's commands reuse these fields. Legacy timing
+stays null. Reference the summary from a named evidence artifact instead of manually
+transcribing execution metadata. Proof boundaries and applicability remain owner
+judgments; a successful command never establishes independent acceptance.
 `spec_verify` returns `receipt_id` and retains observed HEAD/dirty state, exit status and raw-log
 path. A passed command is not automatically a passed EV: the owner maps it to the obligation
 and states the proof boundary. Earlier/dirty-tree evidence requires applicability, not a rerun.

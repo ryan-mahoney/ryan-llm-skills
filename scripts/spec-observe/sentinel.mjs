@@ -28,6 +28,8 @@ export const SENTINEL_LIMITS = Object.freeze({
   totalBytes: 4 * 1024 * 1024,
   quietActivityMs: 120000,
   recentActivityMs: 24 * 60 * 60 * 1000,
+  recentCompletionMs: 7 * 24 * 60 * 60 * 1000,
+  completedPackages: 50,
   activityEntries: 10000,
 });
 
@@ -369,6 +371,8 @@ export function renderWorkspace(snapshot) {
   for (const run of runs) {
     lines.push(renderLine(`  ${basename(dirname(run.repository))}/${basename(run.package)} · ${run.assignment_id} · ${run.execution} · `
       + `${run.checkout ? basename(run.checkout) : 'checkout unknown'} · ${run.obligation || 'obligation unknown'} · ${run.activity || 'activity unknown'}`));
+    for (const worker of run.workflow_workers ?? [])
+      lines.push(renderDetail('    ', `Recorded worker: ${worker.kind} ${worker.id} · ${worker.state} · checkpoint ${run.workflow_observed_at ?? 'unknown'}`));
     if (run.coverage.state !== 'complete' || run.coverage.reasons.length) {
       lines.push(renderDetail('    ', `coverage ${run.coverage.state} (${run.coverage.reasons.join(', ')})`));
     }
@@ -533,15 +537,13 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
   };
   const scan = { entries: 0 };
   const collected = [];
+  const completed = [];
+  const inactive = [];
+  const completionCutoff = Date.parse(readTime) - SENTINEL_LIMITS.recentCompletionMs;
   let staleReceipts = false;
   const note = reason => { if (reason && !reasons.includes(reason)) reasons.push(reason); };
   const noteUnknown = reason => { if (reason && !reasons.includes(reason)) { reasons.push(reason); unknownOmission = true; } };
-  for (const fact of facts.values()) {
-    if (!includeInactive) {
-      const recent = await packageRecentlyModified(fact.packagePath, Date.parse(activityFilter.cutoff), scan);
-      if (recent === false) { activityFilter.hidden_packages++; continue; }
-      if (recent === null) noteUnknown(`activity-filter-unknown: ${fact.packagePath}`);
-    }
+  const collectFact = async (fact, active = true) => {
     const candidates = await collectPackage(fact, budget, note, noteUnknown);
     // Keep the latest assignment as the package's current handoff, including
     // the interval after its worker exits and before review/next-step dispatch.
@@ -550,12 +552,24 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
       - (Date.parse(a.receipt.started_at ?? a.receipt.dispatch_requested_at) || 0)
       || compareCandidates(a, b))[0]?.id ?? null;
     fact.candidates = candidates;
-    if (!includeInactive && candidates.length && await packageCompleted(fact, candidates, budget, noteUnknown)) {
-      activityFilter.hidden_completed_packages++;
-      continue;
+    const completion = await packageCompletion(fact, candidates, budget, noteUnknown);
+    if (completion && Date.parse(completion.completed_at) <= Date.parse(readTime)) {
+      if (Date.parse(completion.completed_at) >= completionCutoff) completed.push({ fact, completion });
+      if (!includeInactive) {
+        activityFilter.hidden_completed_packages++;
+        return;
+      }
     }
-    collected.push(...candidates);
+    if (active) collected.push(...candidates);
     if (fact.staleReceipts) staleReceipts = true;
+  };
+  for (const fact of facts.values()) {
+    if (!includeInactive) {
+      const recent = await packageRecentlyModified(fact.packagePath, Date.parse(activityFilter.cutoff), scan);
+      if (recent === false) { activityFilter.hidden_packages++; inactive.push(fact); continue; }
+      if (recent === null) noteUnknown(`activity-filter-unknown: ${fact.packagePath}`);
+    }
+    await collectFact(fact);
   }
 
   collected.sort(compareCandidates);
@@ -568,6 +582,23 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
   const runs = [];
   const mark = reason => { if (reason) reasons.push(reason); };
   for (const candidate of chosen) runs.push(await observeRun(candidate, budget, mark, readTime));
+
+  // History spends only the remaining shared read budget. Old package mtimes
+  // cannot stand in for completion timestamps; inspect their completion evidence.
+  for (const fact of inactive) {
+    const completion = await packageCompletion(fact, [], budget, noteUnknown);
+    if (completion && Date.parse(completion.completed_at) >= completionCutoff
+      && Date.parse(completion.completed_at) <= Date.parse(readTime)) await collectFact(fact, false);
+  }
+  completed.sort((a, b) => Date.parse(b.completion.completed_at) - Date.parse(a.completion.completed_at)
+    || a.fact.packagePath.localeCompare(b.fact.packagePath));
+  const recentlyCompleted = [];
+  for (const { fact, completion } of completed.slice(0, SENTINEL_LIMITS.completedPackages)) {
+    const candidate = fact.candidates.find(item => item.id === fact.currentAssignment);
+    const run = candidate ? await observeRun(candidate, budget, mark, readTime)
+      : { repository: fact.common, package: fact.packagePath, source_paths: [...fact.sources.values()].map(source => source.file) };
+    recentlyCompleted.push({ ...run, ...completion, workflow_state: 'complete', is_current_assignment: false });
+  }
 
   const packageRequested = enrolled.length > 0 || (Array.isArray(packages) && packages.length > 0);
   let state;
@@ -584,21 +615,27 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
       : (knownOmitted || reasons.length || unknownOmission) ? 'partial' : 'complete';
   }
   const coverage = makeCoverage(state, reasons, unknownOmission ? null : knownOmitted, budget.bytes, readTime);
-  return reduceConditions({ version: 1, workspace, coverage, activity_filter: activityFilter, runs, spec_roots: [...new Set([...facts.values()].map(f => dirname(f.packagePath)))], ...(discovery ? { discovery } : {}) });
+  return reduceConditions({ version: 1, workspace, coverage, activity_filter: activityFilter, runs,
+    recently_completed: recentlyCompleted,
+    completion_history: { window_ms: SENTINEL_LIMITS.recentCompletionMs, cutoff: new Date(completionCutoff).toISOString(),
+      limit: SENTINEL_LIMITS.completedPackages, omitted: Math.max(0, completed.length - recentlyCompleted.length) },
+    spec_roots: [...new Set([...facts.values()].map(f => dirname(f.packagePath)))], ...(discovery ? { discovery } : {}) });
 }
 
 // A workflow completion checkpoint is decisive; a terminal worker receipt is
 // not. Older packages use matching ready-tour and PR publication records. A
 // subsequent dispatch or noncomplete checkpoint keeps reopened work visible.
-async function packageCompleted(fact, candidates, budget, note) {
+async function packageCompletion(fact, candidates, budget, note) {
+  if (fact.staleReceipts || fact.receiptsIncomplete) return false;
   const checkpoints = await readCheckpoints(fact, budget);
   for (const reason of fact.checkpointNotes) note(reason);
   if (fact.checkpointNotes.length) return false;
   const relevant = checkpoints.filter(item => item.package === fact.packagePath);
-  let completedAt;
+  let completedAt, completionBasis;
   if (relevant.length) {
-    if (relevant.some(item => item.state !== 'complete' || !validTime(item.observed_at))) return false;
+    if (relevant.some(item => item.state !== 'complete' || item.active_workers.length || !validTime(item.observed_at))) return false;
     completedAt = Math.max(...relevant.map(item => Date.parse(item.observed_at)));
+    completionBasis = 'workflow-checkpoint';
   } else {
     const read = async (name, allow) => {
       const result = await readJson(join(fact.packagePath, name), SENTINEL_LIMITS.smallJsonBytes, budget,
@@ -614,16 +651,20 @@ async function packageCompleted(fact, candidates, budget, note) {
       ? { verdict: value.verdict, commit: value.commit } : null);
     if (tour?.verdict !== 'ready' || tour.commit !== pr.commit) return false;
     completedAt = Date.parse(pr.submitted_at);
+    completionBasis = 'ready-pr';
   }
-  return !candidates.some(({ receipt }) => {
+  if (fact.staleReceipts || candidates.some(({ receipt }) => {
     const started = Date.parse(receipt.started_at ?? receipt.dispatch_requested_at);
-    return !Number.isFinite(started) || started > completedAt;
-  });
+    return !TERMINAL.has(receipt.state) || !Number.isFinite(started) || started > completedAt;
+  })) return false;
+  return { completed_at: new Date(completedAt).toISOString(), completion_basis: completionBasis };
 }
 
 // Receipts are examined in one bounded pass: identity mismatches are stale
 // evidence and the run is skipped, never re-attributed to another identity.
-async function collectPackage(fact, budget, note, noteUnknown) {
+async function collectPackage(fact, budget, report, reportUnknown) {
+  const note = reason => { fact.receiptsIncomplete = true; report(reason); };
+  const noteUnknown = reason => { fact.receiptsIncomplete = true; reportUnknown(reason); };
   const runsDir = join(fact.packagePath, 'runtime', 'runs');
   const found = new Map();
   const readReceipt = async (file, expectedId = null) => {
@@ -634,7 +675,10 @@ async function collectPackage(fact, budget, note, noteUnknown) {
       allow: value => value && typeof value === 'object' && typeof value.id === 'string' ? value : null,
     });
     if (result.outcome === 'read-budget') { noteUnknown(result.reason); return false; }
-    if (result.outcome === 'missing') return true;
+    if (result.outcome === 'missing') {
+      if (expectedId !== null) note(`receipt-missing: ${file}`);
+      return true;
+    }
     if (result.outcome === 'oversized') { note(`receipt-oversized: ${file}`); return true; }
     if (result.outcome !== 'ok') { note(`receipt-invalid: ${file}`); return true; }
     const value = result.record;
@@ -646,6 +690,8 @@ async function collectPackage(fact, budget, note, noteUnknown) {
     }
     const receipt = {};
     for (const key of RECEIPT_KEYS) if (typeof value[key] === 'string') receipt[key] = value[key];
+    if (['implementation', 'verification-continuation', 'implementation-repair', 'review-repair', 'launch-retry'].includes(value.attempt_kind)) receipt.attempt_kind = value.attempt_kind;
+    if (['as-specified', 'adapted', 'checkpoint', 'no-artifact', 'decision-required', 'needs-spec-correction'].includes(value.handoff?.outcome)) receipt.handoff = { outcome: value.handoff.outcome };
     if (!found.has(value.id)) found.set(value.id, { fact, id: value.id, receipt, source: [{ file, digest: result.digest }], bytes: result.bytes });
     return true;
   };
@@ -716,6 +762,7 @@ async function observeRun(candidate, budget, note, readTime) {
   for (const reason of fact.checkpointNotes) mark(reason);
   let workflow_id = null;
   let workflow_state = null;
+  let workflow_workers = [], workflow_observed_at = null;
   const spec_progress = specProgress(receipt.step, steps);
   let obligation = obligationForStep(spec_progress);
   for (const checkpoint of checkpoints) {
@@ -723,6 +770,8 @@ async function observeRun(candidate, budget, note, readTime) {
     if (!checkpoint.workers.includes(candidate.id) && !(receipt.assignment_id && checkpoint.workers.includes(receipt.assignment_id))) continue;
     workflow_id = checkpoint.workflow;
     workflow_state = typeof checkpoint.state === 'string' ? checkpoint.state : null;
+    workflow_workers = checkpoint.active_workers ?? [];
+    workflow_observed_at = checkpoint.observed_at;
     obligation = checkpoint.summary ? publicHint(checkpoint.summary) : obligation;
     const entry = fact.sources.get(`checkpoint:${checkpoint.workflow}`);
     if (entry) source.push({ file: entry.file, digest: entry.digest });
@@ -757,6 +806,8 @@ async function observeRun(candidate, budget, note, readTime) {
     checkout,
     workflow_id,
     workflow_state,
+    workflow_workers,
+    workflow_observed_at,
     is_current_assignment: fact.currentAssignment === candidate.id,
     assignment_id: typeof receipt.assignment_id === 'string' ? receipt.assignment_id : candidate.id,
     coordinator_session: typeof receipt.parent_session === 'string' ? receipt.parent_session : null,
@@ -782,6 +833,8 @@ function packageTiming(fact, index, checkpoints, observedAt) {
     const progress = specProgress(receipt.step, index);
     return { assignment_id: receipt.assignment_id ?? id, step: progress.current_step,
       name: progress.current_name, state: receipt.state ?? 'unknown',
+      attempt_kind: ['implementation', 'verification-continuation', 'implementation-repair', 'review-repair', 'launch-retry'].includes(receipt.attempt_kind) ? receipt.attempt_kind : null,
+      handoff_outcome: ['as-specified', 'adapted', 'checkpoint', 'no-artifact', 'decision-required', 'needs-spec-correction'].includes(receipt.handoff?.outcome) ? receipt.handoff.outcome : null,
       started_at: validTime(receipt.dispatch_requested_at) ?? validTime(receipt.started_at),
       finished_at: TERMINAL.has(receipt.state) ? validTime(receipt.finished_at) : null };
   }).sort((a, b) => (Date.parse(a.started_at) || 0) - (Date.parse(b.started_at) || 0)
@@ -952,6 +1005,9 @@ async function readCheckpoints(fact, budget) {
           observed_at: validTime(value.observed_at),
           summary: value.obligation && typeof value.obligation === 'object' && typeof value.obligation.summary === 'string' ? value.obligation.summary : null,
           workers: Array.isArray(value.workers) ? value.workers.filter(item => item && typeof item.id === 'string').map(item => item.id) : [],
+          active_workers: value.version === 1 && value.workflow_id === entry.name && Array.isArray(value.workers)
+            ? value.workers.filter(item => item && typeof item.id === 'string' && ['ready', 'working', 'waiting-external', 'decision-required', 'blocked', 'user-held', 'unknown'].includes(item.state))
+              .slice(0, 64).map(item => ({ id: publicHint(item.id), kind: ['owner', 'editor', 'reviewer', 'fixer', 'scout'].includes(item.kind) ? item.kind : 'worker', state: item.state })) : [],
         };
       },
     });

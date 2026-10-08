@@ -28,6 +28,13 @@ it. Use repository assertions or meaningful selectors/text, not a sleep or any m
 row. A page shell, login/loading view, or unrelated worker is not the required state.
 Keep the subsequent behavioral assertions: readiness alone does not prove acceptance.
 
+When a recorded source filters by a frozen clock, insert its records before freezing
+that clock and assert the expected record is visible through the serving process.
+Use application readiness after seeding and clock setup; an earlier login response
+cannot establish those conditions. Keep journey assertions derived from the acceptance
+contract: repair setup or implementation rather than changing an expected interaction
+to match the current behavior merely to obtain a pass.
+
 In Pi, the owner runs verification after the editor returns; the editor writes fixture
 or runner corrections. For a needed server use the existing
 `spec_verify.server: {command, ready_url, readiness_timeout}` with a foreground server

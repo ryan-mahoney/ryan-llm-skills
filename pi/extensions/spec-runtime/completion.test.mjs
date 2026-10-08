@@ -41,6 +41,27 @@ test('structured handoff writes canonical learning and index without converting 
   assert.equal(verificationReceipts(f.r).length, 1);
 });
 
+test('verification summaries preserve execution facts and populate learning without timestamp transcription', t => {
+  const f = fixture(t), before = revision(f.r);
+  const receipt = recordVerification(f.r, 'mise exec -- mix test focused.exs', before, before,
+    { exit_code: 0, full_output_path: f.evidence }, { started_at: '2026-10-08T13:20:00.000Z', elapsed_ms: 3700 });
+  const markdown = readFileSync(receipt.summary_artifact, 'utf8');
+  const facts = JSON.parse(markdown.match(/```json\n([\s\S]*?)\n```/)[1]);
+  assert.equal(facts.started_at, '2026-10-08T13:20:00.000Z');
+  assert.equal(facts.elapsed_ms, 3700);
+  assert.equal(facts.exit_code, 0);
+  assert.equal(facts.observed_at, receipt.observed_at);
+  assert.equal(facts.before.commit, before.commit);
+  assert.equal(facts.artifact, f.evidence);
+  const input = { ...f.input, evidence: [{ ...f.input.evidence[0], receipt_id: receipt.id, artifact: receipt.summary_artifact }] };
+  const result = submitCompletion(f.r, input);
+  assert.match(readFileSync(result.learning_path, 'utf8'), /elapsed_ms: 3700/);
+  assert.match(result.acceptance, /independent review/);
+  const failed = recordVerification(f.r, 'false', before, before, { exit_code: 1 });
+  assert.equal(failed.elapsed_ms, null, 'legacy timing stays unknown');
+  assert.throws(() => submitCompletion(f.r, { ...input, evidence: [{ ...input.evidence[0], receipt_id: failed.id, artifact: failed.summary_artifact }] }), /failed receipt/);
+});
+
 test('evidence logs, failed receipts, omitted gates and changed HEAD cannot masquerade as completed handoff', t => {
   const f = fixture(t);
   mkdirSync(join(f.pkg, 'learnings')); writeFileSync(join(f.pkg, 'learnings/step-001-learning.md'), 'Canonical learning: evidence/check.txt');

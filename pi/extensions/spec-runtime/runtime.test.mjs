@@ -441,11 +441,11 @@ test('owner verification reports failure and cannot overlap an editor or another
   // The editor keeps this slot while waiting for an owner answer.
   mkdirSync(editorSlot);
   const marker = join(f.dir, 'should-not-run');
-  await assert.rejects(runVerification(record, `touch '${marker}'`), /active editor/);
+  await assert.rejects(runVerification(record, `touch '${marker}'`), /holds the writer slot/);
   assert.equal(existsSync(marker), false);
   rmSync(editorSlot, { recursive: true });
   const pending = runVerification(record, 'printf "focused failure"; exit 7');
-  await assert.rejects(runVerification(record, 'true'), /active editor or verification/);
+  await assert.rejects(runVerification(record, 'true'), /holds the writer slot/);
   await assert.rejects(runEditor(record, 'Overlapping edit', undefined, f.options.launchProcess), /already active/);
   const result = await pending;
   assert.equal(result.exit_code, 7);
@@ -473,7 +473,7 @@ test('Jev advice uses the assigned checkout, excludes writers and propagates unc
     return new Promise(resolve => { finish = resolve; });
   } });
   await assert.rejects(runEditor(record, 'overlap', undefined, f.options.launchProcess), /already active/);
-  await assert.rejects(runVerification(record, 'true'), /active editor or verification/);
+  await assert.rejects(runVerification(record, 'true'), /holds the writer slot/);
   finish({ status: 'uncertain', test_pass_claim: false });
   assert.equal((await pending).status, 'uncertain'); assert.equal(calls, 1);
   assert.equal((await runVerification(record, 'true')).exit_code, 0);
@@ -562,6 +562,9 @@ test('owner completion persists learning from real verification and releases the
   const r = loadRun(f.packagePath);
   const check = await runVerification(r, 'echo focused-result');
   assert.ok(check.receipt_id);
+  assert.ok(check.elapsed_ms >= 0);
+  assert.ok(Date.parse(check.observed_at) >= Date.parse(check.started_at));
+  assert.match(readFileSync(check.verification_artifact, 'utf8'), /focused-result/);
   const completion = await runCompletion(r, { outcome: 'as-specified', strategy: 'implementation-first', decisions: [], gaps: [], findings: [], introduced: [], evidence: [{ id: 'EV-1', status: 'passed', receipt_id: check.receipt_id, artifact: check.full_output_path, proof_boundary: 'command plumbing only' }] });
   assert.equal(completion.status, 'recorded');
   const finished = await f.finished;
@@ -590,6 +593,35 @@ test('runtime carries a validated workflow_id and stable assignment_id into the 
   assert.throws(() => runtime2.start({ ...g.input, workflow_id: 'bad id!' }), /workflow_id must be/);
   assert.equal(existsSync(join(g.packagePath, 'runtime')), false);
   assert.equal(g.pids.length, 0);
+});
+
+test('step-scoped sessions isolate steps, retain retries and leave default package reuse unchanged', async t => {
+  const f = fixture(t, 'setInterval(()=>{},1000);'), runtime = new Runtime(f.options);
+  const nextStep = join(f.packagePath, 'step-002-subspec.md'); writeFileSync(nextStep, 'Next prepared step');
+  const run = async input => {
+    const receipt = runtime.start({ ...f.input, ...input });
+    const record = loadRun(f.packagePath, receipt.run_id);
+    assert.equal(runtime.start({ ...f.input, ...input }).run_id, receipt.run_id);
+    await runtime.cancel(f.packagePath, receipt.run_id, 1000);
+    return record;
+  };
+  const first = await run({ assignment_id: 'first', session_scope: 'step', attempt_kind: 'implementation' });
+  assert.equal(summary(first).attempt_kind, 'implementation');
+  const retry = await run({ assignment_id: 'retry', session_scope: 'step', attempt_kind: 'verification-continuation' });
+  const second = await run({ assignment_id: 'second', step: nextStep, session_scope: 'step' });
+  assert.equal(first.editor_session, retry.editor_session);
+  assert.equal(first.owner_session, retry.owner_session);
+  assert.notEqual(first.editor_session, second.editor_session);
+  const legacy1 = await run({ assignment_id: 'legacy1' });
+  const legacy2 = await run({ assignment_id: 'legacy2', step: nextStep });
+  assert.equal(legacy1.editor_session, legacy2.editor_session);
+  assert.notEqual(first.editor_session, legacy1.editor_session);
+  assert.throws(() => runtime.start({ ...f.input, assignment_id: 'first', session_scope: 'package', attempt_kind: 'implementation' }), /different launch contract/);
+  const g = fixture(t), other = new Runtime(g.options);
+  assert.throws(() => other.start({ ...g.input, attempt_kind: 'automatic-retry' }), /Unknown attempt_kind/);
+  assert.throws(() => other.start({ ...g.input, session_scope: 'discard' }), /session_scope/);
+  assert.equal(g.pids.length, 0);
+  assert.equal(existsSync(join(g.packagePath, 'runtime')), false);
 });
 
 test('sentinel cancellation: assertIdleWriter rejects a claimed editor slot while the lease is valid', async t => {

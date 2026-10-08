@@ -8,6 +8,11 @@ Use `spec_dispatch(action: start)` with `package` (absolute canonical folder), `
 (absolute subspec), `owner_model` and `editor_model` (`provider/id[:thinking]`). Optional
 `checkout`, `branch`, `base`, `assignment_id` and `instructions` carry existing directives.
 `timeout_ms` bounds the whole assignment (default `7200000`, two hours).
+When exposed by the loaded tool schema, set `attempt_kind` to the actual reason:
+`implementation`, `verification-continuation`,
+`implementation-repair`, `review-repair`, or `launch-retry`. This is observation metadata,
+not permission to retry. Before an explicit provider change, supply its known required
+trusted provider extension in `child_extensions`; managed children disable discovery.
 An explicit checkout is reused; omitting it creates a sibling worktree. The owner calls
 `spec_editor(assignment: <bounded instructions>)`. Read the
 [runtime API](../../../pi/extensions/spec-runtime/README.md) only for setup/recovery detail.
@@ -21,6 +26,15 @@ The profiles come from `pi/agents/`. The owner uses the assigned capable model; 
 editor defaults to `openrouter/inception/mercury-2.5:high`. Preserve exact selectors and
 explicit overrides. Diagnose actual launch failures on this route; do not silently
 substitute models or providers. Non-Pi harnesses retain the direct worker route.
+
+For an explicitly selected context experiment, `session_scope: step` retains the pair
+within one canonical step and its retries, while separating it from other steps.
+The default `package` preserves current session reuse. Supply a concise handoff of
+dependency contracts, settled decisions, relevant evidence and unresolved obligations.
+Do not switch scope mid-step or discard a live session. Compare comparable completed
+steps using elapsed time, reported context/cost, repairs and independent review findings.
+Change one variable at a time; lower thinking effort is a separate explicitly selected
+experiment, never an automatic fallback or a reason to waive review.
 
 ## Bounded assignments
 

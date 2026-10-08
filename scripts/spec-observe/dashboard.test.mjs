@@ -78,6 +78,25 @@ test('dashboard uses current workspace snapshots without reviving old completed 
   assert.equal(vm.runInContext('normalize(pending).observers.length', context), 1);
 });
 
+test('attempt reasons and unfinished workers distinguish execution from handoff and escape imported text', () => {
+  const script = readFileSync(new URL('./dashboard.html', import.meta.url), 'utf8').match(/<script>([\s\S]*?)<\/script>/)[1];
+  const context = vm.createContext({ document: {}, Date, Map, Set, JSON });
+  vm.runInContext(script.slice(0, script.indexOf("$('run-list').addEventListener")), context);
+  context.run = { workflow_observed_at: '2026-10-08T13:22:00Z',
+    workflow_workers: [{ id: '<img src=x onerror=alert(1)>', kind: 'fixer', state: 'working' }],
+    timing: { attempts: [{ step: 6, state: 'completed', attempt_kind: 'verification-continuation', handoff_outcome: 'checkpoint' },
+      { step: 6, state: 'failed' }] } };
+  const html = vm.runInContext('workflowWorkers(run) + stepTimings(run)', context);
+  assert.match(html, /fixer/);
+  assert.match(html, /&lt;img/);
+  assert.doesNotMatch(html, /<img/);
+  assert.match(html, /Verification continuation/);
+  assert.match(html, /Handoff: checkpoint/);
+  assert.match(html, /Reason not recorded/);
+  assert.throws(() => vm.runInContext('normalize({runs:[{workflow_workers:[null]}]})', context));
+  assert.doesNotThrow(() => vm.runInContext('normalize({runs:[{}]})', context));
+});
+
 test('partial workspace coverage stays in the footer while connection failures use the notice', () => {
   const script = readFileSync(new URL('./dashboard.html', import.meta.url), 'utf8').match(/<script>([\s\S]*?)<\/script>/)[1];
   const elements = new Map();
@@ -228,4 +247,42 @@ test('timing shows retries independently and freezes offline or completed observ
   assert.equal(vm.runInContext('specElapsed(run)', context), '3h 0m 0s', 'fresh observation advances to the current time');
   vm.runInContext('imported=true', context);
   assert.equal(vm.runInContext('specElapsed(run)', context), '2h 0m 0s', 'import freezes the same fresh observation');
+});
+
+test('recently completed view separates specs from runs, sorts by completion and drops reopened history on refresh', () => {
+  const script = readFileSync(new URL('./dashboard.html', import.meta.url), 'utf8').match(/<script>([\s\S]*?)<\/script>/)[1];
+  const elements = new Map();
+  const document = { getElementById(id) {
+    if (!elements.has(id)) elements.set(id, { innerHTML: '', value: '', scrollTop: 0,
+      querySelectorAll: () => [], classList: { toggle() {} } });
+    return elements.get(id);
+  } };
+  const context = vm.createContext({ document, Date, Map, Set, JSON });
+  vm.runInContext(script.slice(0, script.indexOf("$('run-list').addEventListener")), context);
+  const now = new Date().toISOString();
+  const completed = [
+    { repository: '/a/.git', package: '/a/.specs/older', completed_at: '2026-10-06T12:00:00Z', completion_basis: 'ready-pr' },
+    { repository: '/z/.git', package: '/z/.specs/newer', completed_at: '2026-10-07T12:00:00Z', completion_basis: 'workflow-checkpoint' },
+  ];
+  context.state = { observers: [{ observer_id: 'live', state: 'observing', published_at: now,
+    snapshot: { workspace: 'w', coverage: { state: 'complete', observed_at: now },
+      runs: [{ repository: '/a/.git', package: '/a/.specs/working', execution: 'running' }], recently_completed: completed } }] };
+  vm.runInContext('payload=normalize(state);render()', context);
+  assert.equal(vm.runInContext('visibleRecords().length', context), 1);
+  vm.runInContext("filter='completed';selected=null;render()", context);
+  assert.equal(vm.runInContext('visibleRecords()[0].package', context), '/z/.specs/newer');
+  assert.equal(vm.runInContext('visibleRecords().length', context), 2);
+  assert.match(elements.get('run-detail').innerHTML, /Workflow marked complete/);
+  assert.equal(vm.runInContext('activeRun(visibleRecords()[0]) || attention(visibleRecords()[0])', context), false);
+  elements.get('repo-search').value = 'older';
+  assert.equal(vm.runInContext('visibleRecords()[0].package', context), '/a/.specs/older');
+  elements.get('repo-search').value = '';
+  vm.runInContext('payload.observers[0].snapshot.recently_completed=[];render()', context);
+  assert.equal(vm.runInContext('visibleRecords().length', context), 0);
+  assert.equal(vm.runInContext('selected', context), null);
+  assert.match(elements.get('run-list').innerHTML, /No recently completed specs/);
+  vm.runInContext('delete payload.observers[0].snapshot.recently_completed;render()', context);
+  assert.match(elements.get('filter-note').textContent, /unavailable/);
+  context.bad = { runs: [], recently_completed: [{ completed_at: 'invalid', completion_basis: 'workflow-checkpoint' }] };
+  assert.throws(() => vm.runInContext('normalize(bad)', context));
 });

@@ -230,13 +230,21 @@ The agent that dispatches step workers owns these launches. If it cannot launch
 subagents, retain an explicit review gap and report the missing capability. Do not silently
 skip step review or replace it with an automatic branch audit.
 
-**Launch a review after each step.** Once a step passes mechanical verification, launch
-one background reviewer for the commits from the previous review's `head` (or the branch
-base for the first review) to current HEAD. That range includes any step-fix commits
+**Launch a review after each step.** Pin the review base and head to full commit SHAs
+after mechanical verification at step completion, before dispatching
+another writer. If review must wait for a formatting correction, record its explicit
+commit separately; do not later substitute a moving `HEAD`. Identify the step commits
+and intervening fixes in the review packet, with their existing decision records.
+Preserve coverage of those fixes while avoiding repeated findings already resolved;
+assess their effect on this step and route remaining ownership explicitly.
+
+Once the review range is pinned, launch one background reviewer for the commits from
+the previous review's `head` (or the branch base for the first review) to the pinned
+step-completion head. That range includes any step-fix commits
 made since the previous review. The reviewer needs to read files, run `git`, and write to
 the canonical spec folder, and it must not edit code. Require it to read
 `~/.agents/skills/spec-branch-review/SKILL.md` and follow Step Scope with
-`scope=step step=<NNN> since=<sha> head=<full HEAD sha>`. Pass the checkout, the spec
+`scope=step step=<NNN> since=<pinned base sha> head=<pinned head sha>`. Pass the checkout, the spec
 folder, and the model assigned to step review. Don't wait for it: it reads fixed commits,
 so the next step worker can edit the checkout while it runs. Reviews may overlap.
 

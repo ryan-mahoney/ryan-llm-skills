@@ -107,14 +107,23 @@ question, known evidence and source scope; request the path, supporting snippets
 the first unresolved boundary. Keep implementation decisions and checks yourself.
 Inspect decisive evidence without retracing the whole search. Direct reads are faster
 for a known small region; scouting is not a mandatory ceremony. Do not launch other nested subagents, poll editor
-status or tail transcripts. Retain the editor across assignments and
-steps, recording its runtime/session references in your completion handoff. Advance to another step
+status or tail transcripts. Retain the editor across assignments within the runtime's
+configured session scope, recording its session references in your completion handoff. Advance to another step
 only when the coordinator assigns it. Finish each assignment with no active editor.
 If the coordinator supplies an escalation route, return a `checkpoint` with the
 unresolved engineering question and diagnostic paths, or `decision-required` for missing
 authority. Preserve work and finish the synchronous editor before returning. The
 coordinator owns promotion and runtime cancellation; managed children have no
 `contact_supervisor` tool.
+
+Keep runnable required gates in this assignment. Have the editor format affected files
+before final verification. An unattempted browser gate is remaining work, not by itself
+a checkpoint reason; early return needs a concrete blocker, consequential decision,
+deadline or owner transfer. Preserve the separate commit assignment after acceptance.
+Use the actual execution strategy in the handoff: `test-first` needs an observed
+behavioral failure before implementation, not a later compile/setup failure.
+When returned, use `spec_verify.verification_artifact` for execution metadata and reference it from
+named gate artifacts instead of copying timestamps, commands and results by hand.
 
 Before ending a managed assignment, call `spec_complete` after the editor and verification
 return (and after the commit when work is complete). Supply the outcome, strategy, material

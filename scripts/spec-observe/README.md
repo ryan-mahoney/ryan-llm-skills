@@ -32,8 +32,25 @@ null because observation does not establish acceptance.
 
 An active detail selection follows the package's current assignment on refresh,
 so its progress advances when the next step starts. Selecting a historical attempt
-keeps that attempt selected. Filters appear as **Active**, **Attention**, **Runs**;
-Active is selected initially.
+keeps that attempt selected. Filters appear as **Active**, **Attention**, **Runs**,
+and **Recently completed**; Active is selected initially.
+
+**Recently completed** retains one entry per spec completed in the last seven days,
+newest first, with its recorded completion time and completion basis. A complete
+workflow checkpoint or matching ready-tour/non-draft PR publication establishes
+completion; a worker exit alone does not. Reopened workflows, later dispatches,
+unfinished workers and incomplete receipt reads prevent confirmed completion.
+Completion does not establish merge status. Search also applies to this view.
+
+Snapshots carry `recently_completed` separately from monitored `runs`, so history
+does not create recovery conditions or consume the 50-assignment display limit.
+History has its own 50-package cap and `completion_history` window/omission metadata;
+older packages are checked after current run details, within the shared read budget.
+Recorded timestamps determine the window even when package files have older mtimes.
+The dashboard uses authoritative observer snapshots, without accumulating browser
+history. Older snapshots remain readable and explicitly show unavailable completion
+history. Updated observers supply the collection on their next snapshot; an already
+running Pi session needs to load the updated observer code first.
 
 Details show time since the first recorded dispatch and a duration for each step
 attempt, including retries, waits and verification. Timing reuses the bounded
@@ -42,6 +59,13 @@ It does not include work before the first recorded dispatch. Missing timestamps
 stay unknown; terminal worker state does not establish spec completion. A complete
 workflow checkpoint can stop the spec timer unless later work reopens it. Imported
 or stale snapshots freeze unfinished durations at their observation time.
+
+Attempt rows show an explicit dispatch reason when recorded and the handoff outcome
+separately from process state. Older receipts show **Reason not recorded** rather than
+guessing why they repeated. **Recorded unfinished workers** lists nonterminal workers
+from the matching workflow checkpoint with that checkpoint's timestamp, so an earlier
+step's fixer can be visible beside a completed implementation. These are recorded
+states, not live process checks, and grant no intervention authority.
 
 For an independent viewer:
 

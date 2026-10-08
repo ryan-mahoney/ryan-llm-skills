@@ -46,7 +46,8 @@ export function loadRun(packagePath, id) {
   return read(join(canonicalPackage(packagePath).packagePath, 'runtime', id ? `runs/${id}.json` : 'run.json'));
 }
 export function summary(record) {
-  return { run_id: record.id, assignment_id: record.assignment_id, workflow_id: record.workflow_id ?? null, state: record.state, package: record.package, step: record.step,
+  return { run_id: record.id, assignment_id: record.assignment_id, workflow_id: record.workflow_id ?? null,
+    attempt_kind: record.attempt_kind ?? null, session_scope: record.session_scope ?? 'package', state: record.state, package: record.package, step: record.step,
     checkout: record.checkout, owner_session: record.owner_session, editor_session: record.editor_session,
     ledger: join(record.package, 'runtime/progress.json'), run_receipt: join(record.package, 'runtime/run.json'), events: join(record.package, 'runtime/events.jsonl'),
     checks: ['canonical package', 'checkout repository and requested branch', 'exclusive writer lease at launch'],
@@ -145,6 +146,10 @@ export function canonicalPackage(path) {
   return { packagePath, primary, common };
 }
 export function resolveInput(input) {
+  if (input.attempt_kind !== undefined && !['implementation', 'verification-continuation', 'implementation-repair', 'review-repair', 'launch-retry'].includes(input.attempt_kind))
+    throw new Error('Unknown attempt_kind');
+  if (input.session_scope !== undefined && !['package', 'step'].includes(input.session_scope))
+    throw new Error('session_scope must be package or step');
   input = { ...input, owner_model: input.owner_override || input.owner_model,
     routing_reason: input.owner_override ? 'explicit step override' : input.routing_reason };
   const { packagePath, primary, common } = canonicalPackage(input.package);
@@ -266,6 +271,8 @@ export class Runtime {
     mkdirSync(join(runtimeDir, 'runs'), { recursive: true });
     const assignmentFile = join(runtimeDir, 'assignments', `${createHash('sha256').update(key).digest('hex')}.json`);
     const contractParts = [config.step, config.checkout, config.owner_model, config.editor_model, config.scout_model, config.child_extensions || [], config.instructions || ''];
+    if (config.attempt_kind !== undefined || config.session_scope === 'step')
+      contractParts.push({ attempt_kind: config.attempt_kind ?? null, session_scope: config.session_scope ?? 'package' });
     // A supplied workflow_id joins the launch contract so an existing assignment
     // cannot be reused under another workflow; the legacy/no-workflow shape is
     // preserved exactly.
@@ -290,12 +297,15 @@ export class Runtime {
       throw new Error(`Writer already reserved (${lease?.id || 'initializing/unknown'}). Use its completion or confirmed cancellation; never delete the lock to retry.`);
     }
     const id = randomUUID();
-    const pair = createHash('sha256').update(JSON.stringify([config.checkout, config.owner_model, config.editor_model, config.child_extensions || []])).digest('hex').slice(0, 16);
+    const sessionKey = [config.checkout, config.owner_model, config.editor_model, config.child_extensions || []];
+    if (config.session_scope === 'step') sessionKey.push(config.step);
+    const pair = createHash('sha256').update(JSON.stringify(sessionKey)).digest('hex').slice(0, 16);
     const sessionDir = join(runtimeDir, 'sessions', pair);
     mkdirSync(sessionDir, { recursive: true });
     const record = { schema_version: 1, completion_contract: 1, id, assignment_id: key, workflow_id: config.workflow_id ?? null, package: config.package, primary: config.primary,
       step: config.step, checkout: config.checkout, owner_model: config.owner_model, editor_model: config.editor_model, scout_model: config.scout_model,
       dispatch_requested_at: requestedAt, routing_reason: config.routing_reason,
+      attempt_kind: config.attempt_kind ?? null, session_scope: config.session_scope ?? 'package',
       environment: environmentFacts(config.checkout, config.primary),
       child_extensions: config.child_extensions || [], owner_session: join(sessionDir, 'owner.jsonl'), editor_session: join(sessionDir, 'editor.jsonl'),
       parent_session: parentSession, lock: config.lock, package_lock: packageLock, token: randomUUID(), state: 'running', started_at: timestamp(), timeout_ms: input.timeout_ms || 7200000 };
@@ -477,21 +487,25 @@ export async function runVerification(record, command, timeout = 120, signal, se
   return withIdleWriter(record, async () => {
     invalidateCompletion(record);
     const before = revision(record);
+    const started_at = timestamp(), started = performance.now();
+    const timing = () => ({ started_at, elapsed_ms: Math.round(performance.now() - started) });
     let reply;
     try {
       reply = await (server
         ? withVerificationServer(record, server, () => runCommand(record, command, timeout, signal), signal)
         : runCommand(record, command, timeout, signal));
     } catch (error) {
-      const receipt = recordVerification(record, command, before, revision(record), { error: error.message, exit_code: null });
+      const receipt = recordVerification(record, command, before, revision(record), { error: error.message, exit_code: null }, timing());
       event(record, 'verification_finished', { receipt_id: receipt.id, outcome: receipt.outcome });
       error.receipt_id = receipt.id;
       throw error;
     }
-    const receipt = recordVerification(record, command, before, revision(record), reply);
+    const receipt = recordVerification(record, command, before, revision(record), reply, timing());
     event(record, 'verification_finished', { receipt_id: receipt.id, outcome: receipt.outcome });
-    if (typeof reply?.exit_code !== 'number' || reply.exit_code === 0) return { ...reply, receipt_id: receipt.id, observed_revision: receipt.before };
-    return { ...reply, receipt_id: receipt.id, observed_revision: receipt.before, sentinel_failure: await verificationFingerprint(record, command, reply) };
+    const facts = { receipt_id: receipt.id, observed_revision: receipt.before, verification_artifact: receipt.summary_artifact,
+      started_at: receipt.started_at, observed_at: receipt.observed_at, elapsed_ms: receipt.elapsed_ms };
+    if (typeof reply?.exit_code !== 'number' || reply.exit_code === 0) return { ...reply, ...facts };
+    return { ...reply, ...facts, sentinel_failure: await verificationFingerprint(record, command, reply) };
   });
 }
 

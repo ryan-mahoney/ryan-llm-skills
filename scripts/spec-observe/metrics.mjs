@@ -30,6 +30,14 @@ export function testCommands(command, depth = 0) {
     while (/^\w+=/.test(words[0] ?? '')) words.shift();
     if (words[0] === 'env') { words.shift(); while (/^\w+=/.test(words[0] ?? '')) words.shift(); }
     if (['timeout', 'gtimeout'].includes(words[0])) { words.shift(); if (/^[\d.]+[smhd]?$/.test(words[0] ?? '')) words.shift(); }
+    // Only unwrap an explicit exec separator. Never interpret mise tasks, shell
+    // expansions or commands supplied through configuration.
+    if (path.basename(words[0] ?? '') === 'mise' && ['exec', 'x'].includes(words[1])) {
+      const separator = words.indexOf('--', 2);
+      if (separator < 0 || words.slice(2, separator).some(word => /[$`]/.test(word))) continue;
+      words = words.slice(separator + 1);
+      while (/^\w+=/.test(words[0] ?? '')) words.shift();
+    }
     const executable = path.basename(words[0] ?? '');
     const args = words.slice(1);
     if (['bash', 'sh', 'zsh', 'dash'].includes(executable)) {
@@ -145,7 +153,19 @@ export async function readMetrics(node, { maxBytes = 64 * 1024 * 1024 } = {}) {
         if (message.isError) call.agent.tool_errors++;
         if (call.tests) {
           call.agent.test_command_results++;
-          const details = message.details?.result ?? message.details;
+          let details = message.details?.result ?? message.details;
+          // Native spec_verify persists its structured reply in a JSON text block.
+          // Do not parse arbitrary shell output as a verification receipt.
+          if (call.name === 'spec_verify' && !Number.isInteger(details?.exit_code) && !Number.isInteger(details?.exitCode)) {
+            const blocks = Array.isArray(message.content) ? message.content : [];
+            for (const block of blocks) {
+              if (block.type !== 'text') continue;
+              try {
+                const value = JSON.parse(block.text);
+                if (typeof value?.receipt_id === 'string' && Number.isInteger(value.exit_code)) { details = value; break; }
+              } catch { /* Ordinary text is not a structured result. */ }
+            }
+          }
           const exit = details?.exit_code ?? details?.exitCode;
           if (Number.isInteger(exit)) call.agent.test_commands_with_exit++;
           if (message.isError || details?.error || (Number.isInteger(exit) && exit !== 0)) call.agent.test_command_failures++;

@@ -208,6 +208,12 @@ application state with a bounded assertion before full interaction. Diagnose the
 failing boundary; do not repeat an unchanged full journey for the same setup failure.
 This is targeted verification scheduling, not a prerequisite for every simple test.
 
+Routine completion stays in this assignment: have the editor format affected files
+before the final focused gate, then execute every applicable required gate, including
+browser work that is ready to run. A gate that has not been attempted is remaining
+work, not itself a reason to return a checkpoint. Return early for a concrete blocker,
+unresolved consequential decision, deadline, or owner transfer; record that reason.
+
 Stop when the assigned checks pass and known relevant gaps are resolved. Do not rerun
 passing checks without an affected change or named uncertainty, or add another harness
 to account for a label. Preserve required visual observations. Reuse existing meaningful
@@ -259,7 +265,14 @@ cleanup requirements. Other steps do not load this procedure.
 
 In the managed Pi runtime, finish the coherent commit through the editor, then call
 `spec_complete`. It materializes the schema below from your structured judgments and recorded
-verification receipts. Do not ask the editor to write the same learning, copy command results,
+verification receipts. Use the returned `verification_artifact` for mechanical execution
+facts, or link it from a required named gate artifact. Retain the gate's proof boundary
+and applicability assessment; the generated execution summary does not certify them.
+Never reconstruct execution timestamps from file mtimes. Record the actual strategy:
+`test-first` requires observing the intended behavioral failure before implementation;
+writing tests afterward or encountering a compile/setup error is `implementation-first`.
+Explain departures from the planned strategy in the existing learning decisions.
+Do not ask the editor to write the same learning, copy command results,
 or rerun evidence merely because execution preceded the commit: supply its applicability.
 Use explicit empty arrays when there are no decisions, introduced symbols, gaps or findings.
 A checkpoint still needs a submission. If the tool is unavailable in an older running worker
