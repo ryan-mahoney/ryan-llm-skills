@@ -17,7 +17,8 @@ Find yours with `echo $TMPDIR`. Largest offenders first:
 ## Same pattern elsewhere
 
 - **Abandoned worktrees** (`~/.worktrees/`): `git worktree list`, check for live processes (`lsof`, `ps aux | grep <path>`) before removing; `git worktree prune` for stale registrations.
-- **Docker**: `docker system df` to size; `docker image prune` (dangling), `docker container prune` (stopped), `docker builder prune` (build cache). Volumes need explicit review — they can hold data.
+- **Build artifacts in inactive worktrees** (2026-10-08: 14GB): Elixir `_build`/`deps` (~0.2–1.2GB per gtfs-planner worktree) and Terraform `.terraform` provider caches (8GB in one worktree with ~11 modules). Confirm no process has a cwd or open file under `~/.worktrees` (`lsof | grep /.worktrees/`), stage only paths that `git -C <wt> check-ignore -q <path>` confirms are ignored, then remove. Rebuilds with `mix deps.get && mix compile` and `tofu init`. In zsh, iterate the path list with `while read`; `for d in $list` doesn't word-split.
+- **Docker**: `docker system df` to size; `docker image prune` (dangling), `docker container prune` (stopped), `docker builder prune` (build cache). Volumes need explicit review — they can hold data. Freed space stays inside `Docker.raw` and doesn't show in `df` until Docker Desktop trims the disk image.
 
 ## Safety procedure (in order)
 
