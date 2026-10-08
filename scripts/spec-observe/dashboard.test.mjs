@@ -161,3 +161,71 @@ test('task status renders Markdown while HTML, unsafe links and code remain iner
   assert.match(elements.get('run-detail').innerHTML, /class="activity status-markdown"><p><strong>Writing<\/strong> the fix/);
   assert.match(elements.get('run-detail').innerHTML, /class="obligation status-markdown"><p>Review <code>worker.js<\/code>/);
 });
+
+test('refresh follows the next assignment for an active spec and preserves historical selection', async () => {
+  const script = readFileSync(new URL('./dashboard.html', import.meta.url), 'utf8').match(/<script>([\s\S]*?)<\/script>/)[1];
+  const elements = new Map();
+  const document = { getElementById(id) {
+    if (!elements.has(id)) elements.set(id, { innerHTML: '', value: '', scrollTop: 0,
+      querySelectorAll: () => [], setAttribute() {}, removeAttribute() {},
+      classList: { toggle() {} } });
+    return elements.get(id);
+  } };
+  const now = new Date().toISOString();
+  const run = (id, step, current, execution) => ({ repository: '/repo/.git', package: '/repo/.specs/build',
+    assignment_id: id, is_current_assignment: current, execution,
+    spec_progress: { total_steps: 3, current_position: step }, coverage: { state: 'complete' } });
+  const snapshot = runs => ({ observers: [{ observer_id: 'live', state: 'observing', published_at: now,
+    snapshot: { workspace: 'w', coverage: { state: 'complete', observed_at: now }, runs } }] });
+  let next = snapshot([run('one', 1, true, 'running')]);
+  const context = vm.createContext({ document, Date, Map, Set, JSON, AbortController, setTimeout, clearTimeout,
+    location: { protocol: 'http:' }, fetch: async () => ({ ok: true, json: async () => next }) });
+  vm.runInContext(script.slice(0, script.indexOf("$('run-list').addEventListener")), context);
+  await vm.runInContext('refresh()', context);
+  next = snapshot([run('one', 1, true, 'completed')]);
+  await vm.runInContext('refresh()', context);
+  assert.match(elements.get('run-detail').innerHTML, /Step 1 of 3/);
+  next = snapshot([run('one', 1, false, 'completed'), run('two', 2, true, 'running')]);
+  await vm.runInContext('refresh()', context);
+  assert.match(elements.get('run-detail').innerHTML, /Step 2 of 3/);
+  assert.match(elements.get('run-detail').innerHTML, /max="3" value="2"/);
+  vm.runInContext("selected=records.find(r=>r.assignment_id==='one').key;renderDetail()", context);
+  await vm.runInContext('refresh()', context);
+  assert.match(elements.get('run-detail').innerHTML, /Step 1 of 3/);
+});
+
+test('timing shows retries independently and freezes offline or completed observations', () => {
+  const script = readFileSync(new URL('./dashboard.html', import.meta.url), 'utf8').match(/<script>([\s\S]*?)<\/script>/)[1];
+  const fixedNow = Date.parse('2026-10-06T13:00:00Z');
+  class TestDate extends Date {
+    constructor(...args) { super(...(args.length ? args : [fixedNow])); }
+    static now() { return fixedNow; }
+  }
+  const context = vm.createContext({ document: {}, Date: TestDate, Map, Set, JSON });
+  vm.runInContext(script.slice(0, script.indexOf("$('run-list').addEventListener")), context);
+  context.run = { timing: { started_at: '2026-10-06T10:00:00Z', observed_at: '2026-10-06T12:00:00Z',
+    attempts: [
+      { step: 1, name: '<Build>', state: 'failed', started_at: '2026-10-06T10:00:00Z', finished_at: '2026-10-06T10:05:00Z' },
+      { step: 1, name: '<Build>', state: 'running', started_at: '2026-10-06T10:10:00Z' },
+      { step: 2, state: 'completed', started_at: '2026-10-06T10:10:00Z' },
+    ] } };
+  assert.equal(vm.runInContext('specElapsed(run)', context), '2h 0m 0s');
+  const html = vm.runInContext('stepTimings(run)', context);
+  assert.match(html, /Attempt 1/);
+  assert.match(html, /Attempt 2/);
+  assert.match(html, /5m 0s/);
+  assert.match(html, /1h 50m 0s elapsed/);
+  assert.match(html, /Step 1 · &lt;Build&gt;/);
+  assert.match(html, /Unknown/);
+  context.run.timing.finished_at = '2026-10-06T11:00:00Z';
+  assert.equal(vm.runInContext('specElapsed(run)', context), '1h 0m 0s');
+  assert.equal(vm.runInContext("duration('bad','2026-10-06T11:00:00Z')", context), 'Unknown');
+  assert.throws(() => vm.runInContext('normalize({runs:[{timing:{attempts:[null]}}]})', context));
+  const timestamp = new TestDate().toISOString();
+  context.run.timing.finished_at = null;
+  context.run.observer = { state: 'observing', published_at: timestamp,
+    snapshot: { coverage: { observed_at: timestamp } } };
+  assert.equal(vm.runInContext('specElapsed(run)', context), '3h 0m 0s', 'fresh observation advances to the current time');
+  vm.runInContext('imported=true', context);
+  assert.equal(vm.runInContext('specElapsed(run)', context), '2h 0m 0s', 'import freezes the same fresh observation');
+});

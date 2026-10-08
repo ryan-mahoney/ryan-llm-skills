@@ -30,6 +30,19 @@ Missing or invalid indices show unknown size; an empty index shows no prepared
 steps. Snapshots expose these facts as `spec_progress`; `accepted_steps` remains
 null because observation does not establish acceptance.
 
+An active detail selection follows the package's current assignment on refresh,
+so its progress advances when the next step starts. Selecting a historical attempt
+keeps that attempt selected. Filters appear as **Active**, **Attention**, **Runs**;
+Active is selected initially.
+
+Details show time since the first recorded dispatch and a duration for each step
+attempt, including retries, waits and verification. Timing reuses the bounded
+package receipts, including attempts omitted by the displayed-assignment cap.
+It does not include work before the first recorded dispatch. Missing timestamps
+stay unknown; terminal worker state does not establish spec completion. A complete
+workflow checkpoint can stop the spec timer unless later work reopens it. Imported
+or stale snapshots freeze unfinished durations at their observation time.
+
 For an independent viewer:
 
 ```bash

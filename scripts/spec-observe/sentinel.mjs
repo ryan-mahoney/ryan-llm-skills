@@ -549,6 +549,7 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
       (Date.parse(b.receipt.started_at ?? b.receipt.dispatch_requested_at) || 0)
       - (Date.parse(a.receipt.started_at ?? a.receipt.dispatch_requested_at) || 0)
       || compareCandidates(a, b))[0]?.id ?? null;
+    fact.candidates = candidates;
     if (!includeInactive && candidates.length && await packageCompleted(fact, candidates, budget, noteUnknown)) {
       activityFilter.hidden_completed_packages++;
       continue;
@@ -762,6 +763,7 @@ async function observeRun(candidate, budget, note, readTime) {
     execution,
     obligation,
     spec_progress,
+    timing: packageTiming(fact, steps, checkpoints, readTime),
     activity: activity.activity,
     incidents: incidents.map(({ source, ...item }) => item),
     actions: actions.map(({ source, ...item }) => item),
@@ -771,6 +773,27 @@ async function observeRun(candidate, budget, note, readTime) {
     coverage: makeCoverage(stale ? 'stale' : partial ? 'partial' : 'complete', runReasons, null, runBytes.value, readTime),
     conditions: [],
   };
+}
+
+// Reuse bounded, identity-checked receipts; never read session transcripts for
+// timing. Attempts remain separate so retries and overlapping work stay visible.
+function packageTiming(fact, index, checkpoints, observedAt) {
+  const attempts = (fact.candidates ?? []).map(({ id, receipt }) => {
+    const progress = specProgress(receipt.step, index);
+    return { assignment_id: receipt.assignment_id ?? id, step: progress.current_step,
+      name: progress.current_name, state: receipt.state ?? 'unknown',
+      started_at: validTime(receipt.dispatch_requested_at) ?? validTime(receipt.started_at),
+      finished_at: TERMINAL.has(receipt.state) ? validTime(receipt.finished_at) : null };
+  }).sort((a, b) => (Date.parse(a.started_at) || 0) - (Date.parse(b.started_at) || 0)
+    || a.assignment_id.localeCompare(b.assignment_id));
+  const starts = attempts.map(a => a.started_at).filter(Boolean).sort((a, b) => Date.parse(a) - Date.parse(b));
+  const relevant = checkpoints.filter(c => c.package === fact.packagePath);
+  const completion = relevant.length && relevant.every(c => c.state === 'complete' && c.observed_at)
+    ? relevant.map(c => c.observed_at).sort((a, b) => Date.parse(b) - Date.parse(a))[0] : null;
+  const finished = completion && attempts.every(a => TERMINAL.has(a.state) && a.started_at
+    && Date.parse(a.started_at) <= Date.parse(completion)) ? completion : null;
+  return { basis: 'first-recorded-dispatch', started_at: starts[0] ?? null,
+    finished_at: finished, observed_at: observedAt, attempts };
 }
 
 async function readStepIndex(fact, budget) {

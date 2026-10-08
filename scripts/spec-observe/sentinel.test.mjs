@@ -638,3 +638,30 @@ test('worker completion retains the current unfinished workflow without activati
   assert.equal(current.is_current_assignment, true);
   assert.equal(snapshot.runs.find(r => r.assignment_id === 'old').is_current_assignment, false);
 });
+
+test('spec timing retains the earliest dispatch and every attempt across assignment caps', async t => {
+  const f = sandbox(t), repo = primary(f.dir, 'timing'), packagePath = pack(repo);
+  writeFileSync(join(packagePath, 'spec-steps.json'), JSON.stringify({ steps: [{ step: 1, name: 'Build' }] }));
+  for (let i = 0; i < 52; i++) receipt(packagePath, { id: `attempt-${i}`, state: i === 51 ? 'running' : 'completed',
+    step: join(packagePath, 'step-001-subspec.md'), started_at: ago((60 - i) * 60000),
+    dispatch_requested_at: i === 0 ? ago(61 * 60000) : undefined,
+    finished_at: i === 51 ? undefined : ago((59 - i) * 60000) });
+  const input = { roots: [repo], indexDir: f.indexDir, now, includeInactive: true };
+  const snapshot = await collectWorkspace(input);
+  assert.equal(snapshot.runs.length, 50);
+  const timing = snapshot.runs.find(r => r.is_current_assignment).timing;
+  assert.equal(timing.started_at, ago(61 * 60000));
+  assert.equal(timing.attempts.length, 52, 'timing reuses all bounded receipts, even omitted display assignments');
+  assert.equal(timing.attempts[0].name, 'Build');
+  assert.equal(timing.attempts[0].finished_at, ago(59 * 60000));
+  assert.equal(timing.attempts.at(-1).finished_at, null);
+  assert.equal(timing.finished_at, null, 'worker completion does not establish spec completion');
+  receipt(packagePath, { id: 'attempt-51', state: 'completed', started_at: ago(9 * 60000), finished_at: ago(60000) });
+  const dir = join(packagePath, 'runtime', 'sentinel', 'workflow');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'checkpoint.json'), JSON.stringify({ version: 1, workflow_id: 'workflow',
+    package: packagePath, state: 'complete', observed_at: ago(30000), workers: [] }));
+  assert.equal((await collectWorkspace(input)).runs[0].timing.finished_at, ago(30000));
+  receipt(packagePath, { id: 'reopened', state: 'running', started_at: ago(10000) });
+  assert.equal((await collectWorkspace(input)).runs[0].timing.finished_at, null);
+});
