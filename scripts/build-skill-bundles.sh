@@ -191,8 +191,14 @@ install_scripts_to() {
 
   mkdir -p "$target_dir"
   for script_file in "$BUNDLE_DIR/scripts"/*; do
-    [ -f "$script_file" ] || continue
-    install_entry "$script_file" "$target_dir/$(basename "$script_file")"
+    if [ -f "$script_file" ]; then
+      install_entry "$script_file" "$target_dir/$(basename "$script_file")"
+      continue
+    fi
+    if [ -d "$script_file" ] && [ "$(basename "$script_file")" = "repo-search" ]; then
+      install_entry "$script_file" "$target_dir/repo-search"
+      continue
+    fi
   done
 }
 
@@ -753,6 +759,9 @@ write_bundle_files() {
       write_design_spec_workflow_howto
     elif [ "$name" = "specops-skills" ]; then
       write_specops_workflow_howto
+    elif [ "$name" = "repo-search" ]; then
+      printf '\n## Private optional package\n\n'
+      printf 'This bundle is private and optional. It requires Bun and pre-existing local model assets. Installing it downloads nothing and enrolls no checkout.\n'
     fi
     printf '\n## Install\n\n'
     printf '```bash\n./install.sh\n```\n\n'
@@ -842,6 +851,28 @@ build_bundle() {
   elif [ "$name" = "specops-skills" ]; then
     copy_scripts "$bundle_dir" "decompose-skeleton.mjs" "agent-docs.mjs" "commit-ledger.mjs"
     copy_rules "$bundle_dir"
+  elif [ "$name" = "repo-search" ]; then
+    # Private optional engine package: exact sources, lockfile and notices only.
+    # No node_modules, tests, model/ONNX binaries, sqlite state or proof output.
+    copy_file "$bundle_dir" "scripts/repo-search/package.json" "scripts/repo-search/package.json"
+    copy_file "$bundle_dir" "scripts/repo-search/bun.lock" "scripts/repo-search/bun.lock"
+    copy_file "$bundle_dir" "scripts/repo-search/README.md" "scripts/repo-search/README.md"
+    copy_file "$bundle_dir" "scripts/repo-search/SOURCE.md" "scripts/repo-search/SOURCE.md"
+    copy_file "$bundle_dir" "scripts/repo-search/NOTICE" "scripts/repo-search/NOTICE"
+    copy_file "$bundle_dir" "scripts/repo-search/cli.mjs" "scripts/repo-search/cli.mjs"
+    copy_file "$bundle_dir" "scripts/repo-search/client.mjs" "scripts/repo-search/client.mjs"
+    copy_file "$bundle_dir" "scripts/repo-search/setup.mjs" "scripts/repo-search/setup.mjs"
+    copy_file "$bundle_dir" "scripts/repo-search/identity.mjs" "scripts/repo-search/identity.mjs"
+    copy_file "$bundle_dir" "scripts/repo-search/format.mjs" "scripts/repo-search/format.mjs"
+    copy_file "$bundle_dir" "scripts/repo-search/worker.ts" "scripts/repo-search/worker.ts"
+    copy_file "$bundle_dir" "scripts/repo-search/lifecycle.ts" "scripts/repo-search/lifecycle.ts"
+    copy_file "$bundle_dir" "scripts/repo-search/state.ts" "scripts/repo-search/state.ts"
+    copy_file "$bundle_dir" "scripts/repo-search/source.ts" "scripts/repo-search/source.ts"
+    copy_file "$bundle_dir" "scripts/repo-search/search.ts" "scripts/repo-search/search.ts"
+    local core_file
+    while IFS= read -r core_file; do
+      copy_file "$bundle_dir" "$core_file" "$core_file"
+    done < <(cd "$ROOT" && find scripts/repo-search/core -maxdepth 1 -type f -name '*.ts' ! -name '*.test.ts' | sort)
   fi
 
   write_install_script "$bundle_dir"
@@ -902,3 +933,11 @@ build_bundle \
   "SpecOps Skills" \
   "SpecOps analysis, implementation-spec, migration, and verification skills." \
   "${specops_skills[@]}"
+
+if [ "${REPO_SEARCH_BUNDLE:-0}" = "1" ]; then
+  build_bundle \
+    "repo-search" \
+    "Repo Search Skills" \
+    "Private optional repository search engine and lifecycle skills." \
+    repo-search repo-search-install repo-search-index repo-search-status
+fi
