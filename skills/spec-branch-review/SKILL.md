@@ -9,12 +9,12 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "24"
+  version: "25"
 ---
 
 # Spec Branch Evidence Audit
 
-Apply [Verification and Review](../../rules/verification-and-review.md) for CI/operator ownership
+Apply [Verification and Review](../../rules/verification-and-review.md) for focused-check scheduling
 and batched Jev verification/review-triage checkpoints.
 
 > **`.specs/` is standalone working state and is often gitignored.** Read and write it directly; do not depend on git history to recover it. Diffing implementation code under review is unaffected.
@@ -24,7 +24,7 @@ findings to `reviews/branch-<iteration>-review.md`. This is the audit half of
 the branch evidence loop driven by `spec-branch-refine`: it finds bugs and invalid proof; its
 partner `spec-branch-fix` reads the file and applies fixes. This skill never edits
 code. Its stage owner must have command execution and write access to the canonical
-spec folder: it consumes CI and runs outstanding focused verification, updates merge evidence, and writes the
+spec folder: it runs outstanding focused verification, updates merge evidence, and writes the
 review artifact. Use the known profile's declared tools; do not launch probes or
 repeat a capability audit for installed profiles. A harness agent
 named "reviewer" may be analysis-only and therefore unsuitable as the stage owner.
@@ -185,17 +185,14 @@ automated results this review is responsible for producing below.
 
 Step runs supply focused unit/integration results and hand off remaining final checks.
 Pending gates and `readyForAudit: false` are expected inputs, not missing-input reasons to
-stop. Assess whether recorded step or CI results remain applicable to the integrated branch,
+stop. Assess whether recorded step results remain applicable to the integrated branch,
 including relevant code, dependency, configuration, fixture, and environment changes.
 Preserve their observed revisions and explain reuse; do not relabel old executions.
-Before deciding the verdict, inspect required relevant CI for the final pushed SHA when
-publication is authorized and CI is configured. Consume those results for CI-owned gates.
-Without CI, broad testing stays operator-managed outside agent evidence, not a local suite
-or completion prerequisite. Apply Jev verification before expensive/repeated checks; run
-focused gates when they resolve concrete acceptance/debugging questions or known relevant
-failures. Deduplicate overlapping commands. A broad local diagnostic requires explicit user
-direction. Pending configured required CI remains pending evidence; do not invent a code
-defect or launch another suite solely because CI is still running.
+CI results belong to the operator after publication; do not inspect, wait for, or consume
+them here, and broad suites are not a local prerequisite. Apply Jev verification before
+expensive/repeated checks; run focused gates when they resolve concrete acceptance/debugging
+questions or known relevant failures. Deduplicate overlapping commands. A broad local
+diagnostic requires explicit user direction.
 
 Capture exact commands, elapsed times, outcomes, environment, output artifacts, and HEAD.
 Update `merge-evidence.md` and `merge-evidence.json` atomically when gate results,
@@ -493,6 +490,9 @@ skip a fired lens because its preferred skill is absent.
   paths. Apply the shared **Maintained Test Value** policy: assess added protection and oracle
   quality, and require retained-protection evidence or a sourced retirement for deletions.
   Do not infer redundancy from shared source lines or justify new cases by test counts.
+  Apply the Test economy section of that guide: a new case with no named credible failure,
+  or one asserting focus, attribute presence, render-without-crash, or a snapshot with no
+  requirement behind it, is an advisory finding to remove.
   Test-style improvements and optional consolidation stay advisory. Missing or circular coverage that leaves a material
   merge claim unsupported is an actionable `evidence` finding under the always-on evidence lens.
 
@@ -523,6 +523,9 @@ always-emit rule lives once in Severity, Actionability, Verdict.)
 - **Do not report** (no evidence in the diff = not a finding): hypothetical issues
   in code not shown; style or naming opinions that do not affect correctness;
   "missing tests" unless the change adds testable behavior with no coverage;
+  a defect the reviewed range did not introduce — a pre-existing defect in surrounding
+  code is not a finding unless the change worsens or depends on it, and a separate
+  process reviews broader defects;
   patterns consistent with visible codebase conventions — *unless* this change
   introduces a docstring or contract claim its own code contradicts, which a matching
   sibling-module shape does **not** license, or a copy of another module's helper,

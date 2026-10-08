@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "24"
+  version: "25"
 ---
 
 # Spec Write
@@ -213,17 +213,18 @@ Then define stable, numbered:
 
 For every EV item name:
 
-- The gate form: focused test, production-composition integration test, browser journey, accessibility scan, screenshot set, schema validation, migration dry-run, security check, benchmark, deploy rehearsal, rollback demonstration, or another risk-matched form.
+- The gate form: focused test, production-composition integration test, browser journey, accessibility scan, screenshot set, schema validation, migration dry-run, security check, benchmark, deploy rehearsal, rollback demonstration, or another risk-matched form. For a changed visual surface, the inspected screenshot set is the default gate; plan a browser journey or interaction assertion only for a credible failure a capture cannot reject.
 - The claims and failure hypotheses it covers, plus which unsafe implementation it can reject.
 - Where the artifact lands: committed test code in the repository, or a non-committed artifact under `.specs/<feature-slug>/evidence/`.
 - The exact command/procedure, actual target/environment, effects including setup/teardown,
   authority source, independence, phase, and whether it is required in that phase.
 - In existing plan prose, the test layer, distinct failure it detects, execution stage
-  (implementation feedback, boundary completion, or CI before publication), and setup cost when known.
+  (implementation feedback, boundary completion, or CI after publication), and setup cost when known.
   Use the shared scheduling policy; do not add schema fields or invent duration estimates.
+  Steps measure actual elapsed time when they add a test.
   Keep permutations in unit tests and integration cases focused on actual boundary contracts.
 
-Each EV item is owned by exactly one implementation step (see §9's `Evidence:` tag). Every AC maps to a claim; every claim maps to a failure hypothesis and gate; every failure hypothesis is rejected by a gate. User-visible work includes QA-tour scenarios; visual artifacts apply only to changed visual
+Each EV item is owned by exactly one implementation step (see §9's `Evidence:` tag). Every AC maps to a claim; every claim maps to a failure hypothesis and gate; every failure hypothesis is rejected by a gate. A failure hypothesis must be credible: name how the claim fails while superficial checks pass. Do not invent a hypothesis so a UI criterion gets an executable assertion; when the only credible failure is visual, the inspected capture is the gate. User-visible work includes QA-tour scenarios; visual artifacts apply only to changed visual
 surfaces. Library/CLI work does not require an invented UI or screenshot harness. Manual exploration may be offered as optional product discovery, but manual QA cannot be a merge-blocking gate. Scale evidence to actual exposure and credible failures. Reuse gates across claims; existing
 tests, disposable verifiers, or deterministic inspections can suffice. State a stopping condition
 and why any new maintained harness is necessary. Never make production operations a pre-merge

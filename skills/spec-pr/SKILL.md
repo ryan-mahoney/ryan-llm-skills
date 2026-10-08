@@ -1,6 +1,6 @@
 ---
 name: spec-pr
-description: "Publish draft spec-driven checkpoints to start CI, then establish final-commit evidence and a ready work tour before marking the PR ready. Push safely and explain the resulting change concisely."
+description: "Publish draft spec-driven checkpoints early, then establish final-commit evidence and a ready work tour before marking the PR ready. Report CI status once; never gate on it. Push safely and explain the resulting change concisely."
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -9,13 +9,15 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "16"
+  version: "17"
 ---
 
 # Spec PR
 
-Publish an authorized draft after a meaningful implementation checkpoint so CI runs while
-work continues. Mark it ready only when applicable merge evidence is complete. Deployment
+Publish an authorized draft after a meaningful implementation checkpoint so the operator
+can follow progress. Mark it ready only when applicable merge evidence is complete. CI
+results belong to the operator: this skill reads CI status once and reports it, never
+waits for it. Deployment
 readiness, authorization and post-deployment observations remain separate. Apply
 [Verification and Review](../../rules/verification-and-review.md), including Jev checkpoints. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). The PR explains the problem and resulting change to a teammate. The supporting artifacts retain the full verification record; neither opening the PR nor a future human review creates merge safety.
 
@@ -78,15 +80,15 @@ For a draft without a tour, use `"tour": null` in `pr-url.json`.
 ## Order Of Operations
 
 ```text
-draft: resolve authority/checkpoint -> safe push -> create/update draft -> inspect CI
+draft: resolve authority/checkpoint -> safe push -> create/update draft
 ready: fetch/rebase -> resolve conflicts -> commit coherent work -> focused evidence
--> safe push -> collect final-commit CI -> consume step review/fix completion -> render work tour
--> verify HEAD/evidence/CI bindings and mergeability -> update PR to ready -> verify publication
+-> safe push -> consume step review/fix completion -> render work tour
+-> verify HEAD/evidence bindings and mergeability -> update PR to ready -> read CI status once -> verify publication
 ```
 
 Push checkpoints and open/update the draft before final regression evidence is complete.
-After review fixes or other new commits, push again and collect CI for that final SHA before
-ready status. Preserve the selected review budget; pending CI does not require another audit.
+After review fixes or other new commits, push again before ready status. Preserve the
+selected review budget.
 
 ## Rebase Safely
 
@@ -120,8 +122,7 @@ A rebase, conflict resolution, staged commit, dependency/base change, or any cod
 The steps below establish ready-mode evidence. Draft mode records pending/stale gates and
 runs needed focused feedback without requiring final audit/tour assembly before its push.
 
-For an unchanged candidate with current applicable evidence, current step review/fix completion (or an explicitly selected branch review completion), a ready tour, and required CI (when configured)
-passing on the published HEAD, skip evidence
+For an unchanged candidate with current applicable evidence, current step review/fix completion (or an explicitly selected branch review completion), and a ready tour, skip evidence
 regeneration, review, and tour rendering. Proceed to PR metadata and publication
 verification. A stage transition alone does not invalidate those outputs. If the base,
 candidate, authority, or relevant check result changes, explain the invalidation and
@@ -129,12 +130,10 @@ apply only the affected work below within the existing review budget.
 
 1. Determine which claims, gates, and operational assumptions the new base or conflict touched.
 2. Apply the Jev verification checkpoint before expensive/repeated checks. Re-run affected
-   focused gates that inform concrete decisions or resolve relevant failures. Let configured
-   CI own broad build/integration/regression gates, pushing the coherent revision first.
-   Without CI, leave broad testing operator-managed outside recorded evidence. Reuse other valid focused results with their
-   original revisions and an explicit applicability assessment; a new SHA does not require
-   every local suite. Require applicable configured CI passing on the final pushed commit
-   before ready; absent CI does not create a local full-suite prerequisite or block completion.
+   focused gates that inform concrete decisions or resolve relevant failures. Broad
+   build/integration/regression suites belong to CI or the operator, not this stage. Reuse
+   other valid focused results with their original revisions and an explicit applicability
+   assessment; a new SHA does not require every local suite.
 3. Update affected `merge-evidence.json`/Markdown records from actual outcomes only
    if the evidence owner has not already brought them current. Preserve applicable
    unchanged records and their original observations; do not reconstruct the package.
@@ -151,7 +150,7 @@ apply only the affected work below within the existing review budget.
    inspection is missing, or a concrete presentation defect is reported.
 
 If evidence cannot be re-established, keep the authorized PR in draft status and record the
-actual gaps. Continue useful repair and CI feedback; do not mark the candidate ready or
+actual gaps. Continue useful repair; do not mark the candidate ready or
 publish a failed gate as passed.
 
 ## Push Without Overwriting Foreign Work
@@ -159,8 +158,7 @@ publish a failed gate as passed.
 Push all coherent task-owned commits, including final step fixes; preserve unrelated user work. After a rebase, use `--force-with-lease`, never bare `--force`. If the lease fails, fetch and inspect remote divergence. Rebase/integrate the remote work and repeat the affected evidence, scoped review if needed, and tour sequence, or stop. Never overwrite commits the lease identified as foreign.
 
 After pushing, compare the remote branch SHA to local HEAD. For ready status it must also
-match the current tour/evidence and relevant passing CI results. Drafts record pending or
-failing CI honestly; do not wait for a tour to make the initial push.
+match the current tour/evidence. Do not wait for a tour to make the initial push.
 
 Apply the Assembly, Tour, And Publication section of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
 Include consequential behavior rules, observations, proof limits, and follow-up destinations
@@ -219,21 +217,19 @@ Query `gh pr view --json headRefOid,mergeable,mergeStateStatus,statusCheckRollup
 
 - `headRefOid` equals the pushed local HEAD and, for ready status, the work-tour commit;
 - mergeability is not `CONFLICTING` (brief `UNKNOWN` may be polled a few times);
-- required relevant platform checks pass on that exact SHA for ready status; draft checks may be pending or failing with their actual gaps recorded;
+- CI status on that exact SHA is read once and recorded in the PR body as pending, passing, or failing; it does not gate ready status;
 - the submitted body equals `pr-message.md`.
 
-Pending required remote checks leave merge readiness pending and the PR in draft status;
-they do not authorize or establish deployment. Failed checks invalidate readiness: diagnose
-and correct relevant failures, update affected evidence/tour, push, and refresh the PR.
-Before `gh pr ready`, confirm applicable configured final-commit CI and closed acceptance/
-review gaps. Without CI, broad testing stays operator-managed outside agent evidence;
-its absence does not block ready status. Also confirm current
-mergeability, the selected review completion, and a ready tour. Publication never merges or deploys.
+CI results belong to the operator after publication. Do not poll, wait for, or diagnose
+remote checks; a failing or pending check is reported, not fixed here, unless the task is
+CI work or the user asks. Before `gh pr ready`, confirm closed acceptance/review gaps,
+current mergeability, the selected review completion, and a ready tour. Publication never
+merges or deploys.
 
 ## Report
 
-Report the PR URL and whether it was created or updated, plus pending checks or material
-limitations. Link the local tour and publication records for detailed SHAs, rebase history,
+Report the PR URL and whether it was created or updated, plus the recorded CI status and
+material limitations. Link the local tour and publication records for detailed SHAs, rebase history,
 evidence counts, and separate release states. Expand those details only when requested or needed
 to explain a blocker. Do not equate local verification with passing remote checks or deployment.
 

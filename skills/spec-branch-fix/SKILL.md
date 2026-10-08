@@ -9,12 +9,12 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "18"
+  version: "19"
 ---
 
 # Spec Branch Fix
 
-Apply [Verification and Review](../../rules/verification-and-review.md) for CI/operator ownership
+Apply [Verification and Review](../../rules/verification-and-review.md) for focused-check scheduling
 and batched Jev verification/review-triage checkpoints.
 
 > **`.specs/` is standalone working state and is often gitignored.** Read and write it directly; do not depend on git history to recover it. Diffing implementation code is unaffected.
@@ -118,6 +118,7 @@ suppresses that signature:
 |---|---|---|
 | `false-positive` | The finding is wrong. | Yes |
 | `intentional` | Behavior is deliberate and justified by sourced requirements/context; no applicable defect is accepted implicitly. | Yes |
+| `pre-existing` | Not introduced by the reviewed change; left to the operator's broader defect review. | Yes |
 | `accepted-risk` | Real, but accepted by current user instructions or project policy, cited in the prepared context/spec. | Only with `approved: true` and a source citation |
 | `deferred` | Real, but out of scope this pass. | No — keeps surfacing |
 | `unfixable` | Real, but cannot fix without breaking verification. | No |
@@ -171,13 +172,13 @@ If a finding's context is unclear, read the relevant source first.
 
 ## Verify
 
-Confirm actual targets/effects and authority. Apply the shared verification scheduling policy:
-run affected unit tests and the focused integration gates for changed boundaries. Apply Jev
-verification before expensive/repeated checks. Let configured CI own broad suites on
-authorized pushed fixes; without CI, leave broad testing operator-managed outside recorded
-evidence. This does not block completion or require a broad local run. A broad local
-diagnostic requires explicit user direction. Record actual results; pending configured
-required CI cannot be called passed.
+Confirm actual targets/effects and authority. Apply the shared verification scheduling policy
+and the Test economy section of [Unit Testing](../../rules/unit-testing.md): run the
+smallest affected cases that answer whether the fix holds, then the focused integration
+gate for a changed boundary. Apply Jev verification before expensive/repeated checks.
+Broad suites belong to CI or the operator, not this stage, and never require a local run.
+A broad local diagnostic requires explicit user direction. Record actual results; do not
+inspect or wait for CI.
 Reuse other valid results with their original revisions and applicability assessment. Tests are
 evidence, not an infallible oracle; confirm the fixed gate can reject its named failure
 hypothesis and update generated evidence artifacts honestly.

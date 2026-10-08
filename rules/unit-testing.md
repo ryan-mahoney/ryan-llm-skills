@@ -47,6 +47,38 @@ nor removals. Coverage can locate gaps, but it cannot establish assertion qualit
   Existing evidence can suffice. Temporary discovery tests need not become maintained tests
   unless they add ongoing protection or useful diagnosis.
 
+## Test economy
+
+Every test costs time to write, run, and maintain. Before adding or running one:
+
+1. Name the credible failure. A requirement, a sourced invariant, a bug report, or an
+   observed failure justifies a test. The existence of a behavior does not.
+2. Pick the smallest check that rejects that failure: an existing case, then one new case,
+   then a file. Measure "smallest" in elapsed time and attention, not case count; a
+   two-second file beats a minute spent composing a filter.
+3. Run that check first and read its result before running anything broader. Run more
+   only when the result leaves a concrete question open.
+4. Stop when the question is answered. Prior passing evidence stands until an affected
+   change or a named uncertainty invalidates it.
+
+Do not write these without a requirement or bug report naming them: an input gained
+focus, an attribute or class name is present, a component renders without crashing, a
+snapshot matches, a wrapper forwards a call, a default equals itself, or a layout detail
+a screenshot already shows. When a step produces inspected screenshots, those captures
+are the visual evidence; add a browser assertion only for behavior that will regress
+silently in later edits, such as a state transition or a data-driven render.
+
+Make each new case selectable on its own: give it a name the runner's filter can match,
+keep its setup inside the case or a fixture it owns, and do not rely on sibling cases or
+a shared mutable `beforeAll` to establish its state. Record the command that runs the
+case alone next to the case.
+
+Measure a new test's elapsed time on its first run. When the case or its setup adds more
+than five seconds, or exceeds a repository-stated threshold, name the cost and the
+reduction before shipping it: a cheaper fixture, a narrower module, removed waits, or a
+unit case in place of an integration case. A slow test with unique protection may stay,
+with its cost recorded.
+
 ## Structure and assertions
 
 - Name the behavior and condition, such as `rejects empty slug`, rather than numbering

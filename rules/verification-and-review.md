@@ -7,7 +7,9 @@ This guide changes execution timing and triage, not acceptance scope or retained
 ## Focused feedback and CI
 
 Use focused local checks when they inform a concrete implementation decision, debugging,
-or an unresolved behavioral acceptance question. Batch coherent edits before expensive checks.
+or an unresolved behavioral acceptance question. Apply the Test economy section of the
+[Unit Testing Guide](unit-testing.md) when choosing what to write and what to run. Batch
+coherent edits before expensive checks.
 Inspect command expansion and selectors; a filtered command can still start a broad suite.
 Configured CI owns broad regression, coverage, and repository-wide static suites. Do not
 repeat them locally. Without CI, broad testing remains operator-managed and outside the
@@ -20,7 +22,7 @@ The repository owns commands, setup, risk constraints, and required configured C
 explicit user direction overrides older local full-suite completion rules.
 
 Within user-authorized publication scope, push a coherent checkpoint and open or update a
-draft PR after the first meaningful implementation checkpoint so CI runs while work continues.
+draft PR after the first meaningful implementation checkpoint so the operator can follow progress.
 Do not wait for final local regression or a ready tour to publish a draft. Push subsequent
 coherent commits in useful batches. A draft exposes actual progress and remaining gaps;
 it does not certify readiness, authorize merge/deployment, or permit publishing secrets.
@@ -28,15 +30,14 @@ If publication is outside scope, retain the checkpoint locally. Complete the aut
 and record actual focused evidence at the final local revision. Broad operator testing remains
 outside that evidence; do not create a remote-publication or broad local-test prerequisite.
 
-Before declaring a published candidate merge-ready or changing a draft to ready, close unresolved
-acceptance and actionable review gaps and, when configured, confirm all required relevant
-CI checks pass on the final pushed commit. Record the exact SHA, check/run URL, result, and scope in existing
-evidence. Pending, unavailable, stale, cancelled, or failing checks are not passes. Diagnose
-known relevant failures; do not classify them away to obtain green output. If no CI is
-configured, state that broad testing is operator-managed and outside recorded evidence;
-this alone does not block completion or ready status. A configured project-required remote
-check that is unavailable still blocks remote readiness; local evidence does not waive it. Reuse valid focused results with their original revision and an applicability assessment; never
-relabel an earlier execution as one on the final commit.
+Before changing a draft to ready, close unresolved acceptance and actionable review gaps.
+CI is not an agent gate. The workflow ends when the PR is open with tested, reviewed steps;
+the operator owns CI results, further review, and merge. Read CI status once at publication
+and report it in the PR as a fact (SHA, run URL, state), including pending or failing.
+Do not poll, wait for, or diagnose CI unless the task itself is CI work or the user asks.
+If no CI is configured, state that broad testing is operator-managed and outside recorded
+evidence. Reuse valid focused results with their original revision and an applicability
+assessment; never relabel an earlier execution as one on the final commit.
 
 ## Jev checkpoints
 

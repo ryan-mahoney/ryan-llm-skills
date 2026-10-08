@@ -72,8 +72,11 @@ another writer and notifies the coordinator.
    at least one final image after the last visual code change; never call an image final
    when it predates the current implementation.
 
-Write or update existing Playwright visual regression assertions and schedule the affected checks under the shared policy, but do not treat
-baseline acceptance as a substitute for looking at the rendered pixels. Keep ad hoc
+The inspected captures are the visual evidence for this step. Do not add Playwright
+assertions for what a capture already shows; add or update one only for behavior that
+will regress silently in later edits, such as a state transition or a data-driven
+render, and schedule it under the shared policy. Baseline acceptance never substitutes
+for looking at the rendered pixels. Keep ad hoc
 screenshots out of the commit unless the repository explicitly tracks Playwright visual
 baselines, retain the final inspected images under `.specs/<feature>/evidence/` so they
 survive as merge evidence, and terminate any server or watcher started for capture. If the first `uishot` capture launched its warm

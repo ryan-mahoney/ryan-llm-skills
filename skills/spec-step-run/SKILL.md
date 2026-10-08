@@ -9,12 +9,12 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "33"
+  version: "34"
 ---
 
 # Spec Step Run
 
-Apply [Verification and Review](../../rules/verification-and-review.md) for CI/operator ownership
+Apply [Verification and Review](../../rules/verification-and-review.md) for focused-check scheduling
 and batched Jev verification/review-triage checkpoints.
 
 Own one assigned step from the prepared package. In Pi, use the retained owner/editor
@@ -169,8 +169,9 @@ copy prototype-only fixtures, dependencies, shell UI, or fake data wiring.
   Return inapplicable obligations as `needs-spec-correction` in the learning and report for sourced
   correction and re-preparation rather than building
   unnecessary machinery or silently weakening a gate.
-- Fix relevant pre-existing defects encountered on the same execution, ownership,
-  invariant, or verification path. Pre-existence is not a reason to ask or defer.
+- Ignore defects this step did not introduce. If one blocks this step's own
+  verification, make the smallest unblocking change, record it in one line under
+  findings, and continue; a separate process reviews broader defects.
 - Implement missing wiring or work nominally assigned to a later step when it is the
   most coherent way to make the current or overall outcome real. The later step may
   then verify an already-satisfied obligation.
@@ -211,8 +212,11 @@ Stop when the assigned checks pass and known relevant gaps are resolved. Do not 
 passing checks without an affected change or named uncertainty, or add another harness
 to account for a label. Preserve required visual observations. Reuse existing meaningful
 tests or deterministic evidence; a step need not create a test file just to complete.
-Apply [Unit Testing](../../rules/unit-testing.md) when changing tests and the shared
-verification policy for deadlines, Jev scheduling, and CI/operator broad-check ownership.
+Apply the Test economy section of [Unit Testing](../../rules/unit-testing.md) to every
+test written or run: name the credible failure, run the smallest case that answers it
+first, record a new test's elapsed time, and reduce its cost before shipping when it is
+slow. Apply the shared verification policy for deadlines and Jev scheduling. Never
+inspect or wait for CI from a step.
 
 Apply Jev verification once before expensive/repeated checks for a coherent revision.
 On older cards that defer all automation, record this scheduling adaptation without
@@ -240,8 +244,8 @@ as plain procedural language — imperative mood, one instruction per sentence, 
 before its command, no "should". Label optional exploration questions as product
 discovery, never required verification. Captured output names the command and context
 that produced it. Record every produced
-evidence path in the learning prose. CI-owned gates stay `pending` until the configured
-run returns; they do not require local duplication. Older cards deferring focused checks
+evidence path in the learning prose. CI-owned gates stay `pending`; they need no local
+duplication and this step never waits for them. Older cards deferring focused checks
 to branch review must route them to the step/fix owner, not silently skip them. A step whose other required merge evidence remains unproduced is
 not `as-specified` — preserve it as a truthful `checkpoint` with the gap recorded.
 
@@ -327,9 +331,8 @@ Before committing, inspect the diff and tests once. Confirm that the result hone
 represents its outcome, required callbacks and production paths are observed when
 claimed, resources and failure paths are handled as well as the current evidence allows,
 and any required final visual evidence reflects the current diff. Fix useful gaps and
-repeat only checks affected by those fixes. Reuse valid focused and smoke results; keep
-broad regression checks in configured CI or operator-managed outside agent evidence
-under the shared policy. Stage the coherent repository-local implementation and test
+repeat only checks affected by those fixes. Reuse valid focused and smoke results; broad
+regression checks belong to CI or the operator, never to this step. Stage the coherent repository-local implementation and test
 artifact, excluding spec artifacts, ad hoc screenshots, and unrelated user changes, and
 make one conventional commit for `as-specified`, `adapted`, or `checkpoint`, except when repository
 policy requires generated output in a separate commit. In that case keep the same assigned step,

@@ -12,10 +12,9 @@ Skills format.
 ## Verification across harnesses
 
 The shared [verification and review policy](rules/verification-and-review.md) uses focused
-local feedback and lets available CI own broad checks. Repository instructions supply the
-commands, required gates, and whether CI is usable. Without CI, broad testing remains
-operator-managed outside the agent's recorded evidence; it does not become a local agent
-obligation. Authorized draft PRs can start CI before final review and evidence are ready.
+local feedback and leaves broad checks to CI or the operator after publication. Repository
+instructions supply the commands and required gates. Broad testing never becomes a local
+agent obligation, and no stage waits for CI; publication reads its status once and reports it.
 
 The [Jev tool](scripts/jev/README.md) advises at two checkpoints: verification planning and
 review triage. Pi, Claude CLI, and Codex CLI use the same questions through its CLI or MCP
@@ -81,7 +80,7 @@ running stages individually, recovery, and harness setup.
 5. `spec-run` implements each step with its tests and evidence and commits it. After each
    step it starts a background review and fixes earlier findings before the next step.
 6. Finish the last step’s review/fix cycle, reconcile the base, refresh affected evidence,
-   and push all task-owned commits. Collect configured required CI before ready status.
+   and push all task-owned commits. CI status is reported, not gated on.
    `spec-branch-refine` is available only when explicitly requested or required by project policy.
 7. `spec-work-tour` writes `work-tour.json` and a browser-ready `work-tour.html` for the
    final commit.

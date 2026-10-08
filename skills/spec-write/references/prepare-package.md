@@ -47,7 +47,7 @@ Correct only substantive defects:
   Record the source and affected claim/gate mapping for each correction; do not accept real risks
   without a user or project-policy decision.
 - Missing acceptance coverage or non-automatable criteria.
-- Executable Evidence Plan defects: missing or invalid posture; incomplete AC → CL → FH → EV traceability; an EV item owned by no step or by more than one step; a gate that cannot reject its failure hypothesis; human review/manual QA used as a safety gate; or evidence forms, independence, environments, and deployment proof that do not fit actual risk.
+- Executable Evidence Plan defects: missing or invalid posture; incomplete AC → CL → FH → EV traceability; an EV item owned by no step or by more than one step; a gate that cannot reject its failure hypothesis; a hypothesis with no credible failure mechanism, invented to attach an assertion to a criterion; human review/manual QA used as a safety gate; or evidence forms, independence, environments, and deployment proof that do not fit actual risk.
 - Pre-mortem defects: a missing pre-mortem, or a credible concern with no disposition (AC, step, EV item, or explicitly accepted risk).
 - Steps that are not deterministic, minimal, self-contained, forward-only, or dependency ordered.
 - Non-flat step numbering, mismatched `Covers:` tags, or incorrect complexity/visual flags.
@@ -238,9 +238,9 @@ Make every value concrete and step-specific; use `none` only when the item genui
 not apply. Storybook may provide the rendered target, but Playwright must drive it and
 capture screenshots. The Playwright plan must use the smallest representative states and
 viewports and must support rendering both the reference and production UI when the
-reference is executable. Include an exact focused Playwright command and test file in the
-strict verification block when the repository already has Playwright or the step owns the
-smallest required Playwright setup. Non-visual cards omit the section.
+reference is executable. Include the capture command in the strict verification block;
+include a Playwright test file only for behavior a capture cannot establish, naming that
+behavior. Non-visual cards omit the section.
 
 When writing a card exposes independent objectives or unresolved consequential design
 choices, revise the step decomposition first. Update the spec, index and EV ownership,

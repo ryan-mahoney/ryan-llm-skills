@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "34"
+  version: "35"
 ---
 
 # Spec Run
@@ -41,7 +41,7 @@ reset budgets, replay completed edits or promote models to repair connectivity.
 The whole-step deadline remains a safety bound, not a network-health diagnosis.
 
 
-Apply [Verification and Review](../../rules/verification-and-review.md) for CI/operator ownership
+Apply [Verification and Review](../../rules/verification-and-review.md) for focused-check scheduling
 and batched Jev verification/review-triage checkpoints.
 
 Execute the package produced by `spec-write` within its sourced context and authority. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Prepared inputs record accepted intent; implementation may adapt to repository reality while preserving acceptance and authority.
@@ -165,7 +165,7 @@ For each selected executable step:
    inactive eligible worker or restore canonical inputs after confirming no writer remains.
 5. Consume the learning and commit, perform the completion check below, launch its
    independent background review, and continue. Within publication authority, push useful
-   coherent checkpoints through `spec-pr mode=draft` so CI runs alongside remaining work.
+   coherent checkpoints through `spec-pr mode=draft` so the operator can follow progress.
 
 In managed Pi, checkpoint at the existing dispatch, completion, review, fix and
 publication handoffs, not per tool call and not by polling. Reuse the run ID as the
@@ -308,9 +308,8 @@ Assemble focused results and remaining automated commands, test files, setup, ex
 results, and output paths for publication, deduplicating shared commands. Preserve the
 observed revisions as `observedCommit` and record `applicability` when reusing a result
 for a different candidate `commit`. Do not duplicate worker
-checks in this coordinator or dispatch a final testing step; configured CI owns broad
-checks, while absent CI leaves operator testing outside agent evidence without blocking
-completion. The responsible step/fix owner closes concrete focused acceptance/failure gaps. Keep actual automated/smoke results distinct from unexecuted gates.
+checks in this coordinator or dispatch a final testing step; broad suites belong to CI or
+the operator after publication and are never collected here. The responsible step/fix owner closes concrete focused acceptance/failure gaps. Keep actual automated/smoke results distinct from unexecuted gates.
 
 Then atomically write both `.specs/<feature>/merge-evidence.md` and version 2 `.specs/<feature>/merge-evidence.json`. These are the evidence assembly bound to current HEAD. Record default review completion under the shared **Step Review Completion** contract; the next stage presents this evidence in a work tour, without another review.
 
@@ -327,8 +326,8 @@ The Markdown begins with a level-1 heading and contains:
 `merge-evidence.json` identifies `context.md` by canonical path, mirrors every CL/FH/EV item and its phase from `evidence-plan.json`, adds actual statuses, commands/outcomes/artifacts/proof boundaries, step commits, QA inputs, separate deployment readiness/authority/observations, merge gaps and later-phase gaps, and the full current `commit`. Add `audit` with `scope: steps`, `verdict: pass`, current `commit`, and `artifact: merge-evidence.md` only when the shared Step Review Completion conditions hold. The Markdown includes a compact **Step review completion** section linking original review ranges, fix decisions, and affected evidence, with the final fixes’ review status. Use existing records; do not create another review/report. Ignore legacy `readyForAudit` as a routing instruction.
 
 State gaps honestly. Return `outcome: ready-for-publication` when every indexed step and
-its review/fix cycle is complete and required focused evidence is current. Pending configured
-CI is collected after pushing and still gates PR ready status. Otherwise return a truthful
+its review/fix cycle is complete and required focused evidence is current. CI status is
+read once at publication and reported, never gated on. Otherwise return a truthful
 `checkpoint` with the remaining scoped work. Do not invoke a tour, branch refinement, or
 publication here; those are separately resumable top-level stages.
 

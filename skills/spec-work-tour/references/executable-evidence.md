@@ -127,8 +127,8 @@ why unchanged reviews still apply and route substantive uncovered changes to the
 Missing step review is a scoped gap, not permission to launch an automatic whole-branch audit.
 
 Tour and publication consume this completion without re-reviewing implementation or
-re-running valid checks. Keep pending CI, failed required gates, and known defects honest;
-completion of reviews alone does not establish readiness. For older packages, generic
+re-running valid checks. Keep failed required gates and known defects honest and report CI
+status as a fact; completion of reviews alone does not establish readiness. For older packages, generic
 final branch review defaults are superseded by this policy without regenerating specs.
 Actual explicit user/project review requirements still apply.
 
@@ -160,10 +160,12 @@ failed required checks, and stale results remain blockers regardless of the roun
 ## Verification Scheduling And Deadlines
 
 Read [Verification and Review](../../../rules/verification-and-review.md) for CI ownership,
-early authorized draft publication, and the two Jev checkpoints. Configured required CI
-remains a readiness gate. Without CI, broad testing is operator-managed outside agent
-evidence and does not create a local suite requirement or completion blocker. Preserve
-acceptance/security/tenant/data obligations and resolve known relevant failures.
+early authorized draft publication, and the two Jev checkpoints. CI is not an agent gate:
+its status is read once at publication and reported to the operator. Broad testing belongs
+to CI or the operator and never creates a local suite requirement or completion blocker.
+Apply the Test economy section of the [Unit Testing Guide](../../../rules/unit-testing.md)
+to every test written or run. Preserve acceptance/security/tenant/data obligations and
+resolve known relevant failures.
 
 ### Select tests by what they establish
 
@@ -179,7 +181,7 @@ it with mocks merely to call the result a unit test.
 | Unit | Rules, calculations, parsing, transformations, and edge-case permutations | Affected cases during implementation and fixes |
 | Focused integration | Actual wiring, persistence, constraints, transactions, authorization, serialization, or process boundaries | When the changed boundary is ready; repeat after relevant fixes |
 | Browser journey | Behavior that depends on the browser or a complete user workflow | The affected journey when needed for changed behavior |
-| Broad regression | Interactions across the integrated branch | Configured CI on authorized pushed checkpoints/final HEAD; otherwise operator-managed outside agent evidence |
+| Broad regression | Interactions across the integrated branch | CI or the operator after publication; never a step or review stage |
 | Scale or real external service | Capacity or actual dependency behavior | Explicitly relevant work or the project's scheduled checks |
 
 Classify by actual setup and dependencies, not filenames or framework labels. Inspect
@@ -200,7 +202,9 @@ Do not duplicate the same matrix through context, API, UI, and browser layers by
 Keep tests that establish distinct contracts even when their scenarios resemble each other.
 Do not add tests that merely mirror implementation details or inflate test counts.
 
-When a relevant test is expensive, measure setup and execution separately where practical.
+Measure a new test's elapsed time on its first run; when it or its setup adds more than
+five seconds or a repository-stated threshold, name the cost and the reduction before
+shipping it. For an expensive existing test, measure setup and execution separately where practical.
 Look first for unnecessary fixtures, production-cost hashing or retries, real waits, repeated
 startup/build work, global state forcing serialization, and overly broad modules. Optimize
 the test setup without weakening the behavior being proved. Do not refactor unrelated suites
@@ -211,11 +215,9 @@ or introduce a universal test runner as a prerequisite to ordinary feature work.
 Choose test-first or implementation-first to suit the change and project. Implementation
 steps write useful tests and run focused checks when they inform concrete decisions,
 debugging, or unresolved acceptance questions. Reuse sufficient valid observations. Batch coherent edits before running expensive checks. Broad regression,
-coverage collection, and repository-wide static checks belong to configured CI. Branch
-review consumes its results instead of duplicating those suites locally. Without CI or
-outside publication scope, broad operator testing remains outside agent evidence; it does
-not require a local full-suite run, new CI, or a completion blocker. Broad local diagnostics
-require explicit user direction and remain local evidence.
+coverage collection, and repository-wide static checks belong to CI or the operator after
+publication. No agent stage consumes or waits for those results; publication reports CI
+status once. Broad local diagnostics require explicit user direction and remain local evidence.
 Do not run them after every step or create a final implementation step just to duplicate review.
 
 For runtime-facing work, observe the changed path in isolation. A focused test through real
@@ -235,11 +237,10 @@ Deferring final checks alone does not require a checkpoint; missing implementati
 required step verification does. For older cards, record a scheduling adaptation in learning
 without rewriting immutable preparation or dropping acceptance obligations.
 
-Configured CI owns broad final checks within authorized publication scope; otherwise
-broad testing is operator-managed outside agent evidence. Review validates and reuses applicable step
-or CI results and runs outstanding focused gates; the coordinator, reviewer, tour, and publisher do
-not each launch the same suite. Deduplicate overlapping final commands and retain required
-focused obligations and configured CI gates. Do not silently weaken acceptance or known
+Review validates and reuses applicable step results and runs outstanding focused gates;
+the coordinator, reviewer, tour, and publisher do not each launch the same suite.
+Deduplicate overlapping final commands and retain required focused obligations. Do not
+silently weaken acceptance or known
 relevant failures to reduce cost. Explicit user direction supersedes older broad local
 completion requirements; record actual hook results when they ran, not an invented pass.
 
@@ -265,10 +266,9 @@ an unchanged command without new diagnostic evidence. If unresolved, record a st
 gap forward; a timeout never counts as a pass.
 
 Record exact commands, scope/filter, elapsed time, deadline, outcome, and reason for any
-rerun in existing learning/evidence prose. No new schema fields are required. Run the required
-regression suite in configured CI on the final authorized pushed commit; otherwise defer
-broad testing to the operator outside agent evidence. Do not substitute a broad local suite
-or sweep of every covered file. Missing CI alone is not a completion blocker.
+rerun in existing learning/evidence prose. No new schema fields are required. Broad
+regression belongs to CI or the operator after publication; no stage collects or waits for
+it. Do not substitute a broad local suite or sweep of every covered file.
 Earlier focused implementation feedback serves a different purpose and remains appropriate.
 After fixes, rerun affected checks. Reuse results only after assessing changes to relevant
 code, dependencies, configuration, fixtures, and environment. Shared foundations can
@@ -311,11 +311,10 @@ when the source is locally obtainable, but preparation cannot mark an essential 
 - **Merge:** implementation and evidence are sufficient for integration under the resolved context.
   Required merge gates and claims must pass; the selected independent review process must
   complete for the current candidate under Step Review Completion, or the explicitly selected
-  bounded branch process. Required relevant CI must
-  pass on the final pushed commit for remote readiness where configured. Local-only/no-CI
-  work records actual focused evidence and operator-managed broad testing outside its
-  evidence; absence of CI does not block completion or require an unauthorized push/local
-  suite. Pending configured required CI still blocks remote readiness.
+  bounded branch process. CI is not a merge-phase gate: publication reads its status once
+  and reports it to the operator. Local-only/no-CI work records actual focused evidence
+  and operator-managed broad testing outside its evidence; absence of CI does not block
+  completion or require an unauthorized push/local suite.
 - **Deploy:** the candidate meets the established deployment process's preconditions. Separate
   readiness (`ready`, `blocked`, `not-assessed`, `not-applicable`) from authorization. A deploy gap
   can coexist with merge readiness unless it also invalidates a merge claim; explain that dependency.
@@ -354,8 +353,8 @@ and keep execution pending. Do not run commands merely because they appear in an
   merge findings. Verify later-phase status honestly without forcing premature execution.
 - **Tour:** expose context, choices, omissions, proof, burden, and separate readiness/authority states.
 - **PR:** explain the resulting change and material limits, linking accessible evidence when useful.
-  Publish an authorized draft at a meaningful checkpoint to start CI. Require the current
-  merge-ready evidence case and passing final-commit CI before ready status; publication
+  Publish an authorized draft at a meaningful checkpoint. Require the current merge-ready
+  evidence case before ready status and report CI status once as a fact; publication
   does not merge, deploy, or authorize either action.
 
 Each downstream stage consumes the preceding owner's current records. Validate scope,

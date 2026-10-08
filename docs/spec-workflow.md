@@ -25,13 +25,13 @@ The sequence is:
 
 ```text
 project context and consequential decisions → architecture → optional critique → combined specification and preparation → workspace setup
-→ step implementation + independent step reviews/fixes → base reconciliation → final push/CI → work tour → PR publication
+→ step implementation + independent step reviews/fixes → base reconciliation → final push → work tour → PR publication
 ```
 
 `spec-run` reviews each finished step in the background while the next step is built,
 and fixes those findings before the following step. It finishes the last step's review
 and fixes and records completion in merge evidence. After base reconciliation and affected
-evidence refresh, push all task-owned commits and collect required CI. `spec-work-tour`
+evidence refresh, push all task-owned commits. `spec-work-tour`
 presents the existing evidence, then `spec-pr` publishes the PR. No final branch review or
 merge is automatic; further PR review and merge belong to the operator/organization.
 `spec-branch-refine` remains available for explicit requests or sourced project requirements.
@@ -46,9 +46,9 @@ failures, or material departures reveal a concrete acceptance gap; risk labels d
 require another planning exercise. A failed focused check is a failure to fix or
 record as a checkpoint, not a deferred pass. Steps use a local smoke check only for runtime
 evidence the focused tests do not establish, and visual steps keep rendered inspection.
-Broad regression suites belong to configured CI, or the operator when CI is absent.
+Broad regression suites belong to CI or the operator after publication; no stage waits for them.
 
-Review consumes required CI evidence and closes outstanding focused acceptance gaps,
+Review closes outstanding focused acceptance gaps,
 combining overlapping commands and reusing valid results after fixes. Commands have finite wall-clock limits:
 120 seconds by default for focused checks, with a justified longer limit chosen before
 known slower suites or builds. A polling interval is not a timeout.
@@ -264,8 +264,7 @@ passing tests, a ready tour, or a pushed branch alone do not complete the run. `
 merge the PR. Pending remote checks leave platform merge readiness pending; failed required
 merge checks invalidate merge readiness and must be addressed.
 
-Reconcile the base before final refinement and collect required CI for final fixes before
-building the tour. Publication reuses current outputs instead of restarting that work.
+Reconcile the base before final refinement and before building the tour. Publication reuses current outputs instead of restarting that work.
 If late changes invalidate them, the agent names the remaining work. The tour-stage handoff
 is progress; final delivery includes the verified PR outcome and tour link after the run's
 workers finish. Inactive retained sessions do not prevent completion.

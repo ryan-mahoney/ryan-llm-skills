@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "20"
+  version: "21"
 ---
 
 # Spec End To End
@@ -68,14 +68,14 @@ still apply. Preparation gaps go back to preparation; no blanket revalidation or
 reclassification of an already prepared package.
 
 
-Apply [Verification and Review](../../rules/verification-and-review.md) for CI/operator ownership
+Apply [Verification and Review](../../rules/verification-and-review.md) for focused-check scheduling
 and batched Jev verification/review-triage checkpoints.
 
 Own one continuous run from the user's goal to a published pull request. Compose the sibling spec
 skills; do not reimplement their stage logic. Continue autonomously until `spec-pr` returns a PR URL
-with the requested readiness, or a stage produces a concrete blocker. An early draft starts
-CI but does not end the run. This workflow ends at publication; merge, deployment,
-and production verification remain separate actions under existing authority.
+with the requested readiness, or a stage produces a concrete blocker. An early draft does
+not end the run. This workflow ends when the PR is open with tested, reviewed steps; CI
+results, merge, deployment, and production verification belong to the operator.
 
 ## Continue Through The Authorized Outcome
 
@@ -326,17 +326,16 @@ excluded by the routing policy above:
    **Rebase Safely** procedure before final evidence/tour assembly. Refresh only affected
    evidence; route substantive conflict changes or uncovered implementation back to the
    owning step's review/fix cycle. Reuse unchanged reviewed work and original review ranges.
-   Push every coherent task-owned commit, including final fixes, and collect configured
-   required CI on the final candidate. Without CI, broad testing remains operator-managed
-   outside agent evidence and does not block completion.
+   Push every coherent task-owned commit, including final fixes. Do not collect or wait
+   for CI.
 7. Run `spec-work-tour` from the completed step-review/fix records and current merge evidence.
    Require merge `verdict: ready` at current HEAD; deployment readiness, authority, and
    post-deployment observations remain separate. No final branch review is automatic.
    Invoke `spec-branch-refine` only for an explicit user request or sourced project requirement;
    a `REVIEW_AGENT` assignment, missing branch audit, or legacy default is not such a request.
    Preserve any explicitly selected refinement budget through resume and publication.
-8. Run `spec-pr mode=ready` to publish/update the PR after applicable required CI and known
-   acceptance/review gaps close. Reuse current step completion, evidence, and tour; do not
+8. Run `spec-pr mode=ready` to publish/update the PR after known acceptance/review gaps
+   close. Reuse current step completion, evidence, and tour; do not
    add a review during publication or resume. Push all remaining task-owned commits and
    verify the remote HEAD matches. Preserve draft-only requests and keep unresolved required
    evidence honest in a draft. The operator/organization chooses subsequent PR review and
@@ -382,8 +381,8 @@ required work must be finished and no run-owned worker or required command may s
 be active. Retained inactive sessions are fine. Do not sweep unrelated processes,
 add another code review, or rerun checks to establish this lifecycle state.
 
-During finalization, report the remaining action plainly, such as "Required CI is
-pending" or "Tour generated; publishing the PR." A tour-stage handoff is progress,
+During finalization, report the remaining action plainly, such as "Tour generated;
+publishing the PR." A tour-stage handoff is progress,
 not the user-facing completion response. Deliver the final tour link with the verified
 PR outcome after the run is quiescent. Return a compact summary containing:
 

@@ -9,12 +9,12 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "17"
+  version: "18"
 ---
 
 # Spec Branch Refine
 
-Apply [Verification and Review](../../rules/verification-and-review.md) for CI/operator ownership
+Apply [Verification and Review](../../rules/verification-and-review.md) for focused-check scheduling
 and batched Jev verification/review-triage checkpoints.
 
 > **`.specs/` is standalone working state and is often gitignored.** Read and write it directly; do not depend on git history to recover it. Diffing implementation code is unaffected.
@@ -94,12 +94,11 @@ without launching another review. A stale review after unrelated code changes is
 handoff gap, not permission to silently reset the budget. Then:
 
 1. **Review.** Run `spec-branch-review` for iteration `i` per its contract. The first
-   review consolidates valid focused and final-commit CI results and owns outstanding
-   focused gates; pending gates and `readyForAudit: false` are expected on entry. Push
-   coherent revisions within authorized publication scope to start CI. Collect the relevant
-   existing configured required CI results before final readiness; avoid consuming another
-   review round merely to await them. Without CI, broad testing is operator-managed outside
-   agent evidence and creates no local-suite or completion prerequisite. Let review close actual evidence gaps without a duplicate broad pass. It
+   review consolidates valid focused results and owns outstanding focused gates; pending
+   gates and `readyForAudit: false` are expected on entry. Push coherent revisions within
+   authorized publication scope. CI results belong to the operator after publication; do
+   not collect or await them. Let review close actual evidence gaps without a duplicate
+   broad pass. It
    writes `<spec-dir>/reviews/branch-<i>-review.md` and dedupes against prior
    dismissals itself.
 2. **Read the verdict.** Parse the review file's leading `review:` YAML block — the
@@ -131,8 +130,7 @@ handoff gap, not permission to silently reset the budget. Then:
    this iteration — resolved by a genuinely *different* change, or **dismissed** with a
    class — and may not be marked `fixed` again with the same approach. `spec-branch-fix`
    writes `branch-<i>-fix.md` (with `material_change`), applies fixes, runs tests, and
-   commits the code changes. Push coherent fixes within authorized publication scope so
-   CI runs on the new SHA; final readiness waits for its relevant required results.
+   commits the code changes. Push coherent fixes within authorized publication scope.
    If correction changes a sourced obligation or evidence plan, return to its owning planner,
    re-prepare, and rerun only affected proof before the next audit. Do not escalate verification
    without a named remaining failure or use the loop to authorize live operations.

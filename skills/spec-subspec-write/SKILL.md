@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "26"
+  version: "27"
 ---
 
 # Spec Subspec Write
@@ -135,9 +135,8 @@ Choose `test-first` or `implementation-first` to fit the change and project poli
 Both permit focused automated feedback during implementation when it informs a concrete
 decision/debugging or resolves an acceptance question. In Setup, assign useful affected
 unit feedback to implementation and focused integration checks to the point their boundary
-is ready and informs a concrete decision, and broad regression checks to configured CI on
-authorized pushed checkpoints/final HEAD. Without CI, broad operator testing stays outside
-agent evidence and does not create a local suite or completion prerequisite.
+is ready and informs a concrete decision, and broad regression checks to CI or the
+operator after publication, never to a step.
 Name the failure each layer detects and setup cost when known. Include a bounded app or
 entrypoint smoke check only when it adds evidence the selected tests do not establish;
 name readiness, interaction, cleanup, and deadline when needed. Keep required visual checks.
@@ -146,17 +145,22 @@ Apply the shared **Maintained Test Value** policy. Resolve existing test names a
 before planning a new case or file. In Setup, identify the added failure detection or concrete
 diagnostic/cost improvement, or state that existing evidence suffices. For planned removals,
 name retained protection or the sourced retirement. Do not require new maintained tests per step.
+Apply the Test economy section of that guide: do not plan a case without a named credible
+failure, and do not plan focus, attribute-presence, render-without-crash, or snapshot cases
+without a requirement or bug report naming them.
 
 ### Focused commands only
 
-Every ready plan names exact commands scoped to the changed behavior: a test file, test-name filter, targeted typecheck/build command, or similarly bounded verifier. Keep per-step commands focused; record any required full-suite command once in the evidence plan for CI consumption at
+Every ready plan names exact commands scoped to the changed behavior: a test file, test-name filter, targeted typecheck/build command, or similarly bounded verifier. Each planned new case must be runnable alone by that filter; name the case so the filter matches it. Keep per-step commands focused; record any required full-suite command once in the evidence plan for CI consumption at
 publication when CI is configured; otherwise record operator ownership outside the
 agent-required evidence graph. Broad local diagnostics require explicit user direction. Do not replace repository-specific commands with a generic command. Apply the shared Verification Scheduling And Deadlines policy. Inspect script expansion and filter semantics, combine overlapping cases into one focused invocation when supported, and record the process-level deadline in Setup (120 seconds by default; justify longer limits). Assign each command an execution stage in Setup under the shared policy; do not repeat a unit-test matrix through every integration layer.
 
-For a `Visual: yes` step, name an exact focused Playwright command and repository-relative
-Playwright test file when Playwright already exists or the step owns the smallest required
-setup. Storybook may be the served render target, but Playwright must drive the browser and
-capture every screenshot; do not plan Cypress or another screenshot mechanism.
+For a `Visual: yes` step, the inspected `uishot` captures are the visual evidence; name
+the capture command, route, states, and viewports. Plan a Playwright test file only for
+behavior a capture cannot establish, such as a state transition or a data-driven render,
+and name that behavior. Storybook may be the served render target, but Playwright must
+drive the browser and capture every screenshot; do not plan Cypress or another
+screenshot mechanism.
 
 For a step that promises runtime- or user-observable behavior, include at least one case that starts at the actual production entrypoint/composition, crosses the concrete internal adapter, and observes the promised result. Fakes may replace the final external boundary, but a test that manually constructs the new controller/provider/service behind an interface with no production implementation is not sufficient. A deliberately library-only precursor may defer wiring only when its own acceptance coverage is non-runtime and a named later step explicitly owns integration.
 

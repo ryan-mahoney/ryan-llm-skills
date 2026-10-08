@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "11"
+  version: "12"
 ---
 
 # Spec Work Tour
@@ -312,7 +312,7 @@ action. Keep the full bookkeeping in the manifest rather than reciting it in the
 
 Inside `spec-end-to-end`, return this as a stage handoff and continue to publication.
 Do not announce overall completion or present the tour as the final delivery while
-required CI, publication, or run-owned workers remain active. The coordinator delivers
+publication or run-owned workers remain active. The coordinator delivers
 the final tour link with the verified PR outcome. A standalone tour request may finish
 when its own requested artifacts are ready.
 
