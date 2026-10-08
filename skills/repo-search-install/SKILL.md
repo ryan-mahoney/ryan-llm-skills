@@ -1,6 +1,6 @@
 ---
 name: repo-search-install
-description: Explicitly install the optional repo-search package and register an existing local model root. Use only when the operator asks to set up repository search. Never downloads assets, enrolls a checkout, indexes source, or enables spec use.
+description: Install or repair the optional repo-search package dependencies and register an existing local model root without indexing. Use for package maintenance; use repo-search-setup for a first checkout index. Never downloads assets or enables spec use.
 license: MIT
 metadata:
   author: Ryan Mahoney
@@ -11,6 +11,9 @@ metadata:
 # repo-search-install
 
 Explicit operator setup for the optional package.
+
+For a first usable checkout index, use `repo-search-setup`; this skill handles
+only package installation and model registration.
 
 ## Commands
 

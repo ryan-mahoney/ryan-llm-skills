@@ -31,6 +31,11 @@ cache and index compatibility identity include.
 
 ## Setup
 
+For a first checkout index, `repo-search-setup` copies an existing pinned model
+to `~/.local/share/agent-repo-search/models` outside Git, installs the locked
+dependencies, builds the index, and can enable spec use. It does not download
+model assets. The lower-level commands below remain available for maintenance.
+
 Explicitly install this package's locked dependencies and optionally register an
 existing local model root:
 

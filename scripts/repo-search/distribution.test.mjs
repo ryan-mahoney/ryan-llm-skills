@@ -1,4 +1,4 @@
-// Step 9 distribution tests: four skills, portable copy/link installation and
+// Distribution tests: five skills, portable copy/link installation and
 // the private opt-in bundle. All fixtures live under mkdtemp(tmpdir()) with a
 // synthetic HOME. The final package build and install run for real; no model or
 // network acquisition occurs.
@@ -31,6 +31,7 @@ const SKILL_NAMES = [
   "repo-search-install",
   "repo-search-index",
   "repo-search-status",
+  "repo-search-setup",
 ];
 
 const tempDirs = [];
@@ -231,6 +232,7 @@ test("default bundle excludes the private engine; private bundle has exact sourc
   const repoBundle = join(tmpDist, "repo-search");
   const required = [
     ...SKILL_NAMES.map((name) => join("skills", name, "SKILL.md")),
+    "skills/repo-search-setup/scripts/setup.mjs",
     "scripts/repo-search/package.json",
     "scripts/repo-search/bun.lock",
     "scripts/repo-search/README.md",

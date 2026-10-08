@@ -1,6 +1,6 @@
 ---
 name: repo-search
-description: Discover relevant code in an enrolled checkout with the optional local repo-search engine. Use for bounded behavioral discovery when an exact rg query is not enough, and when the operator asks to search a repository semantically. Read-only: it never builds, installs, configures, or refreshes an index.
+description: "Discover relevant code in an enrolled checkout with the optional local repo-search engine. Use for bounded behavioral discovery when an exact rg query is not enough, and when the operator asks to search a repository semantically. Read-only: it never builds, installs, configures, or refreshes an index."
 license: MIT
 metadata:
   author: Ryan Mahoney

@@ -939,5 +939,5 @@ if [ "${REPO_SEARCH_BUNDLE:-0}" = "1" ]; then
     "repo-search" \
     "Repo Search Skills" \
     "Private optional repository search engine and lifecycle skills." \
-    repo-search repo-search-install repo-search-index repo-search-status
+    repo-search repo-search-install repo-search-index repo-search-status repo-search-setup
 fi

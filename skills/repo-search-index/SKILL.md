@@ -1,6 +1,6 @@
 ---
 name: repo-search-index
-description: Build, incrementally update, reindex, and opt in or out of the optional local repo-search index. Use when the operator explicitly asks to index or refresh a checkout. One lifecycle owner; failures leave the prior current generation intact.
+description: Build, incrementally update, reindex, and opt in or out of an optional local repo-search index using an already available model root. Use for manual index maintenance; use repo-search-setup for first-time end-to-end setup.
 license: MIT
 metadata:
   author: Ryan Mahoney
@@ -11,6 +11,9 @@ metadata:
 # repo-search-index
 
 One lifecycle owner for explicit indexing and opt-in.
+
+For a first usable checkout index with model files kept outside Git, use
+`repo-search-setup`.
 
 ## Commands
 
