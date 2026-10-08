@@ -9,7 +9,6 @@ import { createHash } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import { open, opendir, lstat, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { execFile } from 'node:child_process';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
 import { publicHint } from '../../pi/extensions/spec-runtime/monitor.mjs';
@@ -28,6 +27,8 @@ export const SENTINEL_LIMITS = Object.freeze({
   activityBytes: 32768,
   totalBytes: 4 * 1024 * 1024,
   quietActivityMs: 120000,
+  recentActivityMs: 24 * 60 * 60 * 1000,
+  activityEntries: 10000,
 });
 
 const RECEIPT_KEYS = ['id', 'assignment_id', 'package', 'step', 'checkout', 'parent_session', 'owner_session', 'editor_session',
@@ -57,12 +58,34 @@ const samePath = async (left, right) => {
   return await realpath(left).catch(() => null) === right;
 };
 
-// Bounded read-only Git identity query; the mutating dispatch resolver is
-// never invoked for observation.
-const gitCommonDir = checkout => new Promise(settled => {
-  execFile('git', ['-C', checkout, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
-    { timeout: 5000 }, (error, stdout) => settled(error || !stdout.trim() ? null : stdout.trim()));
-});
+// Resolve ordinary Git checkout/worktree metadata directly. Observation must
+// not depend on spawning Git: a host spawn failure used to discard every repo.
+// No source, config commands or hooks are executed. Unsupported/unreadable layouts
+// remain unknown, and a worktree's .git file still resolves to its primary common
+// directory so copied .specs packages cannot masquerade as canonical packages.
+async function gitCommonDir(checkout, budget) {
+  try {
+    const marker = join(checkout, '.git');
+    const info = await lstat(marker);
+    let gitdir;
+    if (info.isDirectory()) gitdir = await realpath(marker);
+    else if (info.isFile()) {
+      const pointer = await readBounded(marker, 8192, budget);
+      const match = pointer.outcome === 'ok' && /^gitdir: (.+)\r?\n?$/.exec(pointer.text);
+      if (!match) return null;
+      gitdir = await realpath(resolve(checkout, match[1].trim()));
+    } else return null;
+    const head = await readBounded(join(gitdir, 'HEAD'), 8192, budget);
+    if (head.outcome !== 'ok' || !/^(?:ref: refs\/[^\s]+|[a-f0-9]{40,64})\s*$/.test(head.text)) return null;
+    const common = await readBounded(join(gitdir, 'commondir'), 8192, budget);
+    if (!['ok', 'missing'].includes(common.outcome)) return null;
+    const directory = common.outcome === 'ok'
+      ? await realpath(resolve(gitdir, common.text.trim())) : gitdir;
+    if (!(await stat(join(directory, 'objects'))).isDirectory()
+      || !(await stat(join(directory, 'refs'))).isDirectory()) return null;
+    return directory;
+  } catch { return null; }
+}
 
 // Additive identity helper: one hash formula for workspace directories and
 // condition identities. Scope separation keeps routed workspaces distinct.
@@ -148,7 +171,7 @@ function makeBudget() {
 
 // Sources are opened only as in-containment regular files: a special file or
 // a foreign symlink is an explicit uncertainty, never an open or a follow.
-const OPEN_REGULAR = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0);
+const OPEN_REGULAR = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0);
 
 async function readBounded(file, maxBytes, budget, { within = null } = {}) {
   // The budget is checked before the read and enforced again on the actual
@@ -250,14 +273,28 @@ function compareCandidates(a, b) {
     || String(a.id).localeCompare(String(b.id));
 }
 
-const stepName = steps => step => steps.find(item => item.step === step)?.name ?? null;
-
-function obligationForStep(receiptStep, steps) {
+// Position in the prepared index is not accepted completion. Worker exit and
+// later step assignment do not establish how many earlier steps were accepted.
+function specProgress(receiptStep, index) {
   const match = /(?:^|[/\\])step-(\d+)-subspec\.md$/.exec(receiptStep ?? '');
-  if (!match) return null;
-  const number = Number(match[1]);
-  const name = stepName(steps)(number);
-  return `step ${number} of ${steps.length}${name ? `: ${publicHint(name)}` : ''}`;
+  const number = match ? Number(match[1]) : null;
+  const position = index.steps.findIndex(item => item.step === number);
+  return {
+    basis: 'step-position',
+    total_steps: index.source ? index.steps.length : null,
+    current_step: number,
+    current_position: position < 0 ? null : position + 1,
+    current_name: position < 0 ? null : publicHint(index.steps[position].name),
+    accepted_steps: null,
+  };
+}
+
+function obligationForStep(progress) {
+  if (progress.current_step === null) return null;
+  const label = progress.current_position === null
+    ? `step ${progress.current_step} (spec position unknown)`
+    : `step ${progress.current_position} of ${progress.total_steps}`;
+  return `${label}${progress.current_name ? `: ${progress.current_name}` : ''}`;
 }
 
 // Conditions are derived facts in memory. They describe what was observed and
@@ -342,14 +379,41 @@ export function renderWorkspace(snapshot) {
       lines.push(renderDetail('    ', run.conditions.map(condition => `${condition.kind} [${condition.severity}/${condition.state}]`).join(' · ')));
     }
   }
-  if (!runs.length) lines.push('  No observed runs.');
+  if (!runs.length) lines.push(['unavailable', 'stale'].includes(coverage.state)
+    ? '  Workspace observation unavailable; running work is unknown.' : '  No observed runs.');
+  if (snapshot.activity_filter?.window_ms) lines.push(`Activity window: last 24 hours · ${snapshot.activity_filter.hidden_packages} inactive package(s), ${snapshot.activity_filter.hidden_completed_packages ?? 0} completed package(s) hidden; status --all includes history.`);
   if (snapshot.discovery?.root) lines.push(renderLine(`Repository discovery: ${snapshot.discovery.root} (nested repositories included)`));
   if (coverage.reasons.length) lines.push(renderLine(`Coverage notes: ${coverage.reasons.join(', ')}`));
   return lines;
 }
 
+// Directory mtimes do not advance when an existing descendant is edited. Check
+// bounded metadata recursively, never follow symlinks or read file contents.
+// Uncertain scans stay visible instead of being classified as inactive.
+async function packageRecentlyModified(directory, cutoff, scan) {
+  const pending = [directory];
+  while (pending.length) {
+    if (++scan.entries > SENTINEL_LIMITS.activityEntries) return null;
+    const current = pending.pop();
+    let info;
+    try { info = await lstat(current); } catch { return null; }
+    if (info.isSymbolicLink()) continue;
+    if (info.mtimeMs >= cutoff) return true;
+    if (!info.isDirectory()) continue;
+    let handle;
+    try {
+      handle = await opendir(current);
+      for await (const entry of handle) {
+        if (scan.entries + pending.length >= SENTINEL_LIMITS.activityEntries) return null;
+        if (!entry.isSymbolicLink()) pending.push(join(current, entry.name));
+      }
+    } catch { return null; }
+  }
+  return false;
+}
+
 export async function collectWorkspace({ roots = [], packages = [], enrollmentErrors = [], discovery = null, indexDir = join(homedir(), '.pi/agent/spec-runtime'),
-  now = Date.now, agentDir, scope } = {}) {
+  now = Date.now, agentDir, scope, includeInactive = false } = {}) {
   const tick = clock(now);
   const readTime = clockIso(tick);
   const budget = makeBudget();
@@ -370,9 +434,8 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
     knownOmitted += enrolled.length - SENTINEL_LIMITS.roots;
   }
 
-  // Keep observation off the host's synchronous Git path. Cache repository
-  // identity only for this read, so sibling packages and duplicate index entries
-  // share one bounded query without hiding repository changes on later reads.
+  // Cache asynchronous Git metadata identity only for this read. Sibling packages
+  // and duplicate index entries share bounded reads without hiding changes later.
   const identities = new Map();
   const canonicalPackage = async path => {
     const target = await realpath(path);
@@ -382,7 +445,7 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
     if (basename(specs) !== '.specs') throw new Error('package must be a direct child of the primary checkout .specs directory');
     const primary = await realpath(dirname(specs));
     if (!identities.has(primary)) {
-      const found = await gitCommonDir(primary);
+      const found = await gitCommonDir(primary, budget);
       identities.set(primary, found ? await realpath(found).catch(() => null) : null);
     }
     const common = identities.get(primary);
@@ -462,12 +525,35 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
     }
   }
 
+  const activityFilter = {
+    window_ms: includeInactive ? null : SENTINEL_LIMITS.recentActivityMs,
+    cutoff: includeInactive ? null : new Date(Date.parse(readTime) - SENTINEL_LIMITS.recentActivityMs).toISOString(),
+    hidden_packages: 0,
+    hidden_completed_packages: 0,
+  };
+  const scan = { entries: 0 };
   const collected = [];
   let staleReceipts = false;
   const note = reason => { if (reason && !reasons.includes(reason)) reasons.push(reason); };
   const noteUnknown = reason => { if (reason && !reasons.includes(reason)) { reasons.push(reason); unknownOmission = true; } };
   for (const fact of facts.values()) {
-    collected.push(...await collectPackage(fact, budget, note, noteUnknown));
+    if (!includeInactive) {
+      const recent = await packageRecentlyModified(fact.packagePath, Date.parse(activityFilter.cutoff), scan);
+      if (recent === false) { activityFilter.hidden_packages++; continue; }
+      if (recent === null) noteUnknown(`activity-filter-unknown: ${fact.packagePath}`);
+    }
+    const candidates = await collectPackage(fact, budget, note, noteUnknown);
+    // Keep the latest assignment as the package's current handoff, including
+    // the interval after its worker exits and before review/next-step dispatch.
+    fact.currentAssignment = [...candidates].sort((a, b) =>
+      (Date.parse(b.receipt.started_at ?? b.receipt.dispatch_requested_at) || 0)
+      - (Date.parse(a.receipt.started_at ?? a.receipt.dispatch_requested_at) || 0)
+      || compareCandidates(a, b))[0]?.id ?? null;
+    if (!includeInactive && candidates.length && await packageCompleted(fact, candidates, budget, noteUnknown)) {
+      activityFilter.hidden_completed_packages++;
+      continue;
+    }
+    collected.push(...candidates);
     if (fact.staleReceipts) staleReceipts = true;
   }
 
@@ -497,46 +583,91 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
       : (knownOmitted || reasons.length || unknownOmission) ? 'partial' : 'complete';
   }
   const coverage = makeCoverage(state, reasons, unknownOmission ? null : knownOmitted, budget.bytes, readTime);
-  return reduceConditions({ version: 1, workspace, coverage, runs, spec_roots: [...new Set([...facts.values()].map(f => dirname(f.packagePath)))], ...(discovery ? { discovery } : {}) });
+  return reduceConditions({ version: 1, workspace, coverage, activity_filter: activityFilter, runs, spec_roots: [...new Set([...facts.values()].map(f => dirname(f.packagePath)))], ...(discovery ? { discovery } : {}) });
+}
+
+// A workflow completion checkpoint is decisive; a terminal worker receipt is
+// not. Older packages use matching ready-tour and PR publication records. A
+// subsequent dispatch or noncomplete checkpoint keeps reopened work visible.
+async function packageCompleted(fact, candidates, budget, note) {
+  const checkpoints = await readCheckpoints(fact, budget);
+  for (const reason of fact.checkpointNotes) note(reason);
+  if (fact.checkpointNotes.length) return false;
+  const relevant = checkpoints.filter(item => item.package === fact.packagePath);
+  let completedAt;
+  if (relevant.length) {
+    if (relevant.some(item => item.state !== 'complete' || !validTime(item.observed_at))) return false;
+    completedAt = Math.max(...relevant.map(item => Date.parse(item.observed_at)));
+  } else {
+    const read = async (name, allow) => {
+      const result = await readJson(join(fact.packagePath, name), SENTINEL_LIMITS.smallJsonBytes, budget,
+        { within: fact.packagePath, prefix: 'completion', allow });
+      if (result.outcome !== 'ok' && result.outcome !== 'missing') note(result.reason ?? `completion-unavailable: ${name}`);
+      return result.outcome === 'ok' ? result.record : null;
+    };
+    const pr = await read('pr-url.json', value => value && typeof value === 'object'
+      ? { package: value.package, kind: value.kind, commit: value.commit, submitted_at: value.submitted_at, draft: value.draft, url: value.url } : null);
+    if (!pr || pr.package !== fact.packagePath || pr.kind !== 'pr_submission' || pr.draft === true
+      || !validTime(pr.submitted_at) || !/^https:\/\//.test(pr.url ?? '') || !/^[a-f0-9]{40,64}$/.test(pr.commit ?? '')) return false;
+    const tour = await read('work-tour.json', value => value && typeof value === 'object'
+      ? { verdict: value.verdict, commit: value.commit } : null);
+    if (tour?.verdict !== 'ready' || tour.commit !== pr.commit) return false;
+    completedAt = Date.parse(pr.submitted_at);
+  }
+  return !candidates.some(({ receipt }) => {
+    const started = Date.parse(receipt.started_at ?? receipt.dispatch_requested_at);
+    return !Number.isFinite(started) || started > completedAt;
+  });
 }
 
 // Receipts are examined in one bounded pass: identity mismatches are stale
 // evidence and the run is skipped, never re-attributed to another identity.
 async function collectPackage(fact, budget, note, noteUnknown) {
   const runsDir = join(fact.packagePath, 'runtime', 'runs');
-  const listed = await listDirectory(runsDir, SENTINEL_LIMITS.receiptFiles,
-    entry => entry.isFile() && entry.name.endsWith('.json') && !entry.name.includes('-activity'));
-  const found = [];
-  if (listed.entries === null) {
-    // A package without a runs directory has no receipts to observe.
-    if (listed.code !== 'ENOENT') noteUnknown(`receipts-unavailable: ${runsDir} (${listed.code})`);
-    return found;
-  }
-  if (listed.code) noteUnknown(`receipts-unavailable: ${runsDir} (${listed.code})`);
-  if (listed.truncated) noteUnknown(`receipts-cap: ${fact.packagePath}`);
-  for (const entry of listed.entries) {
-    const file = join(runsDir, entry.name);
-    const id = entry.name.slice(0, -'.json'.length);
+  const found = new Map();
+  const readReceipt = async (file, expectedId = null) => {
     const result = await readJson(file, SENTINEL_LIMITS.smallJsonBytes, budget, {
       prefix: 'receipt', oversize: false, within: fact.packagePath,
       // Only these receipt fields are observable; result, error, token and
       // usage/cost never enter the snapshot.
       allow: value => value && typeof value === 'object' && typeof value.id === 'string' ? value : null,
     });
-    if (result.outcome === 'read-budget') { noteUnknown(result.reason); break; }
-    if (result.outcome === 'oversized') { note(`receipt-oversized: ${file}`); continue; }
-    if (result.outcome !== 'ok') { note(`receipt-invalid: ${file}`); continue; }
+    if (result.outcome === 'read-budget') { noteUnknown(result.reason); return false; }
+    if (result.outcome === 'missing') return true;
+    if (result.outcome === 'oversized') { note(`receipt-oversized: ${file}`); return true; }
+    if (result.outcome !== 'ok') { note(`receipt-invalid: ${file}`); return true; }
     const value = result.record;
-    if (value.id !== id || (typeof value.package === 'string' && !(await samePath(value.package, fact.packagePath)))) {
+    if ((expectedId !== null && value.id !== expectedId)
+      || (typeof value.package === 'string' && !(await samePath(value.package, fact.packagePath)))) {
       note(`receipt-mismatch: ${file}`);
       fact.staleReceipts = true;
-      continue;
+      return true;
     }
     const receipt = {};
     for (const key of RECEIPT_KEYS) if (typeof value[key] === 'string') receipt[key] = value[key];
-    found.push({ fact, id, receipt, source: [{ file, digest: result.digest }], bytes: result.bytes });
+    if (!found.has(value.id)) found.set(value.id, { fact, id: value.id, receipt, source: [{ file, digest: result.digest }], bytes: result.bytes });
+    return true;
+  };
+
+  // The current receipt has a stable path. Read it directly so logs and result
+  // files cannot push the latest run beyond the bounded directory scan.
+  if (!await readReceipt(join(fact.packagePath, 'runtime', 'run.json'))) return [...found.values()];
+  const listed = await listDirectory(runsDir, SENTINEL_LIMITS.receiptFiles,
+    entry => entry.isFile() && entry.name.endsWith('.json')
+      && !entry.name.endsWith('-verification.json') && !entry.name.endsWith('-completion.json'));
+  if (listed.entries === null) {
+    // A package without a runs directory has no receipts to observe.
+    if (listed.code !== 'ENOENT') noteUnknown(`receipts-unavailable: ${runsDir} (${listed.code})`);
+    return [...found.values()];
   }
-  return found;
+  if (listed.code) noteUnknown(`receipts-unavailable: ${runsDir} (${listed.code})`);
+  if (listed.truncated) noteUnknown(`receipts-cap: ${fact.packagePath}`);
+  for (const entry of listed.entries) {
+    const file = join(runsDir, entry.name);
+    const id = entry.name.slice(0, -'.json'.length);
+    if (!await readReceipt(file, id)) break;
+  }
+  return [...found.values()];
 }
 
 async function observeRun(candidate, budget, note, readTime) {
@@ -583,11 +714,14 @@ async function observeRun(candidate, budget, note, readTime) {
   const checkpoints = await readCheckpoints(fact, runBudget);
   for (const reason of fact.checkpointNotes) mark(reason);
   let workflow_id = null;
-  let obligation = obligationForStep(receipt.step, steps.steps);
+  let workflow_state = null;
+  const spec_progress = specProgress(receipt.step, steps);
+  let obligation = obligationForStep(spec_progress);
   for (const checkpoint of checkpoints) {
     if (checkpoint.package !== fact.packagePath) continue;
     if (!checkpoint.workers.includes(candidate.id) && !(receipt.assignment_id && checkpoint.workers.includes(receipt.assignment_id))) continue;
     workflow_id = checkpoint.workflow;
+    workflow_state = typeof checkpoint.state === 'string' ? checkpoint.state : null;
     obligation = checkpoint.summary ? publicHint(checkpoint.summary) : obligation;
     const entry = fact.sources.get(`checkpoint:${checkpoint.workflow}`);
     if (entry) source.push({ file: entry.file, digest: entry.digest });
@@ -607,7 +741,7 @@ async function observeRun(candidate, budget, note, readTime) {
     const key = resolve(receipt.checkout);
     if (!fact.checkouts.has(key)) {
       const real = await realpath(key).catch(() => null);
-      const commonDir = real ? await gitCommonDir(real) : null;
+      const commonDir = real ? await gitCommonDir(real, runBudget) : null;
       fact.checkouts.set(key, real && commonDir && await realpath(commonDir).catch(() => null) === fact.common
         ? { ok: true, path: real }
         : { ok: false, reason: real && commonDir ? `checkout-foreign: ${key}` : `checkout-unavailable: ${key}` });
@@ -621,10 +755,13 @@ async function observeRun(candidate, budget, note, readTime) {
     package: fact.packagePath,
     checkout,
     workflow_id,
+    workflow_state,
+    is_current_assignment: fact.currentAssignment === candidate.id,
     assignment_id: typeof receipt.assignment_id === 'string' ? receipt.assignment_id : candidate.id,
     coordinator_session: typeof receipt.parent_session === 'string' ? receipt.parent_session : null,
     execution,
     obligation,
+    spec_progress,
     activity: activity.activity,
     incidents: incidents.map(({ source, ...item }) => item),
     actions: actions.map(({ source, ...item }) => item),
@@ -645,7 +782,8 @@ async function readStepIndex(fact, budget) {
       if (!value || typeof value !== 'object' || !Array.isArray(value.steps)) return null;
       const steps = [];
       for (const item of value.steps) {
-        if (!item || typeof item !== 'object' || !Number.isInteger(item.step)) continue;
+        if (!item || typeof item !== 'object' || !Number.isSafeInteger(item.step) || item.step < 1
+          || steps.some(existing => existing.step === item.step)) return null;
         steps.push({ step: item.step, name: typeof item.name === 'string' ? item.name : null });
       }
       return steps.sort((a, b) => a.step - b.step);
@@ -787,6 +925,8 @@ async function readCheckpoints(fact, budget) {
         if (!value || typeof value !== 'object' || typeof value.package !== 'string') return null;
         return {
           package: value.package,
+          state: value.version === 1 && value.workflow_id === entry.name ? value.state : null,
+          observed_at: validTime(value.observed_at),
           summary: value.obligation && typeof value.obligation === 'object' && typeof value.obligation.summary === 'string' ? value.obligation.summary : null,
           workers: Array.isArray(value.workers) ? value.workers.filter(item => item && typeof item.id === 'string').map(item => item.id) : [],
         };

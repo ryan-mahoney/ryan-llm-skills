@@ -4,6 +4,47 @@ This read-only CLI finds Pi sessions and measures orchestration without sending 
 requests, executing logged commands, changing workers, or printing prompts and source
 contents. Node.js is the only dependency.
 
+## Sentinel dashboard
+
+In an interactive Pi session, starting `/spec-sentinel`, `observe`, `shadow`, or
+`recover` starts an owned localhost dashboard and opens it in the default browser.
+`/spec-sentinel status` prints its URL. `off` and session shutdown stop that service;
+a status-only read after off does not reopen it. Loading Pi alone starts nothing.
+Mode changes reuse the same dashboard. A failed browser launch leaves its URL
+available to open manually, and a failed service launch does not stop observation.
+
+The dashboard uses the Adjacent workspace shell's dark split-pane layout. Search
+repositories/packages, filter runs, then select a run for activity, obligations,
+incidents, actions, coverage and paths. Freshness and observer heartbeat are shown
+separately. It reads existing JSON exports every five seconds, without new model
+calls or repository scans. No worker controls are exposed. Task activity and obligation
+text render Markdown emphasis, code, headings, lists and HTTP(S) links. Raw HTML
+is displayed as text; other link schemes cannot execute. Existing public-hint
+redaction and length limits still apply before display.
+
+Run cards and details show the assigned step’s position, name and total prepared
+steps from the canonical primary package’s bounded `spec-steps.json` read. The
+bar represents position in the sorted index (including sparse step numbers),
+not accepted completion. Worker exit does not increase an accepted count.
+Missing or invalid indices show unknown size; an empty index shows no prepared
+steps. Snapshots expose these facts as `spec_progress`; `accepted_steps` remains
+null because observation does not establish acceptance.
+
+For an independent viewer:
+
+```bash
+node ~/.agents/scripts/spec-observe/dashboard.mjs
+# Open http://127.0.0.1:4319/
+```
+
+Optional `--port` and `--agent-dir` override the port and Pi state directory.
+Only localhost can access the read-only page and state endpoint. Stop this manual
+server with Ctrl+C; sentinel does not own or stop independently launched viewers.
+
+`dashboard.html` contains its compiled Tailwind CSS and JavaScript, with no CDN or
+build step. It can also open directly from disk: use **Import snapshot** to inspect
+a saved observer JSON file offline. Live refresh requires the local service.
+
 ## Workspace sentinel status
 
 ```bash
@@ -24,6 +65,12 @@ children and are bounded by depth, entries, directory count and cooperative elap
 budget. Incomplete coverage is reported. The reader validates canonical primary
 packages; observation never grants recovery authority or makes a model call. Existing
 `list|runs|report|metrics` commands are unchanged.
+
+The dashboard keeps workflow state separate from worker execution. The latest
+assignment remains under **Active** when its worker has completed but its workflow
+still has a ready, waiting, blocked, held, or decision-required obligation. Historical
+completed attempts stay historical. For example, a ready workflow is labelled
+**Ready for next action**, while the detail preserves the worker's completed status.
 
 ## Workflow metrics
 

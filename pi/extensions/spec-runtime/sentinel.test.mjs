@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 
-import { reduceVerificationResult, readVerificationIncidents, writeVerificationIncidents, verificationIncidentsPath, createVerificationRecorder, recordCheckpoint, readInboxGuard, checkpointPath, readCheckpointRecord, observeInput, reconcileRuntimeReturn, createSentinelAuthority, createDiagnosisController, activatePolicy, disablePolicy, readPolicyGuard, reserveIntent, finishIntent, decideSettle, handleBeforeSettle, buildDiagnosisPacket, validateDiagnosisResult, diagnoseIncident, readDiagnosisAttempt, diagnosisAttemptPath } from './sentinel.mjs';
+import { reduceVerificationResult, readVerificationIncidents, writeVerificationIncidents, verificationIncidentsPath, createVerificationRecorder, recordCheckpoint, readInboxGuard, checkpointPath, readCheckpointRecord, observeInput, reconcileRuntimeReturn, createSentinelAuthority, createDiagnosisController, activatePolicy, activateRuntimePolicy, disablePolicy, readPolicyGuard, reserveIntent, finishIntent, decideSettle, handleBeforeSettle, buildDiagnosisPacket, validateDiagnosisResult, diagnoseIncident, readDiagnosisAttempt, diagnosisAttemptPath } from './sentinel.mjs';
 
 const FIXED = Date.parse('2026-10-06T12:00:00Z');
 const record = { package: '/tmp/pkg', assignment_id: 'assign-1', checkout: '/tmp/repo' };
@@ -1022,6 +1022,24 @@ function armFixture(packagePath, base, policyOver = {}) {
   const receipt = activatePolicy(authority, activateArgs(packagePath, file));
   return { authority, file, receipt };
 }
+
+test('sentinel runtime mode: no policy file or expiry, with immediate controller revocation', t => {
+  const { packagePath } = canonicalFixture(t);
+  recordCheckpoint(baseCheckpoint(packagePath));
+  const checkpoint = readCheckpointRecord(packagePath, 'wf-1');
+  const authority = createSentinelAuthority();
+  let active = true;
+  const grant = activateRuntimePolicy(authority, { checkpoint, mode: 'shadow', model: 'openrouter/inception/mercury-2.5:high',
+    coordinator_session: 'session-1', isActive: () => active, now: () => FIXED });
+  assert.equal(grant.expires_at, null);
+  assert.equal(readPolicyGuard(authority, { now: () => FIXED + 30 * 86400000 }).state, 'ready');
+  assert.equal(readPolicyGuard(authority, { workflow_id: 'another-workflow', now: () => FIXED }).state, 'blocked');
+  active = false;
+  assert.equal(readPolicyGuard(authority, { now: () => FIXED }).state, 'blocked');
+  assert.throws(() => activateRuntimePolicy(createSentinelAuthority(), { checkpoint, mode: 'recover', model: 'test/model',
+    coordinator_session: 'session-other', isActive: () => true, now: () => FIXED }), /coordinator session|checkpoint/);
+  assert.equal(readPolicyGuard(createSentinelAuthority(), { now: () => FIXED }).armed, false, 'disk receipts never reactivate a controller');
+});
 
 test('sentinel policy: validates schema, scope, expiry and arming before activating', t => {
   const { packagePath, base } = canonicalFixture(t);

@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { EventEmitter } from 'node:events';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -63,6 +64,26 @@ test('checkpoint records missing evidence honestly and rejects escaped or symlin
   assert.throws(() => submitCompletion(f.r, { ...f.input, evidence: [{ ...f.input.evidence[0], artifact: '/tmp/escape' }] }), /canonical root/);
   rmSync(join(f.pkg, 'learnings'), { recursive: true }); symlinkSync(f.root, join(f.pkg, 'learnings'));
   assert.throws(() => submitCompletion(f.r, f.input), /Symlink/);
+});
+
+test('progress watcher failure is reported and disposed without crashing the host', async t => {
+  const f = fixture(t), watchers = [], errors = [];
+  const close = watchProgress(f.pkg, error => errors.push(error), () => {}, {
+    watchDirectory: () => {
+      const watcher = new EventEmitter();
+      watcher.closed = false;
+      watcher.close = () => { watcher.closed = true; };
+      watchers.push(watcher);
+      return watcher;
+    },
+  });
+  t.after(close);
+  const error = Object.assign(new Error('too many open files'), { code: 'EMFILE' });
+  assert.doesNotThrow(() => watchers[0].emit('error', error));
+  assert.equal(watchers[0].closed, true);
+  assert.deepEqual(errors, [error]);
+  await close();
+  assert.ok(watchers.every(watcher => watcher.closed));
 });
 
 test('review arrival refreshes index and progress without a model request or acceptance claim', async t => {

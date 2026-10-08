@@ -54,15 +54,13 @@ function activity(packagePath, id, role, state) {
 
 const condition = (run, kind) => run.conditions.find(item => item.kind === kind);
 
-test('workspace identity uses asynchronous Git once per repository per refresh', async t => {
+test('workspace identity uses bounded metadata even when spawning Git is unavailable', async t => {
   const f = sandbox(t);
   const repo = primary(f.dir, 'shared-primary');
   const one = pack(repo, 'one'), two = pack(repo, 'two');
   receipt(one, { id: 'one', assignment_id: 'one', state: 'completed' });
   receipt(two, { id: 'two', assignment_id: 'two', state: 'completed' });
-  const exec = childProcess.execFile;
-  let queries = 0;
-  t.mock.method(childProcess, 'execFile', (...args) => { queries++; return exec(...args); });
+  t.mock.method(childProcess, 'execFile', () => { throw Object.assign(new Error('spawn EBADF'), { code: 'EBADF' }); });
   t.mock.method(childProcess, 'execFileSync', () => { throw new Error('Synchronous Git blocks the host'); });
   syncBuiltinESMExports();
   t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
@@ -71,9 +69,11 @@ test('workspace identity uses asynchronous Git once per repository per refresh',
   const first = await collectWorkspace(input);
   assert.equal(first.runs.length, 2);
   assert.equal(first.coverage.state, 'complete');
-  assert.equal(queries, 1, 'sibling packages and repeated pointers share identity');
-  await collectWorkspace(input);
-  assert.equal(queries, 2, 'the next refresh revalidates repository identity');
+  writeFileSync(join(repo, '.git', 'HEAD'), 'invalid Git HEAD');
+  const invalidated = await collectWorkspace(input);
+  assert.equal(invalidated.runs.length, 0, 'the next refresh revalidates repository metadata');
+  assert.equal(invalidated.coverage.state, 'unavailable');
+  assert.match(renderWorkspace(invalidated).join('\n'), /running work is unknown/);
 });
 
 test('same-basename packages keep distinct identities and a linked-worktree copy is not canonical', async t => {
@@ -286,13 +286,20 @@ test('retained non-receipt entries cannot make the receipt walk unbounded', asyn
   receipt(packagePath, { id: 'run-kept', assignment_id: 'assign-kept', state: 'running', started_at: ago(60000) });
   const runsDir = join(packagePath, 'runtime', 'runs');
   for (let index = 0; index < 450; index++) writeFileSync(join(runsDir, `retained-${String(index).padStart(3, '0')}.jsonl`), 'retained\n');
+  // A current run must remain observable even when the bounded directory walk
+  // cannot reach its archived receipt.
+  writeFileSync(join(packagePath, 'runtime', 'run.json'), JSON.stringify({
+    id: 'run-current', package: packagePath, assignment_id: 'assign-current',
+    state: 'running', started_at: ago(1000),
+  }));
 
   const snapshot = await collectWorkspace({ roots: [join(f.dir, 'retained')], indexDir: f.indexDir, now });
   // The examination ceiling is an explicit unknown omission, never a silent
   // full scan or a guessed complete set.
   assert.ok(snapshot.coverage.reasons.some(reason => reason.startsWith('receipts-cap')), JSON.stringify(snapshot.coverage.reasons));
   assert.equal(snapshot.coverage.omitted, null);
-  assert.ok(snapshot.runs.length <= 1);
+  assert.ok(snapshot.runs.some(run => run.assignment_id === 'assign-current' && run.execution === 'running'));
+  assert.ok(snapshot.runs.length <= 2);
 });
 
 test('special-file and symlinked sources are rejected without being opened or followed', async t => {
@@ -516,4 +523,118 @@ test('production retained incidents and action outcomes appear as bounded source
   const invalid = await collectWorkspace(options);
   assert.equal(invalid.coverage.state, 'partial');
   assert.equal(condition(invalid.runs[0], 'repeated-verification-failure'), undefined);
+});
+
+test('24-hour activity filter hides untouched packages before assignment selection and rediscovers nested edits', async t => {
+  const { readdirSync, utimesSync } = await import('node:fs');
+  const f = sandbox(t);
+  const repo = primary(f.dir, 'activity-window');
+  const old = pack(repo, 'merged-old-work');
+  const recent = pack(repo, 'current');
+  receipt(old, { id: 'old', state: 'running', started_at: ago(3 * 86400000) });
+  receipt(recent, { id: 'recent', state: 'running', started_at: ago(1000) });
+  const nested = join(old, 'runtime', 'runs', 'old-activity');
+  mkdirSync(nested, { recursive: true });
+  const activityFile = join(nested, 'owner.json');
+  writeFileSync(activityFile, JSON.stringify({ run_id: 'old', role: 'owner', hint: 'editing' }));
+  function ageTree(path, date) {
+    if (statSync(path).isDirectory()) for (const name of readdirSync(path)) ageTree(join(path, name), date);
+    utimesSync(path, date, date);
+  }
+  ageTree(old, new Date(FIXED - 86400001));
+  const input = { roots: [repo], indexDir: f.indexDir, now };
+  const filtered = await collectWorkspace(input);
+  assert.deepEqual(filtered.runs.map(run => run.assignment_id), ['recent']);
+  assert.equal(filtered.activity_filter.hidden_packages, 1);
+  assert.equal(filtered.coverage.omitted, 0, 'intentional age filtering is not a coverage failure');
+  assert.ok(filtered.spec_roots.includes(join(repo, '.specs')), 'old packages remain watched');
+  const history = await collectWorkspace({ ...input, includeInactive: true });
+  assert.equal(history.runs.length, 2);
+  assert.equal(history.activity_filter.window_ms, null);
+  // Editing an existing deep file does not update the top-level directory mtime.
+  utimesSync(activityFile, new Date(FIXED - 86400000), new Date(FIXED - 86400000));
+  const boundary = await collectWorkspace(input);
+  assert.equal(boundary.runs.length, 2, 'exactly 24 hours remains visible');
+  assert.equal(statSync(old).mtimeMs, FIXED - 86400001);
+  utimesSync(activityFile, new Date(FIXED - 1000), new Date(FIXED - 1000));
+  assert.equal((await collectWorkspace(input)).runs.length, 2);
+});
+
+test('completed packages leave monitoring but unfinished steps and reopened packages remain visible', async t => {
+  const f = sandbox(t);
+  const repo = primary(f.dir, 'completion-filter');
+  const done = pack(repo, 'done'), legacy = pack(repo, 'published'), unfinished = pack(repo, 'unfinished');
+  for (const path of [done, legacy, unfinished]) receipt(path, { id: 'attempt', state: 'completed', started_at: ago(60000) });
+  const checkpointDir = join(done, 'runtime', 'sentinel', 'workflow');
+  mkdirSync(checkpointDir, { recursive: true });
+  const checkpointFile = join(checkpointDir, 'checkpoint.json');
+  const checkpoint = { version: 1, workflow_id: 'workflow', package: done, state: 'complete', observed_at: ago(1000), workers: [] };
+  writeFileSync(checkpointFile, JSON.stringify(checkpoint));
+  const commit = 'a'.repeat(40);
+  writeFileSync(join(legacy, 'pr-url.json'), JSON.stringify({ package: legacy, kind: 'pr_submission', commit,
+    url: 'https://example.test/pull/1', submitted_at: ago(1000) }));
+  writeFileSync(join(legacy, 'work-tour.json'), JSON.stringify({ verdict: 'ready', commit }));
+  const input = { roots: [repo], indexDir: f.indexDir, now };
+  const live = await collectWorkspace(input);
+  assert.deepEqual(live.runs.map(run => run.package), [unfinished], 'a completed worker is not a completed workflow');
+  assert.equal(live.activity_filter.hidden_completed_packages, 2);
+  assert.equal((await collectWorkspace({ ...input, includeInactive: true })).runs.length, 3);
+  writeFileSync(join(legacy, 'work-tour.json'), JSON.stringify({ verdict: 'ready', commit: 'b'.repeat(40) }));
+  assert.equal((await collectWorkspace(input)).activity_filter.hidden_completed_packages, 1, 'mismatched publication cannot hide work');
+  writeFileSync(join(legacy, 'work-tour.json'), JSON.stringify({ verdict: 'ready', commit }));
+  // Explicitly reopening the workflow overrides previous completion.
+  writeFileSync(checkpointFile, JSON.stringify({ ...checkpoint, state: 'ready' }));
+  assert.equal((await collectWorkspace(input)).runs.length, 2);
+  // A later dispatch also overrides older publication evidence.
+  receipt(legacy, { id: 'new', state: 'running', started_at: ago(0) });
+  assert.equal((await collectWorkspace(input)).activity_filter.hidden_completed_packages, 0);
+});
+
+test('spec progress uses sparse index position without accepting completed workers', async t => {
+  const f = sandbox(t), repo = primary(f.dir, 'progress'), packagePath = pack(repo);
+  writeFileSync(join(packagePath, 'spec-steps.json'), JSON.stringify({ steps: [
+    { step: 9, name: 'Finish' }, { step: 2, name: 'Start' }, { step: 5, name: 'Build' },
+  ] }));
+  for (const step of [2, 5, 9, 7]) receipt(packagePath, { id: `run-${step}`, state: 'completed',
+    step: join(packagePath, `step-${String(step).padStart(3, '0')}-subspec.md`) });
+  const snapshot = await collectWorkspace({ roots: [repo], indexDir: f.indexDir, now });
+  const progress = step => snapshot.runs.find(run => run.assignment_id === `run-${step}`).spec_progress;
+  assert.deepEqual(progress(5), { basis: 'step-position', total_steps: 3, current_step: 5,
+    current_position: 2, current_name: 'Build', accepted_steps: null });
+  assert.equal(progress(2).current_position, 1);
+  assert.equal(progress(9).current_position, 3);
+  assert.equal(progress(9).accepted_steps, null);
+  assert.equal(progress(7).current_position, null);
+});
+
+test('missing, empty and malformed indices keep spec size and position honest', async t => {
+  const f = sandbox(t), repo = primary(f.dir, 'unknown-progress'), packagePath = pack(repo);
+  receipt(packagePath, { id: 'run', state: 'completed', step: join(packagePath, 'step-001-subspec.md') });
+  const input = { roots: [repo], indexDir: f.indexDir, now };
+  assert.equal((await collectWorkspace(input)).runs[0].spec_progress.total_steps, null);
+  writeFileSync(join(packagePath, 'spec-steps.json'), JSON.stringify({ steps: [] }));
+  assert.equal((await collectWorkspace(input)).runs[0].spec_progress.total_steps, 0);
+  for (const steps of [[{ step: 0 }], [{ step: 1 }, { step: 1 }], [{ name: 'Missing ID' }]]) {
+    writeFileSync(join(packagePath, 'spec-steps.json'), JSON.stringify({ steps }));
+    const run = (await collectWorkspace(input)).runs[0];
+    assert.equal(run.spec_progress.total_steps, null);
+    assert.equal(run.spec_progress.current_position, null);
+    assert.equal(run.coverage.state, 'partial');
+  }
+});
+
+test('worker completion retains the current unfinished workflow without activating historical attempts', async t => {
+  const f = sandbox(t), repo = primary(f.dir, 'between-steps'), packagePath = pack(repo);
+  receipt(packagePath, { id: 'old', state: 'completed', started_at: ago(120000) });
+  receipt(packagePath, { id: 'current', state: 'completed', started_at: ago(60000) });
+  const dir = join(packagePath, 'runtime', 'sentinel', 'workflow');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'checkpoint.json'), JSON.stringify({ version: 1, workflow_id: 'workflow',
+    package: packagePath, state: 'ready', observed_at: ago(1000), workers: [{ id: 'old' }, { id: 'current' }] }));
+  const snapshot = await collectWorkspace({ roots: [repo], indexDir: f.indexDir, now });
+  const current = snapshot.runs.find(r => r.assignment_id === 'current');
+  assert.equal(current.execution, 'completed');
+  assert.equal(current.workflow_state, 'ready');
+  assert.equal(current.is_current_assignment, true);
+  assert.equal(snapshot.runs.find(r => r.assignment_id === 'old').is_current_assignment, false);
 });

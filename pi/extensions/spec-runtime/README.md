@@ -229,14 +229,17 @@ The widget does not infer missing activity. No browser UI is involved.
 
 ## Workspace sentinel status
 
-`/spec-sentinel status` shows a bounded read-only snapshot across automatically discovered
+`/sentinel status` (also `/spec-sentinel status`) shows a bounded read-only snapshot across automatically discovered
 repositories: repository common directory, canonical package, checkout, workflow
 id, assignment id, coordinator session, execution state, obligation, activity hint,
 coverage and factual conditions such as `reconciliation-pending` or `quiet-activity`.
-It is also the default when the command has no argument. Startup and reload are
-silent and dormant: no scans, watchers, timers or sentinel UI until an explicit
-`status`, `root`, `add` or `inspect` command. Activation is never restored from settings.
-After `off`, explicit status/inspect reads remain available without restarting watchers.
+Bare invocation starts observe mode. Startup and reload are silent and dormant: no
+scans, watchers, timers or sentinel UI until explicitly invoked. Control participants
+can join an already active global controller; saved files never activate one.
+Cold status is a bounded one-shot read: it closes its read-only helper before returning
+and starts no watchers, reconciliation timers, widget or dashboard. Active status
+preserves monitoring; `status --all` never overwrites its live snapshot. After `off`,
+explicit status/inspect reads remain available without restarting observation.
 
 Repositories are discovered beneath `~/Documents`, including grouped and nested
 repositories. No registration is required. `/spec-sentinel root ~/Projects` saves a
@@ -269,54 +272,63 @@ missing, oversized or replaced sources stay unknown or stale, never healthy. No
 model call, transcript read or recovery authority is introduced here: completion,
 exit and silence remain non-acceptance facts.
 
-## Scoped authority (enable/disable)
+## Global runtime modes
 
-`/spec-sentinel enable /absolute/policy.json` arms a live, session-local capability
-for the coordinator session; `/spec-sentinel disable` revokes it and `/spec-sentinel
-off` revokes it before hiding observation. Only this native command can arm it: a
-fresh session, reload, checkpoint, model output or copied/forged file never arms it.
-The policy file must be an absolute regular non-symlink JSON file of at most 16 KiB
-with exactly this schema:
+Start sentinel once from any directory, including a Pi session with no repository:
 
-```json
-{
-  "version": 1,
-  "package": "/repo/.specs/feature",
-  "workflow_id": "wf-example",
-  "checkout": "/worktrees/feature",
-  "coordinator_session": "<native SDK session identity>",
-  "mode": "shadow",
-  "actions": ["continue"],
-  "expires_at": "2026-01-01T00:00:00.000Z",
-  "max_effects": 1,
-  "max_diagnostics": 1,
-  "diagnosis": { "model": "provider/model:thinking" },
-  "authority_reference": "user:enable"
-}
+```text
+/sentinel start
+/sentinel observe
+/sentinel shadow
+/sentinel recover
+/sentinel recover --model openrouter/inception/mercury-2.5:high
+/sentinel observe --root "/Users/name/Projects"
+/sentinel status
+/sentinel stop
+/sentinel off
 ```
 
-The package, workflow, checkout and native session must match the retained checkpoint.
-`expires_at` must be a future exact ISO-8601 UTC timestamp no later than eight hours.
-`max_effects` and `max_diagnostics` are integers 0..2; `actions` holds unique
-`continue`/`cancel`; `cancel` requires a diagnosis selector and a diagnosis selector
-requires a nonzero diagnostic budget. `diagnose` is reported only when configured.
+`/sentinel` is the native command; `/spec-sentinel` remains an alias. Bare invocation
+and `start` mean observe; `stop` means off. For natural-language start/status/stop
+requests, the `sentinel_lifecycle` tool accepts only `observe`, `status` and `off`
+and invokes the same controller. It cannot arm shadow or recover; those require
+an explicit native command. The tool returns bounded status, freshness and available
+snapshot/dashboard paths, without source or transcript inspection or shell daemons.
 
-Budgets are finite and retained per workflow: two effect slots (continue/cancel share
-them) and two diagnostic slots, at most one continuation per obligation revision and
-one cancellation per incident generation, plus at most one diagnosis per incident
-generation with a five-minute cooldown. Re-enabling never resets consumed capacity. A
-duplicate same-kind/subject reservation returns its retained receipt without repeating
-the effect. Reservations are published durably (slot first, then an immutable intent,
-with every newly created state directory linked to its parent by fsync before any
-effect); an orphan/malformed/corrupt record, an invalid state directory, an intent
-missing its slot link or an unfinished intent from a previous authority stays spent
-and blocks as unknown, as does an explicitly unknown outcome until its owning live
-authority reconciles it to a terminal state. `/spec-sentinel disable` revokes
-the live capability synchronously at command entry — never queued behind workflow
-work — and reports a persistence failure while remaining
-disarmed; `/spec-sentinel off` revokes first and then hides observation, reporting both
-facts. Step 5 performs no continuation, cancellation, diagnosis or model effect; any
-actual effect belongs to later steps under this guarded authority.
+Shadow runs bounded diagnosis and reports proposed
+interventions; recover allows guarded continuation/cancellation. Mercury 2.5 at high
+reasoning is the diagnostic default. Root/model overrides apply to that invocation.
+No operator-created policy, target workflow or expiry is needed. Repository discovery
+uses `~/Documents` by default (or a legacy saved root), independently of Pi's cwd.
+
+The monitor distributes its explicit mode through pi-intercom's native extension channel.
+All connected coordinators with the updated runtime participate, including later joins.
+Each coordinator resolves its own checkpoints and handles, preserving local action guards;
+workspace scope never means adopting another process's disk PID or bypassing user holds.
+Intercom's existing routing scopes remain in force. Disconnected, older and non-Pi sessions
+remain observable from receipts but are not controllable endpoints. Global modes report
+an unavailable broker rather than silently degrading to one-project recovery.
+
+No timers, watchers, scans or sentinel UI start merely because Pi opens. Coordinators
+register an inert communication capability. Explicit activation lasts until off, a mode
+replacement, controller shutdown or connection loss, with no clock expiry. Off from a
+participant requests global revocation; closing an ordinary participant leaves the
+controller running. Switching to observe revokes global effects. An explicit mode command
+can restart observation after off. Diagnostic and intervention reports return to the
+monitor; ordinary control traffic neither enters transcripts nor starts model turns.
+
+Retained default budgets are still two diagnoses and two actual effects per workflow;
+monitoring itself does not expire. Global shadow action observations have separate
+receipts and do not consume real action slots or prevent later recovery of that obligation.
+All targets keep identity checks, duplicate prevention, diagnostic cooldowns, and conservative
+handling of unknown action outcomes. A recover activation can resume an already-idle
+coordinator only from its retained completed native boundary and freshly checked guards.
+
+### Legacy policy compatibility
+
+The existing `enable /absolute/policy.json` and `disable` interface remains supported for
+scoped callers. Its file schema, eight-hour expiry and explicit scoped identity validation
+are unchanged. Those requirements do not apply to the global runtime-mode interface.
 
 ## Bounded continuation
 
@@ -324,8 +336,8 @@ When explicitly enabled in recover mode, the coordinator may propose exactly one
 additional model turn at the Pi settle boundary. The handler admits only a completed
 settlement with a ready open obligation, an exactly reconciled native input revision,
 zero UI prompt depth, no `context.pendingMessages`, a nonblocking inbox, no nonterminal
-or malformed declared worker, no active managed Runtime handle, and an armed unexpired
-policy that permits `continue`; prior handlers' `continue:true` and every explicit stop
+or malformed declared worker, no active managed Runtime handle, and an active
+authority that permits `continue`; prior handlers' `continue:true` and every explicit stop
 state veto. It re-reads all guards and requires the same checkpoint/obligation revision,
 then durably reserves the continuation (one per obligation revision) before returning
 `{entries:[...event.entries, visible custom_message], continue:true}`. The visible
@@ -342,8 +354,8 @@ effects are not retried.
 
 ## Diagnosis and guarded cancellation
 
-Optional diagnosis and guarded cancellation are separate opt-ins under the same live
-scoped authority. Diagnosis runs only for a complete repeated-failure incident with a
+Global shadow/recover modes enable diagnosis by default; only recover executes actions.
+Legacy scoped policies can still select diagnosis separately. Diagnosis runs only for a complete repeated-failure incident with a
 complete fingerprint through a bounded (at most 16 KiB) tool-free advisory packet, one
 active job per coordinator, a five-minute cooldown, one attempt per incident generation
 and at most two attempts per workflow; its JSON is labelled `note_verified:false` and
@@ -359,8 +371,8 @@ Retained state lives under `runtime/sentinel/<workflow-id>/`: `verification-inci
 `diagnoses/<incident-id>.json`, and `intents/<id>.json` with `effect-slots/` and
 `diagnostic-slots/`. A disk PID from another process is not an owned handle; the runtime
 never adopts it, deletes locks, transfers an owner or launches a replacement. Shadow mode
-writes `shadow-would-cancel` and leaves the worker alive. Cancellation/shadow notices are
-local UI-only, and no Sentinel model-visible custom message is added.
+writes `shadow-would-cancel` and leaves the worker alive. Cancellation/shadow notices return to the global monitor; no diagnosis or shadow
+observation adds a model-visible conversation message.
 
 ## Workflow metrics
 
@@ -468,3 +480,47 @@ auto-restart loop, or guarantee that a closed session continues running.
 
 Existing live Pi processes keep their loaded extension. Use a fresh/reloaded idle coordinator and
 new assignments to pick up the tools; do not restart active work solely for these bookkeeping changes.
+
+### Recent activity and public sentinel snapshots
+
+Sentinel's default view filters out spec packages without any file or directory
+modifications in the last 24 hours. Nested edits count; uncertain scans stay
+visible. This does not mark work complete or change recovery authorization.
+`/spec-sentinel status --all` (or `cli.mjs sentinel status --all`) includes history.
+Inactive `.specs` trees stay watched so new activity brings them back into view.
+
+An invoked observer exports an atomic, owner-readable JSON snapshot each refresh to
+`<agent-dir>/spec-sentinel/<workspace-key>/observers/<observer-id>.json`.
+`/spec-sentinel status` prints the path. Each observer has its own file; loading the
+extension alone writes nothing. The versioned envelope carries publication time,
+sequence, observing/off/closed state, mode, any read-failure note, and the existing
+structured workspace snapshot. Consumers should check publication and coverage
+timestamps because a crashed observer cannot mark its file closed. These snapshots
+are read-only facts for dashboards and tooling, never recovery authority. See the
+[skill](../../../skills/spec-sentinel/SKILL.md#json-snapshots-for-other-tools) for fields.
+
+Sentinel isolates discovery, Git reads and Chokidar in a read-only child process
+with ignored terminal streams. Scans expire after ten seconds, retaining stale
+facts and retrying after a cooldown; off/close stops that helper. The terminal
+widget is bounded to eight short lines and unchanged observations skip redraws.
+This contains scan/watcher hangs without affecting native recovery ownership.
+
+The default view also excludes recorded completed workflows. A terminal step
+receipt alone is insufficient; completion comes from a complete workflow checkpoint
+or legacy ready-tour/publication records at the same commit. A subsequent dispatch
+or noncomplete workflow checkpoint keeps reopened work visible. History remains
+available with `status --all`.
+
+Repository identity observation reads bounded Git metadata (`.git`, worktree gitdir,
+`commondir`, and `HEAD`) directly, without spawning Git. A failed identity/discovery
+read retains prior work with stale coverage instead of replacing it with a healthy
+empty workspace. Isolated snapshots include `reader` PID, runtime/version and scan
+duration to distinguish a current reader from an old observer. The managed runtime
+index discovers active packages outside the default Documents tree automatically.
+
+Interactive sentinel startup now opens a read-only visual dashboard backed by saved
+snapshot JSON. The localhost service belongs to that explicit monitor activation;
+mode changes reuse it, off/shutdown stop it, and extension loading remains inert.
+`/spec-sentinel status` includes the URL. Dashboard failure does not stop monitoring.
+The self-contained UI and manual viewer command are documented in
+[spec-observe](../../../scripts/spec-observe/README.md#sentinel-dashboard).

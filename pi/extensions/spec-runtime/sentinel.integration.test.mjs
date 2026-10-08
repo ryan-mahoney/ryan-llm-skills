@@ -1,3 +1,4 @@
+import { controlBus } from './sentinel-control-fixture.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync, realpathSync, statSync, renameSync, unlinkSync, symlinkSync, chmodSync } from 'node:fs';
@@ -119,7 +120,7 @@ const lastStatus = captured => captured.statuses[captured.statuses.length - 1];
 
 // Shared fixture for the focused observer cases: one enrolled primary with one
 // receipt, injectable watch/timer boundaries and a captured UI.
-function observerFixture(t, { state = 'running', nativeRun = null, maxWatchers } = {}) {
+function observerFixture(t, { state = 'running', nativeRun = null, maxWatchers, dashboard = null } = {}) {
   const dir = sandbox(t);
   const { repo } = primary(dir, 'focus-repo');
   const packagePath = pack(repo);
@@ -142,6 +143,7 @@ function observerFixture(t, { state = 'running', nativeRun = null, maxWatchers }
     indexDir: join(dir, 'spec-runtime'),
     nativeRun,
     maxWatchers,
+    dashboard,
     watchDirectory: (target, listener) => {
       const watcher = {
         dir: target, listener, closed: false, errorCallback: null,
@@ -443,8 +445,9 @@ test('sentinel status: loading the native extension is silent until explicitly i
   assert.equal(requests.length, 0);
 
   await session.prompt('/spec-sentinel status');
-  assert.match(lastWidget(captured).content.join('\n'), /failed-assignment/);
-  assert.ok(captured.notes.some(item => item.type === 'warning'));
+  assert.deepEqual(captured.widgets.filter(item => item.key === SENTINEL_WIDGET_KEY), []);
+  assert.match(lastNote(captured).message, /failed-assignment/);
+  assert.equal(captured.notes.some(item => item.type === 'warning'), false);
 });
 
 test('sentinel observer: startup and ordinary refresh stay dormant even with failed runs', async t => {
@@ -457,7 +460,7 @@ test('sentinel observer: startup and ordinary refresh stay dormant even with fai
   assert.deepEqual(f.captures.statuses, []);
   assert.deepEqual(f.captures.notes, []);
 
-  await f.handler('status');
+  await f.handler('observe');
   assert.ok(f.watchers.length > 0);
   assert.equal(f.repeats.size, 1);
   assert.match(lastWidget(f.captures).content.join('\n'), /assign-focus/);
@@ -509,9 +512,9 @@ test('sentinel observer: coalesced invalidation, missed-event reconciliation and
     cancelRepeat: id => repeats.delete(id),
   });
   t.after(() => observer.close());
-  assert.deepEqual(registered.map(item => item.name), ['spec-sentinel']);
+  assert.deepEqual(registered.map(item => item.name), ['sentinel', 'spec-sentinel']);
 
-  await registered[0].spec.handler('status', context);
+  await registered[0].spec.handler('observe', context);
   assert.ok(watchers.length > 0);
   assert.deepEqual(watchers.filter(w => !w.closed).map(w => w.dir), [dirname(packagePath)], 'only the canonical .specs tree is watched');
   receipt(packagePath, { id: 'run-observer-1', assignment_id: 'assign-observer-1', state: 'running', started_at: new Date(Date.now() - 60000).toISOString() });
@@ -581,7 +584,7 @@ test('sentinel observer: coalesced invalidation, missed-event reconciliation and
 
 test('sentinel observer: repeated failures notify once and missing incident or action sources remain unknown', async t => {
   const f = observerFixture(t);
-  await f.handler('status');
+  await f.handler('observe');
   const record = { package: f.packagePath, id: 'run-focus', assignment_id: 'assign-focus', workflow_id: 'wf-notice' };
   const recorder = createVerificationRecorder();
   const failure = id => recorder.observe(record, { type: 'tool_execution_end', toolName: 'spec_verify', toolCallId: id,
@@ -637,14 +640,14 @@ test('sentinel observer: repeated failures notify once and missing incident or a
 test('sentinel observer: off and close during pending reads never install disposed handles', async t => {
   // close() racing a pending read must not resurrect handles afterwards.
   const closing = observerFixture(t);
-  const closingRead = closing.handler('status');
+  const closingRead = closing.handler('observe');
   closing.observer.close();
   await closingRead;
   assert.equal(closing.watchers.length, 0);
 
   // off() racing a pending read likewise leaves no live handles.
   const offing = observerFixture(t);
-  const offingRead = offing.handler('status');
+  const offingRead = offing.handler('observe');
   await offing.handler('off');
   await offingRead;
   assert.equal(offing.watchers.length, 0);
@@ -660,7 +663,7 @@ test('sentinel observer: off and close during pending reads never install dispos
 
 test('sentinel observer: discovery preserves facts when a legacy enrollment becomes unreadable', async t => {
   const f = observerFixture(t);
-  await f.handler('status');
+  await f.handler('observe');
   assert.match(lastWidget(f.captures).content[0], /1 run\(s\)/);
   assert.match(lastWidget(f.captures).content.join('\n'), /assign-focus/);
 
@@ -677,7 +680,7 @@ test('sentinel observer: discovery preserves facts when a legacy enrollment beco
 
 test('sentinel observer: indexed activity stays current when repository discovery becomes unavailable', async t => {
   const f = observerFixture(t);
-  await f.handler('status');
+  await f.handler('observe');
   rmSync(f.enrollmentFile);
   writeFileSync(discoveryConfigPath(f.dir), JSON.stringify({ version: 1, root: join(f.dir, 'missing') }));
   const index = join(f.dir, 'spec-runtime');
@@ -693,7 +696,7 @@ test('sentinel observer: indexed activity stays current when repository discover
 test('sentinel observer: an external single run keeps details; only the natively displayed run collapses', async t => {
   let native = null;
   const f = observerFixture(t, { state: 'failed', nativeRun: () => native });
-  await f.handler('status');
+  await f.handler('observe');
   // No native monitor is attached to a fresh coordinator: an enrolled external
   // failure stays fully visible in the persistent widget.
   const external = lastWidget(f.captures).content.join('\n');
@@ -714,7 +717,7 @@ test('sentinel observer: an external single run keeps details; only the natively
 
 test('sentinel observer: a watcher-cap exclusion is reported, not hidden', async t => {
   const f = observerFixture(t, { maxWatchers: 0 });
-  await f.handler('status');
+  await f.handler('observe');
   assert.match(lastWidget(f.captures).content.join('\n'), /Watcher cap reached \(0 of \d+ directories\)/);
   assert.match(lastStatus(f.captures).text, /stale/);
 });
@@ -808,8 +811,32 @@ test('sentinel checkpoint: sentinel role worker load has no checkpoint tool and 
   assert.ok(commands.includes('spec-sentinel'));
   // Observe-only means no control/authority tools; the checkpoint recorder is a
   // coordinator-only journal tool and grants no recovery authority.
-  assert.deepEqual(coordinator.loader.getExtensions().extensions.flatMap(extension => [...extension.tools.keys()]).filter(name => /sentinel/i.test(name) && name !== 'spec_sentinel_checkpoint'), []);
+  assert.deepEqual(coordinator.loader.getExtensions().extensions.flatMap(extension => [...extension.tools.keys()]).filter(name => /sentinel/i.test(name) && name !== 'spec_sentinel_checkpoint'), ['sentinel_lifecycle']);
   assert.equal(coordinator.requests.length, 0);
+});
+
+test('sentinel lifecycle tool: real registration shares bounded native status and off without model calls', { skip: sdkSkip, timeout: 30000 }, async t => {
+  const dir = sandbox(t);
+  const run = await loadExtension(t, { dir });
+  const tools = new Map(run.loader.getExtensions().extensions.flatMap(extension => [...extension.tools.entries()]));
+  const lifecycle = tools.get('sentinel_lifecycle').definition;
+  const ctx = { ui: run.captured.ui };
+  const cold = await lifecycle.execute('cold-status', { action: 'status' }, undefined, undefined, ctx);
+  assert.equal(cold.isError, false);
+  assert.equal(cold.details.state, 'inactive');
+  assert.equal(cold.details.snapshot_path, null);
+  assert.deepEqual(run.captured.widgets.filter(item => item.key === SENTINEL_WIDGET_KEY), []);
+  const refused = await lifecycle.execute('refused-recovery', { action: 'recover' }, undefined, undefined, ctx);
+  assert.equal(refused.isError, true);
+  assert.match(refused.details.error, /native/);
+  await run.session.prompt('/sentinel status');
+  assert.match(lastNote(run.captured).message, /No observed runs/);
+  const off = await lifecycle.execute('off', { action: 'off' }, undefined, undefined, ctx);
+  assert.equal(off.isError, false);
+  assert.equal(off.details.state, 'off');
+  await run.session.prompt('/spec-sentinel status');
+  assert.match(lastNote(run.captured).message, /No observed runs/);
+  assert.equal(run.requests.length, 0);
 });
 
 test('sentinel checkpoint: the actual coordinator tool registers and refuses a stale native input revision', { skip: sdkSkip, timeout: 60000 }, async t => {
@@ -1243,6 +1270,60 @@ async function continuationFixture(t, { mode = 'recover', actions = ['continue']
   assert.equal(created.isError, false, JSON.stringify(created.details));
   return { run, dir, packagePath, canonical, identity, checkout, checkpointTool, ctx };
 }
+
+test('sentinel global modes: a separate monitor controls two repository coordinators without policy files', { skip: sdkSkip, timeout: 20000 }, async t => {
+  const bus = controlBus();
+  const coordinators = [];
+  for (const id of ['repo-a', 'repo-b']) {
+    const dir = sandbox(t);
+    const { repo } = primary(dir, id);
+    const packagePath = pack(repo);
+    const run = await loadExtension(t, { dir, providerFactory: continuationProvider, extraFactories: [bus.extension(id)] });
+    const identity = run.sessionManager.getSessionFile() || run.sessionManager.getSessionId();
+    recordCheckpoint({ package: packagePath, workflow_id: id, expected_revision: 0, state: 'ready',
+      obligation: { key: 'continue-work', stage: 'implementation', summary: 'finish the work', artifacts: [] },
+      workers: [], inbox: { items: [] }, reconciles_input_revision: 0, coordinator_session: identity, checkout: repo });
+    const tools = new Map(run.loader.getExtensions().extensions.flatMap(extension => [...extension.tools.entries()]));
+    const tool = tools.get('spec_sentinel_checkpoint');
+    const args = { package: packagePath, workflow_id: id, expected_revision: 1, state: 'ready',
+      obligation: { key: 'continue-work', stage: 'implementation', summary: 'finish the work', artifacts: [] },
+      workers: [], inbox: { items: [] }, reconciles_input_revision: 0 };
+    const ctx = { sessionManager: run.sessionManager };
+    const created = await tool.definition.execute('checkpoint', args, undefined, undefined, ctx);
+    assert.equal(created.isError, false, JSON.stringify(created.details));
+    coordinators.push({ run, packagePath, tool, args, ctx });
+  }
+  const monitor = await loadExtension(t, { dir: sandbox(t), extraFactories: [bus.extension('global-monitor')] });
+  await monitor.session.prompt('/spec-sentinel shadow');
+  assert.match(lastNote(monitor.captured).message, /workspace-wide/);
+  for (const f of coordinators) {
+    await f.run.session.prompt('Finish this turn.', { source: 'extension' });
+    await f.run.session.waitForIdle();
+    assert.equal(f.run.requests.length, 1, 'shadow never adds a provider turn');
+    const authority = JSON.parse(readFileSync(join(f.packagePath, 'runtime', 'sentinel', f.args.workflow_id, 'authority', 'grant.json')));
+    assert.equal(authority.expires_at, null);
+    assert.equal(authority.source_path, null);
+    assert.equal(authority.diagnosis.model, 'openrouter/inception/mercury-2.5:high');
+  }
+  await monitor.session.prompt('/spec-sentinel recover');
+  // Mode activation resumes already-idle eligible coordinators, without sending
+  // them a human prompt or asking the operator to bind either repository.
+  for (const f of coordinators) {
+    await f.run.session.waitForIdle();
+    assert.equal(f.run.requests.length, 2, 'recover delivers one turn to each idle repository coordinator');
+  }
+  await monitor.session.prompt('/spec-sentinel off');
+  for (const f of coordinators) {
+    const changed = await f.tool.definition.execute('checkpoint-after-off', { ...f.args, expected_revision: 2,
+      obligation: { ...f.args.obligation, key: 'after-off' } }, undefined, undefined, f.ctx);
+    assert.equal(changed.isError, false);
+    await f.run.session.prompt('Ordinary work after sentinel stopped.', { source: 'extension' });
+    assert.equal(f.run.requests.length, 3, 'off prevents extra turns across repositories');
+    assert.deepEqual(f.run.errors, []);
+  }
+  assert.equal(monitor.requests.length, 0, 'the global monitor itself needs no provider calls for control');
+  assert.deepEqual(monitor.errors, []);
+});
 
 test('sentinel continuation: recover mode adds exactly one visible request and marks it delivered', { skip: sdkSkip, timeout: 15000 }, async t => {
   const f = await continuationFixture(t, { mode: 'recover' });
@@ -1813,7 +1894,7 @@ function compositionFixture(t) {
 
 // Loads the actual index.ts with the pi-subagents diagnosis path and a scripted
 // final provider, with the fixture bin prepended to PATH for the fake owner.
-async function loadComposition(t, fake, payloadFile) {
+async function loadComposition(t, fake, payloadFile, extraFactories = []) {
   const originalPath = process.env.PATH;
   const originalPayload = process.env.FAKE_PI_PAYLOAD;
   t.after(() => {
@@ -1838,7 +1919,7 @@ async function loadComposition(t, fake, payloadFile) {
       return stream;
     },
   });
-  const run = await loadExtension(t, { dir: fake.dir, providerFactory: provider, extraExtensionPaths: [piSubagentsPath] });
+  const run = await loadExtension(t, { dir: fake.dir, providerFactory: provider, extraFactories, extraExtensionPaths: [piSubagentsPath] });
   return { ...run, setDiagnosisReply: value => { diagnosisReply = value; } };
 }
 
@@ -1895,10 +1976,11 @@ function compositionDiagnostic(fake, workflowId, runId, incidentId) {
   return `incident=${incidentId} | ${lines.join(' | ')}`.slice(0, 1500);
 }
 
-async function armComposition(t, mode) {
+async function armComposition(t, mode, { global = false } = {}) {
+  const bus = global ? controlBus() : null;
   const fake = compositionFixture(t);
   const payloadFile = join(fake.dir, 'fake-payload.json');
-  const run = await loadComposition(t, fake, payloadFile);
+  const run = await loadComposition(t, fake, payloadFile, bus ? [bus.extension('worker-coordinator')] : []);
   const tools = new Map(run.loader.getExtensions().extensions.flatMap(extension => [...extension.tools.entries()]));
   const manager = run.sessionManager;
   const identity = (typeof manager.getSessionFile === 'function' && manager.getSessionFile())
@@ -1920,12 +2002,18 @@ async function armComposition(t, mode) {
   const checkout = dispatched.details.checkout;
   // Guarantee prompt fixture teardown for every exit path.
   t.after(() => cancelFixtureRun(tools, ctx, fake, runId));
+  let monitor;
+  if (global) {
+    monitor = await loadExtension(t, { dir: fake.dir, extraFactories: [bus.extension('global-monitor')] });
+    await monitor.session.prompt(`/spec-sentinel ${mode} --model sentinel-fixture/scripted`);
+  } else {
   const policyPath = join(fake.dir, 'composition-policy.json');
   writeFileSync(policyPath, JSON.stringify({ version: 1, package: fake.packagePath, workflow_id: workflowId,
     checkout, coordinator_session: identity, mode, actions: ['continue', 'cancel'],
     expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
     max_effects: 2, max_diagnostics: 2, diagnosis: { model: 'sentinel-fixture/scripted' }, authority_reference: 'user:composition' }));
   await run.session.prompt(`/spec-sentinel enable ${policyPath}`);
+  }
   const treeDigest = (await collectFacts(checkout)).working_tree_digest;
   assert.ok(typeof treeDigest === 'string' && treeDigest, 'the dispatch checkout has a complete digest');
   const commandSha = 'a'.repeat(64);
@@ -1935,8 +2023,26 @@ async function armComposition(t, mode) {
   run.setDiagnosisReply(JSON.stringify({ decision: 'cancel-candidate', fact_ids: ['incident.count'], reason_code: 'repeated-unchanged-failure',
     incident_id: incidentId, incident_generation: 1, note: 'fixture' }));
   writeFileSync(payloadFile, JSON.stringify({ command_sha256: commandSha, summary_sha256: summarySha, tree_digest: treeDigest }));
-  return { fake, run, tools, ctx, assignmentId, workflowId, runId, checkout, incidentId };
+  return { fake, run, monitor, tools, ctx, assignmentId, workflowId, runId, checkout, incidentId };
 }
+
+test('sentinel global modes: remote diagnosis cancels only the owning coordinator worker and reports to the monitor', { skip: sdkSkip || delegationSkip, timeout: 15000 }, async t => {
+  const unrelated = unrelatedChild(t);
+  const f = await armComposition(t, 'recover', { global: true });
+  try {
+    const cancelled = await waitForValue(() => {
+      const record = readRunFile(f.fake.packagePath, f.runId);
+      return record.state === 'cancelled' ? record : null;
+    }, 6000);
+    assert.ok(cancelled, compositionDiagnostic(f.fake, f.workflowId, f.runId, f.incidentId));
+    const report = await waitForValue(() => f.monitor.captured.notes.find(item => /Sentinel cancellation applied/.test(item.message)), 3000);
+    assert.ok(report, 'the global monitor receives the remote action outcome');
+    assert.ok(f.monitor.captured.notes.some(item => /Sentinel diagnosis:/.test(item.message)));
+    assert.doesNotThrow(() => process.kill(unrelated, 0));
+    assert.equal(existsSync(join(f.fake.dir, 'composition-policy.json')), false);
+    assert.deepEqual(f.run.errors, []);
+  } finally { await cancelFixtureRun(f.tools, f.ctx, f.fake, f.runId); }
+});
 
 test('sentinel cancellation: confirmed cancellation of a diagnosed spinning dispatched worker', { skip: sdkSkip || delegationSkip, timeout: 15000 }, async t => {
   const unrelated = unrelatedChild(t);
@@ -1983,4 +2089,85 @@ test('sentinel shadow: a diagnosed spinning worker is not cancelled before expli
   } finally {
     if (f) await cancelFixtureRun(f.tools, f.ctx, f.fake, f.runId);
   }
+});
+
+test('sentinel observer: publishes atomic walkable snapshots only after invocation, tracks refresh and stop', async t => {
+  const f = observerFixture(t);
+  const file = f.observer.snapshotPath;
+  const read = () => JSON.parse(readFileSync(file, 'utf8'));
+  assert.equal(existsSync(file), false, 'registration must not write observer state');
+  await f.handler('observe', { ui: f.captures.ui });
+  const first = read();
+  assert.equal(first.schema_version, 1);
+  assert.equal(first.state, 'observing');
+  assert.equal(first.mode, 'observe');
+  assert.ok(Date.parse(first.published_at));
+  assert.equal(first.snapshot.runs[0].assignment_id, 'assign-focus');
+  assert.equal(first.snapshot.activity_filter.window_ms, 86400000);
+  assert.equal(statSync(file).mode & 0o777, 0o600);
+  assert.ok(f.watchers.every(watcher => !file.startsWith(watcher.dir)), 'exports never trigger spec watchers');
+  receipt(f.packagePath, { id: 'run-focus', assignment_id: 'assign-focus', state: 'completed' });
+  await f.observer.refresh();
+  const next = read();
+  assert.ok(next.sequence > first.sequence);
+  assert.equal(next.snapshot.runs[0].execution, 'completed');
+  await f.handler('status --all', { ui: f.captures.ui });
+  assert.equal(read().sequence, next.sequence, 'historical view cannot replace the live snapshot');
+  await f.handler('off', { ui: f.captures.ui });
+  assert.equal(read().state, 'off');
+  const stopped = readFileSync(file, 'utf8');
+  await f.observer.refresh();
+  assert.equal(readFileSync(file, 'utf8'), stopped);
+  await f.observer.close();
+  assert.equal(read().state, 'closed');
+  assert.deepEqual(readdirSync(dirname(file)), [file.split('/').pop()], 'no partial files remain');
+});
+
+test('sentinel observer: caps terminal rendering and suppresses unchanged redraws', async t => {
+  const { boundedSentinelLines } = await import('./sentinel.mjs');
+  const lines = boundedSentinelLines(Array.from({ length: 1000 }, () => 'x'.repeat(20000)));
+  assert.equal(lines.length, 8);
+  assert.ok(lines.every(line => line.length <= 180));
+  assert.match(lines.at(-1), /JSON snapshot/);
+  const f = observerFixture(t);
+  await f.handler('observe');
+  const before = f.captures.widgets.length;
+  await f.observer.refresh();
+  await f.observer.refresh();
+  assert.equal(f.captures.widgets.length, before, 'identical facts must not rebuild terminal components');
+});
+
+
+test('sentinel observer: failed repository identity retains known work as stale instead of an empty workspace', async t => {
+  const f = observerFixture(t);
+  await f.handler('observe');
+  const before = JSON.parse(readFileSync(f.observer.snapshotPath, 'utf8'));
+  writeFileSync(join(dirname(dirname(f.packagePath)), '.git', 'HEAD'), 'unreadable repository identity');
+  await f.observer.refresh();
+  const after = JSON.parse(readFileSync(f.observer.snapshotPath, 'utf8'));
+  assert.equal(after.snapshot.runs[0].assignment_id, 'assign-focus');
+  assert.equal(after.snapshot.coverage.state, 'stale');
+  assert.equal(after.snapshot.coverage.observed_at, before.snapshot.coverage.observed_at);
+  assert.ok(after.snapshot.coverage.reasons.some(reason => reason.includes('package-noncanonical')));
+  assert.match(after.note, /unavailable/);
+});
+
+
+test('sentinel observer: dashboard follows explicit activation and off without starting on registration', async t => {
+  let starts = 0, stops = 0;
+  const dashboard = { start: async () => { starts++; return { url: 'http://127.0.0.1:4319/' }; }, stop: () => stops++ };
+  const f = observerFixture(t, { dashboard });
+  assert.equal(starts, 0);
+  await f.observer.refresh();
+  assert.equal(starts, 0);
+  await f.handler('observe');
+  assert.equal(starts, 1);
+  await f.handler('off');
+  assert.equal(stops, 1);
+  await f.handler('status');
+  assert.equal(starts, 1, 'one-shot status after off does not launch a service');
+  await f.handler('observe');
+  assert.equal(starts, 2);
+  await f.observer.close();
+  assert.equal(stops, 2);
 });

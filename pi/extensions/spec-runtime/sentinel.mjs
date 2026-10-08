@@ -2,7 +2,7 @@
 //
 // Observation is read-only: it collects bounded workspace facts and renders them
 // as plain status, and never starts, stops, messages or cancels a worker. Its only
-// writes are discovery settings, optional explicit enrollments and the
+// writes include atomic public snapshots, discovery settings, optional enrollments and the
 // explicit native policy/authority storage created by /spec-sentinel enable (with
 // /spec-sentinel disable revocation), which arms a session-local capability only.
 
@@ -16,41 +16,83 @@ import { publicHint } from './monitor.mjs';
 import { createOwnedLeaf } from './scout.mjs';
 import { collectFacts } from '../../../scripts/jev/core.mjs';
 import { collectWorkspace, reduceConditions, renderWorkspace, enrollmentDirectory, readEnrollments, enrollmentReasons, SENTINEL_LIMITS } from '../../../scripts/spec-observe/sentinel.mjs';
-import { createRepositoryDiscovery, saveDiscoveryRoot } from '../../../scripts/spec-observe/discovery.mjs';
+import { createRepositoryDiscovery, saveDiscoveryRoot, discoveryRoot } from '../../../scripts/spec-observe/discovery.mjs';
+import { parseSentinelStart, SENTINEL_MODES } from './sentinel-options.mjs';
+import { createSentinelReaderProcess } from './sentinel-reader-process.mjs';
+import { createSnapshotPublisher } from './sentinel-snapshot.mjs';
 
 export const SENTINEL_COALESCE_MS = 250;
 export const SENTINEL_RECONCILE_MS = 15000;
 export const SENTINEL_WIDGET_KEY = 'spec-sentinel';
 
-const USAGE = 'Usage: /spec-sentinel status | root /absolute/search-folder | add /absolute/primary | inspect ID | enable /absolute/policy.json | disable | off';
+const USAGE = 'Usage: /sentinel [start|observe|shadow|recover] [--model provider/model:thinking] [--root PATH] | status [--all] | inspect ID | stop|off';
 const MAX_WATCHERS = 60;
+
+// Pi wraps every supplied line. Bound both dimensions before crossing the UI
+// boundary; the full record belongs in JSON, not the terminal render loop.
+export function boundedSentinelLines(lines, maxLines = 8, maxChars = 180) {
+  const chosen = lines.length > maxLines
+    ? [...lines.slice(0, maxLines - 1), `… ${lines.length - maxLines + 1} more lines; inspect a run or use the JSON snapshot.`]
+    : lines;
+  return chosen.map(line => {
+    const clean = String(line).replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ');
+    return clean.length > maxChars ? `${clean.slice(0, maxChars - 1)}…` : clean;
+  });
+}
 
 export function createSentinelObserver({ pi, context, agentDir, scope = null, ownPackages = [], indexDir = join(agentDir, 'spec-runtime'),
   now = Date.now, watchDirectory = watchSpecTree, setTimer = setTimeout, clearTimer = clearTimeout, repeat = setInterval, cancelRepeat = clearInterval,
-  nativeRun = null, maxWatchers = MAX_WATCHERS, enablePolicy = null, disablePolicy: disableAuthority = null }) {
+  nativeRun = null, maxWatchers = MAX_WATCHERS, enablePolicy = null, disablePolicy: disableAuthority = null,
+  isolateReader = false, readerFactory = createSentinelReaderProcess, dashboard = null, startMode = null, stopMode = () => {}, modeStatus = () => null }) {
   let closed = false;
   let hidden = false;
   let active = false;
   let displayed = false;
+  let lastRendered = null;
+  let dashboardGeneration = 0;
+  let lifecycleGeneration = 0;
   let latest = null;
+  const publisher = createSnapshotPublisher({ agentDir, scope, now });
+  let exported = false;
+  let exportError = null;
   let inFlight = null;
   let coalesced;
   let reconcileTimer;
   let note = null;
   const watchers = new Map();
   let noticeSeverities = new Map();
-  const repositoryDiscovery = createRepositoryDiscovery({ agentDir, now });
+  let discoveryRootOverride = null;
+  const isolatedReader = isolateReader ? readerFactory({
+    onChange: () => invalidate(),
+    onError: message => { note = message; render(); },
+  }) : null;
+  let repositoryDiscovery = createRepositoryDiscovery({ agentDir, now });
 
   const notify = (ctx, message, level = 'info') => {
-    try { (ctx ?? context)?.ui?.notify?.(message, level); } catch { /* UI failure must not affect observation. */ }
+    try { (ctx ?? context)?.ui?.notify?.(boundedSentinelLines(String(message).split('\n'), 24, 240).join('\n'), level); } catch { /* UI failure must not affect observation. */ }
   };
 
   const clearWidgets = () => {
     if (!displayed) return;
     displayed = false;
+    lastRendered = null;
     try { context?.ui?.setWidget?.(SENTINEL_WIDGET_KEY, []); } catch { /* UI failure must not affect observation. */ }
     try { context?.ui?.setStatus?.(SENTINEL_WIDGET_KEY, ''); } catch { /* UI failure must not affect observation. */ }
   };
+
+  async function publishSnapshot() {
+    if (!exported && !active) return;
+    try {
+      await publisher.publish({
+        state: closed ? 'closed' : hidden ? 'off' : 'observing',
+        mode: modeStatus()?.options?.mode ?? 'observe', snapshot: latest, note,
+      });
+      exported = true;
+      exportError = null;
+    } catch (error) {
+      exportError = `Snapshot export unavailable: ${publicHint(error?.message ?? String(error))}`;
+    }
+  }
 
   function retainMissingSummaries(snapshot) {
     for (const run of snapshot.runs) {
@@ -83,6 +125,7 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
   }
 
   function notifyConditions(snapshot) {
+    const alerts = [];
     const next = new Map();
     for (const run of snapshot.runs) {
       for (const condition of run.conditions) {
@@ -95,11 +138,12 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
         next.set(key, severity);
         if (condition.state === 'open' && severity === 'attention' && severity !== previous) {
           const problem = condition.kind === 'repeated-verification-failure' ? 'Repeated verification failures' : 'Execution failed';
-          notify(null, `${problem}: ${run.package} (${run.assignment_id}). Inspect workspace status for recorded sources.`, 'warning');
+          alerts.push(`${problem}: ${run.package} (${run.assignment_id}). Inspect workspace status for recorded sources.`);
         }
       }
     }
     noticeSeverities = next;
+    if (alerts.length) notify(null, [...alerts.slice(0, 2), ...(alerts.length > 2 ? [`${alerts.length - 2} additional conditions in the JSON snapshot.`] : [])].join('\n'), 'warning');
   }
 
   function invalidate() {
@@ -128,6 +172,7 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
       // Excluded directories keep only 15 s reconciliation; the gap stays visible.
       note = `Watcher cap reached (${selected.length} of ${wanted.length} directories); reconciliation covers the excluded ones.`;
     }
+    if (isolatedReader) { isolatedReader.watch(selected); return; }
     for (const directory of selected) {
       if (watchers.has(directory)) continue;
       try {
@@ -156,30 +201,46 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
     return snapshot?.spec_roots ?? [];
   }
 
-  async function run(force = false) {
+  async function run(force = false, includeInactive = false) {
     if (closed || (!force && (!active || hidden))) return latest;
-    if (inFlight) return inFlight;
+    if (inFlight) {
+      if (!includeInactive) return inFlight;
+      await inFlight;
+    }
+    const readOnly = includeInactive || !active || hidden;
     inFlight = (async () => {
       if (hidden && !force) return latest;
       try {
-        const enrolled = await readEnrollments({ agentDir, scope });
-        const discovery = await repositoryDiscovery.read();
-        const enrollmentErrors = enrolled.errors ?? [];
-        const roots = [...new Set([...(enrolled.roots ?? []), ...discovery.roots])];
-        const snapshot = await collectWorkspace({
-          roots, packages: [...ownPackages], enrollmentErrors, discovery, indexDir, agentDir, scope, now,
-        });
-        if (!snapshot.runs.length && !roots.length && (enrollmentErrors.length || discovery.reasons.length) && latest) {
+        let snapshot, roots, discovery, enrollmentErrors;
+        if (isolatedReader) {
+          ({ snapshot, roots, discovery, enrollmentErrors } = await isolatedReader.read({
+            agentDir, scope, indexDir, packages: [...ownPackages], root: discoveryRootOverride, includeInactive,
+          }));
+        } else {
+          const enrolled = await readEnrollments({ agentDir, scope });
+          discovery = await repositoryDiscovery.read();
+          enrollmentErrors = enrolled.errors ?? [];
+          roots = [...new Set([...(enrolled.roots ?? []), ...discovery.roots])];
+          snapshot = await collectWorkspace({
+            roots, packages: [...ownPackages], enrollmentErrors, discovery, indexDir, agentDir, scope, now, includeInactive,
+          });
+        }
+        // History is a one-shot view, never the live alert/export state.
+        if (readOnly) return { ...snapshot, roots };
+        if (latest && (snapshot.coverage.state === 'unavailable'
+          || (!snapshot.runs.length && !roots.length && (enrollmentErrors.length || discovery.reasons.length)))) {
           // Unreadable enrollment retains the last known facts as stale
           // instead of replacing them with an unobserved empty workspace.
           latest = { ...latest, roots, coverage: { ...latest.coverage, state: 'stale', omitted: null,
-            reasons: [...new Set([...latest.coverage.reasons, ...enrollmentReasons(enrollmentErrors), ...discovery.reasons])] } };
-          note = 'Repository discovery or enrollment unreadable; status reflects the last bounded read.';
+            reasons: [...new Set([...latest.coverage.reasons, ...snapshot.coverage.reasons, ...enrollmentReasons(enrollmentErrors), ...discovery.reasons])] } };
+          note = 'Workspace read unavailable; status retains the last observed work as stale.';
+          if (!closed && !hidden) await publishSnapshot();
           if (!closed && active && !hidden) render();
           return latest;
         }
         latest = { ...retainMissingSummaries(snapshot), roots };
         note = null;
+        if (!closed && !hidden) await publishSnapshot();
         // Lifecycle fence: off or close during the asynchronous reads must
         // never install handles or render into a hidden/disposed view.
         if (!closed && active && !hidden) {
@@ -189,12 +250,20 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
         }
         return latest;
       } catch (error) {
+        if (readOnly) {
+          const message = `Sentinel workspace unavailable: ${publicHint(error?.message ?? String(error))}`;
+          return latest ? { ...latest, coverage: { ...latest.coverage, state: 'stale',
+            reasons: [...latest.coverage.reasons, message] } } : null;
+        }
         // Last known facts are kept; the failure becomes an explicit note.
         note = `Sentinel workspace unavailable: ${publicHint(error?.message ?? String(error))}`;
+        if (latest) latest = { ...latest, coverage: { ...latest.coverage, state: 'stale' } };
+        if (!closed && !hidden) await publishSnapshot();
         if (!closed && active && !hidden) render();
         return latest;
       } finally {
-        inFlight = null;
+        try { if (closed || hidden || !active) await isolatedReader?.stop(); }
+        finally { inFlight = null; }
       }
     })();
     return inFlight;
@@ -215,9 +284,14 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
           === resolve(join(current.package, 'runtime', 'runs', `${current.id}.json`)))) {
         lines.splice(1, 1);
       }
-      if (note) lines.push(note);
+      if (exportError) lines.splice(1, 0, exportError);
+      if (note) lines.splice(1, 0, note);
+      const bounded = boundedSentinelLines(lines);
+      const signature = JSON.stringify(bounded);
+      if (lastRendered === signature) return;
+      lastRendered = signature;
       displayed = true;
-      context.ui.setWidget(SENTINEL_WIDGET_KEY, lines);
+      context.ui.setWidget(SENTINEL_WIDGET_KEY, bounded);
       context.ui.setStatus(SENTINEL_WIDGET_KEY,
         `sentinel ${shown?.coverage?.state ?? 'unknown'} · ${shown?.runs?.length ?? 0} run(s)`);
     } catch { /* UI failure must not affect observation. */ }
@@ -225,6 +299,7 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
 
   function stopHandles() {
     const closing = [];
+    if (isolatedReader) closing.push(Promise.resolve(isolatedReader.stop()));
     for (const watcher of watchers.values()) {
       try { closing.push(Promise.resolve(watcher.close?.()).catch(() => {})); } catch { /* Closing is best effort. */ }
     }
@@ -262,23 +337,60 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
     return canonical;
   }
 
-  async function handler(args = '', ctx = context) {
+  function lifecycleReceipt(snapshot = null, extra = {}) {
+    return { state: closed ? 'closed' : hidden ? 'off' : active ? 'observing' : 'inactive',
+      mode: modeStatus()?.options?.mode ?? 'observe',
+      snapshot_path: exported ? publisher.path : null,
+      dashboard_url: active && !hidden ? dashboard?.url ?? null : null,
+      dashboard_state: closed || hidden || !active || !dashboard || !context?.hasUI ? 'inactive' : dashboard.url ? 'ready' : 'pending-or-unavailable',
+      ...(snapshot ? { observed_at: snapshot.coverage?.observed_at ?? null,
+        coverage: { state: snapshot.coverage?.state ?? 'unavailable', reasons: (snapshot.coverage?.reasons ?? []).slice(0, 8) },
+        runs_count: snapshot.runs?.length ?? 0, lines: boundedSentinelLines(renderWorkspace(snapshot), 24, 240) } : {}), ...extra };
+  }
+
+  async function handler(args = '', ctx = context, startOptions = null) {
     try {
       const [actionRaw, ...rest] = String(args ?? '').trim().split(/\s+/).filter(Boolean);
-      const action = (actionRaw ?? '').toLowerCase();
+      const requested = (actionRaw ?? '').toLowerCase();
+      const action = requested === 'start' ? 'observe' : requested === 'stop' ? 'off' : requested;
       // A replaced or shut-down observer must not retain or re-arm authority.
-      if (closed && ['enable', 'disable', 'off', 'add', 'root'].includes(action)) {
+      if (closed) {
         notify(ctx, 'Sentinel observer is closed; this command is refused.', 'error');
-        return;
+        return lifecycleReceipt(null, { error: 'Sentinel observer is closed; this command is refused.' });
       }
-      if (!action || action === 'status') {
+      if (!action || action.startsWith('--') || SENTINEL_MODES.includes(action)) {
+        const generation = ++lifecycleGeneration;
+        const options = startOptions ?? parseSentinelStart(requested === 'start' ? String(args).trim().replace(/^start\b/i, 'observe') : args);
+        if (options.mode === 'observe') {
+          await stopMode();
+          if (disableAuthority) await disableAuthority(ctx);
+        }
+        else {
+          if (!startMode) throw new Error('Global sentinel control is unavailable in this host.');
+          await startMode(options, ctx);
+        }
+        if (closed || generation !== lifecycleGeneration) return lifecycleReceipt(null, { fenced: true });
+        discoveryRootOverride = options.root;
+        repositoryDiscovery = createRepositoryDiscovery({ agentDir, root: options.root, now });
+        hidden = false;
+        active = false;
+        await stopHandles();
+        if (inFlight) await inFlight;
+        if (closed || generation !== lifecycleGeneration) return lifecycleReceipt(null, { fenced: true });
         activate();
+        notify(ctx, `Sentinel ${options.mode}: workspace-wide observation${options.mode === 'observe' ? '; no model calls' : `; ${options.model}; all connected sentinel coordinators`}. Runs until stopped or this session closes.`, 'info');
         const snapshot = await run(true);
-        if (!snapshot) { notify(ctx, 'Sentinel workspace unavailable.', 'error'); return; }
+        return lifecycleReceipt(snapshot);
+      }
+      if (action === 'status') {
+        if (rest.length && (rest.length !== 1 || rest[0] !== '--all')) throw new Error(USAGE);
+        const snapshot = await run(true, rest[0] === '--all');
+        if (!snapshot) { notify(ctx, 'Sentinel workspace unavailable.', 'error'); return lifecycleReceipt(null, { error: 'Sentinel workspace unavailable.' }); }
         // Explicit status carries the retained-read uncertainty too, not only
         // the unrendered observer note.
-        notify(ctx, [...renderWorkspace(snapshot), ...(note ? [note] : [])].join('\n'), 'info');
-        return;
+        const mode = modeStatus();
+        notify(ctx, [...(dashboard?.url ? [`Dashboard: ${dashboard.url}`] : []), ...(exported ? [`Snapshot: ${publisher.path}`] : []), ...renderWorkspace(snapshot), ...(mode ? [`Sentinel mode: ${mode.options.mode} · ${mode.options.model}`] : []), ...(note ? [note] : []), ...(exportError ? [exportError] : [])].join('\n'), 'info');
+        return lifecycleReceipt(snapshot);
       }
       if (action === 'root') {
         const target = rest.join(' ');
@@ -301,7 +413,6 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
       if (action === 'inspect') {
         const id = rest.join(' ');
         if (!id) throw new Error(USAGE);
-        activate();
         const snapshot = await run(true);
         const matched = snapshot?.runs?.find(item => item.assignment_id === id || item.workflow_id === id || item.package === id
           || item.package?.split('/').pop() === id
@@ -349,6 +460,7 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
         return;
       }
       if (action === 'disable') {
+        await stopMode();
         if (!disableAuthority) throw new Error('Sentinel authority is unavailable in this session.');
         const result = await disableAuthority(ctx);
         if (result.persisted === false) notify(ctx, `Sentinel authority revoked${result.was_armed ? '' : ' (none was armed)'}, but revocation persistence failed: ${result.error}. Observation remains available.`, 'warning');
@@ -356,6 +468,12 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
         return;
       }
       if (action === 'off') {
+        if (rest.length) throw new Error(USAGE);
+        lifecycleGeneration++;
+        // Fence late reads before the global revocation awaits.
+        hidden = true;
+        active = false;
+        await stopMode();
         // Revoke the live capability first, then hide observation regardless of
         // whether the revocation persisted, and report both facts.
         let revocation = { revoked: true, persisted: true, was_armed: false };
@@ -363,17 +481,20 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
           try { revocation = await disableAuthority(ctx); }
           catch (error) { revocation = { revoked: false, persisted: false, was_armed: true, error: error?.message ?? String(error) }; }
         }
-        hidden = true;
+        dashboardGeneration++;
+        dashboard?.stop();
         await stopHandles();
+        await publishSnapshot();
         clearWidgets();
         const armed = revocation.was_armed ? 'Sentinel authority revoked' : 'No live sentinel authority was armed';
         const persisted = revocation.persisted === false ? `; revocation persistence failed: ${revocation.error}` : '';
         notify(ctx, `${armed}${persisted}. Sentinel observation hidden for this session; no worker was stopped, changed or messaged.`, revocation.persisted === false ? 'warning' : 'info');
-        return;
+        return lifecycleReceipt(null, { revocation });
       }
       throw new Error(USAGE);
     } catch (error) {
       notify(ctx, `Sentinel: ${error?.message ?? String(error)}`, 'error');
+      return lifecycleReceipt(null, { error: error?.message ?? String(error) });
     }
   }
 
@@ -383,24 +504,45 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
     if (closed || hidden || active) return;
     active = true;
     if (context?.hasUI) {
+      const generation = ++dashboardGeneration;
+      if (dashboard) dashboard.start().then(result => {
+        if (closed || hidden || generation !== dashboardGeneration) return;
+        notify(null, `${result.browserError ? result.browserError + ' ' : ''}Dashboard: ${result.url}`, 'info');
+      }).catch(error => {
+        if (closed || hidden || generation !== dashboardGeneration) return;
+        notify(null, `Dashboard unavailable: ${publicHint(error.message)} Sentinel observation continues.`, 'warning');
+      });
       reconcileTimer = repeat(() => run(false), SENTINEL_RECONCILE_MS);
       reconcileTimer?.unref?.();
     }
   }
 
-  pi.registerCommand('spec-sentinel', {
-    description: 'Sentinel: read-only status/add/inspect plus live-session authority enable/disable/off',
-    handler,
+  for (const name of ['sentinel', 'spec-sentinel']) pi.registerCommand(name, {
+    description: 'Global sentinel: start/observe, shadow, recover, status, stop/off; optional --model and --root', handler,
   });
 
   return {
+    snapshotPath: publisher.path,
+    // The model-facing lifecycle has no path to diagnosis/recovery authority.
+    async lifecycle({ action, root, include_inactive = false } = {}, ctx = context) {
+      if (!['observe', 'status', 'off'].includes(action)) return lifecycleReceipt(null, { error: 'Choose observe, status or off; shadow/recover require a native /sentinel command.' });
+      if ((root !== undefined && action !== 'observe') || (include_inactive && action !== 'status'))
+        return lifecycleReceipt(null, { error: 'root applies only to observe; include_inactive applies only to status.' });
+      try {
+        const options = action === 'observe' ? { ...parseSentinelStart('observe'), root: root ? discoveryRoot(root) : null } : null;
+        return await handler(action === 'status' && include_inactive ? 'status --all' : action, ctx, options);
+      } catch (error) { return lifecycleReceipt(null, { error: error.message }); }
+    },
     refresh: () => run(false),
     close() {
       if (closed) return;
       closed = true;
+      lifecycleGeneration++;
+      dashboardGeneration++;
+      dashboard?.stop();
       const closing = stopHandles();
       clearWidgets();
-      return closing;
+      return Promise.all([closing, publishSnapshot()]);
     },
   };
 }
@@ -1679,7 +1821,7 @@ function validateSelector(value, label) {
 // Exact SentinelPolicy schema and exact nested diagnosis schema, plus canonical
 // identity, expiry, caps and action/diagnosis agreement. Unknown keys/kinds are
 // rejected rather than ignored.
-function validatePolicy(value, { now } = {}) {
+function validatePolicy(value, { now, runtime = false } = {}) {
   if (!isPlainObject(value)) fail('policy must be an object', 'policy-invalid');
   for (const key of Object.keys(value)) if (!POLICY_KEYS.has(key)) fail(`policy has an unknown key: ${key}`, 'policy-invalid');
   if (value.version !== 1) fail('policy.version must be 1', 'policy-invalid');
@@ -1696,9 +1838,11 @@ function validatePolicy(value, { now } = {}) {
     actions.push(action);
   }
   const nowMs = typeof now === 'function' ? now() : now;
-  const expiry = parseExactIso(value.expires_at, 'policy.expires_at');
-  if (expiry <= nowMs) fail('policy.expires_at must be in the future', 'policy-expired');
-  if (expiry > nowMs + 8 * 60 * 60 * 1000) fail('policy.expires_at must be no later than eight hours', 'policy-invalid');
+  if (!(runtime && value.expires_at === null)) {
+    const expiry = parseExactIso(value.expires_at, 'policy.expires_at');
+    if (expiry <= nowMs) fail('policy.expires_at must be in the future', 'policy-expired');
+    if (expiry > nowMs + 8 * 60 * 60 * 1000) fail('policy.expires_at must be no later than eight hours', 'policy-invalid');
+  }
   if (!Number.isInteger(value.max_effects) || value.max_effects < 0 || value.max_effects > AUTHORITY_MAX_EFFECTS) fail('policy.max_effects must be an integer 0..2', 'policy-invalid');
   if (!Number.isInteger(value.max_diagnostics) || value.max_diagnostics < 0 || value.max_diagnostics > AUTHORITY_MAX_DIAGNOSTICS) fail('policy.max_diagnostics must be an integer 0..2', 'policy-invalid');
   if (typeof value.authority_reference !== 'string' || !value.authority_reference.trim()) fail('policy.authority_reference is required', 'policy-invalid');
@@ -1761,12 +1905,42 @@ export function activatePolicy(authority, {
   command,
   now = Date.now,
 } = {}) {
+  const source = readPolicyFile(policyPath);
+  return activateValidatedPolicy(authority, { ...source, policyPath, coordinatorSession, command, now });
+}
+
+// Runtime modes derive scope from an existing checkpoint. The operator chooses
+// workspace behavior; identity remains an internal check at each action target.
+// No policy file or clock expiry is involved. The live controller owns revocation.
+export function activateRuntimePolicy(authority, {
+  checkpoint, mode, model, coordinator_session: coordinatorSession,
+  isActive, onShadow = () => {}, command = `/spec-sentinel ${mode}`, now = Date.now,
+} = {}) {
+  if (!checkpoint || typeof isActive !== 'function' || !isActive())
+    fail('an active sentinel controller and checkpoint are required', 'authority-invalid');
+  const value = {
+    version: 1, package: checkpoint.package, workflow_id: checkpoint.workflow_id,
+    checkout: checkpoint.checkout, coordinator_session: coordinatorSession,
+    mode, actions: ['continue', 'cancel'], expires_at: null,
+    max_effects: 2, max_diagnostics: 2, diagnosis: { model },
+    authority_reference: 'operator:runtime-mode',
+  };
+  const hash = createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  const receipt = activateValidatedPolicy(authority, {
+    value, hash, policyPath: null, coordinatorSession, command, now, isActive,
+  });
+  authorityState(authority).onShadow = onShadow;
+  return receipt;
+}
+
+function activateValidatedPolicy(authority, {
+  value, hash: sourceHash, policyPath, coordinatorSession, command, now, isActive = null,
+}) {
   const state = authorityState(authority);
   if (typeof coordinatorSession !== 'string' || !coordinatorSession) fail('coordinator_session is required', 'authority-invalid');
   // Package/workflow/checkout come only from the validated policy file, then the
   // retained checkpoint must match them; caller-supplied scope is never trusted.
-  const { value, hash: sourceHash } = readPolicyFile(policyPath);
-  const policy = validatePolicy(value, { now });
+  const policy = validatePolicy(value, { now, runtime: Boolean(isActive) });
   const canonical = canonicalPackage(policy.package);
   const packagePath = canonical.packagePath;
   const workflowId = policy.workflow_id;
@@ -1788,7 +1962,9 @@ export function activatePolicy(authority, {
     for (const action of policy.actions) if (!live.actions.includes(action)) fail(`a re-activation cannot add action ${action}`, 'policy-narrow');
     if (policy.max_effects > live.max_effects) fail('a re-activation cannot raise the effect cap', 'policy-narrow');
     if (policy.max_diagnostics > live.max_diagnostics) fail('a re-activation cannot raise the diagnostic cap', 'policy-narrow');
-    if (parseExactIso(policy.expires_at, 'policy.expires_at') > parseExactIso(live.expires_at, 'policy.expires_at')) fail('a re-activation cannot extend expiry', 'policy-narrow');
+    if (policy.expires_at !== live.expires_at && (policy.expires_at === null
+      || (live.expires_at !== null && parseExactIso(policy.expires_at, 'policy.expires_at') > parseExactIso(live.expires_at, 'policy.expires_at'))))
+      fail('a re-activation cannot extend expiry', 'policy-narrow');
     if (live.mode === 'shadow' && policy.mode === 'recover') fail('a re-activation cannot expand shadow observation into recover', 'policy-narrow');
   }
   const activatedAt = new Date(typeof now === 'function' ? now() : now).toISOString();
@@ -1808,6 +1984,7 @@ export function activatePolicy(authority, {
   // Arm only now that durable provenance and grant exist.
   state.armed = true;
   state.policy = policy;
+  state.isActive = isActive;
   state.policyHash = sourceHash;
   state.sourcePath = policyPath;
   state.packagePath = packagePath;
@@ -1836,6 +2013,7 @@ export function disablePolicy(authority, { now = Date.now, reason = 'disabled' }
   // every unfinished request exemption before any persistence can fail.
   state.liveIntents.clear();
   state.policy = null;
+  state.isActive = null;
   state.policyHash = null;
   state.sourcePath = null;
   state.packagePath = null;
@@ -1868,9 +2046,12 @@ export function readPolicyGuard(authority, { workflow_id: workflowId, now = Date
   try {
     const scoped = workflowId ?? state.workflowId;
     if (!scoped || scoped !== state.workflowId) fail('workflow_id does not match the live authority', 'policy-scope');
-    const { value, hash: sourceHash } = readPolicyFile(state.sourcePath);
+    if (state.isActive && !state.isActive()) fail('sentinel runtime mode is no longer active', 'policy-revoked');
+    const { value, hash: sourceHash } = state.isActive
+      ? { value: state.policy, hash: state.policyHash }
+      : readPolicyFile(state.sourcePath);
     if (sourceHash !== state.policyHash) fail('policy source hash changed since activation', 'policy-scope');
-    const policy = validatePolicy(value, { now });
+    const policy = validatePolicy(value, { now, runtime: Boolean(state.isActive) });
     if (canonicalPackage(policy.package).packagePath !== state.packagePath) fail('policy source package changed', 'policy-scope');
     if (policy.workflow_id !== state.workflowId) fail('policy source workflow changed', 'policy-scope');
     if (resolve(policy.checkout) !== state.checkout) fail('policy source checkout changed', 'policy-scope');
@@ -2090,6 +2271,19 @@ export function reserveIntent(authority, {
   if (kind === 'diagnose' && !guard.diagnosis) return { accepted: false, state: 'denied', blocking: true, reasons: ['diagnosis is not permitted by the guarded policy'] };
   const nowMs = typeof now === 'function' ? now() : now;
   const id = intentId(state.workflowId, kind, subjectKey);
+  if (state.isActive && guard.mode === 'shadow' && pool === 'effect') {
+    // Simulations do not spend actual action slots or suppress a later explicit
+    // switch to recover. Retain their own deduplicated observations instead.
+    const existingShadow = readStateJson(state.packagePath, state.workflowId, ['shadow', `${id}.json`]);
+    if (existingShadow) return { accepted: false, duplicate: true, state: 'shadow', blocking: false };
+    const directory = ensureStateDirectory(state.packagePath, ['runtime', 'sentinel', state.workflowId, 'shadow'], 'sentinel shadow directory');
+    const observation = { version: 1, id, kind, workflow_id: state.workflowId, package: state.packagePath,
+      subject_key: subjectKey, source_revision: sourceRevision, reason_code: `shadow-would-${kind}`,
+      observed_at: new Date(nowMs).toISOString() };
+    publishDurable(join(directory, `${id}.json`), observation, { exclusive: true, directory });
+    try { state.onShadow?.(observation); } catch { /* Reporting cannot grant an effect. */ }
+    return { accepted: false, state: 'shadow', blocking: false };
+  }
   const reservation = readReservationState(state.packagePath, state.workflowId, state.liveIntents, state.unpublishedIntents);
   const existing = readIntentRecord(state.packagePath, state.workflowId, id);
   if (existing && state.unpublishedIntents.has(id)) {

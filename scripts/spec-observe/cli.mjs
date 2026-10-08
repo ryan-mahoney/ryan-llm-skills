@@ -18,7 +18,7 @@ const usage = `Usage: node scripts/spec-observe/cli.mjs list|runs|report|metrics
   --all-sessions         Metrics across all recorded coordinator sessions, including pauses
   runs                 List managed run pointers without reading any transcripts
   --index-root PATH     Managed index (default ~/.pi/agent/spec-runtime; runs only)
-  sentinel status [--root PATH | --package PATH] [--format text|json] [--agent-dir PATH]  Discover workspace repositories (default ~/Documents)
+  sentinel status [--all] [--root PATH | --package PATH] [--format text|json] [--agent-dir PATH]  Discover workspace repositories (default ~/Documents)
   --sessions-root PATH  Default: ~/.pi/agent/sessions
   --package PATH        Discover managed runtime records and linked parent/owner/editor sessions
   --cwd PATH            Filter root sessions by exact recorded working directory
@@ -33,6 +33,7 @@ try {
   if (command === 'sentinel' && args.shift() !== 'status') throw new Error(usage);
   while (args.length) {
     const key = args.shift();
+    if (key === '--all' && command === 'sentinel') { options[key] = true; continue; }
     if (key === '--all-sessions' && command === 'metrics') { options[key] = true; continue; }
     const allowed = ['--sessions-root', '--index-root', '--package', '--cwd', '--limit', '--session', '--max-mb',
       ...(command === 'metrics' ? ['--format'] : []), ...(command === 'sentinel' ? ['--format', '--agent-dir', '--root'] : [])];
@@ -55,7 +56,7 @@ try {
     process.exit(0);
   }
   if (command === 'sentinel') {
-    if (Object.keys(options).some(key => !['--package', '--format', '--agent-dir', '--root'].includes(key))) throw new Error('sentinel status accepts only --root, --package, --format and --agent-dir.');
+    if (Object.keys(options).some(key => !['--package', '--format', '--agent-dir', '--root', '--all'].includes(key))) throw new Error('sentinel status accepts only --root, --package, --format, --agent-dir and --all.');
     if (options['--package'] && options['--root']) throw new Error('Choose --root or --package.');
     const format = options['--format'] ?? 'text';
     if (!['text', 'json'].includes(format)) throw new Error('format must be text or json');
@@ -71,7 +72,7 @@ try {
       discovery = await createRepositoryDiscovery({ agentDir, root: options['--root'] }).read();
       roots = [...new Set([...roots, ...discovery.roots])];
     }
-    const snapshot = await collectWorkspace({ roots, packages, enrollmentErrors, discovery, indexDir: path.join(agentDir, 'spec-runtime'), agentDir, scope });
+    const snapshot = await collectWorkspace({ roots, packages, enrollmentErrors, discovery, indexDir: path.join(agentDir, 'spec-runtime'), agentDir, scope, includeInactive: options['--all'] === true });
     if (format === 'json') {
       await print(JSON.stringify(enrollmentErrors.length ? { ...snapshot, enrollment_errors: enrollmentErrors } : snapshot, null, 2));
       process.exit(0);

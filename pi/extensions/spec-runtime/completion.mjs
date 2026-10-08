@@ -198,7 +198,7 @@ export function reminder(r, role = 'owner') {
 }
 // Watch artifact directories rather than every transcript/tool event. Reconciliation
 // repairs missed/coalesced fs.watch notifications without any model turn.
-export function watchProgress(packagePath, onError = () => {}, onFresh = () => {}) {
+export function watchProgress(packagePath, onError = () => {}, onFresh = () => {}, { watchDirectory = watch } = {}) {
   let closed = false, queued, signature = '';
   const watchers = new Map();
   const refresh = () => {
@@ -214,11 +214,19 @@ export function watchProgress(packagePath, onError = () => {}, onFresh = () => {
     for (const dir of dirs) {
       if (!existsSync(dir)) continue;
       if (!watchers.has(dir)) {
-        try { watchers.set(dir, watch(dir, (_event, filename) => {
+        try {
+          const watcher = watchDirectory(dir, (_event, filename) => {
           const name = filename?.toString();
           if (!name || /(?:learning|review|fix)\.md$/.test(name) || dir.endsWith('/runs') && name.endsWith('.json')) refresh();
           if (dir === packagePath && ['learnings', 'reviews', 'runtime'].includes(name)) reconcile();
-        })); } catch (error) { onError(error); }
+          });
+          watcher.on('error', error => {
+            watchers.delete(dir);
+            watcher.close();
+            if (!closed) onError(error);
+          });
+          watchers.set(dir, watcher);
+        } catch (error) { onError(error); }
       }
       for (const name of readdirSync(dir)) if (/(?:learning|review|fix)\.md$/.test(name) || dir.endsWith('/runs') && name.endsWith('.json')) {
         const s = lstatSync(join(dir, name)); parts.push(`${dir}/${name}:${s.mtimeMs}:${s.size}`);

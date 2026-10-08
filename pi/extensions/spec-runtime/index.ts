@@ -1,3 +1,4 @@
+import { createSentinelDashboard } from './sentinel-dashboard.mjs';
 import { Type } from '@earendil-works/pi-ai';
 import { getAgentDir } from '@earendil-works/pi-coding-agent';
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
@@ -7,10 +8,11 @@ import { homedir } from 'node:os';
 import { Runtime, loadRun, summary, assertLease, runEditor, runCommand, runVerification, runAdvice, runCompletion, canonicalPackage, assertIdleWriter, event as runtimeEvent } from './runtime.mjs';
 import { assertModelSelector } from './model-selector.mjs';
 import { createCommunication } from './communication.mjs';
-import { createMonitor } from './monitor.mjs';
-import { createSentinelObserver, createVerificationRecorder, recordCheckpoint as recordSentinelCheckpoint, readInboxGuard, readCheckpointRecord, observeInput, reconcileRuntimeReturn, checkpointPath, createSentinelAuthority, createDiagnosisController, activatePolicy, disablePolicy, handleBeforeSettle, finishIntent, considerCancellation } from './sentinel.mjs';
+import { createMonitor, publicHint } from './monitor.mjs';
+import { createSentinelObserver, createVerificationRecorder, readVerificationIncidents, recordCheckpoint as recordSentinelCheckpoint, readInboxGuard, readCheckpointRecord, observeInput, reconcileRuntimeReturn, checkpointPath, createSentinelAuthority, createDiagnosisController, activatePolicy, activateRuntimePolicy, disablePolicy, handleBeforeSettle, finishIntent, considerCancellation } from './sentinel.mjs';
 import { createScout, SCOUT_MODEL } from './scout.mjs';
 import { registerRepositorySearch } from './search.mjs';
+import { createSentinelControl } from './sentinel-control.mjs';
 import { installProgressContext, recordCheckpoint, refreshProgress } from './completion.mjs';
 import { metrics, formatMetrics } from './metrics.mjs';
 
@@ -203,6 +205,45 @@ export default function (pi: any) {
   let sentinelScope: any = null;
   let pendingContinuation: any = null;
   let sessionCtx: any = null;
+  let lastBoundary: any = null;
+  let diagnosisQueue: Promise<unknown> = Promise.resolve();
+  let sentinelControl: ReturnType<typeof createSentinelControl> | null = null;
+  const knownWorkflows = new Map<string, { package: string; workflow_id: string }>();
+  const runtimeAuthorities = new Map<string, any>();
+  const rememberWorkflow = (value: any) => {
+    if (!value?.package || !value?.workflow_id) return;
+    const key = `${value.package}\u0000${value.workflow_id}`;
+    knownWorkflows.delete(key);
+    knownWorkflows.set(key, { package: value.package, workflow_id: value.workflow_id });
+  };
+  const revokeRuntimeAuthorities = () => {
+    for (const entry of runtimeAuthorities.values()) {
+      entry.controller.close();
+      disablePolicy(entry.authority, { reason: 'runtime-mode-stopped-or-changed' });
+    }
+    runtimeAuthorities.clear();
+  };
+  const runtimeAuthorityFor = (value: any) => {
+    const activation = sentinelControl?.current();
+    if (!activation || !sessionCtx || !value?.package || !value?.workflow_id) return null;
+    const key = `${value.package}\u0000${value.workflow_id}`;
+    if (runtimeAuthorities.has(key)) return runtimeAuthorities.get(key);
+    try {
+      const checkpoint: any = readCheckpointRecord(value.package, value.workflow_id);
+      const coordinator_session = coordinatorIdentity(sessionCtx);
+      if (!checkpoint?.checkout || checkpoint.coordinator_session !== coordinator_session) return null;
+      const authority = createSentinelAuthority();
+      activateRuntimePolicy(authority, { checkpoint, mode: activation.options.mode, model: activation.options.model,
+        coordinator_session, isActive: () => sentinelControl?.current() === activation,
+        onShadow: (observation: any) => {
+          if (observation.kind === 'continue') sentinelControl?.report({ message: `Sentinel would continue: ${checkpoint.package} · ${checkpoint.workflow_id}.` });
+        } });
+      const entry = { authority, controller: createDiagnosisController({ authority, workflow_id: value.workflow_id, events: pi.events }),
+        scope: { package: checkpoint.package, workflow_id: checkpoint.workflow_id, coordinator_session }, activation };
+      runtimeAuthorities.set(key, entry);
+      return entry;
+    } catch { return null; }
+  };
   // Session-local native-input guard and workflow->dispatch checkout bindings for
   // the coordinator branch. Interactive/RPC input advances the revision before
   // processing; extension-originated messages never do. Never model-supplied.
@@ -264,10 +305,22 @@ export default function (pi: any) {
           expected_revision: args.expected_revision, state: args.state, obligation: args.obligation,
           workers: args.workers ?? [], inbox: args.inbox ?? {},
           reconciles_input_revision: args.reconciles_input_revision, coordinator_session, checkout });
+        rememberWorkflow(receipt);
         return result(receipt);
       } catch (error: any) { return result({ error: error.message, next: 'correct this checkpoint error; do not assume recovery authority' }, true); }
       });
     } });
+  pi.registerTool({ name: 'sentinel_lifecycle', label: 'Sentinel lifecycle',
+    description: 'Start read-only workspace observation, read bounded status, or stop sentinel supervision and its owned observer/dashboard. Use once for natural-language sentinel start/status/stop requests; do not inspect source, processes, transcripts or launch a shell daemon. Status never starts monitoring. off never stops product workers. shadow/recover require the native /sentinel command.',
+    parameters: Type.Object({ action: Type.Union(['observe', 'status', 'off'].map(value => Type.Literal(value))),
+      root: optional('Optional discovery root for observe; defaults to saved root or ~/Documents'),
+      include_inactive: Type.Optional(Type.Boolean({ description: 'Status only: include inactive packages without changing the live snapshot' })) }),
+    execute: async (_id: string, args: any, _signal: any, _update: any, ctx: any) => {
+      if (!sentinel) return result({ error: 'Sentinel lifecycle is unavailable before session startup.' }, true);
+      const receipt = await sentinel.lifecycle(args, ctx);
+      return result(receipt, Boolean(receipt.error));
+    },
+  });
   pi.registerCommand('spec-metrics', {
     description: 'Read-only timing, model/tool calls, test submissions and cost: /spec-metrics /absolute/canonical/package',
     handler: async (args: string, ctx: any) => {
@@ -281,6 +334,10 @@ export default function (pi: any) {
   });
   pi.on('session_start', (_event: any, ctx: any) => {
     sentinel?.close();
+    sentinelControl?.close();
+    revokeRuntimeAuthorities();
+    knownWorkflows.clear();
+    lastBoundary = null;
     // One fresh, disarmed capability per coordinator session. Only the native
     // command handler can arm it; the authority object is never exposed and no
     // tool, load, checkpoint or file can arm it. Session reset clears the live
@@ -292,8 +349,47 @@ export default function (pi: any) {
     diagnosisController = null;
     const authority = createSentinelAuthority();
     sentinelAuthority = authority;
-    sentinel = createSentinelObserver({ pi, context: ctx, agentDir: getAgentDir(), scope: process.env.PI_INTERCOM_SCOPE_ID ?? null, ownPackages,
+    sentinelControl = createSentinelControl(pi.events, {
+      onChange: (activation: any) => {
+        revokeRuntimeAuthorities();
+        if (activation) {
+          diagnosisController?.close();
+          diagnosisController = null;
+          sentinelScope = null;
+          disablePolicy(authority);
+          queueMicrotask(() => {
+            if (sentinelControl?.current() !== activation) return;
+            resumeIdleCoordinator();
+            for (const { record } of runtime.active.values()) {
+              if (!record.workflow_id) continue;
+              const retained = readVerificationIncidents(record.package, record.workflow_id)?.assignments?.[record.assignment_id];
+              if (retained?.state !== 'open' || retained.count < 3 || retained.replay_exhausted
+                || JSON.stringify(retained.fingerprint) !== JSON.stringify(retained.incident_fingerprint)) continue;
+              diagnoseObserved(record, { id: retained.incident_id, generation: retained.generation,
+                kind: 'repeated-verification-failure', package: record.package, workflow_id: record.workflow_id,
+                assignment_id: record.assignment_id, count: retained.count, ...retained.fingerprint,
+                linked_from: retained.linked_from, observed_at: retained.observed_at });
+            }
+          });
+        }
+      },
+      onReport: (report: any) => {
+        if (!report || typeof report.message !== 'string') return;
+        try { sessionCtx?.ui?.notify(publicHint(report.message).slice(0, 1200), report.attention ? 'warning' : 'info'); } catch { /* UI failure contained. */ }
+      },
+    });
+    sentinelControl.register();
+    sentinel = createSentinelObserver({ pi, context: ctx, isolateReader: true, dashboard: createSentinelDashboard({ agentDir: getAgentDir() }), agentDir: getAgentDir(), scope: process.env.PI_INTERCOM_SCOPE_ID ?? null, ownPackages,
       nativeRun: () => monitor.currentRun(),
+      startMode: (options: any) => {
+        diagnosisController?.close();
+        diagnosisController = null;
+        sentinelScope = null;
+        disablePolicy(authority);
+        return sentinelControl!.start(options);
+      },
+      stopMode: () => sentinelControl?.stop(),
+      modeStatus: () => sentinelControl?.current(),
       enablePolicy: (policyPath: string, commandCtx: any) => {
         // Captured at command entry, before queueing: a disable that arrives
         // while this activation waits behind workflow work must win.
@@ -335,6 +431,11 @@ export default function (pi: any) {
       } });
     monitor.close();
     const entries = ctx.sessionManager.getBranch();
+    for (const entry of entries) {
+      const message = entry.message;
+      if (message?.role === 'toolResult' && ['spec_dispatch', 'spec_sentinel_checkpoint'].includes(message.toolName))
+        rememberWorkflow(message.details);
+    }
     for (let i = entries.length - 1; i >= 0; i--) {
       const message = entries[i].message;
       if (message?.role !== 'toolResult' || message.toolName !== 'spec_dispatch') continue;
@@ -354,7 +455,7 @@ export default function (pi: any) {
     },
   });
   const verificationRecorder = createVerificationRecorder();
-  const runtime = new Runtime({ notify: (value: any) => {
+  const runtime = new Runtime({ indexDir: join(getAgentDir(), 'spec-runtime'), notify: (value: any) => {
     // On a mapped terminal runtime notification, reconcile the checkpoint before
     // sending the existing native completion message. A runtime return is
     // reconciliation work, never acceptance; any reconcile error is reported
@@ -404,15 +505,33 @@ export default function (pi: any) {
       // cancel-candidate offers guarded cancellation through the same serialized
       // workflow path and the exact live identities.
       const observed = verificationRecorder.observe(record, event);
-      if (!observed?.incident || !diagnosisController || !sentinelAuthority || !sentinelScope) return;
-      const authority = sentinelAuthority;
-      const scope = sentinelScope;
-      const controller = diagnosisController;
-      const incident = observed.incident;
-      controller.diagnose(record, incident).then((attempt: any) => {
-        if (!attempt || attempt.launched !== true || attempt.state !== 'applied' || attempt.decision !== 'cancel-candidate') return;
+      if (!observed?.incident) return;
+      diagnoseObserved(record, observed.incident);
+    } });
+  function diagnoseObserved(record: any, incident: any) {
+      const routed = runtimeAuthorityFor(record);
+      const authority = routed?.authority ?? sentinelAuthority;
+      const scope = routed?.scope ?? sentinelScope;
+      const controller = routed?.controller ?? diagnosisController;
+      if (!authority || !scope || !controller) return;
+      const job = diagnosisQueue.then(() => controller.diagnose(record, incident));
+      diagnosisQueue = job.catch(() => {});
+      job.then((attempt: any) => {
+        if (!attempt || (routed && sentinelControl?.current() !== routed.activation)) return;
+        if (routed && attempt.state === 'exhausted' && !routed.exhaustionReported) {
+          routed.exhaustionReported = true;
+          sentinelControl?.report({ message: `Sentinel diagnostic budget exhausted: ${scope.package} · ${scope.workflow_id}. Observation continues.`, attention: true });
+        }
+        if (attempt.launched !== true) return;
+        if (attempt.state !== 'applied') {
+          if (routed) sentinelControl?.report({ message: `Sentinel diagnosis unavailable: ${scope.package} · ${scope.workflow_id} · ${attempt.reason_code}.`, attention: true });
+          return;
+        }
+        if (routed) sentinelControl?.report({ message: `Sentinel diagnosis: ${scope.package} · ${scope.workflow_id} · ${attempt.decision} (${attempt.reason_code}).`, attention: attempt.decision === 'human-decision' });
+        if (attempt.decision !== 'cancel-candidate') return;
         return serializeWorkflow(async () => {
-          if (sentinelAuthority !== authority || sentinelScope !== scope || diagnosisController !== controller) return;
+          if (routed ? sentinelControl?.current() !== routed.activation
+            : sentinelAuthority !== authority || sentinelScope !== scope || diagnosisController !== controller) return;
           const result = await considerCancellation({
             authority, record, incident, packet_sha256: attempt.packet_sha256,
             adapter: (target: any) => runtime.cancel(target.package, target.id),
@@ -423,6 +542,7 @@ export default function (pi: any) {
           });
           // Surface only accepted shadow/applied/unknown transitions; duplicates
           // and guard abstentions stay silent.
+          if (routed && ['applied', 'shadow', 'unknown'].includes(result.state)) sentinelControl?.report({ message: `Sentinel cancellation ${result.state}: ${scope.package} · ${scope.workflow_id}.`, attention: result.state === 'unknown' });
           if (result.state === 'applied') {
             try { runtime.notify(summary(loadRun(record.package, record.id))); } catch { /* Notification is best effort. */ }
             try { sessionCtx?.ui?.notify(`Sentinel cancelled diagnosed work for ${scope.workflow_id}.`, 'warning'); } catch { /* UI failure contained. */ }
@@ -433,30 +553,56 @@ export default function (pi: any) {
           }
         });
       }).catch(() => { /* Diagnosis/cancellation failure never affects the lifecycle. */ });
-    } });
+  }
   // Bounded continuation: only a live armed authority with an exact scope is
   // consulted, through the shared workflow serialization. A requested identity is
   // held only until the immediately accepted continuation turn starts or the
   // session settles without it (delivery only, never acceptance).
   pi.on('agent_before_settle', (event: any) => {
-    if (!sentinelAuthority || !sentinelScope) return undefined;
-    const authority = sentinelAuthority;
-    const scope = sentinelScope;
-    return serializeWorkflow(async () => {
-      if (sentinelAuthority !== authority || sentinelScope !== scope) return undefined;
-      return handleBeforeSettle(event, { authority, workflow_id: scope.workflow_id,
+    lastBoundary = event;
+    return serializeWorkflow(() => continueAtBoundary(event));
+  });
+  async function continueAtBoundary(event: any) {
+    const entries = [...knownWorkflows.values()].reverse().map(runtimeAuthorityFor).filter(Boolean);
+    if (sentinelAuthority && sentinelScope) entries.push({ authority: sentinelAuthority, scope: sentinelScope });
+    for (const entry of entries) {
+      const { authority, scope } = entry;
+      const continued = await handleBeforeSettle(event, { authority, workflow_id: scope.workflow_id,
         package: scope.package, coordinator_session: scope.coordinator_session,
         inputGuard: () => inputGuard, activeManaged: () => runtime.active.size > 0,
         onRequested: (intent: any) => {
-          pendingContinuation = { workflow_id: scope.workflow_id, intent_id: typeof intent?.id === 'string' ? intent.id : null };
+          pendingContinuation = { workflow_id: scope.workflow_id, intent_id: typeof intent?.id === 'string' ? intent.id : null, authority, scope };
+          if (entry.activation) sentinelControl?.report({ message: `Sentinel continuing: ${scope.package} · ${scope.workflow_id}.` });
         } });
-    });
-  });
+      if (continued) return continued;
+    }
+    return undefined;
+  }
+  function resumeIdleCoordinator() {
+    // Resume only a genuinely completed native boundary retained in this live
+    // session. Do not infer readiness from elapsed time or reconstruct it from disk.
+    serializeWorkflow(async () => {
+      if (!lastBoundary || lastBoundary.outcome !== 'completed' || !sessionCtx?.isIdle?.()
+        || sessionCtx.hasPendingMessages?.() !== false || pendingContinuation) return;
+      const continued = await continueAtBoundary({ ...lastBoundary, entries: [],
+        context: { ...lastBoundary.context, pendingMessages: [] } });
+      if (!continued?.continue || !pendingContinuation) return;
+      const message = continued.entries?.find((item: any) => item.customType === 'spec-sentinel');
+      if (!message) return;
+      try { pi.sendMessage({ customType: message.customType, content: message.content, display: true }, { triggerTurn: true }); }
+      catch {
+        const pending = pendingContinuation;
+        pendingContinuation = null;
+        try { finishIntent(pending.authority, { workflow_id: pending.workflow_id, intent_id: pending.intent_id,
+          state: 'unknown', reason_code: 'undelivered' }); } catch { /* Never retry an uncertain delivery. */ }
+      }
+    }).catch(() => {});
+  }
   pi.on('agent_start', () => {
-    if (!pendingContinuation || !sentinelAuthority || !sentinelScope) return undefined;
-    const authority = sentinelAuthority;
-    const scope = sentinelScope;
+    lastBoundary = null;
+    if (!pendingContinuation) return undefined;
     const pending = pendingContinuation;
+    const { authority, scope } = pending;
     pendingContinuation = null;
     // This agent_start follows the reservation with no intervening settlement,
     // so it is the immediately accepted continuation turn the SDK started for
@@ -464,7 +610,7 @@ export default function (pi: any) {
     // Pi awaits the requested->applied delivery record before the turn
     // proceeds; never retry on failure.
     return serializeWorkflow(async () => {
-      if (sentinelAuthority !== authority || sentinelScope !== scope || !pending.intent_id) return;
+      if (!pending.intent_id) return;
       try {
         finishIntent(authority, { workflow_id: pending.workflow_id, intent_id: pending.intent_id,
           state: 'applied', reason_code: 'delivered' });
@@ -478,13 +624,12 @@ export default function (pi: any) {
   // outcome blocks automatic retry until an authorized reconciliation (AC-11),
   // instead of letting an unrelated later turn mint a false delivery receipt.
   pi.on('agent_settled', () => {
-    if (!pendingContinuation || !sentinelAuthority || !sentinelScope) return undefined;
-    const authority = sentinelAuthority;
-    const scope = sentinelScope;
+    if (!pendingContinuation) return undefined;
     const pending = pendingContinuation;
+    const { authority, scope } = pending;
     pendingContinuation = null;
     return serializeWorkflow(async () => {
-      if (sentinelAuthority !== authority || sentinelScope !== scope || !pending.intent_id) return;
+      if (!pending.intent_id) return;
       try {
         finishIntent(authority, { workflow_id: pending.workflow_id, intent_id: pending.intent_id,
           state: 'unknown', reason_code: 'undelivered' });
@@ -493,6 +638,8 @@ export default function (pi: any) {
   });
   pi.on('session_shutdown', async () => {
     monitor.close();
+    sentinelControl?.close();
+    revokeRuntimeAuthorities();
     await sentinel?.close();
     sentinel = undefined;
     sessionCtx = null;
@@ -560,6 +707,7 @@ export default function (pi: any) {
         // binding while every per-run mapping is retained for its own terminal
         // notification; only a genuinely active assignment was refused above.
         if (workflowId && receipt.run_id) {
+          rememberWorkflow({ package: args.package, workflow_id: workflowId });
           const coordinator_session = coordinatorIdentity(ctx);
           const packagePath = canonicalPackage(args.package).packagePath;
           const existing: any = readCheckpointRecord(packagePath, workflowId);
