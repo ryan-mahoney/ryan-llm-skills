@@ -547,9 +547,12 @@ empty workspace. Isolated snapshots include `reader` PID, runtime/version and sc
 duration to distinguish a current reader from an old observer. The managed runtime
 index discovers active packages outside the default Documents tree automatically.
 
-Interactive sentinel startup now opens a read-only visual dashboard backed by saved
+Interactive sentinel startup opens a visual dashboard backed by saved
 snapshot JSON. The localhost service belongs to that explicit monitor activation;
 mode changes reuse it, off/shutdown stop it, and extension loading remains inert.
 `/spec-sentinel status` includes the URL. Dashboard failure does not stop monitoring.
 The self-contained UI and manual viewer command are documented in
 [spec-observe](../../../scripts/spec-observe/README.md#sentinel-dashboard).
+The dashboard's explicit **Mark complete** action saves separate package lifecycle
+metadata without stopping workers or changing acceptance evidence. New dispatches
+or workflow checkpoint changes invalidate manual completion.

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// Read-only localhost presentation of sentinel exports. Never scans repositories,
-// imports transcripts or invokes models/workers.
+// Local sentinel presentation with one explicit package-completion write action.
+// Never imports transcripts or invokes models/workers.
 import { createServer } from 'node:http';
+import { randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
 import { open, opendir, lstat, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -9,6 +10,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { authorizePackage, listPackageFiles, readPackageFile } from './package-files.mjs';
+import { applyManualCompletions, writeManualCompletion } from './manual-completion.mjs';
+import { collectWorkspace } from './sentinel.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const MAX_FILE = 4 * 1024 * 1024, MAX_TOTAL = 12 * 1024 * 1024, MAX_FILES = 200;
@@ -71,11 +74,12 @@ export async function readDashboardState(agentDir) {
     } catch (failure) { error(source, failure); }
     finally { await handle?.close(); }
   }
-  return result;
+  return applyManualCompletions(result);
 }
 
 export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi/agent') } = {}) {
   let cached, read;
+  const actionToken = randomBytes(32).toString('hex');
   return createServer(async (request, response) => {
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
@@ -88,16 +92,43 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
     if (request.headers.origin && ![`http://127.0.0.1:${request.socket.localPort}`, `http://localhost:${request.socket.localPort}`].includes(request.headers.origin)) {
       response.writeHead(403); response.end('Same-origin access only'); return;
     }
-    if (!['GET', 'HEAD'].includes(request.method)) { response.writeHead(405, { Allow: 'GET, HEAD' }); response.end(); return; }
     const url = new URL(request.url, `http://${host}`), path = url.pathname;
+    const completionRequest = path === '/api/package-completion' && request.method === 'POST';
+    if (!['GET', 'HEAD'].includes(request.method) && !completionRequest) { response.writeHead(405, { Allow: 'GET, HEAD' }); response.end(); return; }
     try {
-      if (path === '/api/state') {
+      if (completionRequest) {
+        if (request.headers.origin !== `http://${host}` || request.headers['x-sentinel-token'] !== actionToken
+          || request.headers['content-type'] !== 'application/json') {
+          response.writeHead(403); response.end('Completion requires the local dashboard'); return;
+        }
+        let bytes = 0; const chunks = [];
+        for await (const chunk of request) {
+          bytes += Buffer.byteLength(chunk);
+          if (bytes > 8192) { response.writeHead(413); response.end(); return; }
+          chunks.push(Buffer.from(chunk));
+        }
+        let input;
+        try { input = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { response.writeHead(400); response.end(); return; }
+        const state = await readDashboardState(agentDir);
+        const root = await authorizePackage(state, input?.package);
+        const fresh = await collectWorkspace({ packages: [root], skipManagedIndex: true });
+        const current = fresh.runs.find(r => r.package === root && r.is_current_assignment === true);
+        if (fresh.coverage.state !== 'complete' || !current?.completion_revision
+          || current.completion_revision !== input.revision) {
+          response.writeHead(409, { 'Content-Type': 'application/json' });
+          response.end(JSON.stringify({ error: 'The package changed or its state is incomplete. Refresh state before marking it complete.' })); return;
+        }
+        const record = await writeManualCompletion(root, current.completion_revision);
+        cached = null;
+        response.setHeader('Content-Type', 'application/json; charset=utf-8');
+        response.end(JSON.stringify({ completed_at: record.completed_at }));
+      } else if (path === '/api/state') {
         if (!cached || Date.now() - cached.at > 1000) {
           read ??= readDashboardState(agentDir).then(value => { cached = { at: Date.now(), value }; }).finally(() => { read = null; });
           await read;
         }
         response.setHeader('Content-Type', 'application/json; charset=utf-8');
-        response.end(request.method === 'HEAD' ? undefined : JSON.stringify(cached.value));
+        response.end(request.method === 'HEAD' ? undefined : JSON.stringify({ ...cached.value, action_token: actionToken }));
       } else if (path === '/api/package-files' || path === '/api/package-file' || path.startsWith('/package-view/')) {
         const state = await readDashboardState(agentDir);
         const view = path.startsWith('/package-view/') ? path.slice('/package-view/'.length).split('/') : null;

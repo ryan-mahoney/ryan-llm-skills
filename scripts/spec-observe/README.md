@@ -22,6 +22,22 @@ text render Markdown emphasis, code, headings, lists and HTTP(S) links. Raw HTML
 is displayed as text; other link schemes cannot execute. Existing public-hint
 redaction and length limits still apply before display.
 
+**Mark complete** in a current package's detail asks for confirmation, then saves
+`sentinel-completion.json` in the canonical package. The package moves to Recently
+completed with an explicit **Marked complete** label. This records an operator's
+lifecycle decision; workers continue and step evidence, checkpoints, and PR status
+remain unchanged. A new dispatch or changed workflow checkpoint invalidates the
+decision and makes work current again. Removing the completion record also removes
+that override on the next observation.
+
+The action requires the live local dashboard, its same-origin action token, and a
+fresh bounded read matching the displayed package revision. Stale clicks, incomplete
+state, unpublished packages, and symlink targets cannot write completion. Imported
+snapshots are read-only. Saved completion appears immediately in the dashboard and
+on subsequent Sentinel observations, without rewriting observer export files.
+After installing this change, stop and restart Sentinel to load both the collector
+and dashboard service.
+
 Run cards and details show the assigned step’s position, name and total prepared
 steps from the canonical primary package’s bounded `spec-steps.json` read. The
 bar represents position in the sorted index (including sparse step numbers),
@@ -105,7 +121,8 @@ retained.
 Observe mode caches results in reader memory. Shadow/recover may atomically persist
 `sentinel-merge.json` in the canonical primary package, without changing receipts,
 checkpoint acceptance or readiness artifacts. Cold status and the standalone
-viewer never run merge commands or write package metadata.
+viewer never run merge commands. Package metadata changes only through the
+explicit **Mark complete** action described above.
 
 Package details list every file type in pages of up to 500 entries, within a
 10,000-entry/12-level enumeration limit. **Load more files** reaches later pages;
@@ -141,7 +158,7 @@ node ~/.agents/scripts/spec-observe/dashboard.mjs
 ```
 
 Optional `--port` and `--agent-dir` override the port and Pi state directory.
-Only localhost can access the read-only page and state endpoint. Stop this manual
+Only localhost can access the page and state endpoint. Stop this manual
 server with Ctrl+C; sentinel does not own or stop independently launched viewers.
 
 `dashboard.html` contains its compiled Tailwind CSS and JavaScript, with no CDN or

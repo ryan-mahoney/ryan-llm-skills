@@ -13,6 +13,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
 import { applicableMerge, validateMergeCache } from './merge-reconciliation.mjs';
+import { manualCompletion, COMPLETION_FILE } from './manual-completion.mjs';
 import { publicHint } from '../../pi/extensions/spec-runtime/monitor.mjs';
 import { discoverManaged } from './core.mjs';
 
@@ -419,7 +420,7 @@ async function packageRecentlyModified(directory, cutoff, scan) {
 }
 
 export async function collectWorkspace({ roots = [], packages = [], enrollmentErrors = [], discovery = null, indexDir = join(homedir(), '.pi/agent/spec-runtime'),
-  now = Date.now, agentDir, scope, includeInactive = false, reconcileMerge = null } = {}) {
+  now = Date.now, agentDir, scope, includeInactive = false, reconcileMerge = null, skipManagedIndex = false } = {}) {
   const tick = clock(now);
   const readTime = clockIso(tick);
   const budget = makeBudget();
@@ -478,7 +479,7 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
   // Managed index pointers are discovery hints only: reading one never enrolls
   // a repository, and a pointer without its receipt stays an observed absence.
   let managed = { runs: [], discovery_errors: [], candidates_truncated: false, runs_truncated: false };
-  try { managed = await discoverManaged(indexDir, { limit: SENTINEL_LIMITS.indexEntries, budget }); }
+  try { if (!skipManagedIndex) managed = await discoverManaged(indexDir, { limit: SENTINEL_LIMITS.indexEntries, budget }); }
   catch (error) {
     reasons.push(`index-unavailable: ${indexDir} (${codeOf(error)})`);
     unknownOmission = true;
@@ -554,8 +555,21 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
       - (Date.parse(a.receipt.started_at ?? a.receipt.dispatch_requested_at) || 0)
       || compareCandidates(a, b))[0]?.id ?? null;
     fact.candidates = candidates;
+    const checkpoints = await readCheckpoints(fact, budget);
+    fact.completionRevision = !fact.staleReceipts && !fact.receiptsIncomplete && !fact.checkpointNotes.length
+      && candidates.length && candidates.every(c => validTime(c.receipt.started_at ?? c.receipt.dispatch_requested_at))
+      && checkpoints.every(c => validTime(c.observed_at))
+      ? digestOf(JSON.stringify({
+        dispatches: candidates.map(c => [c.id, c.receipt.started_at ?? c.receipt.dispatch_requested_at]).sort((a,b) => a[0].localeCompare(b[0])),
+        checkpoints: checkpoints.map(c => [c.workflow, c.state, c.observed_at]).sort((a,b) => String(a[0]).localeCompare(String(b[0]))),
+      })) : null;
     let completion = await packageCompletion(fact, candidates, budget, noteUnknown);
-    const mergeInput = await packageMergeInput(fact, candidates, budget);
+    if (!completion && fact.completionRevision) {
+      const saved = await readJson(join(fact.packagePath, COMPLETION_FILE), SENTINEL_LIMITS.smallJsonBytes, budget,
+        { within: fact.packagePath, allow: value => value });
+      completion = manualCompletion(saved.record, fact.packagePath, fact.completionRevision, Date.parse(readTime));
+    }
+    const mergeInput = completion?.completion_basis === 'manual' ? null : await packageMergeInput(fact, candidates, budget);
     if (mergeInput) {
       let evidence;
       if (reconcileMerge) { try { evidence = await reconcileMerge(mergeInput); } catch { evidence = { state: 'unknown', reason: 'merge-check-unavailable' }; } }
@@ -847,6 +861,7 @@ async function observeRun(candidate, budget, note, readTime) {
     workflow_workers,
     workflow_observed_at,
     merge: fact.merge ?? { state: 'unknown' },
+    completion_revision: fact.completionRevision ?? null,
     is_current_assignment: fact.currentAssignment === candidate.id,
     assignment_id: typeof receipt.assignment_id === 'string' ? receipt.assignment_id : candidate.id,
     coordinator_session: typeof receipt.parent_session === 'string' ? receipt.parent_session : null,
