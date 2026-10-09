@@ -26,17 +26,20 @@ redaction and length limits still apply before display.
 `sentinel-completion.json` in the canonical package. The package moves to Recently
 completed with an explicit **Marked complete** label. This records an operator's
 lifecycle decision; workers continue and step evidence, checkpoints, and PR status
-remain unchanged. A new dispatch or changed workflow checkpoint invalidates the
-decision and makes work current again. Removing the completion record also removes
+remain unchanged. Existing worker and checkpoint updates preserve the decision.
+A dispatch started after the decision makes work current again. Removing the completion record also removes
 that override on the next observation.
 
-The action requires the live local dashboard, its same-origin action token, and a
-fresh bounded read matching the displayed package revision. Stale clicks, incomplete
-state, unpublished packages, and symlink targets cannot write completion. Imported
+The action requires the live local dashboard and its same-origin action token.
+It applies the operator's decision even when the displayed state has changed,
+the worker lease or worktree is gone, or lifecycle records are incomplete.
+Canonical package authorization and symlink protection remain required; imported
 snapshots are read-only. Saved completion appears immediately in the dashboard and
 on subsequent Sentinel observations, without rewriting observer export files.
 After installing this change, stop and restart Sentinel to load both the collector
 and dashboard service.
+An old running record without its lease or checkout is labeled **Running
+unconfirmed**; it does not establish that a worker is currently executing.
 
 Run cards and details show the assigned step’s position, name and total prepared
 steps from the canonical primary package’s bounded `spec-steps.json` read. The

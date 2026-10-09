@@ -11,7 +11,6 @@ import { fileURLToPath } from 'node:url';
 
 import { authorizePackage, listPackageFiles, readPackageFile } from './package-files.mjs';
 import { applyManualCompletions, writeManualCompletion } from './manual-completion.mjs';
-import { collectWorkspace } from './sentinel.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const MAX_FILE = 4 * 1024 * 1024, MAX_TOTAL = 12 * 1024 * 1024, MAX_FILES = 200;
@@ -111,14 +110,7 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
         try { input = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { response.writeHead(400); response.end(); return; }
         const state = await readDashboardState(agentDir);
         const root = await authorizePackage(state, input?.package);
-        const fresh = await collectWorkspace({ packages: [root], skipManagedIndex: true });
-        const current = fresh.runs.find(r => r.package === root && r.is_current_assignment === true);
-        if (fresh.coverage.state !== 'complete' || !current?.completion_revision
-          || current.completion_revision !== input.revision) {
-          response.writeHead(409, { 'Content-Type': 'application/json' });
-          response.end(JSON.stringify({ error: 'The package changed or its state is incomplete. Refresh state before marking it complete.' })); return;
-        }
-        const record = await writeManualCompletion(root, current.completion_revision);
+        const record = await writeManualCompletion(root);
         cached = null;
         response.setHeader('Content-Type', 'application/json; charset=utf-8');
         response.end(JSON.stringify({ completed_at: record.completed_at }));

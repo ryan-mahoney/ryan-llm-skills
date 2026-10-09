@@ -564,10 +564,11 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
         checkpoints: checkpoints.map(c => [c.workflow, c.state, c.observed_at]).sort((a,b) => String(a[0]).localeCompare(String(b[0]))),
       })) : null;
     let completion = await packageCompletion(fact, candidates, budget, noteUnknown);
-    if (!completion && fact.completionRevision) {
+    if (!completion) {
       const saved = await readJson(join(fact.packagePath, COMPLETION_FILE), SENTINEL_LIMITS.smallJsonBytes, budget,
         { within: fact.packagePath, allow: value => value });
-      completion = manualCompletion(saved.record, fact.packagePath, fact.completionRevision, Date.parse(readTime));
+      completion = manualCompletion(saved.record, fact.packagePath, fact.completionRevision, Date.parse(readTime),
+        candidates.map(c => c.receipt.started_at ?? c.receipt.dispatch_requested_at));
     }
     const mergeInput = completion?.completion_basis === 'manual' ? null : await packageMergeInput(fact, candidates, budget);
     if (mergeInput) {

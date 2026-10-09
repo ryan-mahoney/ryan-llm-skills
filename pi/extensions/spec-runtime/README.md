@@ -554,5 +554,7 @@ mode changes reuse it, off/shutdown stop it, and extension loading remains inert
 The self-contained UI and manual viewer command are documented in
 [spec-observe](../../../scripts/spec-observe/README.md#sentinel-dashboard).
 The dashboard's explicit **Mark complete** action saves separate package lifecycle
-metadata without stopping workers or changing acceptance evidence. New dispatches
-or workflow checkpoint changes invalidate manual completion.
+metadata without stopping workers or changing acceptance evidence. The action
+does not require complete monitoring coverage or a matching page revision.
+Existing worker/checkpoint updates preserve the decision; a dispatch started after
+the decision makes work current again.

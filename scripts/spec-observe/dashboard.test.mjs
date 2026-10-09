@@ -155,6 +155,20 @@ test('Active filter includes a current completed worker when its workflow still 
   assert.equal(vm.runInContext('activeRun(run)', context), false);
 });
 
+// Run independently: node --test --test-name-pattern='operator completion remains' scripts/spec-observe/dashboard.test.mjs
+test('operator completion remains available for an unconfirmed running record with incomplete coverage', () => {
+  const script = readFileSync(new URL('./dashboard.html', import.meta.url), 'utf8').match(/<script>([\s\S]*?)<\/script>/)[1];
+  const context = vm.createContext({ document: {}, Date, Map, Set, JSON });
+  vm.runInContext(script.slice(0, script.indexOf("$('run-list').addEventListener")), context);
+  context.run = { execution: 'running', is_current_assignment: true, completion_revision: null,
+    coverage: { state: 'partial', reasons: ['lease-missing', 'checkout-unavailable: removed'] } };
+  vm.runInContext("payload={action_token:'local-token'}", context);
+  assert.doesNotMatch(vm.runInContext('completionControl(run)', context), /disabled/);
+  assert.equal(vm.runInContext('runState(run)', context), 'Running unconfirmed');
+  vm.runInContext('imported=true', context);
+  assert.match(vm.runInContext('completionControl(run)', context), /disabled/);
+});
+
 test('task status renders Markdown while HTML, unsafe links and code remain inert', () => {
   const script = readFileSync(new URL('./dashboard.html', import.meta.url), 'utf8').match(/<script>([\s\S]*?)<\/script>/)[1];
   const elements = new Map();

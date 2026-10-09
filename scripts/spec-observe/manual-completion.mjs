@@ -7,22 +7,24 @@ import { boundedJson } from './merge-reconciliation.mjs';
 export const COMPLETION_FILE = 'sentinel-completion.json';
 export const readManualCompletion = root => boundedJson(join(root, COMPLETION_FILE), root);
 
-export function manualCompletion(record, root, revision, now = Date.now()) {
-  if (!revision || record?.schema_version !== 1 || record.kind !== 'manual_completion'
-    || record.package !== root || record.revision !== revision
+export function manualCompletion(record, root, revision, now = Date.now(), dispatches = []) {
+  if (![1, 2].includes(record?.schema_version) || record.kind !== 'manual_completion'
+    || record.package !== root
     || !Number.isFinite(Date.parse(record.completed_at)) || Date.parse(record.completed_at) > now) return null;
+  // Retain old revision-bound records. New operator overrides survive checkpoint
+  // and receipt updates; only a dispatch started after the decision reopens work.
+  if (record.schema_version === 1 && (!revision || record.revision !== revision)) return null;
+  if (record.schema_version === 2 && dispatches.some(start => Date.parse(start) > Date.parse(record.completed_at))) return null;
   return { completed_at: record.completed_at, completion_basis: 'manual' };
 }
 
-export async function writeManualCompletion(root, revision) {
-  if (!/^[a-f0-9]{64}$/.test(revision) || await realpath(root) !== root) throw Error('Invalid completion target');
+export async function writeManualCompletion(root) {
+  if (await realpath(root) !== root) throw Error('Invalid completion target');
   const path = join(root, COMPLETION_FILE);
   try {
     if (!(await lstat(path)).isFile()) throw Error('Completion path is not a regular file');
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  const existing = await readManualCompletion(root);
-  if (manualCompletion(existing, root, revision)) return existing;
-  const record = { schema_version: 1, kind: 'manual_completion', package: root, revision,
+  const record = { schema_version: 2, kind: 'manual_completion', package: root,
     completed_at: new Date().toISOString() };
   const temporary = join(root, `.sentinel-completion-${randomUUID()}.tmp`);
   try {
@@ -45,7 +47,8 @@ export async function applyManualCompletions(state) {
     if (!snapshot) continue;
     const completed = new Map();
     for (const run of snapshot.runs) {
-      const completion = manualCompletion(records.get(run.package), run.package, run.completion_revision);
+      const completion = manualCompletion(records.get(run.package), run.package, run.completion_revision, Date.now(),
+        (run.timing?.attempts ?? []).map(attempt => attempt.started_at));
       if (completion && run.is_current_assignment === true) completed.set(run.package,
         { ...run, ...completion, workflow_state: 'complete', is_current_assignment: false });
     }
