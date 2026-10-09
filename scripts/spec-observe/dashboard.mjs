@@ -8,6 +8,8 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { authorizePackage, listPackageFiles, readPackageFile } from './package-files.mjs';
+
 const here = dirname(fileURLToPath(import.meta.url));
 const MAX_FILE = 4 * 1024 * 1024, MAX_TOTAL = 12 * 1024 * 1024, MAX_FILES = 200;
 async function entries(path, accept, limit) {
@@ -78,7 +80,7 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('X-Frame-Options', 'DENY');
-    response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'");
+    response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src 'self' blob:; frame-ancestors 'none'");
     const host = request.headers.host;
     if (host !== `127.0.0.1:${request.socket.localPort}` && host !== `localhost:${request.socket.localPort}`) {
       response.writeHead(403); response.end('Local access only'); return;
@@ -87,7 +89,7 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
       response.writeHead(403); response.end('Same-origin access only'); return;
     }
     if (!['GET', 'HEAD'].includes(request.method)) { response.writeHead(405, { Allow: 'GET, HEAD' }); response.end(); return; }
-    const path = new URL(request.url, `http://${host}`).pathname;
+    const url = new URL(request.url, `http://${host}`), path = url.pathname;
     try {
       if (path === '/api/state') {
         if (!cached || Date.now() - cached.at > 1000) {
@@ -96,6 +98,24 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
         }
         response.setHeader('Content-Type', 'application/json; charset=utf-8');
         response.end(request.method === 'HEAD' ? undefined : JSON.stringify(cached.value));
+      } else if (path === '/api/package-files' || path === '/api/package-file' || path.startsWith('/package-view/')) {
+        const state = await readDashboardState(agentDir);
+        const view = path.startsWith('/package-view/') ? path.slice('/package-view/'.length).split('/') : null;
+        const requestedPackage = view ? Buffer.from(view.shift(), 'base64url').toString('utf8') : url.searchParams.get('package');
+        const requestedFile = view ? view.map(decodeURIComponent).join('/') : url.searchParams.get('file');
+        const root = await authorizePackage(state, requestedPackage);
+        if (path === '/api/package-files') {
+          response.setHeader('Content-Type', 'application/json; charset=utf-8');
+          response.end(request.method === 'HEAD' ? undefined : JSON.stringify(await listPackageFiles(root, url.searchParams.has('cursor')?Number(url.searchParams.get('cursor')):0)));
+        } else {
+          const file = await readPackageFile(root, requestedFile);
+          response.setHeader('Content-Type', view && /\.(?:js|mjs)$/i.test(requestedFile) ? 'text/javascript; charset=utf-8' : view && /\.css$/i.test(requestedFile) ? 'text/css; charset=utf-8' : file.type);
+          response.setHeader('X-Package-File-Kind', file.kind);
+          response.setHeader('X-Frame-Options', 'SAMEORIGIN');
+          response.setHeader('Content-Security-Policy', "sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'");
+          if (file.kind === 'download' || url.searchParams.has('download')) response.setHeader('Content-Disposition', 'attachment; filename="package-file"');
+          response.end(request.method === 'HEAD' ? undefined : file.bytes);
+        }
       } else if (path === '/' || path === '/dashboard.html') {
         response.setHeader('Content-Type', 'text/html; charset=utf-8');
         response.end(request.method === 'HEAD' ? undefined : await readFile(join(here, 'dashboard.html')));

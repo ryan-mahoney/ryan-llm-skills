@@ -2,7 +2,8 @@
 //
 // Every read here is observational: regular files, allowlisted fields, explicit
 // byte caps and one shared total budget. Nothing in this module writes, launches,
-// controls or models anything, and no transcript, metric or raw failure log is
+// controls or models anything by default. An explicit lifecycle callback belongs
+// to the active reader; cold collection never supplies it. No transcript, metric or raw failure log is
 // read. Observation is never acceptance (INV-2).
 
 import { createHash } from 'node:crypto';
@@ -11,6 +12,7 @@ import { open, opendir, lstat, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
+import { applicableMerge, validateMergeCache } from './merge-reconciliation.mjs';
 import { publicHint } from '../../pi/extensions/spec-runtime/monitor.mjs';
 import { discoverManaged } from './core.mjs';
 
@@ -19,6 +21,7 @@ export const SENTINEL_LIMITS = Object.freeze({
   assignments: 50,
   packageChildren: 100,
   receiptFiles: 100,
+  receiptDirectoryEntries: 5000,
   indexEntries: 1000,
   incidentEntries: 20,
   actionFiles: 64,
@@ -230,13 +233,12 @@ async function readJson(file, maxBytes, budget, { prefix = 'read-error', oversiz
 // candidates: retained non-matching names can neither stall the reader nor
 // inflate the snapshot, and an examination ceiling that prevents proving
 // completeness is reported as truncation.
-async function listDirectory(dir, limit, matcher = () => true) {
+async function listDirectory(dir, limit, matcher = () => true, examine = limit * SENTINEL_LIMITS.directoryEntryFactor) {
   let handle;
   try { handle = await opendir(dir); }
   catch (error) { return { entries: null, truncated: false, code: codeOf(error) }; }
   const entries = [];
   let truncated = false;
-  const examine = limit * SENTINEL_LIMITS.directoryEntryFactor;
   let examined = 0;
   try {
     while (examined < examine) {
@@ -326,7 +328,7 @@ function runConditions(run, snapshotObservedAt) {
   }
   for (const action of run.actions ?? []) if (action.state === 'unknown') conditions.push({
     id: sha256(JSON.stringify([run.package, action.id, 'action-outcome-unknown'])).slice(0, 32),
-    kind: 'action-outcome-unknown', severity: 'attention', state: 'unknown', action_id: action.id, fact_ids,
+    kind: 'action-outcome-unknown', severity: 'attention', state: 'unknown', action_id: action.id, current: action.current === true, fact_ids,
   });
   if (run.execution === 'completed') add('reconciliation-pending', 'info', 'open');
   else if (run.execution === 'failed') add('execution-failed', 'attention', 'open');
@@ -417,7 +419,7 @@ async function packageRecentlyModified(directory, cutoff, scan) {
 }
 
 export async function collectWorkspace({ roots = [], packages = [], enrollmentErrors = [], discovery = null, indexDir = join(homedir(), '.pi/agent/spec-runtime'),
-  now = Date.now, agentDir, scope, includeInactive = false } = {}) {
+  now = Date.now, agentDir, scope, includeInactive = false, reconcileMerge = null } = {}) {
   const tick = clock(now);
   const readTime = clockIso(tick);
   const budget = makeBudget();
@@ -552,7 +554,19 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
       - (Date.parse(a.receipt.started_at ?? a.receipt.dispatch_requested_at) || 0)
       || compareCandidates(a, b))[0]?.id ?? null;
     fact.candidates = candidates;
-    const completion = await packageCompletion(fact, candidates, budget, noteUnknown);
+    let completion = await packageCompletion(fact, candidates, budget, noteUnknown);
+    const mergeInput = await packageMergeInput(fact, candidates, budget);
+    if (mergeInput) {
+      let evidence;
+      if (reconcileMerge) { try { evidence = await reconcileMerge(mergeInput); } catch { evidence = { state: 'unknown', reason: 'merge-check-unavailable' }; } }
+      else {
+        const read = await readJson(join(fact.packagePath, 'sentinel-merge.json'), SENTINEL_LIMITS.smallJsonBytes, budget, { within: fact.packagePath, allow: value => value });
+        evidence = read.record;
+        if (!await validateMergeCache(evidence, mergeInput)) evidence = null;
+      }
+      fact.merge = evidence ? { state: evidence.state, checked_at: evidence.checked_at, reason: evidence.reason, url: evidence.url, merged_at: evidence.merged_at, head: evidence.head, merge_commit: evidence.merge_commit } : { state: 'unknown', reason: 'merge-evidence-unavailable' };
+      if (applicableMerge(evidence, mergeInput)) completion = { completed_at: evidence.merged_at, completion_basis: 'merged-pr', merge: fact.merge };
+    }
     if (completion && Date.parse(completion.completed_at) <= Date.parse(readTime)) {
       if (Date.parse(completion.completed_at) >= completionCutoff) completed.push({ fact, completion });
       if (!includeInactive) {
@@ -585,11 +599,7 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
 
   // History spends only the remaining shared read budget. Old package mtimes
   // cannot stand in for completion timestamps; inspect their completion evidence.
-  for (const fact of inactive) {
-    const completion = await packageCompletion(fact, [], budget, noteUnknown);
-    if (completion && Date.parse(completion.completed_at) >= completionCutoff
-      && Date.parse(completion.completed_at) <= Date.parse(readTime)) await collectFact(fact, false);
-  }
+  for (const fact of inactive) await collectFact(fact, false);
   completed.sort((a, b) => Date.parse(b.completion.completed_at) - Date.parse(a.completion.completed_at)
     || a.fact.packagePath.localeCompare(b.fact.packagePath));
   const recentlyCompleted = [];
@@ -620,6 +630,32 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
     completion_history: { window_ms: SENTINEL_LIMITS.recentCompletionMs, cutoff: new Date(completionCutoff).toISOString(),
       limit: SENTINEL_LIMITS.completedPackages, omitted: Math.max(0, completed.length - recentlyCompleted.length) },
     spec_roots: [...new Set([...facts.values()].map(f => dirname(f.packagePath)))], ...(discovery ? { discovery } : {}) });
+}
+
+
+// A scoped PR record permits lifecycle lookup even when planning and receipts
+// lag publication. Scoped remote or fetched Git merge proof can supersede older work records.
+async function packageMergeInput(fact, candidates, budget) {
+  const skip = reason => { fact.merge = { state: 'unknown', reason }; return null; };
+  if (fact.staleReceipts) return skip('stale-receipts');
+  if (fact.receiptsIncomplete) return skip('incomplete-receipts');
+  const checkpoints = await readCheckpoints(fact, budget);
+  if (fact.checkpointNotes.some(reason => /^checkpoints?-/.test(reason))) return skip('checkpoint-unavailable');
+  if (checkpoints.some(c => !validTime(c.observed_at))) return skip('checkpoint-time-unavailable');
+  const prRead = await readJson(join(fact.packagePath, 'pr-url.json'), SENTINEL_LIMITS.smallJsonBytes, budget,
+    { within: fact.packagePath, allow: value => value });
+  if (prRead.outcome !== 'ok') return skip(prRead.outcome === 'missing' ? 'missing-pr-record' : 'pr-record-unavailable');
+  const pr = prRead.record;
+  if (pr?.package !== fact.packagePath || pr.kind !== 'pr_submission'
+    || !/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/[1-9][0-9]*$/.test(pr.url ?? '')) return skip('pr-record-invalid');
+  const validRef = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_./-]*$/.test(value) && !value.includes('..');
+  if (pr.branch != null && !validRef(pr.branch) || pr.base != null && !validRef(pr.base)) return skip('pr-ref-invalid');
+  if (candidates.some(c => !validTime(c.receipt.started_at ?? c.receipt.dispatch_requested_at))) return skip('dispatch-time-unavailable');
+  return { package: fact.packagePath, primary: fact.primary,
+    pr: { url: pr.url, branch: pr.branch ?? null, base: pr.base ?? null }, commits: [],
+    checkpoints: checkpoints.map(c => [c.state, c.observed_at]),
+    receipts: candidates.map(c => [c.id, c.receipt.state, c.receipt.started_at ?? c.receipt.dispatch_requested_at])
+      .sort((a, b) => a[0].localeCompare(b[0])) };
 }
 
 // A workflow completion checkpoint is decisive; a terminal worker receipt is
@@ -701,7 +737,8 @@ async function collectPackage(fact, budget, report, reportUnknown) {
   if (!await readReceipt(join(fact.packagePath, 'runtime', 'run.json'))) return [...found.values()];
   const listed = await listDirectory(runsDir, SENTINEL_LIMITS.receiptFiles,
     entry => entry.isFile() && entry.name.endsWith('.json')
-      && !entry.name.endsWith('-verification.json') && !entry.name.endsWith('-completion.json'));
+      && !entry.name.endsWith('-verification.json') && !entry.name.endsWith('-completion.json'),
+    SENTINEL_LIMITS.receiptDirectoryEntries);
   if (listed.entries === null) {
     // A package without a runs directory has no receipts to observe.
     if (listed.code !== 'ENOENT') noteUnknown(`receipts-unavailable: ${runsDir} (${listed.code})`);
@@ -762,7 +799,7 @@ async function observeRun(candidate, budget, note, readTime) {
   for (const reason of fact.checkpointNotes) mark(reason);
   let workflow_id = null;
   let workflow_state = null;
-  let workflow_workers = [], workflow_observed_at = null;
+  let workflow_workers = [], workflow_observed_at = null, obligation_revision = null;
   const spec_progress = specProgress(receipt.step, steps);
   let obligation = obligationForStep(spec_progress);
   for (const checkpoint of checkpoints) {
@@ -772,6 +809,7 @@ async function observeRun(candidate, budget, note, readTime) {
     workflow_state = typeof checkpoint.state === 'string' ? checkpoint.state : null;
     workflow_workers = checkpoint.active_workers ?? [];
     workflow_observed_at = checkpoint.observed_at;
+    obligation_revision = checkpoint.obligation_revision;
     obligation = checkpoint.summary ? publicHint(checkpoint.summary) : obligation;
     const entry = fact.sources.get(`checkpoint:${checkpoint.workflow}`);
     if (entry) source.push({ file: entry.file, digest: entry.digest });
@@ -780,7 +818,7 @@ async function observeRun(candidate, budget, note, readTime) {
 
   const assignment = receipt.assignment_id ?? candidate.id;
   const incidents = fact.incidents.filter(item => item.assignment_id === assignment);
-  const actions = fact.actions.filter(item => item.workflow_id === workflow_id);
+  const actions = fact.actions.filter(item => item.workflow_id === workflow_id).map(item => ({...item, current: obligation_revision != null && item.subject_hash === digestOf(obligation_revision) || incidents.some(i=>digestOf(i.id) === item.subject_hash)}));
   for (const item of [...incidents, ...actions]) source.push(item.source);
 
   const observed_at = activity.observed ?? validTime(receipt.started_at ?? null) ?? readTime;
@@ -808,6 +846,7 @@ async function observeRun(candidate, budget, note, readTime) {
     workflow_state,
     workflow_workers,
     workflow_observed_at,
+    merge: fact.merge ?? { state: 'unknown' },
     is_current_assignment: fact.currentAssignment === candidate.id,
     assignment_id: typeof receipt.assignment_id === 'string' ? receipt.assignment_id : candidate.id,
     coordinator_session: typeof receipt.parent_session === 'string' ? receipt.parent_session : null,
@@ -1001,6 +1040,7 @@ async function readCheckpoints(fact, budget) {
         if (!value || typeof value !== 'object' || typeof value.package !== 'string') return null;
         return {
           package: value.package,
+          obligation_revision: typeof value.obligation_revision === 'string' ? value.obligation_revision : null,
           state: value.version === 1 && value.workflow_id === entry.name ? value.state : null,
           observed_at: validTime(value.observed_at),
           summary: value.obligation && typeof value.obligation === 'object' && typeof value.obligation.summary === 'string' ? value.obligation.summary : null,
@@ -1073,7 +1113,7 @@ async function readActionSummaries(fact, directory, workflow, budget) {
         && ['accepted', 'requested', 'applied', 'blocked', 'failed', 'unknown'].includes(value.state)
         && typeof value.subject_key === 'string' && value.subject_key.length > 0 && value.subject_key.length <= 160
         && typeof value.reason_code === 'string' && value.reason_code.trim().length > 0
-        ? { id: value.id, workflow_id: workflow, kind: value.kind,
+        ? { id: value.id, workflow_id: workflow, kind: value.kind, subject_hash: digestOf(value.subject_key),
             state: value.state, reason_code: SUMMARY_TOKEN.test(value.reason_code) ? value.reason_code : null } : null,
     });
     if (result.outcome !== 'ok') { fact.checkpointNotes.push(result.reason ?? `action-invalid: ${file}`); if (result.outcome === 'read-budget') break; continue; }

@@ -285,7 +285,7 @@ test('retained non-receipt entries cannot make the receipt walk unbounded', asyn
   const packagePath = pack(primary(f.dir, 'retained'));
   receipt(packagePath, { id: 'run-kept', assignment_id: 'assign-kept', state: 'running', started_at: ago(60000) });
   const runsDir = join(packagePath, 'runtime', 'runs');
-  for (let index = 0; index < 450; index++) writeFileSync(join(runsDir, `retained-${String(index).padStart(3, '0')}.jsonl`), 'retained\n');
+  for (let index = 0; index < SENTINEL_LIMITS.receiptDirectoryEntries + 50; index++) writeFileSync(join(runsDir, `retained-${String(index).padStart(3, '0')}.jsonl`), 'retained\n');
   // A current run must remain observable even when the bounded directory walk
   // cannot reach its archived receipt.
   writeFileSync(join(packagePath, 'runtime', 'run.json'), JSON.stringify({
@@ -739,4 +739,57 @@ test('spec timing retains the earliest dispatch and every attempt across assignm
   assert.equal((await collectWorkspace(input)).runs[0].timing.finished_at, ago(30000));
   receipt(packagePath, { id: 'reopened', state: 'running', started_at: ago(10000) });
   assert.equal((await collectWorkspace(input)).runs[0].timing.finished_at, null);
+});
+
+// Run independently: node --test --test-name-pattern='merged lifecycle' scripts/spec-observe/sentinel.test.mjs
+test('merged lifecycle supersedes stale draft and worker checkpoint but new dispatch keeps work current',async t=>{
+ const {mergeBinding}=await import('./merge-reconciliation.mjs');const f=sandbox(t),repo=primary(f.dir,'merged-lifecycle'),pkg=pack(repo);
+ writeFileSync(join(pkg,'spec-steps.json'),JSON.stringify({steps:[{step:1,name:'Build'}]}));mkdirSync(join(pkg,'learnings'));
+ writeFileSync(join(pkg,'learnings','step-001-learning.md'),'```yaml\nlearning:\n  version: 2\n  kind: "step"\n  step: 1\n  outcome: "as-specified"\n  commit: "'+'c'.repeat(40)+'"\n```\n');
+ writeFileSync(join(pkg,'pr-url.json'),JSON.stringify({kind:'pr_submission',package:pkg,url:'https://github.com/o/r/pull/1',branch:'feature',base:'main',draft:true,commit:'d'.repeat(40)}));
+ receipt(pkg,{id:'run',assignment_id:'attempt',state:'cancelled',started_at:ago(60000)});
+ const dir=join(pkg,'runtime','sentinel','workflow');mkdirSync(dir,{recursive:true});const checkpoint={version:1,workflow_id:'workflow',package:pkg,state:'waiting-worker',observed_at:ago(30000),workers:[{id:'attempt',kind:'owner',state:'working'}]};writeFileSync(join(dir,'checkpoint.json'),JSON.stringify(checkpoint));
+ let checks=0;const reconcileMerge=async input=>{checks++;return {schema_version:1,package:pkg,binding:mergeBinding(input),state:'merged',head:'a'.repeat(40),merge_commit:'b'.repeat(40),merged_at:ago(1000)};};
+ const input={packages:[pkg],indexDir:f.indexDir,now,reconcileMerge};const merged=await collectWorkspace(input);
+ assert.equal(checks,1);assert.equal(merged.runs.length,0);assert.equal(merged.recently_completed[0].completion_basis,'merged-pr');assert.equal(merged.recently_completed[0].execution,'cancelled','merge lifecycle does not turn a cancelled worker into success');
+ receipt(pkg,{id:'new',state:'running',started_at:ago(0)});const reopened=await collectWorkspace(input);assert.equal(reopened.recently_completed.length,0);assert.equal(reopened.runs.length,2);assert.equal(checks,2,'lookup does not supersede a dispatch newer than the merge');
+});
+
+// Run independently: node --test --test-name-pattern='scoped merged PR' scripts/spec-observe/sentinel.test.mjs
+test('scoped merged PR supersedes old running receipts and unfinished planning without inventing acceptance',async t=>{
+ const {mergeBinding}=await import('./merge-reconciliation.mjs');const f=sandbox(t),repo=primary(f.dir,'legacy-merged'),pkg=pack(repo);
+ writeFileSync(join(pkg,'spec-steps.json'),JSON.stringify({steps:[{step:1},{step:2}]}));
+ // Canonical publication records can omit branch/base and step learnings.
+ writeFileSync(join(pkg,'pr-url.json'),JSON.stringify({kind:'pr_submission',package:pkg,url:'https://github.com/o/r/pull/2',draft:true}));
+ receipt(pkg,{id:'old',state:'running',started_at:ago(60000)});
+ const dir=join(pkg,'runtime','sentinel','workflow');mkdirSync(dir,{recursive:true});writeFileSync(join(dir,'checkpoint.json'),JSON.stringify({version:1,workflow_id:'workflow',package:pkg,state:'waiting-worker',observed_at:ago(30000),workers:[{id:'old',state:'working',kind:'owner'}]}));
+ let observed;const reconcileMerge=async input=>{observed=input;return {schema_version:1,package:pkg,binding:mergeBinding(input),state:'merged',head:'a'.repeat(40),merge_commit:'b'.repeat(40),merged_at:ago(1000)};};
+ const result=await collectWorkspace({packages:[pkg],indexDir:f.indexDir,now,reconcileMerge});
+ assert.equal(observed.pr.branch,null);assert.equal(observed.pr.base,null);assert.equal(result.runs.length,0);assert.equal(result.recently_completed[0].execution,'running');assert.equal(result.recently_completed[0].completion_basis,'merged-pr');
+ const missing=pack(repo,'unpublished');receipt(missing,{id:'unpublished',state:'running',started_at:ago(1000)});
+ const next=await collectWorkspace({packages:[missing],indexDir:f.indexDir,now,reconcileMerge});assert.equal(next.runs[0].merge.reason,'missing-pr-record');
+});
+
+// Run independently: node --test --test-name-pattern='receipt discovery ignores' scripts/spec-observe/sentinel.test.mjs
+test('receipt discovery ignores hundreds of sidecar logs without weakening the actual receipt cap',async t=>{
+ const {mergeBinding}=await import('./merge-reconciliation.mjs');const f=sandbox(t),repo=primary(f.dir,'receipt-sidecars'),pkg=pack(repo);
+ receipt(pkg,{id:'current',state:'running',started_at:ago(60000)});
+ const runs=join(pkg,'runtime','runs');for(let i=0;i<510;i++)writeFileSync(join(runs,`log-${i}.md`),'ignored log');
+ writeFileSync(join(pkg,'pr-url.json'),JSON.stringify({kind:'pr_submission',package:pkg,url:'https://github.com/o/r/pull/3'}));
+ let checks=0;const reconcileMerge=async input=>{checks++;return {schema_version:1,package:pkg,binding:mergeBinding(input),state:'merged',head:'a'.repeat(40),merge_commit:'b'.repeat(40),merged_at:ago(1000)};};
+ const input={packages:[pkg],indexDir:f.indexDir,now,reconcileMerge};const merged=await collectWorkspace(input);
+ assert.equal(merged.runs.length,0);assert.equal(merged.recently_completed.length,1);assert.equal(merged.coverage.state,'complete');assert.equal(checks,1);
+ for(let i=0;i<SENTINEL_LIMITS.receiptFiles;i++)receipt(pkg,{id:`attempt-${i}`,state:'completed',started_at:ago(30000)});
+ const capped=await collectWorkspace(input);assert.equal(capped.recently_completed.length,0);assert.ok(capped.coverage.reasons.some(r=>r.startsWith('receipts-cap:')));assert.equal(checks,1,'genuine receipt truncation inhibits lifecycle reconciliation');
+});
+
+// Run independently: node --test --test-name-pattern='cold local merge' scripts/spec-observe/sentinel.test.mjs
+test('cold local merge cache stays tied to the fetched base ref',async t=>{
+ const {mergeBinding}=await import('./merge-reconciliation.mjs');const f=sandbox(t),repo=primary(f.dir,'cold-local'),pkg=pack(repo);
+ const git=(...args)=>execFileSync('git',['-C',repo,...args],{encoding:'utf8'}).trim();const head=git('rev-parse','HEAD');git('branch','feature');
+ writeFileSync(join(repo,'next'),'next');git('add','next');git('commit','-qm','Advance fixture base');const base=git('rev-parse','HEAD');git('update-ref','refs/remotes/origin/main',base);
+ receipt(pkg,{id:'old',state:'running',started_at:ago(60000)});const pr={kind:'pr_submission',package:pkg,url:'https://github.com/o/r/pull/7',branch:'feature',base:'main'};writeFileSync(join(pkg,'pr-url.json'),JSON.stringify(pr));
+ const input={package:pkg,primary:repo,pr,commits:[],receipts:[['old','running',ago(60000)]],checkpoints:[]};writeFileSync(join(pkg,'sentinel-merge.json'),JSON.stringify({schema_version:1,package:pkg,binding:mergeBinding(input),url:pr.url,branch:'feature',base:'main',head,merge_commit:base,merged_at:ago(1000),state:'merged',reason:'local-pr-merge',evidence_source:'local-git',base_tip:base}));
+ const options={packages:[pkg],indexDir:f.indexDir,now};assert.equal((await collectWorkspace(options)).recently_completed.length,1);
+ git('update-ref','refs/remotes/origin/main',head);const rewound=await collectWorkspace(options);assert.equal(rewound.recently_completed.length,0);assert.equal(rewound.runs.length,1);assert.equal(rewound.runs[0].merge.reason,'merge-evidence-unavailable');
 });

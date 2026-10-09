@@ -516,7 +516,7 @@ timestamps because a crashed observer cannot mark its file closed. These snapsho
 are read-only facts for dashboards and tooling, never recovery authority. See the
 [skill](../../../skills/spec-sentinel/SKILL.md#json-snapshots-for-other-tools) for fields.
 
-Sentinel isolates discovery, Git reads and Chokidar in a read-only child process
+Sentinel isolates discovery, Git reads and Chokidar in a child process
 with ignored terminal streams. Scans expire after ten seconds, retaining stale
 facts and retrying after a cooldown; off/close stops that helper. The terminal
 widget is bounded to eight short lines and unchanged observations skip redraws.
@@ -526,7 +526,19 @@ The default view also excludes recorded completed workflows. A terminal step
 receipt alone is insufficient; completion comes from a complete workflow checkpoint
 or legacy ready-tour/publication records at the same commit. A subsequent dispatch
 or noncomplete workflow checkpoint keeps reopened work visible. History remains
-available with `status --all`.
+available with `status --all`. Active observers additionally check scoped canonical
+PR publication records against authoritative merged PR metadata and the associated
+local branch head (or confirmed branch absence). Before API calls, a bounded local
+fallback can match the exact conventional PR merge commit on the fetched origin
+base and its second parent to the current branch. It records local Git evidence
+separately from remote metadata and rejects unpublished local merges or ancestry
+alone. Both cold and active local cache reads validate the fetched base tip. Stale planned steps, learnings and
+premerge worker states do not prevent lifecycle reconciliation; newer dispatches or
+noncomplete postmerge checkpoints keep reopened work current. Observe mode keeps merge evidence in memory; shadow/recover may
+persist only the dedicated canonical `sentinel-merge.json` lifecycle record. This
+does not rewrite acceptance, worker receipts or workflow checkpoints. Reopened
+work invalidates old merge evidence. Cold status never invokes merge commands.
+See the dashboard documentation for polling, eligibility and viewer bounds.
 
 Repository identity observation reads bounded Git metadata (`.git`, worktree gitdir,
 `commondir`, and `HEAD`) directly, without spawning Git. A failed identity/discovery

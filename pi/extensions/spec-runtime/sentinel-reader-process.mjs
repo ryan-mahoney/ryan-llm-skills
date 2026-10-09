@@ -1,5 +1,6 @@
 // Scans and recursive watchers live outside Pi's UI process. This process is
-// observation-only: no models, worker control, recovery grants or repo writes.
+// no models, worker control or recovery grants. Explicit shadow/recover reads
+// may reconcile a dedicated merge metadata file in a canonical package.
 import { fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -94,6 +95,7 @@ export function createSentinelReaderProcess({ onChange = () => {}, onError = () 
 if (process.argv[2] === '--sentinel-observer-child') {
   const { collectWorkspace, readEnrollments } = await import('../../../scripts/spec-observe/sentinel.mjs');
   const { createRepositoryDiscovery } = await import('../../../scripts/spec-observe/discovery.mjs');
+  const { createMergeReconciler } = await import('../../../scripts/spec-observe/merge-reconciliation.mjs');
   const { watchSpecTree } = await import('./spec-watcher.mjs');
   const watchers = new Map();
   let discovery, discoveryKey, changeTimer;
@@ -134,7 +136,7 @@ if (process.argv[2] === '--sentinel-observer-child') {
       const enrolled = await readEnrollments(options);
       const found = await discovery.read();
       const roots = [...new Set([...enrolled.roots, ...found.roots])];
-      const snapshot = await collectWorkspace({ ...options, roots, discovery: found, enrollmentErrors: enrolled.errors });
+      const snapshot = await collectWorkspace({ ...options, roots, discovery: found, enrollmentErrors: enrolled.errors, reconcileMerge: options.mergeLookup ? createMergeReconciler({ persist: options.reconcileMergeMetadata === true }) : null });
       snapshot.reader = { isolated: true, pid: process.pid, runtime: process.release.name, runtime_version: process.version, scan_ms: Math.round(performance.now() - started) };
       send({ type: 'result', id: message.id, value: { snapshot, roots, discovery: found, enrollmentErrors: enrolled.errors } });
       watchTargets(message.targets);

@@ -14,10 +14,10 @@ Mode changes reuse the same dashboard. A failed browser launch leaves its URL
 available to open manually, and a failed service launch does not stop observation.
 
 The dashboard uses the Adjacent workspace shell's dark split-pane layout. Search
-repositories/packages, filter runs, then select a run for activity, obligations,
+repositories/packages, filter current packages, then select a package for activity, obligations,
 incidents, actions, coverage and paths. Freshness and observer heartbeat are shown
 separately. It reads existing JSON exports every five seconds, without new model
-calls or repository scans. No worker controls are exposed. Task activity and obligation
+calls. Its file endpoints read only canonical packages authorized by those exports. No worker controls are exposed. Task activity and obligation
 text render Markdown emphasis, code, headings, lists and HTTP(S) links. Raw HTML
 is displayed as text; other link schemes cannot execute. Existing public-hint
 redaction and length limits still apply before display.
@@ -31,16 +31,18 @@ steps. Snapshots expose these facts as `spec_progress`; `accepted_steps` remains
 null because observation does not establish acceptance.
 
 An active detail selection follows the package's current assignment on refresh,
-so its progress advances when the next step starts. Selecting a historical attempt
-keeps that attempt selected. Filters appear as **Active**, **Attention**, **Runs**,
-and **Recently completed**; Active is selected initially.
+so its progress advances when the next step starts. Filters appear as **Active**, **Attention**, and **Recently completed**, with count
+badges. Active is selected initially. Attention includes current blocked or
+decision-required obligations and current unresolved incidents; historical attempts
+and generic coverage gaps stay available as evidence without becoming alerts.
 
 **Recently completed** retains one entry per spec completed in the last seven days,
 newest first, with its recorded completion time and completion basis. A complete
 workflow checkpoint or matching ready-tour/non-draft PR publication establishes
 completion; a worker exit alone does not. Reopened workflows, later dispatches,
 unfinished workers and incomplete receipt reads prevent confirmed completion.
-Completion does not establish merge status. Search also applies to this view.
+Completion alone does not establish merge status. A confirmed merged PR supplies
+a separate `merged-pr` completion basis. Search also applies to this view.
 
 Snapshots carry `recently_completed` separately from monitored `runs`, so history
 does not create recovery conditions or consume the 50-assignment display limit.
@@ -51,6 +53,70 @@ The dashboard uses authoritative observer snapshots, without accumulating browse
 history. Older snapshots remain readable and explicitly show unavailable completion
 history. Updated observers supply the collection on their next snapshot; an already
 running Pi session needs to load the updated observer code first.
+
+Active observers check scoped canonical `pr_submission` records against authoritative
+GitHub PR metadata. Missing stored branch/base fields are filled from that response;
+when present they must match. The associated local branch tip must equal the merged
+PR head, or the branch must be demonstrably absent. Loose and packed refs are read
+without Git subprocesses. This also handles squash merges, rebased learnings and
+branches deleted after publication.
+
+Before an API lookup, Sentinel can confirm a conventional PR merge from fetched Git
+history. The canonical GitHub origin repository must match the PR URL. Within the
+newest 100 first-parent commits on `origin/<base>`, exactly one two-parent commit
+must have the matching `Merge pull request #N from owner/branch` subject, and its
+second parent must equal the current local associated branch head. Missing branch
+metadata can come from that exact subject; missing base metadata requires the
+unambiguous `origin/HEAD` default. An unpublished merge on local `main`, ancestry
+alone, another PR/repository, an advanced branch or newer dispatch does not suffice.
+
+This records `reason: local-pr-merge`, `evidence_source: local-git`, the merge commit,
+fetched base tip and Git committer timestamp. It proves scoped integration in the
+fetched repository history, not a fresh GitHub API response or acceptance. Squash,
+fast-forward and unconventional merge messages still need API evidence, as do
+first-time confirmations without a matching local branch. A later authoritative
+unmerged response outweighs this local convention; it is refreshed when its poll
+interval expires. Both active and cold cache reads reject a changed fetched base.
+
+A confirmed merged PR records lifecycle completion, independently of acceptance.
+Stale draft metadata, incomplete planned steps, missing/older-format learnings and
+older running worker receipts cannot prevent that lifecycle check. Receipts and
+checkpoints retain their recorded states. Dispatches newer than the merge,
+noncomplete checkpoints newer than the merge and new branch commits keep reopened
+work current. Unreadable/incomplete receipts or checkpoints cannot prove the absence
+of reopened work; those remain unknown with a bounded `merge.reason`. Receipt
+discovery examines up to 5,000 directory entries while retaining the separate
+100-receipt cap, so verification logs and transcripts do not consume the receipt
+allowance. Genuine entry or receipt truncation stays conservative. A package
+without a scoped PR record is not associated with a PR by guesswork.
+
+Each scan permits three local proof attempts and two seconds of local Git command
+work, with each command capped at 750 ms. It permits three external PR checks and
+six seconds of network work, with each call capped at 3.5 seconds. Both paths
+respect their remaining budgets and an eight-second combined command-work cap.
+Discovery/file-reading time does not spend that budget. Recorded local misses and API failures retry after
+one minute, allowing later packages their turn; authoritative unmerged responses retry after ten minutes. Stable merged
+evidence only needs a local ref check, including after the network budget is spent.
+Historical receipt-state or premerge checkpoint reconciliation reuses that confirmed
+PR/ref association; it does not force another API call. Newer work still invalidates
+the confirmation. API failure reasons distinguish network, timeout, authentication,
+rate limiting, missing client and malformed response failures; raw stderr is never
+retained.
+Observe mode caches results in reader memory. Shadow/recover may atomically persist
+`sentinel-merge.json` in the canonical primary package, without changing receipts,
+checkpoint acceptance or readiness artifacts. Cold status and the standalone
+viewer never run merge commands or write package metadata.
+
+Package details list every file type in pages of up to 500 entries, within a
+10,000-entry/12-level enumeration limit. **Load more files** reaches later pages;
+truncation and read errors are visible. Reads accept regular files up to 8 MiB.
+Links, traversal, unpublished packages and worktree copies are rejected. Images,
+Markdown (including tables and fenced code), formatted JSON, YAML and text render
+in the viewer; unsupported binaries download. Package-relative Markdown links
+and images remain within the authorized package. Standalone HTML uses an opaque
+sandboxed iframe with package-relative scripts/styles/images, no external resources, fetch requests,
+forms or parent-page access. The selected viewer stays mounted across refreshes.
+Missing tours are reported, and offline imports have no filesystem access.
 
 Details show time since the first recorded dispatch and a duration for each step
 attempt, including retries, waits and verification. Timing reuses the bounded

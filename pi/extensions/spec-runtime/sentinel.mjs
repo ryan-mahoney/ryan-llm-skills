@@ -2,7 +2,7 @@
 //
 // Observation is read-only: it collects bounded workspace facts and renders them
 // as plain status, and never starts, stops, messages or cancels a worker. Its only
-// writes include atomic public snapshots, discovery settings, optional enrollments and the
+// writes include dedicated merge metadata in shadow/recover, atomic public snapshots, discovery settings, optional enrollments and the
 // explicit native policy/authority storage created by /spec-sentinel enable (with
 // /spec-sentinel disable revocation), which arms a session-local capability only.
 
@@ -16,6 +16,7 @@ import { publicHint } from './monitor.mjs';
 import { createOwnedLeaf } from './scout.mjs';
 import { collectFacts } from '../../../scripts/jev/core.mjs';
 import { collectWorkspace, reduceConditions, renderWorkspace, enrollmentDirectory, readEnrollments, enrollmentReasons, SENTINEL_LIMITS } from '../../../scripts/spec-observe/sentinel.mjs';
+import { createMergeReconciler } from '../../../scripts/spec-observe/merge-reconciliation.mjs';
 import { createRepositoryDiscovery, saveDiscoveryRoot, discoveryRoot } from '../../../scripts/spec-observe/discovery.mjs';
 import { parseSentinelStart, SENTINEL_MODES } from './sentinel-options.mjs';
 import { createSentinelReaderProcess } from './sentinel-reader-process.mjs';
@@ -128,6 +129,7 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
     const alerts = [];
     const next = new Map();
     for (const run of snapshot.runs) {
+      if (run.is_current_assignment !== true) continue;
       for (const condition of run.conditions) {
         if (!['repeated-verification-failure', 'execution-failed'].includes(condition.kind)) continue;
         const key = `${run.package}\u0000${run.assignment_id}\u0000${condition.kind}\u0000${condition.incident_id ?? ''}`;
@@ -214,7 +216,7 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
         let snapshot, roots, discovery, enrollmentErrors;
         if (isolatedReader) {
           ({ snapshot, roots, discovery, enrollmentErrors } = await isolatedReader.read({
-            agentDir, scope, indexDir, packages: [...ownPackages], root: discoveryRootOverride, includeInactive,
+            agentDir, scope, indexDir, packages: [...ownPackages], root: discoveryRootOverride, includeInactive, mergeLookup: !readOnly, reconcileMergeMetadata: !readOnly && ['shadow','recover'].includes(modeStatus()?.options?.mode),
           }));
         } else {
           const enrolled = await readEnrollments({ agentDir, scope });
@@ -223,6 +225,7 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
           roots = [...new Set([...(enrolled.roots ?? []), ...discovery.roots])];
           snapshot = await collectWorkspace({
             roots, packages: [...ownPackages], enrollmentErrors, discovery, indexDir, agentDir, scope, now, includeInactive,
+            reconcileMerge: readOnly ? null : createMergeReconciler({ persist: ['shadow','recover'].includes(modeStatus()?.options?.mode), now }),
           });
         }
         // History is a one-shot view, never the live alert/export state.

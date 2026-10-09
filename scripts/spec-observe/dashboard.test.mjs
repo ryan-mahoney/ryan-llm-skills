@@ -100,7 +100,7 @@ test('attempt reasons and unfinished workers distinguish execution from handoff 
 test('partial workspace coverage stays in the footer while connection failures use the notice', () => {
   const script = readFileSync(new URL('./dashboard.html', import.meta.url), 'utf8').match(/<script>([\s\S]*?)<\/script>/)[1];
   const elements = new Map();
-  const document = { getElementById(id) {
+  const document = { querySelectorAll: () => [], getElementById(id) {
     if (!elements.has(id)) elements.set(id, { textContent: '', className: '', classList: { toggle(name, value) { this[name] = value; } } });
     return elements.get(id);
   } };
@@ -112,12 +112,12 @@ test('partial workspace coverage stays in the footer while connection failures u
       reasons: ['roots-cap: selected 20 of 27', 'index-entry-invalid: removed test package'] },
     runs: [{ package: '/repo/.specs/feature', coverage: { state: 'complete' } }] } }] };
   vm.runInContext(`payload=${JSON.stringify(snapshot)};status()`, context);
-  assert.equal(elements.get('notice').textContent, '');
+  assert.equal(elements.get('notice').innerHTML, '');
   assert.equal(elements.get('notice').classList.hidden, true);
   assert.match(elements.get('observer-summary').textContent, /Workspace partial \(7 roots skipped\)/);
 
   vm.runInContext("error='Could not refresh workspace state.';status()", context);
-  assert.match(elements.get('notice').textContent, /Could not refresh workspace state/);
+  assert.match(elements.get('notice').innerHTML, /Could not refresh workspace state/);
   assert.equal(elements.get('notice').classList.hidden, false);
 });
 
@@ -158,7 +158,7 @@ test('Active filter includes a current completed worker when its workflow still 
 test('task status renders Markdown while HTML, unsafe links and code remain inert', () => {
   const script = readFileSync(new URL('./dashboard.html', import.meta.url), 'utf8').match(/<script>([\s\S]*?)<\/script>/)[1];
   const elements = new Map();
-  const document = { getElementById(id) {
+  const document = { querySelectorAll: () => [], getElementById(id) {
     if (!elements.has(id)) elements.set(id, { innerHTML: '', querySelectorAll: () => [] });
     return elements.get(id);
   } };
@@ -177,14 +177,14 @@ test('task status renders Markdown while HTML, unsafe links and code remain iner
   context.run = { key: 'current', package: '/repo/.specs/feature', activity: '**Writing** the fix',
     obligation: 'Review `worker.js`', observer: { snapshot: { coverage: {} } } };
   vm.runInContext('records=[run];selected=run.key;renderDetail()', context);
-  assert.match(elements.get('run-detail').innerHTML, /class="activity status-markdown"><p><strong>Writing<\/strong> the fix/);
-  assert.match(elements.get('run-detail').innerHTML, /class="obligation status-markdown"><p>Review <code>worker.js<\/code>/);
+  assert.match(elements.get('observation-detail').innerHTML, /class="activity status-markdown"><p><strong>Writing<\/strong> the fix/);
+  assert.match(elements.get('observation-detail').innerHTML, /class="obligation status-markdown"><p>Review <code>worker.js<\/code>/);
 });
 
 test('refresh follows the next assignment for an active spec and preserves historical selection', async () => {
   const script = readFileSync(new URL('./dashboard.html', import.meta.url), 'utf8').match(/<script>([\s\S]*?)<\/script>/)[1];
   const elements = new Map();
-  const document = { getElementById(id) {
+  const document = { querySelectorAll: () => [], getElementById(id) {
     if (!elements.has(id)) elements.set(id, { innerHTML: '', value: '', scrollTop: 0,
       querySelectorAll: () => [], setAttribute() {}, removeAttribute() {},
       classList: { toggle() {} } });
@@ -203,14 +203,14 @@ test('refresh follows the next assignment for an active spec and preserves histo
   await vm.runInContext('refresh()', context);
   next = snapshot([run('one', 1, true, 'completed')]);
   await vm.runInContext('refresh()', context);
-  assert.match(elements.get('run-detail').innerHTML, /Step 1 of 3/);
+  assert.match(elements.get('observation-detail').innerHTML, /Step 1 of 3/);
   next = snapshot([run('one', 1, false, 'completed'), run('two', 2, true, 'running')]);
   await vm.runInContext('refresh()', context);
-  assert.match(elements.get('run-detail').innerHTML, /Step 2 of 3/);
-  assert.match(elements.get('run-detail').innerHTML, /max="3" value="2"/);
+  assert.match(elements.get('observation-detail').innerHTML, /Step 2 of 3/);
+  assert.match(elements.get('observation-detail').innerHTML, /max="3" value="2"/);
   vm.runInContext("selected=records.find(r=>r.assignment_id==='one').key;renderDetail()", context);
   await vm.runInContext('refresh()', context);
-  assert.match(elements.get('run-detail').innerHTML, /Step 1 of 3/);
+  assert.match(elements.get('observation-detail').innerHTML, /Step 1 of 3/);
 });
 
 test('timing shows retries independently and freezes offline or completed observations', () => {
@@ -252,7 +252,7 @@ test('timing shows retries independently and freezes offline or completed observ
 test('recently completed view separates specs from runs, sorts by completion and drops reopened history on refresh', () => {
   const script = readFileSync(new URL('./dashboard.html', import.meta.url), 'utf8').match(/<script>([\s\S]*?)<\/script>/)[1];
   const elements = new Map();
-  const document = { getElementById(id) {
+  const document = { querySelectorAll: () => [], getElementById(id) {
     if (!elements.has(id)) elements.set(id, { innerHTML: '', value: '', scrollTop: 0,
       querySelectorAll: () => [], classList: { toggle() {} } });
     return elements.get(id);
@@ -272,7 +272,7 @@ test('recently completed view separates specs from runs, sorts by completion and
   vm.runInContext("filter='completed';selected=null;render()", context);
   assert.equal(vm.runInContext('visibleRecords()[0].package', context), '/z/.specs/newer');
   assert.equal(vm.runInContext('visibleRecords().length', context), 2);
-  assert.match(elements.get('run-detail').innerHTML, /Workflow marked complete/);
+  assert.match(elements.get('observation-detail').innerHTML, /Workflow marked complete/);
   assert.equal(vm.runInContext('activeRun(visibleRecords()[0]) || attention(visibleRecords()[0])', context), false);
   elements.get('repo-search').value = 'older';
   assert.equal(vm.runInContext('visibleRecords()[0].package', context), '/a/.specs/older');
@@ -285,4 +285,29 @@ test('recently completed view separates specs from runs, sorts by completion and
   assert.match(elements.get('filter-note').textContent, /unavailable/);
   context.bad = { runs: [], recently_completed: [{ completed_at: 'invalid', completion_basis: 'workflow-checkpoint' }] };
   assert.throws(() => vm.runInContext('normalize(bad)', context));
+});
+
+// Run independently: node --test --test-name-pattern='Attention includes' scripts/spec-observe/dashboard.test.mjs
+test('Attention includes current blocked obligations but excludes superseded incidents and generic coverage gaps',()=>{
+ const script=readFileSync(new URL('./dashboard.html',import.meta.url),'utf8').match(/<script>([\s\S]*?)<\/script>/)[1];
+ const context=vm.createContext({document:{},Date,Map,Set,JSON});vm.runInContext(script.slice(0,script.indexOf("$('run-list').addEventListener")),context);
+ context.run={is_current_assignment:true,execution:'completed',workflow_state:'blocked',conditions:[],incidents:[],coverage:{state:'complete'}};
+ assert.equal(vm.runInContext('attention(run)',context),true);
+ context.run.is_current_assignment=false;context.run.incidents=[{state:'open'}];assert.equal(vm.runInContext('attention(run)',context),false);
+ context.run={is_current_assignment:true,execution:'running',conditions:[{kind:'action-outcome-unknown',state:'unknown',severity:'attention',current:false}],coverage:{state:'partial'}};
+ assert.equal(vm.runInContext('attention(run)',context),false);context.run.conditions[0].current=true;assert.equal(vm.runInContext('attention(run)',context),true);
+ assert.match(vm.runInContext('statusMarkdown("| Name | State |\\n| --- | --- |\\n| **Build** | ready |")',context),/<table/);
+ assert.match(vm.runInContext('statusMarkdown("| Name | State |\\n| --- | --- |\\n| **Build** | ready |")',context),/<strong>Build<\/strong>/);
+});
+
+// Run independently: node --test --test-name-pattern='isolates package HTML' scripts/spec-observe/dashboard.test.mjs
+test('dashboard isolates package HTML and serves only authorized package-relative resources',async t=>{
+ const {realpathSync}=await import('node:fs');const f=fixture(t),repo=realpathSync(f.dir),pkg=join(repo,'.specs','feature');mkdirSync(pkg,{recursive:true});mkdirSync(join(repo,'.git'));mkdirSync(join(pkg,'assets'));
+ writeFileSync(join(pkg,'work-tour.html'),'<script src="assets/tour.js"></script>');writeFileSync(join(pkg,'assets','tour.js'),'document.body.textContent="Tour"');writeFileSync(join(pkg,'assets','tour.css'),'body{color:red}');
+ const value=envelope('a');value.snapshot.runs=[{package:pkg}];writeFileSync(join(f.observers,'a.json'),JSON.stringify(value));const server=createDashboardServer({agentDir:f.dir});
+ const prefix='/package-view/'+Buffer.from(pkg).toString('base64url')+'/';const html=await request(server,prefix+'work-tour.html');
+ assert.equal(html.status,200);assert.match(html.headers['Content-Security-Policy'],/sandbox allow-scripts;/);assert.doesNotMatch(html.headers['Content-Security-Policy'],/allow-same-origin/);assert.match(html.headers['Content-Security-Policy'],/connect-src 'none'/);
+ assert.equal(html.headers['X-Frame-Options'],'SAMEORIGIN');assert.match((await request(server,prefix+'assets/tour.js')).headers['Content-Type'],/javascript/);assert.match((await request(server,prefix+'assets/tour.css')).headers['Content-Type'],/text\/css/);
+ assert.notEqual((await request(server,'/api/package-file?'+new URLSearchParams({package:pkg,file:'../../secret'}))).status,200);
+ assert.notEqual((await request(server,'/api/package-files?'+new URLSearchParams({package:repo}))).status,200);
 });
