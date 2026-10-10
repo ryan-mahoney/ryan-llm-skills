@@ -235,9 +235,10 @@ revision because the human answer is native input. Then call `spec_dispatch` wit
 `action: start`, the same `package`, `step`, and `checkout`, the recorded owner as
 `owner_model` or `owner_override`, the recorded `editor_model`, `scout_model`,
 `child_extensions`, `session_scope` and `timeout_ms`, plus the `workflow_id`, a new
-`assignment_id` such as `<step-basename>-clarified-1`, `attempt_kind: implementation`,
+`assignment_id` such as `step-003-clarified-1`, `attempt_kind: implementation`,
 and `instructions` equal to the prior direction followed by one
 `Clarification: Q: <question> A: <answer> Source: <decision or file>` line per gap.
+The attempt ID must be 1-128 characters of ASCII letters, digits, underscore or hyphen with no file extension.
 Expect the runtime to reuse the retained owner and editor sessions because the session
 key excludes `instructions`, and to refuse the old attempt ID. Record the question,
 answer, source and new attempt ID in the checkpoint decisions, or in `run-ledger.md`
