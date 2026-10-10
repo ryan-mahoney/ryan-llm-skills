@@ -76,8 +76,8 @@ branch audit is assumed.
   evidence, which does not exist yet. Use the step index to locate later ownership,
   reading a later card only when needed to resolve a dependency or planned deferral.
   Behavior assigned to a later step is planned work, not a finding.
-- Load dismissals from earlier `reviews/step-<k>-fix.md` files under the Load Prior
-  Dismissals rules.
+- Load dismissals from earlier `reviews/step-<k>-fix.md` files, and for `final-2`
+  from `reviews/final-1-fix.md`, under the Load Prior Dismissals rules.
 - Verdict in-range fixes: for every `reviews/*-fix.md` record whose `commit:` is a
   full SHA listed by `git rev-list <since>..<head>`, read each `decision: fixed`
   entry's file/symbol with `git show <head>:<path>`; record a `resolved` or
@@ -539,10 +539,10 @@ always-emit rule lives once in Severity, Actionability, Verdict.)
 - **Do not report** (no evidence in the diff = not a finding): hypothetical issues
   in code not shown; style or naming opinions that do not affect correctness;
   "missing tests" unless the change adds testable behavior with no coverage;
-  a defect the reviewed range did not introduce — except an unresolved `fixed` decision
-  whose fix commit is in the reviewed range, which Step Scope re-emits under its
-  fix-verdict rule — a pre-existing defect in surrounding code is not a finding unless
-  the change worsens or depends on it, and a separate process reviews broader defects;
+  a defect the reviewed range did not introduce — a pre-existing defect in surrounding
+  code is not a finding unless the change worsens or depends on it, and a separate
+  process reviews broader defects (exception: an unresolved `fixed` decision whose fix
+  commit is in the reviewed range, which Step Scope re-emits under its fix-verdict rule);
   patterns consistent with visible codebase conventions — *unless* this change
   introduces a docstring or contract claim its own code contradicts, which a matching
   sibling-module shape does **not** license, or a copy of another module's helper,

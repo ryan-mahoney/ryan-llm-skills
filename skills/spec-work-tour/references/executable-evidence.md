@@ -113,7 +113,8 @@ never merges automatically. `REVIEW_AGENT` selects a model, not an additional re
 
 `spec-run` records completion in existing `merge-evidence.md`/JSON when all steps have
 review coverage, every actionable finding has a fix or justified dismissal, affected
-focused checks support those decisions, and no known acceptance/review gap remains.
+focused checks support those decisions, `final-fix-review` is not `blocked`, and no
+known acceptance/review gap remains.
 Link the original review ranges, fix records, and evidence; do not copy their contents.
 Final fixes are covered by the bounded final fix review over the trailing fix range:
 `spec-run` records `final-fix-review` as `not-needed`, `pass`, `pass-after-fix`,
