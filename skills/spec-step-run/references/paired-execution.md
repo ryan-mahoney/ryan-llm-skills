@@ -150,7 +150,10 @@ The owner resolves concrete contradictions,
 consequential choices, repeated failures without a new diagnosis, and acceptance gaps.
 For unresolved escalation, it returns a `checkpoint` and concrete question to the
 coordinator; missing authority returns `decision-required`. Managed Pi children have
-no supervisor messaging tool. It does not duplicate discovery, baseline tests or
+no supervisor messaging tool. A necessary fact missing at step startup is returned the
+same way before the first editor dispatch; the coordinator redispatches the step with
+the answer in instructions under a new attempt ID, and the retained sessions are reused
+(Clarification: lines in the new prompt). It does not duplicate discovery, baseline tests or
 successful verification. The editor
 uses contextual patches for existing files and coherent writes for small new files.
 An anchor mismatch calls for a scoped reread; repeated edit failure without a new

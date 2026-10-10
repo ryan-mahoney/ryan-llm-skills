@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "34"
+  version: "35"
 ---
 
 # Spec Step Run
@@ -63,7 +63,9 @@ itself. Do not assume data disposability, operational authority, or material ris
 
 Treat the spec, subspec, named files, edit sequence, and verification commands as
 evidence of intent and a strong starting route, not an exhaustive permission boundary.
-Prefer a concrete evidence-bearing artifact over stopping for clarification. Follow the shared context contract for all external effects, including reversible disruption.
+Prefer a concrete evidence-bearing artifact over stopping for clarification about an
+ordinary implementation choice; a necessary missing fact follows Startup Clarification
+below. Follow the shared context contract for all external effects, including reversible disruption.
 Stopping services, changing traffic, live migrations/resets/restores, production writes and fault
 injection need explicit target/action authority. Build and verify the isolated side, prepare any
 necessary later procedure, and record pending execution. A spec gate never grants permission.
@@ -121,6 +123,27 @@ or contradictory inputs to the planner; do not invent a substitute plan. Use a t
 The coordinator checks package structure once. Do not repeat a full-package audit,
 compute preparation hashes, or require `preparation.json`. Ignore obsolete hash fields
 in otherwise usable legacy inputs; format migration alone is not a reason to replan.
+
+## Startup Clarification
+
+Before the first `spec_editor` dispatch, inspect the card, `context.md`, history and
+local sources first to settle every fact needed for the chosen approach. When a
+necessary fact is still missing and guessing would change behavior, scope, data or
+acceptance, return it instead of starting edits. In managed Pi, call `spec_complete`
+with `outcome: decision-required`, the planned strategy, `fix_attempts: 0`, every owned
+EV pending with its proof boundary, `introduced: []`, `findings: []`, the recommended
+interpretation in `decisions` when one exists, and one gaps entry per fact in the form
+`Missing: <fact>. Inspected: <sources>. If guessed: <consequence>. Recommended:
+<interpretation | none>. Blocks: <dependent work>.`. Make no edits and no commit before
+returning. As a direct worker, write the same learning and report the question. Treat
+the answer as context for this assignment, not a card edit; keep the prepared card
+immutable. After the coordinator answers in the next prompt's `Clarification:` lines and
+redispatches this step into its retained session under a new attempt ID, read those
+lines first, skip repeated startup discovery, and continue. Do not ask ordinary
+implementation choices, questions the card settles, or facts your tools can read. For a
+gap after edits begin, keep the existing route: finish or stop the editor, then return a
+checkpoint, or `decision-required` for missing authority, with the same gap form.
+Because the runtime provides no live channel, never wait or poll.
 
 ## Preserve The Plan As Evidence
 
