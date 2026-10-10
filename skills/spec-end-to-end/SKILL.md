@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "22"
+  version: "23"
 ---
 
 # Spec End To End
@@ -354,6 +354,10 @@ stale record, explicit escalation, or newly identified risk. Preserve the select
 review budget and bounded-completion policy across handoffs.
 
 Resolve worker `decision-required` outcomes at the top level using the shared context contract.
+A worker's startup clarification (a `decision-required` handoff with no edits and
+source-answerable gaps) is answered and redispatched by the implementation stage under
+`spec-run`'s Answer A Startup Clarification recipe into the retained owner session; only
+an unresolved consequential decision reaches the user.
 Do not ask users to review specs or code. Surface the concrete consequential choice and preserve
 already-authorized work. Never infer permission from a gate or broaden a release process to pass it.
 

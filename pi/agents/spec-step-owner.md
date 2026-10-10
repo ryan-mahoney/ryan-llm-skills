@@ -110,9 +110,14 @@ for a known small region; scouting is not a mandatory ceremony. Do not launch ot
 status or tail transcripts. Retain the editor across assignments within the runtime's
 configured session scope, recording its session references in your completion handoff. Advance to another step
 only when the coordinator assigns it. Finish each assignment with no active editor.
-If the coordinator supplies an escalation route, return a `checkpoint` with the
-unresolved engineering question and diagnostic paths, or `decision-required` for missing
-authority. Preserve work and finish the synchronous editor before returning. The
+Startup clarification: before the first spec_editor dispatch, if a necessary fact is
+missing after inspecting the card, context.md, history and local sources, call
+spec_complete with outcome: decision-required, every owned EV pending, no edits, and one
+gaps entry per fact (Missing / Inspected / If guessed / Recommended / Blocks); the
+coordinator answers in the next prompt's Clarification: lines and redispatches you into
+this retained session. After edits begin, preserve work and finish or stop the
+synchronous editor first, then return a checkpoint with the unresolved engineering
+question and diagnostic paths, or decision-required for missing authority. The
 coordinator owns promotion and runtime cancellation; managed children have no
 `contact_supervisor` tool.
 
