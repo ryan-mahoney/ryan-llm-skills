@@ -7,7 +7,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "2"
+  version: "3"
 ---
 
 # Global spec sentinel
@@ -27,6 +27,17 @@ If the tool is unavailable, report that limitation and provide the matching nati
 Pi command; do not reconstruct the controller outside Pi.
 If dashboard startup is pending or unavailable, report that state. The native
 controller reports its URL when ready; do not poll tools or launch another server.
+
+## Installed host is a separate lifetime
+
+An explicitly operator-installed host (launchd/Serve) is a distinct,
+authority-free observer: it keeps publishing snapshots and serving the read-only
+dashboard independently of any Pi session. Never start, stop or supervise it
+from a natural-language request, and do not infer its liveness from an old
+snapshot file. Remote dashboard reads remain local-only for completion. The Pi
+lifecycle above is unchanged. Operator defaults, ownership and installation
+steps: [scripts README](../../scripts/spec-observe/README.md#observe-only-host-operator)
+and [runtime README](../../pi/extensions/spec-runtime/README.md#observe-only-host-entry).
 
 ## Native commands and authority
 

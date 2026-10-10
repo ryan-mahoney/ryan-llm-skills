@@ -237,6 +237,29 @@ native stream and incremental file-change notifications. Large/incomplete histor
 events can be unavailable; legacy activity timestamps use stream modification time.
 The widget does not infer missing activity. No browser UI is involved.
 
+## Observe-only host entry
+
+The ordinary host lives in `sentinel-host.mjs` and composes the shared claim, the
+headless observer and the owned dashboard without Pi or authority callbacks:
+
+```js
+import { createSentinelHost } from './sentinel-host.mjs';
+const { receipt, close } = await createSentinelHost({ agentDir, root, port: 0 });
+// receipt: { type: 'ready', state, snapshot_path, dashboard_url, dashboard_state }
+await close(); // one shared, bounded shutdown promise; releases the claim
+```
+
+Importing the module creates nothing. The guarded CLI accepts only
+`--agent-dir`, `--root`, `--port` and `--public-host`, rejects unknown,
+duplicate, missing or invalid values before any observation effect, installs
+SIGTERM/SIGINT handling before initialization resolves, and prints one JSON
+ready line. The host is observe-only: it never arms policy, starts workers,
+writes completion records or opens a browser, and shutdown is bounded. Ordinary
+Pi observation, commands and lifecycle behavior are unchanged. See
+[the scripts README](../../../scripts/spec-observe/README.md#observe-only-host-operator)
+for defaults, ownership, heartbeat, local-only completion and the operator-only
+launchd/Serve procedures.
+
 ## Workspace sentinel status
 
 `/sentinel status` (also `/spec-sentinel status`) shows a bounded read-only snapshot across automatically discovered
