@@ -261,6 +261,9 @@ export function validateScenario(folder, { git = defaultGit } = {}) {
     } else if (scenario.checks.some(check => check && check.todo === true)) {
       errors.push('scenario.json: ready scenario must not have a check with todo true');
     }
+    if (roles?.todo === true) {
+      errors.push('scenario.json: ready scenario must not have roles with todo true');
+    }
 
     const repoRoot = findGitRoot(folder);
     if (!repoRoot) {
@@ -332,6 +335,7 @@ export async function readUsage(sessionFiles = []) {
   let inputTokens = null;
   let outputTokens = null;
   let cost = null;
+  let unpriced = false;
   for (const file of sessionFiles) {
     if (!existsSync(file)) continue;
     const { agents } = await readMetrics({ file, role: 'leaf' });
@@ -339,9 +343,12 @@ export async function readUsage(sessionFiles = []) {
       if (Number.isFinite(agent.input_tokens)) inputTokens = (inputTokens ?? 0) + agent.input_tokens;
       if (Number.isFinite(agent.output_tokens)) outputTokens = (outputTokens ?? 0) + agent.output_tokens;
       if (Number.isFinite(agent.reported_cost)) cost = (cost ?? 0) + agent.reported_cost;
+      // A managed owner on a priced model with an unpriced editor would otherwise
+      // report the owner's cost as the cell total.
+      if (agent.usage_model_calls > 0 && !(agent.reported_cost > 0 && agent.priced_model_calls === agent.usage_model_calls)) unpriced = true;
     }
   }
-  return { input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: cost !== null && cost > 0 ? cost : null };
+  return { input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: !unpriced && cost !== null && cost > 0 ? cost : null };
 }
 
 function rootCommit(repo) {
@@ -440,6 +447,9 @@ export function evaluateCheck(check, roots, context = {}) {
 export function contaminated(sessionFiles, scenarioFolder) {
   const folder = String(scenarioFolder ?? '');
   if (!folder) return false;
+  // The default run root sits inside the gym repository, so a relative or
+  // home-based path can reach the scenario without its absolute prefix.
+  const tail = `scenarios/${basename(dirname(folder))}/${basename(folder)}`;
   const tools = new Set(['read', 'grep', 'find', 'ls', 'bash']);
   for (const file of sessionFiles ?? []) {
     if (!file || !existsSync(file)) continue;
@@ -461,7 +471,8 @@ export function contaminated(sessionFiles, scenarioFolder) {
       if (!Array.isArray(content)) continue;
       for (const part of content) {
         if (part?.type !== 'toolCall' || !tools.has(part.name)) continue;
-        if (JSON.stringify(part.arguments ?? {}).includes(folder)) return true;
+        const args = JSON.stringify(part.arguments ?? {});
+        if (args.includes(folder) || args.includes(tail)) return true;
       }
     }
   }

@@ -234,8 +234,15 @@ if (!['list', 'validate', 'run', 'extract'].includes(command)) {
   process.exit(2);
 }
 
-const code = command === 'list' ? list(parsed.values)
-  : command === 'validate' ? validate(parsed.values)
-  : command === 'extract' ? extractScenario(parsed.values)
-  : await run(parsed.values);
+let code;
+try {
+  code = command === 'list' ? list(parsed.values)
+    : command === 'validate' ? validate(parsed.values)
+    : command === 'extract' ? extractScenario(parsed.values)
+    : await run(parsed.values);
+} catch (error) {
+  // A malformed scenario.json reaches list/validate through loadScenario.
+  process.stderr.write(`${error.message}\n`);
+  code = 1;
+}
 process.exit(code);

@@ -13,6 +13,7 @@ import {
   gradeCell,
   indexDrift,
   loadScenario,
+  readUsage,
   renderIndex,
   renderReport,
   scenarioVersion,
@@ -211,6 +212,7 @@ test('ready scenario refuses untracked files empty expectations empty checks and
     ['empty expectation_sources', scenario => { scenario.expectation_sources = []; }, 'expectation_sources'],
     ['empty checks', scenario => { scenario.checks = []; }, 'checks'],
     ['todo check', scenario => { scenario.checks = [...scenario.checks, { id: 'pending-check', kind: 'file-exists', root: 'package', path: 'learnings/step-001-learning.md', todo: true }]; }, 'todo'],
+    ['todo roles from extraction', scenario => { scenario.roles = { editor_model: 'TODO/editor-model', todo: true }; }, 'roles'],
   ];
   for (const [label, mutate, rule] of refused) {
     const scenario = readyScenario();
@@ -390,6 +392,12 @@ test('contamination marks a grader read of the scenario folder invalid', t => {
   })}\n`);
 
   assert.equal(contaminated([contaminatedSession], scenarioFolder), true);
+  const relativeSession = join(root, 'relative.jsonl');
+  writeFileSync(relativeSession, `${JSON.stringify({
+    type: 'message',
+    message: { role: 'assistant', content: [{ type: 'toolCall', name: 'bash', arguments: { command: 'cat ../../../scenarios/spec-a/case/scenario.json' } }] },
+  })}\n`);
+  assert.equal(contaminated([relativeSession], scenarioFolder), true);
   assert.equal(contaminated([unrelatedSession], scenarioFolder), false);
   assert.equal(contaminated([join(root, 'missing.jsonl')], scenarioFolder), false);
 });
@@ -481,4 +489,20 @@ test('report lists every repetition and prints unknown cost', () => {
   for (const line of report.split('\n')) {
     assert.ok(!/\b(?:average|mean|winner)\b/.test(line), line);
   }
+});
+
+test('usage cost is unknown when any session call is unpriced', async t => {
+  const root = fixture(t);
+  const session = (name, cost) => {
+    const file = join(root, `${name}.jsonl`);
+    const message = { role: 'assistant', provider: 'test', model: name, stopReason: 'stop', content: [{ type: 'text', text: 'done' }], usage: { input: 10, output: 2, cost: { total: cost } }, timestamp: 1 };
+    writeFileSync(file, `${JSON.stringify({ type: 'message', timestamp: '2026-01-01T00:00:00.000Z', message })}\n`);
+    return file;
+  };
+  const owner = session('owner', 0.5);
+  const editor = session('editor', 0);
+  assert.equal((await readUsage([owner])).cost_usd, 0.5);
+  const mixed = await readUsage([owner, editor]);
+  assert.equal(mixed.cost_usd, null);
+  assert.equal(mixed.input_tokens, 20);
 });
