@@ -16,11 +16,14 @@ metadata:
 
 Create a new `scenarios/<skill>/<id>/` draft from a real package and a pinned Git
 revision. Extraction reads only; it never runs a model, never edits a source, and
-never commits.
+never commits. It refuses a destination that overlaps the source package or
+repository, including through linked parents, so run it from a separate gym
+checkout.
 
 ```bash
-node scripts/spec-gym/cli.mjs extract --source .specs/<feature> --repo <repo> \
-  --revision <rev> --skill <spec-skill> --id <scenario-id> [--step N] [--include PATH]...
+node scripts/spec-gym/cli.mjs extract --source <source-repo>/.specs/<feature> \
+  --repo <source-repo> --revision <rev> --skill <spec-skill> --id <scenario-id> \
+  [--step N] [--include PATH]...
 ```
 
 ## Read-only guarantee
@@ -61,7 +64,17 @@ promotion, and extract only from trusted local sources.
 
 ## Promotion to ready
 
-Extraction seeds `draft` checks, including `todo: true` placeholders. Replace them
-with checks that cite `expectation_sources`, fill the sources, run
-`node scripts/spec-gym/cli.mjs validate`, and only then set `status: ready`. The
-index is regenerated atomically at extraction; never hand-edit `scenarios.md`.
+Extraction seeds `draft` checks, including `todo: true` placeholders. Promote in
+this order:
+
+1. Replace the seeded checks with checks that cite `expectation_sources`, fill the
+   sources, and resolve every `missing_inputs` entry.
+2. Set `status: ready`.
+3. Track every file under the scenario folder with Git (for example
+   `git add scenarios/<skill>`); ready validation refuses untracked fixture files.
+4. Regenerate the index:
+   `node scripts/spec-gym/cli.mjs validate --skill <skill> --write-index`.
+5. Require a final `node scripts/spec-gym/cli.mjs validate --skill <skill>` to
+   pass with no drift.
+
+The index is generated; never hand-edit `scenarios.md`.

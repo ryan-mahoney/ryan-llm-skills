@@ -44,12 +44,14 @@ node scripts/spec-gym/cli.mjs run --skill spec-step-run --scenario missing-requi
   --model provider/a --model provider/b
 ```
 
-Options: `--repeat N` repeats every cell; `--timeout-ms N` sets the run-level
-deadline; `--root DIR` overrides `tmp/spec-gym/`; `--pi PATH` selects the Pi
-executable; `--editor-model`/`--scout-model` fix auxiliary selectors for
-managed-step cells; `--child-extension PATH` (repeatable) passes managed child
-extensions. The command refuses a draft scenario, a missing index, or an invalid
-selector before it creates the run directory.
+Options: `--repeat N` repeats every cell; `--timeout-ms N` records the run
+fallback deadline in the manifest, while each scenario's required `timeout_ms` is
+the effective cell deadline — inspect it before authorizing a run; `--root DIR`
+overrides `tmp/spec-gym/`; `--pi PATH` selects the Pi executable;
+`--editor-model`/`--scout-model` fix auxiliary selectors for managed-step cells;
+`--child-extension PATH` (repeatable) passes managed child extensions. The
+command refuses a draft scenario, a missing index, or an invalid selector before
+it creates the run directory.
 
 ## Outcomes and labels
 
