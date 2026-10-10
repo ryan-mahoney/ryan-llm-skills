@@ -318,6 +318,20 @@ test('immutable: manifest skill digest distinguishes distinct raw bytes', t => {
   assert.notEqual(first, second);
 });
 
+test('immutable: managed manifest freezes the owner profile the runtime loads', t => {
+  const f = fixture(t);
+  const ownerProfile = join(f.gym, 'pi', 'agents', 'spec-step-owner.md');
+  assert.equal(freezeManifest(runFixture(f)).managed_sha256, undefined);
+  const run = runFixture(f, { scenarios: [f.managed] });
+  writeFixtureFile(ownerProfile, '# owner v1\n');
+  const first = freezeManifest(run);
+  writeFileSync(ownerProfile, '# owner v2\n');
+  const second = freezeManifest(run);
+  assert.match(first.managed_sha256, /^[0-9a-f]{64}$/);
+  assert.notEqual(first.managed_sha256, second.managed_sha256);
+  assert.equal(first.skill_sha256, second.skill_sha256);
+});
+
 test('materialize rejects traversal cell IDs before writing', t => {
   const f = fixture(t);
   const run = runFixture(f);
@@ -364,6 +378,10 @@ test('ambient context lists ancestor AGENTS.md and ~/.pi/agent files', t => {
   writeFixtureFile(join(home, '.pi', 'agent', 'AGENTS.md'), 'home agent\n');
   writeFixtureFile(join(f.root, 'AGENTS.md'), 'root agent\n');
   assert.deepEqual(ambientContext(repoDir, { home }), [join(f.root, 'AGENTS.md'), join(home, '.pi', 'agent', 'AGENTS.md')].sort());
+
+  // --no-context-files does not suppress the agent directory's system prompt.
+  writeFixtureFile(join(home, '.pi', 'agent', 'APPEND_SYSTEM.md'), 'appended\n');
+  assert.ok(ambientContext(repoDir, { home }).includes(join(home, '.pi', 'agent', 'APPEND_SYSTEM.md')));
 });
 
 test('manifest freezes provenance before the first materialize call', t => {

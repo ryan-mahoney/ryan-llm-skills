@@ -69,7 +69,14 @@ named. No run ranks or selects models.
 ## Cost and limits
 
 A `cost_usd` of `null` means the provider did not price the calls; the report prints
-`unknown`. It is never zero and never a free model.
+`unknown`. It is never zero and never a free model. A managed cell whose owner is
+priced but whose editor is not reports `unknown`, not the owner's partial cost.
+
+A `managed-step` cell does not load `skills/spec-step-run/SKILL.md`: the runtime
+starts the owner and editor with `--no-skills`, the `pi/agents/spec-step-owner.md`
+and `spec-step-editor.md` profiles, and the prompt and tools in
+`pi/extensions/spec-runtime/`. The manifest freezes those as `managed_sha256`;
+compare it, not `skill_sha256`, when judging an instruction change across runs.
 
 Temporary repositories isolate state; they are not an operating-system sandbox.
 Admit only curated, trusted scenarios. The editor launched inside a managed owner

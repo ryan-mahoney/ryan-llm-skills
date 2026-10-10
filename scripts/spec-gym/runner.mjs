@@ -1,7 +1,7 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { constants as osConstants, homedir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { configurationFailure, splitModelSelector } from '../../pi/extensions/spec-runtime/model-selector.mjs';
 import { Runtime, groupAlive, launch, loadRun, summary } from '../../pi/extensions/spec-runtime/runtime.mjs';
@@ -16,6 +16,10 @@ const GENERATED_GITIGNORE = '.specs/\n';
 const FIXTURE_USER = { name: 'Spec Gym', email: 'spec-gym@example.invalid' };
 const MANAGED_TERMINAL_STATES = new Set(['completed', 'failed', 'cancelled', 'blocked']);
 const MANAGED_TERMINATION_INSTRUCTION = 'Confirm the process group is terminated before removing the cell.';
+// Managed cells never load skills/<skill>/SKILL.md: launch() in runtime.mjs starts
+// the owner and editor with --no-skills, these profiles, and the owner prompt and
+// tools defined by the runtime extension. Freeze them so an edit there is visible.
+const MANAGED_INSTRUCTION_PATHS = ['pi/agents/spec-step-owner.md', 'pi/agents/spec-step-editor.md', 'pi/extensions/spec-runtime'];
 
 const toPosix = path => path.split(sep).join('/');
 
@@ -86,6 +90,9 @@ export function freezeManifest(run) {
     pi: { command: run.pi, version: piVersion(run.pi) },
     skill: run.skill,
     skill_sha256: hashTree(run.skillDir),
+    ...(run.scenarios.some(({ scenario }) => scenario.driver === 'managed-step')
+      ? { managed_sha256: hashTree(run.repoRoot, MANAGED_INSTRUCTION_PATHS) }
+      : {}),
     scenarios: run.scenarios.map(({ scenario, version }) => ({
       id: scenario.id, status: scenario.status, version, driver: scenario.driver,
     })),
@@ -165,7 +172,8 @@ export function ambientContext(repoDir, { home } = {}) {
     if (parent === current) break;
     current = parent;
   }
-  for (const name of ['AGENTS.md', 'CLAUDE.md']) {
+  // --no-context-files does not disable the agent directory's system prompt files.
+  for (const name of ['AGENTS.md', 'CLAUDE.md', 'SYSTEM.md', 'APPEND_SYSTEM.md']) {
     const path = join(base, '.pi', 'agent', name);
     if (existsSync(path)) found.push(path);
   }
@@ -423,7 +431,7 @@ export async function runCampaign(options, { log = () => {} } = {}) {
   let activePid = null;
   let activeRuntime = null;
   const signals = [];
-  const onSignal = () => {
+  const onSignal = signal => {
     stopRequested = true;
     const running = record.cells.find(cell => cell.state === 'running');
     if (running) {
@@ -448,7 +456,7 @@ export async function runCampaign(options, { log = () => {} } = {}) {
           await waitGroupGone(ownedPid, 500);
         }
       }
-      process.exit(130);
+      process.exit(128 + (osConstants.signals[signal] ?? 2));
     })();
   };
   for (const signal of ['SIGINT', 'SIGTERM']) {
@@ -607,20 +615,18 @@ function piVersion(command) {
   }
 }
 
-function hashTree(root) {
+function hashTree(root, paths = ['.']) {
   const hash = createHash('sha256');
   const entries = [];
-  const visit = directory => {
-    for (const name of readdirSync(directory).sort()) {
-      const path = join(directory, name);
-      const info = lstatSync(path);
-      const relativePath = toPosix(relative(root, path));
-      if (info.isSymbolicLink()) entries.push({ relativePath, content: Buffer.from(readlinkSync(path)) });
-      else if (info.isDirectory()) visit(path);
-      else entries.push({ relativePath, content: readFileSync(path) });
-    }
+  const visit = path => {
+    const info = lstatSync(path);
+    const relativePath = toPosix(relative(root, path));
+    if (info.isSymbolicLink()) entries.push({ relativePath, content: Buffer.from(readlinkSync(path)) });
+    else if (info.isDirectory()) {
+      for (const name of readdirSync(path).sort()) if (name !== 'node_modules') visit(join(path, name));
+    } else entries.push({ relativePath, content: readFileSync(path) });
   };
-  if (existsSync(root)) visit(root);
+  for (const path of paths) if (existsSync(join(root, path))) visit(join(root, path));
   entries.sort((a, b) => (a.relativePath < b.relativePath ? -1 : a.relativePath > b.relativePath ? 1 : 0));
   for (const entry of entries) {
     hash.update(`${entry.relativePath}\0`);
