@@ -28,6 +28,7 @@ export const SENTINEL_WIDGET_KEY = 'spec-sentinel';
 
 const USAGE = 'Usage: /sentinel [start|observe|shadow|recover] [--model provider/model:thinking] [--root PATH] | status [--all] | inspect ID | stop|off';
 const MAX_WATCHERS = 60;
+const NOOP_STOP_MODE = () => {};
 
 // Pi wraps every supplied line. Bound both dimensions before crossing the UI
 // boundary; the full record belongs in JSON, not the terminal render loop.
@@ -44,13 +45,17 @@ export function boundedSentinelLines(lines, maxLines = 8, maxChars = 180) {
 export function createSentinelObserver({ pi, context, agentDir, scope = null, ownPackages = [], indexDir = join(agentDir, 'spec-runtime'),
   now = Date.now, watchDirectory = watchSpecTree, setTimer = setTimeout, clearTimer = clearTimeout, repeat = setInterval, cancelRepeat = clearInterval,
   nativeRun = null, maxWatchers = MAX_WATCHERS, enablePolicy = null, disablePolicy: disableAuthority = null,
-  isolateReader = false, readerFactory = createSentinelReaderProcess, dashboard = null, startMode = null, stopMode = () => {}, modeStatus = () => null }) {
+  isolateReader = false, readerFactory = createSentinelReaderProcess, dashboard = null, startMode = null, stopMode = NOOP_STOP_MODE, modeStatus = () => null,
+  headless = false }) {
+  if (headless && (startMode != null || stopMode !== NOOP_STOP_MODE || enablePolicy != null || disableAuthority != null))
+    throw new Error('Headless sentinel observation cannot carry authority callbacks.');
   let closed = false;
   let hidden = false;
   let active = false;
   let displayed = false;
   let lastRendered = null;
   let dashboardGeneration = 0;
+  let dashboardActivation = null;
   let lifecycleGeneration = 0;
   let latest = null;
   const publisher = createSnapshotPublisher({ agentDir, scope, now });
@@ -345,7 +350,7 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
       mode: modeStatus()?.options?.mode ?? 'observe',
       snapshot_path: exported ? publisher.path : null,
       dashboard_url: active && !hidden ? dashboard?.url ?? null : null,
-      dashboard_state: closed || hidden || !active || !dashboard || !context?.hasUI ? 'inactive' : dashboard.url ? 'ready' : 'pending-or-unavailable',
+      dashboard_state: closed || hidden || !active || !dashboard || (!headless && !context?.hasUI) ? 'inactive' : dashboard.url ? 'ready' : 'pending-or-unavailable',
       ...(snapshot ? { observed_at: snapshot.coverage?.observed_at ?? null,
         coverage: { state: snapshot.coverage?.state ?? 'unavailable', reasons: (snapshot.coverage?.reasons ?? []).slice(0, 8) },
         runs_count: snapshot.runs?.length ?? 0, lines: boundedSentinelLines(renderWorkspace(snapshot), 24, 240) } : {}), ...extra };
@@ -381,6 +386,7 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
         if (inFlight) await inFlight;
         if (closed || generation !== lifecycleGeneration) return lifecycleReceipt(null, { fenced: true });
         activate();
+        if (headless && options.mode === 'observe' && dashboardActivation) await dashboardActivation;
         notify(ctx, `Sentinel ${options.mode}: workspace-wide observation${options.mode === 'observe' ? '; no model calls' : `; ${options.model}; all connected sentinel coordinators`}. Runs until stopped or this session closes.`, 'info');
         const snapshot = await run(true);
         return lifecycleReceipt(snapshot);
@@ -506,21 +512,25 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
   function activate() {
     if (closed || hidden || active) return;
     active = true;
-    if (context?.hasUI) {
-      const generation = ++dashboardGeneration;
-      if (dashboard) dashboard.start().then(result => {
-        if (closed || hidden || generation !== dashboardGeneration) return;
+    const generation = ++dashboardGeneration;
+    if (dashboard && (headless || context?.hasUI)) {
+      dashboardActivation = dashboard.start().then(result => {
+        if (closed || hidden || generation !== dashboardGeneration) return result;
         notify(null, `${result.browserError ? result.browserError + ' ' : ''}Dashboard: ${result.url}`, 'info');
+        return result;
       }).catch(error => {
-        if (closed || hidden || generation !== dashboardGeneration) return;
-        notify(null, `Dashboard unavailable: ${publicHint(error.message)} Sentinel observation continues.`, 'warning');
+        if (!(closed || hidden || generation !== dashboardGeneration))
+          notify(null, `Dashboard unavailable: ${publicHint(error.message)} Sentinel observation continues.`, 'warning');
+        return { url: null, error: error?.message ?? String(error) };
       });
+    }
+    if (headless || context?.hasUI) {
       reconcileTimer = repeat(() => run(false), SENTINEL_RECONCILE_MS);
-      reconcileTimer?.unref?.();
+      if (!headless) reconcileTimer?.unref?.();
     }
   }
 
-  for (const name of ['sentinel', 'spec-sentinel']) pi.registerCommand(name, {
+  if (!headless) for (const name of ['sentinel', 'spec-sentinel']) pi.registerCommand(name, {
     description: 'Global sentinel: start/observe, shadow, recover, status, stop/off; optional --model and --root', handler,
   });
 

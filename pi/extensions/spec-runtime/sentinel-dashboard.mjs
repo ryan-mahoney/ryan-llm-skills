@@ -8,7 +8,7 @@ function openBrowser(url) {
   const args = process.platform === 'win32' ? ['url.dll,FileProtocolHandler', url] : [url];
   return new Promise((resolve, reject) => execFile(command, args, { timeout: 5000 }, error => error ? reject(error) : resolve()));
 }
-export function createSentinelDashboard({ agentDir, launch = fork, open = openBrowser, timeoutMs = 5000 } = {}) {
+export function createSentinelDashboard({ agentDir, port = 0, publicHost, launch = fork, open = openBrowser, timeoutMs = 5000 } = {}) {
   let owned = null, starting = null, address = null;
   return {
     get url() { return address; },
@@ -28,7 +28,9 @@ export function createSentinelDashboard({ agentDir, launch = fork, open = openBr
         reject(error);
       };
       try {
-        child = launch(serverFile, ['--port', '0', '--agent-dir', agentDir], {
+        const args = ['--port', String(port), '--agent-dir', agentDir];
+        if (publicHost != null) args.push('--public-host', publicHost);
+        child = launch(serverFile, args, {
           stdio: ['ignore', 'ignore', 'ignore', 'ipc'], execArgv: [],
         });
         owned = child;

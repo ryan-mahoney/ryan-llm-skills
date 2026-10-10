@@ -144,3 +144,94 @@ test('cleanup failure remains explicit and cannot poison subsequent status reads
   assert.equal(f.calls.reads, 2);
   assert.equal(f.calls.stopped, 2);
 });
+
+function observeFixture(t, { headless = true, hasUI = !headless, dashboard = null } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'sentinel-observe-'));
+  const repeats = new Set(), watches = new Set();
+  const calls = { reads: 0, stopped: 0, commands: 0 };
+  const reader = {
+    async read(options) {
+      calls.reads++;
+      return { snapshot: { version: 1, workspace: 'headless-fixture', runs: [], spec_roots: [join(dir, '.specs')],
+        coverage: { state: 'complete', reasons: [], observed_at: new Date().toISOString() },
+        activity_filter: { window_ms: 86400000, hidden_packages: options.includeInactive ? 0 : 2 } },
+      roots: [dir], discovery: { reasons: [] }, enrollmentErrors: [] };
+    },
+    watch(targets) { targets.forEach(target => watches.add(target)); },
+    async stop() { await Promise.resolve(); calls.stopped++; watches.clear(); },
+  };
+  const service = dashboard ?? { url: null,
+    async start() { this.url = 'http://127.0.0.1:1234/'; return { url: this.url }; },
+    stop() { this.url = null; },
+  };
+  const observer = createSentinelObserver({
+    pi: { registerCommand: () => { calls.commands++; } }, context: { hasUI }, agentDir: dir,
+    isolateReader: true, readerFactory: () => reader, dashboard: service, headless,
+    repeat: callback => { callback.unref = () => { callback.unrefs = (callback.unrefs ?? 0) + 1; }; repeats.add(callback); return callback; },
+    cancelRepeat: callback => repeats.delete(callback),
+  });
+  t.after(async () => { await observer.close(); rmSync(dir, { recursive: true, force: true }); });
+  return { observer, calls, repeats, watches, dashboard: service };
+}
+
+test('headless observer with no pi or UI starts a referenced interval and dashboard and publishes twice', async t => {
+  const f = observeFixture(t, { headless: true, hasUI: false });
+  const receipt = await f.observer.lifecycle({ action: 'observe' });
+  assert.equal(receipt.state, 'observing');
+  assert.equal(receipt.dashboard_state, 'ready');
+  assert.equal(receipt.dashboard_url, 'http://127.0.0.1:1234/');
+  assert.equal(f.calls.commands, 0, 'headless registers no Pi commands');
+  assert.equal(f.repeats.size, 1, 'headless keeps the existing reconcile interval');
+  const trigger = [...f.repeats][0];
+  assert.equal(trigger.unrefs, undefined, 'the headless interval stays referenced');
+  const before = f.calls.reads;
+  await trigger();
+  assert.ok(f.calls.reads > before, 'the first timer trigger reads and publishes');
+  await trigger();
+  assert.ok(f.calls.reads > before + 1, 'the second timer trigger publishes again');
+  assert.equal(JSON.parse(readFileSync(f.observer.snapshotPath, 'utf8')).snapshot.workspace, 'headless-fixture');
+});
+
+test('headless observe settles a truthful ready or unavailable dashboard receipt while observation continues', async t => {
+  const ready = observeFixture(t, { headless: true, hasUI: false });
+  assert.equal((await ready.observer.lifecycle({ action: 'observe' })).dashboard_state, 'ready');
+  const starts = [];
+  const failing = { url: null,
+    async start() { starts.push('start'); throw new Error('fixture dashboard unavailable'); },
+    stop() { this.url = null; },
+  };
+  const unavailable = observeFixture(t, { headless: true, hasUI: false, dashboard: failing });
+  const failedReceipt = await unavailable.observer.lifecycle({ action: 'observe' });
+  assert.equal(starts.length, 1);
+  assert.equal(failedReceipt.state, 'observing');
+  assert.equal(failedReceipt.dashboard_state, 'pending-or-unavailable');
+  assert.equal(failedReceipt.dashboard_url, null);
+  const before = unavailable.calls.reads;
+  await [...unavailable.repeats][0]();
+  assert.ok(unavailable.calls.reads > before, 'observation continues after dashboard failure');
+});
+
+test('headless observer refuses authority callbacks and shadow or recover lifecycle actions', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'sentinel-headless-authority-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const base = { pi: { registerCommand: () => { throw new Error('headless must not register commands'); } },
+    context: { hasUI: false }, agentDir: dir, isolateReader: true,
+    readerFactory: () => ({ read: async () => ({}), watch() {}, stop: async () => {} }) };
+  for (const callback of [{ startMode: async () => {} }, { stopMode: async () => {} }, { enablePolicy: () => {} }, { disablePolicy: () => {} }])
+    assert.throws(() => createSentinelObserver({ ...base, headless: true, ...callback }), /cannot carry authority callbacks/);
+  const f = observeFixture(t, { headless: true, hasUI: false });
+  assert.match((await f.observer.lifecycle({ action: 'shadow' })).error, /native/);
+  assert.match((await f.observer.lifecycle({ action: 'recover' })).error, /native/);
+  assert.equal(f.calls.commands, 0);
+});
+
+test('ordinary observer without UI stays inert and keeps the interval and dashboard gated by UI', async t => {
+  const f = observeFixture(t, { headless: false, hasUI: false });
+  const receipt = await f.observer.lifecycle({ action: 'observe' });
+  assert.equal(receipt.state, 'observing');
+  assert.equal(receipt.dashboard_state, 'inactive');
+  assert.equal(receipt.dashboard_url, null);
+  assert.equal(f.repeats.size, 0);
+  assert.equal(f.watches.size, 1);
+  assert.equal(f.dashboard.url, null);
+});
