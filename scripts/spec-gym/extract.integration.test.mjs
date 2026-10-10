@@ -10,6 +10,7 @@ import { basename, dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { indexDrift, loadScenario, validateScenario } from './core.mjs';
 import { extract } from './extract.mjs';
+import { createRun, materializeCell } from './runner.mjs';
 
 function writeFixture(path, content) {
   mkdirSync(dirname(path), { recursive: true });
@@ -56,6 +57,9 @@ function extractFixture(t) {
   writeFixture(join(repo, 'src', 'app.mjs'), 'export const version = 1;\n');
   writeFixture(join(repo, 'src', 'paths.txt'), `package=${sourcePackage}\nhome=${repo}/notes.md\n`);
   writeFixture(join(repo, 'src', 'blob.bin'), Buffer.from([0, 1, 2, 255, 0, 65, 10]));
+  writeFixture(join(repo, 'scripts', 'check.sh'), '#!/bin/sh\nprintf "checked\\n"\n');
+  chmodSync(join(repo, 'scripts', 'check.sh'), 0o755);
+  symlinkSync('app.mjs', join(repo, 'src', 'link.mjs'));
   git(repo, 'init', '-q');
   git(repo, 'config', 'user.name', 'Spec Gym Extract Test');
   git(repo, 'config', 'user.email', 'spec-gym-extract@example.invalid');
@@ -67,6 +71,7 @@ function extractFixture(t) {
   git(repo, 'add', '-A');
   git(repo, 'commit', '-qm', 'B');
   const shaB = git(repo, 'rev-parse', 'HEAD');
+  chmodSync(join(repo, 'scripts', 'check.sh'), 0o644);
   writeFixture(join(repo, 'src', 'app.mjs'), 'export const version = 3;\n');
 
   writeFixture(join(sourcePackage, 'requirements.md'), '# Requirements\n');
@@ -128,6 +133,43 @@ test('extract architecture copies profile inputs from the pinned revision and le
   assert.equal(indexDrift('spec-architect-initial', join(f.scenariosRoot, 'spec-architect-initial')).same, true);
 
   assert.equal(digestTree(f.sourcePackage), digestBefore);
+  assert.equal(git(f.repo, 'status', '--porcelain'), statusBefore);
+});
+
+// Select alone: node --test --test-name-pattern='extract preserves pinned executable|extract refuses a pinned symlink' scripts/spec-gym/extract.integration.test.mjs
+test('extract preserves pinned executable modes through materialization', { timeout: 10000 }, t => {
+  const f = extractFixture(t);
+  const result = extract({
+    sourcePackage: f.sourcePackage, repo: f.repo, revision: f.shaA,
+    skill: 'spec-architect-initial', id: 'executable-candidate',
+    include: ['scripts/check.sh', 'src/app.mjs'], scenariosRoot: f.scenariosRoot,
+  });
+  assert.equal(lstatSync(join(result.folder, 'input', 'repository', 'scripts', 'check.sh')).mode & 0o777, 0o755);
+  assert.equal(lstatSync(join(result.folder, 'input', 'repository', 'src', 'app.mjs')).mode & 0o111, 0);
+  const run = createRun({
+    repoRoot: f.gym, root: join(f.root, 'runs'), skill: 'spec-architect-initial',
+    scenarios: [result.folder], models: ['test/model'], timeoutMs: 10000,
+  });
+  const materialized = materializeCell(run, run.cells[0], loadScenario(result.folder));
+  assert.match(git(materialized.repoDir, 'ls-files', '-s', 'scripts/check.sh'), /^100755 /);
+  assert.equal(execFileSync('./scripts/check.sh', { cwd: materialized.repoDir, encoding: 'utf8' }), 'checked\n');
+});
+
+test('extract refuses a pinned symlink without publishing or changing an existing scenario', { timeout: 10000 }, t => {
+  const f = extractFixture(t);
+  const base = {
+    sourcePackage: f.sourcePackage, repo: f.repo, revision: f.shaA,
+    skill: 'spec-architect-initial', id: 'symlink-candidate', scenariosRoot: f.scenariosRoot,
+  };
+  const typeFolder = join(f.scenariosRoot, base.skill);
+  const statusBefore = git(f.repo, 'status', '--porcelain');
+  assert.throws(() => extract({ ...base, include: ['src/link.mjs'] }), /regular repository file.*120000/);
+  assert.deepEqual(readdirSync(typeFolder), []);
+  const first = extract({ ...base, include: ['src/app.mjs'] });
+  const before = digestTree(typeFolder);
+  assert.throws(() => extract({ ...base, update: true, include: ['src/link.mjs'] }), /regular repository file.*120000/);
+  assert.equal(digestTree(typeFolder), before);
+  assert.equal(existsSync(first.folder), true);
   assert.equal(git(f.repo, 'status', '--porcelain'), statusBefore);
 });
 

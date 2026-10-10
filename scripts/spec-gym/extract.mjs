@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { atomicWrite, loadScenario, PREPARED_PACKAGE_FILES, renderIndex } from './core.mjs';
@@ -218,14 +218,15 @@ export function extract({
         missingInputs.push(path);
         continue;
       }
-      try {
-        execFileSync('git', ['-C', repoDir, 'rev-parse', '--verify', '--quiet', `${objectId}^{blob}`], { stdio: ['ignore', 'pipe', 'pipe'] });
-      } catch {
-        throw new Error(`include ${JSON.stringify(path)} must reference a repository file, not a directory or other object`);
+      const entry = execFileSync('git', ['-C', repoDir, 'ls-tree', '-z', pinned, '--', `:(literal)${path}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      const mode = entry.split(' ', 1)[0];
+      if (mode !== '100644' && mode !== '100755') {
+        throw new Error(`include ${JSON.stringify(path)} must reference a regular repository file; unsupported Git entry mode ${mode}`);
       }
       const content = execFileSync('git', ['-C', repoDir, 'show', `${pinned}:${path}`], { stdio: ['ignore', 'pipe', 'pipe'] });
       mkdirSync(dirname(join(repositoryDest, path)), { recursive: true });
       writeFileSync(join(repositoryDest, path), content);
+      chmodSync(join(repositoryDest, path), mode === '100755' ? 0o755 : 0o644);
     }
 
     const managed = profile.driver === 'managed-step';
