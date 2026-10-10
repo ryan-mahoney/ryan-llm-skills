@@ -25,7 +25,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { createFileExclusive, resolveWorkspacePath, writeFileAtomic } from "./store.mjs";
+import { createFileExclusive, listWorkspaces, resolveStorageRoot, resolveWorkspacePath, storageStatus, writeFileAtomic } from "./store.mjs";
 
 const STORE_URL = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), "store.mjs")).href;
 
@@ -544,4 +544,122 @@ test("file publication: resolves contained existing paths and refuses escapes", 
 
   await assert.rejects(resolveWorkspacePath(join(root, "missing-base"), "a"), /does not exist/);
   await assert.rejects(resolveWorkspacePath(file, "a"), /not a directory/);
+});
+
+test("workspace catalog: resolves roots, reports status and lists identities without mutation", async (t) => {
+  const home = await createRoot();
+  const parent = await createRoot();
+  t.after(() => rm(home, { recursive: true, force: true }));
+  t.after(() => rm(parent, { recursive: true, force: true }));
+
+  // resolveStorageRoot: default, absolute override, relative refusal; none created.
+  assert.equal(resolveStorageRoot({}, home), join(home, "Documents", "adjacent-storage"));
+  const customRoot = join(parent, "custom-root");
+  assert.equal(resolveStorageRoot({ ADJACENT_STORAGE_ROOT: customRoot }, home), customRoot);
+  assert.throws(() => resolveStorageRoot({ ADJACENT_STORAGE_ROOT: "relative-store" }, home));
+  await assert.rejects(lstat(join(home, "Documents")), { code: "ENOENT" });
+  await assert.rejects(lstat(customRoot), { code: "ENOENT" });
+
+  // storageStatus: missing root and missing projects stay absent.
+  const missingRoot = join(parent, "missing-root");
+  const missingStatus = await storageStatus(missingRoot);
+  assert.equal(missingStatus.root, missingRoot);
+  assert.equal(missingStatus.status, "missing_root");
+  assert.ok(Array.isArray(missingStatus.errors));
+  await assert.rejects(lstat(missingRoot), { code: "ENOENT" });
+
+  const root = join(parent, "store");
+  await mkdir(root);
+  const beforeProjects = await storageStatus(root);
+  assert.equal(beforeProjects.root, root);
+  assert.equal(beforeProjects.status, "missing_projects");
+  await assert.rejects(lstat(join(root, "projects")), { code: "ENOENT" });
+
+  // listWorkspaces: missing root and missing projects report without creating.
+  const missingList = await listWorkspaces(missingRoot);
+  assert.deepEqual(missingList.valid, []);
+  assert.ok(missingList.invalid.length + missingList.errors.length > 0);
+  await assert.rejects(lstat(missingRoot), { code: "ENOENT" });
+
+  const emptyList = await listWorkspaces(root);
+  assert.deepEqual(emptyList.valid, []);
+  assert.ok(emptyList.invalid.length + emptyList.errors.length > 0);
+  await assert.rejects(lstat(join(root, "projects")), { code: "ENOENT" });
+
+  // Catalog fixtures: valid, mismatch, duplicate, wrong-type, unreadable and hidden.
+  const projects = join(root, "projects");
+  await mkdir(projects);
+  const writeKit = async (directory, id, name) => {
+    await mkdir(join(projects, directory));
+    await writeFile(
+      join(projects, directory, "kit.yaml"),
+      `version: 1\nid: ${id}\nname: ${name}\nrepositories: []\n`,
+    );
+  };
+  await writeKit("alpha", "alpha", "Alpha");
+  await writeKit("gamma-dir", "gamma", "Gamma");
+  await writeKit("dup-a", "shared", "Shared A");
+  await writeKit("dup-b", "shared", "Shared B");
+  await writeKit(".hidden", "hidden", "Hidden");
+  await mkdir(join(projects, "broken", "kit.yaml"), { recursive: true });
+  const deniedKit = join(projects, "denied", "kit.yaml");
+  await writeKit("denied", "denied", "Denied");
+  await chmod(deniedKit, 0o000);
+  const deniedUnreadable = await readFile(deniedKit, "utf8").then(
+    () => false,
+    () => true,
+  );
+
+  const okStatus = await storageStatus(root);
+  assert.equal(okStatus.status, "ok");
+  assert.deepEqual(okStatus.errors, []);
+
+  // A fake git first on PATH records any execution while the catalog is read.
+  const bin = join(parent, "bin");
+  await mkdir(bin);
+  const gitRan = join(parent, "git-ran");
+  await writeFile(join(bin, "git"), `#!/bin/sh\nprintf ran > "${gitRan}"\nexit 7\n`);
+  await chmod(join(bin, "git"), 0o755);
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${bin}${sep}${originalPath ?? ""}`;
+  let catalog;
+  try {
+    catalog = await listWorkspaces(root);
+  } finally {
+    process.env.PATH = originalPath;
+  }
+
+  // No git process ran and no boundary was created by the read.
+  await assert.rejects(lstat(gitRan), { code: "ENOENT" });
+  assert.ok(Array.isArray(catalog.errors));
+
+  const expectedValidIds = ["alpha", "gamma", ...(deniedUnreadable ? [] : ["denied"])].sort();
+  assert.deepEqual(catalog.valid.map((entry) => entry.id).sort(), expectedValidIds);
+  const byId = new Map(catalog.valid.map((entry) => [entry.id, entry]));
+
+  const alpha = byId.get("alpha");
+  assert.equal(alpha.name, "Alpha");
+  assert.equal(alpha.directory, join(projects, "alpha"));
+  assert.equal(alpha.kit.version, 1);
+  assert.equal(alpha.kit.id, "alpha");
+  assert.deepEqual(alpha.kit.repositories, []);
+  assert.deepEqual(alpha.attention, []);
+
+  const gamma = byId.get("gamma");
+  assert.ok(gamma, "directory mismatch stays valid");
+  assert.equal(gamma.name, "Gamma");
+  assert.equal(gamma.directory, join(projects, "gamma-dir"));
+  assert.ok(Array.isArray(gamma.attention));
+  assert.ok(gamma.attention.includes("directory_mismatch"));
+
+  assert.equal(byId.has("shared"), false);
+  assert.equal(byId.has("hidden"), false);
+
+  const expectedInvalid = ["broken", "dup-a", "dup-b", ...(deniedUnreadable ? ["denied"] : [])]
+    .map((directory) => join(projects, directory))
+    .sort();
+  assert.deepEqual(catalog.invalid.map((entry) => entry.directory).sort(), expectedInvalid);
+  for (const entry of catalog.invalid) {
+    assert.ok(Array.isArray(entry.errors) && entry.errors.length > 0, `missing errors for ${entry.directory}`);
+  }
 });

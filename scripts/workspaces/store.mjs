@@ -11,6 +11,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { parseKit } from "./kit.mjs";
 
 const TEMP_PREFIX = ".workspace-publish-";
 const TEMP_SUFFIX = ".tmp";
@@ -210,4 +211,257 @@ export async function resolveWorkspacePath(base, relative) {
     throw new Error(`path escapes the workspace base: ${relative}`);
   }
   return target;
+}
+
+// Read-only storage root resolution, storage status and catalog identity.
+// These functions create, modify and lock nothing; catalog reads never run git.
+
+const STORAGE_PERMISSION_CODES = new Set(["EACCES", "EPERM"]);
+
+function isStoragePermissionError(error) {
+  return Boolean(error) && STORAGE_PERMISSION_CODES.has(error.code);
+}
+
+function storageError(path, error) {
+  return { path, message: error instanceof Error ? error.message : String(error) };
+}
+
+async function storageLstat(path) {
+  try {
+    return { info: await fs.lstat(path) };
+  } catch (error) {
+    if (error && error.code === "ENOENT") return { info: null };
+    if (isStoragePermissionError(error)) return { permission: error };
+    throw error;
+  }
+}
+
+/**
+ * Resolve the storage root: an absolute `ADJACENT_STORAGE_ROOT` wins
+ * unchanged, otherwise `<home>/Documents/adjacent-storage`. Relative
+ * overrides are refused; nothing is created.
+ * @param {{ADJACENT_STORAGE_ROOT?: string}} env
+ * @param {string} home
+ * @returns {string}
+ */
+export function resolveStorageRoot(env, home) {
+  const configured = env ? env.ADJACENT_STORAGE_ROOT : undefined;
+  if (configured === undefined || configured === null || configured === "") {
+    return join(home, "Documents", "adjacent-storage");
+  }
+  if (!isAbsolute(configured)) {
+    throw new Error("ADJACENT_STORAGE_ROOT must be an absolute path");
+  }
+  return configured;
+}
+
+/**
+ * Read-only storage status: reports the first unusable boundary without
+ * creating or modifying anything.
+ * @param {string} root
+ * @returns {Promise<{root: string, status: string,
+ *   errors: {path: string, message: string}[]}>}
+ */
+export async function storageStatus(root) {
+  if (typeof root !== "string" || root === "") {
+    throw new TypeError("root must be a non-empty string");
+  }
+  const absolute = resolve(root);
+
+  const rootLookup = await storageLstat(absolute);
+  if (rootLookup.permission) {
+    return {
+      root: absolute,
+      status: "unreadable",
+      errors: [storageError(absolute, rootLookup.permission)],
+    };
+  }
+  if (rootLookup.info === null) return { root: absolute, status: "missing_root", errors: [] };
+  if (rootLookup.info.isSymbolicLink() || !rootLookup.info.isDirectory()) {
+    return {
+      root: absolute,
+      status: "invalid_root",
+      errors: [{ path: absolute, message: "root is not a real directory" }],
+    };
+  }
+  if ((await fs.realpath(absolute)) !== absolute) {
+    return {
+      root: absolute,
+      status: "invalid_root",
+      errors: [{ path: absolute, message: "root path contains a symbolic link" }],
+    };
+  }
+
+  let rootHandle;
+  try {
+    rootHandle = await fs.opendir(absolute);
+  } catch (error) {
+    if (isStoragePermissionError(error)) {
+      return { root: absolute, status: "unreadable", errors: [storageError(absolute, error)] };
+    }
+    throw error;
+  }
+  await rootHandle.close();
+
+  const projects = join(absolute, "projects");
+  const projectsLookup = await storageLstat(projects);
+  if (projectsLookup.permission) {
+    return {
+      root: absolute,
+      status: "unreadable",
+      errors: [storageError(projects, projectsLookup.permission)],
+    };
+  }
+  if (projectsLookup.info === null) {
+    return { root: absolute, status: "missing_projects", errors: [] };
+  }
+  if (projectsLookup.info.isSymbolicLink() || !projectsLookup.info.isDirectory()) {
+    return {
+      root: absolute,
+      status: "invalid_projects",
+      errors: [{ path: projects, message: "projects is not a real directory" }],
+    };
+  }
+  if ((await fs.realpath(projects)) !== resolve(projects)) {
+    return {
+      root: absolute,
+      status: "invalid_projects",
+      errors: [{ path: projects, message: "projects path contains a symbolic link" }],
+    };
+  }
+
+  let projectsHandle;
+  try {
+    projectsHandle = await fs.opendir(projects);
+  } catch (error) {
+    if (isStoragePermissionError(error)) {
+      return { root: absolute, status: "unreadable", errors: [storageError(projects, error)] };
+    }
+    return { root: absolute, status: "invalid_projects", errors: [storageError(projects, error)] };
+  }
+  await projectsHandle.close();
+  return { root: absolute, status: "ok", errors: [] };
+}
+
+async function readWorkspaceEntry(projectsDir, directoryName) {
+  const directory = join(projectsDir, directoryName);
+  const directoryLookup = await storageLstat(directory);
+  if (directoryLookup.permission) {
+    return { invalid: { directory, errors: [directoryLookup.permission.message] } };
+  }
+  if (directoryLookup.info === null) {
+    return { invalid: { directory, errors: ["workspace directory is missing"] } };
+  }
+  if (directoryLookup.info.isSymbolicLink() || !directoryLookup.info.isDirectory()) {
+    return { invalid: { directory, errors: ["workspace is not a real directory"] } };
+  }
+
+  const kitPath = join(directory, "kit.yaml");
+  const kitLookup = await storageLstat(kitPath);
+  if (kitLookup.permission) {
+    return { invalid: { directory, errors: [kitLookup.permission.message] } };
+  }
+  if (kitLookup.info === null) {
+    return { invalid: { directory, errors: ["kit.yaml is missing"] } };
+  }
+  if (kitLookup.info.isSymbolicLink() || !kitLookup.info.isFile()) {
+    return { invalid: { directory, errors: ["kit.yaml is not a regular file"] } };
+  }
+
+  let text;
+  try {
+    text = await fs.readFile(kitPath, "utf8");
+  } catch (error) {
+    return {
+      invalid: { directory, errors: [error instanceof Error ? error.message : String(error)] },
+    };
+  }
+  const parsed = parseKit(text);
+  if (!parsed.ok) return { invalid: { directory, errors: parsed.errors } };
+  const { kit } = parsed;
+  if (typeof kit.id !== "string" || kit.id === "") {
+    return { invalid: { directory, errors: ["kit id is missing"] } };
+  }
+  const displayName = typeof kit.name === "string" && kit.name !== "" ? kit.name : kit.id;
+  return {
+    valid: {
+      id: kit.id,
+      name: displayName,
+      directory,
+      kit: { version: kit.version, id: kit.id, name: kit.name, repositories: kit.repositories },
+      attention: directoryName === kit.id ? [] : ["directory_mismatch"],
+    },
+  };
+}
+
+/**
+ * Read-only workspace catalog: invalid manifests and duplicate ids are
+ * retained with their source paths. Nothing is created and no git runs.
+ * @param {string} root
+ * @returns {Promise<{valid: object[], invalid: {directory: string, errors: string[]}[],
+ *   errors: {path: string, message: string}[]}>}
+ */
+export async function listWorkspaces(root) {
+  if (typeof root !== "string" || root === "") {
+    throw new TypeError("root must be a non-empty string");
+  }
+  const rootPath = resolve(root);
+  const valid = [];
+  const invalid = [];
+  const errors = [];
+
+  const status = await storageStatus(rootPath);
+  if (status.status !== "ok") {
+    if (status.errors.length > 0) errors.push(...status.errors);
+    else {
+      errors.push({
+        path: status.status === "missing_projects" ? join(rootPath, "projects") : rootPath,
+        message: status.status,
+      });
+    }
+    return { valid, invalid, errors };
+  }
+
+  const projectsDir = join(rootPath, "projects");
+  let handle;
+  try {
+    handle = await fs.opendir(projectsDir);
+  } catch (error) {
+    errors.push(storageError(projectsDir, error));
+    return { valid, invalid, errors };
+  }
+
+  const directoryNames = [];
+  try {
+    for await (const entry of handle) {
+      if (!entry.name.startsWith(".")) directoryNames.push(entry.name);
+    }
+  } catch (error) {
+    errors.push(storageError(projectsDir, error));
+  }
+
+  for (const directoryName of directoryNames) {
+    const read = await readWorkspaceEntry(projectsDir, directoryName);
+    if (read.valid) valid.push(read.valid);
+    else invalid.push(read.invalid);
+  }
+
+  const claimants = new Map();
+  for (const entry of valid) {
+    const list = claimants.get(entry.id);
+    if (list) list.push(entry);
+    else claimants.set(entry.id, [entry]);
+  }
+  const unique = [];
+  for (const entry of valid) {
+    if (claimants.get(entry.id).length === 1) unique.push(entry);
+    else {
+      invalid.push({
+        directory: entry.directory,
+        errors: [`duplicate workspace id ${JSON.stringify(entry.id)}`],
+      });
+    }
+  }
+
+  return { valid: unique, invalid, errors };
 }
