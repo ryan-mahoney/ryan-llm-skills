@@ -117,14 +117,14 @@ test('partial workspace coverage stays in the footer while connection failures u
     if (!elements.has(id)) elements.set(id, { textContent: '', className: '', classList: { toggle(name, value) { this[name] = value; } } });
     return elements.get(id);
   } };
-  const context = vm.createContext({ document, Date, Map, Set, JSON });
+  const context = vm.createContext({ document, Date, Map, Set, JSON, performance: { now: () => 0 } });
   vm.runInContext(script.slice(0, script.indexOf("$('run-list').addEventListener")), context);
   const now = new Date().toISOString();
   const snapshot = { observers: [{ observer_id: 'live', state: 'observing', published_at: now,
     snapshot: { workspace: 'workspace', coverage: { state: 'partial', observed_at: now,
       reasons: ['roots-cap: selected 20 of 27', 'index-entry-invalid: removed test package'] },
     runs: [{ package: '/repo/.specs/feature', coverage: { state: 'complete' } }] } }] };
-  vm.runInContext(`payload=${JSON.stringify(snapshot)};status()`, context);
+  vm.runInContext(`payload=${JSON.stringify(snapshot)};liveAnchor={at:Date.parse(${JSON.stringify(now)}),perf:0};status()`, context);
   assert.equal(elements.get('notice').innerHTML, '');
   assert.equal(elements.get('notice').classList.hidden, true);
   assert.match(elements.get('observer-summary').textContent, /Workspace partial \(7 roots skipped\)/);
