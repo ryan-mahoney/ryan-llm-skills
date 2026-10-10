@@ -1405,3 +1405,123 @@ test("workspace material: adds briefs, notes and artifact records exclusively", 
 
   assert.deepEqual(await readFile(kitPath), kitBefore);
 });
+
+test("workspace material: refuses symlink-ancestor artifact targets without publishing", async (t) => {
+  const root = await createRoot();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const repo = join(root, "repo");
+  await mkdir(repo, { recursive: true });
+  const outside = join(root, "outside");
+  await mkdir(outside, { recursive: true });
+  await writeFile(join(outside, "secret.md"), "outside\n");
+  await symlink(outside, join(repo, "link"));
+  const initialized = await new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn("git", ["init", "--quiet"], { cwd: repo, stdio: ["ignore", "pipe", "pipe"] });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", rejectPromise);
+    child.on("close", (code) => resolvePromise({ code, stderr }));
+  });
+  assert.equal(initialized.code, 0, initialized.stderr);
+
+  await setupStorage(root);
+  await createWorkspace(root, { id: "links" });
+  const workspace = join(root, "projects", "links");
+  await writeFile(
+    join(workspace, "kit.yaml"),
+    ["version: 1", "id: links", "name: Links", "repositories:", "  - id: docs", `    path: ${repo}`, ""].join("\n"),
+  );
+  const artifactsDir = join(workspace, "artifacts");
+
+  // The leaf is missing, but the existing `link` ancestor is a symlink that
+  // escapes the repository: admission must refuse before publishing.
+  await assert.rejects(
+    addArtifact(root, "links", {
+      kind: "repository",
+      target: { repository_id: "docs", path: "link/new.md" },
+    }),
+    /unsafe/,
+  );
+  await assert.rejects(lstat(join(repo, "link", "new.md")), { code: "ENOENT" });
+  let names = [];
+  try {
+    names = (await readdir(artifactsDir)).sort();
+  } catch (error) {
+    if (!error || error.code !== "ENOENT") throw error;
+  }
+  assert.deepEqual(names, []);
+
+  // A safe missing target through real ancestors is still retained.
+  const retained = await addArtifact(root, "links", {
+    kind: "repository",
+    target: { repository_id: "docs", path: "missing-doc.md" },
+  });
+  assert.match(retained.path, /^artifacts\/[0-9a-f-]{36}\.json$/);
+  assert.deepEqual((await readdir(artifactsDir)).sort(), [basename(retained.path)]);
+});
+
+test("workspace material: stores canonical http urls that remain readable", async (t) => {
+  const root = await createRoot();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const repo = join(root, "repo");
+  await mkdir(repo, { recursive: true });
+  await setupStorage(root);
+  await createWorkspace(root, { id: "urls" });
+  const workspace = join(root, "projects", "urls");
+  await writeFile(
+    join(workspace, "kit.yaml"),
+    ["version: 1", "id: urls", "name: Urls", "repositories:", "  - id: docs", `    path: ${repo}`, ""].join("\n"),
+  );
+
+  // Both spellings parse as https but only the canonical form satisfies the
+  // `https?://` record reader; no network access occurs.
+  const collapsed = await addArtifact(root, "urls", {
+    kind: "url",
+    target: "https:example.invalid/resource",
+    title: "Collapsed",
+    note: "slashes",
+  });
+  assert.equal(collapsed.record.target, "https://example.invalid/resource");
+  const padded = await addArtifact(root, "urls", {
+    kind: "url",
+    target: " https://example.invalid/resource",
+    title: "Padded",
+  });
+  assert.equal(padded.record.target, "https://example.invalid/resource");
+
+  for (const created of [collapsed, padded]) {
+    const stored = JSON.parse(await readFile(join(workspace, created.path), "utf8"));
+    assert.match(stored.target, /^https?:\/\//);
+  }
+  const fetched = await fetchWorkspace(root, "urls");
+  for (const created of [collapsed, padded]) {
+    const visible = fetched.artifacts.find((entry) => entry.artifact_id === created.record.artifact_id);
+    assert.ok(visible, `missing artifact ${created.record.artifact_id}`);
+    assert.equal(visible.status, "external");
+    assert.equal(visible.target, "https://example.invalid/resource");
+    assert.equal(visible.title, created.record.title);
+  }
+});
+
+test("workspace material: concurrent first additions allocate distinct names", async (t) => {
+  const root = await createRoot();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await setupStorage(root);
+  await createWorkspace(root, { id: "race" });
+  const workspace = join(root, "projects", "race");
+  // Neither briefs directory exists: both additions race its first creation.
+  await assert.rejects(lstat(join(workspace, "briefs")), { code: "ENOENT" });
+
+  const results = await Promise.all([
+    addMaterial(root, "race", { kind: "brief", title: "Concurrent Brief", content: "first payload\n" }),
+    addMaterial(root, "race", { kind: "brief", title: "Concurrent Brief", content: "second payload\n" }),
+  ]);
+  assert.notEqual(results[0].path, results[1].path);
+  const bodies = await Promise.all(results.map((entry) => readFile(join(workspace, entry.path), "utf8")));
+  assert.deepEqual(new Set(bodies), new Set(["first payload\n", "second payload\n"]));
+  for (const entry of results) {
+    assert.equal(dirname(join(workspace, entry.path)), join(workspace, "briefs"));
+  }
+});

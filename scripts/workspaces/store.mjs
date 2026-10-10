@@ -1011,8 +1011,16 @@ function materialSlug(title) {
 async function ensureRealDirectory(path, label) {
   let resolved = await existingRealDirectory(path, label);
   if (resolved === null) {
-    await fs.mkdir(path, { recursive: false });
+    try {
+      await fs.mkdir(path, { recursive: false });
+    } catch (error) {
+      // A concurrent first addition may have created the directory between
+      // the absence check and this mkdir: revalidate below instead of
+      // surfacing EEXIST.
+      if (!error || error.code !== "EEXIST") throw error;
+    }
     resolved = await existingRealDirectory(path, label);
+    if (resolved === null) throw new Error(`${label} does not exist: ${path}`);
   }
   return resolved;
 }
@@ -1025,15 +1033,10 @@ async function catalogWorkspace(root, id) {
 }
 
 function assertRelativeArtifactPath(path) {
-  if (typeof path !== "string" || path === "" || isAbsolute(path)) {
+  try {
+    relativeSegments(path);
+  } catch {
     throw new Error(`unsafe artifact target path: ${String(path)}`);
-  }
-  if (path.includes("\\") || path.includes("\0")) {
-    throw new Error(`unsafe artifact target path: ${path}`);
-  }
-  const segments = path.split("/");
-  if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
-    throw new Error(`unsafe artifact target path: ${path}`);
   }
 }
 
@@ -1123,6 +1126,24 @@ export async function addArtifact(root, id, options = {}) {
       throw new Error(`unknown repository: ${target.repository_id}`);
     }
     assertRelativeArtifactPath(target.path);
+    const repository = catalogEntry.kit.repositories.find(
+      (entry) => entry.id === target.repository_id,
+    );
+    const repositoryPath = isAbsolute(repository.path)
+      ? resolve(repository.path)
+      : resolve(catalogEntry.directory, repository.path);
+    // Reject symlink-redirected existing ancestors before publishing: a
+    // missing leaf beneath a symlink still inspects as outside_root, while
+    // safe missing targets and unavailable bases stay retainable.
+    let inspected = null;
+    try {
+      inspected = await inspectContainedReference(repositoryPath, target.path);
+    } catch {
+      inspected = null;
+    }
+    if (inspected !== null && inspected.status === "outside_root") {
+      throw new Error(`unsafe artifact target path: ${target.path}`);
+    }
     normalizedTarget = { repository_id: target.repository_id, path: target.path };
   } else {
     if (typeof target !== "string" || target === "") throw new Error("invalid artifact url");
@@ -1135,7 +1156,10 @@ export async function addArtifact(root, id, options = {}) {
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       throw new Error(`invalid artifact url scheme: ${parsed.protocol}`);
     }
-    normalizedTarget = target;
+    // Persist the canonical parsed URL: accepted spellings such as a missing
+    // `//` or surrounding whitespace must remain readable to the
+    // `https?://` record reader instead of becoming path-only entries.
+    normalizedTarget = parsed.href;
   }
 
   const record = {
