@@ -25,7 +25,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { createFileExclusive, createWorkspace, fetchWorkspace, listWorkspaces, resolveStorageRoot, resolveWorkspacePath, setupStorage, storageStatus, writeFileAtomic } from "./store.mjs";
+import { addArtifact, addMaterial, createFileExclusive, createWorkspace, fetchWorkspace, listWorkspaces, resolveStorageRoot, resolveWorkspacePath, setupStorage, storageStatus, writeFileAtomic } from "./store.mjs";
 import { parseKit } from "./kit.mjs";
 
 const STORE_URL = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), "store.mjs")).href;
@@ -1236,4 +1236,172 @@ test("workspace create: sets up storage and creates exclusive empty workspace ki
   assert.equal(observed.observations[1].kit.id, "1");
   assert.equal(observed.observations[1].kit.name, "Alpha # beta");
   assert.deepEqual(observed.observations[1].kit.repositories, []);
+});
+
+test("workspace material: adds briefs, notes and artifact records exclusively", async (t) => {
+  const root = await createRoot();
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const runBounded = (command, args, cwd, timeoutMs) =>
+    new Promise((resolvePromise, rejectPromise) => {
+      const child = spawn(command, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+      let stdout = "";
+      let stderr = "";
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGKILL");
+      }, timeoutMs);
+      child.stdout.on("data", (chunk) => {
+        stdout += chunk;
+      });
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk;
+      });
+      child.on("error", (error) => {
+        clearTimeout(timer);
+        rejectPromise(error);
+      });
+      child.on("close", (code, signal) => {
+        clearTimeout(timer);
+        resolvePromise({ code, signal, timedOut, stdout, stderr });
+      });
+    });
+
+  const repo = join(root, "repo");
+  await mkdir(repo, { recursive: true });
+  const initialized = await runBounded("git", ["init", "--quiet"], repo, 15000);
+  assert.equal(initialized.timedOut, false, initialized.stderr);
+  assert.equal(initialized.code, 0, initialized.stderr);
+
+  await setupStorage(root);
+  await createWorkspace(root, { id: "writer" });
+  const workspace = join(root, "projects", "writer");
+  const kitPath = join(workspace, "kit.yaml");
+  await writeFile(
+    kitPath,
+    [
+      "version: 1",
+      "id: writer",
+      "name: Writer",
+      "repositories:",
+      "  - id: docs",
+      `    path: ${repo}`,
+      "",
+    ].join("\n"),
+  );
+  const kitBefore = await readFile(kitPath);
+
+  const first = await addMaterial(root, "writer", {
+    kind: "brief",
+    title: "First Brief",
+    content: "first content\n",
+  });
+  assert.match(first.path, /^briefs\/\d{4}-\d{2}-\d{2}-first-brief\.md$/);
+  const briefsDir = join(workspace, "briefs");
+  assert.equal(dirname(join(workspace, first.path)), briefsDir);
+  assert.equal(await readFile(join(workspace, first.path), "utf8"), "first content\n");
+
+  const second = await addMaterial(root, "writer", {
+    kind: "brief",
+    title: "First Brief",
+    content: "second content\n",
+  });
+  assert.equal(second.path, `${first.path.slice(0, -3)}-2.md`);
+  assert.equal(await readFile(join(workspace, first.path), "utf8"), "first content\n");
+  assert.equal(await readFile(join(workspace, second.path), "utf8"), "second content\n");
+
+  // Control and path injection in a title cannot escape the briefs directory.
+  const workspaceBefore = (await readdir(workspace)).sort();
+  const injected = await addMaterial(root, "writer", {
+    kind: "brief",
+    title: "../evil\x00../x",
+    content: "injected\n",
+  });
+  assert.equal(dirname(join(workspace, injected.path)), briefsDir);
+  assert.equal(injected.path.split("/").includes(".."), false);
+  const slashInjected = await addMaterial(root, "writer", {
+    kind: "brief",
+    title: "a/b\\c:d",
+    content: "slash injected\n",
+  });
+  assert.equal(dirname(join(workspace, slashInjected.path)), briefsDir);
+  assert.equal(slashInjected.path.split("/").includes(".."), false);
+  assert.deepEqual((await readdir(workspace)).sort(), workspaceBefore);
+  await assert.rejects(lstat(join(briefsDir, "a")), { code: "ENOENT" });
+  await assert.rejects(lstat(join(workspace, "a")), { code: "ENOENT" });
+  await assert.rejects(lstat(join(root, "evil")), { code: "ENOENT" });
+
+  const note = await addMaterial(root, "writer", {
+    kind: "note",
+    title: "Meeting Notes",
+    content: "note content\n",
+  });
+  assert.match(note.path, /^notes\/\d{4}-\d{2}-\d{2}-meeting-notes\.md$/);
+  assert.equal(dirname(join(workspace, note.path)), join(workspace, "notes"));
+  assert.equal(await readFile(join(workspace, note.path), "utf8"), "note content\n");
+
+  const briefsBefore = (await readdir(briefsDir)).sort();
+  await assert.rejects(addMaterial(root, "writer", { kind: "memo", title: "X", content: "x" }), /invalid/);
+  await assert.rejects(addMaterial(root, "writer", { kind: "brief", title: "", content: "x" }), /invalid/);
+  await assert.rejects(addMaterial(root, "writer", { kind: "brief", title: "X", content: 42 }));
+  assert.deepEqual((await readdir(briefsDir)).sort(), briefsBefore);
+
+  const firstFile = join(workspace, first.path);
+  const readScript = `process.stdout.write(require("node:fs").readFileSync(${JSON.stringify(firstFile)}, "utf8"))`;
+  const fresh = await runBounded(process.execPath, ["-e", readScript], root, 15000);
+  assert.equal(fresh.timedOut, false);
+  assert.equal(fresh.code, 0, fresh.stderr);
+  assert.equal(fresh.stdout, "first content\n");
+
+  const repositoryArtifact = await addArtifact(root, "writer", {
+    kind: "repository",
+    target: { repository_id: "docs", path: "missing-doc.md" },
+    title: "Missing doc",
+    note: "visible later",
+  });
+  assert.match(repositoryArtifact.path, /^artifacts\/[0-9a-f-]{36}\.json$/);
+  const artifactsDir = join(workspace, "artifacts");
+  assert.equal(dirname(join(workspace, repositoryArtifact.path)), artifactsDir);
+  const storedRepository = JSON.parse(await readFile(join(workspace, repositoryArtifact.path), "utf8"));
+  assert.deepEqual(storedRepository, repositoryArtifact.record);
+  assert.equal(storedRepository.schema_version, 1);
+  assert.equal(typeof storedRepository.artifact_id, "string");
+  assert.equal(basename(repositoryArtifact.path), `${storedRepository.artifact_id}.json`);
+  assert.match(storedRepository.added_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/);
+  assert.deepEqual(storedRepository.target, { repository_id: "docs", path: "missing-doc.md" });
+  await assert.rejects(lstat(join(repo, "missing-doc.md")), { code: "ENOENT" });
+
+  const urlArtifact = await addArtifact(root, "writer", {
+    kind: "url",
+    target: "https://example.invalid/resource",
+    title: "External",
+    note: "",
+  });
+  const storedUrl = JSON.parse(await readFile(join(workspace, urlArtifact.path), "utf8"));
+  assert.deepEqual(storedUrl, urlArtifact.record);
+  assert.equal(storedUrl.kind, "url");
+  assert.equal(storedUrl.target, "https://example.invalid/resource");
+
+  const artifactsBefore = (await readdir(artifactsDir)).sort();
+  await assert.rejects(
+    addArtifact(root, "writer", { kind: "repository", target: { repository_id: "ghost", path: "doc.md" } }),
+    /unknown/,
+  );
+  for (const unsafe of ["../escape", "/etc/passwd", "a\\b.md"]) {
+    await assert.rejects(
+      addArtifact(root, "writer", { kind: "repository", target: { repository_id: "docs", path: unsafe } }),
+    );
+  }
+  await assert.rejects(
+    addArtifact(root, "writer", { kind: "url", target: "ftp://example.invalid/resource" }),
+    /scheme|invalid/,
+  );
+  await assert.rejects(
+    addArtifact(root, "writer", { kind: "url", target: "javascript:alert(1)" }),
+    /scheme|invalid/,
+  );
+  assert.deepEqual((await readdir(artifactsDir)).sort(), artifactsBefore);
+
+  assert.deepEqual(await readFile(kitPath), kitBefore);
 });

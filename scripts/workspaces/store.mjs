@@ -998,3 +998,161 @@ export async function createWorkspace(root, options = {}) {
   await createFileExclusive(kit, bytes);
   return { id, name: resolvedName, directory, kit };
 }
+
+// Workspace material and artifact records. Both identities are
+// workspace-relative paths; nothing replaces or deletes existing bytes and no
+// target repository is ever written.
+
+function materialSlug(title) {
+  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return slug === "" ? "material" : slug;
+}
+
+async function ensureRealDirectory(path, label) {
+  let resolved = await existingRealDirectory(path, label);
+  if (resolved === null) {
+    await fs.mkdir(path, { recursive: false });
+    resolved = await existingRealDirectory(path, label);
+  }
+  return resolved;
+}
+
+async function catalogWorkspace(root, id) {
+  const catalog = await listWorkspaces(resolve(root));
+  const matches = catalog.valid.filter((entry) => entry.kit && entry.kit.id === id);
+  if (matches.length !== 1) throw new Error(`workspace is not uniquely available: ${id}`);
+  return matches[0];
+}
+
+function assertRelativeArtifactPath(path) {
+  if (typeof path !== "string" || path === "" || isAbsolute(path)) {
+    throw new Error(`unsafe artifact target path: ${String(path)}`);
+  }
+  if (path.includes("\\") || path.includes("\0")) {
+    throw new Error(`unsafe artifact target path: ${path}`);
+  }
+  const segments = path.split("/");
+  if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
+    throw new Error(`unsafe artifact target path: ${path}`);
+  }
+}
+
+/**
+ * Add an exclusive brief or note as `<UTC date>-<slug>.md` inside the
+ * workspace material directory. Existing files are never replaced; name
+ * collisions allocate `-2` through `-1000` before failing with EEXIST.
+ * @param {string} root
+ * @param {string} id
+ * @param {{kind: "brief"|"note", title: string, content: string}} options
+ * @returns {Promise<{path: string}>} workspace-relative material path
+ */
+export async function addMaterial(root, id, options = {}) {
+  if (typeof root !== "string" || root === "") {
+    throw new TypeError("root must be a non-empty string");
+  }
+  if (typeof id !== "string" || id === "") {
+    throw new TypeError("id must be a non-empty string");
+  }
+  const catalogEntry = await catalogWorkspace(root, id);
+  const { kind, title, content } = options ?? {};
+  const folder = kind === "brief" ? "briefs" : kind === "note" ? "notes" : null;
+  if (folder === null) throw new Error(`invalid material kind: ${String(kind)}`);
+  if (typeof title !== "string" || title.trim() === "") throw new Error("invalid material title");
+  if (typeof content !== "string") throw new Error("invalid material content");
+
+  const directory = await ensureRealDirectory(
+    join(catalogEntry.directory, folder),
+    `${folder} directory`,
+  );
+  const date = new Date().toISOString().slice(0, 10);
+  const slug = materialSlug(title);
+  let failure = null;
+  for (let attempt = 1; attempt <= 1000; attempt += 1) {
+    const name = attempt === 1 ? `${date}-${slug}.md` : `${date}-${slug}-${attempt}.md`;
+    try {
+      await createFileExclusive(join(directory, name), content);
+      return { path: `${folder}/${name}` };
+    } catch (error) {
+      if (!error || error.code !== "EEXIST") throw error;
+      failure = error;
+    }
+  }
+  throw failure ?? Object.assign(
+    new Error(`material names exhausted: ${slug}`),
+    { code: "EEXIST" },
+  );
+}
+
+/**
+ * Add an artifact record as `artifacts/<uuid>.json`. Repository targets must
+ * name a kit repository and stay repository-relative; URL targets accept only
+ * http/https and are never fetched. Missing repository targets are retained.
+ * @param {string} root
+ * @param {string} id
+ * @param {{kind: "repository"|"url", target: object|string,
+ *   title?: string, note?: string}} options
+ * @returns {Promise<{record: object, path: string}>} record plus
+ *   workspace-relative record path
+ */
+export async function addArtifact(root, id, options = {}) {
+  if (typeof root !== "string" || root === "") {
+    throw new TypeError("root must be a non-empty string");
+  }
+  if (typeof id !== "string" || id === "") {
+    throw new TypeError("id must be a non-empty string");
+  }
+  const catalogEntry = await catalogWorkspace(root, id);
+  const { kind, target, title, note } = options ?? {};
+  if (kind !== "repository" && kind !== "url") {
+    throw new Error(`invalid artifact kind: ${String(kind)}`);
+  }
+  if (title !== undefined && typeof title !== "string") throw new Error("invalid artifact title");
+  if (note !== undefined && typeof note !== "string") throw new Error("invalid artifact note");
+
+  let normalizedTarget;
+  if (kind === "repository") {
+    if (!target || typeof target !== "object" || Array.isArray(target)) {
+      throw new Error("invalid artifact target");
+    }
+    if (typeof target.repository_id !== "string" || target.repository_id === "") {
+      throw new Error("invalid artifact repository id");
+    }
+    if (
+      !catalogEntry.kit.repositories.some((repository) => repository.id === target.repository_id)
+    ) {
+      throw new Error(`unknown repository: ${target.repository_id}`);
+    }
+    assertRelativeArtifactPath(target.path);
+    normalizedTarget = { repository_id: target.repository_id, path: target.path };
+  } else {
+    if (typeof target !== "string" || target === "") throw new Error("invalid artifact url");
+    let parsed;
+    try {
+      parsed = new URL(target);
+    } catch {
+      throw new Error(`invalid artifact url: ${target}`);
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error(`invalid artifact url scheme: ${parsed.protocol}`);
+    }
+    normalizedTarget = target;
+  }
+
+  const record = {
+    schema_version: 1,
+    artifact_id: randomUUID(),
+    kind,
+    target: normalizedTarget,
+    added_at: new Date().toISOString(),
+  };
+  if (title !== undefined) record.title = title;
+  if (note !== undefined) record.note = note;
+
+  const directory = await ensureRealDirectory(
+    join(catalogEntry.directory, "artifacts"),
+    "artifacts directory",
+  );
+  const name = `${record.artifact_id}.json`;
+  await createFileExclusive(join(directory, name), JSON.stringify(record));
+  return { record, path: `artifacts/${name}` };
+}
