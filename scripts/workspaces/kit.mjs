@@ -53,6 +53,8 @@
 // MAX_PARSE_DEPTH (64) nesting levels; deeper input fails with a line-numbered
 // error instead of overflowing the stack.
 
+import { isDeepStrictEqual } from "node:util";
+
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 const INTEGER_PATTERN = /^(?:0|[-+]?[1-9][0-9]*)$/;
 const NUMERIC_LOOKING_PATTERN =
@@ -735,4 +737,314 @@ export function validateKit(document) {
 
   if (errors.length > 0) return { ok: false, kit: null, errors };
   return { ok: true, kit, errors: [] };
+}
+
+function lineAtOffset(lines, offset) {
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (lines[index].start <= offset) return lines[index];
+  }
+  return lines[0];
+}
+
+// Apply non-overlapping span edits against the original offsets. Edits run from
+// the end of the text backwards so earlier offsets stay valid.
+function applyEdits(text, edits) {
+  const ordered = [...edits].sort(
+    (left, right) => right.start - left.start || right.end - left.end,
+  );
+  let result = text;
+  for (const edit of ordered) {
+    result = result.slice(0, edit.start) + edit.replacement + result.slice(edit.end);
+  }
+  return result;
+}
+
+// Insert whole lines after an anchor line. A file without a final newline gains
+// only the separating newline, so the no-final-newline convention survives.
+function insertionAfter(anchor, lineTexts, newline) {
+  if (anchor.break === "") {
+    return {
+      offset: anchor.end,
+      replacement: newline + lineTexts.join(newline),
+      afterLines: lineTexts.map((line, index) =>
+        index === lineTexts.length - 1 ? line : line + newline,
+      ),
+      separator: true,
+    };
+  }
+  return {
+    offset: anchor.end + anchor.break.length,
+    replacement: lineTexts.join(newline) + newline,
+    afterLines: lineTexts.map((line) => line + newline),
+    separator: false,
+  };
+}
+
+function mappingEntry(mapping, key) {
+  if (!mapping || mapping.kind !== "mapping") return null;
+  return mapping.entries.find((entry) => entry.key === key) ?? null;
+}
+
+function repositoryMapping(root, repositoryId) {
+  const repositories = mappingEntry(root, "repositories");
+  if (!repositories || repositories.value.kind !== "list") return null;
+  for (const item of repositories.value.items) {
+    const mapping = item.value;
+    if (mapping.kind !== "mapping") continue;
+    const id = mappingEntry(mapping, "id");
+    if (id && id.value.kind === "scalar" && id.value.value === repositoryId) {
+      return mapping;
+    }
+  }
+  return null;
+}
+
+function cloneKit(kit) {
+  return {
+    version: kit.version,
+    id: kit.id,
+    name: kit.name,
+    repositories: kit.repositories.map((repository) => ({ ...repository })),
+    context: [...kit.context],
+  };
+}
+
+/**
+ * Format a string as a YAML double-quoted scalar. Every `"` and `\` is escaped
+ * and the value is always quoted, so numeric/keyword/hash-like text stays a
+ * string. Throws a TypeError for non-strings and an Error for C0/C1 controls,
+ * DEL, lone surrogates and Unicode line separators (U+2028/U+2029), all of
+ * which would break single-line, parser-compatible output.
+ * @param {string} value
+ * @returns {string}
+ */
+export function formatScalar(value) {
+  if (typeof value !== "string") {
+    throw new TypeError(`formatScalar expects a string, got ${typeof value}`);
+  }
+  let formatted = '"';
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code === 0x22) {
+      formatted += '\\"';
+      continue;
+    }
+    if (code === 0x5c) {
+      formatted += "\\\\";
+      continue;
+    }
+    if (code <= 0x1f || code === 0x7f || (code >= 0x80 && code <= 0x9f)) {
+      throw new Error(`formatScalar cannot emit control character ${formatCodePoint(code)}`);
+    }
+    if (code === 0x2028 || code === 0x2029) {
+      throw new Error(`formatScalar cannot emit line separator ${formatCodePoint(code)}`);
+    }
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        throw new Error(`formatScalar cannot emit lone surrogate ${formatCodePoint(code)}`);
+      }
+      formatted += value[index] + value[index + 1];
+      index += 1;
+      continue;
+    }
+    if (code >= 0xdc00 && code <= 0xdfff) {
+      throw new Error(`formatScalar cannot emit lone surrogate ${formatCodePoint(code)}`);
+    }
+    formatted += value[index];
+  }
+  return `${formatted}"`;
+}
+
+/**
+ * Plan an exact, line-preserving kit edit without touching the filesystem.
+ *
+ * Operations:
+ * - { kind: "add-repository", repository: { id, path, remote?, role? } }
+ * - { kind: "set-role", repository_id, role }
+ *
+ * Returns { before, after, expected, hunk }. `before` is the exact input;
+ * `after` differs from it only in the affected lines; and `expected` is the
+ * normalized kit the reparsed `after` must equal. `hunk` is the readable line
+ * preview for the apply consumer:
+ *   { start_line, before_lines, after_lines }
+ * where start_line is 1-based in `before`, each line entry carries its break,
+ * and concatenating before_lines / after_lines reproduces the affected slice in
+ * each text.
+ *
+ * Throws an Error for invalid kit text, unknown kinds, duplicate repository
+ * ids, absent set-role ids, invalid required id/path values and control-bearing
+ * scalars; throws a TypeError for wrong argument types. Path/Git/filesystem
+ * validation belongs to later owners.
+ * @param {string} text
+ * @param {Object} operation
+ * @returns {{before: string, after: string, expected: Object, hunk: Object}}
+ */
+export function planKitEdit(text, operation) {
+  const parsed = parseKit(text);
+  if (!parsed.ok) {
+    throw new Error(`kit text is not valid: ${parsed.errors.join("; ")}`);
+  }
+  if (operation === null || typeof operation !== "object" || Array.isArray(operation)) {
+    throw new TypeError("planKitEdit expects an operation object");
+  }
+  if (operation.kind === "add-repository") return planAddRepository(text, parsed, operation);
+  if (operation.kind === "set-role") return planSetRole(text, parsed, operation);
+  throw new Error(`unknown operation kind: ${String(operation.kind)}`);
+}
+
+function verifyPlan(text, after, expected) {
+  const reparsed = parseKit(after);
+  if (!reparsed.ok) {
+    throw new Error(`planner produced invalid kit text: ${reparsed.errors.join("; ")}`);
+  }
+  if (!isDeepStrictEqual(reparsed.kit, expected)) {
+    throw new Error("planner produced kit content that does not match the intended edit");
+  }
+  return { before: text, after, expected };
+}
+
+function planSetRole(text, parsed, operation) {
+  const repositoryId = operation.repository_id;
+  const role = operation.role;
+  if (typeof repositoryId !== "string" || repositoryId === "") {
+    throw new Error("set-role requires a non-empty repository_id");
+  }
+  if (typeof role !== "string") {
+    throw new TypeError("set-role requires a string role");
+  }
+  const repositories = parsed.kit.repositories;
+  const index = repositories.findIndex((repository) => repository.id === repositoryId);
+  if (index === -1) {
+    throw new Error(`no repository with id ${JSON.stringify(repositoryId)}`);
+  }
+  const mapping = repositoryMapping(parsed.raw.root, repositoryId);
+  if (!mapping) {
+    throw new Error(`repository ${JSON.stringify(repositoryId)} is missing from the parsed AST`);
+  }
+  const expected = cloneKit(parsed.kit);
+  expected.repositories[index].role = role;
+  const { lines, newline } = parsed.raw;
+  const roleEntry = mappingEntry(mapping, "role");
+  if (roleEntry) {
+    const start = roleEntry.value.start;
+    const end = roleEntry.value.end;
+    const replacement = `${start === end ? " " : ""}${formatScalar(role)}`;
+    const after = applyEdits(text, [{ start, end, replacement }]);
+    const line = lineAtOffset(lines, start);
+    const lineText = text.slice(line.start, line.end);
+    const localStart = start - line.start;
+    const localEnd = end - line.start;
+    const afterText = lineText.slice(0, localStart) + replacement + lineText.slice(localEnd);
+    return {
+      ...verifyPlan(text, after, expected),
+      hunk: {
+        start_line: line.number,
+        before_lines: [lineText + line.break],
+        after_lines: [afterText + line.break],
+      },
+    };
+  }
+  const firstEntry = mapping.entries[0];
+  const firstLine = lineAtOffset(lines, firstEntry.keySpan.start);
+  const indent = firstEntry.keySpan.start - firstLine.start;
+  const anchor = lineAtOffset(lines, mapping.end - 1);
+  const inserted = insertionAfter(
+    anchor,
+    [`${" ".repeat(indent)}role: ${formatScalar(role)}`],
+    newline,
+  );
+  const after = applyEdits(text, [
+    { start: inserted.offset, end: inserted.offset, replacement: inserted.replacement },
+  ]);
+  const anchorText = text.slice(anchor.start, anchor.end);
+  return {
+    ...verifyPlan(text, after, expected),
+    hunk: {
+      start_line: anchor.number,
+      before_lines: [anchorText + anchor.break],
+      after_lines: inserted.separator
+        ? [anchorText + newline, ...inserted.afterLines]
+        : [anchorText + anchor.break, ...inserted.afterLines],
+    },
+  };
+}
+
+function planAddRepository(text, parsed, operation) {
+  const repository = operation.repository;
+  if (repository === null || typeof repository !== "object" || Array.isArray(repository)) {
+    throw new TypeError("add-repository requires a repository object");
+  }
+  const id = repository.id;
+  const path = repository.path;
+  const remote = repository.remote ?? null;
+  const role = repository.role ?? null;
+  if (typeof id !== "string" || id === "") {
+    throw new Error("add-repository requires a non-empty repository id");
+  }
+  if (typeof path !== "string" || path === "") {
+    throw new Error("add-repository requires a non-empty repository path");
+  }
+  if (remote !== null && typeof remote !== "string") {
+    throw new TypeError("repository remote must be a string or null");
+  }
+  if (role !== null && typeof role !== "string") {
+    throw new TypeError("repository role must be a string or null");
+  }
+  if (parsed.kit.repositories.some((existing) => existing.id === id)) {
+    throw new Error(`repository id ${JSON.stringify(id)} already exists`);
+  }
+  const expected = cloneKit(parsed.kit);
+  expected.repositories.push({ id, path, remote, role });
+  const { lines, newline } = parsed.raw;
+  const repositoriesEntry = mappingEntry(parsed.raw.root, "repositories");
+  const list = repositoriesEntry.value;
+  const itemLines = (dashIndent) => {
+    const dash = " ".repeat(dashIndent);
+    const field = " ".repeat(dashIndent + 2);
+    const result = [`${dash}- id: ${formatScalar(id)}`, `${field}path: ${formatScalar(path)}`];
+    if (remote !== null) result.push(`${field}remote: ${formatScalar(remote)}`);
+    if (role !== null) result.push(`${field}role: ${formatScalar(role)}`);
+    return result;
+  };
+  if (list.items.length === 0) {
+    const keyLine = lineAtOffset(lines, list.start);
+    const keyText = text.slice(keyLine.start, keyLine.end);
+    const withoutToken = text.slice(keyLine.start, list.start) + text.slice(list.end, keyLine.end);
+    const inserted = insertionAfter(keyLine, itemLines(keyLine.indent + 2), newline);
+    const after = applyEdits(text, [
+      { start: list.start, end: list.end, replacement: "" },
+      { start: inserted.offset, end: inserted.offset, replacement: inserted.replacement },
+    ]);
+    return {
+      ...verifyPlan(text, after, expected),
+      hunk: {
+        start_line: keyLine.number,
+        before_lines: [keyText + keyLine.break],
+        after_lines: inserted.separator
+          ? [withoutToken + newline, ...inserted.afterLines]
+          : [withoutToken + keyLine.break, ...inserted.afterLines],
+      },
+    };
+  }
+  const firstItem = list.items[0];
+  const firstLine = lineAtOffset(lines, firstItem.span.start);
+  const dashIndent = firstItem.span.start - firstLine.start;
+  const lastItem = list.items[list.items.length - 1];
+  const anchor = lineAtOffset(lines, lastItem.value.end - 1);
+  const inserted = insertionAfter(anchor, itemLines(dashIndent), newline);
+  const after = applyEdits(text, [
+    { start: inserted.offset, end: inserted.offset, replacement: inserted.replacement },
+  ]);
+  const anchorText = text.slice(anchor.start, anchor.end);
+  return {
+    ...verifyPlan(text, after, expected),
+    hunk: {
+      start_line: anchor.number,
+      before_lines: [anchorText + anchor.break],
+      after_lines: inserted.separator
+        ? [anchorText + newline, ...inserted.afterLines]
+        : [anchorText + anchor.break, ...inserted.afterLines],
+    },
+  };
 }

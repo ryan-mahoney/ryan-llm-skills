@@ -7,7 +7,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseKit, validateKit } from "./kit.mjs";
+import { formatScalar, parseKit, planKitEdit, validateKit } from "./kit.mjs";
 
 test("parser subset: parses hand-derived empty repositories", () => {
   const text = "version: 1\nid: demo\nname: Demo\nrepositories: []\n";
@@ -574,4 +574,380 @@ test("parser subset: preserves __proto__ keys without prototype pollution", () =
   assert.equal(Object.getPrototypeOf(result.raw.root.value), null);
   assert.equal(Object.prototype.polluted, undefined);
   assert.equal({}.polluted, undefined);
+});
+
+test("kit edit planner: replaces an existing role and keeps every other byte", () => {
+  const text = [
+    "version: 1",
+    "id: planner",
+    "name: Planner",
+    "# retained comment",
+    "repositories:",
+    "  - id: a",
+    "    path: /srv/a",
+    "    role: design-system # keep comment",
+    "    meta:",
+    "      nested: value",
+    "  - id: b",
+    "    path: /srv/b",
+    "design_system:",
+    "  tokens:",
+    "    radius: 4",
+    "",
+  ].join("\n");
+  const plan = planKitEdit(text, { kind: "set-role", repository_id: "a", role: "platform" });
+  assert.equal(plan.before, text);
+  assert.equal(
+    plan.after,
+    [
+      "version: 1",
+      "id: planner",
+      "name: Planner",
+      "# retained comment",
+      "repositories:",
+      "  - id: a",
+      "    path: /srv/a",
+      '    role: "platform" # keep comment',
+      "    meta:",
+      "      nested: value",
+      "  - id: b",
+      "    path: /srv/b",
+      "design_system:",
+      "  tokens:",
+      "    radius: 4",
+      "",
+    ].join("\n"),
+  );
+  assert.deepEqual(plan.expected, {
+    version: 1,
+    id: "planner",
+    name: "Planner",
+    repositories: [
+      { id: "a", path: "/srv/a", remote: null, role: "platform" },
+      { id: "b", path: "/srv/b", remote: null, role: null },
+    ],
+    context: [],
+  });
+  assert.deepEqual(plan.hunk, {
+    start_line: 8,
+    before_lines: ["    role: design-system # keep comment\n"],
+    after_lines: ['    role: "platform" # keep comment\n'],
+  });
+});
+
+test("kit edit planner: replaces bare and explicit null roles", () => {
+  const bare = planKitEdit(
+    "version: 1\nid: bare\nname: Bare\nrepositories:\n  - id: a\n    path: /a\n    role:\n",
+    { kind: "set-role", repository_id: "a", role: "observer" },
+  );
+  assert.equal(
+    bare.after,
+    'version: 1\nid: bare\nname: Bare\nrepositories:\n  - id: a\n    path: /a\n    role: "observer"\n',
+  );
+
+  const comment = planKitEdit(
+    "version: 1\nid: bare\nname: Bare\nrepositories:\n  - id: a\n    path: /a\n    role: # note\n",
+    { kind: "set-role", repository_id: "a", role: "observer" },
+  );
+  assert.equal(
+    comment.after,
+    'version: 1\nid: bare\nname: Bare\nrepositories:\n  - id: a\n    path: /a\n    role: "observer" # note\n',
+  );
+
+  const explicit = planKitEdit(
+    "version: 1\nid: bare\nname: Bare\nrepositories:\n  - id: a\n    path: /a\n    role: null\n",
+    { kind: "set-role", repository_id: "a", role: "observer" },
+  );
+  assert.equal(
+    explicit.after,
+    'version: 1\nid: bare\nname: Bare\nrepositories:\n  - id: a\n    path: /a\n    role: "observer"\n',
+  );
+  assert.equal(explicit.expected.repositories[0].role, "observer");
+});
+
+test("kit edit planner: inserts an absent role after the final occupied line", () => {
+  const text = [
+    "version: 1",
+    "id: planner",
+    "name: Planner",
+    "repositories:",
+    "  - id: first",
+    "    path: /first",
+    "  - id: middle",
+    "    path: /middle",
+    "    meta:",
+    "      nested: value",
+    "  - id: last",
+    "    path: /last",
+    "",
+  ].join("\n");
+  const plan = planKitEdit(text, { kind: "set-role", repository_id: "middle", role: "reviewer" });
+  assert.equal(
+    plan.after,
+    [
+      "version: 1",
+      "id: planner",
+      "name: Planner",
+      "repositories:",
+      "  - id: first",
+      "    path: /first",
+      "  - id: middle",
+      "    path: /middle",
+      "    meta:",
+      "      nested: value",
+      '    role: "reviewer"',
+      "  - id: last",
+      "    path: /last",
+      "",
+    ].join("\n"),
+  );
+  assert.deepEqual(plan.hunk, {
+    start_line: 10,
+    before_lines: ["      nested: value\n"],
+    after_lines: ["      nested: value\n", '    role: "reviewer"\n'],
+  });
+  assert.equal(plan.expected.repositories[1].role, "reviewer");
+});
+
+test("kit edit planner: appends a repository after the final occupied item", () => {
+  const text = [
+    "version: 1",
+    "id: planner",
+    "name: Planner",
+    "# retained comment",
+    "repositories:",
+    "  - id: a",
+    "    path: /srv/a # keep",
+    "design_system:",
+    "  tokens:",
+    "    radius: 4",
+    "",
+  ].join("\n");
+  const plan = planKitEdit(text, {
+    kind: "add-repository",
+    repository: { id: "b", path: "/srv/b", remote: "git@example.com:b.git", role: "worker" },
+  });
+  assert.equal(
+    plan.after,
+    [
+      "version: 1",
+      "id: planner",
+      "name: Planner",
+      "# retained comment",
+      "repositories:",
+      "  - id: a",
+      "    path: /srv/a # keep",
+      '  - id: "b"',
+      '    path: "/srv/b"',
+      '    remote: "git@example.com:b.git"',
+      '    role: "worker"',
+      "design_system:",
+      "  tokens:",
+      "    radius: 4",
+      "",
+    ].join("\n"),
+  );
+  assert.deepEqual(plan.expected.repositories[1], {
+    id: "b",
+    path: "/srv/b",
+    remote: "git@example.com:b.git",
+    role: "worker",
+  });
+  assert.deepEqual(plan.hunk, {
+    start_line: 7,
+    before_lines: ["    path: /srv/a # keep\n"],
+    after_lines: [
+      "    path: /srv/a # keep\n",
+      '  - id: "b"\n',
+      '    path: "/srv/b"\n',
+      '    remote: "git@example.com:b.git"\n',
+      '    role: "worker"\n',
+    ],
+  });
+});
+
+test("kit edit planner: converts an empty flow list at the key line", () => {
+  const commented = planKitEdit(
+    "version: 1\nid: empty\nname: Empty\nrepositories: [] # none yet\n",
+    { kind: "add-repository", repository: { id: "a", path: "/a" } },
+  );
+  assert.equal(
+    commented.after,
+    'version: 1\nid: empty\nname: Empty\nrepositories:  # none yet\n  - id: "a"\n    path: "/a"\n',
+  );
+  assert.deepEqual(commented.hunk, {
+    start_line: 4,
+    before_lines: ["repositories: [] # none yet\n"],
+    after_lines: ["repositories:  # none yet\n", '  - id: "a"\n', '    path: "/a"\n'],
+  });
+
+  const bare = planKitEdit("version: 1\nid: empty\nname: Empty\nrepositories: []", {
+    kind: "add-repository",
+    repository: { id: "a", path: "/a" },
+  });
+  assert.equal(
+    bare.after,
+    'version: 1\nid: empty\nname: Empty\nrepositories: \n  - id: "a"\n    path: "/a"',
+  );
+});
+
+test("kit edit planner: appends into an indentless repository list", () => {
+  const text =
+    "version: 1\nid: indentless\nname: Indentless\nrepositories:\n- id: a\n  path: /a\ncontext:\n- docs\n";
+  const plan = planKitEdit(text, {
+    kind: "add-repository",
+    repository: { id: "b", path: "/b" },
+  });
+  assert.equal(
+    plan.after,
+    'version: 1\nid: indentless\nname: Indentless\nrepositories:\n- id: a\n  path: /a\n- id: "b"\n  path: "/b"\ncontext:\n- docs\n',
+  );
+});
+
+test("kit edit planner: preserves BOM, CRLF and the no-final-newline convention", () => {
+  const crlf = planKitEdit(
+    "\uFEFFversion: 1\r\nid: crlf\r\nname: Crlf\r\nrepositories: []\r\n",
+    { kind: "add-repository", repository: { id: "a", path: "/a" } },
+  );
+  assert.equal(
+    crlf.after,
+    '\uFEFFversion: 1\r\nid: crlf\r\nname: Crlf\r\nrepositories: \r\n  - id: "a"\r\n    path: "/a"\r\n',
+  );
+  assert.equal(crlf.hunk.before_lines[0], "repositories: []\r\n");
+
+  const noFinal = planKitEdit(
+    "version: 1\nid: eof\nname: Eof\nrepositories:\n  - id: a\n    path: /a",
+    { kind: "set-role", repository_id: "a", role: "observer" },
+  );
+  assert.equal(
+    noFinal.after,
+    'version: 1\nid: eof\nname: Eof\nrepositories:\n  - id: a\n    path: /a\n    role: "observer"',
+  );
+});
+
+test("kit edit planner: keeps numeric, keyword, hash, quote and backslash values as strings", () => {
+  const text = "version: 1\nid: tricky\nname: Tricky\nrepositories:\n  - id: a\n    path: /a\n";
+  const plan = planKitEdit(text, {
+    kind: "add-repository",
+    repository: {
+      id: "b",
+      path: "/srv/a # not a comment",
+      remote: "yes",
+      role: 'quote " and \\ slash',
+    },
+  });
+  assert.equal(
+    plan.after,
+    [
+      "version: 1",
+      "id: tricky",
+      "name: Tricky",
+      "repositories:",
+      "  - id: a",
+      "    path: /a",
+      '  - id: "b"',
+      '    path: "/srv/a # not a comment"',
+      '    remote: "yes"',
+      '    role: "quote \\" and \\\\ slash"',
+      "",
+    ].join("\n"),
+  );
+  const reparsed = parseKit(plan.after);
+  assert.equal(reparsed.ok, true);
+  assert.deepEqual(reparsed.kit, plan.expected);
+  assert.equal(reparsed.kit.repositories[1].path, "/srv/a # not a comment");
+  assert.equal(reparsed.kit.repositories[1].remote, "yes");
+  assert.equal(reparsed.kit.repositories[1].role, 'quote " and \\ slash');
+
+  const numeric = planKitEdit(text, { kind: "set-role", repository_id: "a", role: "1.5" });
+  assert.equal(parseKit(numeric.after).kit.repositories[0].role, "1.5");
+  assert.equal(numeric.after.includes('role: "1.5"'), true);
+});
+
+test("kit edit planner: refuses invalid text, operations and values", () => {
+  const text =
+    "version: 1\nid: valid\nname: Valid\nrepositories:\n  - id: a\n    path: /a\n";
+  assert.throws(
+    () => planKitEdit("id: broken\n", { kind: "set-role", repository_id: "x", role: "r" }),
+    /kit text is not valid/,
+  );
+  assert.throws(() => planKitEdit(text, null), /expects an operation object/);
+  assert.throws(() => planKitEdit(text, { kind: "unknown" }), /unknown operation kind/);
+  assert.throws(
+    () => planKitEdit(text, { kind: "add-repository", repository: { id: "a", path: "/b" } }),
+    /already exists/,
+  );
+  assert.throws(
+    () => planKitEdit(text, { kind: "set-role", repository_id: "missing", role: "r" }),
+    /no repository with id/,
+  );
+  assert.throws(
+    () => planKitEdit(text, { kind: "add-repository", repository: { id: "", path: "/b" } }),
+    /non-empty repository id/,
+  );
+  assert.throws(
+    () => planKitEdit(text, { kind: "add-repository", repository: { id: "b", path: "" } }),
+    /non-empty repository path/,
+  );
+  assert.throws(
+    () =>
+      planKitEdit(text, {
+        kind: "add-repository",
+        repository: { id: "b", path: "/b", remote: 5 },
+      }),
+    /remote must be a string or null/,
+  );
+  assert.throws(
+    () =>
+      planKitEdit(text, {
+        kind: "add-repository",
+        repository: { id: "b", path: "/b", role: 5 },
+      }),
+    /role must be a string or null/,
+  );
+  assert.throws(
+    () => planKitEdit(text, { kind: "set-role", repository_id: "a", role: 5 }),
+    /requires a string role/,
+  );
+  assert.throws(
+    () => planKitEdit(text, { kind: "set-role", repository_id: "", role: "r" }),
+    /non-empty repository_id/,
+  );
+});
+
+test("kit edit planner: quotes arbitrary repository ids that Adjacent accepts", () => {
+  const text = "version: 1\nid: ids\nname: Ids\nrepositories:\n  - id: a\n    path: /a\n";
+  for (const id of ["Repo.A", "1.5", "yes", "null", "Repo A # id"]) {
+    const plan = planKitEdit(text, { kind: "add-repository", repository: { id, path: "/b" } });
+    assert.equal(plan.expected.repositories[1].id, id, id);
+    assert.equal(parseKit(plan.after).kit.repositories[1].id, id, id);
+    assert.equal(plan.after.includes(`- id: ${formatScalar(id)}`), true, id);
+  }
+  assert.throws(
+    () =>
+      planKitEdit(text, {
+        kind: "add-repository",
+        repository: { id: "bad\nid", path: "/b" },
+      }),
+    /control character/,
+  );
+});
+
+test("kit edit planner: formatScalar quotes strings and refuses unsafe characters", () => {
+  assert.equal(formatScalar("plain"), '"plain"');
+  assert.equal(formatScalar("1.5"), '"1.5"');
+  assert.equal(formatScalar("yes"), '"yes"');
+  assert.equal(formatScalar("a # b"), '"a # b"');
+  assert.equal(formatScalar(""), '""');
+  assert.equal(formatScalar('a"b\\c'), '"a\\"b\\\\c"');
+  assert.equal(formatScalar("caf\u00e9 \ud83d\ude80"), '"caf\u00e9 \ud83d\ude80"');
+  assert.throws(() => formatScalar(5), /expects a string/);
+  assert.throws(() => formatScalar("\n"), /control character U\+000A/);
+  assert.throws(() => formatScalar("\u0000"), /control character U\+0000/);
+  assert.throws(() => formatScalar("\u007f"), /control character U\+007F/);
+  assert.throws(() => formatScalar("\u0085"), /control character U\+0085/);
+  assert.throws(() => formatScalar("\ud800"), /lone surrogate U\+D800/);
+  assert.throws(() => formatScalar("\udc00"), /lone surrogate U\+DC00/);
+  assert.throws(() => formatScalar("\u2028"), /line separator U\+2028/);
+  assert.throws(() => formatScalar("\u2029"), /line separator U\+2029/);
 });
