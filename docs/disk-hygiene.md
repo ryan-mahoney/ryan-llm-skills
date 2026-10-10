@@ -18,7 +18,13 @@ Find yours with `echo $TMPDIR`. Largest offenders first:
 
 - **Abandoned worktrees** (`~/.worktrees/`): `git worktree list`, check for live processes (`lsof`, `ps aux | grep <path>`) before removing; `git worktree prune` for stale registrations.
 - **Build artifacts in inactive worktrees** (2026-10-08: 14GB): Elixir `_build`/`deps` (~0.2–1.2GB per gtfs-planner worktree) and Terraform `.terraform` provider caches (8GB in one worktree with ~11 modules). Confirm no process has a cwd or open file under `~/.worktrees` (`lsof | grep /.worktrees/`), stage only paths that `git -C <wt> check-ignore -q <path>` confirms are ignored, then remove. Rebuilds with `mix deps.get && mix compile` and `tofu init`. In zsh, iterate the path list with `while read`; `for d in $list` doesn't word-split.
-- **Docker**: `docker system df` to size; `docker image prune` (dangling), `docker container prune` (stopped), `docker builder prune` (build cache). Volumes need explicit review — they can hold data. Freed space stays inside `Docker.raw` and doesn't show in `df` until Docker Desktop trims the disk image.
+- **Sibling worktrees in `~/Documents`** (`<repo>-<feature>`, `.git` is a file): same treatment (2026-10-08 second pass: 16GB across 43 worktrees). Gauge activity by the worktree's git `index` mtime (`git rev-parse --absolute-git-dir`), not the folder's mtime, and skip anything touched today or with a live `lsof` path. Some repos don't ignore every artifact folder (gtfs-planner root `node_modules`), so the `check-ignore` gate matters. In zsh, `echo -` prints nothing, so don't use `-` as a column placeholder.
+- **Tool caches** (2026-10-08 third pass), using each tool's own garbage collection:
+  - **mise runtimes**: Swift toolchains are about 5–6GB each. `mise prune` fails when any worktree `mise.toml` is untrusted and only counts trusted configs, so find references yourself (`mise.toml`, `.tool-versions`, `.swift-version`, `swift-tools-version` minimums), then run `mise uninstall tool@ver`. Removing Swift 6.2 and 6.2.4 freed 11.8GB.
+  - **`uv cache prune`**: removes unreferenced entries. It reported 9.5GiB, but `df` barely moved because uv clones cache files into venvs on APFS.
+  - **`npm cache verify`**: garbage-collects unreferenced content (small).
+  - **Playwright browsers**: `~/Library/Caches/ms-playwright/.links/*` name the projects whose `browsers.json` pins each build. Keep any build a live link references.
+- **Docker**: `docker system df` to size; `docker image prune` (dangling), `docker container prune` (stopped), `docker builder prune` (build cache). Volumes need explicit review — they can hold data. Freed space stays inside `Docker.raw` and doesn't show in `df` until Docker Desktop trims the disk image. After the host disk hit 100%, `docker builder prune` and `docker system df` returned `input/output error` on buildkit and overlay2 paths. Don't repeat prunes against a VM in that state.
 
 ## Safety procedure (in order)
 
@@ -32,4 +38,5 @@ Find yours with `echo $TMPDIR`. Largest offenders first:
 ## Root causes worth fixing at the source
 
 - `mix credo diff` temp leak: consider trapping/cleanup in the worktree check script, or a launchd job pruning `$TMPDIR/credo-diff-*` older than a day.
+- Terraform provider duplication: each module's `.terraform` holds its own provider binaries (~700MB per module, ~8GB per gtfs-planner/warbler checkout, ~32GB total on 2026-10-08), and every worktree copies them again. Setting `TF_PLUGIN_CACHE_DIR` (or `plugin_cache_dir` in `~/.terraformrc`) lets every module share one provider store.
 - Chrome clone leak: benign, macOS/Chrome bug; just re-run this cleanup after Chrome updates.
