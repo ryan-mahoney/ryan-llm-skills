@@ -168,6 +168,135 @@ server with Ctrl+C; sentinel does not own or stop independently launched viewers
 build step. It can also open directly from disk: use **Import snapshot** to inspect
 a saved observer JSON file offline. Live refresh requires the local service.
 
+## Observe-only host (operator)
+
+One long-lived, authority-free host process observes every enrolled/discovered
+repository and serves the same dashboard on loopback. It is separate from Pi:
+it arms no policy, starts no workers and never opens a browser. Its localhost
+dashboard keeps the existing local **Mark complete** write for the operator,
+while remote reads are local-only and cannot complete.
+
+```bash
+# Ordinary foreground use; replace /absolute/Projects with a real directory.
+node ~/.agents/pi/extensions/spec-runtime/sentinel-host.mjs --root /absolute/Projects
+```
+
+Optional flags: `--agent-dir PATH` (default `PI_CODING_AGENT_DIR` or
+`~/.pi/agent`), `--port N` (default 4319), and `--public-host NAME` (optional
+normalized DNS name). The observation scope comes from `PI_INTERCOM_SCOPE_ID`
+(default unset). `--port 0` binds an ephemeral loopback port and is the useful
+choice for isolated tests, and the printed receipt reports the actual URL.
+Invalid `--root`, `--public-host`, `--port`, unknown flags, duplicates and
+missing values exit nonzero before any observation effect; importing the module
+creates nothing.
+
+Ownership is one keyed claim per canonical agent directory, independent of scope
+or dashboard port: a second host for the same real agentDir, including through a
+symlinked alias, is refused while the live owner holds
+`<agentDir>/spec-sentinel/coordination.sqlite`. The store uses Node's
+experimental `node:sqlite`; Node v24.9 is the current implementation target and
+the experimental warning is retained. SIGTERM/SIGINT shutdown is bounded. The
+host prints exactly one JSON line
+`{type:"ready",state,snapshot_path,dashboard_url,dashboard_state}` after
+initialization; `dashboard_state` is `ready` or `unavailable`, and an
+unavailable dashboard is reported to stderr with a null URL while observation
+continues.
+
+Observation publishes one snapshot file per observer under
+`<agentDir>/spec-sentinel/<workspace-key>/observers/<observer-id>.json`. The
+receipt's `snapshot_path` names the current file; shutdown writes `state:
+"closed"` with the same observer UUID. The reconcile heartbeat is referenced at
+15 s; `published_at`, `sequence` and `snapshot.coverage.observed_at` advance
+while the host lives. A stale `observing` file is never proof that its monitor
+is alive; confirm the recorded PID/start identity before acting.
+
+The dashboard keeps the existing local/remote boundary: loopback requests get
+the same-origin action token and normal completion, while requests classified
+remote (public `Host`/`Origin`, or forwarded headers such as `x-forwarded-for`)
+receive `completion:"local-only"`, no token, and a 403 on completion POST.
+`--public-host` only configures Host/Origin acceptance; it does not configure
+Tailscale Serve, TLS or any forwarder.
+
+An empty temporary root avoids inherited live-observe lookups. With a real
+root, host observation also performs the existing read-only local Git PR
+evidence and GitHub merge lookups described above; it grants no publication
+authority.
+
+### Operator-only launchd installation
+
+The following commands are **not** executed by the host, its tests or this
+repository. They require a separate explicit operator decision for the target
+machine. Resolve the real paths first:
+
+```bash
+command -v node
+node -e 'console.log(require("node:fs").realpathSync(process.argv[1]))' ~/.agents/pi/extensions/spec-runtime/sentinel-host.mjs
+```
+
+Write the plist (replace `<NODE>`, `<ENTRY>`, `<ROOT>`, `<HOME>` and optionally
+`<AGENT_DIR>`/`<HOST>` with the resolved absolute values; launchd does not expand `~`). No credentials belong
+in this file; keep the launchd environment minimal and resolve `PATH` for the
+observation lookups (`gh` is only needed for GitHub merge evidence):
+
+```bash
+cat > ~/Library/LaunchAgents/local.spec-sentinel.host.plist <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>local.spec-sentinel.host</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string><NODE></string>
+    <string><ENTRY></string>
+    <string>--root</string><string><ROOT></string>
+    <string>--agent-dir</string><string><AGENT_DIR></string>
+    <string>--port</string><string>4319</string>
+    <string>--public-host</string><string><HOST></string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string></dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string><HOME>/Library/Logs/spec-sentinel-host.out.log</string>
+  <key>StandardErrorPath</key><string><HOME>/Library/Logs/spec-sentinel-host.err.log</string>
+</dict>
+</plist>
+PLIST
+```
+
+Placing the file is not loading it. Loading and removal require separate
+operator authority:
+
+```bash
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.spec-sentinel.host.plist
+launchctl bootout gui/$(id -u)/local.spec-sentinel.host
+rm ~/Library/LaunchAgents/local.spec-sentinel.host.plist
+```
+
+### Operator-only Tailscale Serve
+
+Serve publishes the loopback dashboard over the tailnet; the personal tailnet's
+ACL decides who may connect, and the machine must stay awake for availability.
+
+```bash
+tailscale serve --bg --https=443 http://127.0.0.1:4319
+tailscale serve status
+tailscale serve reset
+```
+
+Never enable Funnel for this dashboard. A `--public-host` argument only matches
+the Serve hostname in Host/Origin checks; it performs no Serve or ACL change.
+`tailscale funnel status` should show no enabled funnel and `AllowFunnel` false.
+
+Later required operator checks, not part of this repository and not run here:
+a second normal or tagged tailnet device (where permitted) must show an HTTPS
+state response with no token and `completion:"local-only"` plus a refused
+completion; the listener and Serve mapping must remain loopback-only with no
+Funnel; and an authorized disposable host restart must show a new exact host
+identity, a fresh observer UUID and unaffected independent processes. Each check
+requires separate operator authority for its named target.
+
 ## Workspace sentinel status
 
 ```bash

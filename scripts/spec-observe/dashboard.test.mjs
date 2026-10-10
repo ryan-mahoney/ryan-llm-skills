@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { readDashboardState, createDashboardServer } from './dashboard.mjs';
+import { readDashboardState, createDashboardServer, isRemoteRequest, normalizePublicHost } from './dashboard.mjs';
+import { COMPLETION_FILE } from './manual-completion.mjs';
 
 function fixture(t) {
   const dir = mkdtempSync(join(tmpdir(), 'sentinel-dashboard-'));
@@ -31,14 +32,25 @@ test('dashboard enumerates snapshots without following links and preserves read 
 
 // Exercise the real request handler without requiring a listening socket, which
 // can be prohibited in managed environments. Live browser verification is separate.
-function request(server, path, { host = '127.0.0.1:4319', origin, method = 'GET' } = {}) {
+// A supplied body installs a throwing async-iterator trap so refusal cases can
+// assert the body was never consumed.
+function request(server, path, { host = '127.0.0.1:4319', origin, method = 'GET', headers = {}, body } = {}) {
   return new Promise(resolve => {
+    const seen = { bodyRead: false };
     const response = { status: 200, headers: {},
       setHeader(key, value) { this.headers[key] = value; },
       writeHead(code, headers = {}) { this.status = code; Object.assign(this.headers, headers); },
-      end(body) { resolve({ status: this.status, headers: this.headers, body: String(body ?? '') }); },
+      end(body) { resolve({ status: this.status, headers: this.headers, body: String(body ?? ''), bodyRead: seen.bodyRead }); },
     };
-    server.emit('request', { url: path, method, headers: { host, ...(origin ? { origin } : {}) }, socket: { localPort: 4319 } }, response);
+    const incoming = {
+      url: path, method,
+      headers: { host, ...(origin !== undefined ? { origin } : {}), ...headers },
+      socket: { localPort: 4319 },
+    };
+    if (body !== undefined) {
+      incoming[Symbol.asyncIterator] = () => { seen.bodyRead = true; throw new Error('request body must not be read'); };
+    }
+    server.emit('request', incoming, response);
   });
 }
 
@@ -63,13 +75,14 @@ test('dashboard uses current workspace snapshots without reviving old completed 
   const html = readFileSync(new URL('./dashboard.html', import.meta.url), 'utf8');
   const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
   new vm.Script(script);
-  const context = vm.createContext({ document: {}, Date, Map, Set, JSON });
+  const context = vm.createContext({ document: {}, Date, Map, Set, JSON, performance: { now: () => 0 } });
   vm.runInContext(script.slice(0, script.indexOf("$('run-list').addEventListener")), context);
   const now = new Date().toISOString();
   context.observers = [
     { observer_id: 'old', state: 'closed', published_at: now, snapshot: { workspace: 'w', coverage: { state: 'partial', observed_at: now }, runs: [{ package: 'completed-work' }] } },
     { observer_id: 'current', state: 'observing', published_at: now, snapshot: { workspace: 'w', coverage: { state: 'complete', observed_at: now }, runs: [] } },
   ];
+  vm.runInContext(`liveAnchor={at:Date.parse(observers[1].snapshot.coverage.observed_at),perf:performance.now()}`, context);
   assert.equal(vm.runInContext('authoritativeObservers(observers)[0].observer_id', context), 'current');
   assert.equal(vm.runInContext('authoritativeObservers(observers)[0].snapshot.runs.length', context), 0);
   context.bad = { observers: [{ snapshot: { runs: [{ actions: [null] }] } }] };
@@ -104,14 +117,14 @@ test('partial workspace coverage stays in the footer while connection failures u
     if (!elements.has(id)) elements.set(id, { textContent: '', className: '', classList: { toggle(name, value) { this[name] = value; } } });
     return elements.get(id);
   } };
-  const context = vm.createContext({ document, Date, Map, Set, JSON });
+  const context = vm.createContext({ document, Date, Map, Set, JSON, performance: { now: () => 0 } });
   vm.runInContext(script.slice(0, script.indexOf("$('run-list').addEventListener")), context);
   const now = new Date().toISOString();
   const snapshot = { observers: [{ observer_id: 'live', state: 'observing', published_at: now,
     snapshot: { workspace: 'workspace', coverage: { state: 'partial', observed_at: now,
       reasons: ['roots-cap: selected 20 of 27', 'index-entry-invalid: removed test package'] },
     runs: [{ package: '/repo/.specs/feature', coverage: { state: 'complete' } }] } }] };
-  vm.runInContext(`payload=${JSON.stringify(snapshot)};status()`, context);
+  vm.runInContext(`payload=${JSON.stringify(snapshot)};liveAnchor={at:Date.parse(${JSON.stringify(now)}),perf:0};status()`, context);
   assert.equal(elements.get('notice').innerHTML, '');
   assert.equal(elements.get('notice').classList.hidden, true);
   assert.match(elements.get('observer-summary').textContent, /Workspace partial \(7 roots skipped\)/);
@@ -234,7 +247,7 @@ test('timing shows retries independently and freezes offline or completed observ
     constructor(...args) { super(...(args.length ? args : [fixedNow])); }
     static now() { return fixedNow; }
   }
-  const context = vm.createContext({ document: {}, Date: TestDate, Map, Set, JSON });
+  const context = vm.createContext({ document: {}, Date: TestDate, Map, Set, JSON, performance: { now: () => 1000 } });
   vm.runInContext(script.slice(0, script.indexOf("$('run-list').addEventListener")), context);
   context.run = { timing: { started_at: '2026-10-06T10:00:00Z', observed_at: '2026-10-06T12:00:00Z',
     attempts: [
@@ -258,7 +271,8 @@ test('timing shows retries independently and freezes offline or completed observ
   context.run.timing.finished_at = null;
   context.run.observer = { state: 'observing', published_at: timestamp,
     snapshot: { coverage: { observed_at: timestamp } } };
-  assert.equal(vm.runInContext('specElapsed(run)', context), '3h 0m 0s', 'fresh observation advances to the current time');
+  vm.runInContext(`liveAnchor={at:${fixedNow},perf:1000}`, context);
+  assert.equal(vm.runInContext('specElapsed(run)', context), '3h 0m 0s', 'fresh observation advances to the server-relative current time');
   vm.runInContext('imported=true', context);
   assert.equal(vm.runInContext('specElapsed(run)', context), '2h 0m 0s', 'import freezes the same fresh observation');
 });
@@ -324,4 +338,199 @@ test('dashboard isolates package HTML and serves only authorized package-relativ
  assert.equal(html.headers['X-Frame-Options'],'SAMEORIGIN');assert.match((await request(server,prefix+'assets/tour.js')).headers['Content-Type'],/javascript/);assert.match((await request(server,prefix+'assets/tour.css')).headers['Content-Type'],/text\/css/);
  assert.notEqual((await request(server,'/api/package-file?'+new URLSearchParams({package:pkg,file:'../../secret'}))).status,200);
  assert.notEqual((await request(server,'/api/package-files?'+new URLSearchParams({package:repo}))).status,200);
+});
+
+// Run independently: node --test --test-name-pattern='remote dashboard' scripts/spec-observe/dashboard.test.mjs
+test('remote dashboard default server retains exact local acceptance and rejects public-looking hosts', async t => {
+  const f = fixture(t), server = createDashboardServer({ agentDir: f.dir });
+  const local = await request(server, '/api/state');
+  assert.equal(local.status, 200);
+  assert.equal(typeof JSON.parse(local.body).action_token, 'string');
+  assert.equal(JSON.parse(local.body).completion, undefined);
+  assert.equal((await request(server, '/api/state', { host: 'localhost:4319' })).status, 200);
+  assert.equal((await request(server, '/api/state', { host: 'remote.example:4319' })).status, 403);
+  assert.equal((await request(server, '/api/state', { host: '127.0.0.1:4318' })).status, 403);
+  assert.equal((await request(server, '/api/state', { origin: 'http://127.0.0.1:4319' })).status, 200);
+  assert.equal((await request(server, '/api/state', { origin: 'https://dashboard.example' })).status, 403);
+  assert.equal(isRemoteRequest({ headers: { host: '127.0.0.1:4319' }, socket: { localPort: 4319 } }), false);
+  assert.equal(isRemoteRequest({ headers: { host: 'dashboard.example' }, socket: { localPort: 4319 } }), true);
+});
+
+test('remote dashboard accepts exact public host bare or :443 with HTTPS origin and refuses lookalikes and invalid names', async t => {
+  const f = fixture(t), server = createDashboardServer({ agentDir: f.dir, publicHost: 'Dashboard.Example.' });
+  for (const host of ['dashboard.example', 'DASHBOARD.EXAMPLE:443']) {
+    const accepted = await request(server, '/api/state', { host });
+    assert.equal(accepted.status, 200, host);
+    const body = JSON.parse(accepted.body);
+    assert.equal(body.completion, 'local-only', host);
+    assert.equal(body.action_token, undefined, host);
+  }
+  const viaOrigin = await request(server, '/api/state', { origin: 'https://DASHBOARD.EXAMPLE' });
+  assert.equal(viaOrigin.status, 200);
+  assert.equal(JSON.parse(viaOrigin.body).completion, 'local-only');
+  assert.equal((await request(server, '/api/state', { host: '127.0.0.1:4319', origin: 'http://127.0.0.1:4319' })).status, 200, 'loopback acceptance is preserved');
+  assert.equal((await request(server, '/api/state', { origin: 'http://dashboard.example' })).status, 403);
+  for (const host of ['dashboard.example:4319', 'dashboard.example:8443', 'dashboard.example.evil.test', 'evil.dashboard.example', 'dashboard.example.', 'other.example']) {
+    assert.equal((await request(server, '/api/state', { host })).status, 403, host);
+  }
+  assert.equal((await request(server, '/api/state', { host: 'dashboard.example', origin: 'https://dashboard.example.evil.test' })).status, 403);
+  assert.equal(normalizePublicHost(undefined), undefined);
+  assert.equal(normalizePublicHost('Example.COM.'), 'example.com');
+  for (const value of ['', '.', 'http://dashboard.example', 'dashboard.example:443', 'dashboard.example/path',
+    'a..example', '-bad.example', 'bad-.example', 'bad host', `${'a'.repeat(64)}.example`, `${'a.'.repeat(127)}example`]) {
+    assert.throws(() => normalizePublicHost(value), value || 'empty');
+    assert.throws(() => createDashboardServer({ agentDir: f.dir, publicHost: value }), value || 'empty');
+  }
+});
+
+test('remote dashboard treats each forwarding marker including empty values as remote without a token', async t => {
+  const f = fixture(t), server = createDashboardServer({ agentDir: f.dir });
+  for (const name of ['x-forwarded-for', 'x-forwarded-host', 'forwarded', 'tailscale-user-login']) {
+    for (const value of ['', '203.0.113.9', 'proxy.example']) {
+      const response = await request(server, '/api/state', { headers: { [name]: value } });
+      assert.equal(response.status, 200, `${name}=${value}`);
+      const body = JSON.parse(response.body);
+      assert.equal(body.completion, 'local-only', `${name}=${value}`);
+      assert.equal(body.action_token, undefined, `${name}=${value}`);
+      assert.equal(isRemoteRequest({ headers: { host: '127.0.0.1:4319', [name]: value }, socket: { localPort: 4319 } }), true, name);
+    }
+  }
+  const local = await request(server, '/api/state');
+  assert.equal(JSON.parse(local.body).completion, undefined);
+  assert.equal(typeof JSON.parse(local.body).action_token, 'string');
+});
+
+test('remote dashboard refuses completion before reading the body and leaves no completion file', async t => {
+  const f = fixture(t), server = createDashboardServer({ agentDir: f.dir });
+  const pkg = join(f.dir, 'repo', '.specs', 'feature');
+  mkdirSync(pkg, { recursive: true });
+  const payload = JSON.stringify({ package: pkg, revision: 'remote-attempt' });
+  const local = await request(server, '/api/state');
+  const token = JSON.parse(local.body).action_token;
+  const forwarded = await request(server, '/api/package-completion', {
+    method: 'POST', body: payload,
+    headers: { origin: 'http://127.0.0.1:4319', 'x-sentinel-token': token, 'content-type': 'application/json', 'x-forwarded-for': '' },
+  });
+  assert.equal(forwarded.status, 403, 'an allowed loopback request carrying a forwarding marker is remote');
+  assert.equal(forwarded.bodyRead, false, 'the remote refusal never consumes the body');
+  assert.equal(existsSync(join(pkg, COMPLETION_FILE)), false);
+  const publicServer = createDashboardServer({ agentDir: f.dir, publicHost: 'dashboard.example' });
+  const publicHost = await request(publicServer, '/api/package-completion', {
+    host: 'dashboard.example', method: 'POST', body: payload,
+    headers: { origin: 'https://dashboard.example', 'content-type': 'application/json' },
+  });
+  assert.equal(publicHost.status, 403);
+  assert.equal(publicHost.bodyRead, false);
+  assert.equal(existsSync(join(pkg, COMPLETION_FILE)), false);
+  const localPost = await request(server, '/api/package-completion', {
+    method: 'POST', body: payload,
+    headers: { origin: 'http://127.0.0.1:4319', 'x-sentinel-token': token, 'content-type': 'application/json' },
+  });
+  assert.equal(localPost.bodyRead, true, 'the body helper is consumed once the request is local');
+  assert.equal(localPost.status, 503, 'the unpublished fixture package is not writable');
+  assert.equal(existsSync(join(pkg, COMPLETION_FILE)), false);
+});
+
+function inlineScript() {
+  return readFileSync(new URL('./dashboard.html', import.meta.url), 'utf8').match(/<script>([\s\S]*?)<\/script>/)[1];
+}
+
+// Real inline script with only final Date/performance/fetch/location boundaries replaced.
+function dashboardContext({ fetch, wallNow = Date.now, perfNow = () => 0, location = { protocol: 'http:' } } = {}) {
+  const elements = new Map();
+  const document = { querySelectorAll: () => [], getElementById(id) {
+    if (!elements.has(id)) elements.set(id, { innerHTML: '', textContent: '', value: '', scrollTop: 0, hidden: false,
+      querySelectorAll: () => [], setAttribute() {}, removeAttribute() {}, append() {}, insertAdjacentHTML() {},
+      classList: { toggle() {} } });
+    return elements.get(id);
+  } };
+  const RealDate = Date;
+  class TestDate extends RealDate {
+    constructor(...args) { super(...(args.length ? args : [wallNow()])); }
+    static now() { return wallNow(); }
+  }
+  const context = vm.createContext({ document, Date: TestDate, Map, Set, JSON, performance: { now: perfNow }, fetch,
+    AbortController, setTimeout, clearTimeout, location });
+  vm.runInContext(inlineScript().slice(0, inlineScript().indexOf("$('run-list').addEventListener")), context);
+  return context;
+}
+
+// Run independently: node --test --test-name-pattern='server-relative freshness' scripts/spec-observe/dashboard.test.mjs
+test('server-relative freshness anchors on refresh and absorbs ±120s client clock skew', async () => {
+  const serverT = Date.parse('2026-10-06T12:00:00Z');
+  const generated = new Date(serverT).toISOString();
+  const fresh = new Date(serverT - 5000).toISOString();
+  const old = new Date(serverT - 90000).toISOString();
+  const envelope = { generated_at: generated, errors: [], observers: [{ observer_id: 'live', state: 'observing', published_at: fresh,
+    snapshot: { runs: [], coverage: { state: 'complete', observed_at: fresh } } }] };
+  for (const skew of [120000, -120000]) {
+    const context = dashboardContext({ wallNow: () => serverT + skew, perfNow: () => 1000,
+      fetch: async () => ({ ok: true, json: async () => envelope }) });
+    await vm.runInContext('refresh()', context);
+    assert.equal(vm.runInContext(`stale(${JSON.stringify(fresh)})`, context), false, `5s heartbeat is fresh at ${skew}ms client skew`);
+    assert.equal(vm.runInContext(`stale(${JSON.stringify(old)})`, context), true, `90s heartbeat is stale at ${skew}ms client skew`);
+    assert.equal(vm.runInContext(`age(${JSON.stringify(fresh)})`, context), '5s ago', `age is measured from the receipt anchor at ${skew}ms skew`);
+  }
+});
+
+test('server-relative freshness uses the 45s boundary and monotonic elapsed time across wall-clock jumps', () => {
+  const serverT = Date.parse('2026-10-06T12:00:00Z');
+  let wall = serverT, perf = 1000;
+  const context = dashboardContext({ wallNow: () => wall, perfNow: () => perf });
+  vm.runInContext(`liveAnchor={at:${serverT},perf:1000}`, context);
+  const at = seconds => JSON.stringify(new Date(serverT - seconds * 1000).toISOString());
+  assert.equal(vm.runInContext(`stale(${at(45)})`, context), false, 'exactly 45 seconds is fresh');
+  assert.equal(vm.runInContext(`age(${at(45)})`, context), '45s ago');
+  assert.equal(vm.runInContext(`stale(${at(46)})`, context), true, 'greater than 45 seconds is stale');
+  assert.equal(vm.runInContext(`age(${at(30)})`, context), '30s ago');
+  wall += 3600000;
+  assert.equal(vm.runInContext(`stale(${at(30)})`, context), false, 'a wall-clock jump alone does not age the heartbeat');
+  perf += 60000;
+  assert.equal(vm.runInContext(`age(${at(30)})`, context), '1m ago', 'monotonic elapsed time advances the label');
+  assert.equal(vm.runInContext(`stale(${at(30)})`, context), true, 'elapsed time moves the heartbeat past the threshold');
+});
+
+test('server-relative freshness treats missing or invalid generated_at as unknown and keeps imports frozen', async () => {
+  const localT = Date.parse('2026-10-06T12:00:00Z');
+  const heartbeat = new Date(localT).toISOString();
+  const body = generated => ({ generated_at: generated, errors: [], observers: [{ observer_id: 'live', state: 'observing', published_at: heartbeat,
+    snapshot: { runs: [], coverage: { state: 'complete', observed_at: heartbeat } } }] });
+  let next = body(undefined), perf = 1000;
+  const context = dashboardContext({ wallNow: () => localT, perfNow: () => perf, fetch: async () => ({ ok: true, json: async () => next }) });
+  await vm.runInContext('refresh()', context);
+  assert.equal(vm.runInContext(`stale(${JSON.stringify(heartbeat)})`, context), true, 'missing generated_at never establishes freshness');
+  assert.equal(vm.runInContext(`age(${JSON.stringify(heartbeat)})`, context), 'Age unknown');
+  vm.runInContext(`liveAnchor={at:${localT},perf:1000}`, context);
+  assert.equal(vm.runInContext(`stale(${JSON.stringify(heartbeat)})`, context), false, 'a known server time can be fresh');
+  next = body('not-a-date');
+  await vm.runInContext('refresh()', context);
+  assert.equal(vm.runInContext(`stale(${JSON.stringify(heartbeat)})`, context), true, 'invalid generated_at clears the prior anchor');
+  assert.equal(vm.runInContext(`age(${JSON.stringify(heartbeat)})`, context), 'Age unknown');
+  vm.runInContext(`liveAnchor={at:${localT},perf:1000}`, context);
+  context.run = { observer: { state: 'observing', published_at: heartbeat, snapshot: { coverage: { observed_at: heartbeat } } },
+    timing: { observed_at: '2026-10-06T12:00:00Z' } };
+  assert.equal(vm.runInContext('timingEnd(run)', context), new Date(localT).toISOString(), 'live timing follows the server anchor');
+  vm.runInContext('imported=true;liveAnchor=null', context);
+  perf += 60000;
+  assert.equal(vm.runInContext('timingEnd(run)', context), '2026-10-06T12:00:00Z', 'imports stay frozen as observed');
+  assert.equal(vm.runInContext(`stale(${JSON.stringify(heartbeat)})`, context), true, 'imports never establish live freshness');
+});
+
+test('remote completion help explains the host-local-only restriction and keeps imported/disconnected precedence', () => {
+  const context = dashboardContext();
+  context.run = { is_current_assignment: true };
+  const help = () => vm.runInContext('completionControl(run)', context);
+  vm.runInContext("payload={completion:'local-only'}", context);
+  assert.match(help(), /<button id="mark-complete" disabled/);
+  assert.match(help(), /Mark complete is available on the host's local dashboard\./);
+  vm.runInContext("payload={action_token:'local-token'}", context);
+  assert.doesNotMatch(help(), /disabled/);
+  assert.match(help(), /Move this package to Recently completed\./);
+  vm.runInContext('imported=true', context);
+  assert.match(help(), /Completion is available on the live dashboard\./);
+  vm.runInContext("imported=false;error='Could not refresh workspace state.'", context);
+  assert.match(help(), /Reconnect to the live dashboard to enable completion\./);
+  assert.doesNotMatch(help(), /host's local dashboard/);
+  context.run = { is_current_assignment: false };
+  assert.equal(help(), '');
 });
