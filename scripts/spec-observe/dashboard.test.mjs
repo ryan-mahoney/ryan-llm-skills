@@ -703,6 +703,107 @@ test('workspace HTTP serves identical bodies to accepted public and forwarded ho
     }
     assert.equal((await request(server, path, { origin: 'http://dashboard.example' })).status, 403, path);
   }
+  const kitBefore = readFileSync(join(workspace, 'kit.yaml'), 'utf8');
+  const briefBefore = readFileSync(join(workspace, brief.path), 'utf8');
+  for (const method of ['POST', 'PUT']) {
+    for (const variant of [{ host: 'dashboard.example' }, { host: 'dashboard.example:443', origin: 'https://dashboard.example' }, { headers: { 'x-forwarded-for': '' } }]) {
+      const refused = await request(server, paths[1], { method, body: '{}', ...variant });
+      assert.equal(refused.status, 405, `${method} ${JSON.stringify(variant)}`);
+      assert.equal(refused.bodyRead, false, `${method} ${JSON.stringify(variant)}`);
+    }
+  }
+  assert.equal(readFileSync(join(workspace, 'kit.yaml'), 'utf8'), kitBefore);
+  assert.equal(readFileSync(join(workspace, brief.path), 'utf8'), briefBefore);
   const plain = createDashboardServer({ agentDir: f.dir, storageRoot });
   assert.equal((await request(plain, '/api/workspaces', { host: 'dashboard.example' })).status, 403);
+});
+
+// Run independently: node --test --test-name-pattern='workspace HTTP serves reads over a real listening' scripts/spec-observe/dashboard.test.mjs
+test('workspace HTTP serves reads over a real listening port-0 server', async t => {
+  const f = fixture(t);
+  const base = realpathSync(f.dir);
+  const storageRoot = join(base, 'storage');
+  await setupStorage(storageRoot);
+  await createWorkspace(storageRoot, { id: 'writer' });
+  const workspace = join(storageRoot, 'projects', 'writer');
+  const repo = join(base, 'repo');
+  mkdirSync(repo, { recursive: true });
+  writeFileSync(join(workspace, 'kit.yaml'), [
+    'version: 1',
+    'id: writer',
+    'name: Writer',
+    'repositories:',
+    '  - id: docs',
+    `    path: ${JSON.stringify(repo)}`,
+    '',
+  ].join('\n'));
+  const brief = await addMaterial(storageRoot, 'writer', { kind: 'brief', title: 'First Brief', content: '# Brief\n' });
+  writeFileSync(join(workspace, '.env.local'), 'SECRET=1');
+  const server = createDashboardServer({ agentDir: f.dir, publicHost: 'dashboard.example', storageRoot });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
+  const port = server.address().port;
+  // node:http (not fetch) so the wire Host header can name the accepted
+  // public host while the TCP connection stays loopback.
+  const { request: httpRequest } = await import('node:http');
+  const httpCall = (path, { host, origin, method = 'GET', headers = {}, body } = {}) => new Promise((resolve, reject) => {
+    const outgoing = httpRequest({ host: '127.0.0.1', port, path, method,
+      headers: { ...(host !== undefined ? { host } : {}), ...(origin !== undefined ? { origin } : {}), ...headers } },
+      incoming => {
+        const chunks = [];
+        incoming.on('data', chunk => chunks.push(chunk));
+        incoming.on('end', () => resolve({ status: incoming.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
+      });
+    outgoing.on('error', reject);
+    if (body !== undefined) outgoing.write(body);
+    outgoing.end();
+  });
+  const detailPath = `/api/workspace?${new URLSearchParams({ id: 'writer' })}`;
+  const listingPath = `/api/workspace-files?${new URLSearchParams({ id: 'writer' })}`;
+  const filePath = `/api/workspace-file?${new URLSearchParams({ id: 'writer', file: brief.path })}`;
+  const paths = ['/api/workspaces', detailPath, listingPath, filePath];
+
+  const loopback = [];
+  for (const path of paths) {
+    const response = await httpCall(path);
+    assert.equal(response.status, 200, path);
+    assert.doesNotMatch(response.body, /action_token/, path);
+    loopback.push(response.body);
+  }
+  assert.equal(JSON.parse(loopback[0]).storage.status, 'ok');
+  assert.equal(JSON.parse(loopback[1]).id, 'writer');
+  assert.equal(loopback[3], '# Brief\n');
+
+  for (const variant of [{ host: 'dashboard.example' }, { host: 'dashboard.example:443', origin: 'https://dashboard.example' }, { headers: { 'x-forwarded-for': '' } }]) {
+    for (const [index, path] of paths.entries()) {
+      const response = await httpCall(path, variant);
+      assert.equal(response.status, 200, `${JSON.stringify(variant)} ${path}`);
+      assert.equal(response.body, loopback[index], `${JSON.stringify(variant)} ${path}`);
+    }
+  }
+
+  for (const path of paths) {
+    const head = await httpCall(path, { method: 'HEAD' });
+    assert.equal(head.status, 200, `HEAD ${path}`);
+    assert.equal(head.body, '', `HEAD ${path}`);
+    for (const host of ['evil-dashboard.example', 'dashboard.example.evil', 'dashboard.example:4319']) {
+      assert.equal((await httpCall(path, { host })).status, 403, `${host} ${path}`);
+    }
+    assert.equal((await httpCall(path, { origin: 'http://dashboard.example' })).status, 403, path);
+  }
+  assert.notEqual((await httpCall(`/api/workspace-file?${new URLSearchParams({ id: 'writer', file: '.env.local' })}`)).status, 200);
+
+  const kitBefore = readFileSync(join(workspace, 'kit.yaml'), 'utf8');
+  const briefBefore = readFileSync(join(workspace, brief.path), 'utf8');
+  const kitMtime = lstatSync(join(workspace, 'kit.yaml')).mtimeMs;
+  const briefMtime = lstatSync(join(workspace, brief.path)).mtimeMs;
+  for (const method of ['POST', 'PUT']) {
+    for (const variant of [{ host: 'dashboard.example' }, { headers: { 'x-forwarded-for': '' } }]) {
+      assert.equal((await httpCall(detailPath, { method, body: '{}', ...variant })).status, 405, `${method} ${JSON.stringify(variant)}`);
+    }
+  }
+  assert.equal(readFileSync(join(workspace, 'kit.yaml'), 'utf8'), kitBefore);
+  assert.equal(readFileSync(join(workspace, brief.path), 'utf8'), briefBefore);
+  assert.equal(lstatSync(join(workspace, 'kit.yaml')).mtimeMs, kitMtime);
+  assert.equal(lstatSync(join(workspace, brief.path)).mtimeMs, briefMtime);
 });
