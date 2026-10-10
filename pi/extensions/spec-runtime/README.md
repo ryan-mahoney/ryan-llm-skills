@@ -42,7 +42,10 @@ branch. Repository setup happens only when the actual step needs it.
 authority. `timeout_ms` defaults to two hours for the complete owner assignment.
 `assignment_id` identifies an attempt and defaults to the step path. Repeating the
 same attempt returns its receipt, including after later steps complete. Reusing an
-ID with a changed model, checkout, extension list, step, or instructions is an error. Use a new
+ID with a changed model, checkout, extension list, step, or instructions is an error. A
+startup clarification redispatch therefore uses a new attempt ID on the same step with the
+answer in `instructions`. Retained sessions are reused because `instructions` is part of the
+launch contract but not the session key. Use a new
 assignment ID for an intentional correction/retry, or an owner transfer. A different
 step is a new assignment. Never use a new ID to bypass an active lease.
 

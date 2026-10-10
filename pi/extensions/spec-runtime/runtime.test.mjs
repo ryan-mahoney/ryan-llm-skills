@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readdirSync, writeFileSync, readFileSync, existsSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -622,6 +622,34 @@ test('step-scoped sessions isolate steps, retain retries and leave default packa
   assert.throws(() => other.start({ ...g.input, session_scope: 'discard' }), /session_scope/);
   assert.equal(g.pids.length, 0);
   assert.equal(existsSync(join(g.packagePath, 'runtime')), false);
+});
+
+test('clarification redispatch reuses retained sessions and refuses the stale attempt ID', async t => {
+  const f = fixture(t, `console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:process.argv.slice(2).join(' ')}]}}));`);
+  let settle;
+  const runtime = new Runtime({ ...f.options, notify: value => settle?.(value) });
+  const complete = async input => {
+    const finished = new Promise(resolve => { settle = resolve; });
+    const receipt = runtime.start({ ...f.input, ...input });
+    await finished;
+    return loadRun(f.packagePath, receipt.run_id);
+  };
+  const first = await complete({ assignment_id: 'startup', instructions: 'Original direction' });
+  assert.equal(first.state, 'completed');
+  assert.ok(first.result.includes(`--session ${first.owner_session}`));
+  assert.ok(first.result.includes('Original direction'));
+  const runsDir = join(f.packagePath, 'runtime', 'runs');
+  const runsBefore = readdirSync(runsDir);
+  assert.throws(() => runtime.start({ ...f.input, assignment_id: 'startup', instructions: 'changed' }), /different launch contract/);
+  assert.equal(f.pids.length, 1);
+  assert.deepEqual(readdirSync(runsDir), runsBefore);
+  const second = await complete({ assignment_id: 'startup-clarified-1', attempt_kind: 'implementation', instructions: 'Clarification: Q: which helper A: existing one' });
+  assert.notEqual(second.id, first.id);
+  assert.equal(second.owner_session, first.owner_session);
+  assert.equal(second.editor_session, first.editor_session);
+  assert.ok(second.result.includes(`--session ${second.owner_session}`));
+  assert.ok(second.result.includes('Clarification: Q: which helper A: existing one'));
+  assert.equal(f.pids.length, 2);
 });
 
 test('sentinel cancellation: assertIdleWriter rejects a claimed editor slot while the lease is valid', async t => {
