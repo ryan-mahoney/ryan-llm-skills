@@ -11,7 +11,7 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parseKit } from "./kit.mjs";
 import { resolveCheckout } from "../repo-search/identity.mjs";
 
@@ -390,7 +390,13 @@ async function readWorkspaceEntry(projectsDir, directoryName) {
       id: kit.id,
       name: displayName,
       directory,
-      kit: { version: kit.version, id: kit.id, name: kit.name, repositories: kit.repositories },
+      kit: {
+        version: kit.version,
+        id: kit.id,
+        name: kit.name,
+        repositories: kit.repositories.map((repository) => ({ ...repository })),
+        context: [...kit.context],
+      },
       attention: directoryName === kit.id ? [] : ["directory_mismatch"],
     },
   };
@@ -547,7 +553,11 @@ async function repositoryRecord(workspaceDirectory, repository) {
     }
     record.status = "ok";
   } catch (error) {
-    if (typeof error?.code === "string" || error?.killed === true) {
+    if (
+      typeof error?.code === "string" ||
+      error?.killed === true ||
+      typeof error?.signal === "string"
+    ) {
       record.status = "unreadable";
       record.attention.push("unreadable");
     } else {
@@ -574,39 +584,95 @@ function contextPath(entry) {
   return null;
 }
 
+// Inspect a relative content reference against an absolute base without
+// following symlinks. Lexical violations (empty, absolute, dot, dotdot,
+// backslash or NUL segments) refuse as outside_root. Every existing component
+// is lstat-checked: a symlink component refuses as outside_root, a missing
+// component (or a non-directory intermediate) reports missing only because
+// every existing ancestor stayed inside the physical base, and an existing
+// target resolves to its physical path for the caller to read.
+async function inspectContainedReference(base, referenced) {
+  try {
+    relativeSegments(referenced);
+  } catch {
+    return { status: "outside_root", physical: null };
+  }
+  const segments = referenced.split("/");
+  let physicalBase;
+  try {
+    physicalBase = await fs.realpath(base);
+  } catch {
+    return { status: "unreadable", physical: null };
+  }
+  let current = physicalBase;
+  for (let index = 0; index < segments.length; index += 1) {
+    current = join(current, segments[index]);
+    let info;
+    try {
+      info = await fs.lstat(current);
+    } catch (error) {
+      if (error && error.code === "ENOENT") return { status: "missing", physical: null };
+      if (error && (error.code === "EACCES" || error.code === "EPERM")) {
+        return { status: "unreadable", physical: null };
+      }
+      throw error;
+    }
+    if (info.isSymbolicLink()) return { status: "outside_root", physical: null };
+    if (index < segments.length - 1 && !info.isDirectory()) {
+      return { status: "missing", physical: null };
+    }
+  }
+  let physical;
+  try {
+    physical = await fs.realpath(current);
+  } catch (error) {
+    if (error && error.code === "ENOENT") return { status: "missing", physical: null };
+    if (error && (error.code === "EACCES" || error.code === "EPERM")) {
+      return { status: "unreadable", physical: null };
+    }
+    throw error;
+  }
+  const prefix = physicalBase.endsWith(sep) ? physicalBase : `${physicalBase}${sep}`;
+  if (physical !== current && !physical.startsWith(prefix)) {
+    return { status: "outside_root", physical: null };
+  }
+  return { status: "ok", physical };
+}
+
 async function contextRecord(workspaceDirectory, entry) {
   const requested = contextPath(entry);
   const record = { path: requested ?? String(entry), status: "unreadable" };
   if (requested === null) return record;
-  const target = isAbsolute(requested)
-    ? resolve(requested)
-    : resolve(workspaceDirectory, requested);
-  if (!insideRoot(workspaceDirectory, target)) {
-    record.status = "outside_root";
-    return record;
-  }
-  let lookup;
-  try {
-    lookup = await storageLstat(target);
-  } catch {
-    return record;
-  }
-  if (lookup.permission) return record;
-  if (lookup.info === null) {
-    record.status = "missing";
-    return record;
-  }
-  try {
-    const physical = await fs.realpath(target);
-    const physicalRoot = await fs.realpath(workspaceDirectory);
-    if (!insideRoot(physicalRoot, physical)) {
+  let referenced = requested;
+  if (isAbsolute(requested)) {
+    const target = resolve(requested);
+    if (!insideRoot(workspaceDirectory, target)) {
       record.status = "outside_root";
       return record;
     }
-    await fs.readFile(physical);
+    if (target === workspaceDirectory) return record;
+    referenced = relative(workspaceDirectory, target);
+  }
+  let inspected;
+  try {
+    inspected = await inspectContainedReference(workspaceDirectory, referenced);
+  } catch {
+    return record;
+  }
+  if (inspected.status === "outside_root") {
+    record.status = "outside_root";
+    return record;
+  }
+  if (inspected.status === "missing") {
+    record.status = "missing";
+    return record;
+  }
+  if (inspected.status !== "ok") return record;
+  try {
+    await fs.readFile(inspected.physical);
     record.status = "ok";
   } catch {
-    record.status = "unreadable";
+    // A directory or unreadable file keeps the unreadable status.
   }
   return record;
 }
@@ -642,6 +708,24 @@ async function artifactRecords(workspaceDirectory, repositories) {
   const records = [];
   for (const name of names) {
     const recordPath = join(artifactsDirectory, name);
+    // The record itself must be a regular non-symlink file: a symlinked
+    // record is refused without reading the bytes it points at.
+    let recordLookup;
+    try {
+      recordLookup = await storageLstat(recordPath);
+    } catch {
+      recordLookup = null;
+    }
+    if (
+      recordLookup === null ||
+      recordLookup.permission ||
+      recordLookup.info === null ||
+      recordLookup.info.isSymbolicLink() ||
+      !recordLookup.info.isFile()
+    ) {
+      records.push({ path: recordPath, status: "unreadable", reason: "unreadable record" });
+      continue;
+    }
     let parsed;
     try {
       parsed = JSON.parse(await fs.readFile(recordPath, "utf8"));
@@ -682,42 +766,54 @@ async function artifactRecords(workspaceDirectory, repositories) {
       records.push({ ...parsed, path: recordPath, status: "repository_unavailable" });
       continue;
     }
+    // A retained repository that is not usable cannot ground a target: the
+    // artifact keeps its fields with a distinct unavailable status.
+    if (repository.status !== "ok") {
+      records.push({ ...parsed, path: recordPath, status: "repository_unavailable" });
+      continue;
+    }
     const repositoryPath = isAbsolute(repository.path)
       ? resolve(repository.path)
       : resolve(workspaceDirectory, repository.path);
-    const targetPath = isAbsolute(target.path)
-      ? resolve(target.path)
-      : resolve(repositoryPath, target.path);
-    if (!insideRoot(repositoryPath, targetPath)) {
+    let inspected;
+    try {
+      inspected = await inspectContainedReference(repositoryPath, target.path);
+    } catch {
+      records.push({
+        ...parsed,
+        path: recordPath,
+        status: "unreadable",
+        reason: "unreadable target",
+      });
+      continue;
+    }
+    if (inspected.status === "outside_root") {
       records.push({ ...parsed, path: recordPath, status: "outside_root" });
       continue;
     }
-    let targetLookup;
-    try {
-      targetLookup = await storageLstat(targetPath);
-    } catch {
-      records.push({ path: recordPath, status: "unreadable", reason: "unreadable target" });
-      continue;
-    }
-    if (targetLookup.permission) {
-      records.push({ path: recordPath, status: "unreadable", reason: "unreadable target" });
-      continue;
-    }
-    if (targetLookup.info === null) {
+    if (inspected.status === "missing") {
       records.push({ ...parsed, path: recordPath, status: "missing" });
       continue;
     }
+    if (inspected.status !== "ok") {
+      records.push({
+        ...parsed,
+        path: recordPath,
+        status: "unreadable",
+        reason: "unreadable target",
+      });
+      continue;
+    }
     try {
-      const physical = await fs.realpath(targetPath);
-      const physicalRepository = await fs.realpath(repositoryPath);
-      if (!insideRoot(physicalRepository, physical)) {
-        records.push({ ...parsed, path: recordPath, status: "outside_root" });
-        continue;
-      }
-      await fs.readFile(physical);
+      await fs.readFile(inspected.physical);
       records.push({ ...parsed, path: recordPath, status: "ok" });
     } catch {
-      records.push({ path: recordPath, status: "unreadable", reason: "unreadable target" });
+      records.push({
+        ...parsed,
+        path: recordPath,
+        status: "unreadable",
+        reason: "unreadable target",
+      });
     }
   }
   return records;
@@ -780,13 +876,10 @@ export async function fetchWorkspace(root, id) {
   const catalogEntry = matches[0];
   const directory = catalogEntry.directory;
 
-  let kit = catalogEntry.kit;
-  try {
-    const parsed = parseKit(await fs.readFile(join(directory, "kit.yaml"), "utf8"));
-    if (parsed.ok) kit = parsed.kit;
-  } catch {
-    // Keep the validated catalog kit when the manifest cannot be re-read.
-  }
+  // Detail resolves from the authorized catalog read: re-reading the manifest
+  // here would accept an unvalidated replacement identity or silently drop
+  // context when the second read fails.
+  const kit = catalogEntry.kit;
   const contextEntries = Array.isArray(kit.context) ? kit.context : [];
 
   const attention = [...(catalogEntry.attention ?? [])];

@@ -851,6 +851,200 @@ test("workspace target status: reports retained repositories, context and artifa
   assert.equal(artifacts.get(join(artifactsDir, "artifact-url.json")).status, "external");
 });
 
+test("workspace target status: refuses unsafe references and retains unavailable associations", async (t) => {
+  const root = await createRoot();
+  const outside = await createRoot();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(outside, { recursive: true, force: true }));
+
+  const runGit = (cwd, args, timeoutMs = 15000) =>
+    new Promise((resolvePromise, rejectPromise) => {
+      const child = spawn("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+      let stderr = "";
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk;
+      });
+      const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
+      child.on("error", (error) => {
+        clearTimeout(timer);
+        rejectPromise(error);
+      });
+      child.on("close", (code) => {
+        clearTimeout(timer);
+        if (code === 0) resolvePromise(null);
+        else rejectPromise(new Error(`git ${args.join(" ")} failed with ${code}: ${stderr.trim()}`));
+      });
+    });
+
+  // One usable repository with readable, locked and symlinked content, one
+  // missing path and one plain file; the outside root owns the leak targets.
+  const repoOk = join(root, "repos", "repo-ok");
+  await mkdir(join(repoOk, "docs"), { recursive: true });
+  await runGit(repoOk, ["init", "--quiet"]);
+  await writeFile(join(repoOk, "docs", "keep.md"), "kept");
+  await writeFile(join(repoOk, "docs", "locked.md"), "restricted");
+  await chmod(join(repoOk, "docs", "locked.md"), 0o000);
+  const lockedDetected = await readFile(join(repoOk, "docs", "locked.md"), "utf8").then(
+    () => false,
+    () => true,
+  );
+  const repoMissing = join(root, "repos", "repo-missing");
+  const repoFile = join(root, "repos", "plain.txt");
+  await writeFile(repoFile, "not a repository");
+  const outsideSecret = join(outside, "secret.md");
+  await writeFile(outsideSecret, "external bytes");
+  await symlink(outside, join(repoOk, "link"));
+  await symlink(join(repoOk, "docs", "keep.md"), join(repoOk, "selflink"));
+
+  const workspace = join(root, "projects", "ws2");
+  await mkdir(join(workspace, "context"), { recursive: true });
+  await symlink(outside, join(workspace, "context-link"));
+  await writeFile(
+    join(workspace, "kit.yaml"),
+    [
+      "version: 1",
+      "id: ws2",
+      "name: Workspace Two",
+      "repositories:",
+      "  - id: repo-ok",
+      `    path: ${repoOk}`,
+      "  - id: repo-missing",
+      `    path: ${repoMissing}`,
+      "  - id: repo-file",
+      `    path: ${repoFile}`,
+      "context:",
+      "  - docs/../escape.md",
+      "  - ./docs/keep.md",
+      "  - context-link/secret.md",
+      "  - docs/keep-missing.md",
+      "",
+    ].join("\n"),
+  );
+
+  // Record fixtures: a symlinked record pointing at a valid outside record,
+  // lexical violations, symlink-ancestor and unavailable-repository targets,
+  // an unreadable target and positive controls.
+  const artifactsDir = join(workspace, "artifacts");
+  await mkdir(artifactsDir);
+  const repositoryArtifact = (artifactId, target) => ({
+    schema_version: 1,
+    artifact_id: artifactId,
+    kind: "repository",
+    target,
+    title: artifactId,
+    note: "",
+    added_at: "2026-10-10T00:00:00Z",
+  });
+  const writeRecord = (name, payload) =>
+    writeFile(join(artifactsDir, name), typeof payload === "string" ? payload : JSON.stringify(payload));
+  await writeFile(
+    outsideSecret.replace(/secret\.md$/, "outside-record.json"),
+    JSON.stringify({
+      schema_version: 1,
+      artifact_id: "leaked",
+      kind: "url",
+      target: "https://example.invalid/leaked",
+      title: "leaked",
+      note: "",
+      added_at: "2026-10-10T00:00:00Z",
+    }),
+  );
+  await symlink(
+    outsideSecret.replace(/secret\.md$/, "outside-record.json"),
+    join(artifactsDir, "artifact-symlink.json"),
+  );
+  await writeRecord("artifact-dotdot.json", repositoryArtifact("artifact-dotdot", { repository_id: "repo-ok", path: "docs/../keep.md" }));
+  await writeRecord("artifact-dot.json", repositoryArtifact("artifact-dot", { repository_id: "repo-ok", path: "./docs/keep.md" }));
+  await writeRecord("artifact-empty.json", repositoryArtifact("artifact-empty", { repository_id: "repo-ok", path: "" }));
+  await writeRecord(
+    "artifact-absolute.json",
+    repositoryArtifact("artifact-absolute", { repository_id: "repo-ok", path: join(repoOk, "docs", "keep.md") }),
+  );
+  await writeRecord("artifact-link.json", repositoryArtifact("artifact-link", { repository_id: "repo-ok", path: "link/new.md" }));
+  await writeRecord("artifact-selflink.json", repositoryArtifact("artifact-selflink", { repository_id: "repo-ok", path: "selflink" }));
+  await writeRecord("artifact-repo-missing.json", repositoryArtifact("artifact-repo-missing", { repository_id: "repo-missing", path: "x.md" }));
+  await writeRecord("artifact-repo-file.json", repositoryArtifact("artifact-repo-file", { repository_id: "repo-file", path: "x.md" }));
+  await writeRecord("artifact-locked.json", repositoryArtifact("artifact-locked", { repository_id: "repo-ok", path: "docs/locked.md" }));
+  await writeRecord("artifact-ok.json", repositoryArtifact("artifact-ok", { repository_id: "repo-ok", path: "docs/keep.md" }));
+  await writeRecord("artifact-gone.json", repositoryArtifact("artifact-gone", { repository_id: "repo-ok", path: "docs/gone.md" }));
+
+  const result = await fetchWorkspace(root, "ws2");
+  const context = new Map(result.context.map((entry) => [entry.path, entry]));
+  assert.equal(context.get("docs/../escape.md").status, "outside_root");
+  assert.equal(context.get("./docs/keep.md").status, "outside_root");
+  assert.equal(context.get("context-link/secret.md").status, "outside_root");
+  assert.equal(context.get("docs/keep-missing.md").status, "missing");
+
+  const artifacts = new Map(result.artifacts.map((entry) => [entry.path, entry]));
+  assert.equal(artifacts.size, 12);
+  const linked = artifacts.get(join(artifactsDir, "artifact-symlink.json"));
+  assert.equal(linked.status, "unreadable");
+  assert.ok(!("artifact_id" in linked), "symlinked record bytes must not surface");
+  assert.equal(artifacts.get(join(artifactsDir, "artifact-dotdot.json")).status, "outside_root");
+  assert.equal(artifacts.get(join(artifactsDir, "artifact-dot.json")).status, "outside_root");
+  assert.equal(artifacts.get(join(artifactsDir, "artifact-empty.json")).status, "outside_root");
+  assert.equal(artifacts.get(join(artifactsDir, "artifact-absolute.json")).status, "outside_root");
+  assert.equal(artifacts.get(join(artifactsDir, "artifact-link.json")).status, "outside_root");
+  assert.equal(artifacts.get(join(artifactsDir, "artifact-link.json")).artifact_id, "artifact-link");
+  assert.equal(artifacts.get(join(artifactsDir, "artifact-selflink.json")).status, "outside_root");
+  for (const name of ["artifact-dotdot.json", "artifact-absolute.json", "artifact-selflink.json"]) {
+    assert.equal(artifacts.get(join(artifactsDir, name)).artifact_id, name.replace(/\.json$/, ""));
+  }
+  const unavailableMissing = artifacts.get(join(artifactsDir, "artifact-repo-missing.json"));
+  assert.equal(unavailableMissing.status, "repository_unavailable");
+  assert.equal(unavailableMissing.artifact_id, "artifact-repo-missing");
+  const unavailableFile = artifacts.get(join(artifactsDir, "artifact-repo-file.json"));
+  assert.equal(unavailableFile.status, "repository_unavailable");
+  assert.equal(unavailableFile.artifact_id, "artifact-repo-file");
+  const locked = artifacts.get(join(artifactsDir, "artifact-locked.json"));
+  assert.equal(locked.status, lockedDetected ? "unreadable" : "ok");
+  assert.equal(locked.artifact_id, "artifact-locked");
+  assert.deepEqual(locked.target, { repository_id: "repo-ok", path: "docs/locked.md" });
+  assert.equal(artifacts.get(join(artifactsDir, "artifact-ok.json")).status, "ok");
+  const gone = artifacts.get(join(artifactsDir, "artifact-gone.json"));
+  assert.equal(gone.status, "missing");
+  assert.equal(gone.artifact_id, "artifact-gone");
+});
+
+test("workspace target status: reports git timeouts as unreadable attention", async (t) => {
+  const root = await createRoot();
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  // A fake git that never answers: the bounded identity call must surface a
+  // timeout as unreadable attention, never as a not_git identity result.
+  const fakeBin = join(root, "fakebin");
+  await mkdir(fakeBin, { recursive: true });
+  await writeFile(join(fakeBin, "git"), "#!/bin/sh\n sleep 30\n");
+  await chmod(join(fakeBin, "git"), 0o755);
+  const repoDir = join(root, "repos", "repo-slow");
+  await mkdir(repoDir, { recursive: true });
+  const workspace = join(root, "projects", "ws-slow");
+  await mkdir(workspace, { recursive: true });
+  await writeFile(
+    join(workspace, "kit.yaml"),
+    [
+      "version: 1",
+      "id: ws-slow",
+      "name: Slow",
+      "repositories:",
+      "  - id: repo-slow",
+      `    path: ${repoDir}`,
+      "",
+    ].join("\n"),
+  );
+
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${fakeBin}:${previousPath ?? ""}`;
+  try {
+    const result = await fetchWorkspace(root, "ws-slow");
+    assert.equal(result.repositories.length, 1);
+    assert.equal(result.repositories[0].status, "unreadable");
+    assert.ok(result.repositories[0].attention.includes("unreadable"));
+  } finally {
+    process.env.PATH = previousPath;
+  }
+});
+
 test("workspace create: sets up storage and creates exclusive empty workspace kits", async (t) => {
   const tmp = await createRoot();
   t.after(() => rm(tmp, { recursive: true, force: true }));
