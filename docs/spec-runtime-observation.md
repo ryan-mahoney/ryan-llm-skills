@@ -112,6 +112,26 @@ elapsed observations, step attempts, model/tool calls by role, model response ti
 recognized test submissions, reported cost, and Mercury/clerk usage. Parallel times
 overlap; unfinished work, missing pricing and incomplete logs stay explicit.
 
+## Curated gym runs
+
+Replay one curated scenario against an explicitly selected model:
+
+```bash
+node scripts/spec-gym/cli.mjs run --skill spec-step-run --scenario <id> --model provider/model
+```
+
+Compare two models on the same scenario and frozen inputs:
+
+```bash
+node scripts/spec-gym/cli.mjs run --skill spec-step-run --scenario <id> --model provider/a --model provider/b
+```
+
+Interpretation limits: one curated workload per run; the report makes no general
+model ranking and names no winner; `unknown` cost means the provider did not price
+the calls, not zero; a harness or provider failure (`blocked`, `invalid`,
+`timed-out`) is not a skill result. Live model comparison remains unproven until the
+authorized pilot runs (`.specs/super1-spec-gym/evidence/pilot.md`).
+
 ## Install and resume
 
 

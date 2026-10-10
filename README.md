@@ -200,6 +200,8 @@ as `Use STRONG_OWNER for steps 4 and 7.` Existing prepared specs need no new fie
 | **spec-pr** | `/spec-pr [spec-path]` | Rebase, refresh evidence, require a ready tour, and publish the PR |
 | **spec-branch**, **spec-branch-worktree** | `/spec-branch [description]` | Optional helpers to create a branch or worktree; the orchestrator does not need them |
 | **spec-issue** | `/spec-issue [markdown-path] [issue-number]` | Mirror a Markdown spec to a GitHub issue; no pipeline state |
+| **spec-gym** | `node scripts/spec-gym/cli.mjs run ...` | Replay one curated scenario against explicitly selected models with frozen inputs and compare outcomes; never edits a skill or scenario |
+| **spec-gym-extract** | `node scripts/spec-gym/cli.mjs extract ...` | Extract a draft scenario from a real package and pinned Git revision without modifying the source |
 | **test-audit** | `/test-audit <behavior or path> [mode=assess\|apply]` | Find redundant, weak, brittle, or costly tests in a scoped suite, and optionally apply the fixes |
 
 ### Design entry point
