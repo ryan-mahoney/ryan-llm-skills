@@ -387,6 +387,9 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
         if (closed || generation !== lifecycleGeneration) return lifecycleReceipt(null, { fenced: true });
         activate();
         if (headless && options.mode === 'observe' && dashboardActivation) await dashboardActivation;
+        // Fence the dashboard-activation gap: off or close during pending
+        // dashboard startup must not fall through to notify or a forced read.
+        if (closed || generation !== lifecycleGeneration) return lifecycleReceipt(null, { fenced: true });
         notify(ctx, `Sentinel ${options.mode}: workspace-wide observation${options.mode === 'observe' ? '; no model calls' : `; ${options.model}; all connected sentinel coordinators`}. Runs until stopped or this session closes.`, 'info');
         const snapshot = await run(true);
         return lifecycleReceipt(snapshot);

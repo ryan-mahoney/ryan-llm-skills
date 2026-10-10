@@ -211,6 +211,30 @@ test('headless observe settles a truthful ready or unavailable dashboard receipt
   assert.ok(unavailable.calls.reads > before, 'observation continues after dashboard failure');
 });
 
+test('headless observe cancelled by off during pending dashboard startup returns fenced without a forced read', async t => {
+  let releaseStart;
+  const gate = new Promise(resolve => { releaseStart = resolve; });
+  let starts = 0;
+  const deferred = { url: null,
+    async start() { starts++; await gate; this.url = 'http://127.0.0.1:1234/'; return { url: this.url }; },
+    stop() { this.url = null; },
+  };
+  const f = observeFixture(t, { headless: true, hasUI: false, dashboard: deferred });
+  const observing = f.observer.lifecycle({ action: 'observe' });
+  // Drain microtasks so observe parks on the pending dashboard activation.
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(starts, 1);
+  const off = await f.observer.lifecycle({ action: 'off' });
+  assert.equal(off.state, 'off');
+  releaseStart();
+  const receipt = await observing;
+  assert.equal(receipt.fenced, true);
+  assert.equal(receipt.state, 'off');
+  assert.equal(f.calls.reads, 0, 'no forced reader read/helper may fork after off cleanup');
+  assert.equal(f.repeats.size, 0);
+  assert.equal(f.watches.size, 0);
+});
+
 test('headless observer refuses authority callbacks and shadow or recover lifecycle actions', async t => {
   const dir = mkdtempSync(join(tmpdir(), 'sentinel-headless-authority-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
