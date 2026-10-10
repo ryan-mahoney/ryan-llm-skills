@@ -79,8 +79,9 @@ running stages individually, recovery, and harness setup.
    the primary repository, even when a worktree has a tracked copy.
 5. `spec-run` implements each step with its tests and evidence and commits it. After each
    step it starts a background review and fixes earlier findings before the next step.
-6. Finish the last step’s review/fix cycle, reconcile the base, refresh affected evidence,
-   and push all task-owned commits. CI status is reported, not gated on.
+6. Finish the last step’s review/fix cycle, including the bounded final fix review of
+   the trailing fix range, reconcile the base, refresh affected evidence, and push all
+   task-owned commits. CI status is reported, not gated on.
    `spec-branch-refine` is available only when explicitly requested or required by project policy.
 7. `spec-work-tour` writes `work-tour.json` and a browser-ready `work-tour.html` for the
    final commit.

@@ -115,8 +115,12 @@ never merges automatically. `REVIEW_AGENT` selects a model, not an additional re
 review coverage, every actionable finding has a fix or justified dismissal, affected
 focused checks support those decisions, and no known acceptance/review gap remains.
 Link the original review ranges, fix records, and evidence; do not copy their contents.
-Final fixes need affected evidence but no automatic additional independent review.
-State that distinction honestly; completion is not an integrated branch audit pass.
+Final fixes are covered by the bounded final fix review over the trailing fix range:
+`spec-run` records `final-fix-review` as `not-needed`, `pass`, `pass-after-fix`,
+`blocked`, or `deferred-to-branch-refinement` from `reviews/final-1-review.md` and its
+bounded `final-1-fix.md`/`final-2-review.md` retry. A `blocked` outcome is a checkpoint
+naming the remaining signatures or the uncovered range. Record that outcome honestly;
+completion is not an integrated branch audit pass.
 
 Use the existing `audit` object with `scope: steps`, `verdict: pass`, the candidate `commit`,
 and `artifact: merge-evidence.md`. Here `pass` means the selected step review/fix process

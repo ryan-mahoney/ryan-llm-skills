@@ -1,13 +1,14 @@
 # Step Reviews, Optional Branch Audit, And Work Tour
 
 The default workflow reviews each step independently and fixes its findings, including
-the final step, then assembles the work tour and publishes the PR. Push all task-owned
-commits. There is no automatic final integrated branch review or merge. The operator or
+the final step, then runs one bounded final fix review over the trailing fixes before
+assembling the work tour and publishing the PR. Push all task-owned commits. There is no automatic final integrated branch review or merge. The operator or
 organization chooses any subsequent PR review and merge process.
 
 Completion is recorded in existing merge evidence with `audit.scope: steps`. It links
-original review ranges and fix records and does not claim final fixes received another
-independent review. The tour labels this **Step reviews · complete**. Required focused
+original review ranges and fix records and records the `final-fix-review` outcome;
+`blocked` is a checkpoint gap naming the remaining signatures or uncovered range. The
+tour labels this **Step reviews · complete**. Required focused
 evidence, known failures, and configured required CI still govern ready status.
 
 `spec-branch-refine` remains available for an explicit request or sourced project requirement.
@@ -45,6 +46,7 @@ block completion. After a fix, rerun affected checks, not unrelated passing suit
 ├── blockers.md                          # when applicable
 ├── reviews/
 │   ├── step-<NNN>-review.md / step-<NNN>-fix.md
+│   ├── final-<k>-review.md / final-<k>-fix.md  # bounded final fix review
 │   └── branch-<i>-review.md / branch-<i>-fix.md  # explicit branch refinement only
 ├── work-tour.json                      # version 2: separate merge/release states
 └── work-tour.html                      # architecture/evidence/QA tour

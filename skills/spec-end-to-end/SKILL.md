@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "21"
+  version: "22"
 ---
 
 # Spec End To End
@@ -322,8 +322,10 @@ excluded by the routing policy above:
    production, and merge-evidence assembly. This run's PR scope authorizes early
    draft publication at the first meaningful coherent checkpoint and subsequent useful pushes;
    apply `spec-pr mode=draft` without waiting for final local regression or a ready tour.
-6. After the last step's independent review and fixes finish, apply `spec-pr`'s
-   **Rebase Safely** procedure before final evidence/tour assembly. Refresh only affected
+6. The last step's review/fix cycle includes the bounded final fix review over the
+   trailing fix range, launched by `spec-run` at the current pre-rebase HEAD. After it
+   finishes, apply `spec-pr`'s **Rebase Safely** procedure before final evidence/tour
+   assembly. Refresh only affected
    evidence; route substantive conflict changes or uncovered implementation back to the
    owning step's review/fix cycle. Reuse unchanged reviewed work and original review ranges.
    Push every coherent task-owned commit, including final fixes. Do not collect or wait

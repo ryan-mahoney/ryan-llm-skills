@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "17"
+  version: "18"
 ---
 
 # Spec PR
@@ -26,9 +26,13 @@ This skill opens or updates PRs and never merges them. It may change repository 
 ## Review Completion
 
 Default to the shared **Step Review Completion** contract: consume completed independent
-step reviews and fixes, including the last step, from current merge evidence. No branch
-audit artifact is required. Do not launch a final review or turn artifact assembly into
-one. Additional PR review and merge decisions belong to the operator/organization.
+step reviews and fixes, including the last step and the bounded final fix review over
+the trailing fix range, from current merge evidence. Consume the recorded
+`final-fix-review` outcome: `not-needed`, `pass`, `pass-after-fix` or
+`deferred-to-branch-refinement` permits ready status; `blocked` or a missing record
+blocks it. No branch audit artifact is required. Do not launch a final review or turn
+artifact assembly into one. Additional PR review and merge decisions belong to the
+operator/organization.
 
 ### Explicit Branch Refinement
 

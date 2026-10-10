@@ -88,9 +88,9 @@ Independent reviews cover each completed step at fixed revisions while later imp
 continues. Findings have one compact representation with stable identities, concrete impact,
 reviewed range and material limitations. Fixers run between implementation assignments through
 a dedicated profile that retains both native Pi and provider adapter write tools. Finish the
-last step's review/fix cycle as well. There is no automatic final whole-branch review; explicitly
-requested branch refinement remains available. Final fixes are honestly recorded as not
-independently re-reviewed when that is the actual state.
+last step's review/fix cycle, including the bounded final fix review over the trailing
+fix range. There is no automatic final whole-branch review; explicitly
+requested branch refinement remains available.
 
 Helper, shared-value and component ownership flows from preparation into cards and editor
 packets. Step reviews make bounded searches in the fixed reviewed tree to detect confirmed

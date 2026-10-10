@@ -414,9 +414,9 @@ The runner also prepares later-phase procedures and assembles evidence from inde
 
 ### 6. Complete Reviews And Reconcile The Base
 
-Finish every step review/fix cycle, including the last step. Reconcile the target base,
-refresh affected evidence, push within publication authority and collect configured
-required CI. Final fixes are not automatically independently re-reviewed.
+Finish every step review/fix cycle, including the last step, plus the bounded final fix
+review of the trailing fix range. Reconcile the target base, refresh affected evidence,
+push within publication authority and collect configured required CI.
 `/spec-branch-refine` remains optional for explicit requests or project policy;
 direct invocation defaults to ten bounded review/fix rounds.
 
