@@ -4,12 +4,12 @@ description: "Fix one iteration of branch code or executable-evidence findings, 
 mode: coding
 scope: document
 disable-model-invocation: true
-argument-hint: "[spec=<path/to/spec.md>] [iter=<n>] [review=<reviews/step-NNN-review.md>]"
+argument-hint: "[spec=<path/to/spec.md>] [iter=<n>] [review=<reviews/<name>-review.md>]"
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "19"
+  version: "20"
 ---
 
 # Spec Branch Fix
@@ -25,9 +25,9 @@ fixes the actionable findings across the branch, and records its decisions in
 `reviews/branch-<iteration>-fix.md`.
 
 The two skills are coupled **only** through the review file, and this skill never
-re-reviews. Step fixes enter the next step review range when one remains; no extra
-review of final step fixes is automatic. Explicit branch refinement runs another review
-only while its selected round budget remains.
+re-reviews. Step fixes enter the next step review range when one remains; fixes after
+the last pinned step review enter the bounded final fix review in `spec-run`. Explicit
+branch refinement runs another review only while its selected round budget remains.
 
 Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Evidence findings are first-class: correct the implementation, test/gate, artifact, claim mapping, or proof boundary that made the evidence invalid, then reproduce the affected gate.
 
@@ -75,12 +75,17 @@ report the exact gap without discarding independent repairs.
 
 ### Step Mode
 
-`review=<spec-dir>/reviews/step-<NNN>-review.md` (a `kind: step` review) selects step
-mode. `spec-run` runs it between implementation steps, with no step worker active in
-the checkout. Everything below applies, with these differences:
+`review=<spec-dir>/reviews/<name>-review.md` (a `kind: step` review such as
+`step-003-review.md` or `final-1-review.md`) selects step mode. `spec-run` runs it
+between implementation steps and for the bounded final fix review, with no step worker
+active in the checkout. Everything below applies, with these differences:
 
-- Write `reviews/step-<NNN>-fix.md` with `kind: step` and `step: <NNN>` in place of
-  `iteration`. Its dismissals feed the same anti-thrash memory as branch fix files.
+- Write `reviews/<name>-fix.md` with `kind: step` and `step:` copied from the review's
+  `step` value in place of `iteration`. Its dismissals feed the same anti-thrash memory
+  as branch fix files.
+- A finding re-emitted from an unresolved `fixed` decision in the review's
+  `fix_verdicts` is an ordinary finding; under a `terminalize` instruction it must be
+  resolved with a genuinely different change or dismissed with a class.
 - The review was taken at an earlier commit. Before acting on a finding, confirm it
   still exists at HEAD. If a later commit already resolved it, record `fixed` with a
   note naming that commit and change nothing.
@@ -164,9 +169,10 @@ apply directly and note the limitation.
   consolidate each one in the same pass, or record in the finding why it serves a
   different contract. A duplicate finding is fixed by reusing the existing owner and
   deleting the copy, not by aligning the two copies.
-- A branch fix may legitimately span files from several steps — that is expected,
-  since the whole-branch pass catches integration bugs isolated per-commit passes
-  could not. Still keep each change tied to a specific finding.
+- A branch fix may legitimately span files from several steps — that is expected.
+  Branch mode's whole-branch pass catches integration bugs isolated per-commit passes
+  could not, and a final fix review range may also include several steps' fixes. Still
+  keep each change tied to a specific finding.
 
 If a finding's context is unclear, read the relevant source first.
 
