@@ -6,10 +6,10 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, 
 import { tmpdir } from 'node:os';
 import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { canonicalPackage } from '../../pi/extensions/spec-runtime/runtime.mjs';
+import { canonicalPackage, loadRun } from '../../pi/extensions/spec-runtime/runtime.mjs';
 import { gitFacts } from '../spec-facts/core.mjs';
 import { PREPARED_PACKAGE_FILES, loadScenario } from './core.mjs';
-import { ambientContext, cellEnvironment, createRun, freezeManifest, materializeCell, runLeafCell, writeRunRecord } from './runner.mjs';
+import { ambientContext, cellEnvironment, createRun, freezeManifest, materializeCell, runLeafCell, runManagedCell, writeRunRecord } from './runner.mjs';
 
 const leafScenario = () => ({
   id: 'leaf-case',
@@ -139,6 +139,53 @@ function leafCase(t, { script = 'success', timeoutMs, model = 'test/leaf-model:l
     return result;
   };
   return { f, run, scenario, materialized, execute };
+}
+
+function managedCase(t, { script = 'success', timeoutMs } = {}) {
+  const f = fixture(t);
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'spec-gym-managed-home-')));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  if (timeoutMs !== undefined) {
+    const timed = managedScenario();
+    timed.timeout_ms = timeoutMs;
+    writeScenario(f.managed, timed);
+  }
+  const scenario = loadScenario(f.managed);
+  const childExtension = join(f.root, 'managed-child-extension.mjs');
+  const run = createRun({
+    repoRoot: f.gym, root: f.root, skill: 'spec-a', scenarios: [f.managed], models: ['test/owner-model'],
+    roles: { editor_model: 'test/editor-model', scout_model: 'test/scout-model' },
+    timeoutMs: 60000, childExtensions: [childExtension], pi: stubPiCommand(f.root),
+  });
+  run.manifest = freezeManifest(run);
+  const materialized = materializeCell(run, run.cells[0], scenario);
+  const original = process.env;
+  const saved = {
+    HOME: process.env.HOME, SECRET_TOKEN: process.env.SECRET_TOKEN,
+    SPEC_GYM_FAKE_PI_LOG: process.env.SPEC_GYM_FAKE_PI_LOG, SPEC_GYM_FAKE_PI_SCRIPT: process.env.SPEC_GYM_FAKE_PI_SCRIPT,
+  };
+  t.after(() => {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete original[name]; else original[name] = value;
+    }
+    process.env = original;
+  });
+  const logPath = join(materialized.cellDir, 'streams', 'fake-pi-log.json');
+  process.env.HOME = home;
+  process.env.SECRET_TOKEN = 'managed-secret';
+  process.env.SPEC_GYM_FAKE_PI_LOG = logPath;
+  process.env.SPEC_GYM_FAKE_PI_SCRIPT = script;
+  const env = { object: process.env, values: { ...process.env } };
+  const pids = [];
+  const execute = async () => {
+    const result = await runManagedCell(run, run.cells[0], scenario, materialized);
+    if (Number.isInteger(result.pid)) pids.push(result.pid);
+    return result;
+  };
+  t.after(() => {
+    for (const pid of pids) { try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ } }
+  });
+  return { f, run, scenario, materialized, home, logPath, childExtension, env, execute };
 }
 
 test('materialize creates a canonical fixture repository with one Fixture commit', t => {
@@ -384,4 +431,149 @@ test('leaf writes stay inside the cell', async t => {
   assert.ok(existsSync(join(c.materialized.cellDir, 'sessions')));
   assert.ok(existsSync(join(c.materialized.cellDir, 'streams')));
   assert.deepEqual(readdirSync(c.f.root).sort(), rootBefore);
+});
+
+test('managed success hosts Runtime with a cell-local index and exact owner argv', { timeout: 10000 }, async t => {
+  const c = managedCase(t);
+  const rootBefore = readdirSync(c.f.root).sort();
+  const digestBefore = digestTree(c.f.managed);
+  const result = await c.execute();
+
+  assert.equal(result.outcome, 'finished');
+  assert.equal(result.state, 'completed');
+  assert.equal(existsSync(join(c.home, '.pi', 'agent', 'spec-runtime')), false);
+
+  const pointer = JSON.parse(readFileSync(join(c.run.runDir, 'index', `${result.run_id}.json`), 'utf8'));
+  assert.equal(pointer.package, canonicalPackage(c.materialized.packageDir).packagePath);
+  assert.equal(pointer.manifest, join(c.materialized.packageDir, 'runtime', 'runs', `${result.run_id}.json`));
+
+  const raw = loadRun(c.materialized.packageDir, result.run_id);
+  assert.equal(raw.state, 'completed');
+  assert.equal(raw.owner_model, 'test/owner-model');
+  assert.equal(raw.editor_model, 'test/editor-model');
+  assert.equal(raw.scout_model, 'test/scout-model');
+  assert.deepEqual(raw.child_extensions, [c.childExtension]);
+
+  const log = JSON.parse(readFileSync(c.logPath, 'utf8'));
+  assert.deepEqual(log.argv.slice(0, 11), [
+    '--no-context-files', '--no-mcp', '--print', '--mode', 'json', '--session', raw.owner_session,
+    '--provider', 'test', '--model', 'owner-model',
+  ]);
+  assert.equal(log.argv.at(-2), '--');
+  assert.ok(log.argv.at(-1).includes(`${c.scenario.scenario.task}\nEnvironment paths (observations, not setup approval): `));
+  assert.ok(log.argv.includes(c.childExtension));
+  assert.equal(log.cwd, raw.checkout);
+
+  assert.equal(raw.checkout, join(c.materialized.cellDir, 'checkout'));
+  const commonDir = execFileSync('git', ['-C', raw.checkout, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' }).trim();
+  assert.equal(commonDir, join(c.materialized.repoDir, '.git'));
+
+  assert.deepEqual(result.sessions, [raw.owner_session, raw.editor_session]);
+  assert.deepEqual(result.checks_root, { package: c.materialized.packageDir, repo: c.materialized.repoDir, checkout: raw.checkout });
+  assert.equal(result.pid, raw.pid);
+  assert.equal(result.text, 'Completed the leaf task.');
+  assert.equal(result.tokens.input_tokens, 100);
+  assert.equal(result.tokens.output_tokens, 20);
+  assert.equal(result.cost_usd, 0.25);
+
+  assert.equal(process.env, c.env.object);
+  assert.deepEqual({ ...process.env }, c.env.values);
+  assert.ok(log.envNames.includes('HOME'));
+  assert.ok(!log.envNames.includes('SECRET_TOKEN'));
+
+  assert.deepEqual(readdirSync(c.f.root).sort(), rootBefore);
+  assert.equal(digestTree(c.f.managed), digestBefore);
+});
+
+test('managed hang is cancelled and timed-out with a retained partial stream', { timeout: 15000 }, async t => {
+  const c = managedCase(t, { script: 'hang', timeoutMs: 500 });
+  const result = await c.execute();
+
+  assert.equal(result.outcome, 'timed-out');
+  assert.equal(result.state, 'cancelled');
+  assert.equal(result.reason, 'deadline exceeded');
+  const raw = loadRun(c.materialized.packageDir, result.run_id);
+  assert.equal(raw.state, 'cancelled');
+  const events = readFileSync(join(c.materialized.packageDir, 'runtime', 'events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert.ok(events.some(entry => entry.event === 'deadline_reached' && entry.run_id === result.run_id));
+  assert.throws(() => process.kill(-result.pid, 0), error => error.code === 'ESRCH');
+
+  const runsDir = join(c.materialized.packageDir, 'runtime', 'runs');
+  const streams = readdirSync(runsDir).filter(name => name.startsWith(`${result.run_id}-owner-`) && name.endsWith('.jsonl'));
+  assert.equal(streams.length, 1);
+  assert.ok(readFileSync(join(runsDir, streams[0]), 'utf8').length > 0);
+
+  assert.equal(process.env, c.env.object);
+  assert.deepEqual({ ...process.env }, c.env.values);
+  assert.ok(!JSON.parse(readFileSync(c.logPath, 'utf8')).envNames.includes('SECRET_TOKEN'));
+});
+
+test('managed configuration failure is blocked and restores env', { timeout: 10000 }, async t => {
+  const c = managedCase(t, { script: 'error' });
+  const result = await c.execute();
+
+  assert.equal(result.outcome, 'blocked');
+  assert.equal(result.state, 'failed');
+  assert.match(result.reason, /unknown model/);
+  assert.equal(result.configuration_failure?.kind, 'model_configuration');
+  const raw = loadRun(c.materialized.packageDir, result.run_id);
+  assert.equal(raw.state, 'failed');
+  assert.match(raw.error, /unknown model/);
+
+  assert.equal(process.env, c.env.object);
+  assert.deepEqual({ ...process.env }, c.env.values);
+  assert.ok(!JSON.parse(readFileSync(c.logPath, 'utf8')).envNames.includes('SECRET_TOKEN'));
+});
+
+test('managed ambient context refusal covers ancestor and home files', { timeout: 10000 }, async t => {
+  const placements = [
+    { name: 'ancestor AGENTS.md', plant: c => join(c.f.root, 'AGENTS.md') },
+    { name: 'ancestor CLAUDE.md', plant: c => join(c.run.runDir, 'CLAUDE.md') },
+    { name: 'home AGENTS.md', plant: c => join(c.home, '.pi', 'agent', 'AGENTS.md') },
+  ];
+  for (const { name, plant } of placements) {
+    await t.test(name, async sub => {
+      const c = managedCase(sub);
+      const planted = plant(c);
+      writeFixtureFile(planted, 'ambient\n');
+      const result = await c.execute();
+
+      assert.equal(result.outcome, 'invalid');
+      assert.equal(result.reason, 'ambient-context');
+      assert.ok(result.detail.includes(planted));
+      assert.equal(existsSync(join(c.materialized.packageDir, 'runtime')), false);
+      assert.equal(existsSync(c.logPath), false);
+      assert.equal(existsSync(join(c.run.runDir, 'index')), false);
+      assert.equal(process.env, c.env.object);
+      assert.deepEqual({ ...process.env }, c.env.values);
+    });
+  }
+});
+
+test('managed missing step card is blocked before launch and restores env', { timeout: 10000 }, async t => {
+  const c = managedCase(t);
+  rmSync(join(c.materialized.packageDir, 'step-001-subspec.md'));
+  const result = await c.execute();
+
+  assert.equal(result.outcome, 'blocked');
+  assert.equal(result.state, 'blocked');
+  assert.match(result.reason, /step-001-subspec\.md/);
+  assert.equal(existsSync(join(c.materialized.packageDir, 'runtime')), false);
+  assert.equal(existsSync(c.logPath), false);
+  assert.equal(process.env, c.env.object);
+  assert.deepEqual({ ...process.env }, c.env.values);
+});
+
+test('managed assignment reuse returns the terminal record without relaunching', { timeout: 10000 }, async t => {
+  const c = managedCase(t);
+  const first = await c.execute();
+  const second = await c.execute();
+
+  assert.equal(first.outcome, 'finished');
+  assert.equal(second.outcome, 'finished');
+  assert.equal(second.state, 'completed');
+  assert.equal(second.run_id, first.run_id);
+  assert.deepEqual(second.sessions, first.sessions);
+  assert.equal(process.env, c.env.object);
+  assert.deepEqual({ ...process.env }, c.env.values);
 });

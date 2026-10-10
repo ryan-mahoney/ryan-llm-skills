@@ -4,6 +4,7 @@ import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readdirSyn
 import { homedir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { configurationFailure, splitModelSelector } from '../../pi/extensions/spec-runtime/model-selector.mjs';
+import { Runtime, launch, loadRun, summary } from '../../pi/extensions/spec-runtime/runtime.mjs';
 import { gitFacts } from '../spec-facts/core.mjs';
 import { atomicWrite, loadScenario, readUsage } from './core.mjs';
 
@@ -13,6 +14,8 @@ const CELL_ENV_NAMES = new Set([
 ]);
 const GENERATED_GITIGNORE = '.specs/\n';
 const FIXTURE_USER = { name: 'Spec Gym', email: 'spec-gym@example.invalid' };
+const MANAGED_TERMINAL_STATES = new Set(['completed', 'failed', 'cancelled', 'blocked']);
+const MANAGED_TERMINATION_INSTRUCTION = 'Confirm the process group is terminated before removing the cell.';
 
 const toPosix = path => path.split(sep).join('/');
 
@@ -241,6 +244,134 @@ export async function runLeafCell(run, cell, scenario, materialized) {
     text: execution.text,
     checks: [],
   };
+}
+
+export async function runManagedCell(run, cell, scenario, materialized) {
+  const cellDir = materialized?.cellDir ?? cellDirFor(run, cell);
+  const repoDir = materialized?.repoDir ?? join(cellDir, 'repo');
+  const packageDir = materialized?.packageDir ?? join(repoDir, '.specs', scenario.scenario.fixture.feature);
+  const checkoutDir = join(cellDir, 'checkout');
+  const startedAt = new Date().toISOString();
+  const started = Date.now();
+  const common = () => ({
+    id: cell.id,
+    scenario: cell.scenarioId,
+    version: cell.version,
+    model: cell.model,
+    state: null,
+    outcome: null,
+    reason: null,
+    configuration_failure: undefined,
+    pid: null,
+    started_at: startedAt,
+    finished_at: new Date().toISOString(),
+    elapsed_ms: Date.now() - started,
+    tokens: { input_tokens: null, output_tokens: null },
+    cost_usd: null,
+    run_id: null,
+    record: null,
+    sessions: [],
+    checks_root: { package: packageDir, repo: repoDir, checkout: checkoutDir },
+    text: null,
+    checks: [],
+  });
+
+  const ambient = ambientContext(repoDir, { home: homedir() });
+  if (ambient.length) return { ...common(), outcome: 'invalid', reason: 'ambient-context', detail: ambient };
+
+  const step = scenario.scenario.fixture.step;
+  const roles = { ...(scenario.scenario.roles ?? {}), ...(run.roles ?? {}) };
+  const childExtensions = run.manifest?.child_extensions ?? run.childExtensions;
+  const snapshot = process.env;
+  let runId = null;
+  let startError = null;
+  try {
+    process.env = cellEnvironment(snapshot);
+    let reportTerminal = () => {};
+    const terminal = new Promise(resolveTerminal => { reportTerminal = resolveTerminal; });
+    const runtime = new Runtime({
+      indexDir: join(run.runDir, 'index'),
+      notify: value => {
+        if (!MANAGED_TERMINAL_STATES.has(value?.state) || runId === null || value.run_id !== runId) return;
+        reportTerminal(value);
+      },
+      launchProcess: (record, role, prompt, options) => launch(record, role, prompt, {
+        ...options, command: run.pi, prefix: ['--no-context-files', '--no-mcp'],
+      }),
+    });
+    let initial;
+    try {
+      initial = runtime.start({
+        package: packageDir,
+        step: join(packageDir, `step-${String(step).padStart(3, '0')}-subspec.md`),
+        checkout: checkoutDir,
+        owner_model: cell.model,
+        editor_model: roles.editor_model,
+        scout_model: roles.scout_model,
+        child_extensions: childExtensions,
+        timeout_ms: scenario.scenario.timeout_ms ?? run.timeoutMs,
+        assignment_id: cell.id,
+        instructions: scenario.scenario.task,
+      }, join(cellDir, 'gym.json'));
+    } catch (error) {
+      startError = error;
+    }
+    if (!startError) {
+      runId = initial.run_id;
+      // A reused assignment returns its terminal record instead of launching; do not await a notify that will never come.
+      if (!MANAGED_TERMINAL_STATES.has(initial.state)) await terminal;
+    }
+  } finally {
+    process.env = snapshot;
+  }
+  if (startError) {
+    return { ...common(), state: 'blocked', outcome: 'blocked', reason: startError.message, configuration_failure: configurationFailure(startError.message) };
+  }
+
+  const record = loadRun(packageDir, runId);
+  const sessions = [record.owner_session, record.editor_session];
+  const usage = await readUsage(sessions.filter(existsSync));
+  let outcome, reason;
+  if (record.state === 'completed') {
+    outcome = 'finished';
+    reason = null;
+  } else if (record.state === 'cancelled' && deadlineReached(packageDir, record.id)) {
+    outcome = 'timed-out';
+    reason = 'deadline exceeded';
+  } else {
+    outcome = 'blocked';
+    reason = record.error ?? `managed run ended in state ${record.state}`;
+    if (record.state === 'blocked') reason = `${reason} ${MANAGED_TERMINATION_INSTRUCTION}`;
+  }
+  return {
+    ...common(),
+    state: record.state,
+    outcome,
+    reason,
+    configuration_failure: configurationFailure(record.error),
+    pid: record.pid ?? null,
+    run_id: record.id,
+    record: summary(record),
+    sessions,
+    checks_root: { package: packageDir, repo: repoDir, checkout: record.checkout },
+    tokens: { input_tokens: usage.input_tokens, output_tokens: usage.output_tokens },
+    cost_usd: usage.cost_usd,
+    text: record.result ?? null,
+  };
+}
+
+function deadlineReached(packageDir, runId) {
+  const events = join(packageDir, 'runtime', 'events.jsonl');
+  if (!existsSync(events)) return false;
+  return readFileSync(events, 'utf8').split('\n').some(line => {
+    if (!line.trim()) return false;
+    try {
+      const entry = JSON.parse(line);
+      return entry?.event === 'deadline_reached' && entry.run_id === runId;
+    } catch {
+      return false; // preserve unparseable diagnostics on disk without classifying them
+    }
+  });
 }
 
 function spawnWithDeadline({ command, args, cwd, env, timeoutMs, stream, stderr }) {
