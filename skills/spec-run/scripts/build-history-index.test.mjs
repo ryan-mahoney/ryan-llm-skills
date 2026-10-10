@@ -31,6 +31,12 @@ try {
   await writeFile(path.join(spec, "reviews/step-002-fix.md"), [
     "# Step Fix", "```yaml", "fix:", "  consumed: reviews/step-009-review.md", "  decisions:", "    - id: F1", "      decision: dismissed", "      dismissal: deferred", "      approval_source: .specs/decisions/risk.md", "      signature: correctness:src/a.js:parse:malformed record", "```", "",
   ].join("\n"));
+  await writeFile(path.join(spec, "reviews/final-1-review.md"), [
+    "# Step Review", "```yaml", "review:", "  kind: step", "  step: final-1", "  verdict: pass", "  findings: []", "  fix_verdicts: []", "```", "",
+  ].join("\n"));
+  await writeFile(path.join(spec, "reviews/final-1-fix.md"), [
+    "# Step Fix", "```yaml", "fix:", "  kind: step", "  step: final-1", "  consumed: reviews/final-1-review.md", "  decisions: []", "  material_change: false", "  commit: none", "```", "",
+  ].join("\n"));
 
   let result = run();
   assert.equal(result.status, 0, result.stderr);
@@ -47,8 +53,8 @@ try {
   assert.match(learning.status, /^unknown/);
   checks++;
 
-  const review = index.records.find((record) => record.kind === "review");
-  const fix = index.records.find((record) => record.kind === "fix");
+  const review = index.records.find((record) => record.path === "reviews/step-002-review.md");
+  const fix = index.records.find((record) => record.path === "reviews/step-002-fix.md");
   assert.equal(review.verdict, "needs-fix");
   assert.deepEqual(review.signatures, ["correctness:src/a.js:parse:malformed record"]);
   assert.equal(review.status.startsWith("unknown"), true);
@@ -58,6 +64,18 @@ try {
   assert.equal(fix.relevantPaths.includes(".specs/decisions/risk.md"), true);
   assert.equal(fix.missingReferences[0].status, "missing referenced review");
   assert.match(fix.status, /^unknown/);
+  checks++;
+
+  const finalReview = index.records.find((record) => record.path === "reviews/final-1-review.md");
+  const finalFix = index.records.find((record) => record.path === "reviews/final-1-fix.md");
+  assert.ok(finalReview, "reviews/final-1-review.md is indexed");
+  assert.equal(finalReview.kind, "review");
+  assert.equal(finalReview.step, null);
+  assert.equal(finalReview.verdict, "pass");
+  assert.ok(finalFix, "reviews/final-1-fix.md is indexed");
+  assert.equal(finalFix.kind, "fix");
+  assert.equal(finalFix.step, null);
+  assert.equal(finalFix.missingReferences, undefined);
   checks++;
 
   result = run();

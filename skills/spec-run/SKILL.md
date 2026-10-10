@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "35"
+  version: "36"
 ---
 
 # Spec Run
@@ -284,10 +284,47 @@ gap; it prevents ready status, but not a truthful draft push. Resume only missin
 
 **After the last step.** Wait for running reviews, then run any pending step fixes
 before the Completion Gate, including fixes for the last step. Resolve every actionable
-finding with a recorded fix or justified dismissal and affected focused evidence. No
-extra review of the final fixes or whole branch is automatic; record those fixes as not
-independently re-reviewed. Report `step-review-coverage: complete` when step reviews cover every
-step's commits, `partial` when some are uncovered, and `none` when no review ran.
+finding with a recorded fix or justified dismissal and affected focused evidence, then
+run the bounded final fix review over the trailing fixes.
+
+If run directives explicitly select branch refinement, record
+`final-fix-review: deferred-to-branch-refinement` and launch nothing; refinement's first
+review owns the uncovered commits. Otherwise compute `<base>..HEAD` at the current
+pre-rebase HEAD, where `<base>` is the highest pinned step-review head in the ledger —
+the `commit:` of the highest completed `reviews/step-<NNN>-review.md`. If no pinned
+step-review head can be resolved, record a blocked scoped gap; never guess the range. An
+empty range records `final-fix-review: not-needed` and dispatches no reviewer. A
+non-empty range launches one `spec-branch-review` Step Scope review with
+`step=final-1 since=<base> head=<HEAD>` under the **In Pi** reviewer launch rules
+(profile, assigned review model, `timeoutMs: 2700000`), with no writer overlap. A
+`final-1` `pass` records `final-fix-review: pass`. A `needs-fix` runs
+`spec-branch-fix review=<spec-dir>/reviews/final-1-review.md`; the final fixer follows
+the **Fix between steps** override precedence, explicit selector passing and
+missing-assignment handling, except its default owner is the recorded effective owner of
+the highest-numbered indexed step.
+
+A committed fix launches `step=final-2 since=<final-1 head> head=<HEAD>`: a `pass`
+records `pass-after-fix`; a `needs-fix` records `blocked` with the remaining signatures.
+A fix with `commit: none` launches no confirmation and records `pass-after-fix` when
+every actionable finding is fixed or carries a supported terminal dismissal, else
+`blocked`. `final-1` and `final-2` verdict in-range `fixed` decisions under Step Scope's
+`fix_verdicts` rule; the fixer applies Load Prior Dismissals and the terminalize rule as
+between steps.
+
+The bound is artifact existence: at most `reviews/final-1-review.md`,
+`reviews/final-1-fix.md` and `reviews/final-2-review.md`. An existing record is
+consumed and never relaunched. On resume, consume the existing `final-1` review/fix
+records and launch only the missing record: after a committed `final-1` fix, launch the
+missing `final-2`, while a `needs-fix` `final-1` without its fix record may run that one
+fixer. Treat commits beyond the last reviewed head as an
+uncovered `blocked` gap only after a terminal `pass`, a `commit: none` fix or `final-2`,
+never between a committed `final-1` fix and its still-missing confirmation; an uncovered
+gap is never a new launch. Only a written review record consumes a review pass: a failed
+or timed-out launch gets the existing single relaunch and consumes no pass, and a second
+failure records `blocked`. No launch follows `final-2`. Record the run ID, range, commit
+count, elapsed time and verdict of each final launch in the ledger. Report
+`step-review-coverage: complete` when step reviews cover every step's commits, `partial`
+when some are uncovered, and `none` when no review ran.
 
 **In Pi.** Launch reviewers and fixers as async single-agent `subagent` runs with an
 explicit `cwd`. Use the installed `spec-stage-reviewer` profile for reviews; it supports
@@ -331,17 +368,20 @@ The Markdown begins with a level-1 heading and contains:
 - **QA tour input** — deterministic entrypoints, fixtures, scenarios, expected results, automated EV coverage, captures, and optional exploration-only questions. No required manual QA.
 - **Gaps** — missing coverage, unproduced evidence, and open findings assigned to their step/fix owner.
 
-`merge-evidence.json` identifies `context.md` by canonical path, mirrors every CL/FH/EV item and its phase from `evidence-plan.json`, adds actual statuses, commands/outcomes/artifacts/proof boundaries, step commits, QA inputs, separate deployment readiness/authority/observations, merge gaps and later-phase gaps, and the full current `commit`. Add `audit` with `scope: steps`, `verdict: pass`, current `commit`, and `artifact: merge-evidence.md` only when the shared Step Review Completion conditions hold. The Markdown includes a compact **Step review completion** section linking original review ranges, fix decisions, and affected evidence, with the final fixes’ review status. Use existing records; do not create another review/report. Ignore legacy `readyForAudit` as a routing instruction.
+`merge-evidence.json` identifies `context.md` by canonical path, mirrors every CL/FH/EV item and its phase from `evidence-plan.json`, adds actual statuses, commands/outcomes/artifacts/proof boundaries, step commits, QA inputs, separate deployment readiness/authority/observations, merge gaps and later-phase gaps, and the full current `commit`. Add `audit` with `scope: steps`, `verdict: pass`, current `commit`, and `artifact: merge-evidence.md` only when the shared Step Review Completion conditions hold and `final-fix-review` is `not-needed`, `pass`, `pass-after-fix` or `deferred-to-branch-refinement`. The Markdown includes a compact **Step review completion** section linking original review ranges, fix decisions, and affected evidence, with one row per `final-<k>` review (range, verdict, fix record) and the `final-fix-review` outcome line. Use existing records; do not create another review/report. Ignore legacy `readyForAudit` as a routing instruction.
 
 State gaps honestly. Return `outcome: ready-for-publication` when every indexed step and
 its review/fix cycle is complete and required focused evidence is current. CI status is
 read once at publication and reported, never gated on. Otherwise return a truthful
-`checkpoint` with the remaining scoped work. Do not invoke a tour, branch refinement, or
-publication here; those are separately resumable top-level stages.
+`checkpoint` with the remaining scoped work; a `final-fix-review: blocked` outcome
+returns `checkpoint` with the exact remaining signatures or uncovered range. Do not
+invoke a tour, branch refinement, or publication here; those are separately resumable
+top-level stages.
 
 ## Report
 
-Return outcome, merge-evidence paths, current HEAD, step-review coverage, retained owner
-and editor IDs by model assignment, and unresolved decisions or gaps. Keep step results
+Return outcome, merge-evidence paths, current HEAD, step-review coverage,
+`final-fix-review`, retained owner and editor IDs by model assignment, and unresolved
+decisions or gaps. Keep step results
 and commands in the indexed records. On completion, end with `next: spec-work-tour`; do not claim an audit/deploy verdict
 or produce work-tour/GitHub artifacts in this stage.
