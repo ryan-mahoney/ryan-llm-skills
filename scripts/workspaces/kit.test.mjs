@@ -25,6 +25,23 @@ test("parser subset: parses hand-derived empty repositories", () => {
   assert.equal(result.raw.root.kind, "mapping");
 });
 
+test("parser subset: retains trailing U+00A0 in a plain repository path", () => {
+  const text = "version: 1\nid: demo\nname: Demo\nrepositories:\n  - id: demo\n    path: /srv/demo\u00A0   # separation spaces\n";
+  const result = parseKit(text);
+  assert.equal(result.ok, true);
+  assert.equal(result.kit.repositories[0].path, "/srv/demo\u00A0");
+  const span = result.raw.spans["repositories[0].path"];
+  assert.equal(text.slice(span.start, span.end), "/srv/demo\u00A0");
+});
+
+test("parser subset: retains trailing U+00A0 in a plain mapping key as unknown", () => {
+  const result = parseKit("version: 1\nid\u00A0  : demo\nname: Demo\nrepositories: []\n");
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.errors, ["id: required"]);
+  assert.equal(result.raw.root.value["id\u00A0"], "demo");
+  assert.equal(Object.hasOwn(result.raw.root.value, "id"), false);
+});
+
 test("parser subset: reads BOM, CRLF, marker, comments, quoted hashes and escaped quotes", () => {
   const text =
     "\uFEFF---\r\n" +

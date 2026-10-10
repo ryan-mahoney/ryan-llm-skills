@@ -388,7 +388,7 @@ class KitParser {
         this.fail(line.number, "unexpected mapping entry inside a scalar value");
       }
     }
-    const token = this.text.slice(start, end).trimEnd();
+    const token = this.text.slice(start, end).replace(/ +$/, "");
     if (token === "") this.fail(line.number, "empty scalar value");
     return {
       kind: "scalar",
@@ -479,7 +479,7 @@ class KitParser {
       this.rejectUnsupportedStart(line, offset, true);
       const colon = this.findPlainKeyColon(line, offset);
       if (colon < 0) this.fail(line.number, "expected ':' after mapping key");
-      const rawKey = this.text.slice(offset, colon).trimEnd();
+      const rawKey = this.text.slice(offset, colon).replace(/ +$/, "");
       if (rawKey === "") this.fail(line.number, "mapping key must not be empty");
       key = rawKey;
       keySpan = { start: offset, end: colon };
