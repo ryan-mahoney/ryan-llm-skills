@@ -4,12 +4,12 @@ description: "Independently audit an implemented spec branch and its executable 
 mode: coding
 scope: document
 disable-model-invocation: true
-argument-hint: "[spec=<path/to/spec.md>] [iter=<n>] [scope=committed|working-tree|step] [step=<NNN>] [base=<ref>] [since=<commit>] [head=<commit>]"
+argument-hint: "[spec=<path/to/spec.md>] [iter=<n>] [scope=committed|working-tree|step] [step=<NNN|label>] [base=<ref>] [since=<commit>] [head=<commit>]"
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "25"
+  version: "26"
 ---
 
 # Spec Branch Evidence Audit
@@ -60,11 +60,14 @@ branch review. Single pass per call: review once, write the file, stop.
 
 ## Step Scope
 
-`scope=step step=<NNN> since=<sha> head=<sha>` reviews one finished unit of work in
-the background while the next step is implemented. `spec-run` launches it at each step
-boundary for the commits `<since>..<head>`: the step's own commits plus any step-fix
-commits made since the previous unit. Apply Stage B and the bounded reuse check below.
-This is the default end-to-end review path; no later branch audit is assumed.
+`scope=step step=<NNN|label> since=<sha> head=<sha>` reviews one finished unit of work
+in the background while the next step is implemented. `step` holds the label as given:
+a zero-padded number writes `reviews/step-<NNN>-review.md`, while any other label such
+as `final-1` (the bounded final fix review) writes `reviews/<label>-review.md`.
+`spec-run` launches it at each step boundary for the commits `<since>..<head>`: the
+step's own commits plus any step-fix commits made since the previous unit. Apply Stage B
+and the bounded reuse check below. This is the default end-to-end review path; no later
+branch audit is assumed.
 
 - Read code only at fixed revisions: `git show <sha>` for each commit and
   `git show <head>:<path>` for surrounding code. Never read the working tree; the
@@ -73,8 +76,19 @@ This is the default end-to-end review path; no later branch audit is assumed.
   evidence, which does not exist yet. Use the step index to locate later ownership,
   reading a later card only when needed to resolve a dependency or planned deferral.
   Behavior assigned to a later step is planned work, not a finding.
-- Load dismissals from earlier `reviews/step-<k>-fix.md` files under the Load Prior
-  Dismissals rules.
+- Load dismissals from earlier `reviews/step-<k>-fix.md` files, and for `final-2`
+  from `reviews/final-1-fix.md`, under the Load Prior Dismissals rules.
+- Verdict in-range fixes: for every `reviews/*-fix.md` record whose `commit:` is a
+  full SHA listed by `git rev-list <since>..<head>`, read each `decision: fixed`
+  entry's file/symbol with `git show <head>:<path>`; record a `resolved` or
+  `unresolved` verdict with that evidence at `<head>` under `fix_verdicts`. Re-emit
+  each `unresolved` entry as a finding with the original `signature`, `severity`, and
+  `category`, `commit` set to the fix commit, and an explanation naming why the defect
+  persists at `<head>`. Dismissed decisions remain under Load Prior Dismissals.
+- Out-of-range consequential defects: a consequential defect outside
+  `<since>..<head>` is recorded in `limitations` with its location and harm; it is not
+  a finding and is not queued for any later review (this workflow has no automatic
+  broad review).
 - Map commits to steps as in Stage A, then apply the Stage B lenses (1, 3, 4, 5),
   Report Discipline, and Severity rules to each commit in the unit. Review the commits
   yourself rather than fanning out.
@@ -93,11 +107,13 @@ This is the default end-to-end review path; no later branch audit is assumed.
   The bounded reuse check still enforces explicit ownership constraints. Do not add
   a final audit to compensate. Skip dirty-tree handling too; uncommitted
   changes belong to the step in progress.
-- Write `<spec-dir>/reviews/step-<NNN>-review.md` atomically in the Emit format with
-  `kind: step`, `step: <NNN>`, `target: <since>..<head>`, `scope: step`, and
-  `commit: <head>`. Give each finding a `commit` naming its introducing commit.
-  Omit `iteration` and `evidence_verdict`; the exact Git range identifies reviewed
-  commits without a duplicate inventory.
+- Write the review atomically in the Emit format with `kind: step`, `step: <label>`,
+  `target: <since>..<head>`, `scope: step`, and `commit: <head>`; a zero-padded
+  numeric label writes `<spec-dir>/reviews/step-<NNN>-review.md`, while any other
+  label writes `<spec-dir>/reviews/<label>-review.md` (example: `step: final-1`
+  writes `reviews/final-1-review.md`). Give each finding a `commit` naming its
+  introducing commit. Omit `iteration` and `evidence_verdict`; the exact Git range
+  identifies reviewed commits without a duplicate inventory.
 
 Return the artifact path, verdict, reviewed range, and any unresolved decision or
 material limitation. The coordinator derives actionable findings from the YAML list.
@@ -525,7 +541,8 @@ always-emit rule lives once in Severity, Actionability, Verdict.)
   "missing tests" unless the change adds testable behavior with no coverage;
   a defect the reviewed range did not introduce — a pre-existing defect in surrounding
   code is not a finding unless the change worsens or depends on it, and a separate
-  process reviews broader defects;
+  process reviews broader defects (exception: an unresolved `fixed` decision whose fix
+  commit is in the reviewed range, which Step Scope re-emits under its fix-verdict rule);
   patterns consistent with visible codebase conventions — *unless* this change
   introduces a docstring or contract claim its own code contradicts, which a matching
   sibling-module shape does **not** license, or a copy of another module's helper,
@@ -611,7 +628,8 @@ guide correction. `correction` is optional when no safe correction is establishe
 `line` is display metadata, while the stable signature drives recurrence. Preserve
 finding IDs for the same defect within resumed records; across records the signature
 is the canonical identity. Step findings also include their introducing `commit`.
-For step records replace `iteration` with `step` and omit `evidence_verdict`.
+For step records replace `iteration` with `step`, omit `evidence_verdict`, and
+require `fix_verdicts` (`[]` when no in-range fix record exists).
 
 Optional fields appear only when needed:
 
@@ -619,6 +637,10 @@ Optional fields appear only when needed:
   excluded candidate changes or working-tree inputs not identified by the Git range.
   Working-tree scope must identify the actual reviewed uncommitted inputs (paths and
   retained diff/content artifact); `commit` alone does not bind those inputs.
+- `fix_verdicts`: step records only; required, one entry per in-range `decision: fixed`
+  decision with `fix` (fix-record path), `id`, `verdict` (`resolved | unresolved`), and
+  `evidence` (file/symbol reviewed at `<head>`). Use `[]` when no in-range fix record
+  exists.
 - `dismissals`: exceptional already-raised issues resolved without a current finding;
   each has `signature`, `dismissal`, `note`, and `source`, plus `approved: true` and
   `approval_source` for authorized accepted risk. These use the same suppression rules

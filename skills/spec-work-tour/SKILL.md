@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "12"
+  version: "13"
 ---
 
 # Spec Work Tour
@@ -114,7 +114,7 @@ that handoff insufficient, inspect the affected original evidence and apply thes
    effects, authority source, outcome and proof boundary. Later-phase gates may be `pending`, with a
    concrete procedure but no fabricated observations. Commands are not permission to execute them.
 4. Reuse valid results with their actual observed revision and scope. Re-run a gate only when a relevant change or concrete uncertainty affects its applicability; cost alone does not justify re-execution. Never relabel an earlier run as a new execution. When reusing prior evidence, retain its `observedCommit` and record `applicability` explaining why it supports the candidate `commit`.
-5. Confirm the selected review/fix process completed, including the last step, and every actionable finding has a recorded resolution. Preserve the original review SHAs and the absence of independent re-review of final fixes; do not imply an integrated branch audit occurred.
+5. Confirm the selected review/fix process completed, including the last step, and every actionable finding has a recorded resolution. Preserve the original review SHAs and consume the recorded bounded final fix review outcome (`final-fix-review`): `not-needed`, `pass`, `pass-after-fix` or `deferred-to-branch-refinement` completes; `blocked` is a checkpoint gap naming the remaining signatures or uncovered range. Do not imply an integrated branch audit occurred.
 6. Treat open merge blockers, unresolved merge findings, material context changes, stale code
    bindings and missing required merge environments as blocking. Classify later-phase gaps
    separately; a known defect that also disproves a merge claim remains a merge blocker.

@@ -30,7 +30,8 @@ project context and consequential decisions → architecture → optional critiq
 
 `spec-run` reviews each finished step in the background while the next step is built,
 and fixes those findings before the following step. It finishes the last step's review
-and fixes and records completion in merge evidence. After base reconciliation and affected
+and fixes, then runs the bounded final fix review over the trailing fix range before
+recording completion in merge evidence. After base reconciliation and affected
 evidence refresh, push all task-owned commits. `spec-work-tour`
 presents the existing evidence, then `spec-pr` publishes the PR. No final branch review or
 merge is automatic; further PR review and merge belong to the operator/organization.
