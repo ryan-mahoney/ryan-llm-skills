@@ -219,6 +219,33 @@ promised behavior, or failed required focused/visual evidence. Ask for a truthfu
 `needs-spec-correction` before dependent work. Continue other meaningful steps within
 existing authority, carrying unresolved gaps to the responsible step owner before publication.
 
+## Answer A Startup Clarification
+
+Recognize a `decision-required` handoff whose learning lists startup clarification gaps
+with no commit or edits. Answer each gap from a sourced decision: `context.md`,
+`.specs/project-context.md`, the spec and card, prior learnings, or repository facts;
+name the source with the answer. When no source settles a gap and plausible answers
+materially change behavior, preservation, compatibility or risk, escalate that one
+decision through the existing top-level `decision-required` path; do not guess. When an
+answer would change prepared intent or acceptance, record `needs-spec-correction` and
+return to spec-write instead of redispatching. Before redispatch, consume pending `inbox`
+messages and honor holds: do not redispatch a held step until released; in managed Pi
+with a `workflow_id`, record `spec_sentinel_checkpoint` against the current native input
+revision because the human answer is native input. Then call `spec_dispatch` with
+`action: start`, the same `package`, `step`, and `checkout`, the recorded owner as
+`owner_model` or `owner_override`, the recorded `editor_model`, `scout_model`,
+`child_extensions`, `session_scope` and `timeout_ms`, plus the `workflow_id`, a new
+`assignment_id` such as `<step-basename>-clarified-1`, `attempt_kind: implementation`,
+and `instructions` equal to the prior direction followed by one
+`Clarification: Q: <question> A: <answer> Source: <decision or file>` line per gap.
+Expect the runtime to reuse the retained owner and editor sessions because the session
+key excludes `instructions`, and to refuse the old attempt ID. Record the question,
+answer, source and new attempt ID in the checkpoint decisions, or in `run-ledger.md`
+outside managed Pi. Allow one clarification redispatch per step for the same question;
+beyond it, treat a repeated startup question as a human decision or
+`needs-spec-correction`. Do not rerun `action: startup` for this: startup without a step
+returns a terminal run for reconciliation.
+
 ## Background Step Review
 
 Review each finished step while the next one is being implemented. These step review/fix
