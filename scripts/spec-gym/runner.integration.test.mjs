@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, sep } from 'node:path';
 import { canonicalPackage } from '../../pi/extensions/spec-runtime/runtime.mjs';
@@ -37,9 +37,10 @@ const managedScenario = () => ({
   checks: [{ id: 'owner-finished', kind: 'run-state', equals: 'completed' }],
 });
 
-function writeFixtureFile(path, content) {
+function writeFixtureFile(path, content, mode) {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, content);
+  if (mode !== undefined) chmodSync(path, mode);
 }
 
 function writeScenario(folder, scenario) {
@@ -55,6 +56,7 @@ function fixture(t) {
   writeScenario(leaf, leafScenario());
   writeFixtureFile(join(leaf, 'input', 'repository', 'src', 'app.mjs'), 'export const app = 1;\n');
   writeFixtureFile(join(leaf, 'input', 'repository', 'README.md'), 'leaf fixture\n');
+  writeFixtureFile(join(leaf, 'input', 'repository', 'scripts', 'check.sh'), '#!/bin/sh\nexit 0\n', 0o755);
   writeFixtureFile(join(leaf, 'input', 'package', 'spec.md'), '# spec\n');
   writeFixtureFile(join(leaf, 'input', 'project-context.md'), 'context\n');
 
@@ -121,6 +123,8 @@ test('materialize creates a canonical fixture repository with one Fixture commit
   for (const file of treeFiles(sourceRepository)) {
     assert.deepEqual(readFileSync(join(materialized.repoDir, file)), readFileSync(join(sourceRepository, file)));
   }
+  assert.equal(lstatSync(join(materialized.repoDir, 'scripts', 'check.sh')).mode & 0o777, 0o755);
+  assert.match(execFileSync('git', ['-C', materialized.repoDir, 'ls-files', '-s', 'scripts/check.sh'], { encoding: 'utf8' }), /^100755 /);
   assert.deepEqual(treeFiles(materialized.packageDir), treeFiles(join(f.leaf, 'input', 'package')));
   assert.equal(existsSync(materialized.projectContext), true);
 
@@ -140,6 +144,20 @@ test('materialize writes .gitignore only when the fixture provides none', t => {
   writeFixtureFile(join(f.leaf, 'input', 'repository', '.gitignore'), 'dist/\n');
   const provided = materializeCell(run, run.cells[1], loadScenario(f.leaf));
   assert.equal(readFileSync(join(provided.repoDir, '.gitignore'), 'utf8'), 'dist/\n');
+});
+
+test('materialize refuses colliding cell selectors before creating the run', t => {
+  const f = fixture(t);
+  const before = readdirSync(f.root).sort();
+  assert.throws(
+    () => runFixture(f, { models: ['provider/a/b', 'provider/a-b'] }),
+    error => error.message.includes('provider/a/b') && error.message.includes('provider/a-b'),
+  );
+  assert.throws(
+    () => runFixture(f, { models: ['provider/model', 'provider/model'] }),
+    error => error.message.includes('provider/model'),
+  );
+  assert.deepEqual(readdirSync(f.root).sort(), before);
 });
 
 test('containment: every created path stays under the run directory', t => {
@@ -165,6 +183,30 @@ test('immutable: scenario tree digest is unchanged by materialization', t => {
   freezeManifest(run);
   materializeCell(run, run.cells[0], loadScenario(f.leaf));
   assert.equal(digestTree(f.leaf), before);
+});
+
+test('immutable: manifest skill digest distinguishes distinct raw bytes', t => {
+  const f = fixture(t);
+  const skillFile = join(f.gym, 'skills', 'spec-a', 'SKILL.md');
+  const run = runFixture(f);
+  writeFileSync(skillFile, Buffer.from([0x80]));
+  const first = freezeManifest(run).skill_sha256;
+  writeFileSync(skillFile, Buffer.from([0x81]));
+  const second = freezeManifest(run).skill_sha256;
+  assert.match(first, /^[0-9a-f]{64}$/);
+  assert.notEqual(first, second);
+});
+
+test('materialize rejects traversal cell IDs before writing', t => {
+  const f = fixture(t);
+  const run = runFixture(f);
+  const scenario = loadScenario(f.leaf);
+  for (const cell of ['../outside', '.', '..', 'nested/cell', { id: '../outside' }]) {
+    assert.throws(() => materializeCell(run, cell, scenario), error => error.message.includes('cell id'));
+  }
+  assert.equal(existsSync(join(f.root, 'outside')), false);
+  assert.equal(existsSync(join(run.runDir, 'nested')), false);
+  assert.deepEqual(readdirSync(run.runDir), []);
 });
 
 test('symlink and dot-dot fixtures are rejected before writing', t => {

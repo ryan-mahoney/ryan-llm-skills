@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { splitModelSelector } from '../../pi/extensions/spec-runtime/model-selector.mjs';
@@ -44,12 +44,18 @@ export function createRun({ repoRoot = process.cwd(), root, skill, scenarios = [
   const runId = `${stamp}-${randomBytes(2).toString('hex')}`;
   const runDir = join(runRoot, runId);
   const cells = [];
+  const cellOwners = new Map();
   for (const entry of loaded) {
     for (const selector of models) {
       const parsed = splitModelSelector(selector);
       for (let repeat = 1; repeat <= repeats; repeat += 1) {
+        const id = cellId(entry.scenario.id, selector, repeat);
+        const selection = `scenario ${entry.scenario.id} model ${selector} repeat ${repeat}`;
+        const previous = cellOwners.get(id);
+        if (previous) throw new Error(`cell id ${JSON.stringify(id)} collides between ${previous} and ${selection}`);
+        cellOwners.set(id, selection);
         cells.push({
-          id: cellId(entry.scenario.id, selector, repeat),
+          id,
           scenarioId: entry.scenario.id,
           version: entry.version,
           model: selector,
@@ -93,8 +99,19 @@ export function freezeManifest(run) {
   return manifest;
 }
 
+function cellDirFor(run, cell) {
+  const id = typeof cell === 'string' ? cell : cell?.id;
+  const valid = typeof id === 'string' && id.length > 0 && !id.includes('/') && !id.includes('\\')
+    && id !== '.' && id !== '..' && !/^[A-Za-z]:/.test(id);
+  if (!valid) throw new Error(`cell id ${JSON.stringify(id)} must be a non-empty single path segment without "." or ".."`);
+  const runDir = resolve(run.runDir);
+  const cellDir = resolve(runDir, id);
+  if (!cellDir.startsWith(runDir + sep)) throw new Error(`cell id ${JSON.stringify(id)} resolves outside the run directory`);
+  return cellDir;
+}
+
 export function materializeCell(run, cell, scenario) {
-  const cellDir = join(run.runDir, typeof cell === 'string' ? cell : cell.id);
+  const cellDir = cellDirFor(run, cell);
   const scenarioFolder = scenario.folder;
   const inputDir = join(scenarioFolder, 'input');
   if (existsSync(inputDir)) {
@@ -173,14 +190,17 @@ function hashTree(root) {
       const path = join(directory, name);
       const info = lstatSync(path);
       const relativePath = toPosix(relative(root, path));
-      if (info.isSymbolicLink()) entries.push({ relativePath, content: readlinkSync(path) });
+      if (info.isSymbolicLink()) entries.push({ relativePath, content: Buffer.from(readlinkSync(path)) });
       else if (info.isDirectory()) visit(path);
-      else entries.push({ relativePath, content: readFileSync(path, 'utf8') });
+      else entries.push({ relativePath, content: readFileSync(path) });
     }
   };
   if (existsSync(root)) visit(root);
   entries.sort((a, b) => (a.relativePath < b.relativePath ? -1 : a.relativePath > b.relativePath ? 1 : 0));
-  for (const entry of entries) hash.update(`${entry.relativePath}\0${entry.content}`);
+  for (const entry of entries) {
+    hash.update(`${entry.relativePath}\0`);
+    hash.update(entry.content);
+  }
   return hash.digest('hex');
 }
 
@@ -211,4 +231,5 @@ function copyTree(source, destination) {
   }
   mkdirSync(dirname(destination), { recursive: true });
   writeFileSync(destination, readFileSync(source));
+  chmodSync(destination, info.mode & 0o777);
 }
