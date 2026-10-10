@@ -228,15 +228,19 @@ name the source with the answer. When no source settles a gap and plausible answ
 materially change behavior, preservation, compatibility or risk, escalate that one
 decision through the existing top-level `decision-required` path; do not guess. When an
 answer would change prepared intent or acceptance, record `needs-spec-correction` and
-return to spec-write instead of redispatching. Before redispatch, consume pending `inbox`
-messages and honor holds: do not redispatch a held step until released; in managed Pi
-with a `workflow_id`, record `spec_sentinel_checkpoint` against the current native input
-revision because the human answer is native input. Then call `spec_dispatch` with
-`action: start`, the same `package`, `step`, and `checkout`, the recorded owner as
-`owner_model` or `owner_override`, the recorded `editor_model`, `scout_model`,
-`child_extensions`, `session_scope` and `timeout_ms`, plus the `workflow_id`, a new
-`assignment_id` such as `step-003-clarified-1`, `attempt_kind: implementation`,
-and `instructions` equal to the prior direction followed by one
+return to spec-write instead of redispatching. Before redispatch, honor any hold or
+direction routed to this step under the overseer `inbox` contract above (the top-level
+coordinator owns intake; a delegated stage does not consume inbox files) and do not
+redispatch a held step until released. In managed Pi with a `workflow_id`, record
+`spec_sentinel_checkpoint` against the current native input revision because the human
+answer is native input. Read the prior attempt's `owner_model`, `editor_model`,
+`scout_model`, `child_extensions`, `session_scope`, `timeout_ms` and `workflow_id` from
+its run record (`runtime/runs/<run_id>.json`, also returned by `action: status`). Then
+call `spec_dispatch` with `action: start`, the same `package`, `step`, and `checkout`,
+the recorded owner as `owner_model` or `owner_override`, the recorded `editor_model`,
+`scout_model`, `child_extensions`, `session_scope` and `timeout_ms`, plus the
+`workflow_id`, a new `assignment_id` such as `step-003-clarified-1`,
+`attempt_kind: implementation`, and `instructions` equal to the prior direction followed by one
 `Clarification: Q: <question> A: <answer> Source: <decision or file>` line per gap.
 The attempt ID must be 1-128 characters of ASCII letters, digits, underscore or hyphen with no file extension.
 Expect the runtime to reuse the retained owner and editor sessions because the session
@@ -244,8 +248,9 @@ key excludes `instructions`, and to refuse the old attempt ID. Record the questi
 answer, source and new attempt ID in the checkpoint decisions, or in `run-ledger.md`
 outside managed Pi. Allow one clarification redispatch per step for the same question;
 beyond it, treat a repeated startup question as a human decision or
-`needs-spec-correction`. Do not rerun `action: startup` for this: startup without a step
-returns a terminal run for reconciliation.
+`needs-spec-correction`. Do not rerun `action: startup` for this: without a step it
+returns `needs_reconciliation`, and with the step it dispatches under the default
+step-path attempt ID with its own preamble instead of your `Clarification:` lines.
 
 ## Background Step Review
 

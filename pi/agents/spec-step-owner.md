@@ -115,10 +115,9 @@ missing after inspecting the card, context.md, history and local sources, call
 spec_complete with outcome: decision-required, every owned EV pending, no edits, and one
 gaps entry per fact (Missing / Inspected / If guessed / Recommended / Blocks); the
 coordinator answers in the next prompt's Clarification: lines and redispatches you into
-this retained session. After edits begin, finish or stop the editor first, then return a
-checkpoint with the unresolved engineering question and diagnostic paths, or
-decision-required for missing authority. Preserve work and finish the synchronous
-editor before returning. The
+this retained session. After edits begin, preserve work and finish or stop the
+synchronous editor first, then return a checkpoint with the unresolved engineering
+question and diagnostic paths, or decision-required for missing authority. The
 coordinator owns promotion and runtime cancellation; managed children have no
 `contact_supervisor` tool.
 
