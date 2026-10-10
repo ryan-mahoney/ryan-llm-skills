@@ -1076,6 +1076,17 @@ test("workspace create: sets up storage and creates exclusive empty workspace ki
   await symlink(realRoot, linkedRoot);
   await assert.rejects(setupStorage(linkedRoot), /symlink|exists/);
 
+  // A missing root beneath a symlink refuses before writing outside.
+  const outside = join(tmp, "outside-target");
+  await mkdir(outside);
+  const linkBase = join(tmp, "link-base");
+  await mkdir(linkBase);
+  await symlink(outside, join(linkBase, "link"));
+  const missingUnderLink = join(linkBase, "link", "new-store");
+  await assert.rejects(setupStorage(missingUnderLink), /symlink/);
+  await assert.rejects(lstat(missingUnderLink), { code: "ENOENT" });
+  assert.deepEqual(await readdir(outside), []);
+
   const projectsFileRoot = join(tmp, "projects-file-root");
   await mkdir(projectsFileRoot);
   await writeFile(join(projectsFileRoot, "projects"), "keep");
@@ -1123,6 +1134,29 @@ test("workspace create: sets up storage and creates exclusive empty workspace ki
   assert.equal((await lstat(join(fresh, "projects", "partial"))).isDirectory(), true);
   await assert.rejects(lstat(join(fresh, "projects", "partial", "kit.yaml")), { code: "ENOENT" });
 
+  // Numeric/keyword ids stay strings and comment-like/escaped names survive.
+  await createWorkspace(fresh, { id: "1", name: "Alpha # beta" });
+  const numericRaw = await readFile(join(fresh, "projects", "1", "kit.yaml"), "utf8");
+  assert.ok(numericRaw.includes('id: "1"'));
+  assert.ok(numericRaw.includes('name: "Alpha # beta"'));
+  const numeric = parseKit(numericRaw);
+  assert.equal(numeric.ok, true);
+  assert.equal(numeric.kit.id, "1");
+  assert.equal(numeric.kit.name, "Alpha # beta");
+
+  await createWorkspace(fresh, { id: "true", name: 'a"b\\c' });
+  const keywordRaw = await readFile(join(fresh, "projects", "true", "kit.yaml"), "utf8");
+  assert.ok(keywordRaw.includes('id: "true"'));
+  const keyword = parseKit(keywordRaw);
+  assert.equal(keyword.ok, true);
+  assert.equal(keyword.kit.id, "true");
+  assert.equal(keyword.kit.name, 'a"b\\c');
+
+  // Control-bearing names refuse but keep the incomplete directory visible.
+  await assert.rejects(createWorkspace(fresh, { id: "control-refusal", name: "a\nb" }));
+  assert.equal((await lstat(join(fresh, "projects", "control-refusal"))).isDirectory(), true);
+  await assert.rejects(lstat(join(fresh, "projects", "control-refusal", "kit.yaml")), { code: "ENOENT" });
+
   // The generated empty kit is accepted by the installed Adjacent loader.
   const oraclePath = process.env.ADJ3_KIT_ORACLE
     ?? "/Users/ryanmahoney/.agents/.specs/adj3-workspace-storage/evidence/kit-oracle.mjs";
@@ -1136,8 +1170,12 @@ test("workspace create: sets up storage and creates exclusive empty workspace ki
     await readFile(join(fresh, "projects", "oracle-kit", "kit.yaml")),
   );
   await writeFile(
+    join(fixtures, "tricky.yaml"),
+    await readFile(join(fresh, "projects", "1", "kit.yaml")),
+  );
+  await writeFile(
     join(fixtures, "fixtures.json"),
-    JSON.stringify({ version: 1, fixtures: [{ file: "generated.yaml", kind: "accepted" }] }),
+    JSON.stringify({ version: 1, fixtures: [{ file: "generated.yaml", kind: "accepted" }, { file: "tricky.yaml", kind: "accepted" }] }),
   );
 
   const runOracle = (command, args, timeoutMs) =>
@@ -1189,9 +1227,13 @@ test("workspace create: sets up storage and creates exclusive empty workspace ki
   assert.equal(oracle.code, 0, `kit oracle failed: ${oracle.stderr || oracle.stdout}`);
   const observed = JSON.parse(await readFile(oracleOut, "utf8"));
   assert.equal(observed.ok, true);
-  assert.equal(observed.observations.length, 1);
+  assert.equal(observed.observations.length, 2);
   assert.equal(observed.observations[0].status, "ok");
   assert.equal(observed.observations[0].kit.id, "oracle-kit");
   assert.equal(observed.observations[0].kit.name, "Oracle Kit");
   assert.deepEqual(observed.observations[0].kit.repositories, []);
+  assert.equal(observed.observations[1].status, "ok");
+  assert.equal(observed.observations[1].kit.id, "1");
+  assert.equal(observed.observations[1].kit.name, "Alpha # beta");
+  assert.deepEqual(observed.observations[1].kit.repositories, []);
 });

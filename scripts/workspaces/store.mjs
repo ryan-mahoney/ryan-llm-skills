@@ -12,7 +12,7 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { parseKit } from "./kit.mjs";
+import { formatScalar, parseKit } from "./kit.mjs";
 import { resolveCheckout } from "../repo-search/identity.mjs";
 
 const TEMP_PREFIX = ".workspace-publish-";
@@ -949,6 +949,9 @@ export async function setupStorage(root) {
   const requestedRoot = resolve(root);
   let rootPath = await existingRealDirectory(requestedRoot, "storage root");
   if (rootPath === null) {
+    // Validate the existing parent before creating through it: a missing root
+    // beneath a symlinked ancestor must refuse without writing outside.
+    await physicalParent(requestedRoot);
     await fs.mkdir(requestedRoot, { recursive: false });
     rootPath = await existingRealDirectory(requestedRoot, "storage root");
   }
@@ -963,9 +966,12 @@ export async function setupStorage(root) {
 
 /**
  * Create an empty workspace kit exclusively: the projects directory must
- * already exist, the id is validated before any mkdir, and kit.yaml is
- * published through createFileExclusive. Any failure after the mkdir leaves
- * the newly owned directory visible without a kit.
+ * already exist, the id is validated before any mkdir, id and name are
+ * emitted through formatScalar, and kit.yaml is published through
+ * createFileExclusive. Any failure after the mkdir leaves the newly owned
+ * directory visible; the kit may be absent or, when publication linked
+ * before its cleanup failed, complete — callers must inspect visible state
+ * rather than assume absence.
  * @param {string} root
  * @param {{id: string, name?: string}} options
  * @returns {Promise<{id: string, name: string, directory: string, kit: string}>}
@@ -988,7 +994,7 @@ export async function createWorkspace(root, options = {}) {
     throw new Error(`invalid workspace name: ${String(resolvedName)}`);
   }
   const kit = join(directory, "kit.yaml");
-  const bytes = `version: 1\nid: ${id}\nname: ${resolvedName}\nrepositories: []\n`;
+  const bytes = `version: 1\nid: ${formatScalar(id)}\nname: ${formatScalar(resolvedName)}\nrepositories: []\n`;
   await createFileExclusive(kit, bytes);
   return { id, name: resolvedName, directory, kit };
 }
