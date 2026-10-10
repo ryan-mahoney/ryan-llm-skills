@@ -233,6 +233,7 @@ test("default bundle excludes the private engine; private bundle has exact sourc
   const required = [
     ...SKILL_NAMES.map((name) => join("skills", name, "SKILL.md")),
     "skills/repo-search-setup/scripts/setup.mjs",
+    "skills/repo-search-setup/references/setup-and-recovery.md",
     "scripts/repo-search/package.json",
     "scripts/repo-search/bun.lock",
     "scripts/repo-search/README.md",

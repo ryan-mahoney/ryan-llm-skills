@@ -11,10 +11,10 @@ metadata:
 
 # Repo search setup
 
-Use the bundled setup script for a first index. It copies the six verified model
-assets to an external user directory, then calls the existing install and build
-commands. Model and index destinations must be outside **every** Git repository;
-never add model files, indexes, or generated state to a repository or its history.
+Prepare one checkout for optional local search with the bundled script. It
+copies six pinned model assets to an external user directory, installs the
+locked search dependencies, builds the first index, and optionally enables
+spec use. It does not acquire model assets.
 
 <!-- repo-search-helper -->
 ## Resolving the helper
@@ -34,28 +34,36 @@ spec tools. Never install, download, build, or enroll as a side effect. Run ever
 command as `node "<helper>/cli.mjs" ...`.
 <!-- /repo-search-helper -->
 
+If the helper itself is absent, the optional private repo-search bundle must be
+installed first; the low-level install command also needs that helper.
+
 ## Run
 
-Resolve the requested checkout, or use the current Git checkout. Find an existing
-model root from the user's path, `REPO_SEARCH_MODELS`, or known session context.
-It must contain `jinaai/jina-embeddings-v2-base-code/` with the pinned files.
-If neither that root nor an already prepared external destination is available,
-ask for an existing model root. Do not download assets or guess a source.
+Resolve the requested checkout, or use the current Git checkout. Use an existing
+model root supplied by the user, `REPO_SEARCH_MODELS`, or known session context.
+The root is the **parent** of `jinaai/jina-embeddings-v2-base-code/`. If neither
+a source root nor an already prepared external copy exists, ask for a source
+path. Do not download or guess model assets.
 
 ```bash
 bun --no-install "<this-skill-dir>/scripts/setup.mjs" \
-  --root <checkout> --models-from <existing-root> [--spec-use on]
+  --root "$checkout" --models-from "$model_root"
 ```
 
-`--root` defaults to the current checkout. `--models-from` is optional after the
-external copy exists; `--models-to` and `--state` override the default external
-locations. Use `--spec-use on` when the operator wants spec or sentinel search;
-building alone does not grant that opt-in. The script is idempotent for a ready
-index. It refuses an existing damaged model copy or current index rather than
-replacing either implicitly. Report the final status and any prerequisite.
+Omit `--models-from` when the external copy already exists. Add `--spec-use on`
+when the operator asks to use search from spec tooling. The wrapper locates and
+invokes the helper; the command above is the setup entry point. A zero exit
+prints the checkout, external model and state roots, current generation, and
+spec-use flag. Report those fields. On failure, report the reason; do not delete
+an existing model copy or replace a current index implicitly.
 
-The default model destination is `~/.local/share/agent-repo-search/models` and
-the index state is `~/.cache/agent-repo-search`. The model source may be inside
-another repository; setup only reads it and stores its own verified copy outside
-Git. If source model files were committed previously, setup cannot remove that
-history; report that separately when observed.
+The script rejects model or index destinations inside any Git repository,
+including `.git`. Its defaults are
+`~/.local/share/agent-repo-search/models` and
+`~/.cache/agent-repo-search`. The source may be in a repository: setup reads it
+and copies the assets outside Git. If source assets were already committed,
+report that separately; copying cannot remove existing history.
+
+Read [the setup and recovery guide](references/setup-and-recovery.md) when
+giving an operator a shell command, explaining effects or prerequisites, or
+handling a failed setup.

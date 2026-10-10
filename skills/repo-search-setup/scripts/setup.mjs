@@ -129,7 +129,18 @@ async function prepareModel({ from, to, helper }) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
-    process.stdout.write('Usage: bun --no-install setup.mjs [--root CHECKOUT] [--models-from EXISTING_ROOT] [--models-to EXTERNAL_ROOT] [--state EXTERNAL_ROOT] [--spec-use on]\n');
+    process.stdout.write(`Usage: bun --no-install setup.mjs [--root CHECKOUT] [--models-from ROOT] [--models-to ROOT] [--state ROOT] [--spec-use on]
+
+--root         Git checkout to index (default: current checkout)
+--models-from  Existing root containing jinaai/jina-embeddings-v2-base-code/
+               (or set REPO_SEARCH_MODELS; omit after the external copy exists)
+--models-to    External model copy (default: ~/.local/share/agent-repo-search/models)
+--state        External index state (default: ~/.cache/agent-repo-search)
+--spec-use on  Enable queries from spec tooling after the first build
+
+Model and state destinations must be outside Git repositories. Model assets
+are never downloaded; locked dependency installation may use the network.
+`);
     return;
   }
   const helper = helperDir();
