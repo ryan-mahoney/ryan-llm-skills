@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, sep } from 'node:path';
+import { readMetrics } from '../spec-observe/metrics.mjs';
 
 // Prepared-package file set for `managed-step` fixtures. The authoritative list
 // is owned by preparedEntry in pi/extensions/spec-runtime/startup.mjs; the
@@ -321,4 +322,20 @@ export function atomicWrite(path, text) {
   const temp = `${path}.${randomUUID()}.tmp`;
   writeFileSync(temp, text);
   renameSync(temp, path);
+}
+
+export async function readUsage(sessionFiles = []) {
+  let inputTokens = null;
+  let outputTokens = null;
+  let cost = null;
+  for (const file of sessionFiles) {
+    if (!existsSync(file)) continue;
+    const { agents } = await readMetrics({ file, role: 'leaf' });
+    for (const agent of agents) {
+      if (Number.isFinite(agent.input_tokens)) inputTokens = (inputTokens ?? 0) + agent.input_tokens;
+      if (Number.isFinite(agent.output_tokens)) outputTokens = (outputTokens ?? 0) + agent.output_tokens;
+      if (Number.isFinite(agent.reported_cost)) cost = (cost ?? 0) + agent.reported_cost;
+    }
+  }
+  return { input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: cost !== null && cost > 0 ? cost : null };
 }

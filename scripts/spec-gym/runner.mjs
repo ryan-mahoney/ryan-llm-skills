@@ -1,11 +1,11 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
-import { splitModelSelector } from '../../pi/extensions/spec-runtime/model-selector.mjs';
+import { configurationFailure, splitModelSelector } from '../../pi/extensions/spec-runtime/model-selector.mjs';
 import { gitFacts } from '../spec-facts/core.mjs';
-import { atomicWrite, loadScenario } from './core.mjs';
+import { atomicWrite, loadScenario, readUsage } from './core.mjs';
 
 const CELL_ENV_NAMES = new Set([
   'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM',
@@ -171,6 +171,125 @@ export function ambientContext(repoDir, { home } = {}) {
 
 export function writeRunRecord(run, record) {
   atomicWrite(join(run.runDir, 'run.json'), `${JSON.stringify(record, null, 2)}\n`);
+}
+
+export async function runLeafCell(run, cell, scenario, materialized) {
+  const cellDir = materialized?.cellDir ?? cellDirFor(run, cell);
+  const sessions = join(cellDir, 'sessions');
+  const streams = join(cellDir, 'streams');
+  mkdirSync(sessions, { recursive: true });
+  mkdirSync(streams, { recursive: true });
+  const session = join(sessions, 'leaf.jsonl');
+  const stream = join(streams, 'leaf.jsonl');
+  const stderr = join(streams, 'leaf.stderr');
+  const { provider, model, thinking } = splitModelSelector(cell.model);
+  const args = [
+    '--print', '--mode', 'json', '--session', session,
+    '--no-context-files', '--no-mcp', '--no-extensions', '--no-skills', '--no-prompt-templates',
+    '--skill', run.skillDir, '--append-system-prompt', join(run.skillDir, 'SKILL.md'),
+    '--provider', provider, '--model', model,
+    ...(thinking ? ['--thinking', thinking] : []),
+    '--', scenario.scenario.task,
+  ];
+  const timeoutMs = scenario.scenario.timeout_ms ?? run.timeoutMs;
+  const startedAt = new Date().toISOString();
+  const started = Date.now();
+  const { pid, done } = spawnWithDeadline({ command: run.pi, args, cwd: materialized.repoDir, env: cellEnvironment(process.env), timeoutMs, stream, stderr });
+  const execution = await done;
+  const finishedAt = new Date().toISOString();
+  const usage = await readUsage([session]);
+
+  let outcome, reason;
+  if (execution.timedOut) {
+    outcome = 'timed-out';
+    reason = 'deadline exceeded';
+  } else if (execution.stopReason === 'error' || execution.stopReason === 'aborted') {
+    outcome = 'blocked';
+    reason = execution.error;
+  } else if (execution.error) {
+    outcome = 'blocked';
+    reason = execution.error;
+  } else if (execution.code !== 0 || execution.signal) {
+    outcome = 'blocked';
+    reason = `Pi exited ${execution.code ?? execution.signal}`;
+  } else {
+    outcome = 'finished';
+    reason = null;
+  }
+
+  return {
+    id: cell.id,
+    scenario: cell.scenarioId,
+    version: cell.version,
+    model: cell.model,
+    state: 'finished',
+    outcome,
+    reason,
+    configuration_failure: configurationFailure(execution.error),
+    pid,
+    exit_code: execution.code,
+    signal: execution.signal,
+    stop_reason: execution.stopReason,
+    started_at: startedAt,
+    finished_at: finishedAt,
+    elapsed_ms: Date.now() - started,
+    tokens: { input_tokens: usage.input_tokens, output_tokens: usage.output_tokens },
+    cost_usd: usage.cost_usd,
+    session,
+    stream,
+    stderr,
+    text: execution.text,
+    checks: [],
+  };
+}
+
+function spawnWithDeadline({ command, args, cwd, env, timeoutMs, stream, stderr }) {
+  mkdirSync(dirname(stream), { recursive: true });
+  mkdirSync(dirname(stderr), { recursive: true });
+  const child = spawn(command, args, { cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const pid = child.pid;
+  let pending = '';
+  let text = '';
+  let stopReason;
+  let failure;
+  let timedOut = false;
+  child.stdout.on('data', chunk => {
+    appendFileSync(stream, chunk, { mode: 0o600 });
+    pending += chunk.toString();
+    let newline;
+    while ((newline = pending.indexOf('\n')) >= 0) {
+      const line = pending.slice(0, newline);
+      pending = pending.slice(newline + 1);
+      try {
+        const value = JSON.parse(line);
+        if (value.type === 'message_end' && value.message?.role === 'assistant') {
+          stopReason = value.message.stopReason;
+          text = (value.message.content || []).filter(part => part.type === 'text').map(part => part.text).join('\n');
+          failure = stopReason === 'error' || stopReason === 'aborted' ? value.message.errorMessage || stopReason : undefined;
+        }
+      } catch { /* preserve non-JSON diagnostics on disk */ }
+    }
+  });
+  child.stderr.on('data', chunk => appendFileSync(stderr, chunk, { mode: 0o600 }));
+  const done = new Promise(resolveDone => {
+    let sigkill;
+    const timer = timeoutMs > 0 ? setTimeout(() => {
+      timedOut = true;
+      try { process.kill(-pid, 'SIGTERM'); } catch { /* process group is already gone */ }
+      sigkill = setTimeout(() => {
+        try { process.kill(-pid, 'SIGKILL'); } catch { /* process group is already gone */ }
+      }, 2000);
+      sigkill.unref();
+    }, timeoutMs) : undefined;
+    timer?.unref();
+    child.on('error', error => { failure = error.message; });
+    child.on('close', (code, signal) => {
+      clearTimeout(timer);
+      clearTimeout(sigkill);
+      resolveDone({ pid, timedOut, code, signal, stopReason, text, error: failure });
+    });
+  });
+  return { pid, done };
 }
 
 function piVersion(command) {
