@@ -76,27 +76,66 @@ export async function readDashboardState(agentDir) {
   return applyManualCompletions(result);
 }
 
-export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi/agent') } = {}) {
+export function normalizePublicHost(value) {
+  if (value == null) return undefined;
+  if (typeof value !== 'string') throw new Error('Public host must be a DNS name');
+  let host = value.toLowerCase();
+  if (host.endsWith('.')) host = host.slice(0, -1);
+  if (!host) throw new Error('Public host must not be empty');
+  if (host.includes('/')) throw new Error('Public host must not include a path');
+  if (host.includes(':')) throw new Error('Public host must not include a scheme or port');
+  const labels = host.split('.');
+  if (labels.some(label => label.length === 0)) throw new Error('Public host must not contain empty labels');
+  if (labels.some(label => label.length > 63)) throw new Error('Public host labels must not exceed 63 characters');
+  if (labels.some(label => label.startsWith('-') || label.endsWith('-'))) throw new Error('Public host labels must not begin or end with a hyphen');
+  if (!labels.every(label => /^[a-z0-9-]+$/.test(label))) throw new Error('Public host must be a DNS name');
+  if (host.length > 253) throw new Error('Public host must not exceed 253 characters');
+  return host;
+}
+
+// Locality classification only: acceptance is applied by the server before this
+// runs, and this predicate grants no authorization. Presence means an own header
+// key, including empty values.
+export function isRemoteRequest(request) {
+  const { localPort } = request.socket ?? {};
+  const headers = request.headers ?? {};
+  if (![`127.0.0.1:${localPort}`, `localhost:${localPort}`].includes(headers.host)) return true;
+  if (Object.hasOwn(headers, 'origin')
+    && ![`http://127.0.0.1:${localPort}`, `http://localhost:${localPort}`].includes(headers.origin)) return true;
+  return ['x-forwarded-for', 'x-forwarded-host', 'forwarded', 'tailscale-user-login']
+    .some(name => Object.hasOwn(headers, name));
+}
+
+export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi/agent'), publicHost } = {}) {
   let cached, read;
   const actionToken = randomBytes(32).toString('hex');
+  const publicName = normalizePublicHost(publicHost);
   return createServer(async (request, response) => {
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('X-Frame-Options', 'DENY');
     response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src 'self' blob:; frame-ancestors 'none'");
     const host = request.headers.host;
-    if (host !== `127.0.0.1:${request.socket.localPort}` && host !== `localhost:${request.socket.localPort}`) {
+    const { localPort } = request.socket;
+    const lowerHost = typeof host === 'string' ? host.toLowerCase() : host;
+    const acceptedHost = [`127.0.0.1:${localPort}`, `localhost:${localPort}`].includes(host)
+      || (publicName != null && (lowerHost === publicName || lowerHost === `${publicName}:443`));
+    if (!acceptedHost) {
       response.writeHead(403); response.end('Local access only'); return;
     }
-    if (request.headers.origin && ![`http://127.0.0.1:${request.socket.localPort}`, `http://localhost:${request.socket.localPort}`].includes(request.headers.origin)) {
+    const origin = request.headers.origin;
+    const acceptedOrigin = [`http://127.0.0.1:${localPort}`, `http://localhost:${localPort}`].includes(origin)
+      || (publicName != null && typeof origin === 'string' && origin.toLowerCase() === `https://${publicName}`);
+    if (origin && !acceptedOrigin) {
       response.writeHead(403); response.end('Same-origin access only'); return;
     }
+    const remote = isRemoteRequest(request);
     const url = new URL(request.url, `http://${host}`), path = url.pathname;
     const completionRequest = path === '/api/package-completion' && request.method === 'POST';
     if (!['GET', 'HEAD'].includes(request.method) && !completionRequest) { response.writeHead(405, { Allow: 'GET, HEAD' }); response.end(); return; }
     try {
       if (completionRequest) {
-        if (request.headers.origin !== `http://${host}` || request.headers['x-sentinel-token'] !== actionToken
+        if (remote || request.headers.origin !== `http://${host}` || request.headers['x-sentinel-token'] !== actionToken
           || request.headers['content-type'] !== 'application/json') {
           response.writeHead(403); response.end('Completion requires the local dashboard'); return;
         }
@@ -120,7 +159,9 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
           await read;
         }
         response.setHeader('Content-Type', 'application/json; charset=utf-8');
-        response.end(request.method === 'HEAD' ? undefined : JSON.stringify({ ...cached.value, action_token: actionToken }));
+        response.end(request.method === 'HEAD' ? undefined : JSON.stringify(remote
+          ? { ...cached.value, completion: 'local-only' }
+          : { ...cached.value, action_token: actionToken }));
       } else if (path === '/api/package-files' || path === '/api/package-file' || path.startsWith('/package-view/')) {
         const state = await readDashboardState(agentDir);
         const view = path.startsWith('/package-view/') ? path.slice('/package-view/'.length).split('/') : null;
@@ -148,17 +189,18 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  let port = 4319, agentDir;
+  let port = 4319, agentDir, publicHost;
   const args = process.argv.slice(2);
   try {
     while (args.length) {
       const option = args.shift(), value = args.shift();
       if (option === '--port' && value != null && /^\d+$/.test(value)) port = Number(value);
       else if (option === '--agent-dir' && value) agentDir = resolve(value);
-      else throw new Error('Usage: node dashboard.mjs [--port 4319] [--agent-dir PATH]');
+      else if (option === '--public-host' && value != null) publicHost = normalizePublicHost(value);
+      else throw new Error('Usage: node dashboard.mjs [--port 4319] [--agent-dir PATH] [--public-host NAME]');
     }
     if (!Number.isSafeInteger(port) || port < 0 || port > 65535) throw new Error('Port must be 0–65535');
-    const server = createDashboardServer({ agentDir });
+    const server = createDashboardServer({ agentDir, publicHost });
     server.on('error', error => {
       if (process.send) process.send({ type: 'error', error: error.code ?? error.message });
       else console.error(`Sentinel dashboard: ${error.code ?? error.message}`);
