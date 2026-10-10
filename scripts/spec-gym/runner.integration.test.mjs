@@ -194,7 +194,7 @@ const cliPath = fileURLToPath(new URL('./cli.mjs', import.meta.url));
 function cliFixture(t, { status = 'ready' } = {}) {
   const f = fixture(t);
   writeScenario(f.leaf, { ...leafScenario(), status });
-  writeFixtureFile(join(f.gym, 'scenarios', 'spec-a', 'scenarios.md'), renderIndex('spec-a', [loadScenario(f.leaf)]));
+  writeFixtureFile(join(f.gym, 'scenarios', 'spec-a', 'scenarios.md'), renderIndex('spec-a', [loadScenario(f.leaf), loadScenario(f.managed)]));
   writeFixtureFile(join(f.gym, 'skills', 'spec-b', 'SKILL.md'), '# spec-b\n');
   const git = (...args) => execFileSync('git', ['-C', f.gym, ...args], { stdio: 'pipe' });
   git('add', '-A');
@@ -202,11 +202,12 @@ function cliFixture(t, { status = 'ready' } = {}) {
   return f;
 }
 
-function spawnCli(args, { f, env = {} } = {}) {
+function spawnCli(args, { f, env = {}, detached = false } = {}) {
   const child = spawn(process.execPath, [cliPath, ...args], {
     cwd: f.gym,
     env: { ...process.env, SPEC_GYM_REPO: f.gym, ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
+    detached,
   });
   let stdout = '';
   let stderr = '';
@@ -784,4 +785,116 @@ test('cli run writes partial report on SIGINT', { timeout: 30000 }, async t => {
   const runDir = join(runRoot, readdirSync(runRoot)[0]);
   assert.match(readFileSync(join(runDir, 'report.md'), 'utf8'), /aborted/);
   assert.throws(() => process.kill(-pid, 0), error => error.code === 'ESRCH');
+});
+
+test('cli run SIGINT escalation kills a TERM-resistant descendant group and exits 130', { timeout: 30000 }, async t => {
+  const f = cliFixture(t);
+  const runRoot = join(f.root, 'runs');
+  mkdirSync(runRoot, { recursive: true });
+  const logPath = join(f.root, 'fake-pi-log.json');
+  const cli = spawnCli([
+    'run', '--skill', 'spec-a', '--scenario', 'leaf-case', '--model', 'test/leaf-model',
+    '--timeout-ms', '600000', '--root', runRoot, '--pi', stubPiCommand(f.root),
+  ], { f, detached: true, env: { SPEC_GYM_FAKE_PI_LOG: logPath, SPEC_GYM_FAKE_PI_SCRIPT: 'stubborn' } });
+  t.after(() => { try { process.kill(-cli.child.pid, 'SIGKILL'); } catch { /* already gone */ } });
+
+  assert.ok(await waitFor(() => cli.stdout().includes('start ')), `no start line: ${cli.stdout()} ${cli.stderr()}`);
+  assert.ok(await waitFor(() => {
+    if (!existsSync(logPath)) return false;
+    try { return Number.isInteger(JSON.parse(readFileSync(logPath, 'utf8')).stubborn_child); } catch { return false; }
+  }), 'no TERM-resistant descendant');
+  assert.ok(await waitFor(() => existsSync(`${logPath}.descendant-ready`)), 'descendant did not arm its SIGTERM handler');
+  const pid = JSON.parse(readFileSync(logPath, 'utf8')).pid;
+  t.after(() => { try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ } });
+
+  cli.child.kill('SIGINT');
+  const result = await cli.done;
+  assert.equal(result.code, 130, result.stderr);
+
+  const runDir = join(runRoot, readdirSync(runRoot)[0]);
+  assert.match(readFileSync(join(runDir, 'report.md'), 'utf8'), /aborted/);
+  assert.throws(() => process.kill(-pid, 0), error => error.code === 'ESRCH');
+});
+
+test('cli run refuses a ready scenario with empty checks before creating a run directory', { timeout: 30000 }, async t => {
+  const f = cliFixture(t);
+  writeScenario(f.leaf, { ...leafScenario(), status: 'ready', checks: [] });
+  writeFixtureFile(join(f.gym, 'scenarios', 'spec-a', 'scenarios.md'), renderIndex('spec-a', [loadScenario(f.leaf), loadScenario(f.managed)]));
+  const runRoot = join(f.root, 'runs');
+  mkdirSync(runRoot, { recursive: true });
+  const result = await runCli([
+    'run', '--skill', 'spec-a', '--scenario', 'leaf-case', '--model', 'test/leaf-model',
+    '--root', runRoot, '--pi', stubPiCommand(f.root),
+  ], { f });
+  assert.equal(result.code, 1, result.stdout);
+  assert.match(result.stderr, /ready scenario requires a non-empty checks array/);
+  assert.deepEqual(readdirSync(runRoot), []);
+});
+
+test('cli run refuses a ready scenario with an untracked fixture before creating a run directory', { timeout: 30000 }, async t => {
+  const f = cliFixture(t);
+  writeFixtureFile(join(f.leaf, 'input', 'package', 'untracked.md'), 'not committed\n');
+  writeFixtureFile(join(f.gym, 'scenarios', 'spec-a', 'scenarios.md'), renderIndex('spec-a', [loadScenario(f.leaf), loadScenario(f.managed)]));
+  const runRoot = join(f.root, 'runs');
+  mkdirSync(runRoot, { recursive: true });
+  const result = await runCli([
+    'run', '--skill', 'spec-a', '--scenario', 'leaf-case', '--model', 'test/leaf-model',
+    '--root', runRoot, '--pi', stubPiCommand(f.root),
+  ], { f });
+  assert.equal(result.code, 1, result.stdout);
+  assert.match(result.stderr, /input\/package\/untracked\.md: untracked by Git/);
+  assert.deepEqual(readdirSync(runRoot), []);
+});
+
+test('cli run refuses a stale scenario index before creating a run directory', { timeout: 30000 }, async t => {
+  const f = cliFixture(t);
+  writeFileSync(join(f.gym, 'scenarios', 'spec-a', 'scenarios.md'), '# stale\n');
+  const runRoot = join(f.root, 'runs');
+  mkdirSync(runRoot, { recursive: true });
+  const result = await runCli([
+    'run', '--skill', 'spec-a', '--scenario', 'leaf-case', '--model', 'test/leaf-model',
+    '--root', runRoot, '--pi', stubPiCommand(f.root),
+  ], { f });
+  assert.equal(result.code, 1, result.stdout);
+  assert.match(result.stderr, /index drift: /);
+  assert.match(result.stderr, /scenarios\/spec-a\/scenarios\.md/);
+  assert.deepEqual(readdirSync(runRoot), []);
+});
+
+test('cli managed campaign records finished scheduling state and report artifact links', { timeout: 30000 }, async t => {
+  const f = cliFixture(t);
+  writeScenario(f.managed, { ...managedScenario(), status: 'ready' });
+  writeFixtureFile(join(f.gym, 'scenarios', 'spec-a', 'scenarios.md'), renderIndex('spec-a', [loadScenario(f.leaf), loadScenario(f.managed)]));
+  const runRoot = join(f.root, 'runs');
+  mkdirSync(runRoot, { recursive: true });
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'spec-gym-cli-managed-home-')));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const result = await runCli([
+    'run', '--skill', 'spec-a', '--scenario', 'managed-case', '--model', 'test/owner-model',
+    '--root', runRoot, '--pi', stubPiCommand(f.root),
+  ], { f, env: { HOME: home, SPEC_GYM_FAKE_PI_LOG: join(f.root, 'fake-pi-managed.json'), SPEC_GYM_FAKE_PI_SCRIPT: 'success' } });
+  assert.equal(result.code, 0, result.stderr);
+
+  const runDir = join(runRoot, readdirSync(runRoot)[0]);
+  const record = JSON.parse(readFileSync(join(runDir, 'run.json'), 'utf8'));
+  assert.equal(record.cells.length, 1);
+  const [cell] = record.cells;
+  assert.equal(cell.state, 'finished');
+  assert.equal(cell.outcome, 'passed');
+
+  const runtimeRecord = loadRun(join(runDir, cell.id, 'repo', '.specs', 'example-feature'));
+  assert.equal(runtimeRecord.state, 'completed');
+
+  for (const name of ['owner_session', 'run_receipt', 'events']) {
+    assert.equal(typeof cell.artifacts[name], 'string', `missing artifact ${name}`);
+  }
+  for (const [name, path] of Object.entries(cell.artifacts)) {
+    assert.equal(existsSync(join(runDir, path)), true, `${name}: ${path}`);
+  }
+  // The stub owner never dispatches an editor; an unlaunched transcript must not be linked.
+  assert.equal('editor_session' in cell.artifacts, existsSync(runtimeRecord.editor_session));
+  const report = readFileSync(join(runDir, 'report.md'), 'utf8');
+  for (const [name, path] of Object.entries(cell.artifacts)) {
+    assert.ok(report.includes(`[${name}](${path})`), `missing ${name} link in report`);
+  }
 });

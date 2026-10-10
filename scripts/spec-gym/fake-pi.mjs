@@ -30,7 +30,15 @@ if (script === 'hang') {
 } else if (script === 'stubborn') {
   process.stdout.write(`${JSON.stringify({ type: 'message_start', role: 'assistant', timestamp })}\n`);
   // A same-group descendant that ignores SIGTERM and holds none of the leader's pipes.
-  spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);"], { stdio: 'ignore' });
+  // It writes a readiness marker after arming the handler so tests can signal once
+  // the descendant is genuinely TERM-resistant rather than mid-startup.
+  const ready = logPath ? `${logPath}.descendant-ready` : undefined;
+  const descendant = spawn(process.execPath, [
+    '-e',
+    "const fs = require('node:fs'); process.on('SIGTERM', () => {}); if (process.env.SPEC_GYM_STUB_READY) fs.writeFileSync(process.env.SPEC_GYM_STUB_READY, 'ready'); setInterval(() => {}, 1000);",
+  ], { stdio: 'ignore', env: ready ? { ...process.env, SPEC_GYM_STUB_READY: ready } : process.env });
+  // Rewrite the log so tests can observe the descendant before signalling the leader.
+  if (logPath) writeFileSync(logPath, JSON.stringify({ pid: process.pid, stubborn_child: descendant.pid, argv, cwd: process.cwd(), envNames: Object.keys(process.env).sort() }));
   setInterval(() => {}, 1000);
 } else if (script === 'exit-2') {
   process.exit(2);

@@ -6,7 +6,7 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 import { configurationFailure, splitModelSelector } from '../../pi/extensions/spec-runtime/model-selector.mjs';
 import { Runtime, groupAlive, launch, loadRun, summary } from '../../pi/extensions/spec-runtime/runtime.mjs';
 import { gitFacts } from '../spec-facts/core.mjs';
-import { atomicWrite, comparisonLabel, gradeCell, loadScenario, readUsage, renderReport } from './core.mjs';
+import { atomicWrite, comparisonLabel, discoverSkills, gradeCell, indexDrift, loadScenario, readUsage, renderReport, validateScenario } from './core.mjs';
 
 const CELL_ENV_NAMES = new Set([
   'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM',
@@ -372,10 +372,20 @@ export async function runCampaign(options, { log = () => {} } = {}) {
   } = options;
 
   // Refuse every invalid input before createRun can make the run directory.
-  const indexPath = join(repoRoot, 'scenarios', skill, 'scenarios.md');
+  const eligible = discoverSkills(join(repoRoot, 'skills'));
+  if (!eligible.includes(skill)) throw new Error(`skill not eligible: ${skill}`);
+  const typeFolder = join(repoRoot, 'scenarios', skill);
+  const indexPath = join(typeFolder, 'scenarios.md');
   if (!existsSync(indexPath)) throw new Error(`missing scenario index: ${indexPath}`);
+  const drift = indexDrift(skill, typeFolder);
+  if (!drift.same) throw new Error(`index drift: ${indexPath}`);
   const loaded = scenarios.map(folder => loadScenario(folder));
   for (const entry of loaded) {
+    if (entry.scenario.skill !== skill) {
+      throw new Error(`scenario ${entry.scenario.id} belongs to skill ${entry.scenario.skill}, not ${skill}`);
+    }
+    const validation = validateScenario(entry.folder);
+    if (!validation.ok) throw new Error(`${entry.folder}: ${validation.errors.join('; ')}`);
     if (entry.scenario.status !== 'ready') throw new Error(`scenario ${entry.folder} has status ${entry.scenario.status}; only ready scenarios run`);
   }
   for (const selector of models) splitModelSelector(selector);
@@ -424,14 +434,18 @@ export async function runCampaign(options, { log = () => {} } = {}) {
     record.label = comparisonLabel(manifest, record.cells);
     try { writeRunRecord(run, record); } catch { /* preserve partial record */ }
     try { atomicWrite(join(run.runDir, 'report.md'), renderReport(record)); } catch { /* preserve partial report */ }
+    // Capture the owned handles before any await: a cell can finish and clear
+    // them mid-escalation, and -null would target this process's own group.
+    const ownedRuntime = activeRuntime;
+    const ownedPid = activePid;
     void (async () => {
-      if (activeRuntime) {
-        try { await activeRuntime.runtime.cancel(activeRuntime.package, activeRuntime.runId); } catch { /* retention is explicit */ }
-      } else if (Number.isInteger(activePid)) {
-        try { process.kill(-activePid, 'SIGTERM'); } catch { /* process group is already gone */ }
-        if (!(await waitGroupGone(activePid, 1000))) {
-          try { process.kill(-activePid, 'SIGKILL'); } catch { /* process group is already gone */ }
-          await waitGroupGone(activePid, 500);
+      if (ownedRuntime) {
+        try { await ownedRuntime.runtime.cancel(ownedRuntime.package, ownedRuntime.runId); } catch { /* retention is explicit */ }
+      } else if (Number.isInteger(ownedPid)) {
+        try { process.kill(-ownedPid, 'SIGTERM'); } catch { /* process group is already gone */ }
+        if (!(await waitGroupGone(ownedPid, 1000))) {
+          try { process.kill(-ownedPid, 'SIGKILL'); } catch { /* process group is already gone */ }
+          await waitGroupGone(ownedPid, 500);
         }
       }
       process.exit(130);
@@ -467,7 +481,7 @@ export async function runCampaign(options, { log = () => {} } = {}) {
         checkout: driver === 'leaf' ? materialized.repoDir : join(materialized.cellDir, 'checkout'),
         fixtureCommit: materialized.fixtureCommit,
       });
-      recordCell.state = result.state ?? 'finished';
+      recordCell.state = 'finished';
       recordCell.outcome = result.outcome;
       recordCell.reason = result.reason;
       recordCell.started_at = result.started_at ?? recordCell.started_at;
@@ -496,6 +510,16 @@ function artifactsFor(run, result) {
   const artifacts = {};
   if (result.stream) artifacts.stream = toPosix(relative(run.runDir, result.stream));
   if (result.session) artifacts.session = toPosix(relative(run.runDir, result.session));
+  const sessionNames = ['owner_session', 'editor_session'];
+  [result.sessions].flat().filter(Boolean).forEach((session, index) => {
+    // A session the driver never launched has no retained transcript to link.
+    if (!existsSync(session)) return;
+    artifacts[sessionNames[index] ?? `session_${index + 1}`] = toPosix(relative(run.runDir, session));
+  });
+  const record = result.record ?? {};
+  for (const [name, path] of [['run_receipt', record.run_receipt], ['events', record.events]]) {
+    if (path && existsSync(path)) artifacts[name] = toPosix(relative(run.runDir, path));
+  }
   return artifacts;
 }
 
