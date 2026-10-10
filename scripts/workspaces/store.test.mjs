@@ -25,7 +25,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { createFileExclusive, listWorkspaces, resolveStorageRoot, resolveWorkspacePath, storageStatus, writeFileAtomic } from "./store.mjs";
+import { createFileExclusive, fetchWorkspace, listWorkspaces, resolveStorageRoot, resolveWorkspacePath, storageStatus, writeFileAtomic } from "./store.mjs";
 
 const STORE_URL = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), "store.mjs")).href;
 
@@ -662,4 +662,190 @@ test("workspace catalog: resolves roots, reports status and lists identities wit
   for (const entry of catalog.invalid) {
     assert.ok(Array.isArray(entry.errors) && entry.errors.length > 0, `missing errors for ${entry.directory}`);
   }
+});
+
+test("workspace target status: reports retained repositories, context and artifacts without mutation", async (t) => {
+  const root = await createRoot();
+  const outside = await createRoot();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(outside, { recursive: true, force: true }));
+
+  // Bound every fixture Git invocation; the test owns and kills its children.
+  const runGit = (cwd, args, timeoutMs = 15000) =>
+    new Promise((resolvePromise, rejectPromise) => {
+      const child = spawn("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (chunk) => {
+        stdout += chunk;
+      });
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk;
+      });
+      const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
+      child.on("error", (error) => {
+        clearTimeout(timer);
+        rejectPromise(error);
+      });
+      child.on("close", (code) => {
+        clearTimeout(timer);
+        if (code === 0) resolvePromise(stdout);
+        else rejectPromise(new Error(`git ${args.join(" ")} failed with ${code}: ${stderr.trim()}`));
+      });
+    });
+
+  // Repositories: canonical work tree, its subdirectory, a plain file, a bare
+  // repository, a missing path and a remote mismatch.
+  const repoOk = join(root, "repos", "repo-ok");
+  await mkdir(repoOk, { recursive: true });
+  await runGit(repoOk, ["init", "--quiet"]);
+  const repoSub = join(repoOk, "sub");
+  await mkdir(repoSub);
+  const repoFile = join(root, "repos", "plain.txt");
+  await writeFile(repoFile, "not a repository");
+  const repoBare = join(root, "repos", "repo-bare");
+  await mkdir(repoBare, { recursive: true });
+  await runGit(repoBare, ["init", "--bare", "--quiet"]);
+  const repoMissing = join(root, "repos", "repo-missing");
+  const repoRemote = join(root, "repos", "repo-remote");
+  await mkdir(repoRemote, { recursive: true });
+  await runGit(repoRemote, ["init", "--quiet"]);
+  await runGit(repoRemote, ["config", "remote.origin.url", "https://example.com/actual.git"]);
+
+  // Workspace: one kit with every repository and context case.
+  const workspace = join(root, "projects", "ws1");
+  const contextDir = join(workspace, "context");
+  await mkdir(contextDir, { recursive: true });
+  const unreadableContext = join(contextDir, "unreadable.md");
+  await writeFile(unreadableContext, "restricted");
+  await chmod(unreadableContext, 0o000);
+  const unreadableDetected = await readFile(unreadableContext, "utf8").then(
+    () => false,
+    () => true,
+  );
+  const outsideFile = join(outside, "outside.md");
+  await writeFile(outsideFile, "outside");
+  await writeFile(
+    join(workspace, "kit.yaml"),
+    [
+      "version: 1",
+      "id: ws1",
+      "name: Workspace One",
+      "repositories:",
+      "  - id: repo-ok",
+      `    path: ${repoOk}`,
+      "  - id: repo-sub",
+      `    path: ${repoSub}`,
+      "  - id: repo-file",
+      `    path: ${repoFile}`,
+      "  - id: repo-bare",
+      `    path: ${repoBare}`,
+      "  - id: repo-missing",
+      `    path: ${repoMissing}`,
+      "  - id: repo-remote",
+      `    path: ${repoRemote}`,
+      "    remote: https://example.com/kit.git",
+      "context:",
+      "  - missing.md",
+      `  - ${outsideFile}`,
+      "  - context/unreadable.md",
+      "",
+    ].join("\n"),
+  );
+
+  // Artifact records: unknown repository, escaping target, malformed JSON,
+  // unknown schema and an external URL that is never fetched.
+  const artifactsDir = join(workspace, "artifacts");
+  await mkdir(artifactsDir);
+  const writeRecord = (name, payload) =>
+    writeFile(join(artifactsDir, name), typeof payload === "string" ? payload : JSON.stringify(payload));
+  const repositoryArtifact = (artifactId, target) => ({
+    schema_version: 1,
+    artifact_id: artifactId,
+    kind: "repository",
+    target,
+    title: artifactId,
+    note: "",
+    added_at: "2026-10-10T00:00:00Z",
+  });
+  await writeRecord(
+    "artifact-unknown-repo.json",
+    repositoryArtifact("artifact-unknown-repo", { repository_id: "ghost", path: "src/app.js" }),
+  );
+  await writeRecord(
+    "artifact-escape.json",
+    repositoryArtifact("artifact-escape", { repository_id: "repo-ok", path: "../escape" }),
+  );
+  await writeRecord("artifact-malformed.json", "{ this is not JSON");
+  await writeRecord("artifact-unknown-schema.json", {
+    schema_version: 99,
+    artifact_id: "artifact-future",
+    kind: "url",
+    target: "https://example.invalid/future",
+    title: "future",
+    note: "",
+    added_at: "2026-10-10T00:00:00Z",
+  });
+  await writeRecord("artifact-url.json", {
+    schema_version: 1,
+    artifact_id: "artifact-url",
+    kind: "url",
+    target: "https://example.invalid/resource",
+    title: "remote",
+    note: "",
+    added_at: "2026-10-10T00:00:00Z",
+  });
+
+  // Read-only proof: the whole storage root is size/mtime-identical after the read.
+  const snapshot = async () => {
+    const entries = [];
+    const walk = async (directory, prefix) => {
+      const listing = await readdir(directory, { withFileTypes: true });
+      for (const item of listing.sort((left, right) => left.name.localeCompare(right.name))) {
+        const path = join(directory, item.name);
+        const relative = prefix ? `${prefix}/${item.name}` : item.name;
+        const info = await lstat(path);
+        entries.push(`${relative}:${info.isDirectory() ? "d" : "f"}:${info.size}:${info.mtimeMs}`);
+        if (item.isDirectory()) await walk(path, relative);
+      }
+    };
+    await walk(root, "");
+    return entries;
+  };
+  const before = await snapshot();
+  const result = await fetchWorkspace(root, "ws1");
+  assert.deepEqual(await snapshot(), before);
+
+  assert.equal(result.id, "ws1");
+  assert.equal(result.name, "Workspace One");
+  assert.equal(result.directory, workspace);
+  assert.equal(result.has_workspace_specs, false);
+
+  const repositories = new Map(result.repositories.map((entry) => [entry.id, entry]));
+  assert.equal(repositories.size, 6);
+  assert.equal(repositories.get("repo-ok").status, "ok");
+  assert.equal(repositories.get("repo-sub").status, "not_git");
+  assert.equal(repositories.get("repo-file").status, "not_git");
+  assert.equal(repositories.get("repo-bare").status, "not_git");
+  assert.equal(repositories.get("repo-remote").status, "ok");
+  assert.equal(repositories.get("repo-missing").status, "missing");
+  assert.equal(repositories.get("repo-missing").path, repoMissing);
+  assert.match(
+    JSON.stringify([...(result.attention ?? []), ...(repositories.get("repo-remote").attention ?? [])]),
+    /mismatch/,
+  );
+
+  const context = new Map(result.context.map((entry) => [entry.path, entry]));
+  assert.equal(context.size, 3);
+  assert.equal(context.get("missing.md").status, "missing");
+  assert.equal(context.get(outsideFile).status, "outside_root");
+  assert.equal(context.get("context/unreadable.md").status, unreadableDetected ? "unreadable" : "ok");
+
+  const artifacts = new Map(result.artifacts.map((entry) => [entry.path, entry]));
+  assert.equal(artifacts.size, 5);
+  assert.equal(artifacts.get(join(artifactsDir, "artifact-unknown-repo.json")).status, "repository_unavailable");
+  assert.equal(artifacts.get(join(artifactsDir, "artifact-escape.json")).status, "outside_root");
+  assert.match(artifacts.get(join(artifactsDir, "artifact-malformed.json")).status, /unreadable|malformed/);
+  assert.equal(artifacts.get(join(artifactsDir, "artifact-unknown-schema.json")).status, "unreadable");
+  assert.equal(artifacts.get(join(artifactsDir, "artifact-url.json")).status, "external");
 });

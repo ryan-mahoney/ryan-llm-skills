@@ -8,10 +8,12 @@
 // rechecks). Publication fsyncs only the temporary file: there is no directory
 // fsync and no power-loss durability claim.
 
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { parseKit } from "./kit.mjs";
+import { resolveCheckout } from "../repo-search/identity.mjs";
 
 const TEMP_PREFIX = ".workspace-publish-";
 const TEMP_SUFFIX = ".tmp";
@@ -464,4 +466,357 @@ export async function listWorkspaces(root) {
   }
 
   return { valid: unique, invalid, errors };
+}
+
+// Read-only workspace detail: retained repository, context and artifact
+// status. Git runs only through bounded read-only commands; nothing is
+// created, modified, fetched or served outside the owned roots.
+
+const WORKSPACE_GIT_TIMEOUT_MS = 5000;
+
+function boundedRemoteConfig(cwd) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    execFile(
+      "git",
+      ["-C", cwd, "config", "--get", "remote.origin.url"],
+      {
+        timeout: WORKSPACE_GIT_TIMEOUT_MS,
+        killSignal: "SIGKILL",
+        maxBuffer: 1024 * 1024,
+        encoding: "utf8",
+        windowsHide: true,
+        env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },
+      },
+      (error, stdout) => {
+        if (error) {
+          rejectPromise(error);
+          return;
+        }
+        resolvePromise(stdout.endsWith("\n") ? stdout.slice(0, -1) : stdout);
+      },
+    );
+  });
+}
+
+function insideRoot(root, target) {
+  if (target === root) return true;
+  return target.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
+}
+
+async function repositoryRecord(workspaceDirectory, repository) {
+  const record = {
+    id: repository.id,
+    path: repository.path,
+    remote: repository.remote ?? null,
+    role: repository.role ?? null,
+    status: "missing",
+    attention: [],
+  };
+  const requested = isAbsolute(repository.path)
+    ? resolve(repository.path)
+    : resolve(workspaceDirectory, repository.path);
+  let lookup;
+  try {
+    lookup = await storageLstat(requested);
+  } catch {
+    record.status = "unreadable";
+    record.attention.push("unreadable");
+    return record;
+  }
+  if (lookup.permission) {
+    record.status = "unreadable";
+    record.attention.push("unreadable");
+    return record;
+  }
+  if (lookup.info === null) return record;
+
+  let physical;
+  try {
+    physical = await fs.realpath(requested);
+  } catch {
+    record.status = "missing";
+    return record;
+  }
+  try {
+    const identity = await resolveCheckout(physical, {
+      deadline: Date.now() + WORKSPACE_GIT_TIMEOUT_MS,
+    });
+    if (identity.root !== physical) {
+      record.status = "not_git";
+      return record;
+    }
+    record.status = "ok";
+  } catch (error) {
+    if (typeof error?.code === "string" || error?.killed === true) {
+      record.status = "unreadable";
+      record.attention.push("unreadable");
+    } else {
+      record.status = "not_git";
+    }
+    return record;
+  }
+
+  if (typeof repository.remote === "string" && repository.remote !== "") {
+    try {
+      const configured = await boundedRemoteConfig(physical);
+      if (configured !== repository.remote) record.attention.push("remote_mismatch");
+    } catch (error) {
+      if (error?.code === 1) record.attention.push("remote_mismatch");
+      else record.attention.push("unreadable");
+    }
+  }
+  return record;
+}
+
+function contextPath(entry) {
+  if (typeof entry === "string") return entry;
+  if (entry && typeof entry.path === "string") return entry.path;
+  return null;
+}
+
+async function contextRecord(workspaceDirectory, entry) {
+  const requested = contextPath(entry);
+  const record = { path: requested ?? String(entry), status: "unreadable" };
+  if (requested === null) return record;
+  const target = isAbsolute(requested)
+    ? resolve(requested)
+    : resolve(workspaceDirectory, requested);
+  if (!insideRoot(workspaceDirectory, target)) {
+    record.status = "outside_root";
+    return record;
+  }
+  let lookup;
+  try {
+    lookup = await storageLstat(target);
+  } catch {
+    return record;
+  }
+  if (lookup.permission) return record;
+  if (lookup.info === null) {
+    record.status = "missing";
+    return record;
+  }
+  try {
+    const physical = await fs.realpath(target);
+    const physicalRoot = await fs.realpath(workspaceDirectory);
+    if (!insideRoot(physicalRoot, physical)) {
+      record.status = "outside_root";
+      return record;
+    }
+    await fs.readFile(physical);
+    record.status = "ok";
+  } catch {
+    record.status = "unreadable";
+  }
+  return record;
+}
+
+async function artifactRecords(workspaceDirectory, repositories) {
+  const artifactsDirectory = join(workspaceDirectory, "artifacts");
+  let directoryLookup;
+  try {
+    directoryLookup = await storageLstat(artifactsDirectory);
+  } catch {
+    return [];
+  }
+  if (directoryLookup.permission || directoryLookup.info === null) return [];
+  if (directoryLookup.info.isSymbolicLink() || !directoryLookup.info.isDirectory()) return [];
+
+  const repositoryById = new Map(repositories.map((record) => [record.id, record]));
+  const names = [];
+  let handle;
+  try {
+    handle = await fs.opendir(artifactsDirectory);
+  } catch {
+    return [];
+  }
+  try {
+    for await (const entry of handle) {
+      if (entry.name.endsWith(".json") && !entry.name.startsWith(".")) names.push(entry.name);
+    }
+  } catch {
+    // Retain the records listed before a partial listing failure.
+  }
+  names.sort();
+
+  const records = [];
+  for (const name of names) {
+    const recordPath = join(artifactsDirectory, name);
+    let parsed;
+    try {
+      parsed = JSON.parse(await fs.readFile(recordPath, "utf8"));
+    } catch (error) {
+      records.push({
+        path: recordPath,
+        status: "unreadable",
+        reason: error instanceof SyntaxError ? "malformed JSON" : "unreadable record",
+      });
+      continue;
+    }
+    if (!parsed || typeof parsed !== "object" || parsed.schema_version !== 1
+      || (parsed.kind !== "repository" && parsed.kind !== "url")) {
+      records.push({ path: recordPath, status: "unreadable", reason: "unknown schema" });
+      continue;
+    }
+    if (parsed.kind === "url") {
+      if (typeof parsed.target !== "string" || !/^https?:\/\//i.test(parsed.target)) {
+        records.push({ path: recordPath, status: "unreadable", reason: "unreadable url" });
+      } else {
+        records.push({ ...parsed, path: recordPath, status: "external" });
+      }
+      continue;
+    }
+
+    const target = parsed.target;
+    if (!target || typeof target !== "object"
+      || typeof target.repository_id !== "string" || typeof target.path !== "string") {
+      records.push({
+        path: recordPath,
+        status: "unreadable",
+        reason: "unreadable repository target",
+      });
+      continue;
+    }
+    const repository = repositoryById.get(target.repository_id);
+    if (!repository) {
+      records.push({ ...parsed, path: recordPath, status: "repository_unavailable" });
+      continue;
+    }
+    const repositoryPath = isAbsolute(repository.path)
+      ? resolve(repository.path)
+      : resolve(workspaceDirectory, repository.path);
+    const targetPath = isAbsolute(target.path)
+      ? resolve(target.path)
+      : resolve(repositoryPath, target.path);
+    if (!insideRoot(repositoryPath, targetPath)) {
+      records.push({ ...parsed, path: recordPath, status: "outside_root" });
+      continue;
+    }
+    let targetLookup;
+    try {
+      targetLookup = await storageLstat(targetPath);
+    } catch {
+      records.push({ path: recordPath, status: "unreadable", reason: "unreadable target" });
+      continue;
+    }
+    if (targetLookup.permission) {
+      records.push({ path: recordPath, status: "unreadable", reason: "unreadable target" });
+      continue;
+    }
+    if (targetLookup.info === null) {
+      records.push({ ...parsed, path: recordPath, status: "missing" });
+      continue;
+    }
+    try {
+      const physical = await fs.realpath(targetPath);
+      const physicalRepository = await fs.realpath(repositoryPath);
+      if (!insideRoot(physicalRepository, physical)) {
+        records.push({ ...parsed, path: recordPath, status: "outside_root" });
+        continue;
+      }
+      await fs.readFile(physical);
+      records.push({ ...parsed, path: recordPath, status: "ok" });
+    } catch {
+      records.push({ path: recordPath, status: "unreadable", reason: "unreadable target" });
+    }
+  }
+  return records;
+}
+
+async function materialFiles(workspaceDirectory, name, attention) {
+  const directory = join(workspaceDirectory, name);
+  try {
+    const lookup = await storageLstat(directory);
+    if (lookup.permission) {
+      attention.push(`${name}_unreadable`);
+      return [];
+    }
+    if (lookup.info === null) return [];
+    if (lookup.info.isSymbolicLink() || !lookup.info.isDirectory()) {
+      attention.push(`${name}_unreadable`);
+      return [];
+    }
+    const names = await fs.readdir(directory);
+    return names.filter((entry) => !entry.startsWith(".")).sort();
+  } catch {
+    attention.push(`${name}_unreadable`);
+    return [];
+  }
+}
+
+async function hasWorkspaceSpecs(workspaceDirectory) {
+  try {
+    const specsPath = join(workspaceDirectory, ".specs");
+    const lookup = await storageLstat(specsPath);
+    if (lookup.permission || lookup.info === null) return false;
+    if (lookup.info.isSymbolicLink() || !lookup.info.isDirectory()) return false;
+    return (await fs.realpath(specsPath)) === specsPath;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Read-only workspace detail: catalog identity plus retained repository,
+ * context and artifact status. Nothing is created, modified or fetched.
+ * @param {string} root
+ * @param {string} id
+ * @returns {Promise<{id: string, name: string, directory: string, kit: object,
+ *   repositories: object[], context: object[], briefs: string[],
+ *   notes: string[], artifacts: object[], has_workspace_specs: boolean,
+ *   attention: string[]}>}
+ */
+export async function fetchWorkspace(root, id) {
+  if (typeof root !== "string" || root === "") {
+    throw new TypeError("root must be a non-empty string");
+  }
+  if (typeof id !== "string" || id === "") {
+    throw new TypeError("id must be a non-empty string");
+  }
+  const rootPath = resolve(root);
+  const catalog = await listWorkspaces(rootPath);
+  const matches = catalog.valid.filter((entry) => entry.kit && entry.kit.id === id);
+  if (matches.length !== 1) throw new Error(`workspace is not uniquely available: ${id}`);
+  const catalogEntry = matches[0];
+  const directory = catalogEntry.directory;
+
+  let kit = catalogEntry.kit;
+  try {
+    const parsed = parseKit(await fs.readFile(join(directory, "kit.yaml"), "utf8"));
+    if (parsed.ok) kit = parsed.kit;
+  } catch {
+    // Keep the validated catalog kit when the manifest cannot be re-read.
+  }
+  const contextEntries = Array.isArray(kit.context) ? kit.context : [];
+
+  const attention = [...(catalogEntry.attention ?? [])];
+  const repositories = [];
+  for (const repository of kit.repositories) {
+    repositories.push(await repositoryRecord(directory, repository));
+  }
+  if (repositories.some((record) => record.attention.includes("remote_mismatch"))) {
+    attention.push("remote_mismatch");
+  }
+  const context = [];
+  for (const entry of contextEntries) {
+    context.push(await contextRecord(directory, entry));
+  }
+  const artifacts = await artifactRecords(directory, repositories);
+  const briefs = await materialFiles(directory, "briefs", attention);
+  const notes = await materialFiles(directory, "notes", attention);
+  const has_workspace_specs = await hasWorkspaceSpecs(directory);
+
+  return {
+    id: catalogEntry.id,
+    name: catalogEntry.name,
+    directory,
+    kit,
+    repositories,
+    context,
+    briefs,
+    notes,
+    artifacts,
+    has_workspace_specs,
+    attention,
+  };
 }
