@@ -1,15 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { canonicalPackage, loadRun } from '../../pi/extensions/spec-runtime/runtime.mjs';
 import { gitFacts } from '../spec-facts/core.mjs';
-import { PREPARED_PACKAGE_FILES, loadScenario } from './core.mjs';
+import { PREPARED_PACKAGE_FILES, loadScenario, renderIndex } from './core.mjs';
 import { ambientContext, cellEnvironment, createRun, freezeManifest, materializeCell, runLeafCell, runManagedCell, writeRunRecord } from './runner.mjs';
+
+// Test plumbing only: pin the ambient variables each case mutates so restore
+// hooks return to the module baseline regardless of hook registration order.
+const baseEnv = { HOME: process.env.HOME, SECRET_TOKEN: process.env.SECRET_TOKEN, SPEC_GYM_FAKE_PI_LOG: process.env.SPEC_GYM_FAKE_PI_LOG, SPEC_GYM_FAKE_PI_SCRIPT: process.env.SPEC_GYM_FAKE_PI_SCRIPT };
+
+function restoreBaseEnv(names) {
+  for (const name of names) {
+    const value = baseEnv[name];
+    if (value === undefined) delete process.env[name]; else process.env[name] = value;
+  }
+}
 
 const leafScenario = () => ({
   id: 'leaf-case',
@@ -65,7 +76,7 @@ function fixture(t) {
   writeScenario(managed, managedScenario());
   for (const name of PREPARED_PACKAGE_FILES) {
     if (name === '../project-context.md') continue;
-    writeFixtureFile(join(managed, 'input', 'package', name), `${name}\n`);
+    writeFixtureFile(join(managed, 'input', 'package', name), name === 'spec-steps.json' ? '{"steps":[{"step":1}]}\n' : `${name}\n`);
   }
   writeFixtureFile(join(managed, 'input', 'package', 'step-001-subspec.md'), '# Step 1\n');
   writeFixtureFile(join(managed, 'input', 'project-context.md'), 'context\n');
@@ -126,13 +137,9 @@ function leafCase(t, { script = 'success', timeoutMs, model = 'test/leaf-model:l
   const scenario = loadScenario(f.leaf);
   const run = createRun({ repoRoot: f.gym, root: f.root, skill: 'spec-a', scenarios: [f.leaf], models: [model], timeoutMs: timeoutMs ?? 60000, pi: stubPiCommand(f.root) });
   const materialized = materializeCell(run, run.cells[0], scenario);
-  const previous = { log: process.env.SPEC_GYM_FAKE_PI_LOG, script: process.env.SPEC_GYM_FAKE_PI_SCRIPT };
   process.env.SPEC_GYM_FAKE_PI_LOG = join(materialized.cellDir, 'streams', 'fake-pi-log.json');
   process.env.SPEC_GYM_FAKE_PI_SCRIPT = script;
-  t.after(() => {
-    if (previous.log === undefined) delete process.env.SPEC_GYM_FAKE_PI_LOG; else process.env.SPEC_GYM_FAKE_PI_LOG = previous.log;
-    if (previous.script === undefined) delete process.env.SPEC_GYM_FAKE_PI_SCRIPT; else process.env.SPEC_GYM_FAKE_PI_SCRIPT = previous.script;
-  });
+  t.after(() => restoreBaseEnv(['SPEC_GYM_FAKE_PI_LOG', 'SPEC_GYM_FAKE_PI_SCRIPT']));
   const execute = async () => {
     const result = await runLeafCell(run, run.cells[0], scenario, materialized);
     t.after(() => { try { process.kill(-result.pid, 'SIGKILL'); } catch { /* already gone */ } });
@@ -160,14 +167,8 @@ function managedCase(t, { script = 'success', timeoutMs } = {}) {
   run.manifest = freezeManifest(run);
   const materialized = materializeCell(run, run.cells[0], scenario);
   const original = process.env;
-  const saved = {
-    HOME: process.env.HOME, SECRET_TOKEN: process.env.SECRET_TOKEN,
-    SPEC_GYM_FAKE_PI_LOG: process.env.SPEC_GYM_FAKE_PI_LOG, SPEC_GYM_FAKE_PI_SCRIPT: process.env.SPEC_GYM_FAKE_PI_SCRIPT,
-  };
   t.after(() => {
-    for (const [name, value] of Object.entries(saved)) {
-      if (value === undefined) delete original[name]; else original[name] = value;
-    }
+    restoreBaseEnv(['HOME', 'SECRET_TOKEN', 'SPEC_GYM_FAKE_PI_LOG', 'SPEC_GYM_FAKE_PI_SCRIPT']);
     process.env = original;
   });
   const logPath = join(materialized.cellDir, 'streams', 'fake-pi-log.json');
@@ -186,6 +187,46 @@ function managedCase(t, { script = 'success', timeoutMs } = {}) {
     for (const pid of pids) { try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ } }
   });
   return { f, run, scenario, materialized, home, logPath, childExtension, env, execute };
+}
+
+const cliPath = fileURLToPath(new URL('./cli.mjs', import.meta.url));
+
+function cliFixture(t, { status = 'ready' } = {}) {
+  const f = fixture(t);
+  writeScenario(f.leaf, { ...leafScenario(), status });
+  writeFixtureFile(join(f.gym, 'scenarios', 'spec-a', 'scenarios.md'), renderIndex('spec-a', [loadScenario(f.leaf)]));
+  writeFixtureFile(join(f.gym, 'skills', 'spec-b', 'SKILL.md'), '# spec-b\n');
+  const git = (...args) => execFileSync('git', ['-C', f.gym, ...args], { stdio: 'pipe' });
+  git('add', '-A');
+  git('commit', '-qm', 'CLI fixture');
+  return f;
+}
+
+function spawnCli(args, { f, env = {} } = {}) {
+  const child = spawn(process.execPath, [cliPath, ...args], {
+    cwd: f.gym,
+    env: { ...process.env, SPEC_GYM_REPO: f.gym, ...env },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', chunk => { stdout += chunk; });
+  child.stderr.on('data', chunk => { stderr += chunk; });
+  const done = new Promise(resolve => child.on('close', code => resolve({ code, stdout, stderr })));
+  return { child, done, stdout: () => stdout, stderr: () => stderr };
+}
+
+function runCli(args, options) {
+  return spawnCli(args, options).done;
+}
+
+async function waitFor(predicate, timeout = 10000) {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    if (predicate()) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
 }
 
 test('materialize creates a canonical fixture repository with one Fixture commit', t => {
@@ -603,4 +644,144 @@ test('managed assignment reuse returns the terminal record without relaunching',
   assert.deepEqual(second.sessions, first.sessions);
   assert.equal(process.env, c.env.object);
   assert.deepEqual({ ...process.env }, c.env.values);
+});
+
+test('cli run freezes manifest before the first cell and rewrites run.json per cell', { timeout: 30000 }, async t => {
+  const f = cliFixture(t);
+  const runRoot = join(f.root, 'runs');
+  mkdirSync(runRoot, { recursive: true });
+  const snapshots = join(f.root, 'snapshots');
+  const result = await runCli([
+    'run', '--skill', 'spec-a', '--scenario', 'leaf-case',
+    '--model', 'test/leaf-model:low', '--model', 'test/leaf-model:high',
+    '--root', runRoot, '--pi', stubPiCommand(f.root),
+  ], { f, env: { SPEC_GYM_FAKE_PI_SCRIPT: 'success', SPEC_GYM_FAKE_PI_LOG: join(f.root, 'fake-pi-log.json'), SPEC_GYM_FAKE_PI_RUN_SNAPSHOT: snapshots } });
+  assert.equal(result.code, 0, result.stderr);
+
+  const runId = readdirSync(runRoot)[0];
+  const runDir = join(runRoot, runId);
+  const record = JSON.parse(readFileSync(join(runDir, 'run.json'), 'utf8'));
+  assert.deepEqual(record.cells.map(cell => [cell.state, cell.outcome]), [['finished', 'passed'], ['finished', 'passed']]);
+  assert.ok(statSync(join(runDir, 'manifest.json')).mtimeMs <= statSync(join(runDir, record.cells[0].id)).mtimeMs);
+
+  const firstSnapshot = JSON.parse(readFileSync(join(snapshots, `${record.cells[0].id}.json`), 'utf8'));
+  assert.equal(firstSnapshot.cells[0].state, 'running');
+  assert.equal(firstSnapshot.cells[1].state, 'pending');
+});
+
+test('cli run prints start and finish lines in order', { timeout: 30000 }, async t => {
+  const f = cliFixture(t);
+  const runRoot = join(f.root, 'runs');
+  mkdirSync(runRoot, { recursive: true });
+  const result = await runCli([
+    'run', '--skill', 'spec-a', '--scenario', 'leaf-case',
+    '--model', 'test/leaf-model:low', '--model', 'test/leaf-model:high',
+    '--root', runRoot, '--pi', stubPiCommand(f.root),
+  ], { f, env: { SPEC_GYM_FAKE_PI_SCRIPT: 'success', SPEC_GYM_FAKE_PI_LOG: join(f.root, 'fake-pi-log.json') } });
+  assert.equal(result.code, 0, result.stderr);
+
+  const runDir = join(runRoot, readdirSync(runRoot)[0]);
+  const record = JSON.parse(readFileSync(join(runDir, 'run.json'), 'utf8'));
+  const [first, second] = record.cells.map(cell => cell.id);
+  let cursor = -1;
+  for (const marker of [`start ${first}`, `finish ${first} passed`, `start ${second}`, `finish ${second} passed`]) {
+    const at = result.stdout.indexOf(marker, cursor + 1);
+    assert.ok(at > cursor, `${marker} out of order in ${result.stdout}`);
+    cursor = at;
+  }
+
+  const report = readFileSync(join(runDir, 'report.md'), 'utf8');
+  const rows = report.split('\n').filter(line => line.startsWith('| ')).filter(line => !/^\|[\s|:-]+\|$/.test(line)).slice(1);
+  assert.equal(rows.length, 2);
+  assert.ok(report.includes('Label: matched'));
+});
+
+test('cli run refuses draft scenario before creating a run directory', { timeout: 30000 }, async t => {
+  const f = cliFixture(t, { status: 'draft' });
+  const runRoot = join(f.root, 'runs');
+  mkdirSync(runRoot, { recursive: true });
+  const result = await runCli([
+    'run', '--skill', 'spec-a', '--scenario', 'leaf-case', '--model', 'test/leaf-model',
+    '--root', runRoot, '--pi', stubPiCommand(f.root),
+  ], { f });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /leaf-case/);
+  assert.match(result.stderr, /draft/);
+  assert.deepEqual(readdirSync(runRoot), []);
+});
+
+test('cli run refuses a skill without an index', { timeout: 30000 }, async t => {
+  const f = cliFixture(t);
+  const runRoot = join(f.root, 'runs');
+  mkdirSync(runRoot, { recursive: true });
+  const result = await runCli([
+    'run', '--skill', 'spec-b', '--scenario', 'leaf-case', '--model', 'test/leaf-model',
+    '--root', runRoot, '--pi', stubPiCommand(f.root),
+  ], { f });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /scenarios\/spec-b\/scenarios\.md/);
+});
+
+test('cli run marks invalid selector blocked without substitution', { timeout: 30000 }, async t => {
+  const f = cliFixture(t);
+  const runRoot = join(f.root, 'runs');
+  mkdirSync(runRoot, { recursive: true });
+  const result = await runCli([
+    'run', '--skill', 'spec-a', '--scenario', 'leaf-case', '--model', 'test/owner-model',
+    '--root', runRoot, '--pi', stubPiCommand(f.root),
+  ], { f, env: { SPEC_GYM_FAKE_PI_LOG: join(f.root, 'fake-pi-log.json'), SPEC_GYM_FAKE_PI_SCRIPT: 'error' } });
+  assert.equal(result.code, 0, result.stderr);
+
+  const record = JSON.parse(readFileSync(join(runRoot, readdirSync(runRoot)[0], 'run.json'), 'utf8'));
+  assert.equal(record.cells.length, 1);
+  assert.equal(record.cells[0].outcome, 'blocked');
+  assert.match(record.cells[0].reason, /unknown model/);
+});
+
+test('cli validate detects drift and write-index repairs it', { timeout: 30000 }, async t => {
+  const f = cliFixture(t);
+  writeFileSync(join(f.gym, 'scenarios', 'spec-a', 'scenarios.md'), '# stale\n');
+
+  const drifted = await runCli(['validate', '--skill', 'spec-a'], { f });
+  assert.equal(drifted.code, 1);
+  assert.match(drifted.stderr, /index drift: /);
+  assert.match(drifted.stderr, /scenarios\/spec-a\/scenarios\.md/);
+
+  const repaired = await runCli(['validate', '--skill', 'spec-a', '--write-index'], { f });
+  assert.equal(repaired.code, 0, repaired.stderr);
+  const clean = await runCli(['validate', '--skill', 'spec-a'], { f });
+  assert.equal(clean.code, 0, clean.stderr);
+});
+
+test('cli list prints eligible skills and no curated scenarios', { timeout: 30000 }, async t => {
+  const f = cliFixture(t);
+  const result = await runCli(['list'], { f });
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stdout, /^spec-a: leaf-case ready [0-9a-f]{12} leaf$/m);
+  assert.match(result.stdout, /^spec-b: no curated scenarios$/m);
+});
+
+test('cli run writes partial report on SIGINT', { timeout: 30000 }, async t => {
+  const f = cliFixture(t);
+  const runRoot = join(f.root, 'runs');
+  mkdirSync(runRoot, { recursive: true });
+  const logPath = join(f.root, 'fake-pi-log.json');
+  const cli = spawnCli([
+    'run', '--skill', 'spec-a', '--scenario', 'leaf-case', '--model', 'test/leaf-model',
+    '--timeout-ms', '600000', '--root', runRoot, '--pi', stubPiCommand(f.root),
+  ], { f, env: { SPEC_GYM_FAKE_PI_LOG: logPath, SPEC_GYM_FAKE_PI_SCRIPT: 'hang' } });
+  t.after(() => { try { cli.child.kill('SIGKILL'); } catch { /* already gone */ } });
+
+  assert.ok(await waitFor(() => cli.stdout().includes('start ')), `no start line: ${cli.stdout()} ${cli.stderr()}`);
+  assert.ok(await waitFor(() => existsSync(logPath)), 'no stub log');
+  const pid = JSON.parse(readFileSync(logPath, 'utf8')).pid;
+  t.after(() => { try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ } });
+
+  cli.child.kill('SIGINT');
+  const result = await cli.done;
+  assert.equal(result.code, 130, result.stderr);
+
+  const runDir = join(runRoot, readdirSync(runRoot)[0]);
+  assert.match(readFileSync(join(runDir, 'report.md'), 'utf8'), /aborted/);
+  assert.throws(() => process.kill(-pid, 0), error => error.code === 'ESRCH');
 });

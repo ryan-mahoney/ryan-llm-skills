@@ -6,11 +6,11 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 import { configurationFailure, splitModelSelector } from '../../pi/extensions/spec-runtime/model-selector.mjs';
 import { Runtime, groupAlive, launch, loadRun, summary } from '../../pi/extensions/spec-runtime/runtime.mjs';
 import { gitFacts } from '../spec-facts/core.mjs';
-import { atomicWrite, loadScenario, readUsage } from './core.mjs';
+import { atomicWrite, comparisonLabel, gradeCell, loadScenario, readUsage, renderReport } from './core.mjs';
 
 const CELL_ENV_NAMES = new Set([
   'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM',
-  'SPEC_GYM_FAKE_PI_LOG', 'SPEC_GYM_FAKE_PI_SCRIPT',
+  'SPEC_GYM_FAKE_PI_LOG', 'SPEC_GYM_FAKE_PI_SCRIPT', 'SPEC_GYM_FAKE_PI_RUN_SNAPSHOT',
 ]);
 const GENERATED_GITIGNORE = '.specs/\n';
 const FIXTURE_USER = { name: 'Spec Gym', email: 'spec-gym@example.invalid' };
@@ -176,7 +176,7 @@ export function writeRunRecord(run, record) {
   atomicWrite(join(run.runDir, 'run.json'), `${JSON.stringify(record, null, 2)}\n`);
 }
 
-export async function runLeafCell(run, cell, scenario, materialized) {
+export async function runLeafCell(run, cell, scenario, materialized, hooks = {}) {
   const cellDir = materialized?.cellDir ?? cellDirFor(run, cell);
   const sessions = join(cellDir, 'sessions');
   const streams = join(cellDir, 'streams');
@@ -198,6 +198,7 @@ export async function runLeafCell(run, cell, scenario, materialized) {
   const startedAt = new Date().toISOString();
   const started = Date.now();
   const { pid, done } = spawnWithDeadline({ command: run.pi, args, cwd: materialized.repoDir, env: cellEnvironment(process.env), timeoutMs, stream, stderr });
+  hooks.onPid?.(pid);
   const execution = await done;
   const finishedAt = new Date().toISOString();
   const usage = await readUsage([session]);
@@ -249,7 +250,7 @@ export async function runLeafCell(run, cell, scenario, materialized) {
   };
 }
 
-export async function runManagedCell(run, cell, scenario, materialized) {
+export async function runManagedCell(run, cell, scenario, materialized, hooks = {}) {
   const cellDir = materialized?.cellDir ?? cellDirFor(run, cell);
   const repoDir = materialized?.repoDir ?? join(cellDir, 'repo');
   const packageDir = materialized?.packageDir ?? join(repoDir, '.specs', scenario.scenario.fixture.feature);
@@ -321,6 +322,7 @@ export async function runManagedCell(run, cell, scenario, materialized) {
     }
     if (!startError) {
       runId = initial.run_id;
+      hooks.onRuntime?.({ runtime, package: packageDir, runId });
       // A reused assignment returns its terminal record instead of launching; do not await a notify that will never come.
       if (!MANAGED_TERMINAL_STATES.has(initial.state)) await terminal;
     }
@@ -361,6 +363,140 @@ export async function runManagedCell(run, cell, scenario, materialized) {
     cost_usd: usage.cost_usd,
     text: record.result ?? null,
   };
+}
+
+export async function runCampaign(options, { log = () => {} } = {}) {
+  const {
+    repoRoot = process.cwd(), root, skill, scenarios = [], models = [],
+    roles = {}, timeoutMs = 1800000, repeats = 1, childExtensions = [], pi = 'pi',
+  } = options;
+
+  // Refuse every invalid input before createRun can make the run directory.
+  const indexPath = join(repoRoot, 'scenarios', skill, 'scenarios.md');
+  if (!existsSync(indexPath)) throw new Error(`missing scenario index: ${indexPath}`);
+  const loaded = scenarios.map(folder => loadScenario(folder));
+  for (const entry of loaded) {
+    if (entry.scenario.status !== 'ready') throw new Error(`scenario ${entry.folder} has status ${entry.scenario.status}; only ready scenarios run`);
+  }
+  for (const selector of models) splitModelSelector(selector);
+  for (const name of ['editor_model', 'scout_model']) {
+    if (roles?.[name] !== undefined) splitModelSelector(roles[name]);
+  }
+
+  const run = createRun({ repoRoot, root, skill, scenarios, models, roles, timeoutMs, repeats, childExtensions, pi });
+  const manifest = freezeManifest(run);
+  const record = {
+    run_id: run.runId,
+    manifest: 'manifest.json',
+    label: null,
+    cells: run.cells.map(cell => ({
+      id: cell.id,
+      scenario: cell.scenarioId,
+      version: cell.version,
+      model: cell.model,
+      repeat: cell.repeat,
+      state: 'pending',
+      outcome: null,
+      reason: null,
+      started_at: null,
+      finished_at: null,
+      elapsed_ms: null,
+      tokens: null,
+      cost_usd: null,
+      checks: [],
+      artifacts: {},
+    })),
+  };
+  writeRunRecord(run, record);
+
+  let stopRequested = false;
+  let activePid = null;
+  let activeRuntime = null;
+  const signals = [];
+  const onSignal = () => {
+    stopRequested = true;
+    const running = record.cells.find(cell => cell.state === 'running');
+    if (running) {
+      running.outcome = 'aborted';
+      running.reason = 'interrupted';
+      running.finished_at = new Date().toISOString();
+    }
+    record.label = comparisonLabel(manifest, record.cells);
+    try { writeRunRecord(run, record); } catch { /* preserve partial record */ }
+    try { atomicWrite(join(run.runDir, 'report.md'), renderReport(record)); } catch { /* preserve partial report */ }
+    void (async () => {
+      if (activeRuntime) {
+        try { await activeRuntime.runtime.cancel(activeRuntime.package, activeRuntime.runId); } catch { /* retention is explicit */ }
+      } else if (Number.isInteger(activePid)) {
+        try { process.kill(-activePid, 'SIGTERM'); } catch { /* process group is already gone */ }
+        if (!(await waitGroupGone(activePid, 1000))) {
+          try { process.kill(-activePid, 'SIGKILL'); } catch { /* process group is already gone */ }
+          await waitGroupGone(activePid, 500);
+        }
+      }
+      process.exit(130);
+    })();
+  };
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.once(signal, onSignal);
+    signals.push(signal);
+  }
+
+  try {
+    for (const [index, cell] of run.cells.entries()) {
+      if (stopRequested) await new Promise(() => {});
+      const recordCell = record.cells[index];
+      recordCell.state = 'running';
+      recordCell.started_at = new Date().toISOString();
+      writeRunRecord(run, record);
+      log(`start ${cell.id}`);
+
+      const scenario = loaded.find(entry => entry.scenario.id === cell.scenarioId);
+      const materialized = materializeCell(run, cell, scenario);
+      const graded = scenario.scenario.driver === 'managed-step'
+        ? await runManagedCell(run, cell, scenario, materialized, { onRuntime: value => { activeRuntime = value; } })
+        : await runLeafCell(run, cell, scenario, materialized, { onPid: pid => { activePid = pid; } });
+      activePid = null;
+      activeRuntime = null;
+      if (stopRequested) await new Promise(() => {});
+
+      const driver = scenario.scenario.driver;
+      const result = gradeCell(graded, scenario, {
+        package: materialized.packageDir,
+        repo: materialized.repoDir,
+        checkout: driver === 'leaf' ? materialized.repoDir : join(materialized.cellDir, 'checkout'),
+        fixtureCommit: materialized.fixtureCommit,
+      });
+      recordCell.state = result.state ?? 'finished';
+      recordCell.outcome = result.outcome;
+      recordCell.reason = result.reason;
+      recordCell.started_at = result.started_at ?? recordCell.started_at;
+      recordCell.finished_at = result.finished_at;
+      recordCell.elapsed_ms = result.elapsed_ms;
+      recordCell.tokens = result.tokens;
+      recordCell.cost_usd = result.cost_usd;
+      recordCell.checks = result.checks;
+      recordCell.artifacts = artifactsFor(run, result);
+      writeRunRecord(run, record);
+      log(`finish ${cell.id} ${result.outcome}`);
+    }
+
+    if (!stopRequested) {
+      record.label = comparisonLabel(manifest, record.cells);
+      writeRunRecord(run, record);
+      atomicWrite(join(run.runDir, 'report.md'), renderReport(record));
+    }
+  } finally {
+    for (const signal of signals) process.removeListener(signal, onSignal);
+  }
+  return record;
+}
+
+function artifactsFor(run, result) {
+  const artifacts = {};
+  if (result.stream) artifacts.stream = toPosix(relative(run.runDir, result.stream));
+  if (result.session) artifacts.session = toPosix(relative(run.runDir, result.session));
+  return artifacts;
 }
 
 function deadlineReached(packageDir, runId) {
