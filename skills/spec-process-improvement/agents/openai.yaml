@@ -1,0 +1,3 @@
+interface:
+  display_name: "Spec Process Improvement"
+  short_description: "Review spec run evidence and propose process fixes"
