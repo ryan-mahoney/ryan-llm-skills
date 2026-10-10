@@ -39,25 +39,8 @@ Use RPC for discussions within Sentinel: exploring ideas, comparing research,
 developing a brief, and preparing an assignment. Each thread has its own persisted
 Pi session and associations with relevant workspace material and kits.
 
-Settled (C-8, owned by adj5): each thread gets its own `pi --mode rpc` child,
-started lazily in the thread's execution directory with
-`--session-dir <workspace>/sessions/<thread-id>` and `--session-id <thread-id>`
-for both new and existing threads. Never use `switch_session`. This removes every
-switching hazard the earlier design listed: output cannot land in another thread,
-a cancelled switch cannot receive the next prompt, and cwd-scoped tools,
-extensions, and context files are correct by construction.
-
-Response scheduling stays serialized: one in-flight model response across all
-threads, with additional sends queued and given a visible waiting state. Raising
-that limit later changes no contract. Framing splits stdout on LF only; Node
-`readline` is not used because it also splits on U+2028/U+2029, which are valid
-inside JSON strings.
-
-A thread process exits (stdin closed) after `agent_settled` plus an idle period.
-History always comes from the session file, so browsing a thread never requires a
-live process. The thread record is `<workspace>/threads/<thread-id>.json` with
-`thread_id`, `workspace_id`, `title`, `execution_dir`, `session_file`, context
-references, optional model settings, and `created_at`.
+Settled in C-8 (owned by adj5): one `pi --mode rpc` child per thread, no session
+switching, and at most one in-flight model response across all threads.
 
 This path retains a need for response streaming, history display, cancellation,
 and error handling. Relevant Adjacent RPC code may be reusable, but the conversation
@@ -97,38 +80,9 @@ repositories.
 - An **assignment** records the work delegated to an agent, its relevant inputs,
   execution location, session identity, and results.
 
-Settled (C-2 through C-5, owned by adj3):
-
-- A workspace is one directory under a storage root, `<root>/projects/<id>/`,
-  containing exactly one `kit.yaml` (version 1). The kit is the workspace's
-  repository section; `repositories: []` is valid, so a workspace can exist before
-  any repository. Cardinality is one workspace to one kit, and no second manifest
-  lists repositories. New workspace-owned material lives in ordinary
-  subdirectories (`briefs/`, `notes/`, `threads/`, `assignments/`, `sessions/`);
-  existing `context/`, `sources/`, and `migration/` keep their meaning.
-- The storage root resolves from `ADJACENT_STORAGE_ROOT`, else
-  `~/Documents/adjacent-storage`. Status and startup never create it; only an
-  explicit setup command creates missing layout, and it refuses when a needed path
-  has the wrong type. Writes are additive only, and new-file publication is
-  exclusive: a temp file is linked into place and `EEXIST` is refused (never
-  `rename` as a no-clobber primitive). Kit edits go through an explicit operator
-  preview/apply step, and `.adjacent/state.sqlite3` stays Adjacent-owned and is
-  opened read-only.
-- Workspace ids match `[a-z0-9][a-z0-9-]*` and are unique within one storage
-  root; two directories declaring the same id make both invalid and visible.
-  A directory/id mismatch on existing storage is report-only, and consumers use
-  the physical canonical directory rather than reconstructing a path from the id.
-  Repository ids are unique within one kit. Thread and assignment ids are full
-  UUIDs and globally unique.
-- A repository reference is `{workspace id, repository id}`. Resolution
-  canonicalizes the kit's absolute path and reports `ok`, `missing`, or `not_git`;
-  a missing repository keeps its association and is never replaced by another
-  checkout. A present `remote` that differs from the checkout's `origin` is `ok`
-  with a visible mismatch attention. An optional free-text `role:` is added per
-  repository entry. Implementation specs stay in the repository's primary checkout
-  `.specs/`; a workspace references them by repository id plus package-relative
-  path and never copies them. Avoid duplicate authoritative copies of
-artifacts merely to display them in Sentinel.
+Settled in C-2 through C-5 (owned by adj3): workspace layout, storage-root write
+rules, identity, and repository references. Avoid duplicate authoritative copies
+of artifacts merely to display them in Sentinel.
 
 The existing implementation-spec contract remains in force: `.specs/` belongs in
 the primary repository checkout, including when code runs in a worktree. External
@@ -163,21 +117,9 @@ the agent directory, and a dashboard that reads those snapshots every few second
 and renders packages, activity, obligations, incidents, coverage and freshness.
 The standalone `spec-observe` CLI reads the same snapshots without Pi.
 
-Settled (C-6 and C-9, owned by adj2 and adj4): one long-lived **Sentinel host**
-Node process, outside any Pi session, owns read-only observation: the reader
-child, its own snapshot publisher, and the dashboard. The dashboard binds the
-fixed loopback port 4319. The host is installed as a launchd user agent only by
-an explicit operator command that writes the plist; nothing installs it
-implicitly. The host claims a single-owner record keyed by `{pid, process start
-time}`; a live foreign owner blocks a second host, and a dead or reused PID is
-reclaimed.
-
-Intervention authority stays where it is today: an explicit native `/sentinel`
-command inside an interactive Pi session, which may itself run in tmux. The host
-never holds or restores intervention authority, and a host restart restores
-observation only. Losing the host stops observation and the dashboard; it never
-signals independent agents or tmux sessions. The native in-session observer and
-its dashboard keep working unchanged.
+Settled in C-6 and C-9 (owned by adj2 and adj4): a standalone Sentinel host owns
+read-only observation and the dashboard on loopback port 4319; intervention
+authority stays with the native `/sentinel` command inside Pi.
 
 Remote reading publishes the loopback dashboard through `tailscale serve`, so
 Tailscale terminates TLS and the tailnet ACL decides who can connect. The
@@ -200,23 +142,9 @@ The discussion remains available while the agent executes. Assignment results an
 artifact references can return to the workspace without streaming the agent's
 entire conversation into Sentinel.
 
-Settled (C-7, owned by adj4 with adj6 reconciliation): the assignment record is
-created with exclusive create before any process starts, with states `launching`,
-`live`, `launch_failed`, `launch_unknown`, and `ended`; `live` becomes `ended`
-only after confirmed process exit. A separate storage-root-wide
- execution-directory reservation, keyed by sha256 of the canonical execution
-directory and acquired atomically with a token, is retained by `launching`,
-`live`, and `launch_unknown`. It is never reclaimed on age or a missing terminal
-alone, only after both process and terminal absence are confirmed, and an
-unreadable identity is treated as unknown rather than gone. Shortened tmux names
-require full-assignment matching and refuse collisions, and at most one
-`launching`/`live` assignment may exist per canonical execution directory. The
-launcher does not take the `spec_dispatch` writer lease. A retry is a new id with
-`attempt_kind: "launch-retry"` and `supersedes`, allowed only when the old tmux
-session is absent and the old Pi process is confirmed gone. Recovery must never
-terminate independent agents. RPC's advertised `sessionFile` is recorded even
-before the file exists, and missing, unreadable, and created remain distinct
-states.
+Settled in C-7 (owned by adj4 with adj6 reconciliation): the assignment record,
+its launch states, and the execution-directory reservation that prevents two
+launches into one directory.
 
 Define the boundary between operator control and automatic intervention explicitly.
 Attaching a terminal is not itself permission to intervene or proof that the
@@ -257,7 +185,7 @@ the shared contract rather than an implementation plan.
 | Content resolution and file preview (`projects/content.ex`, `file_preview*.ex`) | Adapt | adj3 | Extend the existing package-file authorization to workspace roots; no second file server. |
 | Thread data layer, Thread process, command delivery and attribution (`threads.ex`, `threads/thread.ex`, `command.ex`, `record.ex`) | Replace | adj5 | Pi's own prompt/steer/follow_up queue plus the persisted session file replace the commands table; Adjacent's attribution rules are reference material only. |
 | Pi adapter (`pi.ex`, `pi_ex`) | Replace | adj5 | Node child process with LF-only JSONL framing (C-8); argument lists, per-process cwd/env, no shell strings. |
-| Session reader (`pi/session.ex`) | Adapt | adj5 | Extend the existing observer session reader; no second parser. Unreadable is never empty, a missing file is an empty session, and a torn tail is tolerated. |
+| Session reader (`pi/session.ex`) | Adapt | adj5 | Extend the existing observer session reader; no second parser. Unreadable is never empty, a missing file is an empty session only for a thread with no messages yet, and a torn tail is tolerated. Restoring or importing a recorded session treats a missing file as a failure (see the create-on-open hazard below). |
 | Single-owner claim (`threads/recovery.ex` `app_owner`) | Adapt | adj2 | Reuse the `{pid, start time}` identity claim for the Sentinel host (C-6). |
 | Recovery walk that terminates recorded Pi on restart (`threads/recovery.ex`) | Replace | adj4, adj6 | Counterexample to preserve against: independent agents are located and adopted, never killed on controller restart (C-6, C-7). |
 | Worker widget decoding (`threads/workers.ex`) | Replace | adj6 | Sentinel already observes `spec_dispatch` run records and process groups. |
@@ -267,7 +195,7 @@ the shared contract rather than an implementation plan.
 | Skill and target selection (`home_live.ex` launch form, `Projects.targets/1`) | Adapt | adj4 | Assignment records skill, target and authority explicitly (C-7). |
 | Model selection (`pi_model_picker.ex`, `pi_selection.ex`, `pi_model_default` table) | Adapt | adj4 | Assignment carries optional explicit provider/model/thinking; otherwise Pi settings decide. No default table. |
 | Storage setup rules (`storage.ex`) | Retain | adj3 | Status never creates; only explicit setup creates; never deletes or truncates. |
-| SQLite coordination store | Replace | adj3, adj7 | Files under the workspace root; the three existing thread rows are imported read-only by adj7. |
+| SQLite coordination store | Replace | adj3, adj7 | Files under the workspace root; the three existing thread rows are imported read-only by adj7. Ownership coordination uses `node:sqlite` (C-6) but holds no workspace, thread, or assignment records. |
 | Dictation (`transcription.ex`) | Defer | -- | Deferred scope. |
 | LiveView application UI (`home_live.ex`, `thread_conversation_component.ex`, explorer/repository components, recovery feedback) | Defer | -- | Minimal Sentinel dashboard entry points only. |
 
@@ -341,27 +269,28 @@ children (C-8); their loss interrupts a response but never an independent agent.
 Ownership coordination uses only Node's stdlib `node:sqlite` (no npm dependency):
 `BEGIN IMMEDIATE` transactions compare PID, process start time, and token; a
 confirmed-dead owner is reclaimed and release requires a matching token. The host
-stores `coordination.sqlite` under the canonical agent directory
-(`spec-sentinel`), while adj4 derives its database uniquely at the physical
-storage root (`.sentinel/coordination.sqlite`) with no agent-directory or
-database override. No second authoritative workspace/thread/assignment database
-and no writable Adjacent SQLite are introduced. Root coordination creation is
+stores its database at `<agent dir>/spec-sentinel/coordination.sqlite` under the
+canonical Pi agent directory, while adj4 derives its database only from the
+physically resolved storage root, `<storage root>/.sentinel/coordination.sqlite`,
+with no agent-directory or database override. No second authoritative
+workspace/thread/assignment database and no writable Adjacent SQLite are
+introduced. Root coordination creation is
 authorized additive state after the backup prerequisite is resolved; startup,
 status, and default-root auto-setup never create it. False or degraded liveness
 is unknown and refuses reclaim. Exact acquisition, publication, and release proof
 belongs to adj2. Observer UUIDs remain per instance; host exclusivity does not
-require overwriting another observer's snapshot. Owners: adj2 (host), adj6
-(supervision).
+require overwriting another observer's snapshot. Owners: adj2 (host and the shared
+ownership claim), adj4 (launcher database), adj6 (supervision).
 
 ### C-7 Assignment identity, launch, and mapping record
 
 The assignment record `<root>/projects/<workspace>/assignments/<assignment-id>.json`
 is created with exclusive create before any process starts. It carries the
-assignment id (UUID unless supplied), workspace id, brief, skill, instructions,
-optional provider/model/thinking, canonical absolute execution directory,
-optional repository id, spec package and workflow id, publication authority,
-attempt kind and `supersedes`, contract digest, derived tmux session
-(`adj-<first 12 hex of assignment id>`) and socket, Pi session directory and
+assignment id (a UUID, generated unless the caller supplies one), workspace id,
+brief, skill, instructions, optional provider/model/thinking, canonical absolute
+execution directory, optional repository id, spec package and workflow id,
+publication authority, attempt kind and `supersedes`, contract digest, derived
+tmux session (`adj-<first 12 hex of assignment id>`) and socket, Pi session directory and
 advertised file, Pi path/pid/start, brief sha256, optional project trust, launch
 error, ended-observed time, and state and timestamps. Locating a tmux session is
 a lookup by the derived name, never a scan.
@@ -478,11 +407,14 @@ must never treat that success as restored history.
 
 ## Decisions and unresolved authority
 
-- The project-policy reconciliation supersedes the earlier configuration and
-  storage objections to these contracts. Recording it here makes no project-policy
+- Project policy no longer treats ignored local data as disposable or forbids
+  runtime configuration, which resolves the earlier objections to durable
+  workspace storage, the storage-root variable, and the launchd plist. This
+  document records that project-policy decision and makes no project-policy
   change.
-- The backup prerequisite for the storage root remains; no program writes into
-  the store before it is resolved.
+- The storage root holds the only copy of moved Adjacent material (about 1.85 GB)
+  and has no confirmed backup. The backup prerequisite remains: no program writes
+  into the store until a backup path is confirmed.
 - tmux 3.5+ is now installed (3.8 observed) and belongs to operator setup.
 - Remote write-action authority (whether **Mark complete** is reachable remotely
   and under which guards), deployment, and the application UI remain unresolved.
