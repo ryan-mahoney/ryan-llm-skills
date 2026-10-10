@@ -233,8 +233,8 @@ command -v node
 node -e 'console.log(require("node:fs").realpathSync(process.argv[1]))' ~/.agents/pi/extensions/spec-runtime/sentinel-host.mjs
 ```
 
-Write the plist (replace `<NODE>`, `<ENTRY>`, `<ROOT>` and optionally
-`<AGENT_DIR>`/`<HOST>` with the resolved absolute values). No credentials belong
+Write the plist (replace `<NODE>`, `<ENTRY>`, `<ROOT>`, `<HOME>` and optionally
+`<AGENT_DIR>`/`<HOST>` with the resolved absolute values; launchd does not expand `~`). No credentials belong
 in this file; keep the launchd environment minimal and resolve `PATH` for the
 observation lookups (`gh` is only needed for GitHub merge evidence):
 
@@ -255,11 +255,11 @@ cat > ~/Library/LaunchAgents/local.spec-sentinel.host.plist <<'PLIST'
     <string>--public-host</string><string><HOST></string>
   </array>
   <key>EnvironmentVariables</key>
-  <dict><key>PATH</key><string>/usr/local/bin:/usr/bin:/bin</string></dict>
+  <dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string></dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>/tmp/spec-sentinel-host.out.log</string>
-  <key>StandardErrorPath</key><string>/tmp/spec-sentinel-host.err.log</string>
+  <key>StandardOutPath</key><string><HOME>/Library/Logs/spec-sentinel-host.out.log</string>
+  <key>StandardErrorPath</key><string><HOME>/Library/Logs/spec-sentinel-host.err.log</string>
 </dict>
 </plist>
 PLIST
