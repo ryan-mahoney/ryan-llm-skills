@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -15,15 +16,22 @@ const timestamp = new Date().toISOString();
 if (script === 'hang') {
   process.stdout.write(`${JSON.stringify({ type: 'message_start', role: 'assistant', timestamp })}\n`);
   setInterval(() => {}, 1000);
+} else if (script === 'stubborn') {
+  process.stdout.write(`${JSON.stringify({ type: 'message_start', role: 'assistant', timestamp })}\n`);
+  // A same-group descendant that ignores SIGTERM and holds none of the leader's pipes.
+  spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);"], { stdio: 'ignore' });
+  setInterval(() => {}, 1000);
 } else if (script === 'exit-2') {
   process.exit(2);
+} else if (script === 'no-final') {
+  process.exit(0);
 } else {
   const sessionIndex = argv.indexOf('--session');
   const sessionPath = sessionIndex >= 0 ? argv[sessionIndex + 1] : undefined;
   const costTotal = script === 'success' ? 0.25 : 0;
-  const stopReason = script === 'error' ? 'error' : 'stop';
+  const stopReason = script === 'error' ? 'error' : script === 'tool-use' ? 'toolUse' : 'stop';
   const errorMessage = script === 'error' ? 'unknown model leaf-model' : undefined;
-  const text = script === 'error' ? errorMessage : 'Completed the leaf task.';
+  const text = script === 'error' ? errorMessage : script === 'tool-use' ? 'Working on the leaf task.' : 'Completed the leaf task.';
   const message = {
     role: 'assistant',
     provider: 'test',

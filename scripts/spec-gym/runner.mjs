@@ -4,7 +4,7 @@ import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readdirSyn
 import { homedir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { configurationFailure, splitModelSelector } from '../../pi/extensions/spec-runtime/model-selector.mjs';
-import { Runtime, launch, loadRun, summary } from '../../pi/extensions/spec-runtime/runtime.mjs';
+import { Runtime, groupAlive, launch, loadRun, summary } from '../../pi/extensions/spec-runtime/runtime.mjs';
 import { gitFacts } from '../spec-facts/core.mjs';
 import { atomicWrite, loadScenario, readUsage } from './core.mjs';
 
@@ -215,6 +215,9 @@ export async function runLeafCell(run, cell, scenario, materialized) {
   } else if (execution.code !== 0 || execution.signal) {
     outcome = 'blocked';
     reason = `Pi exited ${execution.code ?? execution.signal}`;
+  } else if (!execution.text || execution.stopReason === 'toolUse') {
+    outcome = 'blocked';
+    reason = 'Pi exited without a final assistant result';
   } else {
     outcome = 'finished';
     reason = null;
@@ -403,24 +406,36 @@ function spawnWithDeadline({ command, args, cwd, env, timeoutMs, stream, stderr 
   });
   child.stderr.on('data', chunk => appendFileSync(stderr, chunk, { mode: 0o600 }));
   const done = new Promise(resolveDone => {
-    let sigkill;
+    let cleanup;
     const timer = timeoutMs > 0 ? setTimeout(() => {
       timedOut = true;
       try { process.kill(-pid, 'SIGTERM'); } catch { /* process group is already gone */ }
-      sigkill = setTimeout(() => {
+      // The leader's close event is not proof the detached group is gone: a
+      // TERM-resistant member can outlive it, so keep the escalation running.
+      cleanup = (async () => {
+        if (await waitGroupGone(pid, 2000)) return;
         try { process.kill(-pid, 'SIGKILL'); } catch { /* process group is already gone */ }
-      }, 2000);
-      sigkill.unref();
+        await waitGroupGone(pid, 1000);
+      })();
     }, timeoutMs) : undefined;
     timer?.unref();
     child.on('error', error => { failure = error.message; });
-    child.on('close', (code, signal) => {
+    child.on('close', async (code, signal) => {
       clearTimeout(timer);
-      clearTimeout(sigkill);
+      if (cleanup) await cleanup;
       resolveDone({ pid, timedOut, code, signal, stopReason, text, error: failure });
     });
   });
   return { pid, done };
+}
+
+async function waitGroupGone(pid, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (!groupAlive(pid)) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise(resolveWait => setTimeout(resolveWait, 25));
+  }
 }
 
 function piVersion(command) {

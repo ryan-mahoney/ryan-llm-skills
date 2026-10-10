@@ -392,6 +392,33 @@ test('leaf hang is timed-out and group is gone', async t => {
   assert.ok(readFileSync(join(c.materialized.cellDir, 'streams', 'leaf.jsonl'), 'utf8').trim().length > 0);
 });
 
+test('leaf timeout keeps escalating until a TERM-resistant descendant is gone', { timeout: 15000 }, async t => {
+  const c = leafCase(t, { script: 'stubborn', timeoutMs: 500 });
+  const result = await c.execute();
+  assert.equal(result.outcome, 'timed-out');
+  assert.equal(result.reason, 'deadline exceeded');
+  assert.ok(result.elapsed_ms >= 500, `elapsed_ms ${result.elapsed_ms}`);
+  assert.throws(() => process.kill(-result.pid, 0), error => error.code === 'ESRCH');
+});
+
+test('leaf zero exit without a final assistant event is blocked', async t => {
+  const c = leafCase(t, { script: 'no-final' });
+  const result = await c.execute();
+  assert.equal(result.outcome, 'blocked');
+  assert.equal(result.reason, 'Pi exited without a final assistant result');
+  assert.equal(result.text, '');
+  assert.equal(result.stream, join(c.materialized.cellDir, 'streams', 'leaf.jsonl'));
+});
+
+test('leaf zero exit after a tool request is blocked', async t => {
+  const c = leafCase(t, { script: 'tool-use' });
+  const result = await c.execute();
+  assert.equal(result.outcome, 'blocked');
+  assert.equal(result.reason, 'Pi exited without a final assistant result');
+  assert.equal(result.stop_reason, 'toolUse');
+  assert.match(readFileSync(result.stream, 'utf8'), /"stopReason":"toolUse"/);
+});
+
 test('leaf error exit is blocked not failed', async t => {
   const errorCase = leafCase(t, { script: 'error' });
   const errorResult = await errorCase.execute();
