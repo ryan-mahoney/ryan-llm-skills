@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, sep } from 'node:path';
 import { readMetrics } from '../spec-observe/metrics.mjs';
 
@@ -320,8 +320,12 @@ export function indexDrift(skill, typeFolder) {
 export function atomicWrite(path, text) {
   mkdirSync(dirname(path), { recursive: true });
   const temp = `${path}.${randomUUID()}.tmp`;
-  writeFileSync(temp, text);
-  renameSync(temp, path);
+  try {
+    writeFileSync(temp, text);
+    renameSync(temp, path);
+  } finally {
+    if (existsSync(temp)) rmSync(temp, { force: true });
+  }
 }
 
 export async function readUsage(sessionFiles = []) {

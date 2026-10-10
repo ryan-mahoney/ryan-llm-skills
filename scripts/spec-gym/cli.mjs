@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { splitModelSelector } from '../../pi/extensions/spec-runtime/model-selector.mjs';
 import { atomicWrite, discoverSkills, indexDrift, loadScenario, validateScenario } from './core.mjs';
+import { extract } from './extract.mjs';
 import { runCampaign } from './runner.mjs';
 
 // Test plumbing: the integration suite points SPEC_GYM_REPO at a temp gym.
@@ -19,6 +20,7 @@ Commands:
   list      List eligible skills and their scenarios
   validate  Check scenario contracts and generated indexes
   run       Run scenarios against one or more models
+  extract   Extract a draft scenario from a source package and revision
 
 Options:
   --skill <name>             Exact spec skill
@@ -31,6 +33,13 @@ Options:
   --root <dir>               Run directory override
   --pi <path>                Pi executable (default pi)
   --child-extension <path>   Child extension (repeatable)
+  --source <package>         Source .specs package (extract)
+  --repo <dir>               Source repository (extract)
+  --revision <rev>           Source revision to pin (extract)
+  --id <id>                  New scenario id (extract)
+  --step <n>                 Indexed step for spec-step-run (extract)
+  --include <path>           Repository path at the revision (repeatable, extract)
+  --update                   Replace an existing scenario id (extract)
   --write-index              Write generated indexes during validate
   --help                     Show this help
 `;
@@ -104,6 +113,33 @@ function validate(values) {
   return failed ? 1 : 0;
 }
 
+function extractScenario(values) {
+  for (const flag of ['source', 'repo', 'revision', 'skill', 'id']) {
+    if (!values[flag]) {
+      process.stderr.write(`extract requires --${flag}\n`);
+      return 2;
+    }
+  }
+  try {
+    const result = extract({
+      sourcePackage: values.source,
+      repo: values.repo,
+      revision: values.revision,
+      skill: values.skill,
+      id: values.id,
+      step: values.step !== undefined ? Number(values.step) : undefined,
+      include: values.include ?? [],
+      update: values.update ?? false,
+      scenariosRoot,
+    });
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return 0;
+  } catch (error) {
+    process.stderr.write(`${error.message}\n`);
+    return 1;
+  }
+}
+
 async function run(values) {
   if (!values.skill) {
     process.stderr.write('run requires --skill\n');
@@ -169,6 +205,13 @@ try {
       root: { type: 'string' },
       pi: { type: 'string' },
       'child-extension': { type: 'string', multiple: true },
+      source: { type: 'string' },
+      repo: { type: 'string' },
+      revision: { type: 'string' },
+      id: { type: 'string' },
+      step: { type: 'string' },
+      include: { type: 'string', multiple: true },
+      update: { type: 'boolean' },
       'write-index': { type: 'boolean' },
     },
   });
@@ -186,10 +229,13 @@ if (!command) {
   process.stderr.write(USAGE);
   process.exit(2);
 }
-if (!['list', 'validate', 'run'].includes(command)) {
+if (!['list', 'validate', 'run', 'extract'].includes(command)) {
   process.stderr.write(`unknown command: ${command}\n\n${USAGE}`);
   process.exit(2);
 }
 
-const code = command === 'list' ? list(parsed.values) : command === 'validate' ? validate(parsed.values) : await run(parsed.values);
+const code = command === 'list' ? list(parsed.values)
+  : command === 'validate' ? validate(parsed.values)
+  : command === 'extract' ? extractScenario(parsed.values)
+  : await run(parsed.values);
 process.exit(code);
