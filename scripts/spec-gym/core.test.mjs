@@ -6,10 +6,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   atomicWrite,
+  comparisonLabel,
+  contaminated,
   discoverSkills,
+  evaluateCheck,
+  gradeCell,
   indexDrift,
   loadScenario,
   renderIndex,
+  renderReport,
   scenarioVersion,
   validateScenario,
 } from './core.mjs';
@@ -264,5 +269,216 @@ test('index drift detected and cleared by atomicWrite with the fixed not-covered
   for (const name of ['spec-architect-initial', 'spec-step-run']) {
     const committed = readFileSync(new URL(`../../scenarios/${name}/scenarios.md`, import.meta.url), 'utf8');
     assert.equal(committed, renderIndex(name, []));
+  }
+});
+
+test('check file-exists and file-absent report present and missing paths', t => {
+  const root = fixture(t);
+  const packageDir = join(root, 'package');
+  mkdirSync(packageDir, { recursive: true });
+  writeFileSync(join(packageDir, 'artifact.txt'), 'present\n');
+  const roots = { package: packageDir, checkout: packageDir, repo: packageDir };
+  const present = join(packageDir, 'artifact.txt');
+  const missing = join(packageDir, 'missing.txt');
+
+  const exists = evaluateCheck({ id: 'e1', kind: 'file-exists', root: 'package', path: 'artifact.txt' }, roots, {});
+  assert.equal(exists.ok, true);
+  assert.ok(exists.detail.includes(present), exists.detail);
+
+  const existsMissing = evaluateCheck({ id: 'e2', kind: 'file-exists', root: 'package', path: 'missing.txt' }, roots, {});
+  assert.equal(existsMissing.ok, false);
+  assert.ok(existsMissing.detail.includes(missing), existsMissing.detail);
+
+  const absent = evaluateCheck({ id: 'a1', kind: 'file-absent', root: 'package', path: 'missing.txt' }, roots, {});
+  assert.equal(absent.ok, true);
+  assert.ok(absent.detail.includes(missing), absent.detail);
+
+  const absentPresent = evaluateCheck({ id: 'a2', kind: 'file-absent', root: 'package', path: 'artifact.txt' }, roots, {});
+  assert.equal(absentPresent.ok, false);
+  assert.ok(absentPresent.detail.includes(present), absentPresent.detail);
+});
+
+test('check line-1 matches only the first line', t => {
+  const root = fixture(t);
+  const packageDir = join(root, 'package');
+  mkdirSync(packageDir, { recursive: true });
+  writeFileSync(join(packageDir, 'card.md'), 'header\n---\nbody\n');
+  const roots = { package: packageDir, checkout: packageDir, repo: packageDir };
+
+  assert.equal(evaluateCheck({ id: 'l1', kind: 'line-1', root: 'package', path: 'card.md', pattern: '^---$' }, roots, {}).ok, false);
+  assert.equal(evaluateCheck({ id: 'l2', kind: 'line-1', root: 'package', path: 'card.md', pattern: '^header$' }, roots, {}).ok, true);
+  assert.equal(evaluateCheck({ id: 'l3', kind: 'line-1', root: 'package', path: 'missing.md', pattern: '^header$' }, roots, {}).ok, false);
+});
+
+test('check text-match honors absent and fails on a missing file', t => {
+  const root = fixture(t);
+  const packageDir = join(root, 'package');
+  mkdirSync(packageDir, { recursive: true });
+  writeFileSync(join(packageDir, 'notes.md'), 'target text\n');
+  const roots = { package: packageDir, checkout: packageDir, repo: packageDir };
+
+  assert.equal(evaluateCheck({ id: 't1', kind: 'text-match', root: 'package', path: 'notes.md', pattern: 'target' }, roots, {}).ok, true);
+  assert.equal(evaluateCheck({ id: 't2', kind: 'text-match', root: 'package', path: 'notes.md', pattern: 'target', absent: true }, roots, {}).ok, false);
+  assert.equal(evaluateCheck({ id: 't3', kind: 'text-match', root: 'package', path: 'notes.md', pattern: 'other', absent: true }, roots, {}).ok, true);
+  assert.equal(evaluateCheck({ id: 't4', kind: 'text-match', root: 'package', path: 'missing.md', pattern: 'target' }, roots, {}).ok, false);
+  assert.equal(evaluateCheck({ id: 't5', kind: 'text-match', root: 'package', path: 'missing.md', pattern: 'target', absent: true }, roots, {}).ok, false);
+});
+
+test('check json-equals compares by JSON.stringify at a pointer', t => {
+  const root = fixture(t);
+  const packageDir = join(root, 'package');
+  mkdirSync(packageDir, { recursive: true });
+  writeFileSync(join(packageDir, 'state.json'), '{"steps":[{"difficulty":1}]}\n');
+  const roots = { package: packageDir, checkout: packageDir, repo: packageDir };
+
+  assert.equal(evaluateCheck({ id: 'j1', kind: 'json-equals', root: 'package', path: 'state.json', pointer: 'steps/0/difficulty', equals: 1 }, roots, {}).ok, true);
+  assert.equal(evaluateCheck({ id: 'j2', kind: 'json-equals', root: 'package', path: 'state.json', pointer: 'steps/0/difficulty', equals: '1' }, roots, {}).ok, false);
+  assert.equal(evaluateCheck({ id: 'j3', kind: 'json-equals', root: 'package', path: 'state.json', pointer: 'steps/0/missing', equals: 1 }, roots, {}).ok, false);
+});
+
+test('check git-untouched passes at the fixture commit and names edits', t => {
+  const root = fixture(t);
+  const repoDir = join(root, 'repo');
+  mkdirSync(join(repoDir, 'src'), { recursive: true });
+  writeFileSync(join(repoDir, 'src/a.mjs'), 'export const a = 1;\n');
+  const git = gitIn(repoDir);
+  git('init', '-q');
+  git('config', 'user.name', 'Spec Gym Core Test');
+  git('config', 'user.email', 'spec-gym@example.invalid');
+  git('add', '.');
+  git('commit', '-qm', 'Fixture');
+  const fixtureCommit = execFileSync('git', ['-C', repoDir, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  const roots = { package: repoDir, checkout: repoDir, repo: repoDir };
+  const context = { fixtureCommit, state: 'finished', driver: 'leaf' };
+  const check = { id: 'g1', kind: 'git-untouched', root: 'repo', paths: ['src/a.mjs'] };
+
+  assert.equal(evaluateCheck(check, roots, context).ok, true);
+
+  writeFileSync(join(repoDir, 'src/a.mjs'), 'export const a = 2;\n');
+  const edited = evaluateCheck(check, roots, context);
+  assert.equal(edited.ok, false);
+  assert.ok(edited.detail.includes('src/a.mjs'), edited.detail);
+
+  git('add', 'src/a.mjs');
+  git('commit', '-qm', 'Edit');
+  const committed = evaluateCheck(check, roots, context);
+  assert.equal(committed.ok, false);
+  assert.ok(committed.detail.includes('src/a.mjs'), committed.detail);
+});
+
+test('check run-state equals the managed record state', () => {
+  assert.equal(evaluateCheck({ id: 'r1', kind: 'run-state', equals: 'completed' }, {}, { state: 'completed', driver: 'managed-step' }).ok, true);
+  assert.equal(evaluateCheck({ id: 'r2', kind: 'run-state', equals: 'failed' }, {}, { state: 'completed', driver: 'managed-step' }).ok, false);
+  const leaf = evaluateCheck({ id: 'r3', kind: 'run-state', equals: 'completed' }, {}, { state: 'finished', driver: 'leaf' });
+  assert.equal(leaf.ok, false);
+  assert.ok(leaf.detail.includes('run-state requires managed-step'), leaf.detail);
+});
+
+test('contamination marks a grader read of the scenario folder invalid', t => {
+  const root = fixture(t);
+  const scenarioFolder = join(root, 'scenarios', 'spec-a', 'case');
+  mkdirSync(scenarioFolder, { recursive: true });
+  const contaminatedSession = join(root, 'contaminated.jsonl');
+  writeFileSync(contaminatedSession, `${JSON.stringify({
+    type: 'message',
+    message: { role: 'assistant', content: [{ type: 'toolCall', name: 'read', arguments: { path: join(scenarioFolder, 'scenario.json') } }] },
+  })}\n`);
+  const unrelatedSession = join(root, 'unrelated.jsonl');
+  writeFileSync(unrelatedSession, `${JSON.stringify({
+    type: 'message',
+    message: { role: 'assistant', content: [{ type: 'toolCall', name: 'read', arguments: { path: join(root, 'unrelated', 'file.txt') } }] },
+  })}\n`);
+
+  assert.equal(contaminated([contaminatedSession], scenarioFolder), true);
+  assert.equal(contaminated([unrelatedSession], scenarioFolder), false);
+  assert.equal(contaminated([join(root, 'missing.jsonl')], scenarioFolder), false);
+});
+
+test('outcome precedence ranks invalid above timed-out blocked failed passed', t => {
+  const root = fixture(t);
+  const scenarioFolder = join(root, 'scenarios', 'spec-a', 'case');
+  mkdirSync(scenarioFolder, { recursive: true });
+  const session = join(root, 'session.jsonl');
+  writeFileSync(session, `${JSON.stringify({
+    type: 'message',
+    message: { role: 'assistant', content: [{ type: 'toolCall', name: 'read', arguments: { path: join(scenarioFolder, 'scenario.json') } }] },
+  })}\n`);
+  const scenario = { scenario: { id: 'case' }, folder: scenarioFolder, version: 'v1' };
+
+  assert.equal(gradeCell({ outcome: 'finished', checks: [], session, sessions: [session] }, scenario, null).outcome, 'invalid');
+  assert.equal(gradeCell({ outcome: 'timed-out', checks: [] }, scenario, null).outcome, 'timed-out');
+
+  const failedCheck = { id: 'c', ok: false, detail: 'x' };
+  const blocked = gradeCell({ outcome: 'blocked', checks: [failedCheck] }, scenario, null);
+  assert.equal(blocked.outcome, 'blocked');
+  assert.deepEqual(blocked.checks, [failedCheck]);
+
+  assert.equal(gradeCell({ outcome: 'finished', checks: [failedCheck] }, scenario, null).outcome, 'failed');
+  assert.equal(gradeCell({ outcome: 'finished', checks: [{ id: 'c', ok: true, detail: 'x' }] }, scenario, null).outcome, 'passed');
+});
+
+test('label matched only when the tested model differs', () => {
+  const cells = [
+    { id: 'c1', scenario: 'x', version: 'v1', model: 'p/a' },
+    { id: 'c2', scenario: 'x', version: 'v1', model: 'p/b' },
+  ];
+  const manifest = {
+    skill_sha256: 'h',
+    roles: { editor_model: 'p/editor', scout_model: 'p/scout' },
+    timeout_ms: 1000,
+    env_names: ['PATH'],
+    ambient_context: [],
+    scenarios: [{ id: 'x', version: 'v1', driver: 'leaf' }],
+    cells,
+  };
+  const matched = comparisonLabel(manifest, manifest.cells);
+  assert.equal(matched.label, 'matched');
+  assert.deepEqual(matched.differing, []);
+
+  const drifted = { ...manifest, cells: manifest.cells.map(cell => ({ ...cell })) };
+  drifted.cells[1].roles = { editor_model: 'p/other', scout_model: 'p/scout' };
+  const exploratory = comparisonLabel(drifted, drifted.cells);
+  assert.equal(exploratory.label, 'exploratory');
+  assert.ok(exploratory.differing.includes('roles'), JSON.stringify(exploratory.differing));
+});
+
+test('label exploratory names version drift', () => {
+  const manifest = {
+    skill_sha256: 'h',
+    roles: { editor_model: 'p/editor', scout_model: 'p/scout' },
+    timeout_ms: 1000,
+    env_names: ['PATH'],
+    ambient_context: [],
+    scenarios: [{ id: 'x', version: 'v1', driver: 'leaf' }],
+    cells: [
+      { id: 'c1', scenario: 'x', version: 'v1', model: 'p/a' },
+      { id: 'c2', scenario: 'x', version: 'v2', model: 'p/b' },
+    ],
+  };
+  const result = comparisonLabel(manifest, manifest.cells);
+  assert.equal(result.label, 'exploratory');
+  assert.ok(result.differing.includes('version'), JSON.stringify(result.differing));
+});
+
+test('report lists every repetition and prints unknown cost', () => {
+  const runRecord = {
+    run_id: '20261010T155900Z-abcd',
+    manifest: 'manifest.json',
+    label: { label: 'matched', differing: [] },
+    cells: [
+      { id: 'c1', scenario: 'x', version: 'v1', model: 'p/a', repeat: 1, state: 'finished', outcome: 'passed', reason: null, cost_usd: null, tokens: { input_tokens: 1, output_tokens: 2 }, elapsed_ms: 100, checks: [] },
+      { id: 'c2', scenario: 'x', version: 'v1', model: 'p/b', repeat: 2, state: 'finished', outcome: 'passed', reason: null, cost_usd: 0.25, tokens: { input_tokens: 3, output_tokens: 4 }, elapsed_ms: 200, checks: [] },
+      { id: 'c3', scenario: 'x', version: 'v1', model: 'p/b', repeat: 1, state: 'finished', outcome: 'blocked', reason: 'Pi exited 2', cost_usd: null, tokens: { input_tokens: null, output_tokens: null }, elapsed_ms: 50, checks: [{ id: 'b', ok: false }] },
+    ],
+  };
+  const report = renderReport(runRecord);
+  const tableLines = report.split('\n').filter(line => line.startsWith('| '));
+  const dataRows = tableLines.filter(line => !/^\|[\s|:-]+\|$/.test(line)).slice(1);
+  assert.equal(dataRows.length, 3, report);
+  assert.ok(report.includes('Pi exited 2'), report);
+  assert.ok(report.includes('unknown'), report);
+  assert.ok(report.includes('Unknown cost means the provider did not price the calls; it is not zero.'), report);
+  for (const line of report.split('\n')) {
+    assert.ok(!/\b(?:average|mean|winner)\b/.test(line), line);
   }
 });

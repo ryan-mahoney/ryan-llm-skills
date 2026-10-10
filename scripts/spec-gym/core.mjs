@@ -339,3 +339,210 @@ export async function readUsage(sessionFiles = []) {
   }
   return { input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: cost !== null && cost > 0 ? cost : null };
 }
+
+function rootCommit(repo) {
+  try {
+    const output = execFileSync('git', ['-C', repo, 'rev-list', '--max-parents=0', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    return output.split('\n')[0].trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+export function evaluateCheck(check, roots, context = {}) {
+  const id = check?.id;
+  let resolved;
+  try {
+    if (check?.kind === 'run-state') {
+      if (context.driver !== 'managed-step') return { id, ok: false, detail: 'run-state requires managed-step' };
+      const ok = context.state === check.equals;
+      return { id, ok, detail: `state ${JSON.stringify(context.state)}` };
+    }
+    const root = roots?.[check?.root];
+    if (!root) return { id, ok: false, detail: `root ${JSON.stringify(check?.root)} is unavailable` };
+    resolved = join(root, check?.path ?? '');
+    switch (check?.kind) {
+      case 'file-exists':
+      case 'file-absent': {
+        const present = existsSync(resolved);
+        const ok = check.kind === 'file-exists' ? present : !present;
+        return { id, ok, detail: `${resolved}: ${present ? 'present' : 'missing'}` };
+      }
+      case 'line-1': {
+        if (!existsSync(resolved)) return { id, ok: false, detail: `${resolved}: missing` };
+        const first = readFileSync(resolved, 'utf8').split('\n', 1)[0];
+        const ok = new RegExp(check.pattern).test(first);
+        return { id, ok, detail: `${resolved}: first line ${ok ? 'matches' : 'does not match'} ${JSON.stringify(check.pattern)}` };
+      }
+      case 'text-match': {
+        if (!existsSync(resolved)) return { id, ok: false, detail: `${resolved}: missing` };
+        const present = new RegExp(check.pattern).test(readFileSync(resolved, 'utf8'));
+        const ok = check.absent ? !present : present;
+        return { id, ok, detail: `${resolved}: pattern ${JSON.stringify(check.pattern)} is ${present ? 'present' : 'absent'}` };
+      }
+      case 'json-equals': {
+        if (!existsSync(resolved)) return { id, ok: false, detail: `${resolved}: missing` };
+        let value;
+        try {
+          value = JSON.parse(readFileSync(resolved, 'utf8'));
+        } catch (error) {
+          return { id, ok: false, detail: `${resolved}: invalid JSON at pointer ${JSON.stringify(check.pointer)} (${error.message})` };
+        }
+        for (const segment of String(check.pointer ?? '').split('/').filter(Boolean)) {
+          if (value === null || typeof value !== 'object' || !Object.prototype.hasOwnProperty.call(value, segment)) {
+            return { id, ok: false, detail: `${resolved}: pointer ${JSON.stringify(check.pointer)} not found` };
+          }
+          value = value[segment];
+        }
+        const ok = JSON.stringify(value) === JSON.stringify(check.equals);
+        return { id, ok, detail: `${resolved}: pointer ${JSON.stringify(check.pointer)} is ${JSON.stringify(value)}` };
+      }
+      case 'git-untouched': {
+        if (!context?.fixtureCommit) return { id, ok: false, detail: `${root}: git-untouched requires a fixture commit` };
+        const paths = Array.isArray(check.paths) ? check.paths : [];
+        const run = args => {
+          try {
+            return { code: 0, out: execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }) };
+          } catch (error) {
+            return { code: error.status ?? 1, out: error.stdout ?? '', err: error.stderr ?? '' };
+          }
+        };
+        const quiet = run(['diff', '--quiet', context.fixtureCommit, '--', ...paths]);
+        const status = run(['status', '--porcelain', '--no-renames', '--', ...paths]);
+        if (quiet.code === 0 && !status.out.trim()) {
+          return { id, ok: true, detail: `${paths.join(', ') || 'paths'}: unchanged since ${context.fixtureCommit}` };
+        }
+        const names = new Set();
+        for (const line of status.out.split('\n')) {
+          const name = line.slice(3).trim();
+          if (name) names.add(name);
+        }
+        const diff = run(['diff', '--name-only', context.fixtureCommit, '--', ...paths]);
+        for (const name of diff.out.split('\n')) {
+          const trimmed = name.trim();
+          if (trimmed) names.add(trimmed);
+        }
+        const changed = names.size ? [...names] : paths;
+        return { id, ok: false, detail: `${changed.join(', ')}: changed since ${context.fixtureCommit}` };
+      }
+      default:
+        return { id, ok: false, detail: `unknown check kind ${JSON.stringify(check?.kind)}` };
+    }
+  } catch (error) {
+    return { id, ok: false, detail: `${resolved ?? check?.path ?? 'check'}: ${error.message}` };
+  }
+}
+
+export function contaminated(sessionFiles, scenarioFolder) {
+  const folder = String(scenarioFolder ?? '');
+  if (!folder) return false;
+  const tools = new Set(['read', 'grep', 'find', 'ls', 'bash']);
+  for (const file of sessionFiles ?? []) {
+    if (!file || !existsSync(file)) continue;
+    let text;
+    try {
+      text = readFileSync(file, 'utf8');
+    } catch {
+      continue;
+    }
+    for (const line of text.split('\n')) {
+      if (!line.trim()) continue;
+      let row;
+      try {
+        row = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const content = row?.message?.content;
+      if (!Array.isArray(content)) continue;
+      for (const part of content) {
+        if (part?.type !== 'toolCall' || !tools.has(part.name)) continue;
+        if (JSON.stringify(part.arguments ?? {}).includes(folder)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+export function gradeCell(cellResult, scenario, roots) {
+  const driver = scenario?.scenario?.driver;
+  const fixtureCommit = cellResult.fixture_commit ?? roots?.fixtureCommit ?? (roots?.repo ? rootCommit(roots.repo) : null);
+  const context = {
+    fixtureCommit,
+    state: driver === 'managed-step' ? cellResult.record?.state ?? cellResult.state ?? null : null,
+    driver,
+  };
+  const checks = roots && Array.isArray(scenario?.scenario?.checks)
+    ? scenario.scenario.checks.map(check => evaluateCheck(check, roots, context))
+    : (cellResult.checks ?? []);
+  const sessionFiles = [cellResult.sessions, cellResult.session].flat().filter(Boolean);
+  const result = { ...cellResult, checks };
+  if (contaminated(sessionFiles, scenario?.folder)) return { ...result, outcome: 'invalid', reason: 'grader-read' };
+  if (cellResult.outcome === 'invalid') return { ...result, outcome: 'invalid', reason: cellResult.reason ?? 'invalid' };
+  if (cellResult.outcome === 'timed-out') return { ...result, outcome: 'timed-out', reason: cellResult.reason ?? null };
+  if (cellResult.outcome === 'blocked') return { ...result, outcome: 'blocked', reason: cellResult.reason ?? null };
+  const failed = checks.filter(check => !check.ok);
+  if (failed.length) return { ...result, outcome: 'failed', reason: failed.map(check => check.id).join(', ') };
+  return { ...result, outcome: 'passed', reason: null };
+}
+
+export function comparisonLabel(manifest = {}, cells = []) {
+  const scenarios = new Map((manifest.scenarios ?? []).map(entry => [entry.id, entry]));
+  const fields = ['skill', 'scenario', 'version', 'driver', 'roles', 'timeout', 'env_names', 'ambient_context'];
+  const descriptors = (cells ?? []).map(cell => {
+    const scenario = scenarios.get(cell.scenario) ?? {};
+    return {
+      skill: cell.skill_sha256 ?? manifest.skill_sha256,
+      scenario: cell.scenario,
+      version: cell.version ?? scenario.version,
+      driver: cell.driver ?? scenario.driver,
+      roles: cell.roles ?? manifest.roles,
+      timeout: cell.timeout_ms ?? manifest.timeout_ms,
+      env_names: cell.env_names ?? manifest.env_names,
+      ambient_context: cell.ambient_context ?? manifest.ambient_context,
+    };
+  });
+  const differing = fields.filter(field => descriptors.some(descriptor => JSON.stringify(descriptor[field]) !== JSON.stringify(descriptors[0]?.[field])));
+  if (differing.length) return { label: 'exploratory', differing: differing.sort() };
+  return { label: 'matched', differing: [] };
+}
+
+export function renderReport(runRecord = {}) {
+  const label = typeof runRecord.label === 'string'
+    ? { label: runRecord.label, differing: [] }
+    : (runRecord.label ?? { label: 'unknown', differing: [] });
+  const manifestPath = runRecord.manifest ?? 'manifest.json';
+  const lines = [
+    `# Run ${runRecord.run_id ?? 'unknown'}`,
+    '',
+    `Label: ${label.label}${label.differing?.length ? ` (differing: ${label.differing.join(', ')})` : ''}`,
+    '',
+    `Manifest: [${manifestPath}](${manifestPath})`,
+    '',
+  ];
+  const grouped = new Map();
+  for (const cell of runRecord.cells ?? []) {
+    const scenario = cell.scenario ?? 'unknown';
+    if (!grouped.has(scenario)) grouped.set(scenario, []);
+    grouped.get(scenario).push(cell);
+  }
+  for (const [scenario, cells] of grouped) {
+    lines.push(`## Scenario ${scenario}`, '', '| model | outcome | reason | elapsed_ms | tokens | cost | failed checks |', '| --- | --- | --- | --- | --- | --- | --- |');
+    for (const cell of cells) {
+      const failed = (cell.checks ?? []).filter(check => !check.ok).map(check => check.id).filter(Boolean);
+      const reason = String(cell.reason ?? '').replace(/\|/g, '\\|').replace(/\n/g, ' ');
+      const tokens = cell.tokens?.input_tokens === null || cell.tokens?.input_tokens === undefined
+        ? 'unknown'
+        : `${cell.tokens.input_tokens}/${cell.tokens.output_tokens ?? 'unknown'}`;
+      const cost = cell.cost_usd === null || cell.cost_usd === undefined ? 'unknown' : `$${cell.cost_usd}`;
+      lines.push(`| ${cell.model ?? 'unknown'} | ${cell.outcome ?? 'unknown'} | ${reason} | ${cell.elapsed_ms ?? 'unknown'} | ${tokens} | ${cost} | ${failed.length ? failed.join(', ') : 'none'} |`);
+    }
+    lines.push('');
+  }
+  lines.push('Artifacts:', `- [manifest.json](${manifestPath})`);
+  for (const cell of runRecord.cells ?? []) {
+    for (const [name, path] of Object.entries(cell.artifacts ?? {})) lines.push(`- [${name}](${path})`);
+  }
+  lines.push('', 'Unknown cost means the provider did not price the calls; it is not zero.');
+  return `${lines.join('\n')}\n`;
+}
