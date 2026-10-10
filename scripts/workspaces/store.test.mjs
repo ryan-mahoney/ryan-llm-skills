@@ -25,7 +25,8 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { createFileExclusive, fetchWorkspace, listWorkspaces, resolveStorageRoot, resolveWorkspacePath, storageStatus, writeFileAtomic } from "./store.mjs";
+import { createFileExclusive, createWorkspace, fetchWorkspace, listWorkspaces, resolveStorageRoot, resolveWorkspacePath, setupStorage, storageStatus, writeFileAtomic } from "./store.mjs";
+import { parseKit } from "./kit.mjs";
 
 const STORE_URL = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), "store.mjs")).href;
 
@@ -848,4 +849,155 @@ test("workspace target status: reports retained repositories, context and artifa
   assert.match(artifacts.get(join(artifactsDir, "artifact-malformed.json")).status, /unreadable|malformed/);
   assert.equal(artifacts.get(join(artifactsDir, "artifact-unknown-schema.json")).status, "unreadable");
   assert.equal(artifacts.get(join(artifactsDir, "artifact-url.json")).status, "external");
+});
+
+test("workspace create: sets up storage and creates exclusive empty workspace kits", async (t) => {
+  const tmp = await createRoot();
+  t.after(() => rm(tmp, { recursive: true, force: true }));
+
+  // setupStorage creates only the missing root and projects and stays idempotent.
+  const fresh = join(tmp, "fresh-store");
+  await setupStorage(fresh);
+  assert.equal((await lstat(fresh)).isDirectory(), true);
+  assert.equal((await lstat(join(fresh, "projects"))).isDirectory(), true);
+  await assert.rejects(lstat(join(fresh, ".adjacent")), { code: "ENOENT" });
+  await setupStorage(fresh);
+  assert.equal((await lstat(fresh)).isDirectory(), true);
+  assert.equal((await lstat(join(fresh, "projects"))).isDirectory(), true);
+  await assert.rejects(lstat(join(fresh, ".adjacent")), { code: "ENOENT" });
+
+  // Missing intermediate parents and wrong types are refused without creation.
+  const deep = join(tmp, "a", "b", "store");
+  await assert.rejects(setupStorage(deep));
+  await assert.rejects(lstat(join(tmp, "a")), { code: "ENOENT" });
+
+  const fileRoot = join(tmp, "file-root");
+  await writeFile(fileRoot, "keep");
+  await assert.rejects(setupStorage(fileRoot), /exists|not a directory/);
+  assert.equal(await readFile(fileRoot, "utf8"), "keep");
+
+  const realRoot = join(tmp, "real-root");
+  await mkdir(realRoot);
+  const linkedRoot = join(tmp, "linked-root");
+  await symlink(realRoot, linkedRoot);
+  await assert.rejects(setupStorage(linkedRoot), /symlink|exists/);
+
+  const projectsFileRoot = join(tmp, "projects-file-root");
+  await mkdir(projectsFileRoot);
+  await writeFile(join(projectsFileRoot, "projects"), "keep");
+  await assert.rejects(setupStorage(projectsFileRoot), /exists|not a directory/);
+  assert.equal(await readFile(join(projectsFileRoot, "projects"), "utf8"), "keep");
+
+  // createWorkspace requires projects and refuses invalid ids without creation.
+  const noProjects = join(tmp, "no-projects");
+  await mkdir(noProjects);
+  await assert.rejects(createWorkspace(noProjects, { id: "one" }));
+  await assert.rejects(lstat(join(noProjects, "projects")), { code: "ENOENT" });
+  assert.deepEqual(await readdir(noProjects), []);
+
+  await assert.rejects(createWorkspace(fresh, { id: "Bad_ID!" }), /invalid/);
+  await assert.rejects(lstat(join(fresh, "projects", "Bad_ID!")), { code: "ENOENT" });
+
+  // Valid creates default the name to the id and honor an explicit name.
+  await createWorkspace(fresh, { id: "alpha" });
+  const alpha = parseKit(await readFile(join(fresh, "projects", "alpha", "kit.yaml"), "utf8"));
+  assert.equal(alpha.ok, true);
+  assert.equal(alpha.kit.version, 1);
+  assert.equal(alpha.kit.id, "alpha");
+  assert.equal(alpha.kit.name, "alpha");
+  assert.deepEqual(alpha.kit.repositories, []);
+
+  await createWorkspace(fresh, { id: "beta", name: "Beta Workspace" });
+  const betaPath = join(fresh, "projects", "beta", "kit.yaml");
+  const betaBytes = await readFile(betaPath);
+  const beta = parseKit(betaBytes.toString("utf8"));
+  assert.equal(beta.ok, true);
+  assert.equal(beta.kit.version, 1);
+  assert.equal(beta.kit.id, "beta");
+  assert.equal(beta.kit.name, "Beta Workspace");
+  assert.deepEqual(beta.kit.repositories, []);
+
+  await assert.rejects(
+    createWorkspace(fresh, { id: "beta", name: "Other" }),
+    (error) => error.code === "EEXIST",
+  );
+  assert.deepEqual(await readFile(betaPath), betaBytes);
+  assert.equal((await lstat(join(fresh, "projects", "beta"))).isDirectory(), true);
+
+  // A failure after the exclusive directory mkdir keeps the owned directory visible.
+  await assert.rejects(createWorkspace(fresh, { id: "partial", name: 42 }));
+  assert.equal((await lstat(join(fresh, "projects", "partial"))).isDirectory(), true);
+  await assert.rejects(lstat(join(fresh, "projects", "partial", "kit.yaml")), { code: "ENOENT" });
+
+  // The generated empty kit is accepted by the installed Adjacent loader.
+  const oraclePath = process.env.ADJ3_KIT_ORACLE
+    ?? "/Users/ryanmahoney/.agents/.specs/adj3-workspace-storage/evidence/kit-oracle.mjs";
+  const adjacentPath = process.env.ADJ3_ADJACENT ?? "/Users/ryanmahoney/Documents/adjacent";
+  const fixtures = join(tmp, "oracle-fixtures");
+  const oracleOut = join(tmp, "oracle-result.json");
+  await mkdir(fixtures);
+  await createWorkspace(fresh, { id: "oracle-kit", name: "Oracle Kit" });
+  await writeFile(
+    join(fixtures, "generated.yaml"),
+    await readFile(join(fresh, "projects", "oracle-kit", "kit.yaml")),
+  );
+  await writeFile(
+    join(fixtures, "fixtures.json"),
+    JSON.stringify({ version: 1, fixtures: [{ file: "generated.yaml", kind: "accepted" }] }),
+  );
+
+  const runOracle = (command, args, timeoutMs) =>
+    new Promise((resolvePromise, rejectPromise) => {
+      const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+      let stdout = "";
+      let stderr = "";
+      let timedOut = false;
+      let forceTimer = null;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGTERM");
+        forceTimer = setTimeout(() => child.kill("SIGKILL"), 2000);
+      }, timeoutMs);
+      child.stdout.on("data", (chunk) => {
+        stdout += chunk;
+      });
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk;
+      });
+      child.on("error", (error) => {
+        clearTimeout(timer);
+        if (forceTimer) clearTimeout(forceTimer);
+        rejectPromise(error);
+      });
+      child.on("close", (code, signal) => {
+        clearTimeout(timer);
+        if (forceTimer) clearTimeout(forceTimer);
+        resolvePromise({ code, signal, timedOut, stdout, stderr });
+      });
+    });
+
+  const oracle = await runOracle(
+    process.execPath,
+    [
+      oraclePath,
+      "--adjacent",
+      adjacentPath,
+      "--fixtures",
+      fixtures,
+      "--out",
+      oracleOut,
+      "--timeout-ms",
+      "30000",
+    ],
+    45000,
+  );
+  assert.equal(oracle.timedOut, false, `kit oracle timed out: ${oracle.stderr}`);
+  assert.equal(oracle.code, 0, `kit oracle failed: ${oracle.stderr || oracle.stdout}`);
+  const observed = JSON.parse(await readFile(oracleOut, "utf8"));
+  assert.equal(observed.ok, true);
+  assert.equal(observed.observations.length, 1);
+  assert.equal(observed.observations[0].status, "ok");
+  assert.equal(observed.observations[0].kit.id, "oracle-kit");
+  assert.equal(observed.observations[0].kit.name, "Oracle Kit");
+  assert.deepEqual(observed.observations[0].kit.repositories, []);
 });

@@ -820,3 +820,82 @@ export async function fetchWorkspace(root, id) {
     attention,
   };
 }
+
+// Explicit setup and exclusive creation of empty workspace kits. Both
+// functions create only owned directories and files: nothing is deleted or
+// replaced, and .adjacent is never touched.
+
+const WORKSPACE_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+
+// Resolve an existing real directory while refusing symlinks, non-directories
+// and symlinked ancestors. A missing path returns null so callers can create
+// only that single component non-recursively.
+async function existingRealDirectory(path, label) {
+  const lookup = await storageLstat(path);
+  if (lookup.permission) throw new Error(`${label} is not readable: ${path}`);
+  if (lookup.info === null) return null;
+  if (lookup.info.isSymbolicLink()) throw new Error(`${label} must not be a symlink: ${path}`);
+  if (!lookup.info.isDirectory()) throw new Error(`${label} is not a directory: ${path}`);
+  if ((await fs.realpath(path)) !== resolve(path)) {
+    throw new Error(`${label} path contains a symbolic link: ${path}`);
+  }
+  return resolve(path);
+}
+
+/**
+ * Create only a missing root and its projects directory, one nonrecursive
+ * component at a time. Existing roots and projects must already be real
+ * directories; a second call is a no-op.
+ * @param {string} root
+ * @returns {Promise<{root: string, projects: string}>}
+ */
+export async function setupStorage(root) {
+  if (typeof root !== "string" || root === "") {
+    throw new TypeError("root must be a non-empty string");
+  }
+  const requestedRoot = resolve(root);
+  let rootPath = await existingRealDirectory(requestedRoot, "storage root");
+  if (rootPath === null) {
+    await fs.mkdir(requestedRoot, { recursive: false });
+    rootPath = await existingRealDirectory(requestedRoot, "storage root");
+  }
+  const requestedProjects = join(rootPath, "projects");
+  let projects = await existingRealDirectory(requestedProjects, "projects directory");
+  if (projects === null) {
+    await fs.mkdir(requestedProjects, { recursive: false });
+    projects = await existingRealDirectory(requestedProjects, "projects directory");
+  }
+  return { root: rootPath, projects };
+}
+
+/**
+ * Create an empty workspace kit exclusively: the projects directory must
+ * already exist, the id is validated before any mkdir, and kit.yaml is
+ * published through createFileExclusive. Any failure after the mkdir leaves
+ * the newly owned directory visible without a kit.
+ * @param {string} root
+ * @param {{id: string, name?: string}} options
+ * @returns {Promise<{id: string, name: string, directory: string, kit: string}>}
+ */
+export async function createWorkspace(root, options = {}) {
+  if (typeof root !== "string" || root === "") {
+    throw new TypeError("root must be a non-empty string");
+  }
+  const { id, name } = options ?? {};
+  const projectsRequested = join(resolve(root), "projects");
+  const projects = await existingRealDirectory(projectsRequested, "projects directory");
+  if (projects === null) throw new Error(`projects directory does not exist: ${projectsRequested}`);
+  if (typeof id !== "string" || !WORKSPACE_ID_PATTERN.test(id)) {
+    throw new Error(`invalid workspace id: ${String(id)}`);
+  }
+  const resolvedName = name === undefined ? id : name;
+  const directory = join(projects, id);
+  await fs.mkdir(directory, { recursive: false });
+  if (typeof resolvedName !== "string" || resolvedName === "") {
+    throw new Error(`invalid workspace name: ${String(resolvedName)}`);
+  }
+  const kit = join(directory, "kit.yaml");
+  const bytes = `version: 1\nid: ${id}\nname: ${resolvedName}\nrepositories: []\n`;
+  await createFileExclusive(kit, bytes);
+  return { id, name: resolvedName, directory, kit };
+}
