@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, existsSync, readdirSync, lstatSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { readDashboardState, createDashboardServer, isRemoteRequest, normalizePublicHost } from './dashboard.mjs';
 import { COMPLETION_FILE } from './manual-completion.mjs';
+import { setupStorage, createWorkspace, addMaterial } from '../workspaces/store.mjs';
 
 function fixture(t) {
   const dir = mkdtempSync(join(tmpdir(), 'sentinel-dashboard-'));
@@ -533,4 +534,276 @@ test('remote completion help explains the host-local-only restriction and keeps 
   assert.doesNotMatch(help(), /host's local dashboard/);
   context.run = { is_current_assignment: false };
   assert.equal(help(), '');
+});
+
+test('workspace HTTP serves catalog, detail, listing and brief bytes and refuses private, traversal and symlinked reads', async t => {
+  const f = fixture(t);
+  const base = realpathSync(f.dir);
+  const storageRoot = join(base, 'storage');
+  await setupStorage(storageRoot);
+  await createWorkspace(storageRoot, { id: 'writer' });
+  const workspace = join(storageRoot, 'projects', 'writer');
+  const repo = join(base, 'repo');
+  mkdirSync(repo, { recursive: true });
+  writeFileSync(join(workspace, 'kit.yaml'), [
+    'version: 1',
+    'id: writer',
+    'name: Writer',
+    'repositories:',
+    '  - id: docs',
+    `    path: ${JSON.stringify(repo)}`,
+    '',
+  ].join('\n'));
+  const brief = await addMaterial(storageRoot, 'writer', { kind: 'brief', title: 'First Brief', content: '# Brief\n' });
+  mkdirSync(join(workspace, '.adjacent'), { recursive: true });
+  writeFileSync(join(workspace, '.adjacent', 'inner.txt'), 'private');
+  mkdirSync(join(workspace, 'sessions'), { recursive: true });
+  writeFileSync(join(workspace, 'sessions', 's1.json'), '{}');
+  writeFileSync(join(workspace, '.env.local'), 'SECRET=1');
+  writeFileSync(join(base, 'outside.txt'), 'outside');
+  symlinkSync(join(base, 'outside.txt'), join(workspace, 'link.txt'));
+  const server = createDashboardServer({ agentDir: f.dir, storageRoot });
+  const detailPath = `/api/workspace?${new URLSearchParams({ id: 'writer' })}`;
+  const listingPath = `/api/workspace-files?${new URLSearchParams({ id: 'writer' })}`;
+  const filePath = `/api/workspace-file?${new URLSearchParams({ id: 'writer', file: brief.path })}`;
+
+  // Recursive content/mtime snapshot: reads must leave the storage root unchanged.
+  const snapshot = directory => {
+    const entries = [];
+    const digest = value => {
+      let hash = 2166136261;
+      for (let index = 0; index < value.length; index += 1) {
+        hash ^= value.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+      }
+      return hash >>> 0;
+    };
+    const walk = (current, prefix) => {
+      for (const name of readdirSync(current).sort()) {
+        const path = join(current, name);
+        const relative = prefix ? `${prefix}/${name}` : name;
+        const info = lstatSync(path);
+        if (info.isDirectory()) {
+          entries.push(`${relative}:dir:${info.mtimeMs}`);
+          walk(path, relative);
+        } else {
+          entries.push(`${relative}:file:${info.size}:${info.mtimeMs}:${digest(readFileSync(path).toString('base64'))}`);
+        }
+      }
+    };
+    walk(directory, '');
+    return entries;
+  };
+  const before = snapshot(storageRoot);
+
+  const catalog = await request(server, '/api/workspaces');
+  assert.equal(catalog.status, 200);
+  const catalogBody = JSON.parse(catalog.body);
+  assert.equal(catalogBody.storage.status, 'ok');
+  assert.ok(catalogBody.valid.some(entry => entry.id === 'writer' && entry.directory === workspace));
+
+  const detail = await request(server, detailPath);
+  assert.equal(detail.status, 200);
+  const detailBody = JSON.parse(detail.body);
+  assert.equal(detailBody.id, 'writer');
+  assert.equal(detailBody.directory, workspace);
+  assert.ok(detailBody.kit.repositories.some(repository => repository.id === 'docs' && repository.path === repo));
+  assert.ok(detailBody.briefs.includes(brief.path.slice('briefs/'.length)));
+  assert.equal(detailBody.artifacts.length, 0);
+
+  const listing = await request(server, listingPath);
+  assert.equal(listing.status, 200);
+  const names = JSON.parse(listing.body).files.map(entry => entry.name);
+  assert.ok(names.includes(brief.path));
+  assert.ok(!names.some(name => name.startsWith('.adjacent/') || name.startsWith('sessions/') || name === '.env.local'));
+
+  const file = await request(server, filePath);
+  assert.equal(file.status, 200);
+  assert.equal(file.body, '# Brief\n');
+
+  for (let round = 0; round < 2; round += 1) {
+    for (const path of ['/api/workspaces', detailPath, listingPath, filePath]) {
+      assert.equal((await request(server, path)).status, 200, path);
+      assert.equal((await request(server, path, { method: 'HEAD' })).status, 200, path);
+    }
+  }
+
+  for (const method of ['POST', 'PUT']) {
+    const refused = await request(server, detailPath, { method, body: '{}' });
+    assert.equal(refused.status, 405, method);
+    assert.equal(refused.bodyRead, false, method);
+  }
+
+  for (const candidate of ['../x', 'link.txt', '.adjacent/inner.txt', 'sessions/s1.json', '.env.local']) {
+    const denied = await request(server, `/api/workspace-file?${new URLSearchParams({ id: 'writer', file: candidate })}`);
+    assert.notEqual(denied.status, 200, candidate);
+  }
+
+  assert.deepEqual(snapshot(storageRoot), before);
+
+  for (const body of [catalog.body, detail.body, listing.body, file.body]) {
+    assert.doesNotMatch(body, /action_token/);
+  }
+
+  // A later-invalidated kit denies the same id: authorization reads the fresh catalog.
+  writeFileSync(join(workspace, 'kit.yaml'), 'version: 1\nid: writer\nrepositories: [\n');
+  assert.notEqual((await request(server, detailPath)).status, 200);
+  assert.notEqual((await request(server, filePath)).status, 200);
+});
+
+test('workspace HTTP serves identical bodies to accepted public and forwarded hosts and refuses lookalikes', async t => {
+  const f = fixture(t);
+  const base = realpathSync(f.dir);
+  const storageRoot = join(base, 'storage');
+  await setupStorage(storageRoot);
+  await createWorkspace(storageRoot, { id: 'writer' });
+  const workspace = join(storageRoot, 'projects', 'writer');
+  const repo = join(base, 'repo');
+  mkdirSync(repo, { recursive: true });
+  writeFileSync(join(workspace, 'kit.yaml'), [
+    'version: 1',
+    'id: writer',
+    'name: Writer',
+    'repositories:',
+    '  - id: docs',
+    `    path: ${JSON.stringify(repo)}`,
+    '',
+  ].join('\n'));
+  const brief = await addMaterial(storageRoot, 'writer', { kind: 'brief', title: 'First Brief', content: '# Brief\n' });
+  const server = createDashboardServer({ agentDir: f.dir, publicHost: 'dashboard.example', storageRoot });
+  const paths = [
+    '/api/workspaces',
+    `/api/workspace?${new URLSearchParams({ id: 'writer' })}`,
+    `/api/workspace-files?${new URLSearchParams({ id: 'writer' })}`,
+    `/api/workspace-file?${new URLSearchParams({ id: 'writer', file: brief.path })}`,
+  ];
+  const loopback = [];
+  for (const path of paths) {
+    const response = await request(server, path);
+    assert.equal(response.status, 200, path);
+    assert.doesNotMatch(response.body, /action_token/, path);
+    loopback.push(response.body);
+  }
+  const variants = [
+    { host: 'dashboard.example' },
+    { host: 'dashboard.example:443', origin: 'https://dashboard.example' },
+    { headers: { 'x-forwarded-for': '' } },
+  ];
+  for (const variant of variants) {
+    for (const [index, path] of paths.entries()) {
+      const response = await request(server, path, variant);
+      assert.equal(response.status, 200, path);
+      assert.equal(response.body, loopback[index], path);
+      assert.doesNotMatch(response.body, /action_token/, path);
+    }
+  }
+  for (const path of paths) {
+    for (const host of ['evil-dashboard.example', 'dashboard.example.evil', 'dashboard.example:4319']) {
+      assert.equal((await request(server, path, { host })).status, 403, `${host} ${path}`);
+    }
+    assert.equal((await request(server, path, { origin: 'http://dashboard.example' })).status, 403, path);
+  }
+  const kitBefore = readFileSync(join(workspace, 'kit.yaml'), 'utf8');
+  const briefBefore = readFileSync(join(workspace, brief.path), 'utf8');
+  for (const method of ['POST', 'PUT']) {
+    for (const variant of [{ host: 'dashboard.example' }, { host: 'dashboard.example:443', origin: 'https://dashboard.example' }, { headers: { 'x-forwarded-for': '' } }]) {
+      const refused = await request(server, paths[1], { method, body: '{}', ...variant });
+      assert.equal(refused.status, 405, `${method} ${JSON.stringify(variant)}`);
+      assert.equal(refused.bodyRead, false, `${method} ${JSON.stringify(variant)}`);
+    }
+  }
+  assert.equal(readFileSync(join(workspace, 'kit.yaml'), 'utf8'), kitBefore);
+  assert.equal(readFileSync(join(workspace, brief.path), 'utf8'), briefBefore);
+  const plain = createDashboardServer({ agentDir: f.dir, storageRoot });
+  assert.equal((await request(plain, '/api/workspaces', { host: 'dashboard.example' })).status, 403);
+});
+
+// Run independently: node --test --test-name-pattern='workspace HTTP serves reads over a real listening' scripts/spec-observe/dashboard.test.mjs
+test('workspace HTTP serves reads over a real listening port-0 server', async t => {
+  const f = fixture(t);
+  const base = realpathSync(f.dir);
+  const storageRoot = join(base, 'storage');
+  await setupStorage(storageRoot);
+  await createWorkspace(storageRoot, { id: 'writer' });
+  const workspace = join(storageRoot, 'projects', 'writer');
+  const repo = join(base, 'repo');
+  mkdirSync(repo, { recursive: true });
+  writeFileSync(join(workspace, 'kit.yaml'), [
+    'version: 1',
+    'id: writer',
+    'name: Writer',
+    'repositories:',
+    '  - id: docs',
+    `    path: ${JSON.stringify(repo)}`,
+    '',
+  ].join('\n'));
+  const brief = await addMaterial(storageRoot, 'writer', { kind: 'brief', title: 'First Brief', content: '# Brief\n' });
+  writeFileSync(join(workspace, '.env.local'), 'SECRET=1');
+  const server = createDashboardServer({ agentDir: f.dir, publicHost: 'dashboard.example', storageRoot });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
+  const port = server.address().port;
+  // node:http (not fetch) so the wire Host header can name the accepted
+  // public host while the TCP connection stays loopback.
+  const { request: httpRequest } = await import('node:http');
+  const httpCall = (path, { host, origin, method = 'GET', headers = {}, body } = {}) => new Promise((resolve, reject) => {
+    const outgoing = httpRequest({ host: '127.0.0.1', port, path, method,
+      headers: { ...(host !== undefined ? { host } : {}), ...(origin !== undefined ? { origin } : {}), ...headers } },
+      incoming => {
+        const chunks = [];
+        incoming.on('data', chunk => chunks.push(chunk));
+        incoming.on('end', () => resolve({ status: incoming.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
+      });
+    outgoing.on('error', reject);
+    if (body !== undefined) outgoing.write(body);
+    outgoing.end();
+  });
+  const detailPath = `/api/workspace?${new URLSearchParams({ id: 'writer' })}`;
+  const listingPath = `/api/workspace-files?${new URLSearchParams({ id: 'writer' })}`;
+  const filePath = `/api/workspace-file?${new URLSearchParams({ id: 'writer', file: brief.path })}`;
+  const paths = ['/api/workspaces', detailPath, listingPath, filePath];
+
+  const loopback = [];
+  for (const path of paths) {
+    const response = await httpCall(path);
+    assert.equal(response.status, 200, path);
+    assert.doesNotMatch(response.body, /action_token/, path);
+    loopback.push(response.body);
+  }
+  assert.equal(JSON.parse(loopback[0]).storage.status, 'ok');
+  assert.equal(JSON.parse(loopback[1]).id, 'writer');
+  assert.equal(loopback[3], '# Brief\n');
+
+  for (const variant of [{ host: 'dashboard.example' }, { host: 'dashboard.example:443', origin: 'https://dashboard.example' }, { headers: { 'x-forwarded-for': '' } }]) {
+    for (const [index, path] of paths.entries()) {
+      const response = await httpCall(path, variant);
+      assert.equal(response.status, 200, `${JSON.stringify(variant)} ${path}`);
+      assert.equal(response.body, loopback[index], `${JSON.stringify(variant)} ${path}`);
+    }
+  }
+
+  for (const path of paths) {
+    const head = await httpCall(path, { method: 'HEAD' });
+    assert.equal(head.status, 200, `HEAD ${path}`);
+    assert.equal(head.body, '', `HEAD ${path}`);
+    for (const host of ['evil-dashboard.example', 'dashboard.example.evil', 'dashboard.example:4319']) {
+      assert.equal((await httpCall(path, { host })).status, 403, `${host} ${path}`);
+    }
+    assert.equal((await httpCall(path, { origin: 'http://dashboard.example' })).status, 403, path);
+  }
+  assert.notEqual((await httpCall(`/api/workspace-file?${new URLSearchParams({ id: 'writer', file: '.env.local' })}`)).status, 200);
+
+  const kitBefore = readFileSync(join(workspace, 'kit.yaml'), 'utf8');
+  const briefBefore = readFileSync(join(workspace, brief.path), 'utf8');
+  const kitMtime = lstatSync(join(workspace, 'kit.yaml')).mtimeMs;
+  const briefMtime = lstatSync(join(workspace, brief.path)).mtimeMs;
+  for (const method of ['POST', 'PUT']) {
+    for (const variant of [{ host: 'dashboard.example' }, { headers: { 'x-forwarded-for': '' } }]) {
+      assert.equal((await httpCall(detailPath, { method, body: '{}', ...variant })).status, 405, `${method} ${JSON.stringify(variant)}`);
+    }
+  }
+  assert.equal(readFileSync(join(workspace, 'kit.yaml'), 'utf8'), kitBefore);
+  assert.equal(readFileSync(join(workspace, brief.path), 'utf8'), briefBefore);
+  assert.equal(lstatSync(join(workspace, 'kit.yaml')).mtimeMs, kitMtime);
+  assert.equal(lstatSync(join(workspace, brief.path)).mtimeMs, briefMtime);
 });

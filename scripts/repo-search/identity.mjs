@@ -65,6 +65,8 @@ function git(cwd, args, budget = {}) {
               : "";
           const failure = new Error(`git ${args.join(" ")} failed${detail}`);
           failure.code = error.code;
+          failure.killed = error.killed;
+          failure.signal = error.signal;
           rejectGit(failure);
           return;
         }
