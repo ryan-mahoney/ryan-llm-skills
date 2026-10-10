@@ -33,7 +33,11 @@ function isFile(path) {
 }
 
 function readScenarioFile(folder) {
-  return JSON.parse(readFileSync(join(folder, 'scenario.json'), 'utf8'));
+  const scenario = JSON.parse(readFileSync(join(folder, 'scenario.json'), 'utf8'));
+  if (!scenario || typeof scenario !== 'object' || Array.isArray(scenario)) {
+    throw new Error('scenario must be a JSON object');
+  }
+  return scenario;
 }
 
 function sortedValue(value) {
@@ -53,9 +57,9 @@ function walkEntries(folder, directory = join(folder, 'input')) {
     const path = join(directory, name);
     const info = lstatSync(path);
     const relativePath = toPosix(relative(folder, path));
-    if (info.isSymbolicLink()) entries.push({ relativePath, content: readlinkSync(path) });
+    if (info.isSymbolicLink()) entries.push({ relativePath, content: Buffer.from(readlinkSync(path)) });
     else if (info.isDirectory()) entries.push(...walkEntries(folder, path));
-    else entries.push({ relativePath, content: readFileSync(path, 'utf8') });
+    else entries.push({ relativePath, content: readFileSync(path) });
   }
   return entries;
 }
@@ -101,7 +105,7 @@ export function loadScenario(folder) {
   const file = join(folder, 'scenario.json');
   let scenario;
   try {
-    scenario = JSON.parse(readFileSync(file, 'utf8'));
+    scenario = readScenarioFile(folder);
   } catch (error) {
     throw new Error(`${file}: invalid scenario.json (${error.message})`);
   }
@@ -113,7 +117,10 @@ export function scenarioVersion(folder) {
   const entries = [{ relativePath: 'scenario.json', content: JSON.stringify(sortedValue(rest)) }, ...walkEntries(folder)];
   entries.sort((a, b) => byString(a.relativePath, b.relativePath));
   const hash = createHash('sha256');
-  for (const entry of entries) hash.update(`${entry.relativePath}\0${entry.content}`);
+  for (const entry of entries) {
+    hash.update(`${entry.relativePath}\0`);
+    hash.update(entry.content);
+  }
   return hash.digest('hex');
 }
 
@@ -205,10 +212,35 @@ export function validateScenario(folder, { git = defaultGit } = {}) {
         errors.push(`input/package/${name}: managed-step package is missing a prepared file`);
       }
     }
+    const stepsFile = join(packageDir, 'spec-steps.json');
+    let indexedSteps = null;
+    if (isFile(stepsFile)) {
+      try {
+        const steps = JSON.parse(readFileSync(stepsFile, 'utf8'))?.steps;
+        if (!Array.isArray(steps) || !steps.length || steps.some((entry, index) => !entry || !Number.isInteger(entry.step) || entry.step < 1 || (index && entry.step <= steps[index - 1].step))) {
+          errors.push('input/package/spec-steps.json: managed-step package requires ordered, unique positive step numbers');
+        } else {
+          indexedSteps = steps.map(entry => entry.step);
+        }
+      } catch (error) {
+        errors.push(`input/package/spec-steps.json: invalid spec-steps.json (${error.message})`);
+      }
+    }
+    if (indexedSteps) {
+      for (const indexedStep of indexedSteps) {
+        const card = `step-${String(indexedStep).padStart(3, '0')}-subspec.md`;
+        if (!isFile(join(packageDir, card))) {
+          errors.push(`input/package/${card}: managed-step package is missing an indexed step card`);
+        }
+      }
+    }
     const step = scenario.fixture?.step;
     if (Number.isInteger(step) && step > 0) {
+      if (indexedSteps && !indexedSteps.includes(step)) {
+        errors.push(`scenario.json: managed-step fixture.step ${step} is not indexed by input/package/spec-steps.json`);
+      }
       const card = `step-${String(step).padStart(3, '0')}-subspec.md`;
-      if (!isFile(join(packageDir, card))) {
+      if (!indexedSteps && !isFile(join(packageDir, card))) {
         errors.push(`input/package/${card}: managed-step package is missing the named step card`);
       }
     }

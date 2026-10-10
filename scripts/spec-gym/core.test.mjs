@@ -126,6 +126,54 @@ test('validation accepts the documented example scenario as draft', t => {
   assert.deepEqual(result.errors, []);
 });
 
+test('validation requires every indexed step card and selected step membership', t => {
+  const withIndex = steps => {
+    const { folder } = buildScenario(t);
+    writeFileSync(join(folder, 'input/package/spec-steps.json'), `${JSON.stringify({ steps: steps.map(step => ({ step })) })}\n`);
+    return folder;
+  };
+
+  const complete = withIndex([1, 2]);
+  writeFileSync(join(complete, 'input/package/step-002-subspec.md'), '# Step 2 card\n');
+  const completeResult = validateScenario(complete);
+  assert.equal(completeResult.ok, true, JSON.stringify(completeResult.errors));
+
+  const missingIndexedCard = withIndex([1, 2]);
+  const missingResult = validateScenario(missingIndexedCard);
+  assert.equal(missingResult.ok, false);
+  assert.ok(
+    missingResult.errors.some(error => error.includes('input/package/step-002-subspec.md') && error.includes('indexed step card')),
+    JSON.stringify(missingResult.errors),
+  );
+
+  const unindexedSelection = withIndex([2]);
+  writeFileSync(join(unindexedSelection, 'input/package/step-002-subspec.md'), '# Step 2 card\n');
+  const unindexedResult = validateScenario(unindexedSelection);
+  assert.equal(unindexedResult.ok, false);
+  assert.ok(
+    unindexedResult.errors.some(error => error.includes('fixture.step 1') && error.includes('not indexed')),
+    JSON.stringify(unindexedResult.errors),
+  );
+});
+
+test('validation rejects non-object scenario.json and loadScenario names the file', t => {
+  const { folder } = buildScenario(t);
+  for (const [label, text] of [['null', 'null'], ['array', '[]'], ['string', '"scenario"']]) {
+    writeFileSync(join(folder, 'scenario.json'), `${text}\n`);
+    const result = validateScenario(folder);
+    assert.equal(result.ok, false, label);
+    assert.ok(
+      result.errors.some(error => error.startsWith('scenario.json:') && error.includes('scenario must be a JSON object')),
+      `${label}: ${JSON.stringify(result.errors)}`,
+    );
+  }
+
+  assert.throws(
+    () => loadScenario(folder),
+    error => error.message.includes('scenario.json: invalid scenario.json (scenario must be a JSON object)'),
+  );
+});
+
 test('ready scenario refuses untracked files empty expectations empty checks and todos', t => {
   const root = fixture(t);
   const skill = 'spec-step-run';
@@ -188,6 +236,12 @@ test('version ignores status and tracks input bytes and checks', t => {
   const changedCheck = { ...scenario.checks[0], path: 'learnings/step-002-learning.md' };
   writeScenario(folder, { ...scenario, checks: [changedCheck, ...scenario.checks.slice(1)] });
   assert.notEqual(scenarioVersion(folder), initial);
+
+  const binaryFile = join(folder, 'input', 'package', 'binary.bin');
+  writeFileSync(binaryFile, Buffer.from([0x80]));
+  const firstByteVersion = scenarioVersion(folder);
+  writeFileSync(binaryFile, Buffer.from([0x81]));
+  assert.notEqual(scenarioVersion(folder), firstByteVersion);
 });
 
 test('index drift detected and cleared by atomicWrite with the fixed not-covered sentence', t => {
