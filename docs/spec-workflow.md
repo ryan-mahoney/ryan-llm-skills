@@ -130,7 +130,7 @@ pair receives those commits and refreshes affected source before continuing.
 uses a fresh `spec-final-reviewer` session with `FINAL_REVIEWER` and bounded
 `spec-final-editor` subagents with `EDITOR_MODEL`; it does not use step-card dispatch.
 Omit `FINAL_REVIEWER` to keep the step-review-only workflow.
-`sync.sh` installs the profiles and extension. Restart Pi after syncing.
+`sync.sh` installs the profiles, the extension, and their locked dependencies. Restart Pi after syncing.
 See [runtime setup and API](../pi/extensions/spec-runtime/README.md) and
 [run observation](spec-runtime-observation.md) for persistent ledgers and session discovery.
 

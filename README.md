@@ -309,7 +309,9 @@ the work calls for it, and `spec-write` selects the relevant ones for every spec
 
 Run `sync.sh` after changing instructions, rules, or skills. It copies the harness instruction
 files, refreshes rule links, syncs skills and adapters, and removes links left by renamed skills.
-It only updates harness directories that already exist.
+It only updates harness directories that already exist. It also installs the locked local
+dependencies for the Pi execution extension and the Jev tool, so a fresh clone needs no
+separate install step; run `scripts/install-deps.sh --force` to refresh them.
 
 ```bash
 ~/.agents/sync.sh

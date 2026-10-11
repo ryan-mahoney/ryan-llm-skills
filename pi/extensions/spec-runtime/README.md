@@ -11,7 +11,9 @@ Install the pinned watcher dependency before loading the extension:
 npm ci --prefix ~/.agents/pi/extensions/spec-runtime --ignore-scripts
 ```
 
-`~/.agents/sync.sh` links this directory into Pi's extension directory. Restart or
+`~/.agents/sync.sh` links this directory into Pi's extension directory and installs
+this dependency automatically (`scripts/install-deps.sh`); the manual command above
+is only needed for a standalone checkout. Restart or
 reload Pi to load it. Existing unmanaged subagents are outside its lifecycle control;
 finish or stop those workers before assigning their checkout to this runtime.
 

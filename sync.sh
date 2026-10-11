@@ -4,6 +4,11 @@ set -euo pipefail
 AGENTS_DIR="$HOME/.agents"
 SYNC_AUGMENT="${SYNC_AUGMENT:-0}"
 
+# The Pi execution extension and Jev import npm packages directly. Install their
+# locked dependencies before linking, otherwise a fresh clone loads extensions
+# with no node_modules. Idempotent; already-installed packages are skipped.
+"$AGENTS_DIR/scripts/install-deps.sh"
+
 sync_dir_symlinks() {
   local source_dir="$1"
   local target_dir="$2"
