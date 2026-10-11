@@ -1,0 +1,460 @@
+{
+  "source_repository": "rearrange-writer",
+  "source_revision": "a8ed68577d7d559013b351e62faac3f89d3b28f1",
+  "imported_at": "2026-10-11",
+  "files": [
+    {
+      "source": "docs/ux/cta-design.md",
+      "path": "reference/docs/ux/cta-design.md",
+      "sha256": "ec4908fb4ce2d8cb80616dde8af46710bd566f5e87119bfac2690147a82fa61d",
+      "conversion": "unchanged",
+      "source_sha256": "ec4908fb4ce2d8cb80616dde8af46710bd566f5e87119bfac2690147a82fa61d"
+    },
+    {
+      "source": "docs/ux/form-design.md",
+      "path": "reference/docs/ux/form-design.md",
+      "sha256": "9d8e181fda1b36b9ecc1c4089833199e4c23c8e7469ddebfe054473acdd573da",
+      "conversion": "unchanged",
+      "source_sha256": "9d8e181fda1b36b9ecc1c4089833199e4c23c8e7469ddebfe054473acdd573da"
+    },
+    {
+      "source": "docs/ux/functionalist-design.md",
+      "path": "reference/docs/ux/functionalist-design.md",
+      "sha256": "6ca6b4cd96eea83004328da48fe89c959d575cfbb55184f1691066fa1c2bfe57",
+      "conversion": "unchanged",
+      "source_sha256": "6ca6b4cd96eea83004328da48fe89c959d575cfbb55184f1691066fa1c2bfe57"
+    },
+    {
+      "source": "docs/ux/onboarding-principles.md",
+      "path": "reference/docs/ux/onboarding-principles.md",
+      "sha256": "763867568d357b5575fc1f45c1a5d33a105f1e49a2d884f4da85010ec41457a6",
+      "conversion": "unchanged",
+      "source_sha256": "763867568d357b5575fc1f45c1a5d33a105f1e49a2d884f4da85010ec41457a6"
+    },
+    {
+      "source": "docs/ux/table-row-design.md",
+      "path": "reference/docs/ux/table-row-design.md",
+      "sha256": "9c460d1e73f030884ebc70c8b4f18e6247b3a9f8264ca94c264c6f924642a013",
+      "conversion": "unchanged",
+      "source_sha256": "9c460d1e73f030884ebc70c8b4f18e6247b3a9f8264ca94c264c6f924642a013"
+    },
+    {
+      "source": "src/design-system/design-system.css",
+      "path": "design-system.css",
+      "sha256": "575d2b0e1220419ec17c758cddcd8bb81f0087cea947650bb9b6a0c0e6e0a23a",
+      "conversion": "unchanged",
+      "source_sha256": "575d2b0e1220419ec17c758cddcd8bb81f0087cea947650bb9b6a0c0e6e0a23a"
+    },
+    {
+      "source": "src/design-system/DesignSystemApp.tsx",
+      "path": "shell/app.html",
+      "source_sha256": "cec55cea99e9759cd6ff8b94e2ce74a2051ff4cfdf258c1a80e168eaf4079320",
+      "sha256": "55fb87a4b42c8c6ceb6e4361148a8c30f615fea8b18dd6a53d0135664245bbba",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/DesignSystemLayout.tsx",
+      "path": "shell/layout.html",
+      "source_sha256": "23ebc1109448eba5e9331f325cb6999d057a5ce7e2a2e874f69fdbf394b89b93",
+      "sha256": "474bb683cc10ce7f78859b2956addf1c4b79d127ac188c8ad4f7906f80513eb3",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/DesignSystemPage.tsx",
+      "path": "shell/page.html",
+      "source_sha256": "5b34883ed2e04981f5ae0b57ab76f8bf58ae113e77a15c03f91dfe7bbd5c2456",
+      "sha256": "49b5d4e82a25507f9a97dbca4cb4b19e50ef249af6a70d7ebc864b6e675ef0b7",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/DesignSystemThemeControls.tsx",
+      "path": "shell/theme-controls.html",
+      "source_sha256": "c21b83144e7c719560e29f478452e63bae6aa52531cbfabdfe874000a03e05bf",
+      "sha256": "e8135ff43fa35acd9c91f2b4782a735fabf96e94b9451ef4b4f870ad5422061c",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/RestoryLogo.tsx",
+      "path": "shell/logo.html",
+      "source_sha256": "08a1ab1fcaf93faf9615567aa704e54e012b39b518dc2ee6e7b683cd40f1b2e2",
+      "sha256": "9e443598b40373575418ac2ac26737ab80643841c3769b200ca92bbaa77891d0",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/components/ArkExamples.tsx",
+      "path": "components/ark-examples.html",
+      "source_sha256": "2cdd0a5f272f1212beed85d147de7205ee5bef8f44b1dcf8a3846a134b2592aa",
+      "sha256": "e3480a1ffe244141e97d55081cdc21ccab4682037565cedcef426c45a42f864f",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/components/Avatar.tsx",
+      "path": "components/avatar.html",
+      "source_sha256": "d72958e1f226f574f0fc530abaca551faa9bbeefb8af7e145242ef1e676fa816",
+      "sha256": "93521956868386492fe1029f7eff4ea58826cf0544943467553ec27d6102453d",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/components/GraphCanvasExample.tsx",
+      "path": "components/graph-canvas-example.html",
+      "source_sha256": "4a41e348fe14d9c76432136201c5ecd8d879cd23d1b7827df49861bf7826bd06",
+      "sha256": "1b747e4a1f55661f4250cf35693ed2ebc0d95a2f6162ca1932795981e3fa0652",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/components/MarkdownEditingExample.tsx",
+      "path": "components/markdown-editing-example.html",
+      "source_sha256": "b53924fdb7df04b7c0ce8f50e1cb814d691e0681b7f450e8ecc117da7db5c1c4",
+      "sha256": "284a28b3616425963c21eb76b71b895e2d5bf5ae8c29322eec163f4b294baa81",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/components/NameAvatar.tsx",
+      "path": "components/name-avatar.html",
+      "source_sha256": "2cee3a6db7e8fd2dafb02ea2f3899ad96634f9487abdf6bd22bc04d9e8b484ea",
+      "sha256": "48a1e6e9bebdbe35275a14639abde3344cf2bb51f2aa38db923f0f7d746b0c34",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/components/PlanCanvasExample.tsx",
+      "path": "components/plan-canvas-example.html",
+      "source_sha256": "5b070f8559fbc3a2122f63603f98b0aa2baa724320ee90c2f8676eef56308bcb",
+      "sha256": "6be7ea2bdbbcbe9b0bfc96ba86e907b6b42714062ed1bea1cd1e078dd1b24511",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/components/ProductExamples.tsx",
+      "path": "components/product-examples.html",
+      "source_sha256": "e79b3c9cac95d375535d2dcd9a7b825362b0a3fa560bb373d7640c89c9ba6643",
+      "sha256": "aefab1e90d20d7e5283cc5d76f33d3b83fba316fbf3ca1afcc4538ff4f348fdf",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/components/SearchOverlayExample.tsx",
+      "path": "components/search-overlay-example.html",
+      "source_sha256": "583b649f914a52671fd307327b4f4376ddb31931ece715b4456e5acb8db44a2b",
+      "sha256": "fdd780f04b74384c03371d414e20acc7745426478ffaab666b29a779302c340e",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/components/SectionCard.tsx",
+      "path": "components/section-card.html",
+      "source_sha256": "9fed4c9716b439326644afbd32779656ba7b52c3cfd0ae350cb6162d3148e08c",
+      "sha256": "4f8a2d5e363e98d5d24745a7f7e4ae7a3d88020c82b62ce220944aa9b1d9a05a",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/components/SequenceCanvasExample.tsx",
+      "path": "components/sequence-canvas-example.html",
+      "source_sha256": "b5e86b7e53da19a56c07198e0497a1e836b9b31e0f1c0a843b406e811025bbd3",
+      "sha256": "7a7e4e7a320bc1838fa67dba551f2d30f4a9c4ddf51e2573ff90d9186f34e6e4",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/components/SkillsExample.tsx",
+      "path": "components/skills-example.html",
+      "source_sha256": "d642547f5cc7f0e59e8831f560a46cefe6ca541bf90406256c6dbd2ab963701e",
+      "sha256": "87c3d15b34adf1f5dd4a3e2fdaf0a67130b5b7d65bf23574fffe003112ad649d",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/components/StatusSurface.tsx",
+      "path": "components/status-surface.html",
+      "source_sha256": "71236215dd0df14925b352fc3fb25d05c5224534cf0061f5604058835f5cf728",
+      "sha256": "ad7bfd23f3d06ce70725cc977055e66fdc7b60cb35714ffa14815367f820bf7a",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/components/WriterNode.tsx",
+      "path": "components/writer-node.html",
+      "source_sha256": "1da8963098fd0e9b01bf9de250283a76fc373f70f98d684cce7fe9fb0c589003",
+      "sha256": "bb9c06fa0b59fd9e4f1396865af0fdd4634ee60ced6ea24602106c3c94e02713",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/pages/ApplicationTabsPage.tsx",
+      "path": "pages/application-tabs.html",
+      "source_sha256": "6d34c41e2d4a696a44cab7fec8fc9a5f076483400b7f05e4302ca0d13b1cffab",
+      "sha256": "9cc2181f31dbef099aa8c353361adab48a6a0f8e3d6a41c6fa1d4616f91fb438",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/pages/AssistantPage.tsx",
+      "path": "pages/assistant.html",
+      "source_sha256": "708289b237c513fc04e02eed392a738508b08356a656599675e053e7307a19b3",
+      "sha256": "fca05d6c7add6b4705836bd1b62f1d465e696074819a5036550a998c0d0490be",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/pages/ButtonsPage.tsx",
+      "path": "pages/buttons.html",
+      "source_sha256": "a97b3de2f4ff319b17a11c498d3ad53a85b748d4df7e87d8090a0cfdd034a085",
+      "sha256": "ce84f3b5ac1e1cc20787ae1352ee419501f20c47c3c72b6272c0ebc4c1d312a2",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/pages/CollaborationPage.tsx",
+      "path": "pages/collaboration.html",
+      "source_sha256": "f5dad7100c11b94e66cae3b1062781f1412d62273e8deaa5226809591cca19c0",
+      "sha256": "8834ab07a2e658c9be20292c4764f0a14265063f3459c60c77a295d033eb487f",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/pages/ColorsPage.tsx",
+      "path": "pages/colors.html",
+      "source_sha256": "684042c0d9b0b994aa1273bcf834b37b7be71e482a4e35b0842785ee72103541",
+      "sha256": "513355d453101fecebd9c63db28ff26290e59113f56f4d6305ebb9964c54c893",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/pages/DataPage.tsx",
+      "path": "pages/data.html",
+      "source_sha256": "ee41ad869fa9e61b708e7645413e050afdd76d4747956d8e7f03de14e12eea5a",
+      "sha256": "f5356a8e48e88360d18588c5d9a65a6f7bc77a0f4603567c2ba3f4073a9c81c3",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/pages/DocumentActionsPage.tsx",
+      "path": "pages/document-actions.html",
+      "source_sha256": "f0762ff0b5a5201890c316fab99689cc67e863b8297e957dd8621d9e01a4de70",
+      "sha256": "60a575e09d874beb2b153a992d1928750b326019f3d48c6bfa351ea87a703a88",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/pages/DocumentPickerPage.tsx",
+      "path": "pages/document-picker.html",
+      "source_sha256": "4db3fa39cd24f21a18d827d28c7cf6b1fa3972ffd6c760431ee70633950bc058",
+      "sha256": "060284b57d6c44cca90d5c50cde9fdadf1f354aebc890883610b99af41ad813b",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/pages/FeedbackPage.tsx",
+      "path": "pages/feedback.html",
+      "source_sha256": "0fb64acddcc27eaf1fa2754c9234fb52a64a3bc35f3085794b1706a47b470492",
+      "sha256": "2d1cb6c9c5454afef1948afcad36fdb1e0a3a3d2315ebc70a856b9e40eaa26bb",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/pages/FileUploadPage.tsx",
+      "path": "pages/file-upload.html",
+      "source_sha256": "3caf3f0e4074d8c5427104e45bc673dbded8ce34d6a4c858f32df3d66a965813",
+      "sha256": "71104fff64f56afb266000351e2bdefbbe98bdd1ad804824f1563595bd9a44e9",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/pages/FormsPage.tsx",
+      "path": "pages/forms.html",
+      "source_sha256": "27a2382058a4d26bab86c4008c632733581b0f38db8a9504f0b55da49ab30908",
+      "sha256": "9408c123f977b1124389a6b918664d5e074ca07261028fd362b1e3b5c1563002",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/pages/GitStatusPage.tsx",
+      "path": "pages/git-status.html",
+      "source_sha256": "d38cecbb80d8f1760ce78c9077775e89b6c113998e54e87b60e008029ee14fb4",
+      "sha256": "69f92b64e48eeb55ae04ee12513833a97c753a15045ee9e3c0d2b7e01b34aaf5",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/pages/GraphPage.tsx",
+      "path": "pages/graph.html",
+      "source_sha256": "c240269866c3c9d10ae7f386fb275d364cf345bf3b79fc9ca9c0dd64554bdecc",
+      "sha256": "72eb074465908100280e927abfe635da8f1de3f476e8b4cdf6b3ae8509b0f2fe",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/pages/HomePage.tsx",
+      "path": "pages/home.html",
+      "source_sha256": "c206bd6537c0581fd22bee47f9d9a7cab56fb15ec29c869a55d12633d3df5613",
+      "sha256": "02142206968b31ce8f585441bbcd618082309176edf1897d192925812b01b37f",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/pages/IntroductionPage.tsx",
+      "path": "pages/introduction.html",
+      "source_sha256": "a7826f96d92b7831454e9e483d29891005cadf744c01ae9742b6e6e57f54c7e4",
+      "sha256": "1ed5f7f97d8e8e49604f99ad35abd85c761d0aac2a399e55002f20e4ee87b87f",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/pages/LayoutPage.tsx",
+      "path": "pages/layout.html",
+      "source_sha256": "33ef6d205a5ff15ca82cf66b8a96029e525fbff615bce110c9a9a0b87290fac2",
+      "sha256": "71721da9d942c338b6b4da5f91dfafd1748652bc104a87ddc1d760c8a7d6f905",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/pages/LibraryPage.tsx",
+      "path": "pages/library.html",
+      "source_sha256": "c74997bd58e3123be99d413bd9912bb4b4874cd4b79a94e38e2bbfe8e10e8426",
+      "sha256": "72f7104f39d382b09c00ea5189791cc705910c495f5fded3d7cba1338d684b74",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/pages/NavigationPage.tsx",
+      "path": "pages/navigation.html",
+      "source_sha256": "855c1d11f4f8e85956671fb451acdeb56efe2a09ae01ff50561335ae6168746a",
+      "sha256": "a611d9ac5349d6fcfc9a1df782d71a2b739ccb683df7e991b32828e4992a7896",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/pages/OverlaysPage.tsx",
+      "path": "pages/overlays.html",
+      "source_sha256": "a3d46ac6af5f35df1b05de5b03473099d8885dde4a5906c840d5f6443a4981a1",
+      "sha256": "e4173914d56c6bddc2cb1209008d85015a9527da330902bd2cfa1c7697d64556",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/pages/PagePlaceholder.tsx",
+      "path": "pages/page-placeholder.html",
+      "source_sha256": "a16690dd9f3b34af441f0d9cf672e51a371ce1950aad8fb565bdcd718c75d134",
+      "sha256": "fc77414374d0eb4a6d96d214cba4721783af9cbfa95e398fdfd370dc2b8233f5",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/pages/PlanPage.tsx",
+      "path": "pages/plan.html",
+      "source_sha256": "b68cd7afc3c22dd8effe589a16039e39db4f945492b9b04b8471313ee1f513a6",
+      "sha256": "6ee9fc10a30f09ab9a774a5c414b199412563360045744d9147e744e51972440",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/pages/PreviewPage.tsx",
+      "path": "pages/preview.html",
+      "source_sha256": "e7fe36ed013029fa97d0230768b039db1cf6e1445f1c70126046dd3f971e7b10",
+      "sha256": "16a5b074cebab746690c5713c70c9427c36dbdb2d238e52844fe5fcadf690c04",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/pages/SearchPage.tsx",
+      "path": "pages/search.html",
+      "source_sha256": "3cea1b36aa103b5a51f036610d90d3371a75e7411848d5a4bab957e60fd1b990",
+      "sha256": "9f34ebde57d08e757b38bd0de233a852847786640bad6669e1ab8fbdee9298ba",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/pages/SequencePage.tsx",
+      "path": "pages/sequence.html",
+      "source_sha256": "599cf9306b47559e12b1426a4367c8411884e2582ac9013900bb07a22cd30aa4",
+      "sha256": "6a3269e9dd043184fa56399584d5a434f02dfdf72b98e459585076aecebfa909",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/pages/SkillsPage.tsx",
+      "path": "pages/skills.html",
+      "source_sha256": "63d7bcd92409dfe9292551a4f9675be01a6c6d6d4bb74e29df670c617e603863",
+      "sha256": "4cd37cba7fe75b006b65e6f1c14f19cf6ca4546d496abc77c29e727dc3e44444",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/pages/TypographyPage.tsx",
+      "path": "pages/typography.html",
+      "source_sha256": "59f89f9224b9cd73bb0d001d979856767af8a20a07c3090785eaaadcf4ddae47",
+      "sha256": "5124515f18c1ae6a6939b141d7902efbab737e3b0ab4d1417c17f4bd0885cbc0",
+      "conversion": "native-html"
+    },
+    {
+      "source": "src/design-system/documentStatuses.ts",
+      "path": "helpers/document-statuses.js",
+      "source_sha256": "f4152581a03f617a3c7523b9e218700db3ab40ac0a57160e797e8bb958fa8b5b",
+      "sha256": "da460830a0d840b540bdec6a087e4094cc98568bf517c5f1979a45f94c8d9168",
+      "conversion": "plain-javascript"
+    },
+    {
+      "source": "src/design-system/documentTypes.ts",
+      "path": "helpers/document-types.js",
+      "source_sha256": "7107438b58fa151e6009a3a3263e79baedba783b620e6ba37a4c546414ade78e",
+      "sha256": "f436cae70fda4559b8cb01d7239c7b43c11355dde406a446fd02336ef6f0ee70",
+      "conversion": "plain-javascript"
+    },
+    {
+      "source": "src/design-system/planBoard.ts",
+      "path": "helpers/plan-board.js",
+      "source_sha256": "e2db40d93c407caff8c8b3c6c7224673be87f1812a7b1f3ef22f7b3c8876d015",
+      "sha256": "b401e84e64f491f3e0d1f1070432adea2ab9e25da60ea39af1ea83fa5a8e28d8",
+      "conversion": "plain-javascript"
+    },
+    {
+      "source": "src/design-system/portalThemeProps.ts",
+      "path": "helpers/portal-theme-props.js",
+      "source_sha256": "3ee003f4299b39b508ee6c98594d6eb2acfa76b75b075bd4e64b5af6eb85cc7e",
+      "sha256": "50d2b9c8c4e1e37fb8112c604e0c7bbd3c0310bc1c370af9ef147ab6fc3b7f8d",
+      "conversion": "plain-javascript"
+    },
+    {
+      "source": "src/design-system/routes.ts",
+      "path": "helpers/routes.js",
+      "source_sha256": "2b7915325513fa7cf6a5af44cf41cdbed43aa9e38896eed97546c0e5efcf6abc",
+      "sha256": "2b461f8b4731e76a4076f3fe7fa4d30f58a6c226d9939784bd67dbcf3119843c",
+      "conversion": "plain-javascript"
+    },
+    {
+      "source": "src/design-system/searchIndex.ts",
+      "path": "helpers/search-index.js",
+      "source_sha256": "688d199ba3f73f2bb2f707a5c8177cf9af9315361d2eb107096bffd0116b8c39",
+      "sha256": "2e2e2b689d9cff64d9de72bba54b24b6af65394f14807e616dbd3331b46191de",
+      "conversion": "plain-javascript"
+    },
+    {
+      "source": "src/design-system/sequenceCalendar.ts",
+      "path": "helpers/sequence-calendar.js",
+      "source_sha256": "925a91c0dfec658260962e1553d9e45af29885b43d201f34e0d1e99ce71eb147",
+      "sha256": "85772cece0f578da6d33b046c4c6f9ae12754954743a0ec677a82d60ec64b246",
+      "conversion": "plain-javascript"
+    },
+    {
+      "source": "src/design-system/theme.ts",
+      "path": "helpers/theme.js",
+      "source_sha256": "32f08e6304d4bebdccb00de1dfdb81185c04213730527022c3cb8a9c281fba78",
+      "sha256": "a907c20bc5f1ef24bf0e06e867fc6a6e32bb70d46b59515d354d4d86f0e16a27",
+      "conversion": "plain-javascript"
+    }
+  ],
+  "converted_at": "2026-10-11",
+  "schema_version": 2,
+  "supporting_files": [
+    {
+      "path": "index.html",
+      "sha256": "80e2cd3852b2295b8a7d9bb26c495b4ff244112f7d367dcfc1f7d70aa4bb509f"
+    },
+    {
+      "path": "catalog.css",
+      "sha256": "c9ad66de95e6f76f20833c3142fe2787aff1d38a8748ff341dbbd8702fb30f2e"
+    },
+    {
+      "path": "catalog.js",
+      "sha256": "d3d8f6d0aac657cd5e00f1323054eec2d613edefab2642056ed27a124e9ffd6b"
+    },
+    {
+      "path": "vendor/tailwind.js",
+      "sha256": "176e894661aa9cdc9a5cba6c720044cbbf7b8bd80d1c9a142a7c24b1b6c50d15"
+    },
+    {
+      "path": "helpers/plan-demo.js",
+      "sha256": "f515719866a8bfdbfe4204553726ffd974a31043f5ec2318c51bbea7f4a221df"
+    },
+    {
+      "path": "helpers/search-demo.js",
+      "sha256": "90def652b7b7220d4f9a25d50f9bf9d8e5919a8715b9580a5cc86c83f018d3e3"
+    },
+    {
+      "path": "helpers/sequence-demo.js",
+      "sha256": "417aebd4fa7bb11baaefe3293dd49dad3914a9faf32480f93f792a65750c70d7"
+    },
+    {
+      "path": "helpers/skills-demo.js",
+      "sha256": "2d9fa0ec4771fe1652d51de44ef600945955995dd7d6df726f21055218d060d8"
+    }
+  ],
+  "tailwind": {
+    "version": "3.4.17",
+    "path": "vendor/tailwind.js",
+    "sha256": "176e894661aa9cdc9a5cba6c720044cbbf7b8bd80d1c9a142a7c24b1b6c50d15"
+  },
+  "adaptations": [
+    "React components are standalone HTML references with semantic controls and Tailwind utilities.",
+    "Application services and specialized editor engines use labeled local fixtures.",
+    "Document type React icon renderers are native icon descriptors.",
+    "Routes resolve local HTML pages. Original source is preserved in its source repository."
+  ]
+}

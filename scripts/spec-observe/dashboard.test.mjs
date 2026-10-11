@@ -1329,7 +1329,8 @@ test('threads UI renders loading, empty, waiting, streaming and interrupted stat
   assert.match(threadsBody(context), /Loading threads/);
 
   vm.runInContext('threads=[];selectedThread=null;renderThreads()', context);
-  assert.match(threadsBody(context), /No discussion threads in this workspace yet/);
+  assert.match(threadsBody(context), /No threads yet\. Create one above/);
+  assert.match(threadsBody(context), /data-thread-create/, 'the empty state offers the create action');
 
   const waiting = threadRecord({ queue: [{ id: 'message-1', state: 'queued', text: 'waiting text', queued_at: threadAt, queue_position: 2 }] });
   vm.runInContext(`threads=${JSON.stringify([waiting])};selectedThread=${JSON.stringify(threadId)};threadPartial='';renderThreads()`, context);
@@ -1367,7 +1368,7 @@ test('threads UI explains attention states and keeps recovery controls', () => {
     ['session-mismatch', /Session mismatch/, /does not match this thread record/, /data-thread-refresh/],
     ['missing-directory', /Execution directory missing/, /execution directory is gone/, /data-thread-refresh/],
     ['live-owner', /Owner not confirmed dead/, /fails closed/, /data-thread-refresh/],
-    ['missing-context', /Context missing/, /missing or unreadable/, /data-thread-refresh/],
+    ['missing-context', /Context missing/, /no longer read them/, /data-thread-refresh/],
   ];
   for (const [state, label, explanation, control] of cases) {
     const queue = state === 'uncertain' ? [{ id: 'uncertain-1', state: 'uncertain', text: 'maybe sent', queued_at: threadAt }] : [];

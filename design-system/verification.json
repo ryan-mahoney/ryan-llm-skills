@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "verified_at": "2026-10-11",
+  "source_revision": "a8ed68577d7d559013b351e62faac3f89d3b28f1",
+  "coverage": {
+    "html_references": 44,
+    "javascript_source_helpers": 8,
+    "source_section_headings": 151,
+    "source_specimens": 157,
+    "remaining_typescript_files": 0
+  },
+  "checks": {
+    "catalog_guard": {
+      "command": "node scripts/design-system/verify.mjs",
+      "outcome": "pass"
+    },
+    "browser_loads": {
+      "outcome": "pass",
+      "cases": 90,
+      "viewports": [
+        {
+          "width": 1440,
+          "theme": "dark"
+        },
+        {
+          "width": 390,
+          "theme": "light"
+        }
+      ],
+      "pages": 45,
+      "checked": [
+        "source section headings",
+        "JavaScript errors",
+        "failed resources",
+        "external requests",
+        "document overflow",
+        "appearance controls",
+        "escaped code specimens"
+      ]
+    },
+    "source_helper_comparison": {
+      "outcome": "pass",
+      "cases": 205,
+      "source": "original rearrange-writer source at recorded revision",
+      "covered": [
+        "routes",
+        "document types and statuses",
+        "sequence calendar",
+        "plan board",
+        "search index",
+        "theme and storage",
+        "portal attributes"
+      ]
+    },
+    "coordinator_interactions": {
+      "outcome": "pass",
+      "assertions": 75,
+      "covered": [
+        "modal focus containment, background inertness, Escape, restoration",
+        "search query/facets/safe empty state",
+        "sequence keyboard scheduling and views",
+        "library deletion and affected count",
+        "catalog filtering and appearance persistence",
+        "file protocol navigation and vendored Tailwind"
+      ]
+    },
+    "independent_interactions": {
+      "outcome": "pass",
+      "covered": [
+        "keyboard file picker and repeated same-file selection",
+        "presence roster and local lock release",
+        "active-tab survivor and empty state",
+        "Markdown local links",
+        "forms and comboboxes",
+        "dialog, drawer, menu, tabs and toast keyboard behavior",
+        "toast manual and five-second dismissal",
+        "document picker local actions",
+        "graph insertion and zoom",
+        "Plan moves, ordering and creation",
+        "Skills editing, remixing and proposals"
+      ]
+    },
+    "visual_review": {
+      "outcome": "pass",
+      "initial_captures": 90,
+      "covered": "45 pages in desktop dark and mobile light; refreshed affected paper, table, scope-control and preview layouts after fixes"
+    }
+  },
+  "local_demo_boundaries": [
+    "No application service, collaboration server, or account writes.",
+    "Specialized editor and canvas engines use native specimens; original CSS and design tokens are retained.",
+    "HTML and Markdown downloads are browser-generated; PDF and DOCX are labeled examples."
+  ]
+}

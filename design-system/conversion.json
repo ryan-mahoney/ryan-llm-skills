@@ -1,0 +1,993 @@
+{
+  "schema_version": 1,
+  "source_repository": "rearrange-writer",
+  "source_revision": "a8ed68577d7d559013b351e62faac3f89d3b28f1",
+  "files": [
+    {
+      "source": "src/design-system/DesignSystemApp.tsx",
+      "output": "shell/app.html",
+      "owner": "foundations",
+      "source_sha256": "cec55cea99e9759cd6ff8b94e2ce74a2051ff4cfdf258c1a80e168eaf4079320",
+      "sections": [],
+      "examples": [],
+      "exports": [
+        "DesignSystemApp"
+      ]
+    },
+    {
+      "source": "src/design-system/DesignSystemLayout.tsx",
+      "output": "shell/layout.html",
+      "owner": "foundations",
+      "source_sha256": "23ebc1109448eba5e9331f325cb6999d057a5ce7e2a2e874f69fdbf394b89b93",
+      "sections": [],
+      "examples": [],
+      "exports": [
+        "DesignSystemLayout"
+      ]
+    },
+    {
+      "source": "src/design-system/DesignSystemPage.tsx",
+      "output": "shell/page.html",
+      "owner": "foundations",
+      "source_sha256": "5b34883ed2e04981f5ae0b57ab76f8bf58ae113e77a15c03f91dfe7bbd5c2456",
+      "sections": [],
+      "examples": [],
+      "exports": [
+        "PageHeader",
+        "Section",
+        "ExampleFrame",
+        "CodeBlock",
+        "TokenSwatch",
+        "StatusCallout"
+      ]
+    },
+    {
+      "source": "src/design-system/DesignSystemThemeControls.tsx",
+      "output": "shell/theme-controls.html",
+      "owner": "foundations",
+      "source_sha256": "c21b83144e7c719560e29f478452e63bae6aa52531cbfabdfe874000a03e05bf",
+      "sections": [],
+      "examples": [],
+      "exports": [
+        "DesignSystemThemeControls"
+      ]
+    },
+    {
+      "source": "src/design-system/RestoryLogo.tsx",
+      "output": "shell/logo.html",
+      "owner": "foundations",
+      "source_sha256": "08a1ab1fcaf93faf9615567aa704e54e012b39b518dc2ee6e7b683cd40f1b2e2",
+      "sections": [],
+      "examples": [],
+      "exports": [
+        "RestoryLogo"
+      ]
+    },
+    {
+      "source": "src/design-system/components/ArkExamples.tsx",
+      "output": "components/ark-examples.html",
+      "owner": "foundations",
+      "source_sha256": "2cdd0a5f272f1212beed85d147de7205ee5bef8f44b1dcf8a3846a134b2592aa",
+      "sections": [],
+      "examples": [],
+      "exports": [
+        "DialogExample",
+        "DrawerExample",
+        "MenuExample",
+        "TabsExample",
+        "AccordionExample",
+        "TooltipIconButtonExample",
+        "ComboboxExample",
+        "ToastExample",
+        "ChoiceControlsExample"
+      ]
+    },
+    {
+      "source": "src/design-system/components/Avatar.tsx",
+      "output": "components/avatar.html",
+      "owner": "foundations",
+      "source_sha256": "d72958e1f226f574f0fc530abaca551faa9bbeefb8af7e145242ef1e676fa816",
+      "sections": [],
+      "examples": [],
+      "exports": [
+        "Avatar"
+      ]
+    },
+    {
+      "source": "src/design-system/components/GraphCanvasExample.tsx",
+      "output": "components/graph-canvas-example.html",
+      "owner": "foundations",
+      "source_sha256": "4a41e348fe14d9c76432136201c5ecd8d879cd23d1b7827df49861bf7826bd06",
+      "sections": [],
+      "examples": [],
+      "exports": [
+        "GraphCanvasExample"
+      ]
+    },
+    {
+      "source": "src/design-system/components/MarkdownEditingExample.tsx",
+      "output": "components/markdown-editing-example.html",
+      "owner": "editorial",
+      "source_sha256": "b53924fdb7df04b7c0ce8f50e1cb814d691e0681b7f450e8ecc117da7db5c1c4",
+      "sections": [],
+      "examples": [],
+      "exports": [
+        "MarkdownEditingExample"
+      ]
+    },
+    {
+      "source": "src/design-system/components/NameAvatar.tsx",
+      "output": "components/name-avatar.html",
+      "owner": "foundations",
+      "source_sha256": "2cee3a6db7e8fd2dafb02ea2f3899ad96634f9487abdf6bd22bc04d9e8b484ea",
+      "sections": [],
+      "examples": [],
+      "exports": [
+        "NameAvatar",
+        "monogramFor",
+        "hueFor"
+      ]
+    },
+    {
+      "source": "src/design-system/components/PlanCanvasExample.tsx",
+      "output": "components/plan-canvas-example.html",
+      "owner": "canvases",
+      "source_sha256": "5b070f8559fbc3a2122f63603f98b0aa2baa724320ee90c2f8676eef56308bcb",
+      "sections": [],
+      "examples": [
+        "Plan board"
+      ],
+      "exports": [
+        "PlanCanvasExample"
+      ]
+    },
+    {
+      "source": "src/design-system/components/ProductExamples.tsx",
+      "output": "components/product-examples.html",
+      "owner": "editorial",
+      "source_sha256": "e79b3c9cac95d375535d2dcd9a7b825362b0a3fa560bb373d7640c89c9ba6643",
+      "sections": [],
+      "examples": [],
+      "exports": [
+        "ApplicationTabsExample",
+        "DocumentPickerExample",
+        "AssistantPanelExample",
+        "PreviewWarningsExample"
+      ]
+    },
+    {
+      "source": "src/design-system/components/SearchOverlayExample.tsx",
+      "output": "components/search-overlay-example.html",
+      "owner": "canvases",
+      "source_sha256": "583b649f914a52671fd307327b4f4376ddb31931ece715b4456e5acb8db44a2b",
+      "sections": [],
+      "examples": [
+        "Search overlay"
+      ],
+      "exports": [
+        "SearchOverlayExample"
+      ]
+    },
+    {
+      "source": "src/design-system/components/SectionCard.tsx",
+      "output": "components/section-card.html",
+      "owner": "foundations",
+      "source_sha256": "9fed4c9716b439326644afbd32779656ba7b52c3cfd0ae350cb6162d3148e08c",
+      "sections": [],
+      "examples": [],
+      "exports": [
+        "SectionCard"
+      ]
+    },
+    {
+      "source": "src/design-system/components/SequenceCanvasExample.tsx",
+      "output": "components/sequence-canvas-example.html",
+      "owner": "canvases",
+      "source_sha256": "b5e86b7e53da19a56c07198e0497a1e836b9b31e0f1c0a843b406e811025bbd3",
+      "sections": [],
+      "examples": [
+        "Sequence calendar"
+      ],
+      "exports": [
+        "SequenceCanvasExample"
+      ]
+    },
+    {
+      "source": "src/design-system/components/SkillsExample.tsx",
+      "output": "components/skills-example.html",
+      "owner": "canvases",
+      "source_sha256": "d642547f5cc7f0e59e8831f560a46cefe6ca541bf90406256c6dbd2ab963701e",
+      "sections": [],
+      "examples": [],
+      "exports": [
+        "SkillsExample"
+      ]
+    },
+    {
+      "source": "src/design-system/components/StatusSurface.tsx",
+      "output": "components/status-surface.html",
+      "owner": "foundations",
+      "source_sha256": "71236215dd0df14925b352fc3fb25d05c5224534cf0061f5604058835f5cf728",
+      "sections": [],
+      "examples": [],
+      "exports": [
+        "StatusSurface"
+      ]
+    },
+    {
+      "source": "src/design-system/components/WriterNode.tsx",
+      "output": "components/writer-node.html",
+      "owner": "foundations",
+      "source_sha256": "1da8963098fd0e9b01bf9de250283a76fc373f70f98d684cce7fe9fb0c589003",
+      "sections": [],
+      "examples": [],
+      "exports": [
+        "GRAPH_SECTION_CARD_WIDTH",
+        "GRAPH_SECTION_CARD_HEIGHT",
+        "WriterCardNode"
+      ]
+    },
+    {
+      "source": "src/design-system/pages/ApplicationTabsPage.tsx",
+      "output": "pages/application-tabs.html",
+      "owner": "editorial",
+      "source_sha256": "6d34c41e2d4a696a44cab7fec8fc9a5f076483400b7f05e4302ca0d13b1cffab",
+      "sections": [
+        "Tab strip",
+        "Tab states",
+        "Empty topbar",
+        "Section editor tabs",
+        "Keyboard behavior"
+      ],
+      "examples": [
+        "Tab strip example",
+        "Tab states example",
+        "Empty topbar example",
+        "Section editor tabs example"
+      ],
+      "exports": [
+        "ApplicationTabsPage"
+      ]
+    },
+    {
+      "source": "src/design-system/pages/AssistantPage.tsx",
+      "output": "pages/assistant.html",
+      "owner": "editorial",
+      "source_sha256": "708289b237c513fc04e02eed392a738508b08356a656599675e053e7307a19b3",
+      "sections": [
+        "The assembled turn",
+        "User message",
+        "Assistant text",
+        "Reasoning",
+        "Tool activity",
+        "Turn status",
+        "Error",
+        "Usage",
+        "Choice panel",
+        "Conversation states",
+        "Send button states",
+        "Slash-command skills",
+        "Action proposals",
+        "Comments panel",
+        "Assistant input references",
+        "Files tab",
+        "History tab"
+      ],
+      "examples": [
+        "demo / opening.md",
+        "AssistantTurnView \u00b7 persisted view-model",
+        "composer action states",
+        "type / for skills or @ for files",
+        "no skills match",
+        "selected \u2014 inline chip",
+        "replace text",
+        "append text",
+        "settled \u2014 applied",
+        "apply disabled",
+        "save subfile (create file)",
+        "listing \u2014 top-level only",
+        "expanded thread \u2014 one level of replies",
+        "assigning a comment",
+        "resolved (assigned) \u2014 collapsed",
+        "new comment \u2014 @ mention typeahead",
+        "new comment \u2014 # heading typeahead",
+        "@ file picker",
+        "resolved \u2014 inline chip",
+        "files",
+        "history"
+      ],
+      "exports": [
+        "AssistantPage"
+      ]
+    },
+    {
+      "source": "src/design-system/pages/ButtonsPage.tsx",
+      "output": "pages/buttons.html",
+      "owner": "foundations",
+      "source_sha256": "a97b3de2f4ff319b17a11c498d3ad53a85b748d4df7e87d8090a0cfdd034a085",
+      "sections": [
+        "Primary action",
+        "Go action",
+        "Secondary action",
+        "Icon-only buttons",
+        "Destructive action",
+        "Sizes",
+        "States",
+        "Compound actions"
+      ],
+      "examples": [
+        "Primary action example",
+        "Go action example",
+        "Secondary action example",
+        "Icon-only buttons example",
+        "Destructive action example",
+        "Button sizes",
+        "Button states"
+      ],
+      "exports": [
+        "ButtonsPage"
+      ]
+    },
+    {
+      "source": "src/design-system/pages/CollaborationPage.tsx",
+      "output": "pages/collaboration.html",
+      "owner": "editorial",
+      "source_sha256": "f5dad7100c11b94e66cae3b1062781f1412d62273e8deaa5226809591cca19c0",
+      "sections": [
+        "Presence",
+        "Editor locked"
+      ],
+      "examples": [
+        "document-level presence",
+        "document-level presence with overflow",
+        "section-level presence",
+        "solo state",
+        "presence list / hover detail",
+        "your own lock (header status)",
+        "active editor",
+        "idle / warning",
+        "stale lock",
+        "lock inside a section card"
+      ],
+      "exports": [
+        "CollaborationPage"
+      ]
+    },
+    {
+      "source": "src/design-system/pages/ColorsPage.tsx",
+      "output": "pages/colors.html",
+      "owner": "foundations",
+      "source_sha256": "684042c0d9b0b994aa1273bcf834b37b7be71e482a4e35b0842785ee72103541",
+      "sections": [
+        "Wayfinding roles",
+        "Paper",
+        "Surface ladder",
+        "Ink",
+        "Lines",
+        "Graph and node tokens",
+        "Contrast"
+      ],
+      "examples": [],
+      "exports": [
+        "ColorsPage"
+      ]
+    },
+    {
+      "source": "src/design-system/pages/DataPage.tsx",
+      "output": "pages/data.html",
+      "owner": "foundations",
+      "source_sha256": "ee41ad869fa9e61b708e7645413e050afdd76d4747956d8e7f03de14e12eea5a",
+      "sections": [
+        "Tables",
+        "Lists",
+        "Empty",
+        "Pills",
+        "Format badges"
+      ],
+      "examples": [
+        "Recent saves",
+        "Files list",
+        "Empty state",
+        "Status pills",
+        "Export formats"
+      ],
+      "exports": [
+        "DataPage"
+      ]
+    },
+    {
+      "source": "src/design-system/pages/DocumentActionsPage.tsx",
+      "output": "pages/document-actions.html",
+      "owner": "editorial",
+      "source_sha256": "f0762ff0b5a5201890c316fab99689cc67e863b8297e957dd8621d9e01a4de70",
+      "sections": [
+        "Create document",
+        "Save & restore arrangement",
+        "Export save",
+        "Output styles",
+        "Share",
+        "Organization switcher"
+      ],
+      "examples": [
+        "Split create button",
+        "Document type menu",
+        "Save current arrangement",
+        "Saved arrangements",
+        "Preview before restore",
+        "No arrangements yet",
+        "Export action",
+        "Past exports",
+        "No exports yet",
+        "Output styles menu item",
+        "Output styles drawer",
+        "Binding states",
+        "Synced document assignment",
+        "Share with an organization member",
+        "Share with an email address",
+        "Share with the organization",
+        "Current shares",
+        "Top nav, closed",
+        "Top nav, open",
+        "Sole organization"
+      ],
+      "exports": [
+        "DocumentActionsPage"
+      ]
+    },
+    {
+      "source": "src/design-system/pages/DocumentPickerPage.tsx",
+      "output": "pages/document-picker.html",
+      "owner": "foundations",
+      "source_sha256": "4db3fa39cd24f21a18d827d28c7cf6b1fa3972ffd6c760431ee70633950bc058",
+      "sections": [
+        "Stage",
+        "Topbar organization context",
+        "Recovery actions",
+        "Opening state",
+        "Empty state",
+        "Behavior"
+      ],
+      "examples": [
+        "document-picker",
+        "organization-context",
+        "recovery-row",
+        "opening",
+        "empty"
+      ],
+      "exports": [
+        "DocumentPickerPage"
+      ]
+    },
+    {
+      "source": "src/design-system/pages/FeedbackPage.tsx",
+      "output": "pages/feedback.html",
+      "owner": "foundations",
+      "source_sha256": "0fb64acddcc27eaf1fa2754c9234fb52a64a3bc35f3085794b1706a47b470492",
+      "sections": [
+        "Status indicator",
+        "Inline notices",
+        "Sync status",
+        "Recovery notices",
+        "Empty state",
+        "Toasts",
+        "Destructive confirmation"
+      ],
+      "examples": [
+        "Save state",
+        "Empty notices",
+        "Static toast",
+        "Ark toast example",
+        "Delete workspace confirmation"
+      ],
+      "exports": [
+        "FeedbackPage"
+      ]
+    },
+    {
+      "source": "src/design-system/pages/FileUploadPage.tsx",
+      "output": "pages/file-upload.html",
+      "owner": "editorial",
+      "source_sha256": "3caf3f0e4074d8c5427104e45bc673dbded8ce34d6a4c858f32df3d66a965813",
+      "sections": [
+        "Adding a file",
+        "Drag and drop",
+        "Visibility scope",
+        "Scope on a file",
+        "Formats & limits",
+        "Upload feedback"
+      ],
+      "examples": [
+        "Upload control",
+        "Drop target",
+        "Drop overlay",
+        "Scope dialog",
+        "Scope pills",
+        "Rejected uploads",
+        "Inline error notice",
+        "Recently uploaded row"
+      ],
+      "exports": [
+        "FileUploadPage"
+      ]
+    },
+    {
+      "source": "src/design-system/pages/FormsPage.tsx",
+      "output": "pages/forms.html",
+      "owner": "foundations",
+      "source_sha256": "27a2382058a4d26bab86c4008c632733581b0f38db8a9504f0b55da49ab30908",
+      "sections": [
+        "Text Fields",
+        "Required & Validation",
+        "Selects",
+        "Textarea",
+        "Disabled & Read-only",
+        "Combobox",
+        "Markdown Editing",
+        "MDXEditor Token Map",
+        "Checkboxes, Radios & Switches"
+      ],
+      "examples": [
+        "Text input examples",
+        "Workspace filter selects",
+        "Default textarea",
+        "Monospace textarea",
+        "Disabled and read-only textarea comparison",
+        "Assistant skill combobox",
+        "Markdown editor example",
+        "Choice controls example",
+        "Validation example"
+      ],
+      "exports": [
+        "FormsPage"
+      ]
+    },
+    {
+      "source": "src/design-system/pages/GitStatusPage.tsx",
+      "output": "pages/git-status.html",
+      "owner": "foundations",
+      "source_sha256": "d38cecbb80d8f1760ce78c9077775e89b6c113998e54e87b60e008029ee14fb4",
+      "sections": [
+        "Color key",
+        "Section states",
+        "Readings",
+        "Actions"
+      ],
+      "examples": [
+        "Tones",
+        "Composed line",
+        "Worktree",
+        "Main",
+        "Branch",
+        "Rebase main",
+        "Create PR"
+      ],
+      "exports": [
+        "GitStatusPage"
+      ]
+    },
+    {
+      "source": "src/design-system/pages/GraphPage.tsx",
+      "output": "pages/graph.html",
+      "owner": "foundations",
+      "source_sha256": "c240269866c3c9d10ae7f386fb275d364cf345bf3b79fc9ca9c0dd64554bdecc",
+      "sections": [
+        "Header bar",
+        "Canvas",
+        "Section card",
+        "Interactions",
+        "Keyboard"
+      ],
+      "examples": [
+        "demo / graph",
+        "Section card states",
+        "keyboard model"
+      ],
+      "exports": [
+        "GraphPage"
+      ]
+    },
+    {
+      "source": "src/design-system/pages/HomePage.tsx",
+      "output": "pages/home.html",
+      "owner": "canvases",
+      "source_sha256": "c206bd6537c0581fd22bee47f9d9a7cab56fb15ec29c869a55d12633d3df5613",
+      "sections": [
+        "Home surface"
+      ],
+      "examples": [
+        "First run",
+        "Intermediate state",
+        "Full home surface",
+        "Local sync prompt"
+      ],
+      "exports": [
+        "HomePage"
+      ]
+    },
+    {
+      "source": "src/design-system/pages/IntroductionPage.tsx",
+      "output": "pages/introduction.html",
+      "owner": "foundations",
+      "source_sha256": "a7826f96d92b7831454e9e483d29891005cadf744c01ae9742b6e6e57f54c7e4",
+      "sections": [
+        "Purpose",
+        "Principles",
+        "Pages"
+      ],
+      "examples": [],
+      "exports": [
+        "IntroductionPage"
+      ]
+    },
+    {
+      "source": "src/design-system/pages/LayoutPage.tsx",
+      "output": "pages/layout.html",
+      "owner": "foundations",
+      "source_sha256": "33ef6d205a5ff15ca82cf66b8a96029e525fbff615bce110c9a9a0b87290fac2",
+      "sections": [
+        "Surface ladder",
+        "Lines",
+        "Borders",
+        "Corners",
+        "Spacing & heights",
+        "Hover states"
+      ],
+      "examples": [],
+      "exports": [
+        "LayoutPage"
+      ]
+    },
+    {
+      "source": "src/design-system/pages/LibraryPage.tsx",
+      "output": "pages/library.html",
+      "owner": "canvases",
+      "source_sha256": "c74997bd58e3123be99d413bd9912bb4b4874cd4b79a94e38e2bbfe8e10e8426",
+      "sections": [
+        "Style library",
+        "Empty state",
+        "Create a style",
+        "Edit a style",
+        "Delete a style in use"
+      ],
+      "examples": [
+        "Styles grouped by format",
+        "Empty library",
+        "New style",
+        "Editing a style"
+      ],
+      "exports": [
+        "LibraryPage"
+      ]
+    },
+    {
+      "source": "src/design-system/pages/NavigationPage.tsx",
+      "output": "pages/navigation.html",
+      "owner": "editorial",
+      "source_sha256": "855c1d11f4f8e85956671fb451acdeb56efe2a09ae01ff50561335ae6168746a",
+      "sections": [
+        "Top navigation",
+        "Create actions",
+        "Mobile header",
+        "Motion and themes",
+        "Topbar",
+        "Back and breadcrumbs",
+        "Segmented control",
+        "Skip and focus"
+      ],
+      "examples": [
+        "Document top navigation example",
+        "Top-level area navigation example",
+        "Assembled header",
+        "Mobile header - closed",
+        "Mobile header - drawer open",
+        "Mobile header - mode sheet open",
+        "Mobile header - create sheet open",
+        "Topbar example",
+        "Back and breadcrumbs example",
+        "Segmented control example"
+      ],
+      "exports": [
+        "NavigationPage",
+        "TopNavigationExample"
+      ]
+    },
+    {
+      "source": "src/design-system/pages/OverlaysPage.tsx",
+      "output": "pages/overlays.html",
+      "owner": "foundations",
+      "source_sha256": "a3d46ac6af5f35df1b05de5b03473099d8885dde4a5906c840d5f6443a4981a1",
+      "sections": [
+        "Dropdown Menu",
+        "Modal Dialog",
+        "Drawer Dialog",
+        "Destructive Confirmation",
+        "Popover",
+        "Accordion"
+      ],
+      "examples": [
+        "Section action menu",
+        "Review changes modal",
+        "Section outline drawer",
+        "Details form drawer",
+        "Delete section confirmation",
+        "Section metadata popover",
+        "Section reference"
+      ],
+      "exports": [
+        "OverlaysPage",
+        "DetailsFormDrawer"
+      ]
+    },
+    {
+      "source": "src/design-system/pages/PagePlaceholder.tsx",
+      "output": "pages/page-placeholder.html",
+      "owner": "canvases",
+      "source_sha256": "a16690dd9f3b34af441f0d9cf672e51a371ce1950aad8fb565bdcd718c75d134",
+      "sections": [],
+      "examples": [],
+      "exports": [
+        "PagePlaceholder"
+      ]
+    },
+    {
+      "source": "src/design-system/pages/PlanPage.tsx",
+      "output": "pages/plan.html",
+      "owner": "canvases",
+      "source_sha256": "b68cd7afc3c22dd8effe589a16039e39db4f945492b9b04b8471313ee1f513a6",
+      "sections": [
+        "Board",
+        "Card anatomy",
+        "States",
+        "Light and dark",
+        "Accessibility",
+        "Keyboard",
+        "Responsive"
+      ],
+      "examples": [
+        "Card parts",
+        "Card states",
+        "Lane states",
+        "keyboard model"
+      ],
+      "exports": [
+        "PlanPage"
+      ]
+    },
+    {
+      "source": "src/design-system/pages/PreviewPage.tsx",
+      "output": "pages/preview.html",
+      "owner": "foundations",
+      "source_sha256": "e7fe36ed013029fa97d0230768b039db1cf6e1445f1c70126046dd3f971e7b10",
+      "sections": [
+        "Preview frame",
+        "Themed editor",
+        "Notices",
+        "Export"
+      ],
+      "examples": [
+        "preview.html",
+        "opening.md",
+        "Export menu"
+      ],
+      "exports": [
+        "PreviewPage"
+      ]
+    },
+    {
+      "source": "src/design-system/pages/SearchPage.tsx",
+      "output": "pages/search.html",
+      "owner": "canvases",
+      "source_sha256": "3cea1b36aa103b5a51f036610d90d3371a75e7411848d5a4bab957e60fd1b990",
+      "sections": [
+        "Trigger",
+        "Overlay",
+        "Result rows",
+        "Type awareness",
+        "States",
+        "Accessibility",
+        "Keyboard",
+        "Responsive"
+      ],
+      "examples": [
+        "Search field",
+        "Row gallery",
+        "Type badges",
+        "Row states",
+        "Empty state",
+        "Keyboard model"
+      ],
+      "exports": [
+        "SearchPage"
+      ]
+    },
+    {
+      "source": "src/design-system/pages/SequencePage.tsx",
+      "output": "pages/sequence.html",
+      "owner": "canvases",
+      "source_sha256": "599cf9306b47559e12b1426a4367c8411884e2582ac9013900bb07a22cd30aa4",
+      "sections": [
+        "Calendar",
+        "Densities",
+        "States",
+        "Unscheduled",
+        "Light and dark",
+        "Accessibility",
+        "Keyboard",
+        "Responsive"
+      ],
+      "examples": [
+        "Record densities",
+        "Record states",
+        "Cell states",
+        "Empty states",
+        "Unscheduled rail",
+        "keyboard model"
+      ],
+      "exports": [
+        "SequencePage"
+      ]
+    },
+    {
+      "source": "src/design-system/pages/SkillsPage.tsx",
+      "output": "pages/skills.html",
+      "owner": "canvases",
+      "source_sha256": "63d7bcd92409dfe9292551a4f9675be01a6c6d6d4bb74e29df670c617e603863",
+      "sections": [
+        "Skills management",
+        "Scope pills",
+        "Skill proposal card",
+        "Instruction editor"
+      ],
+      "examples": [
+        "skills workspace",
+        "scope variants",
+        "pending proposal",
+        "applied",
+        "editable \u2014 unsaved changes",
+        "read-only \u2014 system skill"
+      ],
+      "exports": [
+        "SkillsPage"
+      ]
+    },
+    {
+      "source": "src/design-system/pages/TypographyPage.tsx",
+      "output": "pages/typography.html",
+      "owner": "foundations",
+      "source_sha256": "59f89f9224b9cd73bb0d001d979856767af8a20a07c3090785eaaadcf4ddae47",
+      "sections": [
+        "Type families",
+        "Hierarchy",
+        "Identifiers",
+        "Text scale"
+      ],
+      "examples": [],
+      "exports": [
+        "TypographyPage"
+      ]
+    },
+    {
+      "source": "src/design-system/documentStatuses.ts",
+      "output": "helpers/document-statuses.js",
+      "owner": "canvases",
+      "source_sha256": "f4152581a03f617a3c7523b9e218700db3ab40ac0a57160e797e8bb958fa8b5b",
+      "sections": [],
+      "examples": [],
+      "exports": [
+        "STATUS_COLORS",
+        "DEFAULT_STATUS_COLOR",
+        "statusColorVar",
+        "DOCUMENT_TYPE_STATUSES",
+        "matchStatusOption"
+      ]
+    },
+    {
+      "source": "src/design-system/documentTypes.ts",
+      "output": "helpers/document-types.js",
+      "owner": "canvases",
+      "source_sha256": "7107438b58fa151e6009a3a3263e79baedba783b620e6ba37a4c546414ade78e",
+      "sections": [],
+      "examples": [],
+      "exports": [
+        "DOCUMENT_TYPES"
+      ]
+    },
+    {
+      "source": "src/design-system/planBoard.ts",
+      "output": "helpers/plan-board.js",
+      "owner": "canvases",
+      "source_sha256": "e2db40d93c407caff8c8b3c6c7224673be87f1812a7b1f3ef22f7b3c8876d015",
+      "sections": [],
+      "examples": [],
+      "exports": [
+        "PLAN_COLUMNS",
+        "PLAN_TAGS",
+        "PLAN_DEMO_CARDS",
+        "cardsInColumn",
+        "moveCard",
+        "planReducer"
+      ]
+    },
+    {
+      "source": "src/design-system/portalThemeProps.ts",
+      "output": "helpers/portal-theme-props.js",
+      "owner": "foundations",
+      "source_sha256": "3ee003f4299b39b508ee6c98594d6eb2acfa76b75b075bd4e64b5af6eb85cc7e",
+      "sections": [],
+      "examples": [],
+      "exports": [
+        "portalThemeProps"
+      ]
+    },
+    {
+      "source": "src/design-system/routes.ts",
+      "output": "helpers/routes.js",
+      "owner": "coordinator",
+      "source_sha256": "2b7915325513fa7cf6a5af44cf41cdbed43aa9e38896eed97546c0e5efcf6abc",
+      "sections": [],
+      "examples": [],
+      "exports": [
+        "designSystemRoutes",
+        "getDesignSystemRoute",
+        "getDesignSystemPath"
+      ]
+    },
+    {
+      "source": "src/design-system/searchIndex.ts",
+      "output": "helpers/search-index.js",
+      "owner": "canvases",
+      "source_sha256": "688d199ba3f73f2bb2f707a5c8177cf9af9315361d2eb107096bffd0116b8c39",
+      "sections": [],
+      "examples": [],
+      "exports": [
+        "FACETS",
+        "GROUPS",
+        "SEARCH_DEMO_DOCS",
+        "SEARCH_DEMO_DATA",
+        "matches",
+        "facetCounts",
+        "highlightSegments",
+        "buildOrder",
+        "moveSelection",
+        "sectionLocator"
+      ]
+    },
+    {
+      "source": "src/design-system/sequenceCalendar.ts",
+      "output": "helpers/sequence-calendar.js",
+      "owner": "canvases",
+      "source_sha256": "925a91c0dfec658260962e1553d9e45af29885b43d201f34e0d1e99ce71eb147",
+      "sections": [],
+      "examples": [],
+      "exports": [
+        "SEQUENCE_DEMO_TODAY",
+        "isoOf",
+        "parseISO",
+        "shiftISO",
+        "stepAnchor",
+        "monthWeeks",
+        "rangeDays",
+        "rangeLabel",
+        "cardsOn",
+        "isOutOfMonth",
+        "sequenceReducer"
+      ]
+    },
+    {
+      "source": "src/design-system/theme.ts",
+      "output": "helpers/theme.js",
+      "owner": "foundations",
+      "source_sha256": "32f08e6304d4bebdccb00de1dfdb81185c04213730527022c3cb8a9c281fba78",
+      "sections": [],
+      "examples": [],
+      "exports": [
+        "designSystemAppearanceStorageKey",
+        "defaultDesignSystemAppearance",
+        "isDesignSystemTheme",
+        "isDesignSystemTextScale",
+        "readDesignSystemAppearance",
+        "writeDesignSystemAppearance"
+      ]
+    }
+  ]
+}

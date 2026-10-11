@@ -28,6 +28,11 @@ The storage root resolves as the workspace CLI resolves it: `--root`, then
 design is for and, under the supplemental `design_system` key, the design system to mirror.
 Design skills write only inside `designs/<slug>/`.
 
+The `agent-tooling` workspace uses the [design system](../design-system/README.md)
+imported into this repository. Its offline HTML/Tailwind catalog, original CSS token source,
+component examples, and JavaScript helpers are under `design-system/`. The workspace kit
+resolves those paths through repository ID `agents`.
+
 Why workspace storage and not `.specs/`: workspaces already hold the `context/` and
 `sources/` inputs, a kit spans repositories, some repositories track `.specs/` and would
 put prototypes in source history, and Sentinel serves workspace files without a run

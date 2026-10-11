@@ -68,7 +68,6 @@ function threadFor({ execution_dir, session_dir, session_file = null, model, thr
     execution_dir,
     session_dir,
     session_file,
-    context: [],
     history_only: false,
     queue: [],
     queue_paused: false,
@@ -235,7 +234,7 @@ test("new session uses --session-id with the exact fixed argv and cwd", async ()
   const thread = threadFor(roots);
   let adapter;
   try {
-    adapter = await createPiRpc({ thread, context: "ctx text", spawn: harness.spawnImpl });
+    adapter = await createPiRpc({ thread, spawn: harness.spawnImpl });
     assert.equal(harness.calls.length, 1);
     const call = harness.calls[0];
     assert.equal(call.command, "pi");
@@ -253,8 +252,6 @@ test("new session uses --session-id with the exact fixed argv and cwd", async ()
       "--no-skills",
       "--no-prompt-templates",
       "--no-approve",
-      "--append-system-prompt",
-      "ctx text",
       "--session-id",
       thread.session_id,
     ]);
@@ -280,7 +277,7 @@ test("validated provider, model and thinking append to the fixed argv", async ()
   const thread = threadFor({ ...roots, model: { provider: "anthropic", model: "claude-x", thinking: "high" } });
   let adapter;
   try {
-    adapter = await createPiRpc({ thread, context: "ctx", spawn: harness.spawnImpl });
+    adapter = await createPiRpc({ thread, spawn: harness.spawnImpl });
     assert.deepEqual(harness.calls[0].args.slice(-6), ["--provider", "anthropic", "--model", "claude-x", "--thinking", "high"]);
   } finally {
     await closeQuietly(adapter);
@@ -297,7 +294,7 @@ test("resume uses --session and retains the imported session id", async () => {
   const harness = makeHarness();
   let adapter;
   try {
-    adapter = await createPiRpc({ thread, context: "ctx", spawn: harness.spawnImpl });
+    adapter = await createPiRpc({ thread, spawn: harness.spawnImpl });
     assert.deepEqual(harness.calls[0].args.slice(-2), ["--session", file]);
     assert.ok(!harness.calls[0].args.includes("--session-id"));
     assert.equal(adapter.identity.session_id, importedId);
@@ -311,17 +308,14 @@ test("resume uses --session and retains the imported session id", async () => {
   }
 });
 
-test("structural, context and model validation refuse before spawning", async () => {
+test("structural and model validation refuse before spawning", async () => {
   const roots = await makeRoots();
   const base = threadFor(roots);
   const never = () => {
     throw new Error("spawn must not run for a refused thread");
   };
   try {
-    await assert.rejects(createPiRpc({ thread: { ...base, thread_id: "not-a-uuid" }, context: "", spawn: never }), {
-      code: "invalid-thread",
-    });
-    await assert.rejects(createPiRpc({ thread: base, context: "x".repeat(256 * 1024 + 1), spawn: never }), {
+    await assert.rejects(createPiRpc({ thread: { ...base, thread_id: "not-a-uuid" }, spawn: never }), {
       code: "invalid-thread",
     });
     for (const model of [
@@ -330,7 +324,7 @@ test("structural, context and model validation refuse before spawning", async ()
       { provider: "", model: "m" },
       { provider: "p", model: "m", thinking: "turbo" },
     ]) {
-      await assert.rejects(createPiRpc({ thread: { ...base, model }, context: "", spawn: never }), {
+      await assert.rejects(createPiRpc({ thread: { ...base, model }, spawn: never }), {
         code: "invalid-thread",
       });
     }
@@ -347,19 +341,19 @@ test("resume refuses missing, mismatched, escaped and unreadable session files",
   };
   try {
     await assert.rejects(
-      createPiRpc({ thread: { ...base, session_file: join(roots.session_dir, "missing.jsonl") }, context: "", spawn: never }),
+      createPiRpc({ thread: { ...base, session_file: join(roots.session_dir, "missing.jsonl") }, spawn: never }),
       { code: "session-mismatch" },
     );
 
     const wrongId = join(roots.session_dir, "wrong-id.jsonl");
     await writeSession(wrongId, { id: randomUUID(), cwd: roots.execution_dir });
-    await assert.rejects(createPiRpc({ thread: { ...base, session_file: wrongId }, context: "", spawn: never }), {
+    await assert.rejects(createPiRpc({ thread: { ...base, session_file: wrongId }, spawn: never }), {
       code: "session-mismatch",
     });
 
     const wrongCwd = join(roots.session_dir, "wrong-cwd.jsonl");
     await writeSession(wrongCwd, { id: base.session_id, cwd: roots.root });
-    await assert.rejects(createPiRpc({ thread: { ...base, session_file: wrongCwd }, context: "", spawn: never }), {
+    await assert.rejects(createPiRpc({ thread: { ...base, session_file: wrongCwd }, spawn: never }), {
       code: "session-mismatch",
     });
 
@@ -367,7 +361,7 @@ test("resume refuses missing, mismatched, escaped and unreadable session files",
     await writeSession(outside, { id: base.session_id, cwd: roots.execution_dir });
     const link = join(roots.session_dir, "link.jsonl");
     await symlink(outside, link);
-    await assert.rejects(createPiRpc({ thread: { ...base, session_file: link }, context: "", spawn: never }), {
+    await assert.rejects(createPiRpc({ thread: { ...base, session_file: link }, spawn: never }), {
       code: "session-mismatch",
     });
 
@@ -376,7 +370,7 @@ test("resume refuses missing, mismatched, escaped and unreadable session files",
     await chmod(unreadable, 0o000);
     try {
       if (process.getuid && process.getuid() !== 0) {
-        await assert.rejects(createPiRpc({ thread: { ...base, session_file: unreadable }, context: "", spawn: never }), {
+        await assert.rejects(createPiRpc({ thread: { ...base, session_file: unreadable }, spawn: never }), {
           code: "session-mismatch",
         });
       }
@@ -392,7 +386,7 @@ test("post-spawn get_state mismatch closes only the owned child", async () => {
   const roots = await makeRoots();
   const harness = makeHarness({ env: { FAKE_PI_STATE_ID: randomUUID() } });
   try {
-    await assert.rejects(createPiRpc({ thread: threadFor(roots), context: "", spawn: harness.spawnImpl }), {
+    await assert.rejects(createPiRpc({ thread: threadFor(roots), spawn: harness.spawnImpl }), {
       code: "session-mismatch",
     });
     assert.equal(harness.children.length, 1);
@@ -407,7 +401,7 @@ test("startup refuses non-empty get_commands under the fixed argv", async () => 
   const roots = await makeRoots();
   const harness = makeHarness({ env: { FAKE_PI_COMMANDS: JSON.stringify([{ name: "ext:cmd" }]) } });
   try {
-    await assert.rejects(createPiRpc({ thread: threadFor(roots), context: "", spawn: harness.spawnImpl }), {
+    await assert.rejects(createPiRpc({ thread: threadFor(roots), spawn: harness.spawnImpl }), {
       code: "policy-refusal",
     });
     await waitForChildExit(harness.children[0]);
@@ -421,7 +415,7 @@ test("startup get_state is bounded at 10s by the injected clock", async () => {
   const clock = manualClock();
   const harness = makeHarness({ env: { FAKE_PI_GET_STATE_HANG: "1" }, clock });
   try {
-    const creating = createPiRpc({ thread: threadFor(roots), context: "", spawn: harness.spawnImpl, clock });
+    const creating = createPiRpc({ thread: threadFor(roots), spawn: harness.spawnImpl, clock });
     await waitFor(() => clock.pending > 0);
     clock.fire(10_000);
     await assert.rejects(creating, { code: "request-timeout", phase: "startup", uncertain: true });
@@ -436,7 +430,7 @@ test("read tools pass but unexpected tool names are refused without settling the
   const harnessRead = makeHarness({ env: { FAKE_PI_TOOL_ON: "prompt", FAKE_PI_TOOL_NAME: "read" } });
   let adapterRead;
   try {
-    adapterRead = await createPiRpc({ thread: threadFor(rootsRead), context: "", spawn: harnessRead.spawnImpl });
+    adapterRead = await createPiRpc({ thread: threadFor(rootsRead), spawn: harnessRead.spawnImpl });
     const seen = collectEvents(adapterRead);
     const response = await adapterRead.request({ type: "prompt", message: "hello" });
     assert.equal(response.success, true);
@@ -457,7 +451,7 @@ test("read tools pass but unexpected tool names are refused without settling the
   });
   let adapterBash;
   try {
-    adapterBash = await createPiRpc({ thread: threadFor(rootsBash), context: "", spawn: harnessBash.spawnImpl });
+    adapterBash = await createPiRpc({ thread: threadFor(rootsBash), spawn: harnessBash.spawnImpl });
     const seen = collectEvents(adapterBash);
     await assert.rejects(adapterBash.request({ type: "prompt", message: "hello" }), { code: "policy-refusal" });
     const refusal = await waitForEvent(seen, (envelope) => envelope.event?.type === "policy_refusal");
@@ -479,7 +473,7 @@ test("extension UI is cancelled with the matching response before refusal", asyn
   const harness = makeHarness({ env: { FAKE_PI_EXTENSION_UI_ON: "prompt" } });
   let adapter;
   try {
-    adapter = await createPiRpc({ thread: threadFor(roots), context: "", spawn: harness.spawnImpl });
+    adapter = await createPiRpc({ thread: threadFor(roots), spawn: harness.spawnImpl });
     const seen = collectEvents(adapter);
     await assert.rejects(adapter.request({ type: "prompt", message: "hello" }), { code: "policy-refusal" });
     const cancelled = await waitForEvent(seen, (envelope) => envelope.event?.type === "fake_extension_ui_response");
@@ -500,7 +494,7 @@ test("concurrent requests correlate by id across reordered responses", async () 
   const harness = makeHarness({ env: { FAKE_PI_DELAYS: JSON.stringify({ get_entries: 120 }) } });
   let adapter;
   try {
-    adapter = await createPiRpc({ thread: threadFor(roots), context: "", spawn: harness.spawnImpl });
+    adapter = await createPiRpc({ thread: threadFor(roots), spawn: harness.spawnImpl });
     const order = [];
     const messages = adapter.request({ type: "get_messages", id: "req-messages" }).then((result) => {
       order.push("messages");
@@ -539,7 +533,7 @@ test("split writes preserve U+2028, U+2029 and emoji inside a frame", async () =
   });
   let adapter;
   try {
-    adapter = await createPiRpc({ thread: threadFor(roots), context: "", spawn: harness.spawnImpl });
+    adapter = await createPiRpc({ thread: threadFor(roots), spawn: harness.spawnImpl });
     const response = await adapter.request({ type: "get_messages" });
     assert.equal(response.data.messages[0].content[0].text, text);
   } finally {
@@ -555,7 +549,7 @@ test("agent_settled before the prompt ack keeps event-before-ack ordering", asyn
   });
   let adapter;
   try {
-    adapter = await createPiRpc({ thread: threadFor(roots), context: "", spawn: harness.spawnImpl });
+    adapter = await createPiRpc({ thread: threadFor(roots), spawn: harness.spawnImpl });
     const order = [];
     adapter.events.on("event", (envelope) => {
       if (envelope.event?.type === "agent_settled") order.push("event");
@@ -579,7 +573,7 @@ test("an abort timeout reports uncertainty while the child stays live", async ()
   const harness = makeHarness({ env: { FAKE_PI_ABORT_HANG: "1" }, clock });
   let adapter;
   try {
-    adapter = await createPiRpc({ thread: threadFor(roots), context: "", spawn: harness.spawnImpl, clock });
+    adapter = await createPiRpc({ thread: threadFor(roots), spawn: harness.spawnImpl, clock });
     const abort = adapter.request({ type: "abort" });
     clock.fire(30_000);
     await assert.rejects(abort, { code: "request-timeout", uncertain: true, command: "abort" });
@@ -600,8 +594,8 @@ test("separate adapters attribute events to their own generation", async () => {
   let adapterA;
   let adapterB;
   try {
-    adapterA = await createPiRpc({ thread: threadFor(rootsA), context: "", spawn: harnessA.spawnImpl });
-    adapterB = await createPiRpc({ thread: threadFor(rootsB), context: "", spawn: harnessB.spawnImpl });
+    adapterA = await createPiRpc({ thread: threadFor(rootsA), spawn: harnessA.spawnImpl });
+    adapterB = await createPiRpc({ thread: threadFor(rootsB), spawn: harnessB.spawnImpl });
     const seenA = collectEvents(adapterA);
     const seenB = collectEvents(adapterB);
     await adapterA.request({ type: "prompt", message: "a" });
@@ -626,7 +620,7 @@ test("a malformed frame surfaces transport-error without killing the child", asy
   const harness = makeHarness({ env: { FAKE_PI_MALFORMED_ON: "get_entries" } });
   let adapter;
   try {
-    adapter = await createPiRpc({ thread: threadFor(roots), context: "", spawn: harness.spawnImpl });
+    adapter = await createPiRpc({ thread: threadFor(roots), spawn: harness.spawnImpl });
     const seen = collectEvents(adapter);
     await assert.rejects(adapter.request({ type: "get_entries" }), { code: "transport-error", uncertain: true });
     await assert.rejects(adapter.request({ type: "get_state" }), { code: "transport-error" });
@@ -649,7 +643,7 @@ test("fresh get_state identity mismatch before prompt keeps the prompt off the w
   });
   let adapter;
   try {
-    adapter = await createPiRpc({ thread: threadFor(roots), context: "", spawn: harness.spawnImpl });
+    adapter = await createPiRpc({ thread: threadFor(roots), spawn: harness.spawnImpl });
     await assert.rejects(adapter.request({ type: "prompt", message: "hello" }), { code: "session-mismatch" });
     await waitForChildExit(harness.children[0]);
     const log = await readFile(logPath, "utf8");
@@ -666,7 +660,7 @@ test("new-session symlink replacement rejects before prompt", async () => {
   const harness = makeHarness({ env: { FAKE_PI_COMMAND_LOG: logPath } });
   let adapter;
   try {
-    adapter = await createPiRpc({ thread: threadFor(roots), context: "", spawn: harness.spawnImpl });
+    adapter = await createPiRpc({ thread: threadFor(roots), spawn: harness.spawnImpl });
     const outside = join(roots.root, "outside.jsonl");
     await writeSession(outside, { id: adapter.identity.session_id, cwd: roots.execution_dir });
     await symlink(outside, adapter.identity.session_file);
@@ -686,7 +680,7 @@ test("explicit request ids stay unique for the adapter lifetime", async () => {
   const harness = makeHarness({ env: { FAKE_PI_DELAYS: JSON.stringify({ get_entries: 80 }) }, clock });
   let adapter;
   try {
-    adapter = await createPiRpc({ thread: threadFor(roots), context: "", spawn: harness.spawnImpl, clock });
+    adapter = await createPiRpc({ thread: threadFor(roots), spawn: harness.spawnImpl, clock });
     const first = await adapter.request({ type: "get_messages", id: "reused-id" });
     assert.equal(first.id, "reused-id");
     await assert.rejects(adapter.request({ type: "get_messages", id: "reused-id" }), { code: "duplicate-request-id" });
@@ -712,7 +706,7 @@ test("mismatched correlation and failed acks are typed errors", async () => {
   });
   let adapter;
   try {
-    adapter = await createPiRpc({ thread: threadFor(roots), context: "", spawn: harness.spawnImpl });
+    adapter = await createPiRpc({ thread: threadFor(roots), spawn: harness.spawnImpl });
     await assert.rejects(adapter.request({ type: "get_entries" }), { code: "protocol-error" });
     const failed = await adapter.request({ type: "get_messages" }).then(
       () => assert.fail("failed ack must reject"),
@@ -734,7 +728,7 @@ test("a child exit rejects pending work and refuses later sends", async () => {
   const harness = makeHarness({ env: { FAKE_PI_EXIT_ON: "get_entries", FAKE_PI_EXIT_CODE: "3" } });
   let adapter;
   try {
-    adapter = await createPiRpc({ thread: threadFor(roots), context: "", spawn: harness.spawnImpl });
+    adapter = await createPiRpc({ thread: threadFor(roots), spawn: harness.spawnImpl });
     const seen = collectEvents(adapter);
     await assert.rejects(adapter.request({ type: "get_entries" }), { code: "transport-error", uncertain: true });
     const exit = await waitForEvent(seen, (envelope) => envelope.event?.type === "exit");
@@ -755,7 +749,7 @@ test("serialized writes deliver a burst of commands in order", async () => {
   const harness = makeHarness({ env: { FAKE_PI_COMMAND_LOG: logPath } });
   let adapter;
   try {
-    adapter = await createPiRpc({ thread: threadFor(roots), context: "", spawn: harness.spawnImpl });
+    adapter = await createPiRpc({ thread: threadFor(roots), spawn: harness.spawnImpl });
     const ids = Array.from({ length: 25 }, (_, index) => `burst-${String(index).padStart(2, "0")}`);
     const responses = await Promise.all(ids.map((id) => adapter.request({ type: "get_state", id })));
     assert.ok(responses.every((response) => response.success === true && response.command === "get_state"));
@@ -776,7 +770,7 @@ test("an oversize frame rejects pending work and stops reading the transport", a
   const harness = makeHarness({ env: { FAKE_PI_OVERSIZE_ON: "get_entries" } });
   let adapter;
   try {
-    adapter = await createPiRpc({ thread: threadFor(roots), context: "", spawn: harness.spawnImpl });
+    adapter = await createPiRpc({ thread: threadFor(roots), spawn: harness.spawnImpl });
     const seen = collectEvents(adapter);
     await assert.rejects(adapter.request({ type: "get_entries" }), { code: "transport-error", uncertain: true });
     const fault = await waitForEvent(seen, (envelope) => envelope.event?.type === "transport_error");
@@ -794,7 +788,7 @@ test("stdout EOF rejects pending work and is reported as transport error, not de
   const harness = makeHarness({ env: { FAKE_PI_EOF_ON: "prompt" } });
   let adapter;
   try {
-    adapter = await createPiRpc({ thread: threadFor(roots), context: "", spawn: harness.spawnImpl });
+    adapter = await createPiRpc({ thread: threadFor(roots), spawn: harness.spawnImpl });
     const seen = collectEvents(adapter);
     await assert.rejects(adapter.request({ type: "prompt", message: "hello" }), {
       code: "transport-error",
@@ -817,7 +811,7 @@ test("close is idempotent, refuses new work and confirms cooperative death", asy
   const harness = makeHarness();
   let adapter;
   try {
-    adapter = await createPiRpc({ thread: threadFor(roots), context: "", spawn: harness.spawnImpl });
+    adapter = await createPiRpc({ thread: threadFor(roots), spawn: harness.spawnImpl });
     const first = adapter.close();
     const second = adapter.close();
     const result = await first;
@@ -839,7 +833,7 @@ test("an unresponsive child is SIGKILLed through the owned handle", async () => 
   const harness = makeHarness({ env: { FAKE_PI_HANG: "1" }, clock });
   let adapter;
   try {
-    adapter = await createPiRpc({ thread: threadFor(roots), context: "", spawn: harness.spawnImpl, clock });
+    adapter = await createPiRpc({ thread: threadFor(roots), spawn: harness.spawnImpl, clock });
     const closing = adapter.close();
     await waitFor(() => clock.pending > 0);
     clock.fire(4_000);
@@ -860,7 +854,7 @@ test("stdin write callback errors reject the originating request promptly", asyn
   const child = makeFakeChildProcess({ thread, failAt: 3 });
   let adapter;
   try {
-    adapter = await createPiRpc({ thread, context: "", spawn: () => child });
+    adapter = await createPiRpc({ thread, spawn: () => child });
     const outcome = await Promise.race([
       adapter.request({ type: "get_messages" }).then(
         () => "resolved",
@@ -888,7 +882,7 @@ test("a timed-out queued command is never written when a held write resumes", as
   const child = makeFakeChildProcess({ thread, holdAfter: 2 });
   let adapter;
   try {
-    adapter = await createPiRpc({ thread, context: "", spawn: () => child, clock });
+    adapter = await createPiRpc({ thread, spawn: () => child, clock });
     const held = adapter.request({ type: "get_entries", id: "held-request" }).then(
       () => "resolved",
       (error) => error,
@@ -922,7 +916,7 @@ test("a different contained session file before prompt is refused", async () => 
   });
   let adapter;
   try {
-    adapter = await createPiRpc({ thread: threadFor(roots), context: "", spawn: harness.spawnImpl });
+    adapter = await createPiRpc({ thread: threadFor(roots), spawn: harness.spawnImpl });
     await assert.rejects(adapter.request({ type: "prompt", message: "hello" }), { code: "session-mismatch" });
     await waitForChildExit(harness.children[0]);
     const log = await readFile(logPath, "utf8");
@@ -941,7 +935,7 @@ test("a policy refusal during the pre-prompt probe blocks the prompt", async () 
   });
   let adapter;
   try {
-    adapter = await createPiRpc({ thread: threadFor(roots), context: "", spawn: harness.spawnImpl });
+    adapter = await createPiRpc({ thread: threadFor(roots), spawn: harness.spawnImpl });
     await assert.rejects(adapter.request({ type: "prompt", message: "hello" }), { code: "policy-refusal" });
     await waitForChildExit(harness.children[0]);
     const log = await readFile(logPath, "utf8");
@@ -964,7 +958,7 @@ test("installed Pi 1.1.0 starts a new no-provider session and reports empty comm
   let adapter;
   try {
     await withEnv({ PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" }, async () => {
-      adapter = await createPiRpc({ thread: threadFor(roots), context: "verification context" });
+      adapter = await createPiRpc({ thread: threadFor(roots) });
       assert.equal(adapter.identity.mode, "new");
       const state = await adapter.request({ type: "get_state" });
       assert.equal(state.success, true);
@@ -998,7 +992,7 @@ test("installed Pi 1.1.0 resumes a pre-created valid v3 header with its own sess
   let adapter;
   try {
     await withEnv({ PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" }, async () => {
-      adapter = await createPiRpc({ thread: threadFor({ ...roots, session_id: importedId, session_file: file }), context: "verification context" });
+      adapter = await createPiRpc({ thread: threadFor({ ...roots, session_id: importedId, session_file: file }) });
       assert.equal(adapter.identity.mode, "resume");
       assert.equal(adapter.identity.session_id, importedId);
       const state = await adapter.request({ type: "get_state" });

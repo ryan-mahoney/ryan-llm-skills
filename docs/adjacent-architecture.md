@@ -76,7 +76,8 @@ repositories.
 - A **kit** groups related repositories and describes their roles and shared
   context. It supplies context for work without making one repository the implicit
   home of every document.
-- A **thread** records a conversation and its associated workspace context.
+- A **thread** records a conversation started in a workspace or one of its
+  repositories.
 - An **assignment** records the work delegated to an agent, its relevant inputs,
   execution location, session identity, and results.
 
@@ -342,8 +343,10 @@ The SessionManager boundary is explicit: its file is created on the first user o
 assistant message, not on arbitrary metadata. Metadata-only appends do not
 persist, and the advertised filename is not proof of a persisted session. Thread
 record: `<workspace>/threads/<thread-id>.json` with `thread_id`, `workspace_id`,
-`title`, `execution_dir`, `session_file`, context references, optional model
-settings, and `created_at`. Owner: adj5.
+`title`, `execution_dir`, `session_file`, optional model settings, and
+`created_at`. A thread passes Pi nothing beyond its execution directory: kit
+`context:` entries and project material are not injected, so they can never
+block a start. Owner: adj5.
 
 ### C-9 Remote access boundary
 
