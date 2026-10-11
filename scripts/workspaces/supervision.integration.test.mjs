@@ -273,7 +273,12 @@ async function createFixture(t) {
 }
 
 // Substitute only the final attach client; every probe reaches the real tmux.
-async function addTmuxWrapper(fixture) {
+// attachExit controls the substituted client's exit code: 0 keeps the normal
+// successful-detach behavior, nonzero exercises the attach-failure receipt.
+async function addTmuxWrapper(fixture, { attachExit = 0 } = {}) {
+  if (!Number.isInteger(attachExit) || attachExit < 0 || attachExit > 255) {
+    throw new Error(`attachExit must be an integer 0-255, got ${attachExit}`);
+  }
   const wrapperDir = join(fixture.root, "tmux-wrapper");
   await mkdir(wrapperDir, { recursive: true });
   const realTmux = execFileSync("which", ["tmux"], { encoding: "utf8" }).trim();
@@ -283,7 +288,7 @@ case " $* " in
   *" attach-session "*)
     count=$(find "$FAKE_TMUX_INBOX" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l | tr -d ' ')
     printf '%s hold=%s\\n' "$*" "$count" >> "$FAKE_TMUX_LOG"
-    exit 0
+    exit ${attachExit}
     ;;
 esac
 exec "$FAKE_TMUX_REAL" "$@"
@@ -408,6 +413,42 @@ test("takeover CLI: delivers the hold before the mocked final tmux attach bounda
   await waitForClose(pty.child);
 });
 
+test("takeover CLI: a nonzero attach exit after a delivered hold reports the attach failure without a duplicate", async (t) => {
+  const fixture = await createFixture(t);
+  writeCheckpoint(fixture.packagePath);
+  const id = randomUUID();
+  await launchAssignment(fixture, { id, specPackage: fixture.packagePath, workflow: "wf-1" });
+  const { env, log } = await addTmuxWrapper(fixture, { attachExit: 3 });
+
+  const pty = spawnPty([process.execPath, CLI_PATH, "takeover", id, "--run", "wf-1", "--json"], env);
+  fixture.state.children.push(pty.child);
+  await waitFor(async () => {
+    let attachLog = "";
+    try {
+      attachLog = await readFile(log, "utf8");
+    } catch {
+      return null;
+    }
+    return attachLog.trim() !== "" && pty.output().stdout.includes("attach_error") ? true : null;
+  }, "failed attach-session boundary and attach_error receipt").catch((error) => {
+    throw new Error(`${error.message}: ${JSON.stringify(pty.output())}`);
+  });
+
+  const stdout = pty.output().stdout;
+  assert.match(stdout, /"takeover":"delivered"/);
+  assert.match(stdout, /attach_error/);
+  assert.match(stdout, /attach exited with code 3/);
+  assert.match(stdout, /held pending/);
+  killGroup(pty.child);
+  await waitForClose(pty.child);
+
+  const inventory = await inboxFiles(fixture.packagePath);
+  assert.equal(inventory.inbox.length, 1, `expected exactly one hold: ${JSON.stringify(inventory)}`);
+  const holds = readInboxGuard(fixture.packagePath).items.filter((item) => item.kind === "hold");
+  assert.equal(holds.length, 1, "the failed attach wrote no duplicate original");
+  assert.equal(holds[0].state, "blocking");
+});
+
 test("takeover CLI: a non-spec assignment writes no inbox original and prints the attach hint", async (t) => {
   const fixture = await createFixture(t);
   const id = randomUUID();
@@ -482,6 +523,65 @@ test("resume CLI: wrong run, unknown hold and missing checkpoint refuse without 
   const missing = await runCli(["takeover", id, "--run", "wf-1", "--json"], fixture.env);
   assert.match(parseRefusal(missing).error, /requires a retained checkpoint/);
   assert.deepEqual(await inboxFiles(fixture.packagePath), inventory, "a missing checkpoint publishes nothing");
+});
+
+test("resume CLI: conflicting hold copies refuse without publishing a direction", async (t) => {
+  const fixture = await createFixture(t);
+  writeCheckpoint(fixture.packagePath);
+  const id = randomUUID();
+  await launchAssignment(fixture, { id, specPackage: fixture.packagePath, workflow: "wf-1" });
+  const takeover = await runCli(["takeover", id, "--json"], fixture.env);
+  assert.equal(takeover.code, 0, takeover.stderr);
+  const taken = JSON.parse(takeover.stdout.trim());
+  const holdBytes = await readFile(taken.hold.path, "utf8");
+
+  // A conflicting copy: the same hold id with different bytes in the archive.
+  await writeFile(
+    join(fixture.packagePath, "processed", `${taken.hold.id}.md`),
+    `${holdBytes}\nConflicting copy.\n`,
+  );
+  const inventory = await inboxFiles(fixture.packagePath);
+  assert.equal(inventory.inbox.length, 1);
+  assert.equal(inventory.processed.length, 1);
+
+  const refused = await runCli(["resume", id, "--hold", taken.hold.id, "--run", "wf-1", "--json"], fixture.env);
+  assert.match(parseRefusal(refused).error, /conflicting hold/);
+  assert.deepEqual(await inboxFiles(fixture.packagePath), inventory, "the refusal publishes no direction");
+  assert.equal(await readFile(taken.hold.path, "utf8"), holdBytes, "the refusal rewrites no hold");
+});
+
+test("resume CLI: a changed hold refuses against the retained checkpoint hash", async (t) => {
+  const fixture = await createFixture(t);
+  writeCheckpoint(fixture.packagePath);
+  const id = randomUUID();
+  await launchAssignment(fixture, { id, specPackage: fixture.packagePath, workflow: "wf-1" });
+  const takeover = await runCli(["takeover", id, "--json"], fixture.env);
+  assert.equal(takeover.code, 0, takeover.stderr);
+  const taken = JSON.parse(takeover.stdout.trim());
+  const holdBytes = await readFile(taken.hold.path, "utf8");
+
+  // Retain the delivered hold hash in the checkpoint, then change the live
+  // original under the same hold id.
+  recordCheckpoint({
+    package: fixture.packagePath,
+    workflow_id: "wf-1",
+    expected_revision: 1,
+    state: "ready",
+    obligation: { key: "implement:step-006", stage: "implementation", step: "step-006",
+      summary: "expose takeover and resume", artifacts: [] },
+    workers: [],
+    inbox: { items: [{ id: taken.hold.id, sha256: taken.hold.sha256, outcome: "held" }] },
+    reconciles_input_revision: 0,
+    coordinator_session: "session-1",
+    checkout: "/tmp/checkout-1",
+    now: () => FIXED,
+  });
+  await writeFile(taken.hold.path, `${holdBytes}\nRewritten archive.\n`);
+  const inventory = await inboxFiles(fixture.packagePath);
+
+  const refused = await runCli(["resume", id, "--hold", taken.hold.id, "--run", "wf-1", "--json"], fixture.env);
+  assert.match(parseRefusal(refused).error, /conflicting hold|different hash/);
+  assert.deepEqual(await inboxFiles(fixture.packagePath), inventory, "the refusal publishes no direction");
 });
 
 test("takeover CLI: attach failure after a delivered hold keeps it held and a retry writes no duplicate", async (t) => {

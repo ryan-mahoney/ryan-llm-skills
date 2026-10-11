@@ -576,6 +576,21 @@ async function takeoverCommand(root, id, options) {
   await printResult('takeover', result, options);
   try {
     const { exitCode, signal } = await attachAssignment(root, id, { isTTY: true, stdio: 'inherit' });
+    if (signal != null || exitCode !== 0) {
+      // A live assignment whose attach client exits nonzero (or is signaled)
+      // resolves rather than rejects, so the held-pending catch below is
+      // bypassed. Report the same retained-hold/held-pending receipt as a
+      // rejected attach call; the hold was already delivered exactly once
+      // before the attach and no second original is written here.
+      await printResult('takeover', {
+        ...result,
+        attached: false,
+        attach_error: signal != null
+          ? `attach terminated by signal ${signal}`
+          : `attach exited with code ${exitCode ?? 'unknown'}`,
+        note: 'attach failed after hold delivery; the message is retained and remains held pending',
+      }, options);
+    }
     process.exitCode = signal != null ? 1 : (exitCode ?? 1);
   } catch (error) {
     await printResult('takeover', {
@@ -595,12 +610,43 @@ async function resumeCommand(root, id, options) {
   if (declared === null) throw new Error('resume requires an assignment with a spec package');
   const packagePath = canonicalPackage(declared).packagePath;
   const run = resolveRun(record, options['--run']);
-  retainedCheckpoint(packagePath, run, 'resume');
+  const checkpoint = retainedCheckpoint(packagePath, run, 'resume');
   const holdId = options['--hold'];
-  const guard = readInboxGuard(packagePath);
+  // Project the live mailboxes against the retained checkpoint's inbox
+  // history/outcomes: a conflicting copy (same hold id, different bytes) or a
+  // changed archived hold (live hash differs from the retained hash) must
+  // refuse instead of publishing a release direction for an arbitrary hash.
+  const retainedItems = Array.isArray(checkpoint.inbox?.items) ? checkpoint.inbox.items : [];
+  const priorDirectories = Array.isArray(checkpoint.inbox?.observed_directories)
+    ? checkpoint.inbox.observed_directories.filter((name) => name === 'inbox' || name === 'processed')
+    : [];
+  const guard = readInboxGuard(packagePath, {
+    priorItems: retainedItems, items: retainedItems, priorDirectories,
+  });
+  const reasons = guard.reasons ?? [];
+  if (reasons.includes(`conflict:${holdId}`)) {
+    throw new Error(`resume refuses conflicting hold ${holdId} for run ${run} in ${packagePath}: conflicting originals share one hold id with different bytes`);
+  }
+  if (reasons.includes(`missing-history:${holdId}`)) {
+    throw new Error(`resume refuses hold ${holdId} for run ${run} in ${packagePath}: the retained original is missing from the inbox and archive`);
+  }
+  const sources = (guard.sources ?? []).filter((source) => source?.id === holdId);
+  if (sources.length > 1) {
+    throw new Error(`resume refuses hold ${holdId} for run ${run} in ${packagePath}: multiple observed originals share one hold id`);
+  }
   const hold = (guard.items ?? []).find((item) => item.id === holdId && item.kind === 'hold'
     && item.run === run && (item.state === 'blocking' || item.state === 'held'));
-  if (!hold) throw new Error(`no retained kind:hold original ${holdId} for run ${run} in ${packagePath}`);
+  // No observed source, a source for another run, a released hold, or a
+  // duplicate-observed copy all fail the unique-identity match below.
+  if (!hold || sources.length !== 1) throw new Error(`no retained kind:hold original ${holdId} for run ${run} in ${packagePath}`);
+  const [source] = sources;
+  if (source.state !== 'observed' || source.sha256 !== hold.sha256) {
+    throw new Error(`resume refuses hold ${holdId} for run ${run} in ${packagePath}: unavailable hold identity`);
+  }
+  const retainedHold = retainedItems.find((item) => item && item.id === holdId && typeof item.sha256 === 'string');
+  if (retainedHold && retainedHold.sha256 !== hold.sha256) {
+    throw new Error(`resume refuses hold ${holdId} for run ${run} in ${packagePath}: the retained checkpoint holds a different hash for this hold id`);
+  }
   const delivery = await deliverOverseerMessage(packagePath, {
     run,
     sender: 'operator',

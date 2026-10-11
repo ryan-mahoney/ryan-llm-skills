@@ -116,7 +116,10 @@ one `kind: direction` original naming the hold id and hash. It never attaches,
 archives, edits or releases anything; the result stays "release requested,
 waiting for the coordinator". Wrong run, unknown hold id, a missing checkpoint
 and symlinked or absent mailboxes refuse with the ordinary `{error,path}`
-envelope and write nothing.
+envelope and write nothing. Conflicting copies of one hold id, a hold whose
+live hash differs from the retained checkpoint hash, and missing hold history
+refuse the same way: a release direction is published only for one uniquely
+observed, hash-matching hold original.
 
 A non-spec assignment has no automatic actor: `takeover` prints that note,
 writes no inbox file and attaches only when a TTY is present.
