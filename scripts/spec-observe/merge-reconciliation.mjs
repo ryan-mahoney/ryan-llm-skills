@@ -1,10 +1,12 @@
 // Explicit metadata reconciliation, separate from the read-only observer.
+// One input per package target: { package, ref, target, primary, pr, ... }. A
+// package's sentinel-merge.json holds one record per target.
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
 import { lstat, realpath, open, rename, unlink } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 const exec = promisify(execFile);
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 export const MERGE_POLL_MS = 10 * 60 * 1000;
@@ -19,10 +21,10 @@ export async function boundedJson(path, root) {
   } catch { return null; }
 }
 export function mergeBinding(input) {
-  return hash([input.package, input.pr.url, input.pr.branch, input.pr.base, input.commits, input.receipts, input.checkpoints]);
+  return hash([input.ref, input.target, input.pr.url, input.pr.branch, input.pr.base, input.commits, input.receipts, input.checkpoints]);
 }
 export function applicableMerge(record, input) {
-  return record?.schema_version === 1 && record.package === input.package
+  return record?.schema_version === 1 && record.package_ref === input.ref && record.target === input.target
     && (record.binding === mergeBinding(input) || record.url === input.pr.url
       && typeof record.branch === 'string' && typeof record.base === 'string'
       && (input.pr.branch == null || input.pr.branch === record.branch)
@@ -93,7 +95,7 @@ function apiFailure(error) {
 async function localMergeEvidence(input, prior, { run, readBranch, now }) {
   const fail = reason => ({ state: 'unknown', reason });
   try {
-    if (await realpath(input.primary) !== input.primary || dirname(input.package) !== join(input.primary, '.specs')
+    if (await realpath(input.primary) !== input.primary
       || await realpath(join(input.primary, '.git')) !== join(input.primary, '.git')
       || !(await lstat(join(input.primary, '.git'))).isDirectory()) return fail('local-repository-unavailable');
     const pr = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/([1-9][0-9]*)$/.exec(input.pr.url);
@@ -129,7 +131,7 @@ async function localMergeEvidence(input, prior, { run, readBranch, now }) {
     if (!Number.isFinite(Date.parse(match.time)) || Date.parse(match.time) > now()) return fail('local-merge-time-unavailable');
     const currentBase = await readGitRef(input.primary, 'refs/remotes/origin/' + base);
     if (currentBase.head !== tracked.head) return fail('local-tracked-base-changed');
-    const record = { schema_version: 1, package: input.package, binding: mergeBinding(input), url: input.pr.url,
+    const record = { schema_version: 1, package_ref: input.ref, target: input.target, binding: mergeBinding(input), url: input.pr.url,
       branch: match.branch, base, tip: match.head, head: match.head, base_tip: tracked.head,
       checked_at: new Date(now()).toISOString(), state: 'merged', reason: 'local-pr-merge',
       merge_commit: match.commit, merged_at: match.time, evidence_source: 'local-git' };
@@ -149,13 +151,14 @@ export function createMergeReconciler({ persist = false, now = Date.now, monoton
     finally { localSpent += Math.max(0, now() - started, monotonic() - startMono); }
   };
   const finish = async (input, record) => {
-    if (memory.size >= 500 && !memory.has(input.package)) memory.delete(memory.keys().next().value);
-    memory.set(input.package, record);
+    const key = `${input.package}\0${input.target}`;
+    if (memory.size >= 500 && !memory.has(key)) memory.delete(memory.keys().next().value);
+    memory.set(key, record);
     return persist ? persistRecord(input, record) : record;
   };
   return async input => {
     const path = join(input.package, 'sentinel-merge.json'), binding = mergeBinding(input);
-    const prior = memory.get(input.package) ?? await boundedJson(path, input.package);
+    const prior = memory.get(`${input.package}\0${input.target}`) ?? (await boundedJson(path, input.package))?.targets?.[input.target];
     let branch = input.pr.branch ?? (prior?.url === input.pr.url ? prior.branch : null);
     let local = branch ? await readBranch(input.primary, branch) : null;
     if (local?.state === 'unknown') return { state: 'unknown', reason: 'branch-tip-unavailable' };
@@ -180,7 +183,7 @@ export function createMergeReconciler({ persist = false, now = Date.now, monoton
     }
     if (checks >= 3 || spent >= MERGE_NETWORK_BUDGET_MS || spent + localSpent >= MERGE_NETWORK_BUDGET_MS + MERGE_LOCAL_BUDGET_MS) return { state: 'unknown', reason: 'merge-check-budget' };
     checks++;
-    let record = { schema_version: 1, package: input.package, binding, url: input.pr.url, branch, base: input.pr.base ?? prior?.base ?? null,
+    let record = { schema_version: 1, package_ref: input.ref, target: input.target, binding, url: input.pr.url, branch, base: input.pr.base ?? prior?.base ?? null,
       authoritative_unmerged_at: prior?.url === input.pr.url ? prior.authoritative_unmerged_at ?? (prior.state === 'unmerged' ? prior.checked_at : null) : null,
       tip, checked_at: new Date(now()).toISOString(), state: 'unknown', reason: 'merge-check-unavailable', local_reason: localReason };
     const started = now(), startedMono = monotonic();
@@ -214,12 +217,13 @@ export function createMergeReconciler({ persist = false, now = Date.now, monoton
 async function persistRecord(input,record){
   const path=join(input.package,'sentinel-merge.json');
   const existing=await boundedJson(path,input.package);
-  if(existing&&JSON.stringify(existing)===JSON.stringify(record))return record;
+  if(JSON.stringify(existing?.targets?.[input.target])===JSON.stringify(record))return record;
   // Canonical package was validated by the collector; reject a replacement before writing.
   if (await realpath(input.package) !== input.package) return {state:'unknown',reason:'package-changed'};
   try { const info=await lstat(path);if(!info.isFile()||info.isSymbolicLink())return {state:'unknown',reason:'metadata-path-invalid'}; } catch(error){if(error.code!=='ENOENT')return {state:'unknown',reason:'metadata-path-unavailable'};}
+  const file={schema_version:2,package_ref:input.ref,targets:{...existing?.targets,[input.target]:record}};
   const temporary=join(input.package,`.sentinel-merge-${randomUUID()}.tmp`);
-  try { const handle=await open(temporary,'wx',0o600);try{await handle.writeFile(JSON.stringify(record,null,2)+'\n');}finally{await handle.close();}await rename(temporary,path); }
+  try { const handle=await open(temporary,'wx',0o600);try{await handle.writeFile(JSON.stringify(file,null,2)+'\n');}finally{await handle.close();}await rename(temporary,path); }
   finally { await unlink(temporary).catch(()=>{}); }
   return record;
 }

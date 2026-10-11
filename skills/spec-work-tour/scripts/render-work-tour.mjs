@@ -166,6 +166,10 @@ const provenCount = mergeClaims.filter((claim) => claim.status === "proven").len
 const passedRequiredCount = requiredGates.filter((gate) => gate.status === "passed").length;
 const deploymentStatusClass = deployment.readiness === "ready" ? "status--passed" : deployment.readiness === "blocked" ? "status--blocked" : "status--stale";
 
+// A link spelled through workspace storage (projects/<workspace>/specs/<slug>/...) is internal
+// provenance, like a legacy `.specs` segment. Siblings of the tour itself stay linkable.
+const STORAGE_PACKAGE_PATH = /(^|[\\/])projects[\\/][^\\/]+[\\/]specs([\\/]|$)/;
+
 const resolveArtifact = (rawValue) => {
   if (!rawValue) return { label: "none", href: null, exists: false, image: false };
   const raw = String(rawValue);
@@ -177,7 +181,7 @@ const resolveArtifact = (rawValue) => {
   const filePart = hashIndex >= 0 ? linkValue.slice(0, hashIndex) : linkValue;
   const fragment = hashIndex >= 0 ? linkValue.slice(hashIndex) : "";
   // Internal provenance stays in the manifest, not in reader-facing links.
-  if (path.isAbsolute(filePart) || filePart.split(/[\\/]/).includes(".specs")) {
+  if (path.isAbsolute(filePart) || filePart.split(/[\\/]/).includes(".specs") || STORAGE_PACKAGE_PATH.test(filePart)) {
     return { href: null, exists: false, image: false };
   }
   const candidates = [

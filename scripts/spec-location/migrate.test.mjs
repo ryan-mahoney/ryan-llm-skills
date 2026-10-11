@@ -29,7 +29,7 @@ function legacyFixture() {
   put(join(a, 'p1', 'spec.md'), '# P1 spec\n\nBody.\n');
   put(join(a, 'p1', 'context.md'), '# P1 context\n');
   put(join(a, 'p1', 'spec-steps.json'), JSON.stringify({ package: join(a, 'p1'), sibling: join(a, 'p1-other') }));
-  put(join(a, 'p1', 'pr-url.json'), JSON.stringify({ schema_version: 1, kind: 'pr_submission', url: 'https://example.test/pull/1', package: join(a, 'p1') }));
+  put(join(a, 'p1', 'pr-url.json'), JSON.stringify({ schema_version: 1, kind: 'pr_submission', url: 'https://example.test/pull/1', draft: false, package: join(a, 'p1') }));
   put(join(a, 'p1', 'runtime', 'run.json'), JSON.stringify({ state: 'completed', pid: 999999, package: join(a, 'p1') }));
   put(join(a, 'p1', 'runtime', 'runs', 'r1.json'), 'transcript\n');
   put(join(a, 'project-context.md'), '# Alpha context\n\nAlpha facts.\n');
@@ -83,8 +83,8 @@ test('migrate --apply: builds the storage tree, rewrites paths, archives the ori
   assert.equal(steps.package, p1);
   assert.equal(steps.sibling, join(fx.alpha, '.specs', 'p1-other'));
   assert.deepEqual(json(join(p1, 'pr-url.json')), {
-    package_ref: 'demo/p1',
-    targets: { alpha: { schema_version: 1, kind: 'pr_submission', url: 'https://example.test/pull/1' } },
+    schema_version: 1, kind: 'pr_submission', package_ref: 'demo/p1',
+    targets: { alpha: { url: 'https://example.test/pull/1', mode: 'ready' } },
   });
   assert.equal(json(join(p1, 'runtime', 'run.json')).package, p1);
   assert.deepEqual(json(join(p1, 'scope.json')).targets, [{ id: 'alpha', branch: 'spec-p1' }]);

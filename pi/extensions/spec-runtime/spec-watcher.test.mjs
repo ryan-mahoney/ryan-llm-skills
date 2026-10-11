@@ -7,10 +7,10 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { watchSpecTree } from './spec-watcher.mjs';
 
-test('recursive watcher observes nested creation and atomic replacement only inside .specs', { timeout: 10000 }, async t => {
+test('recursive watcher observes nested creation and atomic replacement only inside a workspace specs directory', { timeout: 10000 }, async t => {
   const repo = fs.realpathSync(fs.mkdtempSync(join(tmpdir(), 'spec-watch-')));
-  const root = join(repo, '.specs'), outside = join(repo, 'source');
-  fs.mkdirSync(root); fs.mkdirSync(outside);
+  const root = join(repo, 'projects', 'demo', 'specs'), outside = join(repo, 'source');
+  fs.mkdirSync(root, { recursive: true }); fs.mkdirSync(outside);
   fs.writeFileSync(join(outside, 'private.txt'), 'outside');
   fs.symlinkSync(outside, join(root, 'external'));
   const nativePaths = [], nativeWatch = fs.watch;
@@ -54,7 +54,7 @@ test('recursive watcher observes nested creation and atomic replacement only ins
   fs.writeFileSync(nested, '{}');
   await new Promise(resolve => setTimeout(resolve, 50));
   assert.equal(invalidations, afterClose);
-  assert.throws(() => watchSpecTree(repo, () => {}), /canonical .specs/);
+  assert.throws(() => watchSpecTree(join(repo, 'missing'), () => {}), { code: 'ENOENT' });
   fs.symlinkSync(root, join(repo, 'alias'));
-  assert.throws(() => watchSpecTree(join(repo, 'alias'), () => {}), /canonical .specs/);
+  assert.throws(() => watchSpecTree(join(repo, 'alias'), () => {}), /canonical directory/);
 });

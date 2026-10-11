@@ -1,18 +1,22 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, writeFileSync } from 'node:fs';
-import { constants as osConstants, homedir } from 'node:os';
+import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
+import { constants as osConstants, homedir, hostname } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { configurationFailure, splitModelSelector } from '../../pi/extensions/spec-runtime/model-selector.mjs';
 import { Runtime, groupAlive, launch, loadRun, summary } from '../../pi/extensions/spec-runtime/runtime.mjs';
 import { gitFacts } from '../spec-facts/core.mjs';
+import { newPackage, setWorktree } from '../spec-location/index.mjs';
+import { setupStorage } from '../workspaces/store.mjs';
 import { atomicWrite, comparisonLabel, discoverSkills, gradeCell, indexDrift, loadScenario, readUsage, renderReport, validateScenario } from './core.mjs';
 
 const CELL_ENV_NAMES = new Set([
   'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM',
   'SPEC_GYM_FAKE_PI_LOG', 'SPEC_GYM_FAKE_PI_SCRIPT', 'SPEC_GYM_FAKE_PI_RUN_SNAPSHOT',
 ]);
-const GENERATED_GITIGNORE = '.specs/\n';
+// Each cell gets its own storage root with one workspace holding the fixture repository.
+const FIXTURE_WORKSPACE = 'gym';
+const FIXTURE_REPOSITORY = 'repo';
 const FIXTURE_USER = { name: 'Spec Gym', email: 'spec-gym@example.invalid' };
 const MANAGED_TERMINAL_STATES = new Set(['completed', 'failed', 'cancelled', 'blocked']);
 const MANAGED_TERMINATION_INSTRUCTION = 'Confirm the process group is terminated before removing the cell.';
@@ -120,7 +124,7 @@ function cellDirFor(run, cell) {
   return cellDir;
 }
 
-export function materializeCell(run, cell, scenario) {
+export async function materializeCell(run, cell, scenario) {
   const cellDir = cellDirFor(run, cell);
   const scenarioFolder = scenario.folder;
   const inputDir = join(scenarioFolder, 'input');
@@ -131,25 +135,47 @@ export function materializeCell(run, cell, scenario) {
   const feature = scenario.scenario.fixture.feature;
 
   const repoDir = join(cellDir, 'repo');
-  const packageDir = join(repoDir, '.specs', feature);
-  const projectContext = join(repoDir, '.specs', 'project-context.md');
   const repositorySource = join(inputDir, 'repository');
   if (existsSync(repositorySource)) copyTree(repositorySource, repoDir);
   else mkdirSync(repoDir, { recursive: true });
-  if (!existsSync(join(repoDir, '.gitignore'))) writeFileSync(join(repoDir, '.gitignore'), GENERATED_GITIGNORE);
-  const packageSource = join(inputDir, 'package');
-  if (existsSync(packageSource)) copyTree(packageSource, packageDir);
-  copyTree(join(inputDir, 'project-context.md'), projectContext);
 
   const git = (...args) => execFileSync('git', ['-C', repoDir, ...args], { stdio: 'pipe' });
   git('init', '-q');
   git('config', 'user.name', FIXTURE_USER.name);
   git('config', 'user.email', FIXTURE_USER.email);
   git('add', '-A');
-  git('commit', '-qm', 'Fixture');
+  git('commit', '--allow-empty', '-qm', 'Fixture');
   const fixtureCommit = execFileSync('git', ['-C', repoDir, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-  return { cellDir, repoDir, packageDir, projectContext, fixtureCommit };
+
+  // The kit's execution host is this machine, so spec-location accepts the cell.
+  const storageRoot = join(realpathSync(cellDir), 'storage');
+  await setupStorage(storageRoot);
+  const workspaceDir = join(storageRoot, 'projects', FIXTURE_WORKSPACE);
+  mkdirSync(workspaceDir, { recursive: true });
+  writeFileSync(join(workspaceDir, 'kit.yaml'), [
+    'version: 1', `id: ${FIXTURE_WORKSPACE}`, `name: ${FIXTURE_WORKSPACE}`,
+    `execution_host: ${hostname().split('.')[0].toLowerCase()}`,
+    'repositories:', `  - id: ${FIXTURE_REPOSITORY}`, `    path: ${JSON.stringify(realpathSync(repoDir))}`, '',
+  ].join('\n'));
+  const created = await newPackage({ workspace: FIXTURE_WORKSPACE, slug: feature, targets: [{ id: FIXTURE_REPOSITORY }], root: storageRoot });
+  if (!created.ok) throw new Error(`${created.message} ${created.remedy}`);
+  const { package_dir: packageDir, project_context: projectContext } = created.locations;
+  // The runtime takes the worktree from locations.json, so a managed cell gets its checkout up front.
+  if (scenario.scenario.driver === 'managed-step') {
+    git('worktree', 'add', '-q', '-b', created.locations.targets[0].branch, checkoutDirFor(cellDir));
+    const recorded = await setWorktree(created.locations.package_ref, FIXTURE_REPOSITORY, checkoutDirFor(cellDir), { root: storageRoot });
+    if (!recorded.ok) throw new Error(`${recorded.message} ${recorded.remedy}`);
+  }
+  const packageSource = join(inputDir, 'package');
+  if (existsSync(packageSource)) copyTree(packageSource, packageDir);
+  copyTree(join(inputDir, 'project-context.md'), projectContext);
+  return { cellDir, repoDir, storageRoot, packageDir, projectContext, fixtureCommit };
 }
+
+const checkoutDirFor = cellDir => join(cellDir, 'checkout');
+
+// A scenario task may name the cell's package as {package}.
+const taskFor = (scenario, packageDir) => scenario.scenario.task.replaceAll('{package}', packageDir);
 
 export function cellEnvironment(env = {}) {
   const result = {};
@@ -200,12 +226,12 @@ export async function runLeafCell(run, cell, scenario, materialized, hooks = {})
     '--skill', run.skillDir, '--append-system-prompt', join(run.skillDir, 'SKILL.md'),
     '--provider', provider, '--model', model,
     ...(thinking ? ['--thinking', thinking] : []),
-    '--', scenario.scenario.task,
+    '--', taskFor(scenario, materialized.packageDir),
   ];
   const timeoutMs = scenario.scenario.timeout_ms ?? run.timeoutMs;
   const startedAt = new Date().toISOString();
   const started = Date.now();
-  const { pid, done } = spawnWithDeadline({ command: run.pi, args, cwd: materialized.repoDir, env: cellEnvironment(process.env), timeoutMs, stream, stderr });
+  const { pid, done } = spawnWithDeadline({ command: run.pi, args, cwd: materialized.repoDir, env: { ...cellEnvironment(process.env), ADJACENT_STORAGE_ROOT: materialized.storageRoot }, timeoutMs, stream, stderr });
   hooks.onPid?.(pid);
   const execution = await done;
   const finishedAt = new Date().toISOString();
@@ -261,8 +287,8 @@ export async function runLeafCell(run, cell, scenario, materialized, hooks = {})
 export async function runManagedCell(run, cell, scenario, materialized, hooks = {}) {
   const cellDir = materialized?.cellDir ?? cellDirFor(run, cell);
   const repoDir = materialized?.repoDir ?? join(cellDir, 'repo');
-  const packageDir = materialized?.packageDir ?? join(repoDir, '.specs', scenario.scenario.fixture.feature);
-  const checkoutDir = join(cellDir, 'checkout');
+  const packageDir = materialized?.packageDir ?? join(cellDir, 'storage', 'projects', FIXTURE_WORKSPACE, 'specs', scenario.scenario.fixture.feature);
+  const checkoutDir = checkoutDirFor(cellDir);
   const startedAt = new Date().toISOString();
   const started = Date.now();
   const common = () => ({
@@ -298,7 +324,7 @@ export async function runManagedCell(run, cell, scenario, materialized, hooks = 
   let runId = null;
   let startError = null;
   try {
-    process.env = cellEnvironment(snapshot);
+    process.env = { ...cellEnvironment(snapshot), ADJACENT_STORAGE_ROOT: materialized?.storageRoot ?? join(cellDir, 'storage') };
     let reportTerminal = () => {};
     const terminal = new Promise(resolveTerminal => { reportTerminal = resolveTerminal; });
     const runtime = new Runtime({
@@ -313,17 +339,16 @@ export async function runManagedCell(run, cell, scenario, materialized, hooks = 
     });
     let initial;
     try {
-      initial = runtime.start({
+      initial = await runtime.start({
         package: packageDir,
         step: join(packageDir, `step-${String(step).padStart(3, '0')}-subspec.md`),
-        checkout: checkoutDir,
         owner_model: cell.model,
         editor_model: roles.editor_model,
         scout_model: roles.scout_model,
         child_extensions: childExtensions,
         timeout_ms: scenario.scenario.timeout_ms ?? run.timeoutMs,
         assignment_id: cell.id,
-        instructions: scenario.scenario.task,
+        instructions: taskFor(scenario, packageDir),
       }, join(cellDir, 'gym.json'));
     } catch (error) {
       startError = error;
@@ -474,7 +499,7 @@ export async function runCampaign(options, { log = () => {} } = {}) {
       log(`start ${cell.id}`);
 
       const scenario = loaded.find(entry => entry.scenario.id === cell.scenarioId);
-      const materialized = materializeCell(run, cell, scenario);
+      const materialized = await materializeCell(run, cell, scenario);
       const graded = scenario.scenario.driver === 'managed-step'
         ? await runManagedCell(run, cell, scenario, materialized, { onRuntime: value => { activeRuntime = value; } })
         : await runLeafCell(run, cell, scenario, materialized, { onPid: pid => { activePid = pid; } });
@@ -486,7 +511,7 @@ export async function runCampaign(options, { log = () => {} } = {}) {
       const result = gradeCell(graded, scenario, {
         package: materialized.packageDir,
         repo: materialized.repoDir,
-        checkout: driver === 'leaf' ? materialized.repoDir : join(materialized.cellDir, 'checkout'),
+        checkout: driver === 'leaf' ? materialized.repoDir : checkoutDirFor(materialized.cellDir),
         fixtureCommit: materialized.fixtureCommit,
       });
       recordCell.state = 'finished';

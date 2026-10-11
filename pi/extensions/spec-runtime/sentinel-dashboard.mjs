@@ -10,7 +10,7 @@ function openBrowser(url) {
   const args = process.platform === 'win32' ? ['url.dll,FileProtocolHandler', url] : [url];
   return new Promise((resolve, reject) => execFile(command, args, { timeout: 5000 }, error => error ? reject(error) : resolve()));
 }
-export function createSentinelDashboard({ agentDir, port = 0, publicHost, launch = fork, open = openBrowser, timeoutMs = 5000 } = {}) {
+export function createSentinelDashboard({ agentDir, port = 0, publicHost, storageRoot, launch = fork, open = openBrowser, timeoutMs = 5000 } = {}) {
   let owned = null, starting = null, address = null, stopping = null;
   // Stop only this owned handle. The promise settles when the owned child
   // exits, and repeated stops share it instead of returning before exit.
@@ -48,6 +48,7 @@ export function createSentinelDashboard({ agentDir, port = 0, publicHost, launch
       try {
         const args = ['--port', String(port), '--agent-dir', agentDir];
         if (publicHost != null) args.push('--public-host', publicHost);
+        if (storageRoot != null) args.push('--storage-root', storageRoot);
         child = launch(serverFile, args, {
           stdio: ['ignore', 'ignore', 'ignore', 'ipc'], execArgv: [],
         });

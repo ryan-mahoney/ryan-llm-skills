@@ -1,22 +1,25 @@
 import test from 'node:test';
 import { EventEmitter } from 'node:events';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync, symlinkSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { setWorktree } from '../../../scripts/spec-location/index.mjs';
+import { makePackageFixture } from './package-fixture.mjs';
 import { submitCompletion, completionStatus, recordVerification, verificationReceipts, revision, refreshProgress, recordCheckpoint, installProgressContext, watchProgress } from './completion.mjs';
 
-function fixture(t) {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'completion-')));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+async function fixture(t) {
+  const base = await makePackageFixture({ prefix: 'completion-' });
+  const root = base.repo, pkg = base.packagePath;
+  t.after(() => rmSync(base.dir, { recursive: true, force: true }));
   const git = (...args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: 'pipe' }).trim();
-  git('init', '-q'); git('config', 'user.name', 'Test'); git('config', 'user.email', 'test@example.invalid');
-  writeFileSync(join(root, '.gitignore'), '.specs/\n'); writeFileSync(join(root, 'source.js'), 'export const value = 1;\n');
+  writeFileSync(join(root, 'source.js'), 'export const value = 1;\n');
   git('add', '.'); git('commit', '-qm', 'Fixture');
-  const pkg = join(root, '.specs/feature'); mkdirSync(join(pkg, 'runtime/runs'), { recursive: true });
+  const recorded = await setWorktree(base.ref, 'repo', root, base.location);
+  assert.equal(recorded.ok, true);
+  mkdirSync(join(pkg, 'runtime/runs'), { recursive: true });
   mkdirSync(join(pkg, 'evidence')); writeFileSync(join(pkg, 'spec.md'), '# Spec');
-  const gate = { id: 'EV-1', ownerStep: 1, required: true, phase: 'merge', rejects: ['FH-1'], artifact: '.specs/feature/evidence/check.txt' };
+  const gate = { id: 'EV-1', ownerStep: 1, required: true, phase: 'merge', rejects: ['FH-1'], artifact: 'evidence/check.txt' };
   writeFileSync(join(pkg, 'evidence-plan.json'), JSON.stringify({ gates: [gate] }));
   const r = { id: 'attempt-1', completion_contract: 1, step: join(pkg, 'step-001-subspec.md'), package: pkg, primary: root, checkout: root, state: 'running' };
   writeFileSync(join(pkg, 'runtime/runs/attempt-1.json'), JSON.stringify(r));
@@ -28,7 +31,7 @@ function fixture(t) {
 }
 
 test('structured handoff writes canonical learning and index without converting process exit into acceptance', async t => {
-  const f = fixture(t);
+  const f = await fixture(t);
   assert.equal(completionStatus(f.r).status, 'handoff_incomplete');
   const saved = submitCompletion(f.r, f.input);
   assert.equal(saved.status, 'recorded'); assert.match(saved.acceptance, /review/);
@@ -41,8 +44,8 @@ test('structured handoff writes canonical learning and index without converting 
   assert.equal(verificationReceipts(f.r).length, 1);
 });
 
-test('verification summaries preserve execution facts and populate learning without timestamp transcription', t => {
-  const f = fixture(t), before = revision(f.r);
+test('verification summaries preserve execution facts and populate learning without timestamp transcription', async t => {
+  const f = await fixture(t), before = revision(f.r);
   const receipt = recordVerification(f.r, 'mise exec -- mix test focused.exs', before, before,
     { exit_code: 0, full_output_path: f.evidence }, { started_at: '2026-10-08T13:20:00.000Z', elapsed_ms: 3700 });
   const markdown = readFileSync(receipt.summary_artifact, 'utf8');
@@ -62,8 +65,8 @@ test('verification summaries preserve execution facts and populate learning with
   assert.throws(() => submitCompletion(f.r, { ...input, evidence: [{ ...input.evidence[0], receipt_id: failed.id, artifact: failed.summary_artifact }] }), /failed receipt/);
 });
 
-test('evidence logs, failed receipts, omitted gates and changed HEAD cannot masquerade as completed handoff', t => {
-  const f = fixture(t);
+test('evidence logs, failed receipts, omitted gates and changed HEAD cannot masquerade as completed handoff', async t => {
+  const f = await fixture(t);
   mkdirSync(join(f.pkg, 'learnings')); writeFileSync(join(f.pkg, 'learnings/step-001-learning.md'), 'Canonical learning: evidence/check.txt');
   assert.equal(completionStatus(f.r).status, 'handoff_incomplete');
   assert.throws(() => submitCompletion(f.r, { ...f.input, evidence: [] }), /exactly/);
@@ -77,8 +80,8 @@ test('evidence logs, failed receipts, omitted gates and changed HEAD cannot masq
   assert.equal(submitCompletion(f.r, { ...f.input, evidence: [{ ...f.input.evidence[0], applicability: 'Earlier focused evidence covers the unchanged contract; later change is constant-only.' }] }).status, 'recorded');
 });
 
-test('checkpoint records missing evidence honestly and rejects escaped or symlinked artifacts', t => {
-  const f = fixture(t);
+test('checkpoint records missing evidence honestly and rejects escaped or symlinked artifacts', async t => {
+  const f = await fixture(t);
   const input = { ...f.input, outcome: 'checkpoint', gaps: ['Required behavior unfinished'], evidence: [{ id: 'EV-1', status: 'pending', proof_boundary: 'not run' }] };
   assert.equal(submitCompletion(f.r, input).outcome, 'checkpoint');
   assert.throws(() => submitCompletion(f.r, { ...input, outcome: 'as-specified' }), /gaps/);
@@ -88,7 +91,7 @@ test('checkpoint records missing evidence honestly and rejects escaped or symlin
 });
 
 test('progress watcher failure is reported and disposed without crashing the host', async t => {
-  const f = fixture(t), watchers = [], errors = [];
+  const f = await fixture(t), watchers = [], errors = [];
   const close = watchProgress(f.pkg, error => errors.push(error), () => {}, {
     watchDirectory: () => {
       const watcher = new EventEmitter();
@@ -108,7 +111,7 @@ test('progress watcher failure is reported and disposed without crashing the hos
 });
 
 test('review arrival refreshes index and progress without a model request or acceptance claim', async t => {
-  const f = fixture(t);
+  const f = await fixture(t);
   const errors = []; const close = watchProgress(f.pkg, e => errors.push(e)); t.after(close);
   mkdirSync(join(f.pkg, 'reviews'));
   writeFileSync(join(f.pkg, 'reviews/step-001-review.md'), '```yaml\nreview:\n  verdict: needs-fix\n```\n');
@@ -122,8 +125,8 @@ test('review arrival refreshes index and progress without a model request or acc
   assert.deepEqual(errors, []); assert.equal(ledger.artifacts.find(a => a.kind === 'review').assessment, 'inspect source; presence is not approval');
 });
 
-test('compacted owner context receives one current reminder without persistent messages or extra turns', t => {
-  const f = fixture(t), handlers = {};
+test('compacted owner context receives one current reminder without persistent messages or extra turns', async t => {
+  const f = await fixture(t), handlers = {};
   const pi = { on: (event, fn) => { handlers[event] = fn; } };
   installProgressContext(pi, { record: f.r, role: 'owner' });
   const first = handlers.context({ messages: [{ role: 'user', content: 'Compacted context' }] });
@@ -135,7 +138,7 @@ test('compacted owner context receives one current reminder without persistent m
 });
 
 test('coordinator decisions survive reconstruction while artifact presence is never review approval', async t => {
-  const f = fixture(t);
+  const f = await fixture(t);
   recordCheckpoint(f.pkg, { stage: 'implementation', status: 'running', next: 'Finish step 1', decisions: [], artifacts: ['spec.md'] });
   const ledger = await refreshProgress(f.pkg);
   assert.equal(ledger.stages[0].next, 'Finish step 1');
@@ -145,7 +148,7 @@ test('coordinator decisions survive reconstruction while artifact presence is ne
 
 
 test('coordinator session binding survives compaction and restores next action without a model wake', async t => {
-  const f = fixture(t), handlers = {}, persisted = [];
+  const f = await fixture(t), handlers = {}, persisted = [];
   const pi = { on: (event, fn) => { handlers[event] = fn; }, appendEntry: (customType, data) => persisted.push({ type: 'custom', customType, data }) };
   const hooks = installProgressContext(pi);
   hooks.attach(f.pkg);
@@ -161,7 +164,7 @@ test('coordinator session binding survives compaction and restores next action w
 });
 
 test('skill stage aliases retain completion guards while draft publication remains a checkpoint', async t => {
-  const f = fixture(t);
+  const f = await fixture(t);
   await refreshProgress(f.pkg);
   for (const stage of ['spec-run', 'spec-step-run', 'spec-pr']) {
     assert.throws(() => recordCheckpoint(f.pkg, { stage, status: 'complete', next: 'Continue', decisions: [], artifacts: ['spec.md'] }), /Unfinished/);
@@ -170,8 +173,8 @@ test('skill stage aliases retain completion guards while draft publication remai
   assert.equal(recordCheckpoint(f.pkg, { stage: 'spec-run', status: 'running', next: 'Finish', decisions: [], artifacts: ['spec.md'] }).stage, 'implementation');
 });
 
-test('artifact references accept canonical package forms and reject escapes or future evidence', t => {
-  const f = fixture(t);
+test('artifact references accept canonical package forms and reject escapes or future evidence', async t => {
+  const f = await fixture(t);
   for (const path of ['spec.md', '.specs/feature/spec.md', join(f.pkg, 'spec.md')]) {
     assert.equal(recordCheckpoint(f.pkg, { stage: 'preparation', status: 'complete', next: 'Implement', decisions: [], artifacts: [path] }).status, 'complete');
   }
@@ -180,13 +183,18 @@ test('artifact references accept canonical package forms and reject escapes or f
   }
   mkdirSync(join(f.root, 'evidence')); writeFileSync(join(f.root, 'evidence/check.txt'), 'different checkout artifact');
   assert.throws(() => submitCompletion(f.r, { ...f.input, evidence: [{ ...f.input.evidence[0], artifact: 'evidence/check.txt' }] }), /Ambiguous evidence/);
+  // <repo id>:<path> resolves in that target's worktree even where the bare relative path is ambiguous.
+  assert.equal(submitCompletion(f.r, { ...f.input, evidence: [{ ...f.input.evidence[0], artifact: 'repo:evidence/check.txt' }] }).status, 'recorded');
+  assert.throws(() => submitCompletion(f.r, { ...f.input, evidence: [{ ...f.input.evidence[0], artifact: 'repo:evidence/future.txt' }] }), /actual evidence or report pending/);
+  assert.throws(() => submitCompletion(f.r, { ...f.input, evidence: [{ ...f.input.evidence[0], artifact: 'repo:../outside.txt' }] }), /canonical root/);
+  assert.throws(() => recordCheckpoint(f.pkg, { stage: 'preparation', status: 'running', next: 'Implement', decisions: [], artifacts: ['.specs/other/spec.md'] }), /does not name a file of this package/);
   assert.throws(() => recordCheckpoint(f.pkg, { stage: 'preparation', status: 'running', next: 'Implement', decisions: [], artifacts: ['../outside.md'] }), /canonical root/);
   assert.throws(() => recordCheckpoint(f.pkg, { stage: 'preparation', status: 'running', next: 'Implement', decisions: [], artifacts: ['runtime/future-editor.jsonl'] }), /existing artifact/);
   assert.throws(() => submitCompletion(f.r, { ...f.input, evidence: [{ ...f.input.evidence[0], artifact: 'evidence/future.txt' }] }), /actual evidence or report pending/);
 });
 
 test('new human input marks stale stage decisions for reconciliation after resume without releasing holds', async t => {
-  const f = fixture(t), handlers = {}, persisted = [];
+  const f = await fixture(t), handlers = {}, persisted = [];
   const pi = { on: (event, fn) => { handlers[event] = fn; }, appendEntry: (customType, data) => persisted.push({ type: 'custom', customType, data }) };
   const hooks = installProgressContext(pi); hooks.attach(f.pkg);
   recordCheckpoint(f.pkg, { stage: 'implementation', status: 'blocked', next: 'Await human decision', decisions: ['Hold implementation'], artifacts: ['spec.md'] });
@@ -208,7 +216,7 @@ test('new human input marks stale stage decisions for reconciliation after resum
 });
 
 test('progress reconciles historical stage aliases by newest checkpoint and retains latest hold', async t => {
-  const f = fixture(t);
+  const f = await fixture(t);
   const directory = join(f.pkg, 'runtime/stages'); mkdirSync(directory);
   const checkpoint = { status: 'complete', next: 'Continue', artifacts: ['spec.md'], decisions: [] };
   writeFileSync(join(directory, 'spec-run.json'), JSON.stringify({ ...checkpoint, stage: 'spec-run', recorded_at: '2026-01-01T00:00:00Z' }));
@@ -225,7 +233,7 @@ test('progress reconciles historical stage aliases by newest checkpoint and reta
 });
 
 test('session restore clears input and package bindings from the previous branch', async t => {
-  const f = fixture(t), handlers = {}, entries = [];
+  const f = await fixture(t), handlers = {}, entries = [];
   const pi = { on: (event, fn) => { handlers[event] = fn; }, appendEntry: (customType, data) => entries.push({ type: 'custom', customType, data }) };
   const hooks = installProgressContext(pi); hooks.attach(f.pkg);
   recordCheckpoint(f.pkg, { stage: 'preparation', status: 'blocked', next: 'Await decision', decisions: [], artifacts: ['spec.md'] });

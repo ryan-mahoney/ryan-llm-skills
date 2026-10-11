@@ -7,11 +7,11 @@ const record = (extra = {}) => ({ schema_version: 1, epic: 'demo', title: 'Demo'
   packages: [{ package: 'a' }, { package: 'b', requires: ['a'] }], ...extra });
 
 test('parseEpic accepts a valid record and keeps allowlisted fields', () => {
-  const { epic, error } = parseEpic(record({ plan: '../_plans/demo.md', note: 'n', extra: 1,
-    packages: [{ package: 'a', repository: '/repo/other', note: 'folded' }, { package: 'b', requires: ['a'] }] }), { slug: 'demo' });
+  const { epic, error } = parseEpic(record({ plan: 'demo.md', note: 'n', extra: 1,
+    packages: [{ package: 'a', note: 'folded' }, { package: 'b', requires: ['a'] }] }), { slug: 'demo' });
   assert.equal(error, undefined);
-  assert.deepEqual(epic.packages[0], { package: 'a', repository: '/repo/other', requires: [], note: 'folded' });
-  assert.equal(epic.plan, '../_plans/demo.md');
+  assert.deepEqual(epic.packages[0], { package: 'a', requires: [], note: 'folded' });
+  assert.equal(epic.plan, 'demo.md');
   assert.equal('extra' in epic, false);
   assert.deepEqual(epic.designs, []);
 });
@@ -35,10 +35,10 @@ test('parseEpic rejects each invalid class with a short reason', () => {
   bad(record({ title: '' }), /title/);
   bad(record({ packages: [{ package: 'a' }, { package: 'a' }] }), /duplicate package a/);
   bad(record({ packages: [{ package: '../x' }] }), /package name/);
-  bad(record({ packages: [{ package: 'a', repository: 'relative' }] }), /not absolute/);
   bad(record({ packages: [{ package: 'a', requires: ['ghost'] }] }), /unknown package ghost/);
   bad(record({ packages: [{ package: 'a', requires: ['a'] }] }), /requires itself/);
   bad(record({ plan: '../../../outside.md' }), /plan escapes/);
+  bad(record({ plan: '../../../../outside.md' }), /plan escapes/);
   bad(record({ plan: '/etc/passwd' }), /plan escapes/);
   bad(record({ packages: Array.from({ length: EPIC_LIMITS.members + 1 }, (_, i) => ({ package: `p${i}` })) }), /more than 100/);
   bad(null, /not an object/);
@@ -69,9 +69,9 @@ test('attention comes only from the current run of an in-progress member', () =>
 });
 
 test('buildEpics derives summary, waiting_on and next from member facts', () => {
-  const member = (name, fact) => ({ path: `/r/.specs/${name}`, repository: '/r', observed: true, exists: true, ...fact });
+  const member = (name, fact) => ({ path: `/s/projects/w/specs/${name}`, observed: true, exists: true, ...fact });
   const entry = {
-    repository: '/r', file: '/r/.specs/_epics/demo/epic.json', dir: '/r/.specs/_epics/demo',
+    workspace: 'w', file: '/s/projects/w/epics/demo/epic.json', dir: '/s/projects/w/epics/demo', plan: '/s/projects/w/epics/demo/plan.md',
     epic: { epic: 'demo', title: 'Demo', state: 'active', note: null, plan: 'plan.md', packages: [
       { package: 'a', requires: [], note: null }, { package: 'b', requires: ['a'], note: null },
       { package: 'c', requires: ['b'], note: null }, { package: 'd', requires: ['b'], note: 'later' },
@@ -82,7 +82,7 @@ test('buildEpics derives summary, waiting_on and next from member facts', () => 
       member('b', { hasReceipts: true, run: { assignment_id: 'x', workflow_state: 'blocked', spec_progress: { current_position: 2, total_steps: 5 } } }),
       member('c', { prepared: true }),
       member('d', { exists: false }),
-      member('e', { observed: false, repository: '/elsewhere' }),
+      member('e', { observed: false }),
     ],
   };
   const { epics, memberships } = buildEpics([entry]);
@@ -93,9 +93,9 @@ test('buildEpics derives summary, waiting_on and next from member facts', () => 
   assert.deepEqual(epic.members[1].step, { position: 2, total: 5 });
   assert.equal(epic.members[0].pr_url, 'https://github.com/o/r/pull/1');
   assert.equal(epic.next, null, 'the only prepared member still waits on an unlanded dependency');
-  assert.equal(epic.plan, '/r/.specs/_epics/demo/plan.md');
-  assert.deepEqual(epic.coverage, { state: 'partial', reasons: ['member-unobserved: e (/elsewhere)'] });
-  assert.deepEqual(memberships.get('/r/.specs/c'), { epic: 'demo', repository: '/r', position: 3, total: 5 });
+  assert.equal(epic.plan, '/s/projects/w/epics/demo/plan.md');
+  assert.deepEqual(epic.coverage, { state: 'partial', reasons: ['member-unobserved: e (w)'] });
+  assert.deepEqual(memberships.get('/s/projects/w/specs/c'), { epic: 'demo', workspace: 'w', position: 3, total: 5 });
 
   entry.members[1] = member('b', { completion: { completion_basis: 'manual', completed_at: '2026-10-02T00:00:00.000Z' } });
   const landed = buildEpics([entry]).epics[0];
@@ -108,11 +108,11 @@ test('incomplete receipts yield unknown unless a completion is recorded, and lan
   assert.equal(deriveMemberStatus({ exists: true, prepared: true, hasReceipts: false, incomplete: true }).status, 'unknown');
   assert.equal(deriveMemberStatus({ exists: true, incomplete: true, completion: { completion_basis: 'merged-pr' } }).status, 'merged');
   const epic = { epic: 'e', title: 'E', state: 'active', plan: null, note: null, packages: [
-    { package: 'a', repository: null, requires: [], note: null },
-    { package: 'b', repository: null, requires: ['a'], note: null },
-    { package: 'c', repository: null, requires: ['a'], note: null } ] };
-  const member = (name, extra) => ({ path: `/r/.specs/${name}`, repository: '/r', observed: true, exists: true, ...extra });
-  const { epics } = buildEpics([{ slug: 'e', dir: '/r/.specs/_epics/e', file: '/r/.specs/_epics/e/epic.json', repository: '/r', epic, members: [
+    { package: 'a', requires: [], note: null },
+    { package: 'b', requires: ['a'], note: null },
+    { package: 'c', requires: ['a'], note: null } ] };
+  const member = (name, extra) => ({ path: `/s/projects/w/specs/${name}`, observed: true, exists: true, ...extra });
+  const { epics } = buildEpics([{ slug: 'e', dir: '/s/projects/w/epics/e', file: '/s/projects/w/epics/e/epic.json', workspace: 'w', epic, members: [
     member('a', { hasReceipts: true, incomplete: true }),
     member('b', { completion: { completion_basis: 'merged-pr', completed_at: '2026-10-11T00:00:00Z' } }),
     member('c', { prepared: true }) ] }]);

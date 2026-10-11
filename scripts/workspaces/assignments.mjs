@@ -19,9 +19,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, delimiter, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { canonicalPackage } from "../../pi/extensions/spec-runtime/runtime.mjs";
+import { checkPackage } from "../spec-location/index.mjs";
 import { resolveCheckout } from "../repo-search/identity.mjs";
 import { processIdentity, sameProcess } from "../spec-observe/process-identity.mjs";
 import { claimOwner } from "../spec-observe/owner-claim.mjs";
@@ -84,6 +84,7 @@ const IMMUTABLE_RECORD_FIELDS = [
   "execution_dir",
   "repository_id",
   "spec_package",
+  "package_ref",
   "workflow_id",
   "publication_authority",
   "attempt_kind",
@@ -246,13 +247,15 @@ function projectTrustFlags(projectTrust) {
  * resolved to its physical checkout root through `resolveCheckout`.
  * Workspace and repository attention entries are preserved.
  *
- * When `specPackage` is supplied, `canonicalPackage` must resolve it to the
- * primary checkout of the execution directory's repository; the canonical
- * package path is returned as `spec_package`.
+ * When `specPackage` is supplied (a `workspace/slug` reference, package
+ * directory or file inside it), spec-location must accept it for this
+ * workspace and the execution directory must be one of the package's target
+ * worktrees or primary checkouts. The absolute package directory and its
+ * reference are returned as `spec_package` and `package_ref`.
  *
  * @param {{workspace: object, target?: string|null, specPackage?: string|null}} input
  * @returns {Promise<{execution_dir: string, repository_id: string|null,
- *   spec_package: string|null, attention: string[]}>}
+ *   spec_package: string|null, package_ref: string|null, attention: string[]}>}
  */
 export async function resolveTarget({ workspace, target = null, specPackage = null } = {}) {
   if (workspace === null || typeof workspace !== "object" || Array.isArray(workspace)) {
@@ -304,34 +307,37 @@ export async function resolveTarget({ workspace, target = null, specPackage = nu
   }
 
   let specPackagePath = null;
+  let packageRef = null;
   if (specPackage !== null && specPackage !== undefined) {
     if (typeof specPackage !== "string" || specPackage === "") {
       throw new Error("specPackage must be a non-empty string");
     }
-    // canonicalPackage throws when the path is not a primary-checkout package.
-    const canonical = canonicalPackage(specPackage);
-    if (checkout === null) {
-      try {
-        checkout = await resolveCheckout(executionDir, { deadline: Date.now() + GIT_TIMEOUT_MS });
-      } catch (error) {
-        throw new Error(
-          "a spec package requires a Git repository execution directory",
-          { cause: error },
-        );
-      }
+    // Workspaces live at <storage root>/projects/<id>.
+    const checked = await checkPackage(specPackage, { root: dirname(dirname(directory)) });
+    if (!checked.ok) throw new Error(`${checked.message} ${checked.remedy}`);
+    const { locations } = checked;
+    if (await fs.realpath(locations.workspace_dir) !== directory) {
+      throw new Error("spec package belongs to a different workspace than the assignment");
     }
-    if (canonical.common !== checkout.commonDir) {
+    const candidates = await Promise.all(
+      locations.targets.flatMap((entry) => [entry.primary, entry.worktree])
+        .filter(Boolean)
+        .map((path) => fs.realpath(path).catch(() => null)),
+    );
+    if (!candidates.includes(executionDir)) {
       throw new Error(
-        "spec package belongs to a different repository than the execution directory",
+        "execution directory is not a target worktree or primary checkout of the spec package",
       );
     }
-    specPackagePath = canonical.packagePath;
+    specPackagePath = locations.package_dir;
+    packageRef = locations.package_ref;
   }
 
   return {
     execution_dir: executionDir,
     repository_id: repositoryId,
     spec_package: specPackagePath,
+    package_ref: packageRef,
     attention,
   };
 }
@@ -512,6 +518,7 @@ export async function resolveAssignment(input = {}) {
     target.execution_dir,
     target.repository_id,
     target.spec_package,
+    target.package_ref,
     workflowId,
     publicationAuthority,
     attemptKind,
@@ -572,6 +579,7 @@ export async function resolveAssignment(input = {}) {
     execution_dir: target.execution_dir,
     repository_id: target.repository_id,
     spec_package: target.spec_package,
+    package_ref: target.package_ref,
     // Resolution diagnostics are part of the record but not of the canonical
     // contract digest above.
     attention: target.attention,
@@ -834,6 +842,10 @@ async function validateAssignmentRecord(physicalRoot, workspace, path, record) {
   if (record.spec_package !== null
     && (typeof record.spec_package !== "string" || !isAbsolute(record.spec_package))) {
     refuseAssignment(path, "spec_package is neither null nor an absolute path");
+  }
+  if (record.package_ref !== undefined && record.package_ref !== null
+    && (typeof record.package_ref !== "string" || record.package_ref === "")) {
+    refuseAssignment(path, "package_ref is neither null nor a non-empty string");
   }
   if (record.workflow_id !== null
     && (typeof record.workflow_id !== "string" || record.workflow_id === "")) {
@@ -1256,45 +1268,25 @@ function observePersistedUpdate(record, observation) {
   };
 }
 
-async function refuseObservedLock(lockPath, label) {
-  let info;
+// Refuse a launch into a spec package whose current run still has a live
+// coordinator, the same check spec_dispatch applies.
+async function assertNoActiveRun(record) {
+  if (record.spec_package === null) return;
+  let run;
   try {
-    info = await lstatOrNull(lockPath);
+    run = JSON.parse(await fs.readFile(join(record.spec_package, "runtime", "run.json"), "utf8"));
   } catch (error) {
-    throw new Error(`cannot observe ${label} at ${lockPath}: ${error.code ?? error.message}`);
+    if (error.code === "ENOENT") return;
+    throw new Error(`cannot read spec run state at ${record.spec_package}: ${error.code ?? error.message}`);
   }
-  if (info) throw new Error(`observed ${label} at ${lockPath}; refusing launch`);
-}
-
-// Read-only lease preflight: observe the spec_dispatch git lock and a supplied
-// spec package's runtime package lock without taking, modifying or deleting
-// either. A non-git workspace is allowed, but an existing unusable .git fails
-// closed.
-async function assertNoObservedLeases(record) {
-  let checkout = null;
+  if (!["running", "cancelling", "blocked"].includes(run.state)) return;
+  const pid = run.coordinator_pid ?? run.pid;
   try {
-    checkout = await resolveCheckout(record.execution_dir, {
-      deadline: Date.now() + GIT_TIMEOUT_MS,
-    });
+    process.kill(pid, 0);
   } catch {
-    checkout = null;
+    return;
   }
-  if (checkout !== null) {
-    await refuseObservedLock(join(checkout.gitDir, "spec-runtime.lock"), "spec_dispatch git lease");
-  } else {
-    const dotGit = await lstatOrNull(join(record.execution_dir, ".git"));
-    if (dotGit) {
-      throw new Error(
-        `execution directory has an unobservable .git at ${record.execution_dir}; refusing launch`,
-      );
-    }
-  }
-  if (record.spec_package !== null) {
-    await refuseObservedLock(
-      join(record.spec_package, "runtime", "package.lock"),
-      "spec runtime package lease",
-    );
-  }
+  throw new Error(`run-active: spec run ${run.id} is ${run.state} and its coordinator (pid ${pid}) is alive; refusing launch`);
 }
 
 // Publish the durable launching reservation first, then the approved snapshot
@@ -1418,6 +1410,9 @@ export async function launchAssignment(input = {}, options = {}) {
     target: record.repository_id,
     specPackage: record.spec_package,
   });
+  if (target.package_ref !== record.package_ref) {
+    throw new Error("approved package_ref is not the canonical package reference");
+  }
   if (target.execution_dir !== record.execution_dir) {
     throw new Error("approved execution_dir is not the canonical target directory");
   }
@@ -1474,10 +1469,9 @@ export async function launchAssignment(input = {}, options = {}) {
       }
     }
 
-    // Observed lease refusal runs under the held claim, after the
-    // identical-repeat return and exclusion checks, immediately before
-    // publication.
-    await assertNoObservedLeases(record);
+    // Runs under the held claim, after the identical-repeat return and
+    // exclusion checks, immediately before publication.
+    await assertNoActiveRun(record);
 
     plan = await publishLaunchReservation({
       workspace,

@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { canonicalPackage } from './runtime.mjs';
+import { packageDirOf } from './runtime.mjs';
 import { recordCheckpoint, readCheckpointRecord } from './sentinel.mjs';
 
 const TERMINAL_WORKER = new Set(['complete', 'failed', 'aborted', 'cancelled']);
@@ -54,8 +54,10 @@ function sentinelWorkflows(packagePath, coordinatorSession) {
   });
 }
 
+// pr-url.json is { package_ref, targets: { <repo id>: { url, ... } } }; a single target names its URL.
 function summaryFor(packagePath) {
-  const url = readJson(join(packagePath, 'pr-url.json'))?.url;
+  const entries = Object.values(readJson(join(packagePath, 'pr-url.json'))?.targets ?? {});
+  const url = entries.length === 1 ? entries[0]?.url : undefined;
   const summary = typeof url === 'string' ? `Publication complete: ${url}` : '';
   return summary && summary.length <= SUMMARY_MAX ? summary : 'Publication complete';
 }
@@ -64,13 +66,13 @@ function summaryFor(packagePath) {
 // registered for the package whose declared workers all have terminal receipts.
 // Never throws: a skip or failure leaves the explicit coordinator checkpoint as
 // the way to finish.
-export function completeWorkflowsAfterPublication({ package: packageInput, known = [], coordinator_session: coordinatorSession,
-  input_revision: inputRevision, checkoutFor = () => null }) {
+export async function completeWorkflowsAfterPublication({ package: packageInput, known = [], coordinator_session: coordinatorSession,
+  input_revision: inputRevision, checkoutFor = () => null, location = {} }) {
   let packagePath;
-  try { packagePath = canonicalPackage(packageInput).packagePath; } catch { return []; }
+  try { packagePath = await packageDirOf(packageInput, location); } catch { return []; }
   const registered = new Set();
   for (const value of known) {
-    try { if (canonicalPackage(value.package).packagePath === packagePath) registered.add(value.workflow_id); } catch { /* unrelated package */ }
+    try { if (await packageDirOf(value.package, location) === packagePath) registered.add(value.workflow_id); } catch { /* unrelated package */ }
   }
   const workflows = registered.size ? [...registered] : sentinelWorkflows(packagePath, coordinatorSession);
   return workflows.map(workflowId => {

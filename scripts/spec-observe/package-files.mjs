@@ -3,14 +3,18 @@ import { constants } from 'node:fs';
 import { lstat, realpath, opendir, open } from 'node:fs/promises';
 import { dirname, basename, join, resolve, sep, extname } from 'node:path';
 export const PACKAGE_FILE_LIMITS = { entries: 500, totalEntries: 10000, depth: 12, bytes: 8 * 1024 * 1024 };
-export async function authorizePackage(state, requested) {
-  if (typeof requested !== 'string' || !state.observers.some(o => [...(o.snapshot?.runs ?? []), ...(o.snapshot?.recently_completed ?? [])].some(r => r.package === requested))) throw Error('Package is not published');
+// A package is served only when a published snapshot names it and it is a direct
+// child of `specs/` in a workspace the caller's gate accepts (dashboard.mjs
+// `authorizedWorkspace`). Returns the package directory and its reference.
+export async function authorizePackage(state, requested, authorizedWorkspace) {
+  const row = typeof requested === 'string'
+    ? state.observers.flatMap(o => [...(o.snapshot?.runs ?? []), ...(o.snapshot?.recently_completed ?? [])]).find(r => r.package === requested)
+    : undefined;
+  if (!row) throw Error('Package is not published');
+  const specs = join(await realpath(await authorizedWorkspace(row.workspace)), 'specs');
   const root = await realpath(requested);
-  if (root !== requested || basename(dirname(root)) !== '.specs' || !(await lstat(root)).isDirectory()
-    || !(await lstat(join(dirname(dirname(root)), '.git'))).isDirectory()) throw Error('Package is not canonical');
-  // .specs itself may not redirect into another checkout.
-  if (await realpath(dirname(root)) !== dirname(root)) throw Error('Package is not canonical');
-  return root;
+  if (root !== requested || dirname(root) !== specs || !(await lstat(root)).isDirectory()) throw Error('Package is not canonical');
+  return { root, ref: `${row.workspace}/${basename(root)}` };
 }
 async function safePath(root, name, { exclude } = {}) {
   if (typeof name !== 'string' || !name || name.includes('\\') || name.includes('\0')) throw Error('Invalid file path');

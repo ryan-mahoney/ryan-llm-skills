@@ -78,8 +78,8 @@ export async function discoverRepositories(root, { limits = DISCOVERY_LIMITS, no
         if (queue.length >= limits.directories) { note('discovery-cap: directory limit reached'); continue; }
         queue.push({ path: join(current.path, entry.name), depth: current.depth + 1 });
       }
-      // Canonical package validation remains with the existing workspace reader;
-      // linked-worktree copies never become accepted primary packages.
+      // A root marks a repository that still holds `.specs/` content, which the
+      // sentinel reports as a legacy location; packages come from storage.
       if (git && specs) roots.push(current.path);
     } catch (error) { note(`discovery-unavailable: ${current.path} (${error.code || error.message})`); }
     finally { await handle?.close(); }

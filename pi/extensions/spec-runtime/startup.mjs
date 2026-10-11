@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, readdirSync, realpathSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
 import { buildHistoryIndex } from '../../../skills/spec-run/scripts/build-history-index.mjs';
 
 import { splitModelSelector } from './model-selector.mjs';
@@ -10,7 +10,7 @@ const entries = path => existsSync(path) ? readdirSync(path).filter(name => !nam
 
 // Mechanical startup only. A process exit or a learning filename never certifies
 // acceptance. Legacy/resumed progress is reconciled by the coordinator once.
-export async function preparedEntry(packagePath, input) {
+export async function preparedEntry(packagePath, input, locations) {
   const artifacts = Object.fromEntries(['run-ledger.md', 'history-index.json', 'spec-steps.json'].map(name => [name, join(packagePath, name)]));
   const pending = entries(join(packagePath, 'inbox')).filter(name => name.endsWith('.md'));
   if (pending.length) return { state: 'needs_intake', package: packagePath,
@@ -20,7 +20,7 @@ export async function preparedEntry(packagePath, input) {
     const run = read(latest);
     return { state: run.state, run_id: run.id, package: packagePath, artifacts,
       next: ['running', 'cancelling', 'blocked'].includes(run.state)
-        ? 'reuse existing run; await completion or resolve its retained lease'
+        ? 'reuse existing run; await completion or confirmed cancellation'
         : 'reconcile this result with the ledger and outstanding review/fix obligations; pass the explicit next step or an intentional retry ID; never infer acceptance from process completion' };
   }
   if (!input.step && (existsSync(artifacts['run-ledger.md']) || entries(join(packagePath, 'learnings')).length || entries(join(packagePath, 'reviews')).length || entries(packagePath).some(n => /^step-\d+-(?:learning|review|fix)\.md$|^merge-evidence\.|^pr-url\./.test(n))))
@@ -29,7 +29,7 @@ export async function preparedEntry(packagePath, input) {
   for (const name of ['context.md', 'spec.md', 'spec-prepare.md', 'evidence-plan.json', 'spec-steps.json']) {
     if (!existsSync(join(packagePath, name))) throw new Error(`Prepared input missing: ${name}; resolve this preparation gap`);
   }
-  if (!existsSync(join(dirname(packagePath), 'project-context.md'))) throw new Error('Prepared input missing: shared project-context.md');
+  if (!existsSync(locations.project_context)) throw new Error(`Prepared input missing: workspace project-context.md (${locations.project_context})`);
   const { steps } = read(artifacts['spec-steps.json']);
   if (!Array.isArray(steps) || !steps.length || steps.some((s, i) => !Number.isInteger(s.step) || s.step < 1 || (i && s.step <= steps[i - 1].step)))
     throw new Error('spec-steps.json must contain ordered, unique positive step numbers');

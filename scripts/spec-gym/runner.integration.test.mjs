@@ -6,8 +6,9 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, 
 import { tmpdir } from 'node:os';
 import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { canonicalPackage, loadRun } from '../../pi/extensions/spec-runtime/runtime.mjs';
+import { loadRun } from '../../pi/extensions/spec-runtime/runtime.mjs';
 import { gitFacts } from '../spec-facts/core.mjs';
+import { checkPackage } from '../spec-location/index.mjs';
 import { PREPARED_PACKAGE_FILES, loadScenario, renderIndex } from './core.mjs';
 import { ambientContext, cellEnvironment, createRun, freezeManifest, materializeCell, runLeafCell, runManagedCell, writeRunRecord } from './runner.mjs';
 
@@ -42,7 +43,7 @@ const managedScenario = () => ({
   status: 'draft',
   purpose: 'Managed-step fixture for materialization.',
   fixture: { feature: 'example-feature', step: 1 },
-  task: 'spec=.specs/example-feature/spec.md step=1',
+  task: 'spec={package}/spec.md step=1',
   roles: { editor_model: 'provider/editor' },
   timeout_ms: 60000,
   expectation_sources: ['requirements.md item 2'],
@@ -127,7 +128,7 @@ function stubPiCommand(root) {
   return wrapper;
 }
 
-function leafCase(t, { script = 'success', timeoutMs, model = 'test/leaf-model:low' } = {}) {
+async function leafCase(t, { script = 'success', timeoutMs, model = 'test/leaf-model:low' } = {}) {
   const f = fixture(t);
   if (timeoutMs !== undefined) {
     const timed = leafScenario();
@@ -136,7 +137,7 @@ function leafCase(t, { script = 'success', timeoutMs, model = 'test/leaf-model:l
   }
   const scenario = loadScenario(f.leaf);
   const run = createRun({ repoRoot: f.gym, root: f.root, skill: 'spec-a', scenarios: [f.leaf], models: [model], timeoutMs: timeoutMs ?? 60000, pi: stubPiCommand(f.root) });
-  const materialized = materializeCell(run, run.cells[0], scenario);
+  const materialized = await materializeCell(run, run.cells[0], scenario);
   process.env.SPEC_GYM_FAKE_PI_LOG = join(materialized.cellDir, 'streams', 'fake-pi-log.json');
   process.env.SPEC_GYM_FAKE_PI_SCRIPT = script;
   t.after(() => restoreBaseEnv(['SPEC_GYM_FAKE_PI_LOG', 'SPEC_GYM_FAKE_PI_SCRIPT']));
@@ -148,7 +149,7 @@ function leafCase(t, { script = 'success', timeoutMs, model = 'test/leaf-model:l
   return { f, run, scenario, materialized, execute };
 }
 
-function managedCase(t, { script = 'success', timeoutMs } = {}) {
+async function managedCase(t, { script = 'success', timeoutMs } = {}) {
   const f = fixture(t);
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'spec-gym-managed-home-')));
   t.after(() => rmSync(home, { recursive: true, force: true }));
@@ -165,7 +166,7 @@ function managedCase(t, { script = 'success', timeoutMs } = {}) {
     timeoutMs: 60000, childExtensions: [childExtension], pi: stubPiCommand(f.root),
   });
   run.manifest = freezeManifest(run);
-  const materialized = materializeCell(run, run.cells[0], scenario);
+  const materialized = await materializeCell(run, run.cells[0], scenario);
   const original = process.env;
   t.after(() => {
     restoreBaseEnv(['HOME', 'SECRET_TOKEN', 'SPEC_GYM_FAKE_PI_LOG', 'SPEC_GYM_FAKE_PI_SCRIPT']);
@@ -230,41 +231,31 @@ async function waitFor(predicate, timeout = 10000) {
   }
 }
 
-test('materialize creates a canonical fixture repository with one Fixture commit', t => {
+test('materialize creates a canonical fixture repository with one Fixture commit', async t => {
   const f = fixture(t);
   const run = runFixture(f);
   freezeManifest(run);
-  const materialized = materializeCell(run, run.cells[0], loadScenario(f.leaf));
+  const materialized = await materializeCell(run, run.cells[0], loadScenario(f.leaf));
 
   const sourceRepository = join(f.leaf, 'input', 'repository');
-  const providedGitignore = existsSync(join(sourceRepository, '.gitignore'));
-  const actualRepository = treeFiles(materialized.repoDir, ['.git', '.specs'])
-    .filter(file => file !== '.gitignore' || providedGitignore);
-  assert.deepEqual(actualRepository, treeFiles(sourceRepository));
+  assert.deepEqual(treeFiles(materialized.repoDir, ['.git']), treeFiles(sourceRepository));
   for (const file of treeFiles(sourceRepository)) {
     assert.deepEqual(readFileSync(join(materialized.repoDir, file)), readFileSync(join(sourceRepository, file)));
   }
   assert.equal(lstatSync(join(materialized.repoDir, 'scripts', 'check.sh')).mode & 0o777, 0o755);
   assert.match(execFileSync('git', ['-C', materialized.repoDir, 'ls-files', '-s', 'scripts/check.sh'], { encoding: 'utf8' }), /^100755 /);
-  assert.deepEqual(treeFiles(materialized.packageDir), treeFiles(join(f.leaf, 'input', 'package')));
+  assert.deepEqual(treeFiles(materialized.packageDir).filter(file => file !== 'scope.json' && file !== 'locations.json'), treeFiles(join(f.leaf, 'input', 'package')));
   assert.equal(existsSync(materialized.projectContext), true);
 
   const subjects = execFileSync('git', ['-C', materialized.repoDir, 'log', '--format=%s'], { encoding: 'utf8' }).trim().split('\n');
   assert.deepEqual(subjects, ['Fixture']);
 
-  const canonical = canonicalPackage(materialized.packageDir);
-  assert.equal(canonical.primary, materialized.repoDir);
-});
-
-test('materialize writes .gitignore only when the fixture provides none', t => {
-  const f = fixture(t);
-  const run = runFixture(f, { repeats: 2 });
-  const generated = materializeCell(run, run.cells[0], loadScenario(f.leaf));
-  assert.equal(readFileSync(join(generated.repoDir, '.gitignore'), 'utf8'), '.specs/\n');
-
-  writeFixtureFile(join(f.leaf, 'input', 'repository', '.gitignore'), 'dist/\n');
-  const provided = materializeCell(run, run.cells[1], loadScenario(f.leaf));
-  assert.equal(readFileSync(join(provided.repoDir, '.gitignore'), 'utf8'), 'dist/\n');
+  // The package is a spec-location package in the cell's storage root, targeting the fixture repository.
+  const checked = await checkPackage(materialized.packageDir, { root: materialized.storageRoot });
+  assert.equal(checked.ok, true, checked.message);
+  assert.equal(checked.locations.package_dir, materialized.packageDir);
+  assert.equal(checked.locations.project_context, materialized.projectContext);
+  assert.equal(checked.locations.targets[0].primary, realpathSync(materialized.repoDir));
 });
 
 test('materialize refuses colliding cell selectors before creating the run', t => {
@@ -281,11 +272,11 @@ test('materialize refuses colliding cell selectors before creating the run', t =
   assert.deepEqual(readdirSync(f.root).sort(), before);
 });
 
-test('containment: every created path stays under the run directory', t => {
+test('containment: every created path stays under the run directory', async t => {
   const f = fixture(t);
   const run = runFixture(f);
   freezeManifest(run);
-  materializeCell(run, run.cells[0], loadScenario(f.leaf));
+  await materializeCell(run, run.cells[0], loadScenario(f.leaf));
   writeRunRecord(run, { run_id: run.runId, cells: [] });
 
   assert.deepEqual(readdirSync(f.root).sort(), ['gym', run.runId].sort());
@@ -297,12 +288,12 @@ test('containment: every created path stays under the run directory', t => {
   }
 });
 
-test('immutable: scenario tree digest is unchanged by materialization', t => {
+test('immutable: scenario tree digest is unchanged by materialization', async t => {
   const f = fixture(t);
   const before = digestTree(f.leaf);
   const run = runFixture(f);
   freezeManifest(run);
-  materializeCell(run, run.cells[0], loadScenario(f.leaf));
+  await materializeCell(run, run.cells[0], loadScenario(f.leaf));
   assert.equal(digestTree(f.leaf), before);
 });
 
@@ -332,32 +323,32 @@ test('immutable: managed manifest freezes the owner profile the runtime loads', 
   assert.equal(first.skill_sha256, second.skill_sha256);
 });
 
-test('materialize rejects traversal cell IDs before writing', t => {
+test('materialize rejects traversal cell IDs before writing', async t => {
   const f = fixture(t);
   const run = runFixture(f);
   const scenario = loadScenario(f.leaf);
   for (const cell of ['../outside', '.', '..', 'nested/cell', { id: '../outside' }]) {
-    assert.throws(() => materializeCell(run, cell, scenario), error => error.message.includes('cell id'));
+    await assert.rejects(() => materializeCell(run, cell, scenario), error => error.message.includes('cell id'));
   }
   assert.equal(existsSync(join(f.root, 'outside')), false);
   assert.equal(existsSync(join(run.runDir, 'nested')), false);
   assert.deepEqual(readdirSync(run.runDir), []);
 });
 
-test('symlink and dot-dot fixtures are rejected before writing', t => {
+test('symlink and dot-dot fixtures are rejected before writing', async t => {
   const f = fixture(t);
   const run = runFixture(f);
   const cell = run.cells[0];
   const cellDir = join(run.runDir, cell.id);
 
   symlinkSync(join(f.leaf, 'input', 'repository', 'README.md'), join(f.leaf, 'input', 'link.md'));
-  assert.throws(() => materializeCell(run, cell, loadScenario(f.leaf)), error => error.message.includes('input/link.md'));
+  await assert.rejects(() => materializeCell(run, cell, loadScenario(f.leaf)), error => error.message.includes('input/link.md'));
   assert.equal(existsSync(cellDir), false);
 
   rmSync(join(f.leaf, 'input', 'link.md'));
   const broken = loadScenario(f.leaf);
   broken.scenario.fixture.feature = '../x';
-  assert.throws(() => materializeCell(run, cell, broken), error => error.message.includes('../x'));
+  await assert.rejects(() => materializeCell(run, cell, broken), error => error.message.includes('../x'));
   assert.equal(existsSync(cellDir), false);
 });
 
@@ -411,7 +402,7 @@ test('manifest freezes provenance before the first materialize call', t => {
 });
 
 test('leaf passes frozen isolation and model arguments', async t => {
-  const c = leafCase(t);
+  const c = await leafCase(t);
   const result = await c.execute();
   assert.equal(result.outcome, 'finished');
   const log = JSON.parse(readFileSync(join(c.materialized.cellDir, 'streams', 'fake-pi-log.json'), 'utf8'));
@@ -434,7 +425,7 @@ test('leaf env names equal allowlist intersection', async t => {
     if (previousFoo === undefined) delete process.env.PI_FOO; else process.env.PI_FOO = previousFoo;
     if (previousSecret === undefined) delete process.env.SECRET_TOKEN; else process.env.SECRET_TOKEN = previousSecret;
   });
-  const c = leafCase(t);
+  const c = await leafCase(t);
   await c.execute();
   const log = JSON.parse(readFileSync(join(c.materialized.cellDir, 'streams', 'fake-pi-log.json'), 'utf8'));
   assert.ok(log.envNames.includes('PATH'));
@@ -443,7 +434,7 @@ test('leaf env names equal allowlist intersection', async t => {
 });
 
 test('leaf hang is timed-out and group is gone', async t => {
-  const c = leafCase(t, { script: 'hang', timeoutMs: 500 });
+  const c = await leafCase(t, { script: 'hang', timeoutMs: 500 });
   const result = await c.execute();
   assert.equal(result.outcome, 'timed-out');
   assert.equal(result.reason, 'deadline exceeded');
@@ -453,7 +444,7 @@ test('leaf hang is timed-out and group is gone', async t => {
 });
 
 test('leaf timeout keeps escalating until a TERM-resistant descendant is gone', { timeout: 15000 }, async t => {
-  const c = leafCase(t, { script: 'stubborn', timeoutMs: 500 });
+  const c = await leafCase(t, { script: 'stubborn', timeoutMs: 500 });
   const result = await c.execute();
   assert.equal(result.outcome, 'timed-out');
   assert.equal(result.reason, 'deadline exceeded');
@@ -462,7 +453,7 @@ test('leaf timeout keeps escalating until a TERM-resistant descendant is gone', 
 });
 
 test('leaf zero exit without a final assistant event is blocked', async t => {
-  const c = leafCase(t, { script: 'no-final' });
+  const c = await leafCase(t, { script: 'no-final' });
   const result = await c.execute();
   assert.equal(result.outcome, 'blocked');
   assert.equal(result.reason, 'Pi exited without a final assistant result');
@@ -471,7 +462,7 @@ test('leaf zero exit without a final assistant event is blocked', async t => {
 });
 
 test('leaf zero exit after a tool request is blocked', async t => {
-  const c = leafCase(t, { script: 'tool-use' });
+  const c = await leafCase(t, { script: 'tool-use' });
   const result = await c.execute();
   assert.equal(result.outcome, 'blocked');
   assert.equal(result.reason, 'Pi exited without a final assistant result');
@@ -480,20 +471,20 @@ test('leaf zero exit after a tool request is blocked', async t => {
 });
 
 test('leaf error exit is blocked not failed', async t => {
-  const errorCase = leafCase(t, { script: 'error' });
+  const errorCase = await leafCase(t, { script: 'error' });
   const errorResult = await errorCase.execute();
   assert.equal(errorResult.outcome, 'blocked');
   assert.match(errorResult.reason, /unknown model/);
   assert.equal(errorResult.configuration_failure?.kind, 'model_configuration');
 
-  const exitCase = leafCase(t, { script: 'exit-2' });
+  const exitCase = await leafCase(t, { script: 'exit-2' });
   const exitResult = await exitCase.execute();
   assert.equal(exitResult.outcome, 'blocked');
   assert.match(exitResult.reason, /Pi exited 2/);
 });
 
 test('leaf unpriced cost is unknown', async t => {
-  const c = leafCase(t, { script: 'unpriced' });
+  const c = await leafCase(t, { script: 'unpriced' });
   const result = await c.execute();
   assert.equal(result.outcome, 'finished');
   assert.equal(result.cost_usd, null);
@@ -502,7 +493,7 @@ test('leaf unpriced cost is unknown', async t => {
 });
 
 test('leaf priced cost is summed', async t => {
-  const c = leafCase(t, { script: 'success' });
+  const c = await leafCase(t, { script: 'success' });
   const result = await c.execute();
   assert.equal(result.outcome, 'finished');
   assert.equal(result.cost_usd, 0.25);
@@ -511,7 +502,7 @@ test('leaf priced cost is summed', async t => {
 });
 
 test('leaf writes stay inside the cell', async t => {
-  const c = leafCase(t);
+  const c = await leafCase(t);
   const rootBefore = readdirSync(c.f.root).sort();
   const result = await c.execute();
   assert.equal(result.outcome, 'finished');
@@ -521,7 +512,7 @@ test('leaf writes stay inside the cell', async t => {
 });
 
 test('managed success hosts Runtime with a cell-local index and exact owner argv', { timeout: 10000 }, async t => {
-  const c = managedCase(t);
+  const c = await managedCase(t);
   const rootBefore = readdirSync(c.f.root).sort();
   const digestBefore = digestTree(c.f.managed);
   const result = await c.execute();
@@ -531,7 +522,7 @@ test('managed success hosts Runtime with a cell-local index and exact owner argv
   assert.equal(existsSync(join(c.home, '.pi', 'agent', 'spec-runtime')), false);
 
   const pointer = JSON.parse(readFileSync(join(c.run.runDir, 'index', `${result.run_id}.json`), 'utf8'));
-  assert.equal(pointer.package, canonicalPackage(c.materialized.packageDir).packagePath);
+  assert.equal(pointer.package, c.materialized.packageDir);
   assert.equal(pointer.manifest, join(c.materialized.packageDir, 'runtime', 'runs', `${result.run_id}.json`));
 
   const raw = loadRun(c.materialized.packageDir, result.run_id);
@@ -547,7 +538,7 @@ test('managed success hosts Runtime with a cell-local index and exact owner argv
     '--provider', 'test', '--model', 'owner-model',
   ]);
   assert.equal(log.argv.at(-2), '--');
-  assert.ok(log.argv.at(-1).includes(`${c.scenario.scenario.task}\nEnvironment paths (observations, not setup approval): `));
+  assert.ok(log.argv.at(-1).includes(`${c.scenario.scenario.task.replaceAll('{package}', c.materialized.packageDir)}\nEnvironment paths (observations, not setup approval): `));
   assert.ok(log.argv.includes(c.childExtension));
   assert.equal(log.cwd, raw.checkout);
 
@@ -573,7 +564,7 @@ test('managed success hosts Runtime with a cell-local index and exact owner argv
 });
 
 test('managed hang is cancelled and timed-out with a retained partial stream', { timeout: 15000 }, async t => {
-  const c = managedCase(t, { script: 'hang', timeoutMs: 500 });
+  const c = await managedCase(t, { script: 'hang', timeoutMs: 500 });
   const result = await c.execute();
 
   assert.equal(result.outcome, 'timed-out');
@@ -596,7 +587,7 @@ test('managed hang is cancelled and timed-out with a retained partial stream', {
 });
 
 test('managed configuration failure is blocked and restores env', { timeout: 10000 }, async t => {
-  const c = managedCase(t, { script: 'error' });
+  const c = await managedCase(t, { script: 'error' });
   const result = await c.execute();
 
   assert.equal(result.outcome, 'blocked');
@@ -620,7 +611,7 @@ test('managed ambient context refusal covers ancestor and home files', { timeout
   ];
   for (const { name, plant } of placements) {
     await t.test(name, async sub => {
-      const c = managedCase(sub);
+      const c = await managedCase(sub);
       const planted = plant(c);
       writeFixtureFile(planted, 'ambient\n');
       const result = await c.execute();
@@ -638,7 +629,7 @@ test('managed ambient context refusal covers ancestor and home files', { timeout
 });
 
 test('managed missing step card is blocked before launch and restores env', { timeout: 10000 }, async t => {
-  const c = managedCase(t);
+  const c = await managedCase(t);
   rmSync(join(c.materialized.packageDir, 'step-001-subspec.md'));
   const result = await c.execute();
 
@@ -652,7 +643,7 @@ test('managed missing step card is blocked before launch and restores env', { ti
 });
 
 test('managed assignment reuse returns the terminal record without relaunching', { timeout: 10000 }, async t => {
-  const c = managedCase(t);
+  const c = await managedCase(t);
   const first = await c.execute();
   const second = await c.execute();
 
@@ -900,7 +891,7 @@ test('cli managed campaign records finished scheduling state and report artifact
   assert.equal(cell.state, 'finished');
   assert.equal(cell.outcome, 'passed');
 
-  const runtimeRecord = loadRun(join(runDir, cell.id, 'repo', '.specs', 'example-feature'));
+  const runtimeRecord = loadRun(join(runDir, cell.id, 'storage', 'projects', 'gym', 'specs', 'example-feature'));
   assert.equal(runtimeRecord.state, 'completed');
 
   for (const name of ['owner_session', 'run_receipt', 'events']) {

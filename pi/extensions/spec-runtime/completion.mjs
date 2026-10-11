@@ -64,24 +64,40 @@ function gatesFor(r) {
   if (!Array.isArray(plan.gates)) throw new Error('evidence-plan.json must contain gates; repair preparation rather than invent evidence obligations');
   return plan.gates.filter(g => Number(g.ownerStep) === stepNumber(r));
 }
-// Package artifacts accept canonical absolute, repo-relative .specs, or package-relative paths.
+// Legacy `.specs/<slug>/<rest>` names the package's own file in migrated packages.
+function legacyPath(packagePath, path) {
+  if (!path.startsWith('.specs/')) return path;
+  const [, slug, ...rest] = path.split('/');
+  if (slug !== basename(packagePath) || !rest.length) throw new Error(`Legacy path ${path} does not name a file of this package; use a package-relative path`);
+  return join(packagePath, ...rest);
+}
+// Package artifacts accept absolute, package-relative or legacy `.specs/<slug>/<rest>` paths.
 function packageArtifactPath(packagePath, path) {
   if (typeof path !== 'string' || !path.trim()) throw new Error('Artifact path is required');
   const root = resolve(packagePath);
-  const target = isAbsolute(path) ? path : path.startsWith('.specs/')
-    ? resolve(dirname(dirname(root)), path) : resolve(root, path);
-  return safePath(root, target);
+  return safePath(root, resolve(root, legacyPath(root, path)));
+}
+// `<repo id>:<path>` names a file in that target's worktree (locations.json), when the id is a target.
+function targetPath(packagePath, path) {
+  const match = /^([A-Za-z0-9][A-Za-z0-9_-]*):(.+)$/.exec(path);
+  if (!match) return null;
+  let targets;
+  try { targets = read(join(packagePath, 'locations.json')).targets; } catch { return null; }
+  const target = targets?.find(entry => entry.id === match[1]);
+  if (!target) return null;
+  if (!target.worktree) throw new Error(`Target ${target.id} has no worktree yet; ${path} cannot be resolved`);
+  return safePath(target.worktree, resolve(target.worktree, match[2]));
 }
 function artifactPath(r, path) {
   if (typeof path !== 'string' || !path.trim()) throw new Error('Evidence artifact path is required');
-  if (isAbsolute(path) || path.startsWith('.specs/')) {
-    const absolute = isAbsolute(path) ? path : resolve(r.primary, path);
-    return safePath(absolute.startsWith(r.package + '/') ? r.package : r.checkout, absolute);
-  }
+  path = legacyPath(r.package, path);
+  const inTarget = targetPath(r.package, path);
+  if (inTarget) return inTarget;
+  if (isAbsolute(path)) return safePath(path.startsWith(r.package + '/') ? r.package : r.checkout, path);
   const packageTarget = safePath(r.package, path);
   const checkoutTarget = safePath(r.checkout, path);
   if (existsSync(packageTarget) && existsSync(checkoutTarget) && packageTarget !== checkoutTarget)
-    throw new Error(`Ambiguous evidence artifact: ${path}; use a canonical absolute or .specs repo-relative path`);
+    throw new Error(`Ambiguous evidence artifact: ${path}; use an absolute or <repo id>:<path> path`);
   return existsSync(checkoutTarget) ? checkoutTarget : packageTarget;
 }
 // JSON-quoted scalars are YAML scalars too; fixed indentation remains compatible

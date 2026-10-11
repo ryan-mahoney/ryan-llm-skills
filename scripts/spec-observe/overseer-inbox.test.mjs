@@ -12,29 +12,21 @@ import { basename, join } from 'node:path';
 
 import { INBOX_FILE_BYTES, readInboxGuard, recordCheckpoint } from '../../pi/extensions/spec-runtime/sentinel.mjs';
 import { deliverOverseerMessage } from './overseer-inbox.mjs';
+import { makeFixture } from '../spec-location/fixture.mjs';
+import { newPackage } from '../spec-location/index.mjs';
 
 const FIXED = Date.parse('2026-10-06T12:00:00.000Z');
 const sha = value => createHash('sha256').update(value).digest('hex');
 
-// Disposable physical canonical Git repository with a real .specs package and
-// existing inbox/processed mailboxes.
-function canonicalFixture(t) {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'overseer-inbox-')));
-  t.after(() => rmSync(base, { recursive: true, force: true }));
-  const repo = join(base, 'repo');
-  mkdirSync(repo, { recursive: true });
-  const git = (...args) => execFileSync('git', ['-C', repo, ...args], { stdio: 'pipe' });
-  git('init', '-q');
-  git('config', 'user.name', 'Overseer Inbox Test');
-  git('config', 'user.email', 'overseer@example.invalid');
-  writeFileSync(join(repo, 'README'), 'fixture\n');
-  git('add', 'README');
-  git('commit', '-qm', 'Initial fixture');
-  const packagePath = join(repo, '.specs', 'feature');
-  mkdirSync(packagePath, { recursive: true });
+// Disposable storage root with a real spec-location package and existing
+// inbox/processed mailboxes.
+async function canonicalFixture(t) {
+  const fx = makeFixture();
+  t.after(fx.cleanup);
+  const packagePath = (await newPackage({ workspace: 'demo', slug: 'feature', targets: [{ id: 'alpha' }], ...fx.options })).locations.package_dir;
   mkdirSync(join(packagePath, 'inbox'), { recursive: true });
   mkdirSync(join(packagePath, 'processed'), { recursive: true });
-  return { base, repo, packagePath };
+  return { base: fx.tmp, repo: fx.alpha, packagePath };
 }
 
 // Real implementation-stage checkpoint matching the owning fixture contract.
@@ -56,7 +48,7 @@ function checkpointInput(packagePath) {
 }
 
 test('overseer delivery: a hold original reaches the real guard and leaves the checkpoint untouched', async t => {
-  const { packagePath } = canonicalFixture(t);
+  const { packagePath } = await canonicalFixture(t);
 
   // Initial empty mailbox is nonblocking.
   const initial = readInboxGuard(packagePath);
@@ -109,7 +101,7 @@ function checkpointDigest(packagePath) {
 }
 
 test('overseer delivery: archived hold protocol releases only on bound outcomes and never rewrites originals', async t => {
-  const { packagePath } = canonicalFixture(t);
+  const { packagePath } = await canonicalFixture(t);
   recordCheckpoint(checkpointInput(packagePath));
   const delivered = await deliverOverseerMessage(packagePath, {
     run: 'wf-1', sender: 'operator', audience: 'coordinator', kind: 'hold', body: 'Stop dependent work.',
@@ -204,6 +196,7 @@ test('overseer delivery: refusals leave mailboxes and checkpoint untouched', asy
     }, /physical canonical package/],
     ['linked worktree package', async ({ repo, base }) => {
       const worktree = join(base, 'linked-worktree');
+      execFileSync('git', ['-C', repo, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-qm', 'Initial fixture'], { stdio: 'pipe' });
       execFileSync('git', ['-C', repo, 'worktree', 'add', '-q', worktree], { stdio: 'pipe' });
       const target = join(worktree, '.specs', 'feature');
       mkdirSync(join(target, 'inbox'), { recursive: true });
@@ -260,7 +253,7 @@ test('overseer delivery: refusals leave mailboxes and checkpoint untouched', asy
     }, /must not be a symlink/],
   ];
   for (const [name, setup, pattern, runOverride] of cases) {
-    const fixture = canonicalFixture(t);
+    const fixture = await canonicalFixture(t);
     const target = await setup(fixture) ?? fixture.packagePath;
     const before = { inventory: inventoryOf(fixture.packagePath), checkpoint: checkpointDigest(fixture.packagePath) };
     await assert.rejects(
@@ -273,7 +266,7 @@ test('overseer delivery: refusals leave mailboxes and checkpoint untouched', asy
 });
 
 test('overseer delivery: review and user-held checkpoints accept, strict input refusals publish nothing', async t => {
-  const review = canonicalFixture(t);
+  const review = await canonicalFixture(t);
   const reviewInput = checkpointInput(review.packagePath);
   reviewInput.obligation = { ...reviewInput.obligation, stage: 'review' };
   recordCheckpoint(reviewInput);
@@ -282,7 +275,7 @@ test('overseer delivery: review and user-held checkpoints accept, strict input r
   });
   assert.equal(reviewDelivery.status, 'delivered');
 
-  const userHeld = canonicalFixture(t);
+  const userHeld = await canonicalFixture(t);
   const heldInput = checkpointInput(userHeld.packagePath);
   heldInput.state = 'user-held';
   recordCheckpoint(heldInput);
@@ -291,7 +284,7 @@ test('overseer delivery: review and user-held checkpoints accept, strict input r
   });
   assert.equal(heldDelivery.status, 'delivered');
 
-  const strict = canonicalFixture(t);
+  const strict = await canonicalFixture(t);
   recordCheckpoint(checkpointInput(strict.packagePath));
   const before = inventoryOf(strict.packagePath);
   const rejects = [
@@ -314,7 +307,7 @@ test('overseer delivery: review and user-held checkpoints accept, strict input r
 });
 
 test('overseer delivery: preflight lstat collision regenerates before any link attempt', async t => {
-  const { packagePath } = canonicalFixture(t);
+  const { packagePath } = await canonicalFixture(t);
   recordCheckpoint(checkpointInput(packagePath));
   const realLstat = fs.lstat;
   const realLink = fs.link;
@@ -347,7 +340,7 @@ test('overseer delivery: preflight lstat collision regenerates before any link a
 });
 
 test('overseer delivery: primitive EEXIST race is unconfirmed with the captured id and one link attempt', async t => {
-  const { packagePath } = canonicalFixture(t);
+  const { packagePath } = await canonicalFixture(t);
   recordCheckpoint(checkpointInput(packagePath));
   const realLink = fs.link;
   const raceBytes = Buffer.from('---\nid: race-original\nrun: wf-1\nsender: operator\naudience: coordinator\nkind: hold\n---\n\nrace\n');
@@ -378,7 +371,7 @@ test('overseer delivery: primitive EEXIST race is unconfirmed with the captured 
 });
 
 test('overseer delivery: EIO after a successful link still confirms the observed original', async t => {
-  const { packagePath } = canonicalFixture(t);
+  const { packagePath } = await canonicalFixture(t);
   recordCheckpoint(checkpointInput(packagePath));
   const realLink = fs.link;
   let attempts = 0;
@@ -406,7 +399,7 @@ test('overseer delivery: EIO after a successful link still confirms the observed
 });
 
 test('overseer delivery: EIO with the original moved outside the mailboxes is unconfirmed with one attempt', async t => {
-  const { base, packagePath } = canonicalFixture(t);
+  const { base, packagePath } = await canonicalFixture(t);
   recordCheckpoint(checkpointInput(packagePath));
   const realLink = fs.link;
   const moved = join(base, 'outside.md');
@@ -438,7 +431,7 @@ test('overseer delivery: EIO with the original moved outside the mailboxes is un
 });
 
 test('overseer delivery: archive after link is confirmed at the processed path', async t => {
-  const { packagePath } = canonicalFixture(t);
+  const { packagePath } = await canonicalFixture(t);
   recordCheckpoint(checkpointInput(packagePath));
   const realLink = fs.link;
   let attempts = 0;
@@ -464,7 +457,7 @@ test('overseer delivery: archive after link is confirmed at the processed path',
 });
 
 test('overseer delivery: exact 64 KiB accepted, one byte more rejected without a new file', async t => {
-  const { packagePath } = canonicalFixture(t);
+  const { packagePath } = await canonicalFixture(t);
   recordCheckpoint(checkpointInput(packagePath));
   // Derive the serialized header overhead from a small real delivery with the
   // same fixed-shape values, then build an ASCII body to hit the exact cap.

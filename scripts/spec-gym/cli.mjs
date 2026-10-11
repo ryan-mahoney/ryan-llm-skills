@@ -33,7 +33,7 @@ Options:
   --root <dir>               Run directory override
   --pi <path>                Pi executable (default pi)
   --child-extension <path>   Child extension (repeatable)
-  --source <package>         Source .specs package (extract)
+  --source <package>         Source storage package: workspace/slug or its directory (extract)
   --repo <dir>               Source repository (extract)
   --revision <rev>           Source revision to pin (extract)
   --id <id>                  New scenario id (extract)
@@ -113,7 +113,7 @@ function validate(values) {
   return failed ? 1 : 0;
 }
 
-function extractScenario(values) {
+async function extractScenario(values) {
   for (const flag of ['source', 'repo', 'revision', 'skill', 'id']) {
     if (!values[flag]) {
       process.stderr.write(`extract requires --${flag}\n`);
@@ -121,7 +121,7 @@ function extractScenario(values) {
     }
   }
   try {
-    const result = extract({
+    const result = await extract({
       sourcePackage: values.source,
       repo: values.repo,
       revision: values.revision,
@@ -238,7 +238,7 @@ let code;
 try {
   code = command === 'list' ? list(parsed.values)
     : command === 'validate' ? validate(parsed.values)
-    : command === 'extract' ? extractScenario(parsed.values)
+    : command === 'extract' ? await extractScenario(parsed.values)
     : await run(parsed.values);
 } catch (error) {
   // A malformed scenario.json reaches list/validate through loadScenario.

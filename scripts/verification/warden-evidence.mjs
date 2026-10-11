@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { realpathSync } from 'node:fs';
-import { dirname, relative, resolve } from 'node:path';
+import { existsSync, realpathSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 
@@ -40,8 +40,9 @@ export function classifyProjectCheck(tool, input, failed, output = '', cwd) {
   } catch { return 'unknown'; }
 }
 
-// Only workflow-owned prose and metadata qualify, never arbitrary .specs content.
-// Resolve existing ancestors so a symlink cannot hide an implementation edit.
+// Only workflow-owned prose and metadata in a storage package qualify, never
+// arbitrary package content. Resolve existing ancestors so a symlink cannot
+// hide an implementation edit.
 function physicalPath(file) {
   try { return realpathSync(file); } catch (error) {
     if (error.code !== 'ENOENT') throw error;
@@ -55,12 +56,12 @@ export function classifySpecArtifact(tool, input, cwd) {
   const file = input.path ?? input.file_path;
   if (typeof file !== 'string' || !file) return undefined;
   try {
-    const root = physicalPath(resolve(cwd));
-    const rel = relative(root, physicalPath(resolve(cwd, file))).replaceAll('\\', '/');
-    if (rel === '.specs/project-context.md') return 'unknown';
-    const match = /^\.specs\/[^/]+\/(.+)$/.exec(rel);
-    if (!match) return undefined;
-    const artifact = match[1];
+    // <storage>/projects/<workspace>/{project-context.md,specs/<slug>/<artifact>}
+    const path = physicalPath(resolve(cwd, file)).replaceAll('\\', '/');
+    const match = /^(.*\/projects\/[a-z0-9][a-z0-9-]*)\/(?:project-context\.md|specs\/[a-z0-9][a-z0-9-]*\/(.+))$/.exec(path);
+    if (!match || !existsSync(`${match[1]}/kit.yaml`)) return undefined;
+    const artifact = match[2];
+    if (artifact === undefined) return 'unknown';
     const known = /^(?:spec|proposal|context|learning|merge-evidence|work-tour|pr-message|pr-rebase-log|ledger)\.md$/.test(artifact)
       || /^(?:evidence-plan|merge-evidence|work-tour|pr-url)\.json$/.test(artifact)
       || artifact === 'work-tour.html'

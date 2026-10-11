@@ -27,7 +27,8 @@ export const LAUNCHING_ATTENTION_MS = 60000;
 const CLASSIFIED_STATES = new Set(["launching", "live", "launch_unknown", "launch_failed", "ended"]);
 const TERMINAL_RECORD_STATES = new Set(["launch_failed", "ended"]);
 const RUN_ENDED_EXECUTION = new Set(["exited", "failed", "cancelled", "blocked"]);
-const LEASE_REASONS = ["lease-missing", "lease-mismatch", "lease-revoked"];
+// A run recorded as running whose coordinator process is gone leaves its workers unconfirmed.
+const UNCONFIRMED_REASONS = ["coordinator-gone"];
 // adj4 classify has no structured probe-status field, so availability is read
 // from its own attention notes for an unknown launcher/terminal/Pi observation
 // or an incomplete UUID process listing.
@@ -47,7 +48,7 @@ function asString(value) {
 
 // Same spelling normalization on both sides of the run join; the comparison is
 // an exact match after trailing separators are removed.
-function canonicalPackage(value) {
+function packageKey(value) {
   const text = asString(value);
   if (text === null) return null;
   const trimmed = text.replace(/\/+$/, "");
@@ -85,7 +86,7 @@ function normalizeRecord(record) {
   const source = record !== null && typeof record === "object" && !Array.isArray(record) ? record : {};
   return {
     assignmentId: asString(source.assignment_id),
-    specPackage: canonicalPackage(source.spec_package),
+    specPackage: packageKey(source.spec_package),
     workflowId: asString(source.workflow_id),
     recordedState: asString(source.state),
     paneId: asString(source.pane_id),
@@ -211,15 +212,16 @@ function structuredAttachedCount(normalized, observations) {
   return value;
 }
 
-// A run joins only on the same workflow id and the same canonical package; a
-// run that carries a full assignment id must also name this assignment.
+// A run joins only on the same workflow id and the same package (`ws/slug`
+// reference or directory path); a run that carries a full assignment id must
+// also name this assignment.
 function linkedRuns(runs, normalized) {
   if (normalized.workflowId === null || normalized.specPackage === null) return [];
   const matches = [];
   for (const run of Array.isArray(runs) ? runs : []) {
     if (run === null || typeof run !== "object") continue;
     if (asString(run.workflow_id) !== normalized.workflowId) continue;
-    if (canonicalPackage(run.spec_package ?? run.package) !== normalized.specPackage) continue;
+    if (![run.spec_package, run.package_ref, run.package].some(value => packageKey(value) === normalized.specPackage)) continue;
     const runAssignment = asString(run.assignment_id);
     if (runAssignment !== null && runAssignment !== normalized.assignmentId) continue;
     matches.push(run);
@@ -227,10 +229,10 @@ function linkedRuns(runs, normalized) {
   return matches;
 }
 
-function leaseReasons(run) {
+function unconfirmedReasons(run) {
   const reasons = Array.isArray(run?.coverage?.reasons) ? run.coverage.reasons
     : Array.isArray(run?.reasons) ? run.reasons : [];
-  return LEASE_REASONS.filter(kind =>
+  return UNCONFIRMED_REASONS.filter(kind =>
     reasons.some(reason => typeof reason === "string"
       && (reason === kind || reason.startsWith(`${kind}:`))));
 }
@@ -393,19 +395,19 @@ export function projectAssignment(record, classification, { runs = [], activity 
     && nowMs - metadata.mtime > QUIET_ACTIVITY_MS;
 
   const matches = linkedRuns(runs, normalized);
-  const leases = [];
+  const unconfirmed = [];
   for (const run of matches) {
-    for (const kind of leaseReasons(run)) if (!leases.includes(kind)) leases.push(kind);
+    for (const kind of unconfirmedReasons(run)) if (!unconfirmed.includes(kind)) unconfirmed.push(kind);
   }
   const runEnded = matches.some(run => RUN_ENDED_EXECUTION.has(asString(run.execution)));
   const coordinatorGone = decision.display === "ended" || decision.display === "exited-unrecorded";
-  const workersUnconfirmed = matches.length > 0 && leases.length > 0 && (runEnded || coordinatorGone);
+  const workersUnconfirmed = matches.length > 0 && unconfirmed.length > 0 && (runEnded || coordinatorGone);
 
   let nextAction = decision.nextAction;
   if (workersUnconfirmed) {
     nextAction = "Inspect recorded workers";
     attention.push("workers-unconfirmed");
-    for (const kind of leases) if (!attention.includes(kind)) attention.push(kind);
+    for (const kind of unconfirmed) if (!attention.includes(kind)) attention.push(kind);
   }
 
   const coverageReasons = [];

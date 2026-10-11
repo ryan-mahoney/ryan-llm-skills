@@ -5,7 +5,9 @@
 // writes, follows symlinks, or reads package contents.
 
 import { lstat, realpath } from 'node:fs/promises';
-import { isAbsolute, join, posix, resolve } from 'node:path';
+import { dirname, isAbsolute, join, posix, resolve } from 'node:path';
+
+import { listEpics } from '../spec-location/index.mjs';
 
 export const EPIC_LIMITS = Object.freeze({ epics: 50, members: 100, recordBytes: 65536 });
 export const EPIC_SLUG = /^[a-z][a-z0-9-]{0,31}$/;
@@ -25,9 +27,9 @@ export function parseEpic(record, { slug } = {}) {
   if (!STATES.includes(record.state)) return fail('state is not planned, active, complete or abandoned');
   if (![record.created_at, record.note].every(optionalString)) return fail('created_at and note must be strings');
   if (record.plan !== undefined) {
-    // Lexical containment: the plan resolved from the epic directory stays inside .specs.
+    // Lexical containment: the plan resolved from the epic directory stays inside the workspace.
     if (typeof record.plan !== 'string' || !record.plan || isAbsolute(record.plan) || record.plan.includes('\\')
-      || !posix.resolve(`/.specs/_epics/${slug}`, record.plan).startsWith('/.specs/')) return fail('plan escapes .specs');
+      || !posix.resolve(`/workspace/epics/${slug}`, record.plan).startsWith('/workspace/')) return fail('plan escapes the workspace');
   }
   const designs = [];
   if (record.designs !== undefined) {
@@ -49,10 +51,9 @@ export function parseEpic(record, { slug } = {}) {
     if (typeof name !== 'string' || !name || name === '.' || name === '..' || /[\\/]/.test(name)) return fail('package name is invalid');
     if (names.has(name)) return fail(`duplicate package ${name}`);
     names.add(name);
-    if (item.repository !== undefined && (typeof item.repository !== 'string' || !isAbsolute(item.repository))) return fail(`repository of ${name} is not absolute`);
     if (item.requires !== undefined && (!Array.isArray(item.requires) || item.requires.some(value => typeof value !== 'string'))) return fail(`requires of ${name} is not a list of names`);
     if (!optionalString(item.note)) return fail(`note of ${name} is not a string`);
-    packages.push({ package: name, repository: item.repository ?? null, requires: [...new Set(item.requires ?? [])], note: item.note ?? null });
+    packages.push({ package: name, requires: [...new Set(item.requires ?? [])], note: item.note ?? null });
   }
   for (const item of packages) {
     for (const required of item.requires) {
@@ -64,36 +65,27 @@ export function parseEpic(record, { slug } = {}) {
     created_at: record.created_at ?? null, note: record.note ?? null, designs, packages } };
 }
 
-// Lists <specsDir>/_epics/* (real directories only) and reads each epic.json
-// through the caller's bounded reader so its bytes count against the shared budget.
-export async function readEpics(specsDir, { readJson, listDirectory, budget }) {
-  const root = join(specsDir, '_epics');
-  const epics = [];
+// Reads one workspace's epic records through spec-location (which resolves each
+// member to its package directory) and validates them. Records are small and
+// read outside the sentinel's byte budget.
+export async function readWorkspaceEpics(workspace, options) {
+  const entries = [];
   const reasons = [];
-  const listed = await listDirectory(root, EPIC_LIMITS.epics, entry => entry.isDirectory());
-  // An absent _epics directory is the ordinary case.
-  if (listed.entries === null) {
-    if (listed.code !== 'ENOENT') reasons.push(`epics-unavailable: ${root} (${listed.code})`);
-    return { epics, reasons };
+  const listed = await listEpics(workspace, options);
+  if (!listed.ok) return { entries, reasons: [`epics-unavailable: ${workspace} (${listed.code})`] };
+  if (listed.epics.length > EPIC_LIMITS.epics) reasons.push(`epics-cap: ${workspace}`);
+  for (const found of listed.epics.slice(0, EPIC_LIMITS.epics)) {
+    if (found.error) { reasons.push(`epic-invalid: ${found.record} (unreadable or not JSON)`); continue; }
+    const parsed = parseEpic(found.epic, { slug: found.slug });
+    if (parsed.error) { reasons.push(`epic-invalid: ${found.record} (${parsed.error})`); continue; }
+    const dir = dirname(found.record);
+    // A bare name is a file under plans/; anything with a separator is relative to the epic directory.
+    const plan = parsed.epic.plan === null ? null
+      : parsed.epic.plan.includes('/') ? resolve(dir, parsed.epic.plan) : join(dirname(dirname(dir)), 'plans', parsed.epic.plan);
+    entries.push({ slug: found.slug, workspace, dir, file: found.record, plan, epic: parsed.epic,
+      packageDirs: found.members.map(member => ({ dir: member.packageDir })) });
   }
-  if (listed.code) reasons.push(`epics-unavailable: ${root} (${listed.code})`);
-  if (listed.truncated) reasons.push(`epics-cap: ${root}`);
-  for (const entry of listed.entries) {
-    const dir = join(root, entry.name);
-    const file = join(dir, 'epic.json');
-    const read = await readJson(file, EPIC_LIMITS.recordBytes, budget, {
-      prefix: 'epic', oversize: false, within: dir, allow: value => value && typeof value === 'object' ? value : null });
-    if (read.outcome === 'read-budget') { reasons.push(read.reason); break; }
-    if (read.outcome !== 'ok') {
-      const why = read.outcome === 'missing' ? 'epic.json missing' : read.outcome === 'oversized' ? 'record over 64 KiB' : 'unreadable or not JSON';
-      reasons.push(`epic-invalid: ${file} (${why})`);
-      continue;
-    }
-    const parsed = parseEpic(read.record, { slug: entry.name });
-    if (parsed.error) reasons.push(`epic-invalid: ${file} (${parsed.error})`);
-    else epics.push({ slug: entry.name, dir, file, epic: parsed.epic });
-  }
-  return { epics, reasons };
+  return { entries, reasons };
 }
 
 export const attentionOf = run => !!run
@@ -113,7 +105,7 @@ export function deriveMemberStatus({ observed = true, exists, prepared, hasRecei
 
 // Pure projection of collected member facts. `entries[].members` aligns with
 // `epic.packages`; each carries the facts the status table needs plus `path`,
-// `repository`, `run`, `incomplete`.
+// `run`, `incomplete`.
 export function buildEpics(entries) {
   const memberships = new Map();
   const epics = entries.map(entry => {
@@ -122,7 +114,7 @@ export function buildEpics(entries) {
       const fact = entry.members[index];
       const { status, attention } = deriveMemberStatus(fact);
       const progress = fact.run?.spec_progress;
-      return { name: item.package, package: fact.path, repository: fact.repository, status, attention,
+      return { name: item.package, package: fact.path, workspace: entry.workspace, status, attention,
         step: status === 'in-progress' && progress?.current_position != null
           ? { position: progress.current_position, total: progress.total_steps } : null,
         waiting_on: item.requires, note: item.note,
@@ -137,15 +129,15 @@ export function buildEpics(entries) {
     const count = (...statuses) => members.filter(member => statuses.includes(member.status)).length;
     const reasons = [];
     members.forEach((member, index) => {
-      if (member.status === 'unobserved') reasons.push(`member-unobserved: ${member.name} (${member.repository})`);
+      if (member.status === 'unobserved') reasons.push(`member-unobserved: ${member.name} (${entry.workspace})`);
       else if (entry.members[index].incomplete) reasons.push(`member-incomplete: ${member.name}`);
     });
     members.forEach((member, index) => {
       if (!memberships.has(member.package)) memberships.set(member.package,
-        { epic: epic.epic, repository: entry.repository, position: index + 1, total: members.length });
+        { epic: epic.epic, workspace: entry.workspace, position: index + 1, total: members.length });
     });
-    return { epic: epic.epic, title: epic.title, state: epic.state, note: epic.note, designs: epic.designs, repository: entry.repository,
-      record: entry.file, plan: epic.plan ? resolve(entry.dir, epic.plan) : null, members,
+    return { epic: epic.epic, title: epic.title, state: epic.state, note: epic.note, designs: epic.designs, workspace: entry.workspace,
+      record: entry.file, plan: entry.plan ?? null, members,
       summary: { total: members.length, merged: count('merged'), complete: count('complete'), published: count('published'),
         in_progress: count('in-progress'), prepared: count('prepared'), proposed: count('proposed'),
         missing: count('missing'), unobserved: count('unobserved'), unknown: count('unknown'), attention: members.filter(member => member.attention).length },
@@ -160,47 +152,23 @@ const kindOf = async path => {
   catch (error) { return error?.code === 'ENOENT' ? null : 'error'; }
 };
 
-// Reads epic records from every observed primary checkout. Call this before the
-// package reads: records are small and must not lose the shared budget to history.
-export async function readEpicRecords({ facts, roots = [], readJson, listDirectory, budget }) {
-  const primaries = new Set([...facts.values()].map(fact => fact.primary));
-  // Enrolled primary checkouts (a .git directory, not a linked-worktree file) count as observed.
-  for (const root of roots) {
-    try {
-      const primary = await realpath(root);
-      if ((await lstat(join(primary, '.git'))).isDirectory()) primaries.add(primary);
-    } catch { /* an unreadable root is reported by the package enumeration */ }
-  }
-  const reasons = [];
-  const entries = [];
-  for (const primary of [...primaries].sort()) {
-    const found = await readEpics(join(primary, '.specs'), { readJson, listDirectory, budget });
-    reasons.push(...found.reasons);
-    for (const item of found.epics) entries.push({ ...item, repository: primary });
-  }
-  return { entries, primaries, reasons };
-}
-
 // Joins the records with collected package facts. Beyond the sentinel's own
 // package reads it performs only lstat calls on a member directory and its spec-steps.json.
-export async function collectEpics({ entries, primaries, facts, runs, recentlyCompleted, runConditions, readTime }) {
+export async function collectEpics({ entries, facts, runs, recentlyCompleted, runConditions, readTime }) {
   const currentRun = path => {
     const row = runs.find(item => item.package === path && item.is_current_assignment === true);
     return row ? { ...row, conditions: runConditions(row, readTime) } : recentlyCompleted.find(item => item.package === path) ?? null;
   };
   for (const entry of entries) {
     entry.members = [];
-    for (const item of entry.epic.packages) {
-      const repository = item.repository ? await realpath(item.repository).catch(() => resolve(item.repository)) : entry.repository;
-      const path = join(repository, '.specs', item.package);
+    for (const item of entry.packageDirs) {
+      const path = await realpath(item.dir).catch(() => item.dir);
       const fact = facts.get(path);
-      const base = { path, repository, observed: primaries.has(repository) };
+      const base = { path, workspace: entry.workspace, observed: true };
       if (fact) {
         entry.members.push({ ...base, exists: true, prepared: await kindOf(join(path, 'spec-steps.json')) === 'file',
           hasReceipts: (fact.candidates?.length ?? 0) > 0, completion: fact.completion ?? null, run: currentRun(path),
           incomplete: !!(fact.staleReceipts || fact.receiptsIncomplete) });
-      } else if (!base.observed) {
-        entry.members.push({ ...base, exists: false });
       } else {
         const kind = await kindOf(path);
         entry.members.push({ ...base, observed: kind !== 'error', exists: kind === 'dir',
@@ -208,6 +176,6 @@ export async function collectEpics({ entries, primaries, facts, runs, recentlyCo
       }
     }
   }
-  entries.sort((a, b) => a.repository.localeCompare(b.repository) || a.slug.localeCompare(b.slug));
+  entries.sort((a, b) => a.workspace.localeCompare(b.workspace) || a.slug.localeCompare(b.slug));
   return buildEpics(entries);
 }

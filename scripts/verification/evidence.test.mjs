@@ -79,15 +79,23 @@ test('Warden accepts only a current clean checkout receipt from the dedicated co
 test('spec metadata exemptions keep executable, config, arbitrary and escaped paths protected', t => {
   const repo = mkdtempSync(join(tmpdir(), 'warden-artifacts-'));
   t.after(() => rmSync(repo, { recursive: true, force: true }));
-  for (const path of ['.specs/project-context.md', '.specs/feature/ledger.md', '.specs/feature/pr-rebase-log.md', '.specs/feature/learnings/step-003-learning.md', '.specs/feature/step-003-subspec.md', '.specs/feature/reviews/step-003-fix.md', '.specs/feature/merge-evidence.json'])
-    assert.equal(classifySpecArtifact('write', { path }, repo), 'unknown', path);
-  for (const path of ['src/app.js', 'test/app.test.js', 'package.json', '.specs/feature/evidence/check.mjs', '.specs/feature/package.json', '.specs/feature/fixture.json', '.specs/feature/arbitrary.md', '.specs/feature/../../src/app.js'])
+  const workspace = join(repo, 'storage/projects/demo');
+  mkdirSync(join(workspace, 'specs/feature/reviews'), { recursive: true });
+  writeFileSync(join(workspace, 'kit.yaml'), 'version: 1\n');
+  for (const path of ['project-context.md', 'specs/feature/ledger.md', 'specs/feature/pr-rebase-log.md', 'specs/feature/learnings/step-003-learning.md', 'specs/feature/step-003-subspec.md', 'specs/feature/reviews/step-003-fix.md', 'specs/feature/merge-evidence.json'])
+    assert.equal(classifySpecArtifact('write', { path: join(workspace, path) }, repo), 'unknown', path);
+  for (const path of ['specs/feature/evidence/check.mjs', 'specs/feature/package.json', 'specs/feature/fixture.json', 'specs/feature/arbitrary.md', 'specs/feature/../../../../../src/app.js', 'kit.yaml', 'specs/feature/runtime/run.json'])
+    assert.equal(classifySpecArtifact('edit', { path: join(workspace, path) }, repo), undefined, path);
+  for (const path of ['src/app.js', '.specs/feature/ledger.md', '.specs/project-context.md'])
     assert.equal(classifySpecArtifact('edit', { path }, repo), undefined, path);
-  mkdirSync(join(repo, '.specs/feature'), { recursive: true });
+  // A projects/ lookalike without a kit is not storage.
+  mkdirSync(join(repo, 'projects/other/specs/feature'), { recursive: true });
+  assert.equal(classifySpecArtifact('write', { path: join(repo, 'projects/other/specs/feature/ledger.md') }, repo), undefined);
+  rmSync(join(workspace, 'specs/feature/reviews'), { recursive: true });
   mkdirSync(join(repo, 'src'));
-  symlinkSync(join(repo, 'src'), join(repo, '.specs/feature/reviews'));
-  assert.equal(classifySpecArtifact('write', { path: '.specs/feature/reviews/step-003-fix.md' }, repo), undefined);
-  assert.equal(classifySpecArtifact('apply_patch', { path: '.specs/feature/ledger.md' }, repo), undefined);
+  symlinkSync(join(repo, 'src'), join(workspace, 'specs/feature/reviews'));
+  assert.equal(classifySpecArtifact('write', { path: join(workspace, 'specs/feature/reviews/step-003-fix.md') }, repo), undefined);
+  assert.equal(classifySpecArtifact('apply_patch', { path: join(workspace, 'specs/feature/ledger.md') }, repo), undefined);
 });
 
 test('installed Warden preserves check freshness through observed metadata batch and real mutations invalidate it', async t => {
@@ -109,6 +117,9 @@ test('installed Warden preserves check freshness through observed metadata batch
       value => value, () => false, /node --test/, () => undefined, () => false);
   const repo = mkdtempSync(join(tmpdir(), 'warden-state-'));
   t.after(() => rmSync(repo, { recursive: true, force: true }));
+  const packageDir = join(repo, 'storage/projects/demo/specs/feature');
+  mkdirSync(packageDir, { recursive: true });
+  writeFileSync(join(repo, 'storage/projects/demo/kit.yaml'), 'version: 1\n');
   const state = warden.emptyEvidence();
   const record = (tool, input, failed = false) => warden.recordOutcome(state, warden.classifyToolResult(tool, input, failed, '', repo), input, tool);
   record('edit', { path: 'src/app.js' });
@@ -116,17 +127,17 @@ test('installed Warden preserves check freshness through observed metadata batch
   const failure = state.checks[0];
   record('bash', { command: 'node --test app.test.mjs' });
   for (const path of ['ledger.md', 'pr-rebase-log.md', 'pr-message.md', 'pr-url.json', 'merge-evidence.json', 'work-tour.json', 'work-tour.html'])
-    record('write', { path: `.specs/feature/${path}` });
+    record('write', { path: join(packageDir, path) });
   assert.equal(state.mutations, 1);
   assert.equal(warden.freshChecks(state).length, 2);
   assert.equal(state.checks[0], failure);
   assert.equal(failure.passed, false);
   assert.equal(warden.needsDoneCheck(state), false);
-  record('edit', { path: '.specs/feature/evidence/check.mjs' });
+  record('edit', { path: join(packageDir, 'evidence/check.mjs') });
   assert.deepEqual(warden.freshChecks(state), []);
   assert.equal(warden.needsDoneCheck(state), true);
   record('bash', { command: 'node --test app.test.mjs' }, true);
-  record('write', { path: '.specs/feature/ledger.md' });
+  record('write', { path: join(packageDir, 'ledger.md') });
   assert.equal(warden.needsDoneCheck(state), true);
   assert.equal(warden.freshChecks(state)[0].passed, false);
 });

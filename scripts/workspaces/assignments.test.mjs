@@ -11,8 +11,9 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
+import { newPackage } from "../spec-location/index.mjs";
 import { resolveAssignment, resolveTarget } from "./assignments.mjs";
 import { fetchWorkspace } from "./store.mjs";
 
@@ -54,12 +55,13 @@ async function makeRepo(directory, remote = null) {
   return realpath(directory);
 }
 
-function kitYaml({ id, name, repositories }) {
+function kitYaml({ id, name, repositories, executionHost = null }) {
   const lines = [
     "version: 1",
     `id: ${JSON.stringify(id)}`,
     `name: ${JSON.stringify(name)}`,
   ];
+  if (executionHost !== null) lines.push(`execution_host: ${JSON.stringify(executionHost)}`);
   if (repositories.length === 0) {
     lines.push("repositories: []");
   } else {
@@ -160,7 +162,7 @@ test("assignment resolution preserves directory mismatch and registered worktree
   await assertNoWrites(workspaceDirectory, storageRoot);
 });
 
-test("assignment resolution validates supplied spec package against repository common dir", async (t) => {
+test("assignment resolution validates supplied spec package against the package targets", async (t) => {
   const root = await tempRoot(t);
   const storageRoot = join(root, "storage");
   const workspaceDirectory = join(storageRoot, "projects", "package-workspace");
@@ -172,43 +174,55 @@ test("assignment resolution validates supplied spec package against repository c
   const worktreePath = join(root, "repos", "linked");
   await git(primary, ["worktree", "add", "--quiet", worktreePath]);
   const linkedPhysical = await realpath(worktreePath);
+  const secondary = join(root, "repos", "secondary");
+  await makeRepo(secondary);
 
-  const packageDirectory = join(primary, ".specs", "feature");
-  await mkdir(packageDirectory, { recursive: true });
-  await writeFile(join(packageDirectory, "spec.md"), "# Feature\n");
-
+  const executionHost = hostname().split(".")[0].toLowerCase();
   await writeFile(join(workspaceDirectory, "kit.yaml"), kitYaml({
     id: "package-workspace",
     name: "Package Workspace",
-    repositories: [{ id: "linked", path: linkedPhysical }],
+    executionHost,
+    repositories: [{ id: "linked", path: linkedPhysical }, { id: "secondary", path: secondary }],
   }));
+  const created = await newPackage({
+    workspace: "package-workspace",
+    slug: "feature",
+    targets: [{ id: "linked" }],
+    root: storageRoot,
+  });
+  assert.equal(created.ok, true);
+  const packageDirectory = created.locations.package_dir;
+  await writeFile(join(packageDirectory, "spec.md"), "# Feature\n");
 
   const workspace = await fetchWorkspace(storageRoot, "package-workspace");
 
-  // The package lives in the primary checkout of the worktree's repository.
-  const accepted = await resolveTarget({
-    workspace,
-    target: "linked",
-    specPackage: join(packageDirectory, "spec.md"),
-  });
-  assert.equal(accepted.spec_package, await realpath(packageDirectory));
+  // The package lives in the storage root; a package file or reference resolves to it.
+  for (const specPackage of [join(packageDirectory, "spec.md"), "package-workspace/feature"]) {
+    const accepted = await resolveTarget({ workspace, target: "linked", specPackage });
+    assert.equal(accepted.spec_package, packageDirectory);
+    assert.equal(accepted.package_ref, "package-workspace/feature");
+  }
 
-  // A package from a different repository refuses.
-  const secondary = join(root, "repos", "secondary");
-  await makeRepo(secondary);
-  const secondaryPackage = join(secondary, ".specs", "other");
-  await mkdir(secondaryPackage, { recursive: true });
-  await writeFile(join(secondaryPackage, "spec.md"), "# Other\n");
+  // A repository the package does not target refuses.
   await assert.rejects(
-    resolveTarget({ workspace, target: "linked", specPackage: join(secondaryPackage, "spec.md") }),
-    /different repository/,
+    resolveTarget({ workspace, target: "secondary", specPackage: packageDirectory }),
+    /not a target worktree or primary checkout/,
   );
 
-  // Without a repository target the workspace directory is not a Git checkout.
+  // Without a repository target the workspace directory is not a package target.
   await assert.rejects(
-    resolveTarget({ workspace, target: null, specPackage: join(packageDirectory, "spec.md") }),
-    /Git repository execution directory/,
+    resolveTarget({ workspace, target: null, specPackage: packageDirectory }),
+    /not a target worktree or primary checkout/,
   );
+
+  // A legacy package inside a checkout refuses with the migration remedy.
+  const legacy = join(primary, ".specs", "old");
+  await mkdir(legacy, { recursive: true });
+  await assert.rejects(
+    resolveTarget({ workspace, target: "linked", specPackage: legacy }),
+    /migrate/,
+  );
+  await rm(join(primary, ".specs"), { recursive: true, force: true });
 
   await assertNoWrites(workspaceDirectory, storageRoot);
 });
@@ -361,6 +375,7 @@ test("assignment resolution fixes digest for known brief bytes and tracks socket
     null,
     appPhysical,
     "app",
+    null,
     null,
     null,
     "none",

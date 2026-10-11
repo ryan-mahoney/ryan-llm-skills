@@ -3,36 +3,31 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readdirSync, writeFileSync, readFileSync, existsSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { Runtime, launch, loadRun, summary, groupAlive, runEditor, runCommand, runVerification, runCompletion, runAdvice, activeGroups, spawnManaged, settleGroup, assertLease, assertIdleWriter, canonicalPackage } from './runtime.mjs';
+import { Runtime, launch, loadRun, summary, groupAlive, runEditor, runCommand, runVerification, runCompletion, runAdvice, activeGroups, spawnManaged, settleGroup, assertLease, assertIdleWriter, editorSlot, revoke } from './runtime.mjs';
 import { createVerificationRecorder, readVerificationIncidents } from './sentinel.mjs';
+import { makePackageFixture } from './package-fixture.mjs';
 
-function fixture(t, source) {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'spec-runtime-test-')));
-  const repo = join(dir, 'repo'); mkdirSync(repo);
-  const git = (...args) => execFileSync('git', ['-C', repo, ...args], { stdio: 'pipe' });
-  git('init', '-q'); git('config', 'user.name', 'Runtime Test'); git('config', 'user.email', 'runtime@example.invalid');
-  writeFileSync(join(repo, 'README'), 'fixture\n');
-  writeFileSync(join(repo, '.gitignore'), '.specs/\n');
-  git('add', 'README', '.gitignore'); git('commit', '-qm', 'Initial fixture');
-  const packagePath = join(repo, '.specs/feature'); mkdirSync(packagePath, { recursive: true });
+async function fixture(t, source) {
+  const base = await makePackageFixture();
+  const { dir, repo, packagePath, location } = base;
   const step = join(packagePath, 'step-001-subspec.md'); writeFileSync(step, 'Prepared step');
   const fake = join(dir, 'fake-pi.cjs');
   writeFileSync(fake, source || `setTimeout(() => { console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'Implemented; focused check passed.'}]}})); }, 50);`);
   const pids = [];
   let notified;
   const finished = new Promise(resolve => { notified = resolve; });
-  const options = { indexDir: join(dir, 'index'), notify: notified, launchProcess: (record, role, prompt, launchOptions = {}) => {
+  const options = { indexDir: join(dir, 'index'), notify: notified, location, launchProcess: (record, role, prompt, launchOptions = {}) => {
     const task = launch(record, role, prompt, { command: process.execPath, prefix: [fake], ...launchOptions }); pids.push(task.child.pid); return task;
   } };
   t.after(() => { for (const pid of pids) { try { process.kill(-pid, 'SIGKILL'); } catch {} } rmSync(dir, { recursive: true, force: true }); });
-  return { dir, repo, packagePath, step, options, finished, pids, input: { package: packagePath, step, checkout: repo, owner_model: 'test/owner', editor_model: 'test/editor' } };
+  return { ...base, step, options, finished, pids, input: { package: packagePath, step, owner_model: 'test/owner', editor_model: 'test/editor' } };
 }
 
 function prepare(f, difficulty = 'hard') {
   for (const file of ['context.md', 'spec.md', 'spec-prepare.md']) writeFileSync(join(f.packagePath, file), 'Prepared and validated');
-  writeFileSync(join(f.repo, '.specs/project-context.md'), 'Project authority');
+  writeFileSync(f.locations.project_context, 'Project authority');
   writeFileSync(join(f.packagePath, 'evidence-plan.json'), '{}');
   writeFileSync(join(f.packagePath, 'spec-steps.json'), JSON.stringify({ steps: [{ step: 1, difficulty }] }));
   const { step, ...input } = f.input;
@@ -40,7 +35,7 @@ function prepare(f, difficulty = 'hard') {
 }
 
 test('prepared startup routes hard work, returns retained progress, and never equates worker completion with acceptance', async t => {
-  const f = fixture(t), input = prepare(f), runtime = new Runtime(f.options);
+  const f = await fixture(t), input = prepare(f), runtime = new Runtime(f.options);
   const started = await runtime.startup(input, '/parent/session.jsonl');
   assert.equal(started.owner_model, 'test/strong');
   assert.equal(started.routing_reason, 'prepared hard tier');
@@ -55,7 +50,7 @@ test('prepared startup routes hard work, returns retained progress, and never eq
 });
 
 test('prepared startup defers pending directions and legacy progress without launching a writer', async t => {
-  const f = fixture(t), input = prepare(f), runtime = new Runtime(f.options);
+  const f = await fixture(t), input = prepare(f), runtime = new Runtime(f.options);
   mkdirSync(join(f.packagePath, 'inbox'));
   writeFileSync(join(f.packagePath, 'inbox/hold.md'), 'Hold implementation');
   assert.equal((await runtime.startup(input)).state, 'needs_intake');
@@ -66,10 +61,10 @@ test('prepared startup defers pending directions and legacy progress without lau
 });
 
 test('explicit owner override wins over hard routing; missing prepared cards cannot create a worktree', async t => {
-  const f = fixture(t), input = prepare(f), runtime = new Runtime(f.options);
-  const checkout = join(f.dir, 'new-checkout');
+  const f = await fixture(t), input = prepare(f), runtime = new Runtime(f.options);
+  const checkout = join(f.dir, 'repo-feature');
   rmSync(f.step);
-  await assert.rejects(runtime.startup({ ...input, checkout }), /Prepared card missing/);
+  await assert.rejects(runtime.startup(input), /Prepared card missing/);
   assert.equal(existsSync(checkout), false);
   writeFileSync(f.step, 'Prepared step');
   const receipt = await runtime.startup({ ...input, owner_override: 'test/pinned' });
@@ -78,74 +73,74 @@ test('explicit owner override wins over hard routing; missing prepared cards can
 });
 
 test('spec file and directory inputs share run identity; explicit start honors owner_override without a default owner', async t => {
-  const f = fixture(t), runtime = new Runtime(f.options);
+  const f = await fixture(t), runtime = new Runtime(f.options);
   writeFileSync(join(f.packagePath, 'spec.md'), 'Spec');
   const input = { ...f.input, package: join(f.packagePath, 'spec.md'), owner_model: undefined, owner_override: 'test/pinned' };
-  const receipt = runtime.start(input);
+  const receipt = await runtime.start(input);
   assert.equal(receipt.package, f.packagePath);
   assert.equal(receipt.owner_model, 'test/pinned');
-  assert.equal(runtime.start({ ...input, package: f.packagePath }).run_id, receipt.run_id);
+  assert.equal((await runtime.start({ ...input, package: f.packagePath })).run_id, receipt.run_id);
   assert.equal(loadRun(input.package).id, receipt.run_id);
-  assert.throws(() => canonicalPackage(f.step), /directory or its spec.md/);
+  assert.equal(loadRun(f.step).id, receipt.run_id, 'a step card names its package');
   assert.deepEqual(receipt.environment.dependency_paths, []);
   await f.finished;
 });
 
 test('repeated starts return the same run before and after completion; a second coordinator cannot take its writer lease', async t => {
-  const f = fixture(t);
+  const f = await fixture(t);
   const runtime = new Runtime(f.options);
-  const first = runtime.start(f.input, '/parent/session.jsonl');
-  assert.equal(runtime.start(f.input).run_id, first.run_id);
-  assert.throws(() => new Runtime(f.options).start({ ...f.input, assignment_id: 'another-step' }), /Writer already reserved/);
+  const first = await runtime.start(f.input, '/parent/session.jsonl');
+  assert.equal((await runtime.start(f.input)).run_id, first.run_id);
+  await assert.rejects(() => new Runtime(f.options).start({ ...f.input, assignment_id: 'another-step' }), /run-active/);
   const completed = await f.finished;
   assert.equal(completed.state, 'completed');
   assert.equal(completed.result, 'Implemented; focused check passed.');
-  assert.equal(runtime.start(f.input).run_id, first.run_id);
+  assert.equal((await runtime.start(f.input)).run_id, first.run_id);
   const record = loadRun(f.packagePath);
   assert.equal(record.parent_session, '/parent/session.jsonl');
-  assert.equal(existsSync(record.lock), false);
+  assert.throws(() => assertLease(record), /revoked/, 'a finished run no longer holds the writer role');
   assert.match(readFileSync(join(f.packagePath, 'runtime/events.jsonl'), 'utf8'), /run_finished/);
 });
 
 test('a rejected cancellation preserves the lease and prevents replacement', async t => {
-  const f = fixture(t, 'setInterval(() => {}, 1000);');
+  const f = await fixture(t, 'setInterval(() => {}, 1000);');
   const runtime = new Runtime({ ...f.options, kill: () => { throw Object.assign(new Error('permission denied'), { code: 'EPERM' }); } });
-  const started = runtime.start(f.input);
+  const started = await runtime.start(f.input);
   await assert.rejects(runtime.cancel(f.packagePath, started.run_id, 10), /Cancellation unconfirmed/);
   assert.equal(loadRun(f.packagePath).state, 'blocked');
-  assert.throws(() => runtime.start({ ...f.input, assignment_id: 'replacement' }), /Writer already reserved/);
+  await assert.rejects(() => runtime.start({ ...f.input, assignment_id: 'replacement' }), /run-active/);
   process.kill(-f.pids[0], 'SIGKILL');
   await f.finished;
 });
 
 test('owner exit is not completion while a descendant can still write', async t => {
-  const f = fixture(t, `const {spawn}=require('node:child_process'); spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'}).unref(); console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'done'}]}}));`);
+  const f = await fixture(t, `const {spawn}=require('node:child_process'); spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'}).unref(); console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'done'}]}}));`);
   const runtime = new Runtime(f.options);
-  runtime.start(f.input);
+  await runtime.start(f.input);
   const outcome = await f.finished;
   assert.equal(outcome.state, 'blocked');
   assert.equal(groupAlive(f.pids[0]), true);
-  assert.equal(existsSync(loadRun(f.packagePath).lock), true);
-  assert.throws(() => runtime.start({ ...f.input, assignment_id: 'replacement' }), /Writer already reserved/);
+  assertLease(loadRun(f.packagePath));
+  await assert.rejects(() => runtime.start({ ...f.input, assignment_id: 'replacement' }), /run-active/);
   const cancelled = await runtime.cancel(f.packagePath, undefined, 1000);
   assert.equal(cancelled.state, 'cancelled');
 });
 
 test('provider failure is retained as failure even with process exit zero', async t => {
-  const f = fixture(t, `console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'error',errorMessage:'upstream timeout',content:[]}}));`);
-  new Runtime(f.options).start(f.input);
+  const f = await fixture(t, `console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'error',errorMessage:'upstream timeout',content:[]}}));`);
+  await new Runtime(f.options).start(f.input);
   const outcome = await f.finished;
   assert.equal(outcome.state, 'failed'); assert.equal(outcome.error, 'upstream timeout');
 });
 
 test('oversized results preserve their beginning and expose a complete readable artifact', async t => {
   const response = 'Outcome: change applied.\n' + 'x'.repeat(16000) + '\nFinal diagnostic.';
-  const f = fixture(t, `console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:${JSON.stringify(response)}}]}}));`);
-  new Runtime(f.options).start(f.input);
+  const f = await fixture(t, `console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:${JSON.stringify(response)}}]}}));`);
+  await new Runtime(f.options).start(f.input);
   const outcome = await f.finished;
   assert.equal(outcome.state, 'completed');
   assert.equal(outcome.handoff.status, 'handoff_incomplete');
-  assert.equal(existsSync(loadRun(f.packagePath).lock), false);
+  assert.throws(() => assertLease(loadRun(f.packagePath)), /revoked/);
   assert.equal(outcome.result_truncated, true);
   assert.ok(outcome.result.startsWith('Outcome: change applied.'));
   assert.ok(outcome.result.length <= 8000);
@@ -155,11 +150,11 @@ test('oversized results preserve their beginning and expose a complete readable 
 });
 
 test('successful recovery clears a transient provider failure while preserving the error event', async t => {
-  const f = fixture(t, `
+  const f = await fixture(t, `
     console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'error',errorMessage:'upstream timeout',content:[]}}));
     console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'Recovered and completed.'}]}}));
   `);
-  new Runtime(f.options).start(f.input);
+  await new Runtime(f.options).start(f.input);
   const outcome = await f.finished;
   assert.equal(outcome.state, 'completed');
   assert.equal(outcome.error, undefined);
@@ -169,29 +164,72 @@ test('successful recovery clears a transient provider failure while preserving t
 });
 
 test('confirmed cancellation releases the writer lease, while a new coordinator cannot kill by stale PID', async t => {
-  const f = fixture(t, 'setInterval(() => {}, 1000);');
+  const f = await fixture(t, 'setInterval(() => {}, 1000);');
   const runtime = new Runtime(f.options);
-  const first = runtime.start(f.input);
+  const first = await runtime.start(f.input);
   await assert.rejects(new Runtime(f.options).cancel(f.packagePath, first.run_id), /does not own the live process handle/);
   const cancelled = await runtime.cancel(f.packagePath, first.run_id, 50);
   assert.equal(cancelled.state, 'cancelled');
-  assert.equal(existsSync(loadRun(f.packagePath).lock), false);
+  assert.throws(() => assertLease(loadRun(f.packagePath)), /revoked/);
 });
 
-test('omitting checkout creates a linked worktree while retaining canonical spec paths', async t => {
-  const f = fixture(t);
-  new Runtime(f.options).start({ ...f.input, checkout: undefined });
+test('start creates the target worktree on the target branch, records it in locations.json and the run index, and writes no lock fields', async t => {
+  const f = await fixture(t);
+  await new Runtime(f.options).start(f.input);
   await f.finished;
   const record = loadRun(f.packagePath);
   assert.equal(record.package, f.packagePath);
+  assert.equal(record.package_ref, 'demo/feature');
   assert.equal(record.step, f.step);
   assert.equal(record.checkout, join(f.dir, 'repo-feature'));
-  assert.equal(existsSync(join(record.checkout, '.specs')), false);
+  assert.equal(record.primary, f.repo);
+  assert.equal(record.coordinator_pid, process.pid);
+  for (const field of ['lock', 'package_lock', 'token']) assert.equal(field in record, false, field);
+  assert.equal(execFileSync('git', ['-C', record.checkout, 'branch', '--show-current'], { encoding: 'utf8' }).trim(), 'spec-feature');
+  assert.equal(JSON.parse(readFileSync(join(f.packagePath, 'locations.json'), 'utf8')).targets[0].worktree, record.checkout);
+  assert.equal(JSON.parse(readFileSync(join(f.dir, 'index', `${record.id}.json`), 'utf8')).package_ref, 'demo/feature');
+  assert.equal(existsSync(join(f.packagePath, 'runtime/package.lock')), false);
+  assert.deepEqual(readdirSync(join(f.packagePath, 'runtime')).filter(name => name.endsWith('.lock')), []);
+});
+
+test('a package ref starts the same run as its folder; a package with two targets is refused before any run or worktree', async t => {
+  const f = await fixture(t);
+  const receipt = await new Runtime(f.options).start({ ...f.input, package: f.ref });
+  assert.equal(receipt.package, f.packagePath);
+  await f.finished;
+  const two = await makePackageFixture({ repos: ['repo', 'second'], targets: ['repo', 'second'] });
+  t.after(() => rmSync(two.dir, { recursive: true, force: true }));
+  const step = join(two.packagePath, 'step-001-subspec.md'); writeFileSync(step, 'Prepared step');
+  await assert.rejects(new Runtime({ ...f.options, location: two.location }).start({ package: two.ref, step, owner_model: 'test/owner', editor_model: 'test/editor' }),
+    error => error.code === 'multiple-targets-unsupported' && /multiple-targets-unsupported/.test(error.message) && Boolean(error.remedy));
+  assert.equal(existsSync(join(two.dir, 'repo-feature')), false);
+  assert.equal(existsSync(join(two.packagePath, 'runtime')), false);
+});
+
+test('a live coordinator refuses a second dispatch; a dead coordinator marks its run stale and the new run proceeds', async t => {
+  const f = await fixture(t);
+  const runtime = new Runtime(f.options);
+  const first = await runtime.start(f.input);
+  await f.finished;
+  // Reopen the finished run as one whose coordinator is another live process, then a dead one.
+  const reopen = pid => { const run = loadRun(f.packagePath); const open = { ...run, state: 'running', coordinator_pid: pid };
+    writeFileSync(join(f.packagePath, 'runtime/run.json'), JSON.stringify(open)); writeFileSync(join(f.packagePath, 'runtime/runs', `${run.id}.json`), JSON.stringify(open)); return run.id; };
+  reopen(process.ppid);
+  await assert.rejects(runtime.start({ ...f.input, assignment_id: 'second' }), error => error.code === 'run-active');
+  const dead = spawnSync(process.execPath, ['-e', '']);
+  const staleId = reopen(dead.pid);
+  const second = await runtime.start({ ...f.input, assignment_id: 'second' });
+  assert.notEqual(second.run_id, staleId);
+  assert.equal(JSON.parse(readFileSync(join(f.packagePath, 'runtime/runs', `${staleId}.json`), 'utf8')).state, 'stale');
+  assert.equal(loadRun(f.packagePath).id, second.run_id);
+  assert.equal(first.run_id, staleId);
+  assert.match(readFileSync(join(f.packagePath, 'runtime/events.jsonl'), 'utf8'), /run_stale/);
+  await runtime.cancel(f.packagePath, second.run_id, 1000).catch(() => {});
 });
 
 test('an editor descendant prevents a second editor and remains cancellable by its owner runtime', async t => {
-  const f = fixture(t, `if(process.env.SPEC_RUNTIME_ROLE==='owner')setInterval(()=>{},1000); else { require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'}).unref(); console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'done'}]}})); }`);
-  const runtime = new Runtime(f.options); runtime.start(f.input);
+  const f = await fixture(t, `if(process.env.SPEC_RUNTIME_ROLE==='owner')setInterval(()=>{},1000); else { require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'}).unref(); console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'done'}]}})); }`);
+  const runtime = new Runtime(f.options); await runtime.start(f.input);
   const record = loadRun(f.packagePath);
   const editor = await runEditor(record, 'Implement', undefined, f.options.launchProcess);
   assert.match(editor.error, /descendants remain alive/);
@@ -201,8 +239,8 @@ test('an editor descendant prevents a second editor and remains cancellable by i
 });
 
 test('editor abort returns a fatal receipt when termination cannot close stdout', async t => {
-  const f = fixture(t, 'setInterval(()=>{},1000);'), runtime = new Runtime(f.options);
-  runtime.start(f.input);
+  const f = await fixture(t, 'setInterval(()=>{},1000);'), runtime = new Runtime(f.options);
+  await runtime.start(f.input);
   try {
     const signal = new AbortController();
     signal.abort();
@@ -215,9 +253,9 @@ test('editor abort returns a fatal receipt when termination cannot close stdout'
 });
 
 test('editor fatal command receipt returns before the editor process finishes', async t => {
-  const f = fixture(t, `if(process.env.SPEC_RUNTIME_ROLE==='editor')console.log(JSON.stringify({type:'tool_execution_end',result:{details:{requires_cancellation:true,error:'editor command cleanup unconfirmed'}}})); setInterval(()=>{},1000);`);
+  const f = await fixture(t, `if(process.env.SPEC_RUNTIME_ROLE==='editor')console.log(JSON.stringify({type:'tool_execution_end',result:{details:{requires_cancellation:true,error:'editor command cleanup unconfirmed'}}})); setInterval(()=>{},1000);`);
   const runtime = new Runtime(f.options);
-  runtime.start(f.input);
+  await runtime.start(f.input);
   try {
     const reply = await runEditor(loadRun(f.packagePath), 'Implement', undefined, f.options.launchProcess);
     assert.equal(reply.requires_cancellation, true);
@@ -226,8 +264,8 @@ test('editor fatal command receipt returns before the editor process finishes', 
 });
 
 test('a shell timeout kills its process group before allowing further work', async t => {
-  const f = fixture(t, 'setInterval(()=>{},1000);');
-  const runtime = new Runtime(f.options); runtime.start(f.input);
+  const f = await fixture(t, 'setInterval(()=>{},1000);');
+  const runtime = new Runtime(f.options); await runtime.start(f.input);
   const record = loadRun(f.packagePath);
   const output = await runCommand(record, `"${process.execPath}" -e 'process.on("SIGTERM",()=>{});setInterval(()=>{},1000)'`, 0.1);
   assert.match(output.error, /timed out/);
@@ -236,8 +274,8 @@ test('a shell timeout kills its process group before allowing further work', asy
 });
 
 test('verification preserves pipeline failures including literal nested Bash wrappers', async t => {
-  const f = fixture(t, 'setInterval(()=>{},1000);'), runtime = new Runtime(f.options);
-  runtime.start(f.input);
+  const f = await fixture(t, 'setInterval(()=>{},1000);'), runtime = new Runtime(f.options);
+  await runtime.start(f.input);
   try {
     const record = loadRun(f.packagePath);
     const fingerprints = [];
@@ -254,8 +292,8 @@ test('verification preserves pipeline failures including literal nested Bash wra
 });
 
 test('a leaked command group is cleaned up without revoking the owner or permitting a false success', async t => {
-  const f = fixture(t, 'setInterval(()=>{},1000);'), runtime = new Runtime(f.options);
-  runtime.start(f.input);
+  const f = await fixture(t, 'setInterval(()=>{},1000);'), runtime = new Runtime(f.options);
+  await runtime.start(f.input);
   try {
     const record = loadRun(f.packagePath);
     const reply = await runVerification(record, 'sleep 30 >/dev/null 2>&1 &');
@@ -269,8 +307,8 @@ test('a leaked command group is cleaned up without revoking the owner or permitt
 });
 
 test('unconfirmed command cleanup revokes the lease and requests coordinator cancellation', async t => {
-  const f = fixture(t, 'setInterval(()=>{},1000);'), runtime = new Runtime(f.options);
-  runtime.start(f.input);
+  const f = await fixture(t, 'setInterval(()=>{},1000);'), runtime = new Runtime(f.options);
+  await runtime.start(f.input);
   try {
     const record = loadRun(f.packagePath);
     const reply = await runCommand(record, 'sleep 30 >/dev/null 2>&1 &', 5, undefined, { stopGroup: async () => false });
@@ -281,8 +319,8 @@ test('unconfirmed command cleanup revokes the lease and requests coordinator can
 });
 
 test('unconfirmed timeout returns a cancellation receipt even while the command keeps stdout open', async t => {
-  const f = fixture(t, 'setInterval(()=>{},1000);'), runtime = new Runtime(f.options);
-  runtime.start(f.input);
+  const f = await fixture(t, 'setInterval(()=>{},1000);'), runtime = new Runtime(f.options);
+  await runtime.start(f.input);
   try {
     const reply = await runCommand(loadRun(f.packagePath), 'sleep 30', 0.05, undefined, { stopGroup: async () => false });
     assert.equal(reply.requires_cancellation, true);
@@ -291,12 +329,12 @@ test('unconfirmed timeout returns a cancellation receipt even while the command 
 });
 
 test('fatal cleanup receipt wakes the coordinator and cancels the managed owner', async t => {
-  const f = fixture(t, `console.log(JSON.stringify({type:'tool_execution_end',result:{details:{requires_cancellation:true,error:'fixture cleanup unconfirmed'}}})); setInterval(()=>{},1000);`);
+  const f = await fixture(t, `console.log(JSON.stringify({type:'tool_execution_end',result:{details:{requires_cancellation:true,error:'fixture cleanup unconfirmed'}}})); setInterval(()=>{},1000);`);
   const notifications = [];
   let resolveCancelled;
   const cancelled = new Promise(resolve => { resolveCancelled = resolve; });
   const runtime = new Runtime({ ...f.options, notify: value => { notifications.push(value); if (value.state === 'cancelled') resolveCancelled(value); } });
-  runtime.start(f.input);
+  await runtime.start(f.input);
   const result = await cancelled;
   assert.equal(result.state, 'cancelled');
   assert.match(notifications[0].error, /cleanup unconfirmed/);
@@ -304,14 +342,14 @@ test('fatal cleanup receipt wakes the coordinator and cancels the managed owner'
 });
 
 test('fatal cleanup receipt survives a throwing observer callback', async t => {
-  const f = fixture(t, `console.log(JSON.stringify({type:'tool_execution_end',result:{details:{requires_cancellation:true,error:'fixture cleanup unconfirmed'}}})); setInterval(()=>{},1000);`);
+  const f = await fixture(t, `console.log(JSON.stringify({type:'tool_execution_end',result:{details:{requires_cancellation:true,error:'fixture cleanup unconfirmed'}}})); setInterval(()=>{},1000);`);
   const notifications = [];
   let resolveCancelled;
   const cancelled = new Promise(resolve => { resolveCancelled = resolve; });
   const runtime = new Runtime({ ...f.options,
     onWorkerEvent: () => { throw new Error('observer failed'); },
     notify: value => { notifications.push(value); if (value.state === 'cancelled') resolveCancelled(value); } });
-  runtime.start(f.input);
+  await runtime.start(f.input);
   const result = await cancelled;
   // A throwing observer neither suppresses lifecycle cancellation nor replaces
   // the worker result.
@@ -321,8 +359,8 @@ test('fatal cleanup receipt survives a throwing observer callback', async t => {
 });
 
 test('sentinel fingerprint: failed verification carries complete hashes, success omits it, and only surrounding whitespace is ignored', async t => {
-  const f = fixture(t, 'setInterval(()=>{},1000);'), runtime = new Runtime(f.options);
-  runtime.start(f.input);
+  const f = await fixture(t, 'setInterval(()=>{},1000);'), runtime = new Runtime(f.options);
+  await runtime.start(f.input);
   try {
     const record = loadRun(f.packagePath);
     const HEX = /^[a-f0-9]{64}$/;
@@ -344,7 +382,7 @@ test('sentinel fingerprint: failed verification carries complete hashes, success
     assert.equal(passed.exit_code, 0);
     assert.equal(passed.sentinel_failure, undefined);
 
-    writeFileSync(join(f.repo, 'untracked-fixture.txt'), 'changed working tree\n');
+    writeFileSync(join(record.checkout, 'untracked-fixture.txt'), 'changed working tree\n');
     const changed = await runVerification(record, 'printf focused; exit 7');
     assert.equal(changed.sentinel_failure.complete, true);
     assert.notEqual(changed.sentinel_failure.tree_digest, failed.sentinel_failure.tree_digest);
@@ -364,10 +402,10 @@ test('sentinel repetition: three distinct owner spec_verify events open one inci
   const source = [event('verify-1'), event('verify-2'), event('verify-2'), event('verify-3')]
     .map(line => `console.log(${JSON.stringify(line)});`).join('')
     + `setTimeout(() => { console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'Verification failed repeatedly.'}]}})); }, 50);`;
-  const f = fixture(t, source);
+  const f = await fixture(t, source);
   const recorder = createVerificationRecorder();
   const runtime = new Runtime({ ...f.options, onWorkerEvent: (record, value) => recorder.observe(record, value) });
-  runtime.start(f.input);
+  await runtime.start(f.input);
   await f.finished;
   const snapshot = readVerificationIncidents(f.packagePath);
   assert.equal(snapshot.version, 1);
@@ -393,8 +431,8 @@ async function freePort() {
 }
 
 test('managed verification waits for a server, preserves capture failures, and cleans up before the next writer', async t => {
-  const f = fixture(t, 'setInterval(()=>{},1000);'), runtime = new Runtime(f.options);
-  runtime.start(f.input);
+  const f = await fixture(t, 'setInterval(()=>{},1000);'), runtime = new Runtime(f.options);
+  await runtime.start(f.input);
   try {
     const record = loadRun(f.packagePath), port = await freePort();
     const script = join(f.dir, 'server.cjs');
@@ -422,11 +460,11 @@ test('managed verification waits for a server, preserves capture failures, and c
 });
 
 test('managed verification refuses an already responding server without touching it', async t => {
-  const f = fixture(t, 'setInterval(()=>{},1000);'), runtime = new Runtime(f.options);
+  const f = await fixture(t, 'setInterval(()=>{},1000);'), runtime = new Runtime(f.options);
   const external = createServer((q,s) => s.end('external'));
   await new Promise(resolve => external.listen(0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${external.address().port}`;
-  runtime.start(f.input);
+  await runtime.start(f.input);
   try {
     await assert.rejects(runVerification(loadRun(f.packagePath), 'true', 3, undefined, { command: 'exit 1', ready_url: url }), /already responds/);
     assert.equal(await (await fetch(url)).text(), 'external');
@@ -434,37 +472,37 @@ test('managed verification refuses an already responding server without touching
 });
 
 test('owner verification reports failure and cannot overlap an editor or another check', async t => {
-  const f = fixture(t, 'setInterval(()=>{},1000);');
-  const runtime = new Runtime(f.options); runtime.start(f.input);
+  const f = await fixture(t, 'setInterval(()=>{},1000);');
+  const runtime = new Runtime(f.options); await runtime.start(f.input);
   const record = loadRun(f.packagePath);
-  const editorSlot = join(record.lock, 'editor');
+  const slotPath = editorSlot(record);
   // The editor keeps this slot while waiting for an owner answer.
-  mkdirSync(editorSlot);
+  mkdirSync(slotPath);
   const marker = join(f.dir, 'should-not-run');
   await assert.rejects(runVerification(record, `touch '${marker}'`), /holds the writer slot/);
   assert.equal(existsSync(marker), false);
-  rmSync(editorSlot, { recursive: true });
+  rmSync(slotPath, { recursive: true });
   const pending = runVerification(record, 'printf "focused failure"; exit 7');
   await assert.rejects(runVerification(record, 'true'), /holds the writer slot/);
   await assert.rejects(runEditor(record, 'Overlapping edit', undefined, f.options.launchProcess), /already active/);
   const result = await pending;
   assert.equal(result.exit_code, 7);
   assert.equal(result.output, 'focused failure');
-  assert.equal(existsSync(editorSlot), false);
+  assert.equal(existsSync(slotPath), false);
   assert.equal((await runVerification(record, 'true')).exit_code, 0);
   await runtime.cancel(f.packagePath, undefined, 1000);
 });
 
 test('the assignment deadline cancels live workers and records a terminal result', async t => {
-  const f = fixture(t, 'setInterval(()=>{},1000);');
-  new Runtime(f.options).start({ ...f.input, timeout_ms: 100 });
+  const f = await fixture(t, 'setInterval(()=>{},1000);');
+  await new Runtime(f.options).start({ ...f.input, timeout_ms: 100 });
   assert.equal((await f.finished).state, 'cancelled');
   assert.match(readFileSync(join(f.packagePath, 'runtime/events.jsonl'), 'utf8'), /deadline_reached/);
 });
 
 test('Jev advice uses the assigned checkout, excludes writers and propagates uncertainty without retry', async t => {
-  const f = fixture(t, 'setInterval(()=>{},1000);');
-  const runtime = new Runtime(f.options); runtime.start(f.input);
+  const f = await fixture(t, 'setInterval(()=>{},1000);');
+  const runtime = new Runtime(f.options); await runtime.start(f.input);
   const record = loadRun(f.packagePath);
   let finish, calls = 0;
   const input = { schema_version: 1 };
@@ -481,8 +519,8 @@ test('Jev advice uses the assigned checkout, excludes writers and propagates unc
 });
 
 test('command excerpts retain early failures and each command owns its exact raw log and exit code', async t => {
-  const f = fixture(t, 'setInterval(()=>{},1000);');
-  const runtime = new Runtime(f.options); runtime.start(f.input);
+  const f = await fixture(t, 'setInterval(()=>{},1000);');
+  const runtime = new Runtime(f.options); await runtime.start(f.input);
   const record = loadRun(f.packagePath);
   const content = 'starting\n'.repeat(300) + 'Assertion failed: missing rejection\n' + 'noise\n'.repeat(5000) + 'all passed (untrusted text)\n';
   const source = join(f.dir, 'output.txt'); writeFileSync(source, content);
@@ -501,13 +539,12 @@ test('command excerpts retain early failures and each command owns its exact raw
 });
 
 test('revocation during group registration prevents the gated command from writing', async t => {
-  const f = fixture(t, 'setInterval(()=>{},1000);');
-  const runtime = new Runtime(f.options); runtime.start(f.input);
+  const f = await fixture(t, 'setInterval(()=>{},1000);');
+  const runtime = new Runtime(f.options); await runtime.start(f.input);
   const record = loadRun(f.packagePath);
   const target = join(f.dir, 'should-not-exist');
   const child = spawnManaged(record, 'command', process.execPath, ['-e', `require('node:fs').writeFileSync(${JSON.stringify(target)}, 'bad')`], () => {
-    const file = join(record.lock, 'lease.json');
-    const lease = JSON.parse(readFileSync(file, 'utf8')); writeFileSync(file, JSON.stringify({ ...lease, revoked: true }));
+    revoke(record);
   });
   await new Promise(resolveDone => child.once('close', resolveDone));
   assert.equal(existsSync(target), false);
@@ -517,35 +554,35 @@ test('revocation during group registration prevents the gated command from writi
 });
 
 test('historical assignment IDs remain idempotent after another step and reject changed launch contracts', async t => {
-  const f = fixture(t);
+  const f = await fixture(t);
   let notify;
   const runtime = new Runtime({ ...f.options, notify: value => notify(value) });
   const firstDone = new Promise(resolve => { notify = resolve; });
-  const first = runtime.start({ ...f.input, assignment_id: 'A' }); await firstDone;
+  const first = await runtime.start({ ...f.input, assignment_id: 'A' }); await firstDone;
   const nextDone = new Promise(resolve => { notify = resolve; });
-  runtime.start({ ...f.input, assignment_id: 'B' }); await nextDone;
-  assert.equal(runtime.start({ ...f.input, assignment_id: 'A' }).run_id, first.run_id);
+  await runtime.start({ ...f.input, assignment_id: 'B' }); await nextDone;
+  assert.equal((await runtime.start({ ...f.input, assignment_id: 'A' })).run_id, first.run_id);
   assert.equal(f.pids.length, 2);
-  assert.throws(() => runtime.start({ ...f.input, assignment_id: 'A', owner_model: 'test/strong' }), /different launch contract/);
+  await assert.rejects(() => runtime.start({ ...f.input, assignment_id: 'A', owner_model: 'test/strong' }), /different launch contract/);
   // A supplied workflow_id joins the launch contract: the same assignment cannot
   // be reused under a workflow (or under a different workflow).
-  assert.throws(() => runtime.start({ ...f.input, assignment_id: 'A', workflow_id: 'wf-contract' }), /different launch contract/);
+  await assert.rejects(() => runtime.start({ ...f.input, assignment_id: 'A', workflow_id: 'wf-contract' }), /different launch contract/);
   const workflowDone = new Promise(resolve => { notify = resolve; });
-  runtime.start({ ...f.input, assignment_id: 'C', workflow_id: 'wf-contract' }); await workflowDone;
-  assert.throws(() => runtime.start({ ...f.input, assignment_id: 'C', workflow_id: 'wf-other' }), /different launch contract/);
+  await runtime.start({ ...f.input, assignment_id: 'C', workflow_id: 'wf-contract' }); await workflowDone;
+  await assert.rejects(() => runtime.start({ ...f.input, assignment_id: 'C', workflow_id: 'wf-other' }), /different launch contract/);
 });
 
 test('concurrent cancellation requests share one terminal outcome without recreating a blocked run', async t => {
-  const f = fixture(t, 'setInterval(()=>{},1000);');
-  const runtime = new Runtime(f.options); runtime.start(f.input);
+  const f = await fixture(t, 'setInterval(()=>{},1000);');
+  const runtime = new Runtime(f.options); await runtime.start(f.input);
   const results = await Promise.all([runtime.cancel(f.packagePath, undefined, 1000), runtime.cancel(f.packagePath, undefined, 1000)]);
   assert.deepEqual(results.map(value => value.state), ['cancelled', 'cancelled']);
   assert.equal(loadRun(f.packagePath).state, 'cancelled');
 });
 
 test('a bounded UI-style command can start and reap a temporary server before handing back the writer', async t => {
-  const f = fixture(t, 'setInterval(()=>{},1000);');
-  const runtime = new Runtime(f.options); runtime.start(f.input);
+  const f = await fixture(t, 'setInterval(()=>{},1000);');
+  const runtime = new Runtime(f.options); await runtime.start(f.input);
   const record = loadRun(f.packagePath);
   const output = await runCommand(record, `"${process.execPath}" -e 'require("node:http").createServer((q,s)=>s.end("ok")).listen(0)' &\nserver=$!\ntrap 'kill "$server" 2>/dev/null || true; wait "$server" 2>/dev/null || true' EXIT\nkill -0 "$server"\nprintf 'capture fixture complete\\n'`, 5);
   assert.equal(output.exit_code, 0); assert.equal(output.error, undefined);
@@ -555,10 +592,10 @@ test('a bounded UI-style command can start and reap a temporary server before ha
 
 
 test('owner completion persists learning from real verification and releases the settled lease without accepting review', async t => {
-  const f = fixture(t, `setTimeout(() => console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'Handoff submitted.'}]}})), 1000);`);
+  const f = await fixture(t, `setTimeout(() => console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'Handoff submitted.'}]}})), 1000);`);
   writeFileSync(join(f.packagePath, 'spec.md'), '# Fixture');
   writeFileSync(join(f.packagePath, 'evidence-plan.json'), JSON.stringify({ gates: [{ id: 'EV-1', phase: 'merge', ownerStep: 1, required: true, rejects: ['FH-1'] }] }));
-  const runtime = new Runtime(f.options); runtime.start(f.input);
+  const runtime = new Runtime(f.options); await runtime.start(f.input);
   const r = loadRun(f.packagePath);
   const check = await runVerification(r, 'echo focused-result');
   assert.ok(check.receipt_id);
@@ -569,13 +606,13 @@ test('owner completion persists learning from real verification and releases the
   assert.equal(completion.status, 'recorded');
   const finished = await f.finished;
   assert.equal(finished.handoff.status, 'recorded'); assert.match(finished.handoff.acceptance, /review/);
-  assert.equal(existsSync(r.lock), false);
+  assert.throws(() => assertLease(r), /revoked/);
   assert.equal(JSON.parse(readFileSync(join(f.packagePath, 'runtime/progress.json'))).runs[0].execution, 'completed');
 });
 
 test('runtime carries a validated workflow_id and stable assignment_id into the record and summary', async t => {
-  const f = fixture(t), runtime = new Runtime(f.options);
-  const started = runtime.start({ ...f.input, workflow_id: 'wf-runtime-int', assignment_id: 'assign-runtime-int' });
+  const f = await fixture(t), runtime = new Runtime(f.options);
+  const started = await runtime.start({ ...f.input, workflow_id: 'wf-runtime-int', assignment_id: 'assign-runtime-int' });
   assert.equal(started.workflow_id, 'wf-runtime-int');
   assert.equal(started.assignment_id, 'assign-runtime-int');
   const record = loadRun(f.packagePath, started.run_id);
@@ -589,19 +626,19 @@ test('runtime carries a validated workflow_id and stable assignment_id into the 
   assert.equal(summary(loadRun(f.packagePath, started.run_id)).workflow_id, 'wf-runtime-int');
 
   // A malformed supplied workflow_id is refused before any run/lease side effect.
-  const g = fixture(t), runtime2 = new Runtime(g.options);
-  assert.throws(() => runtime2.start({ ...g.input, workflow_id: 'bad id!' }), /workflow_id must be/);
+  const g = await fixture(t), runtime2 = new Runtime(g.options);
+  await assert.rejects(() => runtime2.start({ ...g.input, workflow_id: 'bad id!' }), /workflow_id must be/);
   assert.equal(existsSync(join(g.packagePath, 'runtime')), false);
   assert.equal(g.pids.length, 0);
 });
 
 test('step-scoped sessions isolate steps, retain retries and leave default package reuse unchanged', async t => {
-  const f = fixture(t, 'setInterval(()=>{},1000);'), runtime = new Runtime(f.options);
+  const f = await fixture(t, 'setInterval(()=>{},1000);'), runtime = new Runtime(f.options);
   const nextStep = join(f.packagePath, 'step-002-subspec.md'); writeFileSync(nextStep, 'Next prepared step');
   const run = async input => {
-    const receipt = runtime.start({ ...f.input, ...input });
+    const receipt = await runtime.start({ ...f.input, ...input });
     const record = loadRun(f.packagePath, receipt.run_id);
-    assert.equal(runtime.start({ ...f.input, ...input }).run_id, receipt.run_id);
+    assert.equal((await runtime.start({ ...f.input, ...input })).run_id, receipt.run_id);
     await runtime.cancel(f.packagePath, receipt.run_id, 1000);
     return record;
   };
@@ -616,21 +653,21 @@ test('step-scoped sessions isolate steps, retain retries and leave default packa
   const legacy2 = await run({ assignment_id: 'legacy2', step: nextStep });
   assert.equal(legacy1.editor_session, legacy2.editor_session);
   assert.notEqual(first.editor_session, legacy1.editor_session);
-  assert.throws(() => runtime.start({ ...f.input, assignment_id: 'first', session_scope: 'package', attempt_kind: 'implementation' }), /different launch contract/);
-  const g = fixture(t), other = new Runtime(g.options);
-  assert.throws(() => other.start({ ...g.input, attempt_kind: 'automatic-retry' }), /Unknown attempt_kind/);
-  assert.throws(() => other.start({ ...g.input, session_scope: 'discard' }), /session_scope/);
+  await assert.rejects(() => runtime.start({ ...f.input, assignment_id: 'first', session_scope: 'package', attempt_kind: 'implementation' }), /different launch contract/);
+  const g = await fixture(t), other = new Runtime(g.options);
+  await assert.rejects(() => other.start({ ...g.input, attempt_kind: 'automatic-retry' }), /Unknown attempt_kind/);
+  await assert.rejects(() => other.start({ ...g.input, session_scope: 'discard' }), /session_scope/);
   assert.equal(g.pids.length, 0);
   assert.equal(existsSync(join(g.packagePath, 'runtime')), false);
 });
 
 test('clarification redispatch reuses retained sessions and refuses the stale attempt ID', async t => {
-  const f = fixture(t, `console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:process.argv.slice(2).join(' ')}]}}));`);
+  const f = await fixture(t, `console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:process.argv.slice(2).join(' ')}]}}));`);
   let settle;
   const runtime = new Runtime({ ...f.options, notify: value => settle?.(value) });
   const complete = async input => {
     const finished = new Promise(resolve => { settle = resolve; });
-    const receipt = runtime.start({ ...f.input, ...input });
+    const receipt = await runtime.start({ ...f.input, ...input });
     await finished;
     return loadRun(f.packagePath, receipt.run_id);
   };
@@ -640,7 +677,7 @@ test('clarification redispatch reuses retained sessions and refuses the stale at
   assert.ok(first.result.includes('Original direction'));
   const runsDir = join(f.packagePath, 'runtime', 'runs');
   const runsBefore = readdirSync(runsDir);
-  assert.throws(() => runtime.start({ ...f.input, assignment_id: 'startup', instructions: 'changed' }), /different launch contract/);
+  await assert.rejects(() => runtime.start({ ...f.input, assignment_id: 'startup', instructions: 'changed' }), /different launch contract/);
   assert.equal(f.pids.length, 1);
   assert.deepEqual(readdirSync(runsDir), runsBefore);
   const second = await complete({ assignment_id: 'startup-clarified-1', attempt_kind: 'implementation', instructions: 'Clarification: Q: which helper A: existing one' });
@@ -653,12 +690,12 @@ test('clarification redispatch reuses retained sessions and refuses the stale at
 });
 
 test('sentinel cancellation: assertIdleWriter rejects a claimed editor slot while the lease is valid', async t => {
-  const f = fixture(t, 'setInterval(()=>{},1000);');
+  const f = await fixture(t, 'setInterval(()=>{},1000);');
   const runtime = new Runtime(f.options);
-  const started = runtime.start(f.input);
+  const started = await runtime.start(f.input);
   const record = loadRun(f.packagePath, started.run_id);
   assertIdleWriter(record);
-  const slot = join(record.lock, 'editor');
+  const slot = editorSlot(record);
   mkdirSync(slot);
   assert.throws(() => assertIdleWriter(record), /editor or verification/);
   rmSync(slot, { recursive: true, force: true });
@@ -667,9 +704,9 @@ test('sentinel cancellation: assertIdleWriter rejects a claimed editor slot whil
 });
 
 test('editor latches deterministic model failure across retained records without revoking lease or retrying', async t => {
-  const f = fixture(t, 'setInterval(()=>{},1000);');
+  const f = await fixture(t, 'setInterval(()=>{},1000);');
   const runtime = new Runtime(f.options);
-  runtime.start({ ...f.input, editor_model: 'vendor/team/exact-model:high' });
+  await runtime.start({ ...f.input, editor_model: 'vendor/team/exact-model:high' });
   let launches = 0;
   const failedLaunch = () => {
     launches++;
@@ -683,15 +720,15 @@ test('editor latches deterministic model failure across retained records without
     assert.equal(repeated.coordinator_action_required, true);
     assert.equal(launches, 1);
     assertLease(loadRun(f.packagePath));
-    assert.equal(existsSync(join(loadRun(f.packagePath).lock, 'editor')), false);
+    assert.equal(existsSync(editorSlot(loadRun(f.packagePath))), false);
     const corrected = { ...loadRun(f.packagePath), editor_model: 'vendor/team/corrected-model:high' };
     await runEditor(corrected, 'Corrected selector', undefined, () => ({ child: { pid: undefined }, done: Promise.resolve({ result: 'done' }) }));
   } finally { await runtime.cancel(f.packagePath); }
 });
 
 test('editor transient and undiagnosed HTTP errors remain retryable', async t => {
-  const f = fixture(t, 'setInterval(()=>{},1000);');
-  const runtime = new Runtime(f.options); runtime.start(f.input);
+  const f = await fixture(t, 'setInterval(()=>{},1000);');
+  const runtime = new Runtime(f.options); await runtime.start(f.input);
   let launches = 0;
   try {
     for (const error of ['404 Not Found', 'ECONNRESET', '429 Too Many Requests']) {
@@ -704,8 +741,8 @@ test('editor transient and undiagnosed HTTP errors remain retryable', async t =>
 });
 
 test('launch passes exact nested model and thinking separately and captures selector mismatch diagnostics', async t => {
-  const f = fixture(t, `if(process.env.SPEC_RUNTIME_ROLE==='owner')setInterval(()=>{},1000); else { console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:JSON.stringify(process.argv.slice(2))}]}})); }`);
-  const runtime = new Runtime(f.options); runtime.start({ ...f.input, editor_model: 'openrouter/deepseek/deepseek-v4.1-flash:high' });
+  const f = await fixture(t, `if(process.env.SPEC_RUNTIME_ROLE==='owner')setInterval(()=>{},1000); else { console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:JSON.stringify(process.argv.slice(2))}]}})); }`);
+  const runtime = new Runtime(f.options); await runtime.start({ ...f.input, editor_model: 'openrouter/deepseek/deepseek-v4.1-flash:high' });
   try {
     const record = loadRun(f.packagePath);
     const reply = await runEditor(record, 'Apply', undefined, f.options.launchProcess);

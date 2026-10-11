@@ -506,8 +506,10 @@ const pathPattern = oldPackage => new RegExp(`${escapeRegExp(oldPackage)}(?![A-Z
 function transformer(kind, ctx) {
   if (kind === 'reshape') {
     return text => {
-      const { package: _package, ...rest } = JSON.parse(text);
-      return `${JSON.stringify({ package_ref: ctx.ref, targets: { [ctx.repoId]: rest } }, null, 2)}\n`;
+      // Match the shape spec-pr writes: mode replaces the legacy draft flag.
+      const { package: _package, draft, schema_version: _version, kind: _kind, ...rest } = JSON.parse(text);
+      const target = draft === undefined || rest.mode !== undefined ? rest : { ...rest, mode: draft ? 'draft' : 'ready' };
+      return `${JSON.stringify({ schema_version: 1, kind: 'pr_submission', package_ref: ctx.ref, targets: { [ctx.repoId]: target } }, null, 2)}\n`;
     };
   }
   if (kind === 'paths') return text => text.replace(pathPattern(ctx.oldPackage), () => ctx.newPackage);

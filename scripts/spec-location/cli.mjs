@@ -5,7 +5,7 @@
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import {
-  checkPackage, listEpics, locatePackage, materialize, migrate, newPackage, resolveWorkspace, stamp, updateScope,
+  checkPackage, listEpics, listPackages, locatePackage, materialize, migrate, newPackage, resolveWorkspace, stamp, updateScope,
 } from './index.mjs';
 
 const USAGE = `Usage: node scripts/spec-location/cli.mjs <command> [options]
@@ -17,6 +17,7 @@ const USAGE = `Usage: node scripts/spec-location/cli.mjs <command> [options]
   materialize REF
   stamp REF
   scope REF [--add-target ID[:BRANCH]] [--add-design REF] [--plan NAME|--no-plan] [--epic SLUG|--no-epic]
+  packages --workspace W
   epics --workspace W
   migrate --workspace W [--apply] [--include-transcripts]
 
@@ -55,6 +56,7 @@ async function execute(command, positionals, v) {
       if (v['no-epic']) change.setEpic = null; else if (v.epic !== undefined) change.setEpic = v.epic;
       return updateScope(ref, change, options);
     }
+    case 'packages': return listPackages(v.workspace, options);
     case 'epics': return listEpics(v.workspace, options);
     case 'migrate': return migrate({ ...options, workspace: v.workspace, apply: v.apply === true, includeTranscripts: v['include-transcripts'] === true });
     default: throw new Error(`unknown command ${JSON.stringify(command)}\n${USAGE}`);

@@ -187,6 +187,7 @@ function parseSentinelHostArguments(argv) {
   const apply = {
     '--agent-dir': value => { options.agentDir = value; },
     '--root': value => { options.root = value; },
+    '--storage-root': value => { options.storageRoot = resolve(value); },
     '--port': value => {
       if (!/^\d+$/.test(value)) throw new Error(PORT_ERROR);
       const port = Number(value);

@@ -33,7 +33,7 @@ import {
   locateAssignment,
   resolveAssignment,
 } from './assignments.mjs';
-import { canonicalPackage } from '../../pi/extensions/spec-runtime/runtime.mjs';
+import { locatePackage } from '../spec-location/index.mjs';
 import { readCheckpointRecord, readInboxGuard } from '../../pi/extensions/spec-runtime/sentinel.mjs';
 import { deliverOverseerMessage } from '../spec-observe/overseer-inbox.mjs';
 
@@ -383,6 +383,7 @@ function previewObject(preview) {
     execution_dir: record.execution_dir,
     repository_id: record.repository_id,
     spec_package: record.spec_package,
+    package_ref: record.package_ref ?? null,
     attention: record.attention ?? [],
     brief: record.brief,
     brief_sha256: record.brief_sha256,
@@ -573,6 +574,12 @@ function specPackageOrNull(record) {
   return typeof record.spec_package === 'string' && record.spec_package !== '' ? record.spec_package : null;
 }
 
+async function storagePackageDir(declared) {
+  const located = await locatePackage(declared);
+  if (!located.ok) throw new Error(`${located.message} ${located.remedy}`);
+  return located.packageDir;
+}
+
 // The recorded workflow id is authoritative: --run may fill a missing record
 // but never override a differing one.
 function resolveRun(record, requested) {
@@ -617,7 +624,7 @@ async function takeoverCommand(root, id, options) {
     return undefined;
   }
 
-  const packagePath = canonicalPackage(declared).packagePath;
+  const packagePath = await storagePackageDir(declared);
   const run = resolveRun(record, options['--run']);
   retainedCheckpoint(packagePath, run, 'takeover');
   const delivery = await deliverOverseerMessage(packagePath, {
@@ -681,7 +688,7 @@ async function resumeCommand(root, id, options) {
   const record = await findAssignment(root, id);
   const declared = specPackageOrNull(record);
   if (declared === null) throw new Error('resume requires an assignment with a spec package');
-  const packagePath = canonicalPackage(declared).packagePath;
+  const packagePath = await storagePackageDir(declared);
   const run = resolveRun(record, options['--run']);
   const checkpoint = retainedCheckpoint(packagePath, run, 'resume');
   const holdId = options['--hold'];
