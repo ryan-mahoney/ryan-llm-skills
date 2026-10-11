@@ -2682,12 +2682,28 @@ test("thread isolation keeps scoped events and history separate", async (t) => {
     assert.notEqual(payloadA.generation, payloadB.generation);
     assert.equal(payloadA.event.delta, markerA);
     assert.equal(payloadB.event.delta, markerB);
+    assert.ok(Number.isSafeInteger(payloadA.sequence) && payloadA.sequence >= 1, "envelopes carry a positive sequence");
+    assert.ok(Number.isSafeInteger(payloadB.sequence) && payloadB.sequence >= 1, "envelopes carry a positive sequence");
 
     const listed = await service.list({ workspace_id: "alpha" });
     const byId = new Map(listed.threads.map((entry) => [entry.thread_id, entry]));
     assert.ok(byId.get(recordA.thread_id).partial.includes("\u2028"));
     assert.ok(byId.get(recordA.thread_id).partial.includes("\u{1F680}"));
     assert.equal(byId.get(recordB.thread_id).partial, markerB);
+    assert.equal(byId.get(recordA.thread_id).watermark, payloadA.sequence, "projection watermark matches the latest scoped event");
+    assert.equal(byId.get(recordB.thread_id).watermark, payloadB.sequence);
+
+    // A later delta advances only this thread's sequence and partial; the
+    // projection reports the new watermark beside the accumulated partial.
+    await harness.control(recordA.thread_id, { event: { type: "message_update", delta: " second" } });
+    await waitFor(() => seenA.filter((payload) => payload.event?.type === "message_update").length === 2);
+    const progressed = seenA.filter((payload) => payload.event?.type === "message_update")[1];
+    assert.ok(progressed.sequence > payloadA.sequence, "later events advance the thread watermark");
+    const relisted = await service.list({ workspace_id: "alpha" });
+    const byIdAgain = new Map(relisted.threads.map((entry) => [entry.thread_id, entry]));
+    assert.equal(byIdAgain.get(recordA.thread_id).watermark, progressed.sequence);
+    assert.ok(byIdAgain.get(recordA.thread_id).partial.endsWith(" second"), "partial keeps both deltas");
+    assert.equal(byIdAgain.get(recordB.thread_id).watermark, payloadB.sequence, "the other thread watermark is unchanged");
 
     const historyA = await service.history({ workspace_id: "alpha", thread_id: recordA.thread_id });
     const historyB = await service.history({ workspace_id: "alpha", thread_id: recordB.thread_id });

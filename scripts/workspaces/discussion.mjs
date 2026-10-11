@@ -589,6 +589,11 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
   let closed = false;
   let closePromise = null;
   const subscribers = new Map();
+  // Per-thread transient event watermark. Every scoped emission advances the
+  // thread's sequence even with no subscribers, so an SSE snapshot can tell
+  // which buffered runtime frames it already reflects. Sequences stay
+  // monotonic for the service lifetime, including across generations.
+  const eventSequences = new Map();
   const threadLocks = new Map();
   const ownedChildren = new Map();
   const ownedAdapters = new Map();
@@ -821,9 +826,12 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
   let stallTimer = null;
 
   function emitScoped(workspace_id, thread_id, generation, type, event) {
-    const listeners = subscribers.get(`${workspace_id}:${thread_id}`);
+    const key = `${workspace_id}:${thread_id}`;
+    const sequence = (eventSequences.get(key) ?? 0) + 1;
+    eventSequences.set(key, sequence);
+    const listeners = subscribers.get(key);
     if (!listeners) return;
-    const payload = { workspace_id, thread_id, generation, type, event };
+    const payload = { workspace_id, thread_id, generation, sequence, type, event };
     for (const listener of [...listeners]) {
       try {
         listener(payload);
@@ -1373,6 +1381,7 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
           owns_response: ownsResponse,
           partial: runtime?.partial ?? "",
           generation: runtime?.generation ?? null,
+          watermark: eventSequences.get(`${id}:${record.thread_id}`) ?? 0,
         });
       }
     }
@@ -2751,6 +2760,7 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
       }
     }
     subscribers.clear();
+    eventSequences.clear();
     // threadLocks are intentionally preserved so queued mutations keep their
     // per-thread serialization through shutdown.
     const entries = [...ownedChildren.entries()];

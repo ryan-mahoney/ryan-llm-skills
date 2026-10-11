@@ -4,10 +4,12 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, existsSync,
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import vm from 'node:vm';
 import { readDashboardState, createDashboardServer, isRemoteRequest, normalizePublicHost } from './dashboard.mjs';
 import { COMPLETION_FILE } from './manual-completion.mjs';
 import { setupStorage, createWorkspace, addMaterial } from '../workspaces/store.mjs';
+import { createDiscussionService } from '../workspaces/discussion.mjs';
 
 function fixture(t) {
   const dir = mkdtempSync(join(tmpdir(), 'sentinel-dashboard-'));
@@ -1075,6 +1077,91 @@ test('workspace HTTP serves reads over a real listening port-0 server', async t 
   assert.equal(lstatSync(join(workspace, brief.path)).mtimeMs, briefMtime);
 });
 
+// Run independently: node --test --test-name-pattern='private thread records' scripts/spec-observe/dashboard.test.mjs
+test('generic workspace reads exclude private thread records while dedicated local routes still serve them', async t => {
+  const f = fixture(t);
+  const base = realpathSync(f.dir);
+  const storageRoot = join(base, 'storage');
+  await setupStorage(storageRoot);
+  await createWorkspace(storageRoot, { id: 'writer' });
+  const workspace = join(storageRoot, 'projects', 'writer');
+  const brief = await addMaterial(storageRoot, 'writer', { kind: 'brief', title: 'First Brief', content: '# Brief\n' });
+  const note = await addMaterial(storageRoot, 'writer', { kind: 'note', title: 'First Note', content: '# Note\n' });
+  const spawnCalls = [];
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(base, 'agent'),
+    spawn: (...args) => {
+      spawnCalls.push(args);
+      throw new Error('no discussion child may launch');
+    },
+  });
+  t.after(() => service.close());
+  const created = await service.create({ workspace_id: 'writer', title: 'Private thread', target: { kind: 'workspace' } });
+  // Seed a durable queued prompt into the record the real service reads. The
+  // queue stays paused so the scheduler never dispatches it and no Pi child
+  // can start during the regression.
+  const threadFile = join(workspace, 'threads', `${created.thread_id}.json`);
+  const record = JSON.parse(readFileSync(threadFile, 'utf8'));
+  const queuedText = 'durable queued prompt text';
+  record.queue = [{ id: randomUUID(), text: queuedText, queued_at: new Date().toISOString(), state: 'queued', attempt: 0 }];
+  record.queue_paused = true;
+  record.updated_at = new Date().toISOString();
+  writeFileSync(threadFile, `${JSON.stringify(record)}\n`);
+  const listed = await service.list({ workspace_id: 'writer' });
+  assert.ok(listed.threads.some(thread => thread.thread_id === created.thread_id && thread.queue[0]?.text === queuedText), 'the durable queued prompt is readable through the service');
+
+  const server = createDashboardServer({ agentDir: f.dir, publicHost: 'dashboard.example', storageRoot, discussion: service });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
+  const port = server.address().port;
+  const { request: httpRequest } = await import('node:http');
+  const httpCall = (path, { host, method = 'GET', headers = {} } = {}) => new Promise((resolve, reject) => {
+    const outgoing = httpRequest({ host: '127.0.0.1', port, path, method,
+      headers: { ...(host !== undefined ? { host } : {}), ...headers } },
+      incoming => {
+        const chunks = [];
+        incoming.on('data', chunk => chunks.push(chunk));
+        incoming.on('end', () => resolve({ status: incoming.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
+      });
+    outgoing.on('error', reject);
+    outgoing.end();
+  });
+  const listingPath = `/api/workspace-files?${new URLSearchParams({ id: 'writer' })}`;
+  const threadPath = `/api/workspace-file?${new URLSearchParams({ id: 'writer', file: `threads/${created.thread_id}.json` })}`;
+  const briefPath = `/api/workspace-file?${new URLSearchParams({ id: 'writer', file: brief.path })}`;
+  const notePath = `/api/workspace-file?${new URLSearchParams({ id: 'writer', file: note.path })}`;
+
+  for (const variant of [undefined, { host: 'dashboard.example' }, { headers: { 'x-forwarded-for': '' } }]) {
+    const label = JSON.stringify(variant);
+    const listing = await httpCall(listingPath, variant);
+    assert.equal(listing.status, 200, label);
+    const names = JSON.parse(listing.body).files.map(entry => entry.name);
+    assert.equal(names.some(name => name === `threads/${created.thread_id}.json` || name.startsWith('threads/')), false, `generic listing omits thread records ${label}`);
+    for (const method of ['GET', 'HEAD']) {
+      const denied = await httpCall(threadPath, { ...(variant ?? {}), method });
+      assert.notEqual(denied.status, 200, `generic ${method} cannot read a thread record ${label}`);
+      assert.doesNotMatch(denied.body, new RegExp(queuedText), `generic ${method} cannot disclose queued prompt text ${label}`);
+    }
+    const download = await httpCall(`${threadPath}&download=1`, variant);
+    assert.notEqual(download.status, 200, `download query cannot read a thread record ${label}`);
+    assert.doesNotMatch(download.body, new RegExp(queuedText), `download query cannot disclose queued prompt text ${label}`);
+    assert.equal((await httpCall(briefPath, variant)).body, '# Brief\n', `ordinary brief stays readable ${label}`);
+    assert.equal((await httpCall(notePath, variant)).body, '# Note\n', `ordinary note stays readable ${label}`);
+  }
+
+  // The dedicated thread routes stay local-only on the same server and remain
+  // the one supported path to the durable record.
+  const remoteThreads = await httpCall(`/api/threads?${new URLSearchParams({ workspace_id: 'writer' })}`, { host: 'dashboard.example' });
+  assert.equal(remoteThreads.status, 403, 'a configured public host cannot read threads');
+  const forwardedThreads = await httpCall(`/api/threads?${new URLSearchParams({ workspace_id: 'writer' })}`, { headers: { 'x-forwarded-for': '' } });
+  assert.equal(forwardedThreads.status, 403, 'a forwarded remote request cannot read threads');
+  const localThreads = await httpCall(`/api/threads?${new URLSearchParams({ workspace_id: 'writer' })}`);
+  assert.equal(localThreads.status, 200);
+  assert.ok(JSON.parse(localThreads.body).threads.some(thread => thread.thread_id === created.thread_id && thread.queue[0]?.text === queuedText), 'a loopback caller still reads the durable record');
+  assert.deepEqual(spawnCalls, [], 'no Pi child was started');
+});
+
 // Run independently: node --test --test-name-pattern='partial workspace coverage' scripts/spec-observe/dashboard.test.mjs
 test('partial workspace coverage: catalog states render through the split-pane owners', async () => {
   const validCatalog = { storage: { root: '/store', status: 'ok', errors: [] },
@@ -1708,13 +1795,30 @@ test('threads UI assignment link reaches the read-only result detail without dis
   assert.match(html, /tmux session adj-9/);
   vm.runInContext(inlineScript().slice(inlineScript().indexOf("$('run-list').addEventListener")), context);
   const clicks = context.document.getElementById('run-detail').listeners.click;
-  assert.ok(clicks.length >= 2, 'the thread action click handler is attached');
-  const click = clicks[1];
-  assert.equal(typeof click, 'function');
+  assert.ok(Array.isArray(clicks) && clicks.length >= 2, 'detail click handlers are attached');
   await flush();
   calls.length = 0;
-  click({ target: { id: 'thread-assignment-link', closest: () => null } });
+  // Exercise every registered detail listener rather than one numeric index:
+  // the no-send/no-fetch contract belongs to the delegated dispatch as a
+  // whole, whichever listener owns the assignment link.
+  // The synthetic target answers the ordinary delegated lookups for the link
+  // (its id selector and the plain anchor selector) with itself and leaves
+  // every unrelated action selector unmatched, so a handler written as
+  // closest('#thread-assignment-link') is actually exercised instead of being
+  // skipped like an unrecognized click.
+  const assignmentLink = {
+    id: 'thread-assignment-link',
+    closest(selector) {
+      return selector === 'a' || selector === '#thread-assignment-link' ? this : null;
+    },
+  };
+  let navigationPrevented = false;
+  for (const click of clicks) {
+    assert.equal(typeof click, 'function');
+    click({ target: assignmentLink, preventDefault() { navigationPrevented = true; } });
+  }
   await flush();
+  assert.equal(navigationPrevented, false, 'following the assignment link keeps the default fragment navigation');
   assert.equal(calls.filter(call => call.method === 'POST').length, 0, 'following the assignment link launches and sends nothing');
   assert.equal(calls.filter(call => String(call.path).startsWith('/api/thread')).length, 0, 'following the assignment link fetches nothing');
 });
@@ -1956,4 +2060,72 @@ test('threads UI stalled owner keeps Stop while a released stall shows Refresh o
   assert.match(html, /Stalled/);
   assert.doesNotMatch(html, /id="thread-stop"/);
   assert.match(html, /data-thread-refresh/);
+});
+
+// Run independently: node --test --test-name-pattern='owned responses keep Stop' scripts/spec-observe/dashboard.test.mjs
+test('threads UI owned responses keep Stop through uncertain, refusal and paused attention', () => {
+  const context = dashboardContext();
+  setThreadContext(context);
+  const cases = [
+    ['owned uncertain', { state: 'uncertain', attention: 'uncertain', owns_response: true }, true],
+    ['owned policy refusal', { state: 'policy-refusal', attention: 'policy-refusal', owns_response: true }, true],
+    ['owned paused', { state: 'paused', attention: null, queue_paused: true, owns_response: true }, true],
+    ['unowned uncertain', { state: 'uncertain', attention: 'uncertain', owns_response: false }, false],
+    ['unowned policy refusal', { state: 'policy-refusal', attention: 'policy-refusal', owns_response: false }, false],
+    ['unowned paused', { state: 'paused', attention: null, queue_paused: true, owns_response: false }, false],
+  ];
+  for (const [label, overrides, expected] of cases) {
+    vm.runInContext(`threads=${JSON.stringify([threadRecord(overrides)])};selectedThread=${JSON.stringify(threadId)};threadRequestError=null;threadDraft='keep me';renderThreads()`, context);
+    const html = threadsBody(context);
+    assert.equal(/id="thread-stop"/.test(html), expected, label);
+    assert.equal(vm.runInContext('threadDraft', context), 'keep me', `${label} keeps the composer draft`);
+    assert.equal(context.document.getElementById('thread-draft').value, 'keep me', `${label} keeps the composer text`);
+    if (overrides.queue_paused === true) {
+      assert.match(html, /id="thread-resume"/, `${label} keeps Resume`);
+      assert.equal(/id="thread-stop"/.test(html), overrides.owns_response, `${label} cancellation follows ownership`);
+    }
+  }
+
+  // The SSE snapshot path applies the same ownership facts through
+  // applyThreadLive: a paused snapshot that still owns the response keeps Stop.
+  vm.runInContext(`threads=${JSON.stringify([threadRecord()])};renderThreads()`, context);
+  vm.runInContext(`handleThreadFrame('snapshot', ${JSON.stringify({ thread_id: threadId, generation: 3, state: 'paused', queue: [], attention: null, partial: '', owns_response: true, queue_paused: true, last_persisted_id: null, watermark: 9 })})`, context);
+  const snapshotHtml = context.document.getElementById('thread-controls-box').innerHTML;
+  assert.match(snapshotHtml, /id="thread-stop"/, 'a snapshot owner keeps Stop while paused');
+  assert.match(snapshotHtml, /id="thread-resume"/, 'a snapshot paused owner keeps Resume');
+});
+
+// Run independently: node --test --test-name-pattern='reconnect snapshots replace' scripts/spec-observe/dashboard.test.mjs
+test('threads UI reconnect snapshots replace obsolete partial text and keep the composer draft', async () => {
+  const context = dashboardContext({ fetch: async url => {
+    if (String(url).startsWith('/api/thread/history')) return { ok: true, json: async () => ({ header: null, entries: [threadEntry('entry-done', 'assistant', 'completed persisted answer')], leaf_id: 'entry-done', incomplete_tail: false, skipped_lines: 0, truncated: false }) };
+    return { ok: false, status: 404, json: async () => ({}) };
+  } });
+  setThreadContext(context);
+  const transcript = () => context.document.getElementById('thread-transcript-box').innerHTML;
+  vm.runInContext(`threads=${JSON.stringify([threadRecord()])};threadHistoryEntries=${JSON.stringify([threadEntry('entry-old','assistant','older history')])};threadPartial='obsolete long partial text';threadDraft='draft to keep';renderThreads();renderThreadTranscript()`, context);
+  assert.match(transcript(), /obsolete long partial text/);
+  assert.equal(context.document.getElementById('thread-draft').value, 'draft to keep');
+
+  // Selection stays immutable: a snapshot for another thread changes nothing.
+  vm.runInContext(`handleThreadFrame('snapshot', ${JSON.stringify({ thread_id: otherThreadId, generation: 1, state: 'idle', queue: [], attention: null, partial: 'intruder', owns_response: false, queue_paused: false, last_persisted_id: null, watermark: 4 })})`, context);
+  assert.equal(vm.runInContext('threadPartial', context), 'obsolete long partial text', 'a snapshot for another thread is ignored');
+
+  // A shorter reconnect snapshot is authoritative over the obsolete partial.
+  vm.runInContext(`handleThreadFrame('snapshot', ${JSON.stringify({ thread_id: threadId, generation: 1, state: 'active', queue: [], attention: null, partial: 'short', owns_response: true, queue_paused: false, last_persisted_id: null, watermark: 5 })})`, context);
+  assert.equal(vm.runInContext('threadPartial', context), 'short', 'a shorter snapshot replaces the obsolete partial');
+  assert.doesNotMatch(transcript(), /obsolete long partial text/);
+  assert.match(transcript(), /short/);
+  assert.equal(vm.runInContext('threadDraft', context), 'draft to keep');
+  assert.equal(context.document.getElementById('thread-draft').value, 'draft to keep', 'the composer draft survives reconnect replacement');
+
+  // An empty reconnect snapshot clears the stale partial and refreshes the
+  // persisted tail when the watermark moved past the local history.
+  vm.runInContext(`threadPartial='stale text replaced by persisted history';renderThreadTranscript()`, context);
+  vm.runInContext(`handleThreadFrame('snapshot', ${JSON.stringify({ thread_id: threadId, generation: 2, state: 'idle', queue: [], attention: null, partial: '', owns_response: false, queue_paused: false, last_persisted_id: 'entry-done', watermark: 6 })})`, context);
+  assert.equal(vm.runInContext('threadPartial', context), '');
+  await flush();
+  assert.match(transcript(), /completed persisted answer/);
+  assert.doesNotMatch(transcript(), /stale text replaced by persisted history/);
+  assert.equal(vm.runInContext('threadDraft', context), 'draft to keep');
 });

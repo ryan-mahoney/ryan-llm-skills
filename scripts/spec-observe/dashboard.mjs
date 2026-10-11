@@ -110,9 +110,11 @@ export function isRemoteRequest(request) {
     .some(name => Object.hasOwn(headers, name));
 }
 
-// Components that workspace read routes never list or serve. Any `.env.`
-// variant (for example `.env.local`) is excluded by prefix.
-const WORKSPACE_EXCLUDED = new Set(['.adjacent', 'sessions', '.git', '.env', 'node_modules', '_build', 'deps']);
+// Components that workspace read routes never list or serve. `threads` holds
+// durable private discussion records (queued prompt text), reachable only
+// through the dedicated local-only thread routes. Any `.env.` variant (for
+// example `.env.local`) is excluded by prefix.
+const WORKSPACE_EXCLUDED = new Set(['.adjacent', 'sessions', 'threads', '.git', '.env', 'node_modules', '_build', 'deps']);
 function workspaceExclude(component) {
   return WORKSPACE_EXCLUDED.has(component) || component.startsWith('.env.');
 }

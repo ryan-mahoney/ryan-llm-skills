@@ -9,9 +9,11 @@
 // message, request override or filesystem path into a response.
 //
 // /api/thread/events is a read-only SSE projection: a fresh snapshot from
-// list/history, then the service's allowed attributed envelopes. The stream
-// never replays history, never carries the action token and never calls a
-// mutating service method synchronously.
+// list/history, then the service's allowed attributed envelopes. Buffered
+// partial frames already reflected in the snapshot watermark are dropped while
+// durable queue/state frames are kept, so snapshot plus deltas represent the
+// response exactly once. The stream never replays history, never carries the
+// action token and never calls a mutating service method synchronously.
 //
 // The handler returns true when it owned the path (including refusals) and
 // false for unrelated routes so the dashboard keeps its existing dispatch.
@@ -182,6 +184,7 @@ export function createDiscussionRoutes({ discussion, actionToken } = {}) {
     let pendingBytes = 0;
     let paused = false;
     let initialized = false;
+    let snapshotWatermark = null;
     let ended = false;
     let cleaned = false;
     let unsubscribe = null;
@@ -224,17 +227,29 @@ export function createDiscussionRoutes({ discussion, actionToken } = {}) {
 
     const overflow = (bytes) => pendingBytes + (response.writableLength ?? 0) + bytes > STREAM_BYTES_LIMIT;
 
+    // A buffered partial-affecting frame whose sequence is at or below the
+    // snapshot watermark is already represented by snapshot.partial and must
+    // not replay. Queue/state/notice (and tool/settled) frames are always
+    // retained because their durable list record may be older than the
+    // snapshot. Unknown watermarks or sequences keep the previous behavior.
+    const reflectsSnapshot = (frame) =>
+      Number.isSafeInteger(snapshotWatermark) &&
+      (frame.type === "delta" || frame.type === "message_end") &&
+      Number.isSafeInteger(frame.sequence) &&
+      frame.sequence <= snapshotWatermark;
+
     // A frame the socket accepted (even one that returned false) is never
     // retried; only frames that follow it are queued until drain.
     const flushPending = () => {
       while (!ended && !paused && pending.length > 0) {
         const frame = pending.shift();
         pendingBytes -= frame.bytes;
+        if (reflectsSnapshot(frame)) continue;
         if (!response.write(frame.text)) paused = true;
       }
     };
 
-    const writeFrame = (type, data) => {
+    const writeFrame = (type, data, sequence = null) => {
       if (ended || cleaned) return;
       const text = `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
       const bytes = Buffer.byteLength(text);
@@ -243,7 +258,7 @@ export function createDiscussionRoutes({ discussion, actionToken } = {}) {
         return;
       }
       if (!initialized || paused) {
-        pending.push({ text, bytes });
+        pending.push({ text, bytes, type, sequence });
         pendingBytes += bytes;
         return;
       }
@@ -292,12 +307,15 @@ export function createDiscussionRoutes({ discussion, actionToken } = {}) {
         return;
       }
       if (!STREAM_TYPES.has(envelope.type)) return;
+      // `sequence` is the frame's event watermark; the snapshot carries the
+      // projection watermark used to discard only already-reflected deltas.
       writeFrame(envelope.type, {
         thread_id: envelope.thread_id,
         generation: envelope.generation ?? null,
         type: envelope.type,
         event: envelope.event,
-      });
+        sequence: envelope.sequence ?? null,
+      }, envelope.sequence);
     };
 
     const endWithStatus = (status) => {
@@ -319,14 +337,19 @@ export function createDiscussionRoutes({ discussion, actionToken } = {}) {
         }
         const branch = await discussion.history({ workspace_id: workspaceId, thread_id: threadId });
         if (ended || cleaned) return;
+        const watermark = Number.isSafeInteger(thread.watermark) ? thread.watermark : null;
+        snapshotWatermark = watermark;
         const snapshot = {
           thread_id: threadId,
           generation: thread.generation ?? null,
           state: thread.state,
           queue: thread.queue,
           partial: thread.partial,
+          owns_response: thread.owns_response === true,
+          queue_paused: thread.queue_paused === true,
           last_persisted_id: branch?.leaf_id ?? null,
           attention: thread.attention ?? null,
+          watermark,
         };
         response.writeHead(200, SSE_HEADERS);
         initialized = true;

@@ -201,9 +201,13 @@ existing **Send** control, which uses the queued-message path.
 
 One long-lived, authority-free host process observes every enrolled/discovered
 repository and serves the same dashboard on loopback. It is separate from Pi:
-it arms no policy, starts no workers and never opens a browser. Its localhost
-dashboard keeps the existing local **Mark complete** write for the operator,
-while remote reads are local-only and cannot complete.
+it arms no policy, starts no observation workers and never opens a browser. The
+composed local discussion service starts a Pi child only for an explicit
+operator **Resume** or **Send**; it never sends provider prompts or deploys on
+its own. Its localhost dashboard keeps the existing local **Mark complete**
+write for the operator, while remote reads are local-only and cannot complete.
+Generic workspace-file routes neither list nor serve the private `threads`
+records; only the dedicated local-only thread routes read them.
 
 ```bash
 # Ordinary foreground use; replace /absolute/Projects with a real directory.
@@ -231,10 +235,10 @@ symlinked alias, is refused while the live owner holds
 experimental `node:sqlite`; Node v24.9 is the current implementation target and
 the experimental warning is retained. SIGTERM/SIGINT shutdown is bounded. The
 host prints exactly one JSON line
-`{type:"ready",state,snapshot_path,dashboard_url,dashboard_state}` after
-initialization; `dashboard_state` is `ready` or `unavailable`, and an
-unavailable dashboard is reported to stderr with a null URL while observation
-continues.
+`{type:"ready",state,snapshot_path,dashboard_url,dashboard_state,discussion_state}`
+after initialization; `dashboard_state` and `discussion_state` are `ready` or
+`unavailable`, and an unavailable dashboard is reported to stderr with a null
+URL while observation continues.
 
 Observation publishes one snapshot file per observer under
 `<agentDir>/spec-sentinel/<workspace-key>/observers/<observer-id>.json`. The

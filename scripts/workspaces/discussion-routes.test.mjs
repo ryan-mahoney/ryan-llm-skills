@@ -257,12 +257,16 @@ function fakeSseResponse() {
 }
 
 // Controlled service for deterministic SSE tests: a summary list, one leaf
-// history, and a captured listener that can be fed arbitrary envelopes.
-function controlledDiscussion({ deferFirstList = false } = {}) {
+// history, and a captured listener that can be fed arbitrary envelopes. Each
+// list call resolves a fresh projection so later mutations to `summary` only
+// model events that arrive after the read, exactly like the real service.
+function controlledDiscussion({ deferFirstList = false, deferFirstHistory = false } = {}) {
   const listeners = new Set();
   let unsubscribes = 0;
   let listCalls = 0;
+  let historyCalls = 0;
   let resolveFirstList = null;
+  let resolveFirstHistory = null;
   const summary = {
     thread_id: THREAD_ID,
     generation: "gen-1",
@@ -271,13 +275,19 @@ function controlledDiscussion({ deferFirstList = false } = {}) {
     partial: "",
     attention: null,
   };
+  const branch = { header: null, entries: [], leaf_id: "leaf-1", incomplete_tail: false, skipped_lines: 0, truncated: false };
+  const project = () => ({ threads: [{ ...summary }], invalid: [] });
   const service = {
     list: () => {
       listCalls += 1;
       if (deferFirstList && listCalls === 1) return new Promise((resolve) => { resolveFirstList = resolve; });
-      return Promise.resolve({ threads: [summary], invalid: [] });
+      return Promise.resolve(project());
     },
-    history: () => Promise.resolve({ header: null, entries: [], leaf_id: "leaf-1", incomplete_tail: false, skipped_lines: 0, truncated: false }),
+    history: () => {
+      historyCalls += 1;
+      if (deferFirstHistory && historyCalls === 1) return new Promise((resolve) => { resolveFirstHistory = resolve; });
+      return Promise.resolve({ ...branch });
+    },
     subscribe: ({ workspace_id, thread_id }, listener) => {
       listeners.add(listener);
       return () => {
@@ -295,7 +305,9 @@ function controlledDiscussion({ deferFirstList = false } = {}) {
     },
     unsubscribes: () => unsubscribes,
     listCalls: () => listCalls,
-    resolveFirstList: () => resolveFirstList?.({ threads: [summary], invalid: [] }),
+    historyCalls: () => historyCalls,
+    resolveFirstList: () => resolveFirstList?.(project()),
+    resolveFirstHistory: () => resolveFirstHistory?.({ ...branch }),
   };
 }
 
@@ -717,6 +729,9 @@ test("the real discussion service serves a fresh SSE snapshot without replay", a
   assert.ok(Array.isArray(snapshot.data.queue));
   assert.equal(snapshot.data.partial, "");
   assert.equal(snapshot.data.attention, null);
+  assert.equal(snapshot.data.owns_response, false);
+  assert.equal(snapshot.data.queue_paused, false);
+  assert.equal(snapshot.data.watermark, 0, "an idle thread starts at watermark zero");
   assert.ok(Object.hasOwn(snapshot.data, "generation"));
   assert.ok(Object.hasOwn(snapshot.data, "last_persisted_id"));
   assert.equal(Object.hasOwn(snapshot.data, "action_token"), false);
@@ -890,7 +905,7 @@ test("a disconnect during initialization releases capacity without writing heade
   assert.equal(secondResponse.status, 200);
 });
 
-test("a delta emitted during initialization stays ordered after the snapshot exactly once", async (t) => {
+test("a delta emitted during initialization without a snapshot watermark stays ordered after the snapshot exactly once", async (t) => {
   const controlled = controlledDiscussion({ deferFirstList: true });
   const routes = createDiscussionRoutes({ discussion: controlled.service, actionToken: "test-token" });
   const request = fakeSseRequest();
@@ -910,6 +925,62 @@ test("a delta emitted during initialization stays ordered after the snapshot exa
     1,
     "the buffered delta is written exactly once",
   );
+});
+
+test("buffered deltas already reflected in the snapshot watermark are deduplicated while later frames follow", async (t) => {
+  const controlled = controlledDiscussion({ deferFirstList: true, deferFirstHistory: true });
+  const routes = createDiscussionRoutes({ discussion: controlled.service, actionToken: "test-token" });
+  const request = fakeSseRequest();
+  const response = fakeSseResponse();
+  t.after(() => request.emit("aborted"));
+  routes(request, response, sseUrl(), { remote: false });
+  await until(() => controlled.listeners.size === 1, "subscription is registered before list resolves");
+
+  // Durable state/notice and a terminal message_end land before the snapshot
+  // projection resolves, followed by the early delta already represented by
+  // snapshot.partial. All four sit at or below the snapshot watermark: the
+  // durable queue/state record may be older than the projection and must
+  // survive, while the partial-affecting message_end and delta are already
+  // represented and must not replay.
+  controlled.emit(sseEnvelope("state", { type: "state", queue: [], queue_paused: false, attention: null }, { sequence: 1 }));
+  controlled.emit(sseEnvelope("notice", { type: "notice", attention: "provider-retry" }, { sequence: 2 }));
+  controlled.emit(sseEnvelope("message_end", { type: "message_end" }, { sequence: 3 }));
+  controlled.emit(sseEnvelope("delta", { type: "message_update", delta: "early" }, { sequence: 4 }));
+  controlled.summary.partial = "early";
+  controlled.summary.watermark = 4;
+  controlled.resolveFirstList();
+  await until(() => controlled.historyCalls() === 1, "history read starts after the projection");
+
+  // A later delta arrives after the projection but before deferred history
+  // resolves, so it stays buffered behind the snapshot too.
+  controlled.summary.watermark = 5;
+  controlled.emit(sseEnvelope("delta", { type: "message_update", delta: " later" }, { sequence: 5 }));
+  controlled.resolveFirstHistory();
+  await until(() => response.chunks.length === 4, "snapshot, durable state/notice and the later delta flush");
+
+  const dataOf = (chunk) => JSON.parse(chunk.slice(chunk.indexOf("data: ") + 6).trim());
+  const types = response.chunks.map((chunk) => chunk.match(/^event: (\w+)/)[1]);
+  assert.deepEqual(types, ["snapshot", "state", "notice", "delta"], "durable state/notice keep arrival order ahead of the later delta");
+  const snapshot = dataOf(response.chunks[0]);
+  assert.equal(snapshot.partial, "early");
+  assert.equal(snapshot.watermark, 4);
+  assert.equal(
+    response.chunks.filter((chunk) => chunk.includes('"delta":"early"')).length,
+    0,
+    "a buffered delta already reflected in the snapshot is not replayed",
+  );
+  assert.equal(types.includes("message_end"), false, "a buffered message_end at or below the watermark is not replayed");
+  const later = response.chunks.find((chunk) => chunk.includes('"delta":" later"'));
+  assert.ok(later, "a later delta is retained");
+  assert.equal(dataOf(later).sequence, 5);
+  assert.equal(
+    response.chunks.filter((chunk) => chunk.includes('"delta":" later"')).length,
+    1,
+    "the later delta is written exactly once",
+  );
+  assert.equal(snapshot.partial + dataOf(later).event.delta, "early later", "snapshot plus stream reconstructs the partial exactly once");
+  assert.equal(dataOf(response.chunks[1]).sequence, 1, "the durable state frame is retained with its watermark");
+  assert.equal(dataOf(response.chunks[2]).sequence, 2, "the durable notice frame is retained with its watermark");
 });
 
 test("an over-cap snapshot cleans up the stream and releases the subscription", async (t) => {
