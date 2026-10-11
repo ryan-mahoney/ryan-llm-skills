@@ -2,6 +2,8 @@
 import { fork, execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+import { createDashboardServer } from '../../../scripts/spec-observe/dashboard.mjs';
+
 const serverFile = fileURLToPath(new URL('../../../scripts/spec-observe/dashboard.mjs', import.meta.url));
 function openBrowser(url) {
   const command = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'rundll32.exe' : 'xdg-open';
@@ -84,6 +86,69 @@ export function createSentinelDashboard({ agentDir, port = 0, publicHost, launch
       }
       if (child) return terminate(child);
       return stopping ? stopping.promise : Promise.resolve();
+    },
+  };
+}
+
+export function createDirectDashboard({ agentDir, port = 0, publicHost, discussion } = {}) {
+  let owned = null, starting = null, address = null, stopping = null;
+  // Close only this owned listener. The promise settles when the listener
+  // reports close, and repeated stops of the same listener share it.
+  function terminate(server) {
+    if (stopping && stopping.server === server) return stopping.promise;
+    const promise = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Dashboard cleanup exceeded 1000 ms.')), 1000);
+      server.closeAllConnections();
+      server.close(() => { clearTimeout(timer); resolve(); });
+    });
+    stopping = { server, promise };
+    // An abandoned stop must not crash the host; awaiting callers still see it.
+    promise.catch(() => {});
+    return promise;
+  }
+  return {
+    get url() { return address; },
+    start() {
+      if (starting) return starting.promise;
+      if (owned && address) return Promise.resolve({ url: address, browserError: null });
+      let resolve, reject;
+      const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+      let server;
+      try { server = createDashboardServer({ agentDir, publicHost, discussion }); }
+      catch (error) { reject(new Error(`Dashboard service failed: ${error.code ?? error.message}`)); return promise; }
+      const record = { promise, reject };
+      starting = record;
+      owned = server;
+      const fail = error => {
+        if (starting !== record) return;
+        starting = null;
+        if (owned === server) owned = null;
+        address = null;
+        reject(new Error(`Dashboard service failed: ${error.code ?? error.message}`));
+      };
+      server.on('error', fail);
+      server.once('listening', () => {
+        // A cancelled start must not resurrect the URL; close a late binding.
+        if (starting !== record) { server.close(); return; }
+        starting = null;
+        address = `http://127.0.0.1:${server.address().port}/`;
+        resolve({ url: address, browserError: null });
+      });
+      try { server.listen(port, '127.0.0.1'); }
+      catch (error) { fail(error); }
+      return promise;
+    },
+    stop() {
+      const server = owned, pending = starting;
+      owned = null; address = null;
+      if (pending) {
+        starting = null;
+        pending.reject(new Error('Dashboard startup cancelled.'));
+      }
+      if (server) return terminate(server);
+      if (stopping) return stopping.promise;
+      stopping = { server: null, promise: Promise.resolve() };
+      return stopping.promise;
     },
   };
 }
