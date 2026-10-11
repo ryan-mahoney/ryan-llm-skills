@@ -714,6 +714,38 @@ test('completed implementation exposes recorded repair workers and explicit atte
   assert.deepEqual((await collectWorkspace(input)).runs[0].workflow_workers, []);
 });
 
+// Run alone: node --test --test-name-pattern='replaced step workers' scripts/spec-observe/sentinel.test.mjs
+test('replaced step workers retain the current coordinator obligation without binding historical or foreign runs', async t => {
+  const f = sandbox(t), repo = primary(f.dir, 'handoff'), packagePath = pack(repo);
+  const binding = { checkout: repo, parent_session: '/sessions/coordinator.jsonl' };
+  receipt(packagePath, { id: 'old', state: 'completed', started_at: ago(120000), ...binding });
+  receipt(packagePath, { id: 'current', state: 'completed', started_at: ago(60000), ...binding });
+  const dir = join(packagePath, 'runtime/sentinel/workflow'); mkdirSync(dir, { recursive: true });
+  const checkpoint = { version: 1, workflow_id: 'workflow', package: packagePath,
+    checkout: repo, coordinator_session: binding.parent_session, state: 'waiting-worker', observed_at: ago(1000),
+    obligation: { summary: 'Await step fix' }, workers: [{ id: 'fix-worker', kind: 'fixer', state: 'working' }] };
+  const save = () => writeFileSync(join(dir, 'checkpoint.json'), JSON.stringify(checkpoint));
+  save();
+  const input = { packages: [packagePath], indexDir: f.indexDir, now };
+  const snapshot = await collectWorkspace(input);
+  const current = snapshot.runs.find(run => run.assignment_id === 'current');
+  assert.equal(current.execution, 'completed');
+  assert.equal(current.is_current_assignment, true);
+  assert.equal(current.workflow_state, 'waiting-worker');
+  assert.equal(current.obligation, 'Await step fix');
+  assert.deepEqual(current.workflow_workers, [{ id: 'fix-worker', kind: 'fixer', state: 'working' }]);
+  assert.equal(snapshot.runs.find(run => run.assignment_id === 'old').workflow_state, null);
+  for (const [key, value] of [['coordinator_session', '/sessions/other.jsonl'], ['checkout', '/other/checkout'], ['observed_at', ago(90000)]]) {
+    const previous = checkpoint[key]; checkpoint[key] = value; save();
+    assert.equal((await collectWorkspace(input)).runs.find(run => run.assignment_id === 'current').workflow_state, null, key);
+    checkpoint[key] = previous;
+  }
+  save();
+  const other = join(packagePath, 'runtime/sentinel/other'); mkdirSync(other);
+  writeFileSync(join(other, 'checkpoint.json'), JSON.stringify({ ...checkpoint, workflow_id: 'other' }));
+  assert.equal((await collectWorkspace(input)).runs.find(run => run.assignment_id === 'current').workflow_state, null, 'ambiguous workflow');
+});
+
 test('spec timing retains the earliest dispatch and every attempt across assignment caps', async t => {
   const f = sandbox(t), repo = primary(f.dir, 'timing'), packagePath = pack(repo);
   writeFileSync(join(packagePath, 'spec-steps.json'), JSON.stringify({ steps: [{ step: 1, name: 'Build' }] }));

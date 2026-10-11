@@ -817,9 +817,20 @@ async function observeRun(candidate, budget, note, readTime) {
   let workflow_workers = [], workflow_observed_at = null, obligation_revision = null;
   const spec_progress = specProgress(receipt.step, steps);
   let obligation = obligationForStep(spec_progress);
-  for (const checkpoint of checkpoints) {
+  const matchingWorkers = checkpoints.filter(checkpoint => checkpoint.package === fact.packagePath
+    && (checkpoint.workers.includes(candidate.id) || receipt.assignment_id && checkpoint.workers.includes(receipt.assignment_id)));
+  // Coordinators replace completed step workers with review/fix workers. Keep
+  // the current assignment attached to its uniquely bound workflow during that
+  // handoff, without attributing a new coordinator's obligation to old receipts.
+  const matchingCoordinator = fact.currentAssignment === candidate.id ? checkpoints.filter(checkpoint =>
+    checkpoint.package === fact.packagePath && checkpoint.state != null
+    && typeof receipt.parent_session === 'string' && checkpoint.coordinator_session === receipt.parent_session
+    && typeof receipt.checkout === 'string' && checkpoint.checkout === receipt.checkout
+    && validTime(receipt.started_at ?? receipt.dispatch_requested_at)
+    && Date.parse(checkpoint.observed_at) >= Date.parse(receipt.started_at ?? receipt.dispatch_requested_at)) : [];
+  const associatedCheckpoints = matchingWorkers.length ? matchingWorkers : matchingCoordinator.length === 1 ? matchingCoordinator : [];
+  for (const checkpoint of associatedCheckpoints) {
     if (checkpoint.package !== fact.packagePath) continue;
-    if (!checkpoint.workers.includes(candidate.id) && !(receipt.assignment_id && checkpoint.workers.includes(receipt.assignment_id))) continue;
     workflow_id = checkpoint.workflow;
     workflow_state = typeof checkpoint.state === 'string' ? checkpoint.state : null;
     workflow_workers = checkpoint.active_workers ?? [];
@@ -1056,6 +1067,8 @@ async function readCheckpoints(fact, budget) {
         if (!value || typeof value !== 'object' || typeof value.package !== 'string') return null;
         return {
           package: value.package,
+          coordinator_session: typeof value.coordinator_session === 'string' ? value.coordinator_session : null,
+          checkout: typeof value.checkout === 'string' ? value.checkout : null,
           obligation_revision: typeof value.obligation_revision === 'string' ? value.obligation_revision : null,
           state: value.version === 1 && value.workflow_id === entry.name ? value.state : null,
           observed_at: validTime(value.observed_at),
