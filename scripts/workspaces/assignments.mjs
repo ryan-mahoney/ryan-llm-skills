@@ -34,6 +34,7 @@ import {
   noteCatalogOmission,
   noteCatalogUnavailable,
   readCatalogFile,
+  resolveRepositoryPath,
   resolveWorkspacePath,
   storageStatus,
   writeFileAtomic,
@@ -280,9 +281,7 @@ export async function resolveTarget({ workspace, target = null, specPackage = nu
     if (typeof record.path !== "string" || record.path === "") {
       throw new Error(`repository path is missing: ${target}`);
     }
-    const declared = isAbsolute(record.path)
-      ? resolve(record.path)
-      : resolve(directory, record.path);
+    const declared = resolveRepositoryPath(directory, record.path);
     let physical;
     try {
       physical = await fs.realpath(declared);

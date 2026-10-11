@@ -10,11 +10,12 @@
 
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
+import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { formatScalar, parseKit } from "./kit.mjs";
+import { cloneKit, formatScalar, parseKit } from "./kit.mjs";
 import { resolveCheckout } from "../repo-search/identity.mjs";
 
 const TEMP_PREFIX = ".workspace-publish-";
@@ -241,22 +242,99 @@ async function storageLstat(path) {
 }
 
 /**
- * Resolve the storage root: an absolute `ADJACENT_STORAGE_ROOT` wins
- * unchanged, otherwise `<home>/Documents/adjacent-storage`. Relative
- * overrides are refused; nothing is created.
- * @param {{ADJACENT_STORAGE_ROOT?: string}} env
+ * Path of the per-machine config file holding `{"storage_root": "/abs/path"}`:
+ * `$XDG_CONFIG_HOME/adjacent/config.json`, else `<home>/.config/adjacent/config.json`.
+ * @param {{XDG_CONFIG_HOME?: string}} env
+ * @param {string} home
+ * @returns {string}
+ */
+export function storageConfigPath(env, home) {
+  const xdg = env ? env.XDG_CONFIG_HOME : undefined;
+  const base = typeof xdg === "string" && isAbsolute(xdg) ? xdg : join(home, ".config");
+  return join(base, "adjacent", "config.json");
+}
+
+function readConfiguredRoot(path) {
+  let text;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (error) {
+    if (error && error.code === "ENOENT") return null;
+    throw new Error(`cannot read ${path}: ${error.message}`);
+  }
+  let configured;
+  try {
+    configured = JSON.parse(text)?.storage_root;
+  } catch {
+    throw new Error(`${path} is not valid JSON`);
+  }
+  if (configured === undefined) return null;
+  if (typeof configured !== "string" || !isAbsolute(configured)) {
+    throw new Error(`${path}: storage_root must be an absolute path`);
+  }
+  return configured;
+}
+
+/**
+ * Resolve the storage root and report what decided it. Precedence: `flag`
+ * (CLI `--root`), absolute `ADJACENT_STORAGE_ROOT`, `storage_root` in the
+ * config file, then `<home>/Documents/adjacent-storage`. A relative env value
+ * or a malformed config file throws; nothing is created.
+ * @param {{ADJACENT_STORAGE_ROOT?: string, XDG_CONFIG_HOME?: string}} env
+ * @param {string} home
+ * @param {string} [flag]
+ * @returns {{root: string, source: "flag"|"env"|"config"|"default", config?: string}}
+ */
+export function describeStorageRoot(env, home, flag) {
+  if (flag !== undefined && flag !== null && flag !== "") return { root: resolve(flag), source: "flag" };
+  const configured = env ? env.ADJACENT_STORAGE_ROOT : undefined;
+  if (configured !== undefined && configured !== null && configured !== "") {
+    if (!isAbsolute(configured)) throw new Error("ADJACENT_STORAGE_ROOT must be an absolute path");
+    return { root: configured, source: "env" };
+  }
+  const config = storageConfigPath(env, home);
+  const saved = readConfiguredRoot(config);
+  if (saved !== null) return { root: saved, source: "config", config };
+  return { root: join(home, "Documents", "adjacent-storage"), source: "default" };
+}
+
+/**
+ * Resolve the storage root without the CLI flag; see `describeStorageRoot`.
+ * @param {{ADJACENT_STORAGE_ROOT?: string, XDG_CONFIG_HOME?: string}} env
  * @param {string} home
  * @returns {string}
  */
 export function resolveStorageRoot(env, home) {
-  const configured = env ? env.ADJACENT_STORAGE_ROOT : undefined;
-  if (configured === undefined || configured === null || configured === "") {
-    return join(home, "Documents", "adjacent-storage");
-  }
-  if (!isAbsolute(configured)) {
-    throw new Error("ADJACENT_STORAGE_ROOT must be an absolute path");
-  }
-  return configured;
+  return describeStorageRoot(env, home).root;
+}
+
+/**
+ * Persist `root` as this machine's storage root in the config file.
+ * @param {{XDG_CONFIG_HOME?: string}} env
+ * @param {string} home
+ * @param {string} root absolute path
+ * @returns {Promise<string>} the config file path
+ */
+export async function saveStorageRoot(env, home, root) {
+  if (!isAbsolute(root)) throw new Error("storage root must be an absolute path");
+  const config = storageConfigPath(env, home);
+  await fs.mkdir(dirname(config), { recursive: true });
+  await fs.writeFile(config, `${JSON.stringify({ storage_root: root }, null, 2)}\n`);
+  return config;
+}
+
+/**
+ * Resolve a kit repository path to an absolute path: `~` and `~/...` use the
+ * local home, absolute paths pass through, anything else is relative to the
+ * workspace directory. The kit stores the path as written.
+ * @param {string} workspaceDirectory
+ * @param {string} path
+ * @param {string} [home]
+ * @returns {string}
+ */
+export function resolveRepositoryPath(workspaceDirectory, path, home = homedir()) {
+  if (path === "~" || path.startsWith("~/")) return resolve(home, path.slice(2));
+  return isAbsolute(path) ? resolve(path) : resolve(workspaceDirectory, path);
 }
 
 /**
@@ -598,13 +676,7 @@ async function readWorkspaceEntry(projectsDir, directoryName, budget = null) {
       id: kit.id,
       name: displayName,
       directory,
-      kit: {
-        version: kit.version,
-        id: kit.id,
-        name: kit.name,
-        repositories: kit.repositories.map((repository) => ({ ...repository })),
-        context: [...kit.context],
-      },
+      kit: cloneKit(kit),
       attention: directoryName === kit.id ? [] : ["directory_mismatch"],
     },
   };
@@ -751,9 +823,7 @@ async function repositoryRecord(workspaceDirectory, repository) {
     status: "missing",
     attention: [],
   };
-  const requested = isAbsolute(repository.path)
-    ? resolve(repository.path)
-    : resolve(workspaceDirectory, repository.path);
+  const requested = resolveRepositoryPath(workspaceDirectory, repository.path);
   let lookup;
   try {
     lookup = await storageLstat(requested);
@@ -1005,9 +1075,7 @@ async function artifactRecords(workspaceDirectory, repositories) {
       records.push({ ...parsed, path: recordPath, status: "repository_unavailable" });
       continue;
     }
-    const repositoryPath = isAbsolute(repository.path)
-      ? resolve(repository.path)
-      : resolve(workspaceDirectory, repository.path);
+    const repositoryPath = resolveRepositoryPath(workspaceDirectory, repository.path);
     let inspected;
     try {
       inspected = await inspectContainedReference(repositoryPath, target.path);
@@ -1427,9 +1495,7 @@ export async function addArtifact(root, id, options = {}) {
     const repository = catalogEntry.kit.repositories.find(
       (entry) => entry.id === target.repository_id,
     );
-    const repositoryPath = isAbsolute(repository.path)
-      ? resolve(repository.path)
-      : resolve(catalogEntry.directory, repository.path);
+    const repositoryPath = resolveRepositoryPath(catalogEntry.directory, repository.path);
     // Reject symlink-redirected existing ancestors before publishing: a
     // missing leaf beneath a symlink still inspects as outside_root, while
     // safe missing targets and unavailable bases stay retainable.
@@ -1499,9 +1565,6 @@ async function requireRegularKit(kitPath) {
 }
 
 async function assertRepositoryTopLevel(repositoryPath) {
-  if (!isAbsolute(repositoryPath)) {
-    throw new Error(`repository path must be absolute: ${String(repositoryPath)}`);
-  }
   const physical = await existingRealDirectory(repositoryPath, "repository path");
   if (physical === null) throw new Error(`repository path does not exist: ${repositoryPath}`);
   let identity;
@@ -1530,6 +1593,110 @@ function requirePlan(plan) {
   return { before, after, expected };
 }
 
+// Whether a parsed record names `id` as a `repository_id` anywhere inside it.
+function mentionsRepository(value, id) {
+  if (Array.isArray(value)) return value.some((item) => mentionsRepository(item, id));
+  if (value === null || typeof value !== "object") return false;
+  return Object.entries(value).some(([key, item]) => (key === "repository_id" && item === id)
+    || mentionsRepository(item, id));
+}
+
+async function jsonRecords(directory) {
+  let names;
+  try {
+    names = (await fs.readdir(directory)).filter((name) => name.endsWith(".json")).sort();
+  } catch (error) {
+    if (error && error.code === "ENOENT") return [];
+    throw error;
+  }
+  const records = [];
+  for (const name of names) {
+    try {
+      records.push({ name, record: JSON.parse(await fs.readFile(join(directory, name), "utf8")) });
+    } catch {
+      // An unreadable or malformed record cannot be attributed to a repository.
+    }
+  }
+  return records;
+}
+
+/**
+ * Workspace records that name a kit repository, for the remove-repo preview:
+ * threads, assignments and artifacts by `repository_id`; designs whose
+ * design-system files lie inside the repository's checkout. Read-only.
+ * @param {string} root
+ * @param {string} id workspace id
+ * @param {string} repositoryId
+ * @returns {Promise<{threads: string[], assignments: string[], artifacts: string[], designs: string[]}>}
+ */
+export async function repositoryReferences(root, id, repositoryId) {
+  const { directory, kit } = await catalogWorkspace(root, id);
+  const repository = kit.repositories.find((entry) => entry.id === repositoryId);
+  const checkout = repository ? resolveRepositoryPath(directory, repository.path) : null;
+  const named = async (folder) => (await jsonRecords(join(directory, folder)))
+    .filter(({ record }) => mentionsRepository(record, repositoryId))
+    .map(({ name }) => name.replace(/\.json$/, ""));
+  const designs = [];
+  for (const entry of await fs.readdir(join(directory, "designs")).catch(() => [])) {
+    const { record } = (await jsonRecords(join(directory, "designs", entry))).find(({ name }) => name === "design.json") ?? {};
+    const files = [record?.design_system?.path, record?.design_system?.tokens];
+    if (checkout !== null && files.some((file) => typeof file === "string" && insideRoot(checkout, file))) {
+      designs.push(entry);
+    }
+  }
+  return {
+    threads: await named("threads"),
+    assignments: await named("assignments"),
+    artifacts: await named("artifacts"),
+    designs,
+  };
+}
+
+const KIT_BACKUP_PREFIX = "kit.yaml.prev-";
+const KIT_BACKUPS_KEPT = 20;
+
+/**
+ * Names of a workspace's `kit.yaml.prev-*` backups, newest first. The UTC ISO
+ * timestamp in the name makes the lexical order chronological.
+ * @param {string} root
+ * @param {string} id
+ * @returns {Promise<string[]>}
+ */
+export async function listKitBackups(root, id) {
+  const { directory } = await catalogWorkspace(root, id);
+  return backupNames(directory);
+}
+
+async function backupNames(directory) {
+  return (await fs.readdir(directory))
+    .filter((name) => name.startsWith(KIT_BACKUP_PREFIX))
+    .sort()
+    .reverse();
+}
+
+/**
+ * Read one listed backup's text (the name must be one `listKitBackups` returns).
+ * @returns {Promise<string>}
+ */
+export async function readKitBackup(root, id, name) {
+  const { directory } = await catalogWorkspace(root, id);
+  if (!(await backupNames(directory)).includes(name)) {
+    throw new Error(`no kit backup named ${JSON.stringify(name)} for workspace ${id}`);
+  }
+  return fs.readFile(join(directory, name), "utf8");
+}
+
+// Best effort: a failed prune must not turn a completed apply into an error.
+async function pruneKitBackups(directory) {
+  try {
+    for (const name of (await backupNames(directory)).slice(KIT_BACKUPS_KEPT)) {
+      await fs.unlink(join(directory, name));
+    }
+  } catch {
+    // Left for the next apply.
+  }
+}
+
 /**
  * Apply a previewed kit replacement as an exclusive filesystem transaction.
  *
@@ -1539,7 +1706,8 @@ function requirePlan(plan) {
  * kit, re-read and byte-compare immediately before the atomic replacement. A
  * held lock refuses without touching it; a completed prior copy may remain.
  * Errors after the backup carry `error.backup` for operator recovery. Only the
- * owning lock is closed and unlinked; prior copies are never deleted here.
+ * owning lock is closed and unlinked; after a successful replacement all but
+ * the newest 20 `kit.yaml.prev-*` copies are deleted.
  * This library does not print; the CLI prints plan.hunk before calling.
  *
  * @param {string} root
@@ -1579,12 +1747,16 @@ export async function applyKitEdit(root, id, plan) {
     throw new Error("kit.yaml no longer matches the planned original bytes");
   }
 
-  const beforePaths = new Map(parsedBefore.kit.repositories.map((repository) => [repository.id, repository.path]));
+  // A path that expands to the same location (rewrite-paths /Users/me -> ~)
+  // needs no check, so a repository that is absent on this machine can still
+  // be rewritten.
+  const beforePaths = new Map(parsedBefore.kit.repositories.map((repository) => [
+    repository.id,
+    resolveRepositoryPath(workspace, repository.path),
+  ]));
   for (const repository of parsedAfter.kit.repositories) {
-    const previousPath = beforePaths.get(repository.id);
-    const isNew = previousPath === undefined;
-    const pathChanged = !isNew && previousPath !== repository.path;
-    if (isNew || pathChanged) await assertRepositoryTopLevel(repository.path);
+    const expanded = resolveRepositoryPath(workspace, repository.path);
+    if (beforePaths.get(repository.id) !== expanded) await assertRepositoryTopLevel(expanded);
   }
 
   const backup = join(workspace, `kit.yaml.prev-${new Date().toISOString()}-${randomUUID()}`);
@@ -1622,6 +1794,7 @@ export async function applyKitEdit(root, id, plan) {
       throw changed;
     }
     await writeFileAtomic(rechecked, after);
+    await pruneKitBackups(workspace);
     return { path: rechecked, backup };
   } catch (error) {
     primaryError = error;

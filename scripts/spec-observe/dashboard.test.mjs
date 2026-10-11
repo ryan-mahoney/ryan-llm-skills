@@ -352,12 +352,13 @@ test('partial workspace coverage: artifact relationships and operator copy stay 
   vm.runInContext("mode='workspaces'", context);
 
   vm.runInContext("catalog={storage:{root:'/store/w <root>',status:'missing_root',errors:[]},valid:[],invalid:[],errors:[]};workspace=null;selectedWorkspace=null;render()", context);
-  assert.match(detail().innerHTML, /<code class="mono">node scripts\/workspaces\/cli\.mjs setup<\/code> on the dashboard host/);
+  // The hint names the resolved root, shell-quoted and escaped, so the command initializes the right store.
+  assert.match(detail().innerHTML, /<code class="mono">node scripts\/workspaces\/cli\.mjs setup --root &#39;\/store\/w &lt;root&gt;&#39; --save<\/code> on the dashboard host/);
   assert.match(detail().innerHTML, /missing_root/);
   assert.match(detail().innerHTML, /\/store\/w &lt;root&gt;/);
-  vm.runInContext("catalog.storage.status='missing_projects';render()", context);
+  vm.runInContext("catalog.storage.status='missing_projects';catalog.storage.root='/srv/adjacent-storage';render()", context);
   assert.match(detail().innerHTML, /missing_projects/);
-  assert.match(detail().innerHTML, /setup/);
+  assert.match(detail().innerHTML, /setup --root \/srv\/adjacent-storage --save/);
 
   vm.runInContext("catalog={storage:{root:'/store',status:'ok',errors:[]},valid:[],invalid:[],errors:[]};render()", context);
   assert.match(list().innerHTML, /operator creates/i);

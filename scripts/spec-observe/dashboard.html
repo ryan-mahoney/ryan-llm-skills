@@ -84,6 +84,8 @@ let catalogRequest=0,workspaceDetailRequest=0,listingRequest=0,fileRequest=0;
 let assignments=[],selectedAssignment=null,assignmentGeneration=0;
 let catalogPending=null,workspaceDetailPending=null;
 const str=v=>v==null?'':typeof v==='string'?v:JSON.stringify(v);
+const shq=v=>/^[\w@%+=:,.\/-]+$/.test(v)?v:`'${v.replace(/'/g,`'\\''`)}'`;
+const setupCommand=root=>root?`node scripts/workspaces/cli.mjs setup --root ${shq(str(root))} --save`:'node scripts/workspaces/cli.mjs setup --save';
 const esc=v=>str(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const base=p=>str(p).replace(/\/$/,'').split('/').pop()||'Unknown';
 const time=v=>{const d=new Date(v);return v&&Number.isFinite(d.getTime())?d.toLocaleString(): 'Unknown'};
@@ -388,7 +390,7 @@ function updateWorkspaceDetail(){
   if($('package-panel'))$('package-panel').hidden=true;
   const missing=storageStatus==='missing_root'||storageStatus==='missing_projects';
   const storageHeading=storageStatus==='missing_projects'?'Workspace storage needs setup':missing?'Workspace storage is missing':'Workspace storage unavailable';
-  $('observation-detail').innerHTML=`<div class="empty" role="status" aria-live="polite"><h2>${esc(storageHeading)}</h2><p>${missing?'Run <code class="mono">node scripts/workspaces/cli.mjs setup</code> on the dashboard host, then refresh.':'Repair the configured storage boundary, then retry.'}</p><p class="small muted">Configured root: <span class="mono">${esc(catalog?.storage?.root||'unknown')}</span></p><p class="small muted">Storage status: ${esc(storageStatus)}</p></div>`;
+  $('observation-detail').innerHTML=`<div class="empty" role="status" aria-live="polite"><h2>${esc(storageHeading)}</h2><p>${missing?`Run <code class="mono">${esc(setupCommand(catalog?.storage?.root))}</code> on the dashboard host, then refresh.`:'Repair the configured storage boundary, then retry.'}</p><p class="small muted">Configured root: <span class="mono">${esc(catalog?.storage?.root||'unknown')}</span></p><p class="small muted">Storage status: ${esc(storageStatus)}</p></div>`;
   return;
  }
  if(!selectedWorkspace){if($('package-panel'))$('package-panel').hidden=true;$('observation-detail').innerHTML='<div class="empty"><h2>Select a workspace</h2><p>Choose a workspace to inspect its repositories, context, briefs, notes and artifacts.</p></div>';return;}
@@ -662,7 +664,7 @@ function renderThreadDetail(){const box=$('thread-detail-box');if(!box)return;pr
 function threadsSectionHtml(){return `<section class="section" id="threads-section" aria-labelledby="threads-heading"><div class="section-head"><h3 id="threads-heading">Threads</h3><span class="small muted">Local discussions · one response slot</span></div><div id="threads-body"><p class="small muted">Loading threads…</p></div></section>`;}
 function threadsMounted(){if(mode!=='workspaces'||!workspace)return;if(threadsLoadedWorkspace===selectedWorkspace){renderThreads();return;}loadThreads();}
 function threadsBodyHtml(){
- if(threadsError){const storage=catalog?.storage?.status,bad=storage&&storage!=='ok';return `<div class="empty" role="status" aria-live="polite"><h3>${bad?'Workspace thread storage is unavailable':'Threads are unavailable'}</h3><p class="small">${bad?`Storage status: ${esc(storage)}. Run <code class="mono">node scripts/workspaces/cli.mjs setup</code> on the dashboard host, then retry.`:`${esc(threadsError)}`}</p><p><button id="thread-list-retry" data-thread-retry="list">Retry</button></p></div>`;}
+ if(threadsError){const storage=catalog?.storage?.status,bad=storage&&storage!=='ok';return `<div class="empty" role="status" aria-live="polite"><h3>${bad?'Workspace thread storage is unavailable':'Threads are unavailable'}</h3><p class="small">${bad?`Storage status: ${esc(storage)}. Run <code class="mono">${esc(setupCommand(catalog?.storage?.root))}</code> on the dashboard host, then retry.`:`${esc(threadsError)}`}</p><p><button id="thread-list-retry" data-thread-retry="list">Retry</button></p></div>`;}
  if(!canReadThreads())return `<div class="empty"><h3>Threads require the local dashboard</h3><p class="small">Start the host's local dashboard to browse discussions. Imported snapshots and file:// pages cannot reach the thread routes and never expose remote message controls.</p></div>`;
  if(threads===null)return '<p class="empty">Loading threads…</p>';
  return `${threadCreateHtml()}<div class="threads-split"><div id="thread-list-box" class="thread-list" role="list" aria-label="Threads">${threadListHtml()}</div><div id="thread-detail-box" class="thread-detail">${threadDetailHtml(selectedThreadRecord())}</div></div>${threadsInvalid.length?`<div class="info-row"><p><strong>Invalid thread records (${threadsInvalid.length})</strong></p>${threadsInvalid.map(x=>`<small class="warn">${esc(x.reason||x.error||x.message||'Invalid record')}</small>`).join('')}</div>`:''}`;
