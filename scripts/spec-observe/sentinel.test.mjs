@@ -925,6 +925,12 @@ test('declared tour evidence reports malformed and symlinked artifacts as unavai
   const linked = (await collectWorkspace(input)).runs.find(item => item.assignment_id === 'assign-bad');
   assert.equal(linked.evidence.state, 'unavailable');
   assert.match(linked.evidence.reason, /source-not-regular/);
+
+  rmSync(file);
+  symlinkSync(join(packagePath, 'absent-tour-target.json'), file);
+  const dangling = (await collectWorkspace(input)).runs.find(item => item.assignment_id === 'assign-bad');
+  assert.equal(dangling.evidence.state, 'unavailable');
+  assert.match(dangling.evidence.reason, /source-not-regular/);
 });
 
 test('declared tour evidence reports an oversized artifact as unavailable without touching completion', async t => {

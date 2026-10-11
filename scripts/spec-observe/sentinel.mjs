@@ -194,6 +194,12 @@ async function readBounded(file, maxBytes, budget, { within = null } = {}) {
       return { outcome: 'invalid', reason: `source-not-regular: ${file}`, bytes: 0 };
     }
   } catch (error) {
+    // A dangling symlink is a present-but-unusable entry, not an absence:
+    // realpath follows the link, so an absent target reports ENOENT even
+    // though the link itself survives. Re-inspect without following.
+    if (codeOf(error) === 'ENOENT' && (await lstat(file).catch(() => null))?.isSymbolicLink()) {
+      return { outcome: 'invalid', reason: `source-not-regular: ${file}`, bytes: 0 };
+    }
     // A vanished file is a missing fact, not corrupt evidence.
     return { outcome: codeOf(error) === 'ENOENT' ? 'missing' : 'invalid', reason: `${codeOf(error)}: ${file}`, bytes: 0 };
   }
