@@ -84,9 +84,18 @@ Write these artifacts atomically under the spec folder:
 
 - `pr-rebase-log.md` — base, SHAs, conflicts, resolutions, commands, and evidence invalidation/re-establishment.
 - `pr-message.md` — exact PR title and body submitted.
-- `pr-url.json` — `{ "url": "...", "submittedAt": "...", "commit": "full SHA", "tour": "work-tour.html" }`.
+- `pr-url.json` — the publication receipt sentinel reads:
 
-For a draft without a tour, use `"tour": null` in `pr-url.json`.
+  ```json
+  { "schema_version": 1, "kind": "pr_submission", "package": "/absolute/primary/.specs/<feature>",
+    "url": "https://...", "submitted_at": "<UTC ISO time>", "commit": "<full SHA>",
+    "draft": false, "tour": "work-tour.html", "parent_session": "<coordinator transcript path>" }
+  ```
+
+  Use `"draft": true` and `"tour": null` for a draft. Sentinel ignores a record without
+  `kind`, `package` and `submitted_at`, so a legacy `{ url, submittedAt, commit, tour }` file
+  leaves the package visible as unfinished and blocks merge reconciliation; rewrite it in
+  this shape when updating an older package.
 
 `.specs/` is often gitignored. Read it directly and do not stage it unless the repository explicitly tracks it.
 
