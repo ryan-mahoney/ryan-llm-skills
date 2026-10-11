@@ -879,7 +879,7 @@ const MAX_WORKERS = 32;
 const ARTIFACT_BYTES = 64 * 1024;
 const ARTIFACT_TOTAL_BYTES = 1024 * 1024;
 const INBOX_MAX_FILES = 200;
-const INBOX_FILE_BYTES = 32 * 1024;
+export const INBOX_FILE_BYTES = 64 * 1024;
 const INBOX_TOTAL_BYTES = 1024 * 1024;
 // Enumeration is bounded by examined entries, not only selected candidates
 // (mirroring the observer's directoryEntryFactor): a mailbox larger than the

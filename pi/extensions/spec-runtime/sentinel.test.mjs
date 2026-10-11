@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 
-import { reduceVerificationResult, readVerificationIncidents, writeVerificationIncidents, verificationIncidentsPath, createVerificationRecorder, recordCheckpoint, readInboxGuard, checkpointPath, readCheckpointRecord, observeInput, reconcileRuntimeReturn, createSentinelAuthority, createDiagnosisController, activatePolicy, activateRuntimePolicy, disablePolicy, readPolicyGuard, reserveIntent, finishIntent, decideSettle, handleBeforeSettle, buildDiagnosisPacket, validateDiagnosisResult, diagnoseIncident, readDiagnosisAttempt, diagnosisAttemptPath } from './sentinel.mjs';
+import { reduceVerificationResult, readVerificationIncidents, writeVerificationIncidents, verificationIncidentsPath, createVerificationRecorder, recordCheckpoint, readInboxGuard, checkpointPath, readCheckpointRecord, observeInput, reconcileRuntimeReturn, createSentinelAuthority, createDiagnosisController, activatePolicy, activateRuntimePolicy, disablePolicy, readPolicyGuard, reserveIntent, finishIntent, decideSettle, handleBeforeSettle, buildDiagnosisPacket, validateDiagnosisResult, diagnoseIncident, readDiagnosisAttempt, diagnosisAttemptPath, INBOX_FILE_BYTES } from './sentinel.mjs';
 
 const FIXED = Date.parse('2026-10-06T12:00:00Z');
 const record = { package: '/tmp/pkg', assignment_id: 'assign-1', checkout: '/tmp/repo' };
@@ -550,6 +550,13 @@ test('sentinel inbox: a hold stays held after archiving and releases only with a
   // The direction is bound to its own hash in the projection.
   assert.equal(releasedItem.release_source_sha256, dirSha);
 
+  // A direction item alone, without any hold item, never releases the hold.
+  const directionOnly = readInboxGuard(packagePath, {
+    items: [{ id: dirId, sha256: dirSha, outcome: 'applied' }],
+  });
+  assert.equal(directionOnly.items.find(item => item.id === holdId).state, 'held');
+  assert.equal(directionOnly.blocking, true);
+
   // Without the applied outcome + release_source_id the hold persists.
   const noRelease = readInboxGuard(packagePath, { items: [
     { id: holdId, sha256: holdSha, outcome: 'held' },
@@ -572,6 +579,34 @@ test('sentinel inbox: a hold stays held after archiving and releases only with a
     { id: holdId, sha256: holdSha, outcome: 'applied', release_source_id: dirId },
   ] });
   assert.equal(noDirOutcome.items.find(item => item.id === holdId).state, 'held');
+});
+
+test('hold stays held: guard reads exact64KiB originals and blocks overlimit', t => {
+  const { packagePath } = canonicalFixture(t);
+  mkdirSync(join(packagePath, 'processed'), { recursive: true });
+  const holdId = '20260101T000000Z-h64';
+  const base = original({ id: holdId, kind: 'hold', body: 'stop' });
+  const padding = INBOX_FILE_BYTES - Buffer.byteLength(base, 'utf8');
+  assert.ok(padding > 0);
+  const holdText = original({ id: holdId, kind: 'hold', body: `stop${'x'.repeat(padding)}` });
+  assert.equal(Buffer.byteLength(holdText, 'utf8'), INBOX_FILE_BYTES);
+  putOriginal(packagePath, 'processed', holdId, holdText);
+  const holdSha = sha(holdText);
+
+  // Exactly at the cap the original is read, hash-bound and stays held.
+  const exact = readInboxGuard(packagePath, { items: [{ id: holdId, sha256: holdSha, outcome: 'applied' }] });
+  assert.equal(exact.items.find(item => item.id === holdId).state, 'held');
+  assert.equal(exact.blocking, true);
+  assert.equal(exact.sources.find(source => source.id === holdId).sha256, holdSha);
+
+  // One byte over the cap is oversize and blocking.
+  const overId = '20260101T000001Z-h65';
+  const overText = original({ id: overId, kind: 'hold', body: `stop${'x'.repeat(padding + 1)}` });
+  assert.equal(Buffer.byteLength(overText, 'utf8'), INBOX_FILE_BYTES + 1);
+  putOriginal(packagePath, 'processed', overId, overText);
+  const over = readInboxGuard(packagePath, { items: [{ id: overId, sha256: sha(overText), outcome: 'applied' }] });
+  assert.equal(over.blocking, true);
+  assert.ok(over.reasons.includes(`oversize:processed/${overId}.md`), JSON.stringify(over.reasons));
 });
 
 test('sentinel inbox: malformed, symlink, missing-history and hash-mismatch stay blocking', t => {
