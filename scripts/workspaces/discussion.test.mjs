@@ -12,7 +12,8 @@ import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -1370,3 +1371,794 @@ test(
     }
   },
 );
+
+test("thread durable queue concurrent same-ID enqueues once and preserves original text", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  await setupWorkspace(storageRoot, "alpha");
+  const logPath = join(root, "commands.log");
+  const harness = piHarness({
+    env: { FAKE_PI_COMMAND_LOG: logPath, FAKE_PI_DELAYS: JSON.stringify({ prompt: 120 }) },
+  });
+  const service = createDiscussionService({ root: storageRoot, agentDir: join(root, "agent"), spawn: harness.spawnImpl });
+  try {
+    const thread = await service.create({ workspace_id: "alpha", title: "Queue" });
+    const id = randomUUID();
+    const [first, second] = await Promise.all([
+      service.send({ workspace_id: "alpha", thread_id: thread.thread_id, id, text: "first text" }),
+      service.send({ workspace_id: "alpha", thread_id: thread.thread_id, id, text: "second text" }),
+    ]);
+    assert.equal(first.duplicate, false);
+    assert.equal(first.state, "accepted");
+    assert.equal(second.duplicate, true);
+    assert.equal(second.message_id, id);
+    assert.ok(second.state === "delivering" || second.state === "accepted");
+
+    const persisted = await readThread(storageRoot, "alpha", thread.thread_id);
+    assert.deepEqual(persisted.queue, []);
+    assert.deepEqual(persisted.accepted_message_ids, [id]);
+    assert.equal(persisted.session_file, null);
+
+    const third = await service.send({ workspace_id: "alpha", thread_id: thread.thread_id, id, text: "third text" });
+    assert.equal(third.duplicate, true);
+    assert.equal(third.state, "accepted");
+    assert.equal((await readFile(logPath, "utf8")).split("\n").filter((line) => line.includes('"prompt"')).length, 1);
+  } finally {
+    await service.close();
+  }
+});
+
+test("thread durable queue same text different IDs stay distinct", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  await setupWorkspace(storageRoot, "alpha");
+  const harness = piHarness();
+  const service = createDiscussionService({ root: storageRoot, agentDir: join(root, "agent"), spawn: harness.spawnImpl });
+  try {
+    const thread = await service.create({ workspace_id: "alpha", title: "Queue" });
+    const firstId = randomUUID();
+    const secondId = randomUUID();
+    const first = await service.send({ workspace_id: "alpha", thread_id: thread.thread_id, id: firstId, text: "same text" });
+    assert.equal(first.state, "accepted");
+    const second = await service.send({ workspace_id: "alpha", thread_id: thread.thread_id, id: secondId, text: "same text" });
+    assert.equal(second.state, "queued");
+    const persisted = await readThread(storageRoot, "alpha", thread.thread_id);
+    assert.deepEqual(persisted.queue.map((item) => item.id), [secondId]);
+    assert.equal(persisted.queue[0].text, "same text");
+    assert.deepEqual(persisted.accepted_message_ids, [firstId]);
+  } finally {
+    await service.close();
+  }
+});
+
+test("thread durable queue delivering publication precedes prompt write and accepted ack persists once", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const workspaceDirectory = await setupWorkspace(storageRoot, "alpha");
+  const setup = createDiscussionService({ root: storageRoot, agentDir: join(root, "agent") });
+  let thread;
+  try {
+    thread = await setup.create({ workspace_id: "alpha", title: "Observe prompt" });
+  } finally {
+    await setup.close();
+  }
+  const threadFile = join(workspaceDirectory, "threads", `${thread.thread_id}.json`);
+  const logPath = join(root, "commands.log");
+  const children = [];
+  let observed = null;
+  const spawnImpl = (command, args, options = {}) => {
+    if (command === "ps") return psChild("  1 launchd\n");
+    const child = spawn(process.execPath, [PI_FIXTURE, ...args], {
+      ...options,
+      env: {
+        ...process.env,
+        FAKE_PI_COMMAND_LOG: logPath,
+        FAKE_PI_DELAYS: JSON.stringify({ prompt: 120 }),
+      },
+    });
+    const originalWrite = child.stdin.write.bind(child.stdin);
+    child.stdin.write = (chunk, callback) => {
+      const line = chunk.toString();
+      if (observed === null && line.includes('"prompt"')) {
+        observed = JSON.parse(readFileSync(threadFile, "utf8"));
+      }
+      return originalWrite(chunk, callback);
+    };
+    children.push(child);
+    return child;
+  };
+  const service = createDiscussionService({ root: storageRoot, agentDir: join(root, "agent"), spawn: spawnImpl });
+  try {
+    const id = randomUUID();
+    const first = service.send({ workspace_id: "alpha", thread_id: thread.thread_id, id, text: "hello" });
+    const second = service.send({ workspace_id: "alpha", thread_id: thread.thread_id, id, text: "hello again" });
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    assert.equal(firstResult.state, "accepted");
+    assert.equal(secondResult.duplicate, true);
+    assert.equal(secondResult.message_id, id);
+    assert.ok(secondResult.state === "delivering" || secondResult.state === "accepted");
+
+    assert.ok(observed, "the prompt write must be observed");
+    assert.equal(observed.queue.length, 1);
+    assert.equal(observed.queue[0].id, id);
+    assert.equal(observed.queue[0].state, "delivering");
+    assert.equal(observed.queue[0].attempt, 1);
+
+    const persisted = await readThread(storageRoot, "alpha", thread.thread_id);
+    assert.deepEqual(persisted.queue, []);
+    assert.deepEqual(persisted.accepted_message_ids, [id]);
+    assert.equal((await readFile(logPath, "utf8")).split("\n").filter((line) => line.includes('"prompt"')).length, 1);
+  } finally {
+    await service.close();
+    for (const child of children) {
+      try {
+        child.stdin.destroy();
+        child.stdout.destroy();
+        child.stderr.destroy();
+      } catch {
+        // already closed
+      }
+    }
+  }
+});
+
+test("thread durable queue accepted retry window evicts oldest identity after durable acknowledgement", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const workspaceDirectory = await setupWorkspace(storageRoot, "alpha");
+  const preseeded = Array.from({ length: 100 }, () => randomUUID());
+  const record = manualRecord({
+    workspaceId: "alpha",
+    directory: workspaceDirectory,
+    overrides: { accepted_message_ids: preseeded },
+  });
+  await publishRecord(workspaceDirectory, record);
+  const logPath = join(root, "commands.log");
+  const harness = piHarness({
+    env: {
+      FAKE_PI_COMMAND_LOG: logPath,
+      FAKE_PI_PROMPT_EVENTS: JSON.stringify([{ type: "agent_settled", aborted: false }]),
+    },
+  });
+  const service = createDiscussionService({ root: storageRoot, agentDir: join(root, "agent"), spawn: harness.spawnImpl });
+  try {
+    const id = randomUUID();
+    const first = await service.send({ workspace_id: "alpha", thread_id: record.thread_id, id, text: "text one" });
+    assert.equal(first.state, "accepted");
+    let persisted = await readThread(storageRoot, "alpha", record.thread_id);
+    assert.equal(persisted.accepted_message_ids.length, 100);
+    assert.ok(!persisted.accepted_message_ids.includes(preseeded[0]));
+    assert.ok(persisted.accepted_message_ids.includes(id));
+    for (const kept of preseeded.slice(1)) assert.ok(persisted.accepted_message_ids.includes(kept));
+    assert.equal(persisted.accepted_message_ids.at(-1), id);
+    assert.deepEqual(persisted.queue, []);
+
+    const retry = await service.send({ workspace_id: "alpha", thread_id: record.thread_id, id, text: "changed" });
+    assert.equal(retry.duplicate, true);
+    assert.equal(retry.state, "accepted");
+    assert.equal((await readFile(logPath, "utf8")).split("\n").filter((line) => line.includes('"prompt"')).length, 1);
+
+    const secondId = randomUUID();
+    const second = await service.send({ workspace_id: "alpha", thread_id: record.thread_id, id: secondId, text: "text one" });
+    assert.equal(second.state, "accepted");
+    persisted = await readThread(storageRoot, "alpha", record.thread_id);
+    assert.equal(persisted.accepted_message_ids.length, 100);
+    assert.ok(persisted.accepted_message_ids.includes(secondId));
+    assert.ok(persisted.accepted_message_ids.includes(id));
+    assert.equal((await readFile(logPath, "utf8")).split("\n").filter((line) => line.includes('"prompt"')).length, 2);
+  } finally {
+    await service.close();
+  }
+});
+
+test("thread durable queue delayed acknowledgement deduplicates delivering retries", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const workspaceDirectory = await setupWorkspace(storageRoot, "alpha");
+  const record = manualRecord({ workspaceId: "alpha", directory: workspaceDirectory });
+  await publishRecord(workspaceDirectory, record);
+  const logPath = join(root, "commands.log");
+  const harness = piHarness({ env: { FAKE_PI_COMMAND_LOG: logPath, FAKE_PI_DELAYS: JSON.stringify({ prompt: 150 }) } });
+  const service = createDiscussionService({ root: storageRoot, agentDir: join(root, "agent"), spawn: harness.spawnImpl });
+  try {
+    const id = randomUUID();
+    const first = service.send({ workspace_id: "alpha", thread_id: record.thread_id, id, text: "original text" });
+    first.catch(() => {});
+    await waitFor(async () => {
+      const current = await readThread(storageRoot, "alpha", record.thread_id);
+      const log = await readFile(logPath, "utf8").catch(() => "");
+      return current.queue[0]?.state === "delivering" && log.includes('"prompt"');
+    });
+    const retry = await service.send({ workspace_id: "alpha", thread_id: record.thread_id, id, text: "changed text" });
+    assert.equal(retry.duplicate, true);
+    assert.equal(retry.state, "delivering");
+    const during = await readThread(storageRoot, "alpha", record.thread_id);
+    assert.equal(during.queue.length, 1);
+    assert.equal(during.queue[0].id, id);
+    assert.equal(during.queue[0].text, "original text");
+    assert.equal(during.queue[0].attempt, 1);
+
+    const accepted = await first;
+    assert.equal(accepted.state, "accepted");
+    assert.equal((await readFile(logPath, "utf8")).split("\n").filter((line) => line.includes('"prompt"')).length, 1);
+    const persisted = await readThread(storageRoot, "alpha", record.thread_id);
+    assert.deepEqual(persisted.queue, []);
+    assert.deepEqual(persisted.accepted_message_ids, [id]);
+  } finally {
+    await service.close();
+  }
+});
+
+test("thread durable queue EOF after prompt remains uncertain across restart", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const workspaceDirectory = await setupWorkspace(storageRoot, "alpha");
+  const record = manualRecord({
+    workspaceId: "alpha",
+    directory: workspaceDirectory,
+    overrides: { custom: { kept: true } },
+  });
+  await publishRecord(workspaceDirectory, record);
+  const logPath = join(root, "commands.log");
+  const harness = piHarness({ env: { FAKE_PI_COMMAND_LOG: logPath, FAKE_PI_EOF_ON: "prompt" } });
+  const service = createDiscussionService({ root: storageRoot, agentDir: join(root, "agent"), spawn: harness.spawnImpl });
+  const id = randomUUID();
+  try {
+    await assert.rejects(
+      service.send({ workspace_id: "alpha", thread_id: record.thread_id, id, text: "eof text" }),
+      { code: "delivery-uncertain" },
+    );
+    const persisted = await readThread(storageRoot, "alpha", record.thread_id);
+    assert.equal(persisted.queue.length, 1);
+    assert.equal(persisted.queue[0].id, id);
+    assert.equal(persisted.queue[0].text, "eof text");
+    assert.equal(persisted.queue[0].state, "uncertain");
+    assert.equal(persisted.queue[0].attempt, 1);
+    assert.equal(persisted.attention, "uncertain");
+    assert.deepEqual(persisted.custom, { kept: true });
+    const retry = await service.send({ workspace_id: "alpha", thread_id: record.thread_id, id, text: "again" });
+    assert.equal(retry.duplicate, true);
+    assert.equal(retry.state, "uncertain");
+    assert.equal((await readFile(logPath, "utf8")).split("\n").filter((line) => line.includes('"prompt"')).length, 1);
+  } finally {
+    await service.close();
+  }
+
+  const freshHarness = piHarness();
+  const fresh = createDiscussionService({ root: storageRoot, agentDir: join(root, "agent"), spawn: freshHarness.spawnImpl });
+  try {
+    const listed = await fresh.list({ workspace_id: "alpha" });
+    const listedRecord = listed.threads.find((entry) => entry.thread_id === record.thread_id);
+    assert.equal(listedRecord.queue[0].state, "uncertain");
+    const retry = await fresh.send({ workspace_id: "alpha", thread_id: record.thread_id, id, text: "again" });
+    assert.equal(retry.duplicate, true);
+    assert.equal(retry.state, "uncertain");
+    assert.equal(freshHarness.calls.filter((call) => call.command === "pi").length, 0);
+  } finally {
+    await fresh.close();
+  }
+});
+
+test("thread durable queue prompt timeout stays uncertain without resend", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const workspaceDirectory = await setupWorkspace(storageRoot, "alpha");
+  const record = manualRecord({ workspaceId: "alpha", directory: workspaceDirectory });
+  await publishRecord(workspaceDirectory, record);
+  const logPath = join(root, "commands.log");
+  const clock = manualClock();
+  const harness = piHarness({ env: { FAKE_PI_COMMAND_LOG: logPath, FAKE_PI_PROMPT_HANG: "1" } });
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    spawn: harness.spawnImpl,
+    clock,
+  });
+  const id = randomUUID();
+  try {
+    const send = service.send({ workspace_id: "alpha", thread_id: record.thread_id, id, text: "timeout text" });
+    send.catch(() => {});
+    await waitFor(async () => {
+      const log = await readFile(logPath, "utf8").catch(() => "");
+      return log.includes('"prompt"') && clock.has(30000);
+    });
+    clock.fire(30000);
+    await assert.rejects(send, { code: "delivery-uncertain" });
+
+    const persisted = await readThread(storageRoot, "alpha", record.thread_id);
+    assert.equal(persisted.queue.length, 1);
+    assert.equal(persisted.queue[0].id, id);
+    assert.equal(persisted.queue[0].text, "timeout text");
+    assert.equal(persisted.queue[0].state, "uncertain");
+    assert.equal(persisted.queue[0].attempt, 1);
+    assert.equal(persisted.attention, "uncertain");
+
+    const retry = await service.send({ workspace_id: "alpha", thread_id: record.thread_id, id, text: "again" });
+    assert.equal(retry.duplicate, true);
+    assert.equal(retry.state, "uncertain");
+
+    const freshId = randomUUID();
+    const queued = await service.send({ workspace_id: "alpha", thread_id: record.thread_id, id: freshId, text: "fresh" });
+    assert.equal(queued.state, "queued");
+    assert.equal((await readFile(logPath, "utf8")).split("\n").filter((line) => line.includes('"prompt"')).length, 1);
+  } finally {
+    await service.close();
+  }
+});
+
+test("thread durable queue acceptance publication failure recovers without duplicate prompt", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const workspaceDirectory = await setupWorkspace(storageRoot, "alpha");
+  const record = manualRecord({
+    workspaceId: "alpha",
+    directory: workspaceDirectory,
+    overrides: {
+      import: {
+        source: "adj7",
+        digest: "e".repeat(64),
+        imported_at: "2026-01-01T00:00:00.000Z",
+        adjacent: { authority: "none", provenance: { kept: [1, 2] } },
+      },
+      custom: { kept: true },
+    },
+  });
+  await publishRecord(workspaceDirectory, record);
+  const logPath = join(root, "commands.log");
+  const harness = piHarness({ env: { FAKE_PI_COMMAND_LOG: logPath, FAKE_PI_DELAYS: JSON.stringify({ prompt: 100 }) } });
+  const service = createDiscussionService({ root: storageRoot, agentDir: join(root, "agent"), spawn: harness.spawnImpl });
+  const threadsDir = join(workspaceDirectory, "threads");
+  const backupDir = join(root, "owned-threads-backup");
+  const threadFile = join(threadsDir, `${record.thread_id}.json`);
+  const id = randomUUID();
+  let renamed = false;
+  try {
+    const send = service.send({ workspace_id: "alpha", thread_id: record.thread_id, id, text: "acceptance text" });
+    send.catch(() => {});
+    await waitFor(async () => {
+      const log = await readFile(logPath, "utf8").catch(() => "");
+      if (!log.includes('"prompt"')) return false;
+      try {
+        const current = JSON.parse(await readFile(threadFile, "utf8"));
+        return current.queue[0]?.state === "delivering" && current.queue[0]?.attempt === 1;
+      } catch {
+        return false;
+      }
+    });
+    await rename(threadsDir, backupDir);
+    renamed = true;
+    const outcome = await send.then(
+      () => null,
+      (error) => error,
+    );
+    assert.equal(outcome?.code, "delivery-uncertain");
+    const onDisk = JSON.parse(await readFile(join(backupDir, `${record.thread_id}.json`), "utf8"));
+    assert.equal(onDisk.queue[0].state, "delivering");
+    assert.equal(onDisk.queue[0].attempt, 1);
+    assert.deepEqual(onDisk.accepted_message_ids, []);
+  } finally {
+    if (renamed) {
+      await rename(backupDir, threadsDir);
+      renamed = false;
+    }
+    await service.close();
+  }
+
+  const restored = JSON.parse(await readFile(threadFile, "utf8"));
+  assert.equal(restored.queue[0].state, "delivering");
+  assert.deepEqual(restored.accepted_message_ids, []);
+  assert.equal((await readFile(logPath, "utf8")).split("\n").filter((line) => line.includes('"prompt"')).length, 1);
+
+  const freshHarness = piHarness();
+  const fresh = createDiscussionService({ root: storageRoot, agentDir: join(root, "agent"), spawn: freshHarness.spawnImpl });
+  try {
+    const listed = await fresh.list({ workspace_id: "alpha" });
+    const recovered = listed.threads.find((entry) => entry.thread_id === record.thread_id);
+    assert.equal(recovered.queue[0].state, "uncertain");
+    assert.equal(recovered.queue[0].id, id);
+    assert.equal(recovered.queue[0].text, "acceptance text");
+    assert.equal(recovered.queue[0].attempt, 1);
+    assert.deepEqual(recovered.import.adjacent.provenance, { kept: [1, 2] });
+    assert.deepEqual(recovered.custom, { kept: true });
+    const retry = await fresh.send({ workspace_id: "alpha", thread_id: record.thread_id, id, text: "again" });
+    assert.equal(retry.duplicate, true);
+    assert.equal(retry.state, "uncertain");
+    assert.equal(freshHarness.calls.filter((call) => call.command === "pi").length, 0);
+  } finally {
+    await fresh.close();
+  }
+});
+
+test("thread durable queue restart delivering becomes uncertain on first access", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const workspaceDirectory = await setupWorkspace(storageRoot, "alpha");
+  const deliveringId = randomUUID();
+  const queuedId = randomUUID();
+  const record = manualRecord({
+    workspaceId: "alpha",
+    directory: workspaceDirectory,
+    overrides: {
+      queue: [
+        {
+          id: deliveringId,
+          text: "delivering text",
+          queued_at: "2026-01-01T00:00:00.000Z",
+          state: "delivering",
+          attempt: 2,
+          extra: { kept: true },
+        },
+        { id: queuedId, text: "queued text", queued_at: "2026-01-01T00:00:00.000Z", state: "queued", attempt: 0 },
+      ],
+      queue_paused: true,
+      custom: { nested: { kept: true } },
+    },
+  });
+  await publishRecord(workspaceDirectory, record);
+  const service = createDiscussionService({ root: storageRoot, agentDir: join(root, "agent") });
+  try {
+    const listed = await service.list({ workspace_id: "alpha" });
+    const recovered = listed.threads.find((entry) => entry.thread_id === record.thread_id);
+    assert.equal(recovered.queue[0].state, "uncertain");
+    assert.equal(recovered.queue[1].state, "queued");
+    assert.equal(recovered.attention, "uncertain");
+    assert.equal(recovered.queue_paused, true);
+    assert.deepEqual(recovered.queue[0].extra, { kept: true });
+    assert.deepEqual(recovered.custom, { nested: { kept: true } });
+
+    await service.history({ workspace_id: "alpha", thread_id: record.thread_id });
+    const persisted = await readThread(storageRoot, "alpha", record.thread_id);
+    assert.equal(persisted.queue[0].state, "uncertain");
+    assert.equal(persisted.queue[0].id, deliveringId);
+    assert.equal(persisted.queue[0].attempt, 2);
+    assert.equal(persisted.queue[1].state, "queued");
+  } finally {
+    await service.close();
+  }
+
+  // A fresh service recovers before resume work and never writes a prompt.
+  const logPath = join(root, "commands.log");
+  const harness = piHarness({ env: { FAKE_PI_COMMAND_LOG: logPath } });
+  const resumed = createDiscussionService({ root: storageRoot, agentDir: join(root, "agent"), spawn: harness.spawnImpl });
+  try {
+    await resumed.resume({ workspace_id: "alpha", thread_id: record.thread_id });
+    assert.ok(!(await readFile(logPath, "utf8")).includes('"prompt"'));
+    const persisted = await readThread(storageRoot, "alpha", record.thread_id);
+    assert.equal(persisted.queue[0].state, "uncertain");
+    assert.equal(persisted.queue[1].state, "queued");
+  } finally {
+    await resumed.close();
+  }
+});
+
+test("thread durable queue duplicates survive a new service for queued uncertain and accepted", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const workspaceDirectory = await setupWorkspace(storageRoot, "alpha");
+  const queuedId = randomUUID();
+  const uncertainId = randomUUID();
+  const acceptedIds = Array.from({ length: 100 }, () => randomUUID());
+  const record = manualRecord({
+    workspaceId: "alpha",
+    directory: workspaceDirectory,
+    overrides: {
+      queue: [
+        { id: queuedId, text: "queued text", queued_at: "2026-01-01T00:00:00.000Z", state: "queued", attempt: 0 },
+        { id: uncertainId, text: "uncertain text", queued_at: "2026-01-01T00:00:00.000Z", state: "uncertain", attempt: 1 },
+      ],
+      accepted_message_ids: acceptedIds,
+      queue_paused: true,
+      custom: { kept: true },
+    },
+  });
+  await publishRecord(workspaceDirectory, record);
+  const threadFile = join(workspaceDirectory, "threads", `${record.thread_id}.json`);
+  const bytes = await readFile(threadFile);
+  const service = createDiscussionService({ root: storageRoot, agentDir: join(root, "agent") });
+  try {
+    const queued = await service.send({ workspace_id: "alpha", thread_id: record.thread_id, id: queuedId, text: "replacement" });
+    assert.equal(queued.duplicate, true);
+    assert.equal(queued.state, "queued");
+    const uncertain = await service.send({
+      workspace_id: "alpha",
+      thread_id: record.thread_id,
+      id: uncertainId,
+      text: "replacement",
+    });
+    assert.equal(uncertain.duplicate, true);
+    assert.equal(uncertain.state, "uncertain");
+    const accepted = await service.send({
+      workspace_id: "alpha",
+      thread_id: record.thread_id,
+      id: acceptedIds[99],
+      text: "replacement",
+    });
+    assert.equal(accepted.duplicate, true);
+    assert.equal(accepted.state, "accepted");
+    assert.deepEqual(await readFile(threadFile), bytes);
+    const persisted = await readThread(storageRoot, "alpha", record.thread_id);
+    assert.equal(persisted.queue[0].text, "queued text");
+    assert.equal(persisted.queue[1].text, "uncertain text");
+    assert.equal(persisted.queue_paused, true);
+    assert.deepEqual(persisted.custom, { kept: true });
+  } finally {
+    await service.close();
+  }
+});
+
+test("thread durable queue discard and resend replace uncertain identity with fresh uuid", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const workspaceDirectory = await setupWorkspace(storageRoot, "alpha");
+  const uncertainId = randomUUID();
+  const queuedId = randomUUID();
+  const record = manualRecord({
+    workspaceId: "alpha",
+    directory: workspaceDirectory,
+    overrides: {
+      queue: [
+        {
+          id: uncertainId,
+          text: "uncertain text",
+          queued_at: "2026-01-01T00:00:00.000Z",
+          state: "uncertain",
+          attempt: 3,
+          extra: { kept: true },
+        },
+        { id: queuedId, text: "queued text", queued_at: "2026-01-01T00:00:00.000Z", state: "queued", attempt: 0 },
+      ],
+      queue_paused: true,
+      custom: { kept: true },
+    },
+  });
+  await publishRecord(workspaceDirectory, record);
+  const threadFile = join(workspaceDirectory, "threads", `${record.thread_id}.json`);
+  const service = createDiscussionService({ root: storageRoot, agentDir: join(root, "agent") });
+  try {
+    const bytesBefore = await readFile(threadFile);
+    await assert.rejects(service.discard({ workspace_id: "alpha", thread_id: record.thread_id, id: queuedId }), {
+      code: "message-not-uncertain",
+    });
+    await assert.rejects(service.discard({ workspace_id: "alpha", thread_id: record.thread_id, id: randomUUID() }), {
+      code: "message-not-found",
+    });
+    assert.deepEqual(await readFile(threadFile), bytesBefore);
+
+    const discarded = await service.discard({ workspace_id: "alpha", thread_id: record.thread_id, id: uncertainId });
+    assert.equal(discarded.state, "discarded");
+    assert.equal(discarded.message_id, uncertainId);
+    let persisted = await readThread(storageRoot, "alpha", record.thread_id);
+    assert.deepEqual(persisted.queue.map((item) => item.id), [queuedId]);
+    assert.equal(persisted.queue_paused, true);
+    assert.deepEqual(persisted.custom, { kept: true });
+
+    const resentSourceId = randomUUID();
+    const resentSource = {
+      ...persisted,
+      queue: [
+        ...persisted.queue,
+        {
+          id: resentSourceId,
+          text: "resend text",
+          queued_at: "2026-01-01T00:00:00.000Z",
+          state: "uncertain",
+          attempt: 1,
+        },
+      ],
+    };
+    await writeFile(threadFile, `${JSON.stringify(resentSource)}\n`);
+    const resent = await service.discard({ workspace_id: "alpha", thread_id: record.thread_id, id: resentSourceId, resend: true });
+    assert.notEqual(resent.message_id, resentSourceId);
+    assert.equal(resent.state, "queued");
+    assert.equal(resent.warning, "possible duplicate response");
+    persisted = await readThread(storageRoot, "alpha", record.thread_id);
+    const replacement = persisted.queue.find((item) => item.id === resent.message_id);
+    assert.equal(replacement.text, "resend text");
+    assert.equal(replacement.state, "queued");
+    assert.equal(replacement.attempt, 0);
+    assert.equal(persisted.queue.length, resentSource.queue.length);
+    assert.equal(persisted.queue_paused, true);
+    assert.deepEqual(persisted.custom, { kept: true });
+  } finally {
+    await service.close();
+  }
+});
+
+test("thread durable queue invalid history-only and closed inputs leave bytes unchanged", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const workspaceDirectory = await setupWorkspace(storageRoot, "alpha");
+
+  const invalidRecord = manualRecord({
+    workspaceId: "alpha",
+    directory: workspaceDirectory,
+    overrides: { title: null },
+  });
+  await publishRecord(workspaceDirectory, invalidRecord);
+  const invalidFile = join(workspaceDirectory, "threads", `${invalidRecord.thread_id}.json`);
+  const invalidBytes = await readFile(invalidFile);
+  const service = createDiscussionService({ root: storageRoot, agentDir: join(root, "agent") });
+  try {
+    await assert.rejects(
+      service.send({ workspace_id: "alpha", thread_id: invalidRecord.thread_id, id: randomUUID(), text: "x" }),
+      { code: "invalid-thread" },
+    );
+    assert.deepEqual(await readFile(invalidFile), invalidBytes);
+    await assert.rejects(service.send({ workspace_id: "alpha", thread_id: randomUUID(), id: randomUUID(), text: "x" }), {
+      code: "thread-not-found",
+    });
+    await assert.rejects(
+      service.send({ workspace_id: "alpha", thread_id: randomUUID(), id: "not-a-uuid", text: "x" }),
+      { code: "invalid-message" },
+    );
+    await assert.rejects(service.send({ workspace_id: "alpha", thread_id: randomUUID(), id: randomUUID(), text: "" }), {
+      code: "invalid-message",
+    });
+    await assert.rejects(
+      service.send({
+        workspace_id: "alpha",
+        thread_id: randomUUID(),
+        id: randomUUID(),
+        text: "x".repeat(64 * 1024 + 1),
+      }),
+      { code: "invalid-message" },
+    );
+    await assert.rejects(
+      service.send({ workspace_id: "alpha", thread_id: randomUUID(), id: randomUUID(), text: "x", root: "/tmp/override" }),
+      { code: "invalid-message" },
+    );
+  } finally {
+    await service.close();
+  }
+
+  const historyRecord = manualRecord({
+    workspaceId: "alpha",
+    directory: workspaceDirectory,
+    overrides: { history_only: true, queue_paused: true },
+  });
+  await publishRecord(workspaceDirectory, historyRecord);
+  const historyFile = join(workspaceDirectory, "threads", `${historyRecord.thread_id}.json`);
+  const historyBytes = await readFile(historyFile);
+  const historyService = createDiscussionService({ root: storageRoot, agentDir: join(root, "agent") });
+  try {
+    await assert.rejects(
+      historyService.send({ workspace_id: "alpha", thread_id: historyRecord.thread_id, id: randomUUID(), text: "x" }),
+      { code: "history-only" },
+    );
+    await assert.rejects(
+      historyService.discard({ workspace_id: "alpha", thread_id: historyRecord.thread_id, id: randomUUID() }),
+      { code: "history-only" },
+    );
+    assert.deepEqual(await readFile(historyFile), historyBytes);
+  } finally {
+    await historyService.close();
+  }
+
+  const closedService = createDiscussionService({ root: storageRoot, agentDir: join(root, "agent") });
+  await closedService.close();
+  await assert.rejects(
+    closedService.send({ workspace_id: "alpha", thread_id: randomUUID(), id: randomUUID(), text: "x" }),
+    { code: "service-closed" },
+  );
+  await assert.rejects(
+    closedService.discard({ workspace_id: "alpha", thread_id: randomUUID(), id: randomUUID() }),
+    { code: "service-closed" },
+  );
+});
+
+test("thread durable queue settled before failed acknowledgement keeps uncertainty without lease leak", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  await setupWorkspace(storageRoot, "alpha");
+  const logPath = join(root, "commands.log");
+  const harness = piHarness({
+    env: {
+      FAKE_PI_COMMAND_LOG: logPath,
+      FAKE_PI_PROMPT_EVENTS: JSON.stringify([{ type: "agent_settled", aborted: false }]),
+      FAKE_PI_DISPOSITION: "invalid-disposition",
+    },
+  });
+  const service = createDiscussionService({ root: storageRoot, agentDir: join(root, "agent"), spawn: harness.spawnImpl });
+  try {
+    const firstThread = await service.create({ workspace_id: "alpha", title: "Settled failure" });
+    const secondThread = await service.create({ workspace_id: "alpha", title: "Next thread" });
+    const failedId = randomUUID();
+    await assert.rejects(
+      service.send({ workspace_id: "alpha", thread_id: firstThread.thread_id, id: failedId, text: "will fail" }),
+      { code: "delivery-uncertain" },
+    );
+    const failed = await readThread(storageRoot, "alpha", firstThread.thread_id);
+    assert.equal(failed.queue.length, 1);
+    assert.equal(failed.queue[0].id, failedId);
+    assert.equal(failed.queue[0].state, "uncertain");
+    assert.equal(failed.queue[0].attempt, 1);
+
+    const nextId = randomUUID();
+    await assert.rejects(
+      service.send({ workspace_id: "alpha", thread_id: secondThread.thread_id, id: nextId, text: "next" }),
+      { code: "delivery-uncertain" },
+    );
+    const prompts = (await readFile(logPath, "utf8"))
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .filter((entry) => entry.type === "prompt");
+    assert.deepEqual(prompts.map((entry) => entry.id), [failedId, nextId]);
+    const failedAgain = await readThread(storageRoot, "alpha", firstThread.thread_id);
+    assert.equal(failedAgain.queue[0].state, "uncertain");
+  } finally {
+    await service.close();
+  }
+});
+
+test("thread durable queue unknown captured identity never writes prompt", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const workspaceDirectory = await setupWorkspace(storageRoot, "alpha");
+  const record = manualRecord({
+    workspaceId: "alpha",
+    directory: workspaceDirectory,
+    overrides: { queue_paused: true },
+  });
+  await publishRecord(workspaceDirectory, record);
+
+  const dummy = spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
+  await new Promise((resolvePromise) => dummy.once("exit", resolvePromise));
+  assert.notEqual(dummy.exitCode, null);
+
+  const commands = [];
+  const clock = manualClock();
+  const harness = shutdownHarness({ record, pid: dummy.pid, ready: true });
+  harness.child.stdin.on("data", (chunk) => commands.push(chunk.toString("utf8")));
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    spawn: harness.spawnImpl,
+    clock,
+  });
+  try {
+    const id = randomUUID();
+    const queued = await service.send({ workspace_id: "alpha", thread_id: record.thread_id, id, text: "should not prompt" });
+    assert.equal(queued.duplicate, false);
+    assert.equal(queued.state, "queued");
+    const persisted = await readThread(storageRoot, "alpha", record.thread_id);
+    assert.equal(persisted.queue.length, 1);
+    assert.equal(persisted.queue[0].id, id);
+    assert.equal(persisted.queue[0].state, "queued");
+    assert.equal(persisted.queue[0].attempt, 0);
+    assert.equal(persisted.queue_paused, true);
+    assert.equal(persisted.process?.started_at, null);
+    assert.equal(persisted.attention, "live-owner");
+    assert.equal(
+      commands.some((chunk) => chunk.includes('"prompt"')),
+      false,
+    );
+    assert.equal(dummy.signalCode, null);
+  } finally {
+    const closing = service.close();
+    await waitFor(() => clock.has(4000));
+    clock.fire(4000);
+    await waitFor(() => harness.child.kills.includes("SIGKILL") && clock.has(1000));
+    clock.fire(1000);
+    await new Promise((resolvePromise) => setImmediate(resolvePromise));
+    if (clock.has(5000)) clock.fire(5000);
+    await closing;
+    harness.child.stdin.destroy();
+    harness.child.stdout.destroy();
+    harness.child.stderr.destroy();
+  }
+});

@@ -33,6 +33,7 @@ const TARGET_KINDS = new Set(["workspace", "repository", "worktree"]);
 const MAX_TITLE_LENGTH = 200;
 const MAX_ACCEPTED_MESSAGE_IDS = 100;
 const CONTEXT_LIMIT_BYTES = 256 * 1024;
+const MAX_MESSAGE_BYTES = 64 * 1024;
 const PS_SCAN_TIMEOUT_MS = 2000;
 const PS_SCAN_MAX_BYTES = 1024 * 1024;
 const EMPTY_BRANCH = {
@@ -279,9 +280,7 @@ async function assertOwnedSessionPaths(workspaceDirectory, record) {
   }
 }
 
-async function readOwnedRecord(root, workspaceId, threadId) {
-  const workspace = await fetchWorkspace(root, workspaceId);
-  const directory = await physicalDirectory(workspace.directory, "workspace directory");
+async function readRecordAt(directory, workspaceId, threadId) {
   let file;
   try {
     file = await resolveWorkspacePath(directory, `threads/${threadId}.json`);
@@ -304,6 +303,12 @@ async function readOwnedRecord(root, workspaceId, threadId) {
   }
   await assertOwnedSessionPaths(directory, record);
   return record;
+}
+
+async function readOwnedRecord(root, workspaceId, threadId) {
+  const workspace = await fetchWorkspace(root, workspaceId);
+  const directory = await physicalDirectory(workspace.directory, "workspace directory");
+  return readRecordAt(directory, workspaceId, threadId);
 }
 
 /**
@@ -531,6 +536,13 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
   const threadLocks = new Map();
   const ownedChildren = new Map();
   const ownedAdapters = new Map();
+  const recoveredThreads = new Set();
+  const ownedDelivering = new Map();
+  let responseLease = null;
+
+  function releaseLease(lease) {
+    if (responseLease === lease) responseLease = null;
+  }
 
   function withThreadLock(workspaceId, threadId, task) {
     const key = `${workspaceId}:${threadId}`;
@@ -551,6 +563,41 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
     validateThread(record);
     await writeFileAtomic(join(directory, "threads", `${record.thread_id}.json`), `${JSON.stringify(record)}\n`);
     return record;
+  }
+
+  // First-access recovery converts durable delivering rows to uncertain and
+  // marks the thread recovered only after publication succeeds. The service's
+  // own current delivering row (later delivery batches) is exempt, and invalid
+  // records never reach this path because reading validates first.
+  async function recoverRecord(directory, workspaceId, record) {
+    const key = `${workspaceId}:${record.thread_id}`;
+    if (recoveredThreads.has(key)) return record;
+    const flight = ownedDelivering.get(key);
+    let changed = false;
+    const queue = record.queue.map((item) => {
+      if (item.state !== "delivering" || item.id === flight?.id) return item;
+      changed = true;
+      return { ...item, state: "uncertain" };
+    });
+    if (!changed) {
+      recoveredThreads.add(key);
+      return record;
+    }
+    const recovered = await persistRecord(directory, {
+      ...record,
+      queue,
+      attention: "uncertain",
+      updated_at: new Date().toISOString(),
+    });
+    recoveredThreads.add(key);
+    return recovered;
+  }
+
+  async function loadServiceRecord(workspaceId, threadId) {
+    const workspace = await fetchWorkspace(configuredRoot, workspaceId);
+    const directory = await physicalDirectory(workspace.directory, "workspace directory");
+    const record = await readRecordAt(directory, workspaceId, threadId);
+    return { record: await recoverRecord(directory, workspaceId, record), workspace, directory };
   }
 
   function scanDiscussionProcesses(threadId) {
@@ -778,6 +825,7 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
         if (error && error.code === "EEXIST") throw threadExists(threadId);
         throw error;
       }
+      recoveredThreads.add(`${workspace_id}:${threadId}`);
       return record;
     });
   }
@@ -811,7 +859,11 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
           throw invalidThread("thread record workspace_id does not match the workspace");
         }
         await assertOwnedSessionPaths(directory, record);
-        threads.push(record);
+        const recovered = await withThreadLock(workspace_id, record.thread_id, async () => {
+          const latest = await readRecordAt(directory, workspace_id, record.thread_id);
+          return recoverRecord(directory, workspace_id, latest);
+        });
+        threads.push(recovered);
       } catch (error) {
         invalid.push({
           file,
@@ -828,7 +880,7 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
       throw invalidThread("workspace_id must be a workspace id");
     }
     if (!isUuid(thread_id)) throw invalidThread("thread_id must be a UUID");
-    const record = await readOwnedRecord(configuredRoot, workspace_id, thread_id);
+    const { record } = await withThreadLock(workspace_id, thread_id, () => loadServiceRecord(workspace_id, thread_id));
     const file = await ownedSessionFile(record);
     if (file === null) return { ...EMPTY_BRANCH, entries: [] };
     return readSessionBranch(file, { before, limit });
@@ -844,286 +896,687 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
       throw invalidThread("workspace_id must be a workspace id");
     }
     if (!isUuid(thread_id)) throw invalidThread("thread_id must be a UUID");
-    return withThreadLock(workspace_id, thread_id, async () => {
-      if (closed) throw serviceClosed();
-      const original = await readOwnedRecord(configuredRoot, workspace_id, thread_id);
-      const workspace = await fetchWorkspace(configuredRoot, workspace_id);
-      const directory = await physicalDirectory(workspace.directory, "workspace directory");
-      let current = original;
-      let resolved;
-      try {
-        resolved = await resolveTarget({ workspace, target: original.target });
-      } catch {
-        return persistRecord(directory, { ...original, attention: "missing-directory" });
-      }
-      if (resolved.execution_dir !== original.execution_dir) {
-        return persistRecord(directory, { ...original, attention: "missing-directory" });
-      }
-      try {
-        if (original.history_only) throw typedError("history-only", "history-only threads cannot resume");
+    return withThreadLock(workspace_id, thread_id, () => resumeLocked(workspace_id, thread_id));
+  }
 
-        const key = `${workspace_id}:${thread_id}`;
-        const owned = ownedAdapters.get(key);
-        if (owned) {
-          const observed = inspectProcess(owned.process.pid);
-          const identityKnown = observed.state === "alive" && observed.started_at === owned.process.started_at;
-          const recordedMatches =
-            current.process !== null &&
-            current.process !== undefined &&
-            current.process.pid === owned.process.pid &&
-            current.process.started_at === owned.process.started_at;
-          if (!identityKnown || !recordedMatches) {
-            throw typedError("live-owner", "a prior owned discussion process is not confirmed dead", {
-              state: observed.state,
-              pid: owned.process.pid,
-            });
-          }
-          try {
-            const state = await owned.adapter.request({ type: "get_state" });
-            const expectedFile = owned.adapter.identity.session_file ?? null;
-            if (state.data?.sessionId !== current.session_id) {
-              throw typedError("session-mismatch", "reused adapter session id does not match the thread");
-            }
-            if (typeof state.data?.sessionFile !== "string" || state.data.sessionFile !== expectedFile) {
-              throw typedError("session-mismatch", "reused adapter session file does not match the thread");
-            }
-            await verifyOwnedSessionFile(current, current.session_file);
-            const pinned = await ownedFileOrNull(expectedFile);
-            current = await persistRecord(directory, {
-              ...current,
-              session_file: pinned ?? current.session_file,
-              process: owned.process,
-              attention: resolved.attention[0] ?? current.attention,
-              queue_paused: owned.process.started_at === null ? current.queue_paused : false,
-            });
-            return current;
-          } catch (error) {
-            const shutdown = await closeOwnedPiChild(owned.child, { clock: clockImpl });
-            ownedAdapters.delete(key);
-            ownedChildren.delete(owned.child);
-            if (!shutdown.confirmed_death) {
-              current = await persistRecord(directory, { ...current, process: owned.process, attention: "live-owner" });
-              throw typedError("live-owner", "owned discussion process did not confirm death", { pid: owned.process.pid });
-            }
-            if (error.code === "session-mismatch") throw error;
-          }
-        }
+  // Assumes the per-thread lock is held; send composes this same identity,
+  // context and spawn ownership path without recursively locking.
+  async function resumeLocked(workspace_id, thread_id) {
+    if (closed) throw serviceClosed();
+    const loaded = await loadServiceRecord(workspace_id, thread_id);
+    const original = loaded.record;
+    const workspace = loaded.workspace;
+    const directory = loaded.directory;
+    let current = original;
+    let resolved;
+    try {
+      resolved = await resolveTarget({ workspace, target: original.target });
+    } catch {
+      return persistRecord(directory, { ...original, attention: "missing-directory" });
+    }
+    if (resolved.execution_dir !== original.execution_dir) {
+      return persistRecord(directory, { ...original, attention: "missing-directory" });
+    }
+    try {
+      if (original.history_only) throw typedError("history-only", "history-only threads cannot resume");
 
-        if (current.process !== null && current.process !== undefined) {
-          const observed = inspectProcess(current.process.pid);
-          if (observed.state !== "dead") {
-            throw typedError("live-owner", "recorded discussion process is not confirmed dead", {
-              state: observed.state,
-              pid: current.process.pid,
-            });
-          }
-        }
-
-        const scan = await scanDiscussionProcesses(thread_id);
-        if (!scan.ok) {
-          throw typedError("live-owner", `process listing is not trustworthy: ${scan.reason}`, { reason: scan.reason });
-        }
-        if (scan.matches.length > 0) {
-          throw typedError("live-owner", "another discussion process is live for this thread", { pids: scan.matches });
-        }
-        if (closed) throw serviceClosed();
-
-        let spawnFile = current.session_file;
-        if (spawnFile !== null) {
-          await verifyOwnedSessionFile(current, spawnFile);
-        } else {
-          const discovered = await discoverOwnedSessionFile(current);
-          if (discovered !== null) spawnFile = discovered;
-        }
-
-        const assembled = await assembleContext({ root: configuredRoot, workspace, directory, record: current });
-        if (closed) throw serviceClosed();
-
-        let rawChild = null;
-        let captured = null;
-        let earlyPersist = null;
-        const controller = new AbortController();
-        const spawnBoundary = (command, args, options) => {
-          if (closed) throw serviceClosed();
-          const child = spawnImpl(command, args, options);
-          if (command === "pi" && child && typeof child === "object") {
-            rawChild = child;
-            captured = processIdentity(child.pid);
-            const processInfo = captured ?? { pid: child.pid, started_at: null };
-            ownedChildren.set(child, {
-              workspaceId: workspace_id,
-              threadId: thread_id,
-              directory,
-              process: processInfo,
-              adapter: null,
-              controller,
-            });
-            earlyPersist = persistRecord(directory, {
-              ...current,
-              session_file: spawnFile,
-              process: processInfo,
-              attention: "live-owner",
-            });
-            earlyPersist.catch(() => {});
-          }
-          return child;
-        };
-
-        let adapter = null;
-        let startupError = null;
-        try {
-          adapter = await createPiRpc({
-            thread: { ...current, session_file: spawnFile, context: assembled },
-            context: assembled,
-            spawn: spawnBoundary,
-            clock: clockImpl,
-            signal: controller.signal,
+      const key = `${workspace_id}:${thread_id}`;
+      const owned = ownedAdapters.get(key);
+      if (owned) {
+        const observed = inspectProcess(owned.process.pid);
+        const identityKnown = observed.state === "alive" && observed.started_at === owned.process.started_at;
+        const recordedMatches =
+          current.process !== null &&
+          current.process !== undefined &&
+          current.process.pid === owned.process.pid &&
+          current.process.started_at === owned.process.started_at;
+        if (!identityKnown || !recordedMatches) {
+          throw typedError("live-owner", "a prior owned discussion process is not confirmed dead", {
+            state: observed.state,
+            pid: owned.process.pid,
           });
+        }
+        try {
+          const state = await owned.adapter.request({ type: "get_state" });
+          const expectedFile = owned.adapter.identity.session_file ?? null;
+          if (state.data?.sessionId !== current.session_id) {
+            throw typedError("session-mismatch", "reused adapter session id does not match the thread");
+          }
+          if (typeof state.data?.sessionFile !== "string" || state.data.sessionFile !== expectedFile) {
+            throw typedError("session-mismatch", "reused adapter session file does not match the thread");
+          }
+          await verifyOwnedSessionFile(current, current.session_file);
+          const pinned = await ownedFileOrNull(expectedFile);
+          current = await persistRecord(directory, {
+            ...current,
+            session_file: pinned ?? current.session_file,
+            process: owned.process,
+            attention: resolved.attention[0] ?? current.attention,
+            queue_paused: owned.process.started_at === null ? current.queue_paused : false,
+          });
+          return current;
         } catch (error) {
-          startupError = error;
-        }
-
-        if (earlyPersist !== null) {
-          try {
-            current = await earlyPersist;
-          } catch (persistError) {
-            if (rawChild !== null) {
-              await closeOwnedPiChild(rawChild, { clock: clockImpl }).catch(() => {});
-              ownedChildren.delete(rawChild);
-            }
-            throw persistError;
+          const shutdown = await closeOwnedPiChild(owned.child, { clock: clockImpl });
+          ownedAdapters.delete(key);
+          ownedChildren.delete(owned.child);
+          if (!shutdown.confirmed_death) {
+            current = await persistRecord(directory, { ...current, process: owned.process, attention: "live-owner" });
+            throw typedError("live-owner", "owned discussion process did not confirm death", { pid: owned.process.pid });
           }
+          if (error.code === "session-mismatch") throw error;
         }
+      }
 
-        if (startupError !== null) {
-          const tracked = rawChild !== null ? ownedChildren.get(rawChild) : null;
-          const shutdown = rawChild !== null ? await closeOwnedPiChild(rawChild, { clock: clockImpl }).catch(() => null) : null;
-          if (rawChild !== null) ownedChildren.delete(rawChild);
-          if (tracked) {
-            if (shutdown !== null && shutdown.confirmed_death === false) {
-              current = await persistRecord(directory, { ...current, process: tracked.process, attention: "live-owner" });
-            } else if (
-              current.process &&
-              current.process.pid === tracked.process.pid &&
-              current.process.started_at === tracked.process.started_at
-            ) {
-              const { process: _process, ...rest } = current;
-              current = await persistRecord(directory, { ...rest, attention: "start-failed" });
-            }
-          }
-          throw startupError;
+      if (current.process !== null && current.process !== undefined) {
+        const observed = inspectProcess(current.process.pid);
+        if (observed.state !== "dead") {
+          throw typedError("live-owner", "recorded discussion process is not confirmed dead", {
+            state: observed.state,
+            pid: current.process.pid,
+          });
         }
+      }
 
-        const childExited =
-          rawChild !== null &&
-          (typeof rawChild.exitCode === "number" || (rawChild.signalCode !== null && rawChild.signalCode !== undefined));
-        if (rawChild === null || childExited) {
+      const scan = await scanDiscussionProcesses(thread_id);
+      if (!scan.ok) {
+        throw typedError("live-owner", `process listing is not trustworthy: ${scan.reason}`, { reason: scan.reason });
+      }
+      if (scan.matches.length > 0) {
+        throw typedError("live-owner", "another discussion process is live for this thread", { pids: scan.matches });
+      }
+      if (closed) throw serviceClosed();
+
+      let spawnFile = current.session_file;
+      if (spawnFile !== null) {
+        await verifyOwnedSessionFile(current, spawnFile);
+      } else {
+        const discovered = await discoverOwnedSessionFile(current);
+        if (discovered !== null) spawnFile = discovered;
+      }
+
+      const assembled = await assembleContext({ root: configuredRoot, workspace, directory, record: current });
+      if (closed) throw serviceClosed();
+
+      let rawChild = null;
+      let captured = null;
+      let earlyPersist = null;
+      const controller = new AbortController();
+      const spawnBoundary = (command, args, options) => {
+        if (closed) throw serviceClosed();
+        const child = spawnImpl(command, args, options);
+        if (command === "pi" && child && typeof child === "object") {
+          rawChild = child;
+          captured = processIdentity(child.pid);
+          const processInfo = captured ?? { pid: child.pid, started_at: null };
+          ownedChildren.set(child, {
+            workspaceId: workspace_id,
+            threadId: thread_id,
+            directory,
+            process: processInfo,
+            adapter: null,
+            controller,
+          });
+          earlyPersist = persistRecord(directory, {
+            ...current,
+            session_file: spawnFile,
+            process: processInfo,
+            attention: "live-owner",
+          });
+          earlyPersist.catch(() => {});
+        }
+        return child;
+      };
+
+      let adapter = null;
+      let startupError = null;
+      try {
+        adapter = await createPiRpc({
+          thread: { ...current, session_file: spawnFile, context: assembled },
+          context: assembled,
+          spawn: spawnBoundary,
+          clock: clockImpl,
+          signal: controller.signal,
+        });
+      } catch (error) {
+        startupError = error;
+      }
+
+      if (earlyPersist !== null) {
+        try {
+          current = await earlyPersist;
+        } catch (persistError) {
           if (rawChild !== null) {
             await closeOwnedPiChild(rawChild, { clock: clockImpl }).catch(() => {});
             ownedChildren.delete(rawChild);
           }
-          const { process: _process, ...rest } = current;
-          current = await persistRecord(directory, { ...rest, attention: "start-failed" });
-          throw typedError("live-owner", "resume child exited during startup");
+          throw persistError;
         }
+      }
 
-        const processInfo = captured ?? { pid: rawChild.pid, started_at: null };
-        const stopClosedResume = async (shutdown) => {
+      if (startupError !== null) {
+        const tracked = rawChild !== null ? ownedChildren.get(rawChild) : null;
+        const shutdown = rawChild !== null ? await closeOwnedPiChild(rawChild, { clock: clockImpl }).catch(() => null) : null;
+        if (rawChild !== null) ownedChildren.delete(rawChild);
+        if (tracked) {
+          if (shutdown !== null && shutdown.confirmed_death === false) {
+            current = await persistRecord(directory, { ...current, process: tracked.process, attention: "live-owner" });
+          } else if (
+            current.process &&
+            current.process.pid === tracked.process.pid &&
+            current.process.started_at === tracked.process.started_at
+          ) {
+            const { process: _process, ...rest } = current;
+            current = await persistRecord(directory, { ...rest, attention: "start-failed" });
+          }
+        }
+        throw startupError;
+      }
+
+      const childExited =
+        rawChild !== null &&
+        (typeof rawChild.exitCode === "number" || (rawChild.signalCode !== null && rawChild.signalCode !== undefined));
+      if (rawChild === null || childExited) {
+        if (rawChild !== null) {
+          await closeOwnedPiChild(rawChild, { clock: clockImpl }).catch(() => {});
           ownedChildren.delete(rawChild);
-          const unconfirmed = shutdown === null || shutdown === undefined || shutdown.confirmed_death === false;
-          if (unconfirmed) {
-            return persistRecord(directory, {
+        }
+        const { process: _process, ...rest } = current;
+        current = await persistRecord(directory, { ...rest, attention: "start-failed" });
+        throw typedError("live-owner", "resume child exited during startup");
+      }
+
+      const processInfo = captured ?? { pid: rawChild.pid, started_at: null };
+      const stopClosedResume = async (shutdown) => {
+        ownedChildren.delete(rawChild);
+        const unconfirmed = shutdown === null || shutdown === undefined || shutdown.confirmed_death === false;
+        if (unconfirmed) {
+          return persistRecord(directory, {
+            ...current,
+            process: processInfo,
+            attention: "live-owner",
+            queue_paused: original.queue_paused,
+          }).catch(() => current);
+        }
+        const { process: _process, ...rest } = current;
+        return persistRecord(directory, {
+          ...rest,
+          attention: "start-failed",
+          queue_paused: original.queue_paused,
+        }).catch(() => current);
+      };
+      // Closed after the handshake: never install or unpause on a closed service.
+      if (closed) {
+        const shutdown = await adapter.close().catch(() => null);
+        current = await stopClosedResume(shutdown);
+        throw serviceClosed();
+      }
+
+      const pinned = await ownedFileOrNull(adapter.identity.session_file);
+      try {
+        current = await persistRecord(directory, {
+          ...current,
+          session_file: pinned ?? current.session_file,
+          process: processInfo,
+          attention: processInfo.started_at === null ? "live-owner" : (resolved.attention[0] ?? null),
+          queue_paused: processInfo.started_at === null ? current.queue_paused : false,
+        });
+      } catch (persistError) {
+        const shutdown = await closeOwnedPiChild(rawChild, { clock: clockImpl }).catch(() => null);
+        ownedChildren.delete(rawChild);
+        if (shutdown && shutdown.confirmed_death === false && typeof rawChild?.pid === "number") {
+          try {
+            await persistRecord(directory, {
               ...current,
               process: processInfo,
               attention: "live-owner",
               queue_paused: original.queue_paused,
-            }).catch(() => current);
+            });
+          } catch {
+            // The unconfirmed handle result remains observable to the caller.
           }
-          const { process: _process, ...rest } = current;
-          return persistRecord(directory, {
-            ...rest,
-            attention: "start-failed",
-            queue_paused: original.queue_paused,
-          }).catch(() => current);
-        };
-        // Closed after the handshake: never install or unpause on a closed service.
-        if (closed) {
-          const shutdown = await adapter.close().catch(() => null);
-          current = await stopClosedResume(shutdown);
-          throw serviceClosed();
         }
+        throw persistError;
+      }
 
-        const pinned = await ownedFileOrNull(adapter.identity.session_file);
-        try {
-          current = await persistRecord(directory, {
-            ...current,
-            session_file: pinned ?? current.session_file,
-            process: processInfo,
-            attention: processInfo.started_at === null ? "live-owner" : (resolved.attention[0] ?? null),
-            queue_paused: processInfo.started_at === null ? current.queue_paused : false,
-          });
-        } catch (persistError) {
-          const shutdown = await closeOwnedPiChild(rawChild, { clock: clockImpl }).catch(() => null);
-          ownedChildren.delete(rawChild);
-          if (shutdown && shutdown.confirmed_death === false && typeof rawChild?.pid === "number") {
-            try {
-              await persistRecord(directory, {
-                ...current,
-                process: processInfo,
-                attention: "live-owner",
-                queue_paused: original.queue_paused,
-              });
-            } catch {
-              // The unconfirmed handle result remains observable to the caller.
-            }
+      const exitedAfterPersist =
+        typeof rawChild.exitCode === "number" ||
+        (rawChild.signalCode !== null && rawChild.signalCode !== undefined);
+      if (exitedAfterPersist) {
+        const shutdown = await closeOwnedPiChild(rawChild, { clock: clockImpl }).catch(() => null);
+        current = await stopClosedResume(shutdown);
+        throw typedError("live-owner", "resume child exited during startup");
+      }
+
+      // Closed while the final publication was awaited: same owned-only cleanup.
+      if (closed) {
+        const shutdown = await adapter.close().catch(() => null);
+        current = await stopClosedResume(shutdown);
+        throw serviceClosed();
+      }
+
+      ownedAdapters.set(key, {
+        adapter,
+        child: rawChild,
+        generation: adapter.identity.generation,
+        process: processInfo,
+        directory,
+      });
+      const tracked = ownedChildren.get(rawChild);
+      if (tracked) tracked.adapter = adapter;
+      adapter.events.on("event", (envelope) => {
+        const event = envelope.event;
+        if (event?.type === "exit") {
+          const lease = responseLease;
+          if (lease && lease.generation === adapter.identity.generation) releaseLease(lease);
+          void onOwnedExit(key, adapter, rawChild, processInfo, directory);
+        } else if (event?.type === "agent_settled") {
+          const lease = responseLease;
+          if (lease && lease.generation === adapter.identity.generation) {
+            lease.settled = true;
+            if (lease.acknowledged) releaseLease(lease);
           }
-          throw persistError;
         }
-
-        const exitedAfterPersist =
-          typeof rawChild.exitCode === "number" ||
-          (rawChild.signalCode !== null && rawChild.signalCode !== undefined);
-        if (exitedAfterPersist) {
-          const shutdown = await closeOwnedPiChild(rawChild, { clock: clockImpl }).catch(() => null);
-          current = await stopClosedResume(shutdown);
-          throw typedError("live-owner", "resume child exited during startup");
-        }
-
-        // Closed while the final publication was awaited: same owned-only cleanup.
-        if (closed) {
-          const shutdown = await adapter.close().catch(() => null);
-          current = await stopClosedResume(shutdown);
-          throw serviceClosed();
-        }
-
-        ownedAdapters.set(key, {
-          adapter,
-          child: rawChild,
-          generation: adapter.identity.generation,
-          process: processInfo,
-          directory,
-        });
-        const tracked = ownedChildren.get(rawChild);
-        if (tracked) tracked.adapter = adapter;
-        adapter.events.on("event", (envelope) => {
-          if (envelope.event?.type === "exit") {
-            void onOwnedExit(key, adapter, rawChild, processInfo, directory);
+        // agent_end is intentionally ignored.
+      });
+      return current;
+    } catch (error) {
+      if (error && error.code !== "invalid-thread") {
+        const attention = attentionForError(error);
+        if (attention !== null) {
+          try {
+            await persistRecord(directory, { ...current, attention });
+          } catch {
+            // The refusal remains visible through the thrown error.
           }
-        });
-        return current;
+        }
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Enqueue one durable message under the per-thread lock and, when the item is
+   * the eligible queue head and the global response slot is free, dispatch it to
+   * the current thread's owned adapter. Duplicates never mutate or dispatch.
+   * Returned shape for later batches and step 7:
+   * `{ thread, message_id, state: 'queued'|'delivering'|'uncertain'|'accepted', duplicate }`.
+   */
+  async function send(input = {}) {
+    if (closed) throw serviceClosed();
+    requirePlainObject(input, "send input");
+    for (const override of ["root", "agentDir", "execution_dir", "session_dir"]) {
+      if (Object.prototype.hasOwnProperty.call(input, override)) {
+        throw typedError("invalid-message", `send does not accept a ${override} override`);
+      }
+    }
+    const { workspace_id, thread_id, id, text } = input;
+    if (typeof workspace_id !== "string" || !WORKSPACE_ID_PATTERN.test(workspace_id)) {
+      throw invalidThread("workspace_id must be a workspace id");
+    }
+    if (!isUuid(thread_id)) throw invalidThread("thread_id must be a UUID");
+    if (!isUuid(id)) throw typedError("invalid-message", "message id must be a UUID");
+    if (typeof text !== "string" || text.length === 0) {
+      throw typedError("invalid-message", "message text must be a non-empty string");
+    }
+    if (Buffer.byteLength(text, "utf8") > MAX_MESSAGE_BYTES) {
+      throw typedError("invalid-message", `message text exceeds ${MAX_MESSAGE_BYTES} bytes`);
+    }
+
+    const staged = await withThreadLock(workspace_id, thread_id, async () => {
+      if (closed) throw serviceClosed();
+      const { record, directory } = await loadServiceRecord(workspace_id, thread_id);
+      if (record.history_only) throw typedError("history-only", "history-only threads cannot send");
+      const existing = record.queue.find((item) => item.id === id);
+      if (existing) {
+        return { kind: "duplicate", record, message_id: id, state: existing.state };
+      }
+      if (record.accepted_message_ids.includes(id)) {
+        return { kind: "duplicate", record, message_id: id, state: "accepted" };
+      }
+      const item = { id, text, queued_at: new Date().toISOString(), state: "queued", attempt: 0 };
+      const queued = await persistRecord(directory, {
+        ...record,
+        queue: [...record.queue, item],
+        updated_at: new Date().toISOString(),
+      });
+      const head = queued.queue[0];
+      if (
+        !head ||
+        head.id !== id ||
+        head.state !== "queued" ||
+        queued.attention === "missing-directory" ||
+        responseLease !== null
+      ) {
+        return { kind: "queued", record: queued, message_id: id, state: "queued" };
+      }
+      const lease = {
+        workspace_id,
+        thread_id,
+        message_id: id,
+        generation: null,
+        settled: false,
+        acknowledged: false,
+      };
+      responseLease = lease;
+      let adapter;
+      try {
+        const resumed = await resumeLocked(workspace_id, thread_id);
+        const owned = ownedAdapters.get(`${workspace_id}:${thread_id}`);
+        const knownProcess =
+          resumed.process !== null &&
+          resumed.process !== undefined &&
+          typeof resumed.process.started_at === "string" &&
+          resumed.process.started_at !== "";
+        // Dispatch requires a validated known identity, an unpaused queue and a
+        // resolved target binding; an adapter entry alone is not sufficient.
+        if (!owned || resumed.queue_paused === true || !knownProcess || resumed.attention === "missing-directory") {
+          // Release only when there is no owner and no captured process that
+          // could still be live or unknown; otherwise retain exclusion.
+          if (!owned && (resumed.process === undefined || resumed.process === null)) releaseLease(lease);
+          return { kind: "queued", record: resumed, message_id: id, state: "queued" };
+        }
+        adapter = owned.adapter;
+        lease.generation = adapter.identity.generation;
       } catch (error) {
-        if (error && error.code !== "invalid-thread") {
-          const attention = attentionForError(error);
-          if (attention !== null) {
-            try {
-              await persistRecord(directory, { ...current, attention });
-            } catch {
-              // The refusal remains visible through the thrown error.
-            }
+        let latest = null;
+        try {
+          latest = await readRecordAt(directory, workspace_id, thread_id);
+        } catch {
+          latest = null;
+        }
+        const hasOwner = Boolean(latest && latest.process) || ownedChildren.size > 0;
+        if (!hasOwner) releaseLease(lease);
+        throw error;
+      }
+      const latest = await readRecordAt(directory, workspace_id, thread_id);
+      let delivering;
+      try {
+        delivering = await persistRecord(directory, {
+          ...latest,
+          queue: latest.queue.map((entry) =>
+            entry.id === id ? { ...entry, state: "delivering", attempt: entry.attempt + 1 } : entry,
+          ),
+          updated_at: new Date().toISOString(),
+        });
+      } catch (error) {
+        // No prompt may be written; the item stays queued. Release the slot
+        // only after a confirmed idle observation, otherwise retain exclusion.
+        try {
+          const state = await adapter.request({ type: "get_state" });
+          if (
+            state.data?.isStreaming === false &&
+            state.data?.isCompacting === false &&
+            state.data?.pendingMessageCount === 0
+          ) {
+            releaseLease(lease);
           }
+        } catch {
+          // Retain exclusion.
         }
         throw error;
       }
+      const persistedAttempt = delivering.queue.find((entry) => entry.id === id)?.attempt ?? 0;
+      ownedDelivering.set(`${workspace_id}:${thread_id}`, {
+        id,
+        generation: lease.generation,
+        attempt: persistedAttempt,
+      });
+      if (closed) {
+        await persistRecord(directory, {
+          ...delivering,
+          queue: delivering.queue.map((entry) => (entry.id === id ? { ...entry, state: "uncertain" } : entry)),
+          attention: "uncertain",
+          updated_at: new Date().toISOString(),
+        }).catch(() => null);
+        ownedDelivering.delete(`${workspace_id}:${thread_id}`);
+        throw serviceClosed();
+      }
+      return {
+        kind: "dispatch",
+        adapter,
+        directory,
+        record: delivering,
+        workspace_id,
+        thread_id,
+        message_id: id,
+        generation: lease.generation,
+        attempt: persistedAttempt,
+        lease,
+      };
+    });
+
+    if (staged.kind !== "dispatch") {
+      return {
+        thread: staged.record,
+        message_id: staged.message_id,
+        state: staged.state,
+        duplicate: staged.kind === "duplicate",
+      };
+    }
+
+    // The RPC is awaited outside the per-thread lock so concurrent retries can
+    // observe the durable delivering row and later Stop cannot deadlock.
+    let response;
+    try {
+      response = await staged.adapter.request({ type: "prompt", id: staged.message_id, message: text });
+    } catch (error) {
+      await finalizeDeliveryFailure(staged, error);
+      if (error.code === "command-failed" && !closed) {
+        try {
+          const state = await staged.adapter.request({ type: "get_state" });
+          if (
+            state.data?.isStreaming === false &&
+            state.data?.isCompacting === false &&
+            state.data?.pendingMessageCount === 0
+          ) {
+            staged.lease.settled = true;
+            if (staged.lease.acknowledged) releaseLease(staged.lease);
+          }
+        } catch {
+          // Retain exclusion without settlement.
+        }
+      }
+      throw typedError("delivery-uncertain", `prompt ${staged.message_id} is uncertain: ${error.message}`, {
+        cause: error,
+        message_id: staged.message_id,
+      });
+    }
+    const disposition = response?.data?.disposition;
+    if (disposition !== "started" && disposition !== "queued" && disposition !== "handled") {
+      await finalizeDeliveryFailure(
+        staged,
+        typedError("invalid-disposition", `unexpected prompt disposition: ${String(disposition)}`),
+      );
+      throw typedError("delivery-uncertain", `prompt ${staged.message_id} returned an invalid disposition`, {
+        message_id: staged.message_id,
+      });
+    }
+    if (disposition === "handled") {
+      try {
+        const state = await staged.adapter.request({ type: "get_state" });
+        if (
+          state.data?.isStreaming === false &&
+          state.data?.isCompacting === false &&
+          state.data?.pendingMessageCount === 0
+        ) {
+          staged.lease.settled = true;
+        }
+      } catch {
+        // Keep the conservative unsettled state; agent_settled can release later.
+      }
+    }
+
+    let completed;
+    try {
+      completed = await withThreadLock(workspace_id, thread_id, async () => {
+        const key = `${staged.workspace_id}:${staged.thread_id}`;
+        const latest = await readRecordAt(staged.directory, staged.workspace_id, staged.thread_id);
+        const flight = ownedDelivering.get(key);
+        if (
+          !flight ||
+          flight.id !== staged.message_id ||
+          flight.attempt !== staged.attempt ||
+          flight.generation !== staged.generation
+        ) {
+          return { stale: true, record: latest };
+        }
+        const index = latest.queue.findIndex(
+          (entry) =>
+            entry.id === staged.message_id && entry.state === "delivering" && entry.attempt === staged.attempt,
+        );
+        if (index === -1) {
+          if (latest.accepted_message_ids.includes(staged.message_id)) {
+            ownedDelivering.delete(key);
+            return { stale: false, record: latest };
+          }
+          return { stale: true, record: latest };
+        }
+        let pinned = null;
+        const candidate = await ownedFileOrNull(staged.adapter.identity.session_file);
+        if (candidate !== null) {
+          await verifyOwnedSessionFile(latest, candidate);
+          pinned = candidate;
+        }
+        const queue = latest.queue.filter((entry) => entry.id !== staged.message_id);
+        const accepted = [
+          ...latest.accepted_message_ids.filter((entry) => entry !== staged.message_id),
+          staged.message_id,
+        ].slice(-MAX_ACCEPTED_MESSAGE_IDS);
+        const updated = await persistRecord(staged.directory, {
+          ...latest,
+          queue,
+          accepted_message_ids: accepted,
+          session_file: pinned ?? latest.session_file,
+          updated_at: new Date().toISOString(),
+        });
+        ownedDelivering.delete(key);
+        return { stale: false, record: updated };
+      });
+    } catch (error) {
+      await finalizeDeliveryFailure(staged, error);
+      throw typedError("delivery-uncertain", `prompt ${staged.message_id} acceptance could not be persisted`, {
+        cause: error,
+        message_id: staged.message_id,
+      });
+    }
+    if (completed.stale) {
+      await finalizeDeliveryFailure(staged, typedError("stale-generation", "prompt completion belongs to another attempt"));
+      throw typedError("delivery-uncertain", `prompt ${staged.message_id} completion was stale`, {
+        message_id: staged.message_id,
+      });
+    }
+    staged.lease.acknowledged = true;
+    if (staged.lease.settled) releaseLease(staged.lease);
+    return { thread: completed.record, message_id: staged.message_id, state: "accepted", duplicate: false };
+  }
+
+  // Best-effort uncertainty marking for a dispatched attempt that did not reach
+  // acceptance. Only the exact persisted delivering attempt is finalized; a
+  // stale tuple or a non-matching item is left untouched and the flight record
+  // is deleted only after the outcome is durably saved.
+  async function finalizeDeliveryFailure(staged, error) {
+    await withThreadLock(staged.workspace_id, staged.thread_id, async () => {
+      const key = `${staged.workspace_id}:${staged.thread_id}`;
+      const flight = ownedDelivering.get(key);
+      if (
+        !flight ||
+        flight.id !== staged.message_id ||
+        flight.attempt !== staged.attempt ||
+        flight.generation !== staged.generation
+      ) {
+        return;
+      }
+      let latest;
+      try {
+        latest = await readRecordAt(staged.directory, staged.workspace_id, staged.thread_id);
+      } catch {
+        return;
+      }
+      const index = latest.queue.findIndex(
+        (entry) =>
+          entry.id === staged.message_id && entry.state === "delivering" && entry.attempt === staged.attempt,
+      );
+      if (index === -1) return;
+      const commandFailed = error && error.code === "command-failed";
+      const queue = latest.queue.map((entry) => {
+        if (entry.id !== staged.message_id || entry.state !== "delivering" || entry.attempt !== staged.attempt) {
+          return entry;
+        }
+        return commandFailed ? { ...entry, state: "queued" } : { ...entry, state: "uncertain" };
+      });
+      const next = { ...latest, queue, updated_at: new Date().toISOString() };
+      if (!commandFailed) next.attention = "uncertain";
+      let saved = false;
+      try {
+        await persistRecord(staged.directory, next);
+        saved = true;
+      } catch {
+        // The item stays delivering on disk; no outcome is claimed.
+      }
+      if (saved) {
+        ownedDelivering.delete(key);
+        staged.lease.acknowledged = true;
+        if (staged.lease.settled === true) releaseLease(staged.lease);
+      }
+    }).catch(() => {});
+  }
+
+  /**
+   * Explicitly remove one uncertain queue item, or replace it in place with a
+   * fresh server-generated identity when `resend` is true. The old uncertain
+   * id and text are never reused for delivery. Returned shapes for step 7:
+   * discard `{ thread, message_id, state: 'discarded', duplicate: false }`;
+   * resend `{ thread, message_id, state: 'queued', duplicate: false, warning }`.
+   */
+  async function discard(input = {}) {
+    if (closed) throw serviceClosed();
+    requirePlainObject(input, "discard input");
+    for (const override of ["root", "agentDir", "execution_dir", "session_dir"]) {
+      if (Object.prototype.hasOwnProperty.call(input, override)) {
+        throw typedError("invalid-message", `discard does not accept a ${override} override`);
+      }
+    }
+    const { workspace_id, thread_id, id, resend = false } = input;
+    if (typeof workspace_id !== "string" || !WORKSPACE_ID_PATTERN.test(workspace_id)) {
+      throw invalidThread("workspace_id must be a workspace id");
+    }
+    if (!isUuid(thread_id)) throw invalidThread("thread_id must be a UUID");
+    if (!isUuid(id)) throw typedError("invalid-message", "message id must be a UUID");
+    if (typeof resend !== "boolean") throw typedError("invalid-message", "resend must be a boolean");
+    return withThreadLock(workspace_id, thread_id, async () => {
+      if (closed) throw serviceClosed();
+      const { record, directory } = await loadServiceRecord(workspace_id, thread_id);
+      if (record.history_only) throw typedError("history-only", "history-only threads cannot discard");
+      const index = record.queue.findIndex((item) => item.id === id);
+      if (index === -1) throw typedError("message-not-found", `queue message not found: ${id}`);
+      const item = record.queue[index];
+      if (item.state !== "uncertain") {
+        throw typedError("message-not-uncertain", `only uncertain messages can be discarded: ${item.state}`);
+      }
+      if (!resend) {
+        const queue = record.queue.filter((entry) => entry.id !== id);
+        const updated = await persistRecord(directory, { ...record, queue, updated_at: new Date().toISOString() });
+        ownedDelivering.delete(`${workspace_id}:${thread_id}`);
+        return { thread: updated, message_id: id, state: "discarded", duplicate: false };
+      }
+      const replacement = {
+        id: randomUUID(),
+        text: item.text,
+        queued_at: new Date().toISOString(),
+        state: "queued",
+        attempt: 0,
+      };
+      const queue = [...record.queue];
+      queue[index] = replacement;
+      const updated = await persistRecord(directory, { ...record, queue, updated_at: new Date().toISOString() });
+      ownedDelivering.delete(`${workspace_id}:${thread_id}`);
+      return {
+        thread: updated,
+        message_id: replacement.id,
+        state: "queued",
+        duplicate: false,
+        warning: "possible duplicate response",
+      };
     });
   }
 
@@ -1204,5 +1657,5 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
     return closePromise;
   }
 
-  return { create, list, history, subscribe, resume, close };
+  return { create, list, history, send, discard, subscribe, resume, close };
 }

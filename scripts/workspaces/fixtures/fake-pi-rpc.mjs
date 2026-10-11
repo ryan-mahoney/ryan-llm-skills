@@ -184,6 +184,9 @@ function respondTo(command) {
       respondSuccess(command.id, "abort");
       return;
     case "prompt": {
+      // Named hang mode: the command receipt is already logged, but no
+      // response is written so the caller observes a request timeout.
+      if (process.env.FAKE_PI_PROMPT_HANG === "1") return;
       for (const event of promptEvents) sendEvent(event);
       respondSuccess(command.id, "prompt", { disposition: process.env.FAKE_PI_DISPOSITION ?? "started" });
       return;
