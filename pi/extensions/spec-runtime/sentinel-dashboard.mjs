@@ -90,7 +90,7 @@ export function createSentinelDashboard({ agentDir, port = 0, publicHost, launch
   };
 }
 
-export function createDirectDashboard({ agentDir, port = 0, publicHost, discussion } = {}) {
+export function createDirectDashboard({ agentDir, port = 0, publicHost, storageRoot, discussion } = {}) {
   let owned = null, starting = null, address = null, stopping = null;
   // Close only this owned listener. The promise settles when the listener
   // reports close, and repeated stops of the same listener share it.
@@ -114,7 +114,7 @@ export function createDirectDashboard({ agentDir, port = 0, publicHost, discussi
       let resolve, reject;
       const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
       let server;
-      try { server = createDashboardServer({ agentDir, publicHost, discussion }); }
+      try { server = createDashboardServer({ agentDir, publicHost, storageRoot, discussion }); }
       catch (error) { reject(new Error(`Dashboard service failed: ${error.code ?? error.message}`)); return promise; }
       const record = { promise, reject };
       starting = record;

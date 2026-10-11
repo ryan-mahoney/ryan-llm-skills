@@ -471,14 +471,19 @@ process.on('SIGTERM', () => { handle.close().then(() => process.exit(0), error =
 }
 
 // Scenario E: the public factory composes the real discussion service, serves
-// live thread writes over the loopback dashboard and releases the claim after a
+// browsing and live thread writes from the explicit store, not a different
+// environment store with the same workspace id, and releases the claim after a
 // signal shutdown that kills the owned fake Pi (which ignores stdin close).
 async function scenarioDiscussionFactory(t) {
   const f = createFixture(t, 'discussion');
   const workspaceId = 'fixture';
   await setupStorage(f.storageRoot);
-  await createWorkspace(f.storageRoot, { id: workspaceId, name: 'Fixture' });
-  const host = f.spawnOwned(['--input-type=module', '-e', factoryScript(f)]);
+  const workspace = await createWorkspace(f.storageRoot, { id: workspaceId, name: 'Explicit fixture' });
+  const environmentRoot = join(f.base, 'environment-storage');
+  await setupStorage(environmentRoot);
+  const otherWorkspace = await createWorkspace(environmentRoot, { id: workspaceId, name: 'Environment fixture' });
+  const host = f.spawnOwned(['--input-type=module', '-e', factoryScript(f)],
+    f.environment({ ADJACENT_STORAGE_ROOT: environmentRoot }));
   const receipt = await waitForReady(host);
   assert.equal(receipt.type, 'ready');
   assert.equal(receipt.state, 'observing');
@@ -489,6 +494,13 @@ async function scenarioDiscussionFactory(t) {
   assert.equal(snapshot.state, 'observing');
 
   const port = Number(new URL(receipt.dashboard_url).port);
+  const catalog = await requestOnce({ port, path: '/api/workspaces' });
+  assert.equal(catalog.status, 200, catalog.text);
+  assert.equal(catalog.body.storage.root, f.storageRoot, 'workspace browsing uses the explicit factory root');
+  assert.deepEqual(catalog.body.valid.map(entry => entry.kit.name), ['Explicit fixture']);
+  const material = await requestOnce({ port, path: `/api/workspace-file?${new URLSearchParams({ id: workspaceId, file: 'kit.yaml' })}` });
+  assert.equal(material.status, 200, material.text);
+  assert.equal(material.text, readFileSync(workspace.kit, 'utf8'), 'workspace file browsing uses the explicit store too');
   const state = await requestOnce({ port, path: '/api/state' });
   assert.equal(state.status, 200);
   assert.ok(state.body.observers.some(observer => observer.state === 'observing'), 'the dashboard serves the observing snapshot');
@@ -505,6 +517,11 @@ async function scenarioDiscussionFactory(t) {
   assert.equal(createdResponse.status, 200, createdResponse.text);
   const created = createdResponse.body;
   assert.match(created.thread_id, /^[0-9a-f-]{36}$/);
+  const threadFile = join(workspace.directory, 'threads', `${created.thread_id}.json`);
+  assert.equal(JSON.parse(readFileSync(threadFile, 'utf8')).execution_dir, workspace.directory,
+    'discussion persistence and execution use the browsed explicit workspace');
+  assert.equal(existsSync(join(otherWorkspace.directory, 'threads', `${created.thread_id}.json`)), false,
+    'the same-id environment workspace receives no discussion write');
 
   const text = `concrete discussion prompt ${randomUUID()}`;
   const sent = await write('/api/thread/send', { workspace_id: workspaceId, thread_id: created.thread_id, id: randomUUID(), text });
@@ -603,7 +620,7 @@ test('scenario D: the public factory composes real resources and one shared clos
 
 test('scenario E and scenario F discussion host journeys', { concurrency: 2 }, async t => {
   await Promise.all([
-    t.test('scenario E: the public factory serves live discussions and shuts down owned children', t => scenarioDiscussionFactory(t)),
+    t.test('scenario E: the public factory browses its explicit store, serves live discussions and shuts down owned children', t => scenarioDiscussionFactory(t)),
     t.test('scenario F: unusable ADJACENT_STORAGE_ROOT degrades an ordinary host to observation', t => scenarioUnavailableDiscussions(t)),
   ]);
 });

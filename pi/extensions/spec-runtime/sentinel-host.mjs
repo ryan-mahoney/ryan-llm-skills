@@ -68,6 +68,7 @@ async function composeHost(options, signal) {
   let dashboard = null;
   let observer = null;
   let discussion = null;
+  let configuredStorageRoot = storageRoot;
   let closing = null;
   let abortListener = null;
 
@@ -124,7 +125,7 @@ async function composeHost(options, signal) {
     // Discussions degrade to observation-only when storage is unusable;
     // cancellation must stay a cancellation.
     try {
-      const configuredStorageRoot = storageRoot ?? resolveStorageRoot(process.env, homedir());
+      configuredStorageRoot ??= resolveStorageRoot(process.env, homedir());
       const status = await storageStatus(configuredStorageRoot);
       if (signal?.aborted || closing) throw new StartupCancelledError();
       if (status.status !== 'ok') {
@@ -140,7 +141,7 @@ async function composeHost(options, signal) {
     // Cleanup may already have run for the abort above; nothing else may be
     // created after it did.
     if (signal?.aborted || closing) throw new StartupCancelledError();
-    dashboard = createDirectDashboard({ agentDir: canonicalAgentDir, port, publicHost: normalizedPublicHost, discussion });
+    dashboard = createDirectDashboard({ agentDir: canonicalAgentDir, port, publicHost: normalizedPublicHost, storageRoot: configuredStorageRoot, discussion });
     observer = createSentinelObserver({ agentDir: canonicalAgentDir, scope, headless: true, isolateReader: true, dashboard });
     const lifecycle = await observer.lifecycle({ action: 'observe', root: canonicalRoot });
     if (signal?.aborted) {
