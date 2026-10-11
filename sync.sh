@@ -4,6 +4,14 @@ set -euo pipefail
 AGENTS_DIR="$HOME/.agents"
 SYNC_AUGMENT="${SYNC_AUGMENT:-0}"
 
+# Workspace sync tooling. Machine configuration and Unison state stay outside Git.
+mkdir -p "$HOME/.local/bin"
+if [ -e "$HOME/.local/bin/adjacent-sync" ] && [ ! -L "$HOME/.local/bin/adjacent-sync" ]; then
+  echo "Cannot install adjacent-sync over an existing file." >&2
+  exit 1
+fi
+ln -sfn "$AGENTS_DIR/scripts/adjacent-sync/cli.mjs" "$HOME/.local/bin/adjacent-sync"
+
 sync_dir_symlinks() {
   local source_dir="$1"
   local target_dir="$2"

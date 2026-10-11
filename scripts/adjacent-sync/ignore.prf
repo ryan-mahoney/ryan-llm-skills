@@ -1,0 +1,11 @@
+# Host-owned state and machine-local files never cross machines.
+ignore = Name .sentinel
+ignore = Name .adjacent
+ignore = Name .DS_Store
+ignore = Name *.lock
+ignore = Name *.tmp
+ignore = Name .workspace-publish-*
+ignore = Name .syncthing.*
+ignore = Name *.sqlite*
+ignore = Name runtime
+ignore = Regex projects/[^/]+/(threads|sessions|assignments)

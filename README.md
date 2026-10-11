@@ -315,6 +315,9 @@ Run `sync.sh` after changing instructions, rules, or skills. It copies the harne
 files, refreshes rule links, syncs skills and adapters, and removes links left by renamed skills.
 It only updates harness directories that already exist.
 
+The same command links the optional `adjacent-sync` tool into `~/.local/bin`. See the
+[adjacent sync guide](scripts/adjacent-sync/README.md) to configure and run it between machines.
+
 ```bash
 ~/.agents/sync.sh
 ```
