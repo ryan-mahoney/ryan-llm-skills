@@ -29,6 +29,7 @@ let payload=null,records=[],selected=null,filter='active',imported=false,fetchin
 let liveAnchor=null;
 let mode='packages',catalog=null,workspace=null,workspaceError=null,workspaceDetailError=null,workspaceUnavailable=null,selectedWorkspace=null;
 let catalogRequest=0,workspaceDetailRequest=0,listingRequest=0,fileRequest=0;
+let catalogPending=null,workspaceDetailPending=null;
 const str=v=>v==null?'':typeof v==='string'?v:JSON.stringify(v);
 const esc=v=>str(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const base=p=>str(p).replace(/\/$/,'').split('/').pop()||'Unknown';
@@ -187,24 +188,44 @@ async function openPackageFile(name,source='package'){
 }
 const workspaceFilesUrl=(id,cursor=0)=>'/api/workspace-files?'+new URLSearchParams({id,cursor:String(cursor)});
 const workspaceFileUrl=(id,name,download=false)=>'/api/workspace-file?'+new URLSearchParams({id,file:name,...(download?{download:'1'}:{})});
-function renderWorkspaceList(){
+function preserveWorkspaceFocus(container,update){
+ const active=document.activeElement;
+ const owned=container.contains?.(active);
+ const id=owned?active.id:null,data=owned?{...active.dataset}:null;
+ const scroll=container.scrollTop;
+ update();container.scrollTop=scroll;
+ if(!owned||active.isConnected)return;
+ const replacement=id?$(id):Object.keys(data).length?[...container.querySelectorAll('button')].find(b=>Object.entries(data).every(([key,value])=>b.dataset[key]===value)):null;
+ replacement?.focus({preventScroll:true});
+ if(!replacement&&data.workspaceDetailRetry!==undefined)[...$('run-list').querySelectorAll('button')].find(b=>b.dataset.workspace===selectedWorkspace)?.focus({preventScroll:true});
+}
+function renderWorkspaceList(){preserveWorkspaceFocus($('run-list'),updateWorkspaceList);}
+function renderWorkspaceDetail(){preserveWorkspaceFocus($('observation-detail'),updateWorkspaceDetail);}
+function workspaceDiagnostics(){
+ const storage=catalog?.storage,status=storage?.status;
+ const errors=[...(storage?.errors||[]),...(catalog?.errors||[])];
+ if(!status||status==='ok'&&!errors.length)return '';
+ return `<div class="empty warn" role="status"><h3>${status&&status!=='ok'?'Workspace storage unavailable':'Workspace catalog incomplete'}</h3><p class="small">Configured root: <span class="mono">${esc(storage?.root||'unknown')}</span></p><p class="small">Storage status: ${esc(status||'unknown')}</p>${errors.map(e=>`<p class="small mono">${esc(e)}</p>`).join('')}<button data-workspace-retry>Retry</button></div>`;
+}
+function updateWorkspaceList(){
  const query=$('repo-search').value.trim().toLowerCase();
  const matches=w=>!query||[w.id,w.name,w.directory].some(v=>str(v).toLowerCase().includes(query));
  const valid=(catalog?.valid||[]).filter(matches),invalid=(catalog?.invalid||[]).filter(matches);
  $('run-count').textContent=catalog?`${valid.length} workspace${valid.length===1?'':'s'}`:'—';
  $('filter-note').textContent=workspaceError?workspaceError:(catalog?'':'Loading workspaces…');
- let html='';
+ let html=workspaceDiagnostics();
  if(workspaceError)html+=`<div class="empty"><h3>Workspaces unavailable</h3><p>${esc(workspaceError)}</p><button data-workspace-retry>Retry</button></div>`;
  for(const w of valid)html+=`<button class="run-row" data-workspace="${esc(w.id)}" aria-pressed="${w.id===selectedWorkspace}"><div class="flex justify-between gap-3"><span class="run-title">${esc(w.name||w.id)}</span><span class="pill muted">Workspace</span></div><p class="summary mono">${esc(w.directory)}</p>${(w.attention||[]).map(a=>`<p class="small warn">${esc(a)}</p>`).join('')}</button>`;
  for(const bad of invalid)html+=`<div class="info-row"><p><strong>Invalid workspace</strong></p><small class="mono">${esc(bad.directory)}</small>${(bad.errors||[]).map(e=>`<small class="warn">${esc(e)}</small>`).join('')}</div>`;
  $('run-list').innerHTML=html||(catalog?(query?'<div class="empty"><h3>No matching workspaces</h3><p>Change the search or clear it to see every workspace.</p></div>':'<div class="empty"><h3>No workspaces</h3><p>Workspaces appear after an operator creates them in the store; then refresh.</p></div>'):'<div class="empty"><h3>Loading workspaces…</h3></div>');
 }
-function renderWorkspaceDetail(){
+function updateWorkspaceDetail(){
  const storageStatus=catalog?.storage?.status;
- if(storageStatus==='missing_root'||storageStatus==='missing_projects'){
+ if(storageStatus&&storageStatus!=='ok'&&!selectedWorkspace){
   if($('package-panel'))$('package-panel').hidden=true;
-  const storageHeading=storageStatus==='missing_projects'?'Workspace storage needs setup':'Workspace storage is missing';
-  $('observation-detail').innerHTML=`<div class="empty" role="status" aria-live="polite"><h2>${esc(storageHeading)}</h2><p>Workspace setup is required; an operator creates the storage root, then refresh.</p><p class="small muted">Configured root: <span class="mono">${esc(catalog?.storage?.root||'unknown')}</span></p><p class="small muted">Storage status: ${esc(storageStatus)}</p></div>`;
+  const missing=storageStatus==='missing_root'||storageStatus==='missing_projects';
+  const storageHeading=storageStatus==='missing_projects'?'Workspace storage needs setup':missing?'Workspace storage is missing':'Workspace storage unavailable';
+  $('observation-detail').innerHTML=`<div class="empty" role="status" aria-live="polite"><h2>${esc(storageHeading)}</h2><p>${missing?'Workspace setup is required; an operator creates the storage root, then refresh.':'Repair the configured storage boundary, then retry.'}</p><p class="small muted">Configured root: <span class="mono">${esc(catalog?.storage?.root||'unknown')}</span></p><p class="small muted">Storage status: ${esc(storageStatus)}</p></div>`;
   return;
  }
  if(!selectedWorkspace){if($('package-panel'))$('package-panel').hidden=true;$('observation-detail').innerHTML='<div class="empty"><h2>Select a workspace</h2><p>Choose a workspace to inspect its repositories, context, briefs, notes and artifacts.</p></div>';return;}
@@ -222,10 +243,13 @@ function renderWorkspaceDetail(){
  if($('package-files')&&listingOwner!==fileOwnerKey('workspace',{id:selectedWorkspace}))$('package-files').innerHTML='<p class="small muted">Read-only listing with private components excluded. Select a file to preview it below.</p><p><button data-refresh-workspace-files>Refresh files</button></p>';
 }
 async function loadWorkspaces(){
+ if(catalogPending===catalogRequest)return;
  const request=++catalogRequest;
+ catalogPending=request;
  $('filter-note').textContent=catalog?'Refreshing workspaces…':'Loading workspaces…';
  let value=null,failed=false;
- try{const response=await fetch('/api/workspaces');if(!response.ok)throw Error();value=await response.json();}catch{failed=true;}
+ try{const response=await fetch('/api/workspaces',{signal:AbortSignal.timeout(60000)});if(!response.ok)throw Error();value=await response.json();}catch{failed=true;}
+ if(catalogPending===request)catalogPending=null;
  if(request!==catalogRequest||mode!=='workspaces')return;
  if(failed){workspaceError='Could not load workspaces.';renderWorkspaceList();renderWorkspaceDetail();return;}
  catalog=value;workspaceError=null;
@@ -242,13 +266,14 @@ async function loadWorkspaces(){
 }
 function selectWorkspace(id){
  if(mode!=='workspaces'||!id)return;
+ if(workspaceDetailPending?.id===id&&workspaceDetailPending.request===workspaceDetailRequest)return;
  const changed=id!==selectedWorkspace;selectedWorkspace=id;workspaceDetailError=null;workspaceUnavailable=null;
  if(changed){workspace=null;listingOwner=null;listingLoaded=false;fileOwner=null;fileSelection=null;fileContent=null;++listingRequest;++fileRequest;if($('file-viewer'))$('file-viewer').innerHTML='';if($('package-files'))$('package-files').textContent='';}
- const request=++workspaceDetailRequest;renderWorkspaceList();renderWorkspaceDetail();
- fetch('/api/workspace?'+new URLSearchParams({id})).then(response=>{if(!response.ok)throw Error();return response.json();}).then(value=>{
+ const request=++workspaceDetailRequest;workspaceDetailPending={id,request};renderWorkspaceList();renderWorkspaceDetail();
+ fetch('/api/workspace?'+new URLSearchParams({id}),{signal:AbortSignal.timeout(60000)}).then(response=>{if(!response.ok)throw Error();return response.json();}).then(value=>{
   if(request!==workspaceDetailRequest||mode!=='workspaces'||selectedWorkspace!==id)return;
   workspace=value;workspaceDetailError=null;workspaceUnavailable=null;renderWorkspaceList();renderWorkspaceDetail();
- }).catch(()=>{if(request!==workspaceDetailRequest||mode!=='workspaces'||selectedWorkspace!==id)return;workspace=null;workspaceDetailError='Could not load workspace.';renderWorkspaceList();renderWorkspaceDetail();});
+ }).catch(()=>{if(request!==workspaceDetailRequest||mode!=='workspaces'||selectedWorkspace!==id)return;workspace=null;workspaceDetailError='Could not load workspace.';renderWorkspaceList();renderWorkspaceDetail();}).finally(()=>{if(workspaceDetailPending?.request===request)workspaceDetailPending=null;});
 }
 async function loadWorkspaceFiles(cursor=0,force=false){
  if(mode!=='workspaces'||!selectedWorkspace||!workspace)return;
@@ -257,7 +282,7 @@ async function loadWorkspaceFiles(cursor=0,force=false){
 async function openWorkspaceFile(name){return openPackageFile(name,'workspace');}
 
 function applyModeChrome(){const workspaceMode=mode==='workspaces';$('sidebar-heading').textContent=workspaceMode?'Workspaces':'Repositories & packages';$('search-label').textContent=workspaceMode?'Find workspace':'Find repository or package';$('repo-search').placeholder=workspaceMode?'Search workspace names and paths…':'Search names, paths, activity…';$('package-filters').classList.toggle('hidden',workspaceMode);$('package-panel-heading').textContent=workspaceMode?'Workspace files':'Package files';}
-function render(){const listScroll=$('run-list').scrollTop,detailScroll=$('run-detail').scrollTop;if(mode==='workspaces'){const focus=document.activeElement?.dataset?.workspace;renderWorkspaceList();renderWorkspaceDetail();$('run-list').scrollTop=listScroll;$('run-detail').scrollTop=detailScroll;if(focus){[...$('run-list').querySelectorAll('button')].find(b=>b.dataset.workspace===focus)?.focus({preventScroll:true});}return;}const focus=document.activeElement?.dataset?.key,previous=records.find(r=>r.key===selected);collect();if(previous?.is_current_assignment===true){const current=records.find(r=>r.repository===previous.repository&&r.package===previous.package&&r.is_current_assignment===true);if(current)selected=current.key;}const visible=visibleRecords();if(!selected||!records.some(r=>r.key===selected))selected=visible[0]?.key||null;status();renderList();renderDetail();$('run-list').scrollTop=listScroll;$('run-detail').scrollTop=detailScroll;if(focus){[...$('run-list').querySelectorAll('button')].find(b=>b.dataset.key===focus)?.focus({preventScroll:true});}}
+function render(){const listScroll=$('run-list').scrollTop,detailScroll=$('run-detail').scrollTop;if(mode==='workspaces'){renderWorkspaceList();renderWorkspaceDetail();$('run-list').scrollTop=listScroll;$('run-detail').scrollTop=detailScroll;return;}const focus=document.activeElement?.dataset?.key,previous=records.find(r=>r.key===selected);collect();if(previous?.is_current_assignment===true){const current=records.find(r=>r.repository===previous.repository&&r.package===previous.package&&r.is_current_assignment===true);if(current)selected=current.key;}const visible=visibleRecords();if(!selected||!records.some(r=>r.key===selected))selected=visible[0]?.key||null;status();renderList();renderDetail();$('run-list').scrollTop=listScroll;$('run-detail').scrollTop=detailScroll;if(focus){[...$('run-list').querySelectorAll('button')].find(b=>b.dataset.key===focus)?.focus({preventScroll:true});}}
 async function refresh(manual=false){if(fetching)return;if(manual)imported=false;if(imported)return;if(location.protocol==='file:'){error='Live state requires the local dashboard server.';status();$('run-list').innerHTML='<div class="empty">Import a published JSON snapshot to inspect it offline.</div>';$('observation-detail').innerHTML='<div class="empty"><h2>Open a snapshot</h2><p>Import a sentinel observer JSON file, or open this dashboard through its local server for live observation.</p></div>';return;}fetching=true;const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),10000);$('refresh-button').setAttribute('aria-busy','true');try{const response=await fetch('/api/state',{cache:'no-store',signal:controller.signal});if(!response.ok)throw Error('The local server could not provide workspace state.');payload=normalize(await response.json());const generated=Date.parse(payload.generated_at);liveAnchor=Number.isFinite(generated)?{at:generated,perf:performance.now()}:null;error=null;render();}catch(e){error=e.name==='AbortError'?'Workspace refresh timed out.':'Could not refresh workspace state.';if(payload)render();else status();if(!payload){$('run-list').innerHTML='<div class="empty">Workspace state unavailable</div>';$('observation-detail').innerHTML='<div class="empty"><h2>Workspace state unavailable</h2><p>Check the local dashboard server, then refresh state. You can also import a published snapshot.</p></div>';}}finally{clearTimeout(timeout);fetching=false;$('refresh-button').removeAttribute('aria-busy');}}
 $('run-list').addEventListener('click',e=>{const b=e.target.closest('[data-key]');if(!b)return;selected=b.dataset.key;renderList();renderDetail();$('run-detail').scrollTop=0;[...$('run-list').querySelectorAll('button')].find(x=>x.dataset.key===selected)?.focus({preventScroll:true});});$('run-detail').addEventListener('click',e=>{if(e.target.closest('#mark-complete'))openCompletion();const b=e.target.closest('[data-package-file]');if(b)openPackageFile(b.dataset.packageFile);const refreshFiles=e.target.closest('[data-refresh-files]');if(refreshFiles){const r=records.find(x=>x.key===selected);if(r)loadPackageFiles(r,0,true);}const more=e.target.closest('[data-more-files]');if(more){const r=records.find(x=>x.key===selected);if(r)loadPackageFiles(r,Number(more.dataset.moreFiles));}});document.querySelectorAll('[data-mode]').forEach(b=>b.addEventListener('click',()=>{if(mode===b.dataset.mode)return;mode=b.dataset.mode;selected=null;selectedWorkspace=null;workspace=null;workspaceError=null;workspaceDetailError=null;workspaceUnavailable=null;listingOwner=null;listingLoaded=false;fileOwner=null;fileSelection=null;fileContent=null;++catalogRequest;++workspaceDetailRequest;++listingRequest;++fileRequest;if($('file-viewer'))$('file-viewer').innerHTML='';if($('package-files'))$('package-files').textContent='';if($('package-panel'))$('package-panel').hidden=true;applyModeChrome();document.querySelectorAll('[data-mode]').forEach(x=>x.setAttribute('aria-pressed',String(x.dataset.mode===mode)));render();if(mode==='workspaces')loadWorkspaces();$('run-detail').scrollTop=0;}));$('run-list').addEventListener('click',e=>{if(mode!=='workspaces')return;const b=e.target.closest('[data-workspace]');if(b)selectWorkspace(b.dataset.workspace);else if(e.target.closest('[data-workspace-retry]'))loadWorkspaces();});$('run-detail').addEventListener('click',e=>{if(mode!=='workspaces')return;const b=e.target.closest('[data-workspace-file]');if(b)openWorkspaceFile(b.dataset.workspaceFile);else if(e.target.closest('[data-refresh-workspace-files]'))loadWorkspaceFiles(0,true);else if(e.target.closest('[data-workspace-detail-retry]'))selectWorkspace(selectedWorkspace);else{const more=e.target.closest('[data-more-workspace-files]');if(more)loadWorkspaceFiles(Number(more.dataset.moreWorkspaceFiles));}});$('repo-search').addEventListener('input',render);document.querySelectorAll('[data-filter]').forEach(b=>b.addEventListener('click',()=>{filter=b.dataset.filter;selected=null;document.querySelectorAll('[data-filter]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));render();$('run-detail').scrollTop=0;}));$('refresh-button').addEventListener('click',()=>{refresh(true);if(mode==='workspaces')loadWorkspaces();});$('import-button').addEventListener('click',()=>$('import-file').click());$('import-file').addEventListener('change',async e=>{const file=e.target.files[0];if(!file)return;try{if(file.size>12*1024*1024)throw Error('File too large.');payload=normalize(JSON.parse(await file.text()));imported=true;liveAnchor=null;error=null;render();}catch(e){error='Could not import snapshot. Choose a valid sentinel JSON file smaller than 12 MB.';if(payload)render();else status();}finally{$('import-file').value='';}});refresh();setInterval(()=>{if(imported){if(payload)render();return;}if(mode==='workspaces'){loadWorkspaces();return;}refresh();},5000);
 $('completion-form').addEventListener('submit',submitCompletion);

@@ -197,6 +197,70 @@ test('partial workspace coverage: listing failures cannot overwrite a different 
   assert.equal(vm.runInContext("$('package-files').textContent", packageContext), 'Beta package listing');
 });
 
+test('partial workspace coverage: storage failures and scan diagnostics differ from healthy empty', () => {
+  const context = dashboardContext();
+  vm.runInContext("mode='workspaces'", context);
+  for (const status of ['invalid_root', 'invalid_projects', 'unreadable']) {
+    context.input = { storage: { status, root: '/store/<root>', errors: ['<denied>'] }, valid: [], invalid: [], errors: ['scan <failed>'] };
+    vm.runInContext('catalog=input;renderWorkspaceList();renderWorkspaceDetail()', context);
+    const list = vm.runInContext("$('run-list').innerHTML", context);
+    assert.match(list, /Workspace storage unavailable/);
+    assert.match(list, /&lt;root&gt;/);
+    assert.match(list, /&lt;denied&gt;/);
+    assert.match(list, /scan &lt;failed&gt;/);
+    assert.match(list, /data-workspace-retry/);
+    assert.doesNotMatch(list, /No workspaces/);
+    assert.match(vm.runInContext("$('observation-detail').innerHTML", context), /Repair the configured storage boundary/);
+  }
+  context.input = { storage: { status: 'ok', root: '/store', errors: [] }, valid: [{ id: 'alpha', directory: '/store/alpha' }], invalid: [], errors: ['scan <failed>'] };
+  vm.runInContext('catalog=input;renderWorkspaceList()', context);
+  assert.match(vm.runInContext("$('run-list').innerHTML", context), /Workspace catalog incomplete/);
+  assert.match(vm.runInContext("$('run-list').innerHTML", context), /data-workspace="alpha"/);
+  vm.runInContext('catalog.valid=[];catalog.errors=[];renderWorkspaceList()', context);
+  assert.match(vm.runInContext("$('run-list').innerHTML", context), /No workspaces/);
+  assert.doesNotMatch(vm.runInContext("$('run-list').innerHTML", context), /unavailable|incomplete/);
+});
+
+test('partial workspace coverage: multiple polling ticks coalesce slow catalog and same-selection detail', async () => {
+  let resolveCatalog, resolveDetail, catalogs = 0, details = 0;
+  const signals = [];
+  const context = dashboardContext({ fetch: (url, options) => {
+    signals.push(options.signal);
+    if (url === '/api/workspaces') {
+      catalogs++;
+      return new Promise(resolve => { resolveCatalog = resolve; });
+    }
+    if (url.startsWith('/api/workspace?')) {
+      details++;
+      return new Promise(resolve => { resolveDetail = resolve; });
+    }
+    throw Error('unexpected request');
+  } });
+  vm.runInContext("mode='workspaces';selectedWorkspace='alpha'", context);
+  const pending = vm.runInContext('loadWorkspaces()', context);
+  for (let tick = 0; tick < 3; tick++) await vm.runInContext('loadWorkspaces()', context);
+  assert.equal(catalogs, 1);
+  const catalogResponse = { ok: true, json: async () => ({ storage: { status: 'ok' }, valid: [{ id: 'alpha' }], invalid: [] }) };
+  resolveCatalog(catalogResponse);
+  await pending;
+  assert.equal(details, 1);
+  for (let tick = 0; tick < 3; tick++) {
+    const poll = vm.runInContext('loadWorkspaces()', context);
+    resolveCatalog(catalogResponse);
+    await poll;
+  }
+  assert.equal(details, 1);
+  resolveDetail({ ok: true, json: async () => ({ id: 'alpha', name: 'Settled slow workspace' }) });
+  await flush();
+  assert.match(vm.runInContext("$('observation-detail').innerHTML", context), /Settled slow workspace/);
+  assert.ok(signals.every(signal => signal instanceof AbortSignal));
+  vm.runInContext('selectWorkspace(selectedWorkspace)', context);
+  assert.equal(details, 2, 'refresh resumes after settlement');
+  resolveDetail({ ok: false });
+  await flush();
+  assert.match(vm.runInContext("$('observation-detail').innerHTML", context), /Could not load workspace/);
+});
+
 test('partial workspace coverage: detail failure announces an error and offers a selection retry', async () => {
   let fail = true;
   const context = dashboardContext({ fetch: async url => {
@@ -632,7 +696,7 @@ function dashboardContext({ fetch, wallNow = Date.now, perfNow = () => 0, locati
     static now() { return wallNow(); }
   }
   const context = vm.createContext({ document, Date: TestDate, Map, Set, JSON, performance: { now: perfNow }, fetch,
-    AbortController, setTimeout, clearTimeout, location, URL, URLSearchParams });
+    AbortController, AbortSignal, setTimeout, clearTimeout, location, URL, URLSearchParams });
   vm.runInContext(inlineScript().slice(0, inlineScript().indexOf("$('run-list').addEventListener")), context);
   return context;
 }
