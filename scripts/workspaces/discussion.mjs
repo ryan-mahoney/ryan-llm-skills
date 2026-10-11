@@ -2298,6 +2298,7 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
         const queue = record.queue.filter((entry) => entry.id !== id);
         const updated = await persistRecord(directory, { ...record, queue, updated_at: new Date().toISOString() });
         ownedDelivering.delete(`${workspace_id}:${thread_id}`);
+        requestPump();
         return { thread: updated, message_id: id, state: "discarded", duplicate: false };
       }
       const replacement = {
@@ -2311,6 +2312,7 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
       queue[index] = replacement;
       const updated = await persistRecord(directory, { ...record, queue, updated_at: new Date().toISOString() });
       ownedDelivering.delete(`${workspace_id}:${thread_id}`);
+      requestPump();
       return {
         thread: updated,
         message_id: replacement.id,

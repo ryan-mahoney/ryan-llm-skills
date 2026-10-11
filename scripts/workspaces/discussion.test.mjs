@@ -2244,6 +2244,59 @@ function fixtureHarness({ env = {}, ipc = true, onCommand = null, envFor = null 
   return { calls, children, byThread, receipts, spawnImpl, control };
 }
 
+// node --test --test-name-pattern="thread failure recovery wakes" scripts/workspaces/discussion.test.mjs
+for (const resend of [false, true]) {
+  test(`thread failure recovery wakes ${resend ? "explicit resend" : "following work after discard"} after settled acknowledgement timeout`, async (t) => {
+    const root = await tempRoot(t);
+    const storageRoot = join(root, "storage");
+    await setupStorage(storageRoot);
+    await setupWorkspace(storageRoot, "alpha");
+    const clock = manualClock();
+    const harness = fixtureHarness({ env: { FAKE_PI_PROMPT_HANG: "1" } });
+    const service = createDiscussionService({
+      root: storageRoot,
+      agentDir: join(root, "agent"),
+      spawn: harness.spawnImpl,
+      clock,
+    });
+    try {
+      const thread = await service.create({ workspace_id: "alpha", title: "Recovery" });
+      const failedId = randomUUID();
+      const sending = service.send({ workspace_id: "alpha", thread_id: thread.thread_id, id: failedId, text: "original" });
+      sending.catch(() => {});
+      await waitFor(() => harness.receipts.some((entry) => entry.type === "prompt") && clock.has(30000));
+      const followingId = randomUUID();
+      if (!resend) {
+        const queued = await service.send({ workspace_id: "alpha", thread_id: thread.thread_id, id: followingId, text: "following" });
+        assert.equal(queued.state, "queued");
+      }
+      await harness.control(thread.thread_id, { event: { type: "agent_settled", aborted: false } });
+      clock.fire(30000);
+      await assert.rejects(sending, { code: "delivery-uncertain" });
+      // Let the failed pump finish its catalog scan and stop at the uncertain
+      // head; recovery must wake an idle pump, not race its previous pass.
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+      const failed = await readThread(storageRoot, "alpha", thread.thread_id);
+      assert.equal(failed.queue[0].state, "uncertain");
+      assert.equal(harness.receipts.filter((entry) => entry.type === "prompt").length, 1);
+
+      const recovered = await service.discard({ workspace_id: "alpha", thread_id: thread.thread_id, id: failedId, resend });
+      const expectedId = resend ? recovered.message_id : followingId;
+      assert.notEqual(expectedId, failedId);
+      await waitFor(() => harness.receipts.filter((entry) => entry.type === "prompt").length === 2);
+      const prompts = harness.receipts.filter((entry) => entry.type === "prompt");
+      assert.deepEqual(prompts.map((entry) => entry.id), [failedId, expectedId]);
+      assert.equal(prompts[1].message, resend ? "original" : "following");
+      const progressed = await readThread(storageRoot, "alpha", thread.thread_id);
+      assert.equal(progressed.queue[0].id, expectedId);
+      assert.equal(progressed.queue[0].state, "delivering");
+      assert.equal(progressed.queue[0].attempt, 1);
+    } finally {
+      await service.close();
+    }
+  });
+}
+
 test("thread global scheduler FIFO projection", async (t) => {
   const root = await tempRoot(t);
   const storageRoot = join(root, "storage");
@@ -3238,9 +3291,12 @@ test("thread global scheduler stale generation cannot release new lease", async 
     await waitFor(async () => (await readThread(storageRoot, "alpha", threadA.thread_id)).process === undefined);
 
     const a2Id = randomUUID();
-    assert.equal(
-      (await service.send({ workspace_id: "alpha", thread_id: threadA.thread_id, id: a2Id, text: "A2" })).state,
-      "accepted",
+    const a2Send = await service.send({ workspace_id: "alpha", thread_id: threadA.thread_id, id: a2Id, text: "A2" });
+    assert.ok(a2Send.state === "queued" || a2Send.state === "accepted");
+    // Exit publishes process removal before releasing the response lease.
+    // Observe acceptance rather than requiring send to win that race.
+    await waitFor(async () =>
+      (await readThread(storageRoot, "alpha", threadA.thread_id)).accepted_message_ids.includes(a2Id),
     );
     const newChild = harness.byThread.get(threadA.thread_id);
     assert.notEqual(newChild, oldChild);
