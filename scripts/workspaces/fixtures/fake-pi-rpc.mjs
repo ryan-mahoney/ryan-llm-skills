@@ -57,6 +57,23 @@ const commandLog = process.env.FAKE_PI_COMMAND_LOG;
 const uiRequests = new Map();
 const deferred = new Map();
 let getStateCount = 0;
+const stateOverrides = {};
+
+// Optional IPC control seam used only by focused tests: {event} emits one raw
+// event, {state} overrides subsequent get_state fields, and each control is
+// acknowledged after it has been processed.
+process.on("message", (message) => {
+  if (!message || typeof message !== "object") return;
+  if (message.event !== undefined) {
+    respond(message.event);
+    process.send?.({ control: "event", ok: true });
+    return;
+  }
+  if (message.state !== undefined) {
+    stateOverrides.get_state = message.state;
+    process.send?.({ control: "state", ok: true });
+  }
+});
 
 if (process.env.FAKE_PI_HANG === "1") setInterval(() => {}, 1 << 30);
 
@@ -162,6 +179,7 @@ function respondTo(command) {
         sessionId: currentId,
         sessionName: "discussion",
         pendingMessageCount: 0,
+        ...(stateOverrides.get_state ?? {}),
       });
       return;
     }
@@ -181,6 +199,7 @@ function respondTo(command) {
       return;
     case "abort":
       if (process.env.FAKE_PI_ABORT_HANG === "1") return;
+      stateOverrides.get_state = { isStreaming: false, isCompacting: false, pendingMessageCount: 0 };
       respondSuccess(command.id, "abort");
       return;
     case "prompt": {

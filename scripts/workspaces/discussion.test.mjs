@@ -131,6 +131,7 @@ function piHarness({ psOutput = "  1 launchd\n", psCode = 0, env = {} } = {}) {
 
 function manualClock() {
   let next = 1;
+  let now = 0;
   const timers = new Map();
   return {
     setTimeout(callback, ms) {
@@ -153,6 +154,15 @@ function manualClock() {
         if (timer.ms === ms) return true;
       }
       return false;
+    },
+    now() {
+      return now;
+    },
+    setNow(value) {
+      now = value;
+    },
+    advance(ms) {
+      now += ms;
     },
     get pending() {
       return [...timers.values()].map((timer) => timer.ms);
@@ -1171,7 +1181,7 @@ test("thread identity close during startup closes only the owned handle", async 
 });
 
 test(
-  "thread identity unconfirmed ready shutdown retains process and attention",
+  "thread stop thread identity unconfirmed ready shutdown retains process and attention",
   { timeout: 15000 },
   async (t) => {
     const root = await tempRoot(t);
@@ -1393,7 +1403,7 @@ test("thread durable queue concurrent same-ID enqueues once and preserves origin
     assert.equal(first.state, "accepted");
     assert.equal(second.duplicate, true);
     assert.equal(second.message_id, id);
-    assert.ok(second.state === "delivering" || second.state === "accepted");
+    assert.ok(second.state === "delivering" || second.state === "accepted" || second.state === "queued");
 
     const persisted = await readThread(storageRoot, "alpha", thread.thread_id);
     assert.deepEqual(persisted.queue, []);
@@ -1479,7 +1489,7 @@ test("thread durable queue delivering publication precedes prompt write and acce
     assert.equal(firstResult.state, "accepted");
     assert.equal(secondResult.duplicate, true);
     assert.equal(secondResult.message_id, id);
-    assert.ok(secondResult.state === "delivering" || secondResult.state === "accepted");
+    assert.ok(secondResult.state === "delivering" || secondResult.state === "accepted" || secondResult.state === "queued");
 
     assert.ok(observed, "the prompt write must be observed");
     assert.equal(observed.queue.length, 1);
@@ -2087,10 +2097,23 @@ test("thread durable queue settled before failed acknowledgement keeps uncertain
     assert.equal(failed.queue[0].attempt, 1);
 
     const nextId = randomUUID();
-    await assert.rejects(
-      service.send({ workspace_id: "alpha", thread_id: secondThread.thread_id, id: nextId, text: "next" }),
-      { code: "delivery-uncertain" },
-    );
+    try {
+      const second = await service.send({
+        workspace_id: "alpha",
+        thread_id: secondThread.thread_id,
+        id: nextId,
+        text: "next",
+      });
+      assert.equal(second.state, "queued");
+    } catch (error) {
+      assert.equal(error.code, "delivery-uncertain");
+    }
+    await waitFor(async () => {
+      const record = await readThread(storageRoot, "alpha", secondThread.thread_id);
+      return record.queue.some(
+        (item) => item.id === nextId && item.state === "uncertain" && item.attempt === 1,
+      );
+    });
     const prompts = (await readFile(logPath, "utf8"))
       .split("\n")
       .filter(Boolean)
@@ -2160,5 +2183,1263 @@ test("thread durable queue unknown captured identity never writes prompt", async
     harness.child.stdin.destroy();
     harness.child.stdout.destroy();
     harness.child.stderr.destroy();
+  }
+});
+
+// Fixture IPC seam harness: spawns the real Node fixture with stdio pipes plus
+// an IPC control channel, retains children by the discussion-<thread> --name
+// value and awaits a processed-control ACK with a finite deadline.
+function fixtureHarness({ env = {}, ipc = true, onCommand = null, envFor = null } = {}) {
+  const calls = [];
+  const children = [];
+  const byThread = new Map();
+  const receipts = [];
+  const spawnImpl = (command, args, options = {}) => {
+    calls.push({ command, args, options });
+    if (command === "ps") return psChild("  1 launchd\n");
+    const base = options.stdio ?? ["pipe", "pipe", "pipe"];
+    const stdio = ipc ? [base[0] ?? "pipe", base[1] ?? "pipe", base[2] ?? "pipe", "ipc"] : base;
+    const childEnv = typeof envFor === "function" ? envFor(args, command) : env;
+    const child = spawn(process.execPath, [PI_FIXTURE, ...args], {
+      ...options,
+      stdio,
+      env: { ...process.env, ...childEnv },
+    });
+    child.receipts = [];
+    const originalWrite = child.stdin.write.bind(child.stdin);
+    child.stdin.write = (chunk, callback) => {
+      for (const line of chunk.toString("utf8").split("\n")) {
+        if (line.trim() === "") continue;
+        try {
+          const parsed = JSON.parse(line);
+          receipts.push(parsed);
+          child.receipts.push(parsed);
+          if (typeof onCommand === "function") onCommand(parsed, child, args);
+        } catch {
+          // Non-JSON writes are not command receipts.
+        }
+      }
+      return originalWrite(chunk, callback);
+    };
+    const nameIndex = args.indexOf("--name");
+    const threadId = nameIndex === -1 ? null : String(args[nameIndex + 1]).replace(/^discussion:/, "");
+    if (threadId !== null) byThread.set(threadId, child);
+    children.push(child);
+    return child;
+  };
+  const control = (threadId, message, timeoutMs = 3000) => {
+    const child = byThread.get(threadId);
+    if (!child) return Promise.reject(new Error(`no fixture child for thread ${threadId}`));
+    const ack = new Promise((resolvePromise, rejectPromise) => {
+      const timer = setTimeout(() => rejectPromise(new Error("fixture control ACK timed out")), timeoutMs);
+      child.once("message", (reply) => {
+        clearTimeout(timer);
+        resolvePromise(reply);
+      });
+    });
+    child.send(message);
+    return ack;
+  };
+  return { calls, children, byThread, receipts, spawnImpl, control };
+}
+
+test("thread global scheduler FIFO projection", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const alphaDirectory = await setupWorkspace(storageRoot, "alpha");
+  const betaDirectory = await setupWorkspace(storageRoot, "beta");
+
+  const alphaRecord = manualRecord({
+    workspaceId: "alpha",
+    directory: alphaDirectory,
+    overrides: {
+      queue: [
+        {
+          id: randomUUID(),
+          text: "alpha first",
+          queued_at: "2026-01-01T00:00:00.000Z",
+          state: "queued",
+          attempt: 0,
+        },
+        {
+          id: randomUUID(),
+          text: "alpha second",
+          queued_at: "2026-01-01T00:00:01.000Z",
+          state: "queued",
+          attempt: 0,
+        },
+      ],
+    },
+  });
+  await publishRecord(alphaDirectory, alphaRecord);
+  const betaRecord = manualRecord({
+    workspaceId: "beta",
+    directory: betaDirectory,
+    overrides: {
+      queue: [
+        {
+          id: randomUUID(),
+          text: "beta first",
+          queued_at: "2026-01-01T00:00:02.000Z",
+          state: "queued",
+          attempt: 0,
+        },
+      ],
+    },
+  });
+  await publishRecord(betaDirectory, betaRecord);
+  const pausedRecord = manualRecord({
+    workspaceId: "alpha",
+    directory: alphaDirectory,
+    overrides: {
+      queue: [
+        {
+          id: randomUUID(),
+          text: "paused head",
+          queued_at: "2026-01-01T00:00:00.000Z",
+          state: "queued",
+          attempt: 0,
+        },
+      ],
+      queue_paused: true,
+    },
+  });
+  await publishRecord(alphaDirectory, pausedRecord);
+  const uncertainRecord = manualRecord({
+    workspaceId: "beta",
+    directory: betaDirectory,
+    overrides: {
+      queue: [
+        {
+          id: randomUUID(),
+          text: "uncertain head",
+          queued_at: "2026-01-01T00:00:00.000Z",
+          state: "uncertain",
+          attempt: 1,
+        },
+      ],
+    },
+  });
+  await publishRecord(betaDirectory, uncertainRecord);
+
+  const service = createDiscussionService({ root: storageRoot, agentDir: join(root, "agent") });
+  try {
+    const listed = await service.list();
+    const byId = new Map(listed.threads.map((record) => [record.thread_id, record]));
+    const alpha = byId.get(alphaRecord.thread_id);
+    const beta = byId.get(betaRecord.thread_id);
+    const paused = byId.get(pausedRecord.thread_id);
+    const uncertain = byId.get(uncertainRecord.thread_id);
+    assert.deepEqual(
+      alpha.queue.map((item) => item.queue_position),
+      [1, 2],
+    );
+    assert.deepEqual(
+      beta.queue.map((item) => item.queue_position),
+      [3],
+    );
+    assert.equal(paused.queue[0].queue_position, null);
+    assert.equal(uncertain.queue[0].queue_position, null);
+
+    for (const [directory, record] of [
+      [alphaDirectory, alphaRecord],
+      [betaDirectory, betaRecord],
+      [alphaDirectory, pausedRecord],
+      [betaDirectory, uncertainRecord],
+    ]) {
+      const stored = JSON.parse(await readFile(join(directory, "threads", `${record.thread_id}.json`), "utf8"));
+      assert.ok(!("state" in stored) && !("partial" in stored) && !("generation" in stored));
+      for (const item of stored.queue) assert.ok(!("queue_position" in item));
+    }
+  } finally {
+    await service.close();
+  }
+});
+
+test("thread global scheduler holds started lease", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  await setupWorkspace(storageRoot, "alpha");
+  const harness = fixtureHarness();
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    spawn: harness.spawnImpl,
+  });
+  try {
+    const threadA = await service.create({ workspace_id: "alpha", title: "Scheduler A" });
+    const threadB = await service.create({ workspace_id: "alpha", title: "Scheduler B" });
+    const aId = randomUUID();
+    const bId = randomUUID();
+    const a2Id = randomUUID();
+
+    const aFirst = await service.send({ workspace_id: "alpha", thread_id: threadA.thread_id, id: aId, text: "A one" });
+    assert.equal(aFirst.state, "accepted");
+    const bFirst = await service.send({ workspace_id: "alpha", thread_id: threadB.thread_id, id: bId, text: "B one" });
+    assert.equal(bFirst.state, "queued");
+    const aSecond = await service.send({ workspace_id: "alpha", thread_id: threadA.thread_id, id: a2Id, text: "A two" });
+    assert.equal(aSecond.state, "queued");
+    const promptIds = () => harness.receipts.filter((receipt) => receipt.type === "prompt").map((receipt) => receipt.id);
+    assert.deepEqual(promptIds(), [aId]);
+
+    await harness.control(threadA.thread_id, { event: { type: "agent_end" } });
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 60));
+    assert.deepEqual(promptIds(), [aId]);
+
+    await harness.control(threadA.thread_id, { event: { type: "agent_settled", aborted: false } });
+    await waitFor(async () =>
+      (await readThread(storageRoot, "alpha", threadB.thread_id)).accepted_message_ids.includes(bId),
+    );
+    await waitFor(() => harness.byThread.has(threadB.thread_id));
+    await harness.control(threadB.thread_id, { event: { type: "agent_settled", aborted: false } });
+    await waitFor(async () =>
+      (await readThread(storageRoot, "alpha", threadA.thread_id)).accepted_message_ids.includes(a2Id),
+    );
+
+    assert.deepEqual(promptIds(), [aId, bId, a2Id]);
+    const aFinal = await readThread(storageRoot, "alpha", threadA.thread_id);
+    const bFinal = await readThread(storageRoot, "alpha", threadB.thread_id);
+    assert.deepEqual(aFinal.accepted_message_ids, [aId, a2Id]);
+    assert.deepEqual(bFinal.accepted_message_ids, [bId]);
+    assert.deepEqual(aFinal.queue, []);
+    assert.deepEqual(bFinal.queue, []);
+  } finally {
+    await service.close();
+    for (const child of harness.children) {
+      try {
+        child.disconnect?.();
+      } catch {
+        // Channel already closed.
+      }
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+    }
+  }
+});
+
+test("thread global scheduler event before acknowledgement", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const workspaceDirectory = await setupWorkspace(storageRoot, "alpha");
+  const observed = { delivering: null, acceptedA: null, threadFileA: null, aId: null, bId: null };
+  const harness = fixtureHarness({
+    env: {
+      FAKE_PI_PROMPT_EVENTS: JSON.stringify([{ type: "agent_settled", aborted: false }]),
+      FAKE_PI_DELAYS: JSON.stringify({ prompt: 120 }),
+    },
+    onCommand: (receipt) => {
+      if (receipt.type !== "prompt" || observed.threadFileA === null) return;
+      if (receipt.id === observed.aId && observed.delivering === null) {
+        observed.delivering = JSON.parse(readFileSync(observed.threadFileA, "utf8"));
+      }
+      if (receipt.id === observed.bId && observed.acceptedA === null) {
+        observed.acceptedA = JSON.parse(readFileSync(observed.threadFileA, "utf8"));
+      }
+    },
+  });
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    spawn: harness.spawnImpl,
+  });
+  try {
+    const threadA = await service.create({ workspace_id: "alpha", title: "Ordering A" });
+    const threadB = await service.create({ workspace_id: "alpha", title: "Ordering B" });
+    const aId = randomUUID();
+    const bId = randomUUID();
+    observed.threadFileA = join(workspaceDirectory, "threads", `${threadA.thread_id}.json`);
+    observed.aId = aId;
+    observed.bId = bId;
+
+    const aSend = service.send({ workspace_id: "alpha", thread_id: threadA.thread_id, id: aId, text: "A" });
+    aSend.catch(() => {});
+    await waitFor(() => observed.delivering !== null);
+    const bSend = service.send({ workspace_id: "alpha", thread_id: threadB.thread_id, id: bId, text: "B" });
+    bSend.catch(() => {});
+    assert.equal((await bSend).state, "queued");
+
+    assert.equal((await aSend).state, "accepted");
+    assert.ok(observed.delivering, "the A prompt write must be observed");
+    assert.equal(observed.delivering.queue[0].state, "delivering");
+    assert.equal(observed.delivering.queue[0].attempt, 1);
+
+    await waitFor(() => observed.acceptedA !== null);
+    assert.deepEqual(observed.acceptedA.accepted_message_ids, [aId]);
+    assert.deepEqual(observed.acceptedA.queue, []);
+
+    await waitFor(async () =>
+      (await readThread(storageRoot, "alpha", threadB.thread_id)).accepted_message_ids.includes(bId),
+    );
+    assert.deepEqual(
+      harness.receipts.filter((receipt) => receipt.type === "prompt").map((receipt) => receipt.id),
+      [aId, bId],
+    );
+  } finally {
+    await service.close();
+    for (const child of harness.children) {
+      try {
+        child.disconnect?.();
+      } catch {
+        // Channel already closed.
+      }
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+    }
+  }
+});
+
+test("thread isolation keeps scoped events and history separate", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const workspaceDirectory = await setupWorkspace(storageRoot, "alpha");
+
+  const markerA = "A \u2028\u2029 \u{1F680} end";
+  const markerB = "B only";
+  const recordA = manualRecord({ workspaceId: "alpha", directory: workspaceDirectory });
+  const recordB = manualRecord({ workspaceId: "alpha", directory: workspaceDirectory });
+  const copyA = join(recordA.session_dir, "copy.jsonl");
+  const copyB = join(recordB.session_dir, "copy.jsonl");
+  const sessionText = (sessionId, text) =>
+    `${JSON.stringify({
+      type: "session",
+      version: 3,
+      id: sessionId,
+      timestamp: "2026-01-01T00:00:00.000Z",
+      cwd: workspaceDirectory,
+    })}\n${JSON.stringify({
+      type: "message",
+      id: "m1",
+      parentId: null,
+      timestamp: "2026-01-01T00:00:00.000Z",
+      message: { role: "user", content: [{ type: "text", text }] },
+    })}\n`;
+  await publishRecord(workspaceDirectory, { ...recordA, session_file: copyA });
+  await publishRecord(workspaceDirectory, { ...recordB, session_file: copyB });
+  await writeFile(copyA, sessionText(recordA.session_id, markerA));
+  await writeFile(copyB, sessionText(recordB.session_id, markerB));
+
+  const harness = fixtureHarness({ env: { FAKE_PI_SPLIT_WRITES: "1" } });
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    spawn: harness.spawnImpl,
+  });
+  try {
+    await service.resume({ workspace_id: "alpha", thread_id: recordA.thread_id });
+    await service.resume({ workspace_id: "alpha", thread_id: recordB.thread_id });
+
+    const seenA = [];
+    const seenB = [];
+    const unsubscribeA = service.subscribe({ workspace_id: "alpha", thread_id: recordA.thread_id }, (payload) =>
+      seenA.push(payload),
+    );
+    service.subscribe({ workspace_id: "alpha", thread_id: recordA.thread_id }, () => {
+      throw new Error("throwing subscriber");
+    });
+    service.subscribe({ workspace_id: "alpha", thread_id: recordB.thread_id }, (payload) => seenB.push(payload));
+
+    await harness.control(recordA.thread_id, { event: { type: "message_update", delta: markerA } });
+    await harness.control(recordB.thread_id, { event: { type: "message_update", delta: markerB } });
+    await waitFor(
+      () =>
+        seenA.some((payload) => payload.event?.type === "message_update") &&
+        seenB.some((payload) => payload.event?.type === "message_update"),
+    );
+
+    const payloadA = seenA.find((payload) => payload.event?.type === "message_update");
+    const payloadB = seenB.find((payload) => payload.event?.type === "message_update");
+    assert.equal(payloadA.thread_id, recordA.thread_id);
+    assert.equal(payloadB.thread_id, recordB.thread_id);
+    assert.equal(typeof payloadA.generation, "string");
+    assert.equal(typeof payloadB.generation, "string");
+    assert.notEqual(payloadA.generation, payloadB.generation);
+    assert.equal(payloadA.event.delta, markerA);
+    assert.equal(payloadB.event.delta, markerB);
+
+    const listed = await service.list({ workspace_id: "alpha" });
+    const byId = new Map(listed.threads.map((entry) => [entry.thread_id, entry]));
+    assert.ok(byId.get(recordA.thread_id).partial.includes("\u2028"));
+    assert.ok(byId.get(recordA.thread_id).partial.includes("\u{1F680}"));
+    assert.equal(byId.get(recordB.thread_id).partial, markerB);
+
+    const historyA = await service.history({ workspace_id: "alpha", thread_id: recordA.thread_id });
+    const historyB = await service.history({ workspace_id: "alpha", thread_id: recordB.thread_id });
+    assert.deepEqual(
+      historyA.entries.map((entry) => entry.message.content[0].text),
+      [markerA],
+    );
+    assert.deepEqual(
+      historyB.entries.map((entry) => entry.message.content[0].text),
+      [markerB],
+    );
+    unsubscribeA();
+  } finally {
+    await service.close();
+    for (const child of harness.children) {
+      try {
+        child.disconnect?.();
+      } catch {
+        // Channel already closed.
+      }
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+    }
+  }
+});
+
+test("thread stop pauses and releases only confirmed idle", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const workspaceDirectory = await setupWorkspace(storageRoot, "alpha");
+  const observed = { stopStarted: false, pausedAtRpc: null, fileA: null };
+  const harness = fixtureHarness({
+    onCommand: (receipt) => {
+      if (!observed.stopStarted || receipt.type !== "get_state" || observed.pausedAtRpc !== null) return;
+      observed.pausedAtRpc = JSON.parse(readFileSync(observed.fileA, "utf8")).queue_paused;
+    },
+  });
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    spawn: harness.spawnImpl,
+  });
+  try {
+    const threadA = await service.create({ workspace_id: "alpha", title: "Stop A" });
+    const threadB = await service.create({ workspace_id: "alpha", title: "Stop B" });
+    observed.fileA = join(workspaceDirectory, "threads", `${threadA.thread_id}.json`);
+    const aId = randomUUID();
+    const bId = randomUUID();
+    const a2Id = randomUUID();
+    assert.equal((await service.send({ workspace_id: "alpha", thread_id: threadA.thread_id, id: aId, text: "A one" })).state, "accepted");
+    assert.equal((await service.send({ workspace_id: "alpha", thread_id: threadB.thread_id, id: bId, text: "B one" })).state, "queued");
+    assert.equal((await service.send({ workspace_id: "alpha", thread_id: threadA.thread_id, id: a2Id, text: "A two" })).state, "queued");
+    await harness.control(threadA.thread_id, {
+      state: { isStreaming: true, isCompacting: false, pendingMessageCount: 2 },
+    });
+
+    const childA = harness.byThread.get(threadA.thread_id);
+    const before = childA.receipts.length;
+    observed.stopStarted = true;
+    const stopped = await service.stop({ workspace_id: "alpha", thread_id: threadA.thread_id });
+    assert.equal(stopped.stopped, true);
+    assert.equal(observed.pausedAtRpc, true);
+    assert.deepEqual(
+      childA.receipts.slice(before).map((receipt) => receipt.type),
+      ["get_state", "clear_queue", "abort", "get_state"],
+    );
+
+    await waitFor(async () =>
+      (await readThread(storageRoot, "alpha", threadB.thread_id)).accepted_message_ids.includes(bId),
+    );
+    const aAfter = await readThread(storageRoot, "alpha", threadA.thread_id);
+    assert.equal(aAfter.queue_paused, true);
+    assert.deepEqual(aAfter.queue.map((item) => item.id), [a2Id]);
+    assert.deepEqual(aAfter.queue.map((item) => item.state), ["queued"]);
+  } finally {
+    await service.close();
+    for (const child of harness.children) {
+      try {
+        child.disconnect?.();
+      } catch {
+        // Channel already closed.
+      }
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+    }
+  }
+});
+
+test("thread stop abort unknown keeps exclusion", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  await setupWorkspace(storageRoot, "alpha");
+  const clock = manualClock();
+  const harness = fixtureHarness({ env: { FAKE_PI_ABORT_HANG: "1" } });
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    spawn: harness.spawnImpl,
+    clock,
+  });
+  try {
+    const threadA = await service.create({ workspace_id: "alpha", title: "Abort A" });
+    const threadB = await service.create({ workspace_id: "alpha", title: "Abort B" });
+    const aId = randomUUID();
+    const bId = randomUUID();
+    assert.equal((await service.send({ workspace_id: "alpha", thread_id: threadA.thread_id, id: aId, text: "A" })).state, "accepted");
+    assert.equal((await service.send({ workspace_id: "alpha", thread_id: threadB.thread_id, id: bId, text: "B" })).state, "queued");
+    await harness.control(threadA.thread_id, {
+      state: { isStreaming: true, isCompacting: false, pendingMessageCount: 2 },
+    });
+    const promptIds = () => harness.receipts.filter((receipt) => receipt.type === "prompt").map((receipt) => receipt.id);
+
+    const stopPromise = service.stop({ workspace_id: "alpha", thread_id: threadA.thread_id });
+    stopPromise.catch(() => {});
+    await waitFor(() => clock.has(30000));
+    clock.fire(30000);
+    const stopped = await stopPromise;
+    assert.equal(stopped.stopped, false);
+    const aAfter = await readThread(storageRoot, "alpha", threadA.thread_id);
+    assert.equal(aAfter.attention, "uncertain");
+    assert.equal(aAfter.queue_paused, true);
+    assert.deepEqual(promptIds(), [aId]);
+
+    await harness.control(threadA.thread_id, { event: { type: "agent_end" } });
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 60));
+    assert.deepEqual(promptIds(), [aId]);
+
+    await harness.control(threadA.thread_id, { event: { type: "agent_settled", aborted: true } });
+    await waitFor(async () =>
+      (await readThread(storageRoot, "alpha", threadB.thread_id)).accepted_message_ids.includes(bId),
+    );
+    assert.deepEqual(promptIds(), [aId, bId]);
+  } finally {
+    await service.close();
+    for (const child of harness.children) {
+      try {
+        child.disconnect?.();
+      } catch {
+        // Channel already closed.
+      }
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+    }
+  }
+});
+
+test("thread stop close four children within five seconds", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  await setupWorkspace(storageRoot, "alpha");
+  const harness = fixtureHarness({ env: { FAKE_PI_HANG: "1" } });
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    spawn: harness.spawnImpl,
+  });
+  try {
+    const threads = [];
+    for (let index = 0; index < 4; index += 1) {
+      threads.push(await service.create({ workspace_id: "alpha", title: `Close ${index}` }));
+    }
+    await Promise.all(
+      threads.map((thread) => service.resume({ workspace_id: "alpha", thread_id: thread.thread_id })),
+    );
+    assert.equal(harness.children.length, 4);
+
+    const started = Date.now();
+    const closing = service.close();
+    await assert.rejects(
+      service.send({ workspace_id: "alpha", thread_id: threads[0].thread_id, id: randomUUID(), text: "x" }),
+      { code: "service-closed" },
+    );
+    await closing;
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed <= 5500, `close took ${elapsed}ms`);
+    for (const child of harness.children) {
+      assert.ok(child.signalCode === "SIGKILL" || child.exitCode !== null);
+    }
+  } finally {
+    await service.close();
+    for (const child of harness.children) {
+      try {
+        child.disconnect?.();
+      } catch {
+        // Channel already closed.
+      }
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+    }
+  }
+});
+
+test("thread failure stalled retains exclusion", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  await setupWorkspace(storageRoot, "alpha");
+  const clock = manualClock();
+  const harness = fixtureHarness();
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    spawn: harness.spawnImpl,
+    clock,
+  });
+  try {
+    const threadA = await service.create({ workspace_id: "alpha", title: "Stall A" });
+    const threadB = await service.create({ workspace_id: "alpha", title: "Stall B" });
+    const aId = randomUUID();
+    const bId = randomUUID();
+    assert.equal((await service.send({ workspace_id: "alpha", thread_id: threadA.thread_id, id: aId, text: "A" })).state, "accepted");
+    await service.resume({ workspace_id: "alpha", thread_id: threadB.thread_id });
+    await harness.control(threadB.thread_id, { event: { type: "message_update", delta: "idle" } });
+    assert.equal((await service.send({ workspace_id: "alpha", thread_id: threadB.thread_id, id: bId, text: "B" })).state, "queued");
+    const seenA = [];
+    service.subscribe({ workspace_id: "alpha", thread_id: threadA.thread_id }, (payload) => seenA.push(payload));
+    const promptIds = () => harness.receipts.filter((receipt) => receipt.type === "prompt").map((receipt) => receipt.id);
+
+    await waitFor(() => clock.has(600000));
+    clock.fire(600000);
+    await waitFor(async () => (await readThread(storageRoot, "alpha", threadA.thread_id)).attention === "stalled");
+    let notice = null;
+    await waitFor(() => {
+      notice = seenA.find((payload) => payload.type === "notice" && payload.event?.attention === "stalled");
+      return Boolean(notice);
+    });
+    assert.deepEqual(promptIds(), [aId]);
+
+    await harness.control(threadA.thread_id, { event: { type: "agent_end" } });
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 60));
+    assert.deepEqual(promptIds(), [aId]);
+
+    await harness.control(threadA.thread_id, { event: { type: "agent_settled", aborted: false } });
+    await waitFor(async () =>
+      (await readThread(storageRoot, "alpha", threadB.thread_id)).accepted_message_ids.includes(bId),
+    );
+    assert.deepEqual(promptIds(), [aId, bId]);
+  } finally {
+    await service.close();
+    for (const child of harness.children) {
+      try {
+        child.disconnect?.();
+      } catch {
+        // Channel already closed.
+      }
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+    }
+  }
+});
+
+test("thread failure confirmed exit advances queue", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  await setupWorkspace(storageRoot, "alpha");
+  const harness = fixtureHarness();
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    spawn: harness.spawnImpl,
+  });
+  try {
+    const threadA = await service.create({ workspace_id: "alpha", title: "Exit A" });
+    const threadB = await service.create({ workspace_id: "alpha", title: "Exit B" });
+    const aId = randomUUID();
+    const bId = randomUUID();
+    assert.equal((await service.send({ workspace_id: "alpha", thread_id: threadA.thread_id, id: aId, text: "A" })).state, "accepted");
+    assert.equal((await service.send({ workspace_id: "alpha", thread_id: threadB.thread_id, id: bId, text: "B" })).state, "queued");
+
+    const childA = harness.byThread.get(threadA.thread_id);
+    assert.ok(childA, "the A fixture child must be owned");
+    childA.kill("SIGKILL");
+
+    await waitFor(async () =>
+      (await readThread(storageRoot, "alpha", threadB.thread_id)).accepted_message_ids.includes(bId),
+    );
+    await waitFor(async () => (await readThread(storageRoot, "alpha", threadA.thread_id)).process === undefined);
+    const aAfter = await readThread(storageRoot, "alpha", threadA.thread_id);
+    assert.deepEqual(aAfter.accepted_message_ids, [aId]);
+    const bAfter = await readThread(storageRoot, "alpha", threadB.thread_id);
+    assert.deepEqual(bAfter.accepted_message_ids, [bId]);
+    assert.deepEqual(bAfter.queue, []);
+    assert.deepEqual(
+      harness.receipts.filter((receipt) => receipt.type === "prompt").map((receipt) => receipt.id),
+      [aId, bId],
+    );
+  } finally {
+    await service.close();
+    for (const child of harness.children) {
+      try {
+        child.disconnect?.();
+      } catch {
+        // Channel already closed.
+      }
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+    }
+  }
+});
+
+test("thread failure EOF and dialog retain exclusion", async (t) => {
+  const scenarios = [
+    { name: "EOF", env: { FAKE_PI_EOF_ON: "prompt" } },
+    { name: "dialog", env: { FAKE_PI_EXTENSION_UI_ON: "prompt" } },
+  ];
+  for (const scenario of scenarios) {
+    const root = await tempRoot(t);
+    const storageRoot = join(root, "storage");
+    await setupStorage(storageRoot);
+    await setupWorkspace(storageRoot, "alpha");
+    const perChild = { match: null, env: scenario.env };
+    const harness = fixtureHarness({
+      envFor: (args) => {
+        const nameIndex = args.indexOf("--name");
+        const threadId = nameIndex === -1 ? null : String(args[nameIndex + 1]).replace(/^discussion:/, "");
+        return threadId === perChild.match ? perChild.env : {};
+      },
+    });
+    const service = createDiscussionService({
+      root: storageRoot,
+      agentDir: join(root, "agent"),
+      spawn: harness.spawnImpl,
+    });
+    try {
+      const threadA = await service.create({ workspace_id: "alpha", title: `${scenario.name} A` });
+      const threadB = await service.create({ workspace_id: "alpha", title: `${scenario.name} B` });
+      perChild.match = threadA.thread_id;
+      const aId = randomUUID();
+      const bId = randomUUID();
+      const seenA = [];
+      service.subscribe({ workspace_id: "alpha", thread_id: threadA.thread_id }, (payload) => seenA.push(payload));
+      const promptIds = () => harness.receipts.filter((receipt) => receipt.type === "prompt").map((receipt) => receipt.id);
+
+      await assert.rejects(
+        service.send({ workspace_id: "alpha", thread_id: threadA.thread_id, id: aId, text: "A" }),
+        { code: "delivery-uncertain" },
+      );
+      const aAfter = await readThread(storageRoot, "alpha", threadA.thread_id);
+      assert.equal(aAfter.queue[0].state, "uncertain");
+      assert.equal(aAfter.attention, "uncertain");
+      await waitFor(() =>
+        seenA.some((payload) => payload.type === "notice" && payload.event?.attention === "uncertain"),
+      );
+
+      assert.equal((await service.send({ workspace_id: "alpha", thread_id: threadB.thread_id, id: bId, text: "B" })).state, "queued");
+      assert.deepEqual(promptIds(), [aId]);
+
+      const childA = harness.byThread.get(threadA.thread_id);
+      assert.ok(childA, `the ${scenario.name} A fixture child must be owned`);
+      childA.kill("SIGKILL");
+      await waitFor(async () =>
+        (await readThread(storageRoot, "alpha", threadB.thread_id)).accepted_message_ids.includes(bId),
+      );
+      assert.deepEqual(promptIds(), [aId, bId]);
+    } finally {
+      await service.close();
+      for (const child of harness.children) {
+        try {
+          child.disconnect?.();
+        } catch {
+          // Channel already closed.
+        }
+        child.stdin.destroy();
+        child.stdout.destroy();
+        child.stderr.destroy();
+      }
+    }
+  }
+});
+
+test("thread failure live orphan globally excludes new responses", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const alphaDirectory = await setupWorkspace(storageRoot, "alpha");
+  const betaDirectory = await setupWorkspace(storageRoot, "beta");
+
+  const dummy = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  t.after(() => {
+    try {
+      dummy.kill("SIGKILL");
+    } catch {
+      // already exited
+    }
+  });
+  await new Promise((resolvePromise) => dummy.once("spawn", resolvePromise));
+  const identity = processIdentity(dummy.pid);
+  assert.ok(identity, "the dummy must expose a start identity");
+
+  const orphan = manualRecord({
+    workspaceId: "alpha",
+    directory: alphaDirectory,
+    overrides: { process: identity, queue_paused: true },
+  });
+  const mismatch = manualRecord({
+    workspaceId: "alpha",
+    directory: alphaDirectory,
+    overrides: { process: { pid: dummy.pid, started_at: "bogus start text" }, queue_paused: true },
+  });
+  const target = manualRecord({ workspaceId: "beta", directory: betaDirectory });
+  await publishRecord(alphaDirectory, orphan);
+  await publishRecord(alphaDirectory, mismatch);
+  await publishRecord(betaDirectory, target);
+
+  const harness = fixtureHarness();
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    spawn: harness.spawnImpl,
+  });
+  try {
+    const bId = randomUUID();
+    const bSend = await service.send({ workspace_id: "beta", thread_id: target.thread_id, id: bId, text: "B" });
+    assert.equal(bSend.state, "queued");
+    assert.equal(harness.calls.filter((call) => call.command === "pi").length, 0);
+    assert.equal(dummy.exitCode, null);
+
+    dummy.kill("SIGKILL");
+    await new Promise((resolvePromise) => dummy.once("exit", resolvePromise));
+    await service.stop({ workspace_id: "alpha", thread_id: orphan.thread_id });
+    await service.stop({ workspace_id: "alpha", thread_id: mismatch.thread_id });
+    await waitFor(async () =>
+      (await readThread(storageRoot, "beta", target.thread_id)).accepted_message_ids.includes(bId),
+    );
+    assert.deepEqual(
+      harness.receipts.filter((receipt) => receipt.type === "prompt").map((receipt) => receipt.id),
+      [bId],
+    );
+    assert.ok(!(await readThread(storageRoot, "alpha", orphan.thread_id)).process);
+  } finally {
+    await service.close();
+    for (const child of harness.children) {
+      try {
+        child.disconnect?.();
+      } catch {
+        // Channel already closed.
+      }
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+    }
+  }
+});
+
+test("thread failure confirmed prestart permits next thread", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const workspaceDirectory = await setupWorkspace(storageRoot, "alpha");
+  const perChild = { matchA: null };
+  const harness = fixtureHarness({
+    envFor: (args) => {
+      const nameIndex = args.indexOf("--name");
+      const threadId = nameIndex === -1 ? null : String(args[nameIndex + 1]).replace(/^discussion:/, "");
+      return threadId === perChild.matchA ? { FAKE_PI_STATE_ID: randomUUID() } : {};
+    },
+  });
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    spawn: harness.spawnImpl,
+  });
+  try {
+    const recordA = manualRecord({ workspaceId: "alpha", directory: workspaceDirectory });
+    const recordB = manualRecord({ workspaceId: "alpha", directory: workspaceDirectory });
+    await publishRecord(workspaceDirectory, recordA);
+    await publishRecord(workspaceDirectory, recordB);
+    perChild.matchA = recordA.thread_id;
+    const aId = randomUUID();
+    const bId = randomUUID();
+    const promptIds = () => harness.receipts.filter((receipt) => receipt.type === "prompt").map((receipt) => receipt.id);
+
+    const aSend = service.send({ workspace_id: "alpha", thread_id: recordA.thread_id, id: aId, text: "A" });
+    aSend.catch(() => {});
+    await waitFor(() => harness.byThread.has(recordA.thread_id));
+    const bSend = service.send({ workspace_id: "alpha", thread_id: recordB.thread_id, id: bId, text: "B" });
+    bSend.catch(() => {});
+    await assert.rejects(aSend, { code: "session-mismatch" });
+    assert.equal((await bSend).state, "queued");
+    await waitFor(async () =>
+      (await readThread(storageRoot, "alpha", recordB.thread_id)).accepted_message_ids.includes(bId),
+    );
+
+    const aAfter = await readThread(storageRoot, "alpha", recordA.thread_id);
+    assert.equal(aAfter.queue_paused, true);
+    assert.ok(typeof aAfter.attention === "string" && aAfter.attention !== "");
+    assert.deepEqual(aAfter.queue.map((item) => item.state), ["queued"]);
+    assert.deepEqual(promptIds(), [bId]);
+
+    await harness.control(recordB.thread_id, { event: { type: "agent_settled", aborted: false } });
+    const b2 = randomUUID();
+    await service.send({ workspace_id: "alpha", thread_id: recordB.thread_id, id: b2, text: "B2" });
+    await waitFor(() => promptIds().length === 2);
+    assert.deepEqual(promptIds(), [bId, b2]);
+    assert.equal((await readThread(storageRoot, "alpha", recordA.thread_id)).queue_paused, true);
+  } finally {
+    await service.close();
+    for (const child of harness.children) {
+      try {
+        child.disconnect?.();
+      } catch {
+        // Channel already closed.
+      }
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+    }
+  }
+});
+
+test("thread global scheduler bounded children evicts confirmed idle LRU", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  await setupWorkspace(storageRoot, "alpha");
+  const clock = manualClock();
+  const harness = fixtureHarness();
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    spawn: harness.spawnImpl,
+    clock,
+  });
+  try {
+    const threads = [];
+    for (let index = 0; index < 4; index += 1) {
+      threads.push(await service.create({ workspace_id: "alpha", title: `Cap ${index}` }));
+      clock.advance(1000);
+      await service.resume({ workspace_id: "alpha", thread_id: threads[index].thread_id });
+      clock.advance(1000);
+    }
+    assert.equal(harness.children.length, 4);
+
+    const firstThread = threads[0];
+    const secondThread = threads[1];
+    await harness.control(firstThread.thread_id, {
+      state: { isStreaming: true, isCompacting: false, pendingMessageCount: 0 },
+    });
+
+    const fifth = await service.create({ workspace_id: "alpha", title: "Cap 4" });
+    await service.resume({ workspace_id: "alpha", thread_id: fifth.thread_id });
+    const secondChild = harness.byThread.get(secondThread.thread_id);
+    await waitFor(() => secondChild.exitCode !== null || secondChild.signalCode !== null);
+    assert.equal(harness.children.length, 5);
+    assert.equal(
+      harness.children.filter((child) => child.exitCode === null && child.signalCode === null).length,
+      4,
+    );
+
+    for (const thread of [firstThread, ...threads.slice(2), fifth]) {
+      await harness.control(thread.thread_id, {
+        state: { isStreaming: true, isCompacting: false, pendingMessageCount: 0 },
+      });
+    }
+    const sixth = await service.create({ workspace_id: "alpha", title: "Cap 5" });
+    await assert.rejects(service.resume({ workspace_id: "alpha", thread_id: sixth.thread_id }), {
+      code: "child-limit",
+    });
+    assert.equal(harness.children.length, 5);
+  } finally {
+    await service.close();
+    for (const child of harness.children) {
+      try {
+        child.disconnect?.();
+      } catch {
+        // Channel already closed.
+      }
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+    }
+  }
+});
+
+test("thread failure idle expiry closes only confirmed idle", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const workspaceDirectory = await setupWorkspace(storageRoot, "alpha");
+  const clock = manualClock();
+  const harness = fixtureHarness();
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    spawn: harness.spawnImpl,
+    clock,
+  });
+  try {
+    const threadA = await service.create({ workspace_id: "alpha", title: "Idle A" });
+    const threadB = await service.create({ workspace_id: "alpha", title: "Idle B" });
+    const threadC = await service.create({ workspace_id: "alpha", title: "Idle C" });
+    const threadD = await service.create({ workspace_id: "alpha", title: "Idle D" });
+    await service.resume({ workspace_id: "alpha", thread_id: threadA.thread_id });
+    await service.resume({ workspace_id: "alpha", thread_id: threadB.thread_id });
+    await service.resume({ workspace_id: "alpha", thread_id: threadC.thread_id });
+    await service.resume({ workspace_id: "alpha", thread_id: threadD.thread_id });
+    const stoppedD = await service.stop({ workspace_id: "alpha", thread_id: threadD.thread_id });
+    assert.equal(stoppedD.stopped, true);
+    await harness.control(threadA.thread_id, {
+      state: { isStreaming: true, isCompacting: false, pendingMessageCount: 0 },
+    });
+    const cFile = join(workspaceDirectory, "threads", `${threadC.thread_id}.json`);
+    const cRecord = JSON.parse(await readFile(cFile, "utf8"));
+    await writeFile(cFile, `${JSON.stringify({ ...cRecord, attention: "uncertain" })}\n`);
+
+    assert.equal(harness.children.length, 4);
+    await waitFor(() => clock.has(600000));
+    clock.fire(600000);
+    const childB = harness.byThread.get(threadB.thread_id);
+    await waitFor(() => childB.exitCode !== null || childB.signalCode !== null);
+    const childD = harness.byThread.get(threadD.thread_id);
+    await waitFor(() => childD.exitCode !== null || childD.signalCode !== null);
+    const childA = harness.byThread.get(threadA.thread_id);
+    const childC = harness.byThread.get(threadC.thread_id);
+    assert.equal(childA.exitCode, null);
+    assert.equal(childC.exitCode, null);
+    assert.equal(harness.children.length, 4);
+  } finally {
+    await service.close();
+    for (const child of harness.children) {
+      try {
+        child.disconnect?.();
+      } catch {
+        // Channel already closed.
+      }
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+    }
+  }
+});
+
+test("thread global scheduler stale generation cannot release new lease", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  await setupWorkspace(storageRoot, "alpha");
+  const harness = fixtureHarness();
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    spawn: harness.spawnImpl,
+  });
+  try {
+    const threadA = await service.create({ workspace_id: "alpha", title: "Stale A" });
+    const threadB = await service.create({ workspace_id: "alpha", title: "Stale B" });
+    const aId = randomUUID();
+    const bId = randomUUID();
+    const promptIds = () => harness.receipts.filter((receipt) => receipt.type === "prompt").map((receipt) => receipt.id);
+
+    assert.equal(
+      (await service.send({ workspace_id: "alpha", thread_id: threadA.thread_id, id: aId, text: "A1" })).state,
+      "accepted",
+    );
+    const oldChild = harness.byThread.get(threadA.thread_id);
+    assert.ok(oldChild, "the old A child must be captured");
+    oldChild.kill("SIGKILL");
+    await waitFor(async () => (await readThread(storageRoot, "alpha", threadA.thread_id)).process === undefined);
+
+    const a2Id = randomUUID();
+    assert.equal(
+      (await service.send({ workspace_id: "alpha", thread_id: threadA.thread_id, id: a2Id, text: "A2" })).state,
+      "accepted",
+    );
+    const newChild = harness.byThread.get(threadA.thread_id);
+    assert.notEqual(newChild, oldChild);
+    assert.equal(
+      (await service.send({ workspace_id: "alpha", thread_id: threadB.thread_id, id: bId, text: "B" })).state,
+      "queued",
+    );
+    assert.deepEqual(promptIds(), [aId, a2Id]);
+
+    oldChild.stdout.emit("data", Buffer.from(`${JSON.stringify({ type: "agent_settled", aborted: true })}\n`));
+    oldChild.stdout.emit(
+      "data",
+      Buffer.from(`${JSON.stringify({ type: "message_update", delta: "stale \u2028 delta" })}\n`),
+    );
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 60));
+    assert.deepEqual(promptIds(), [aId, a2Id]);
+    const listed = await service.list({ workspace_id: "alpha" });
+    const aRecord = listed.threads.find((record) => record.thread_id === threadA.thread_id);
+    assert.equal(aRecord.partial, "");
+
+    await harness.control(threadA.thread_id, { event: { type: "agent_settled", aborted: false } });
+    await waitFor(async () =>
+      (await readThread(storageRoot, "alpha", threadB.thread_id)).accepted_message_ids.includes(bId),
+    );
+    assert.deepEqual(promptIds(), [aId, a2Id, bId]);
+  } finally {
+    await service.close();
+    for (const child of harness.children) {
+      try {
+        child.disconnect?.();
+      } catch {
+        // Channel already closed.
+      }
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+    }
+  }
+});
+
+test("thread global scheduler handled requires confirmed idle", async (t) => {
+  {
+    const root = await tempRoot(t);
+    const storageRoot = join(root, "storage");
+    await setupStorage(storageRoot);
+    await setupWorkspace(storageRoot, "alpha");
+    const harness = fixtureHarness({ env: { FAKE_PI_DISPOSITION: "handled" } });
+    const service = createDiscussionService({
+      root: storageRoot,
+      agentDir: join(root, "agent"),
+      spawn: harness.spawnImpl,
+    });
+    try {
+      const threadA = await service.create({ workspace_id: "alpha", title: "Handled A" });
+      const threadB = await service.create({ workspace_id: "alpha", title: "Handled B" });
+      const aId = randomUUID();
+      const bId = randomUUID();
+      assert.equal(
+        (await service.send({ workspace_id: "alpha", thread_id: threadA.thread_id, id: aId, text: "A" })).state,
+        "accepted",
+      );
+      const bSend = await service.send({ workspace_id: "alpha", thread_id: threadB.thread_id, id: bId, text: "B" });
+      assert.ok(bSend.state === "queued" || bSend.state === "accepted");
+      await waitFor(async () =>
+        (await readThread(storageRoot, "alpha", threadB.thread_id)).accepted_message_ids.includes(bId),
+      );
+      assert.deepEqual(
+        harness.receipts.filter((receipt) => receipt.type === "prompt").map((receipt) => receipt.id),
+        [aId, bId],
+      );
+    } finally {
+      await service.close();
+      for (const child of harness.children) {
+        try {
+          child.disconnect?.();
+        } catch {
+          // Channel already closed.
+        }
+        child.stdin.destroy();
+        child.stdout.destroy();
+        child.stderr.destroy();
+      }
+    }
+  }
+
+  {
+    const root = await tempRoot(t);
+    const storageRoot = join(root, "storage");
+    await setupStorage(storageRoot);
+    await setupWorkspace(storageRoot, "alpha");
+    const harness = fixtureHarness({ env: { FAKE_PI_DISPOSITION: "handled" } });
+    const service = createDiscussionService({
+      root: storageRoot,
+      agentDir: join(root, "agent"),
+      spawn: harness.spawnImpl,
+    });
+    try {
+      const threadA = await service.create({ workspace_id: "alpha", title: "Handled C" });
+      const threadB = await service.create({ workspace_id: "alpha", title: "Handled D" });
+      const aId = randomUUID();
+      const bId = randomUUID();
+      const promptIds = () => harness.receipts.filter((receipt) => receipt.type === "prompt").map((receipt) => receipt.id);
+      await service.resume({ workspace_id: "alpha", thread_id: threadA.thread_id });
+      await harness.control(threadA.thread_id, {
+        state: { isStreaming: false, isCompacting: true, pendingMessageCount: 1 },
+      });
+      const aSend = await service.send({ workspace_id: "alpha", thread_id: threadA.thread_id, id: aId, text: "A" });
+      assert.ok(aSend.state === "queued" || aSend.state === "accepted");
+      await waitFor(async () =>
+        (await readThread(storageRoot, "alpha", threadA.thread_id)).accepted_message_ids.includes(aId),
+      );
+      assert.equal(
+        (await service.send({ workspace_id: "alpha", thread_id: threadB.thread_id, id: bId, text: "B" })).state,
+        "queued",
+      );
+      await harness.control(threadA.thread_id, { event: { type: "agent_end" } });
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 60));
+      assert.deepEqual(promptIds(), [aId]);
+
+      await harness.control(threadA.thread_id, {
+        state: { isStreaming: false, isCompacting: false, pendingMessageCount: 0 },
+      });
+      await harness.control(threadA.thread_id, { event: { type: "agent_settled", aborted: false } });
+      await waitFor(async () =>
+        (await readThread(storageRoot, "alpha", threadB.thread_id)).accepted_message_ids.includes(bId),
+      );
+      assert.deepEqual(promptIds(), [aId, bId]);
+    } finally {
+      await service.close();
+      for (const child of harness.children) {
+        try {
+          child.disconnect?.();
+        } catch {
+          // Channel already closed.
+        }
+        child.stdin.destroy();
+        child.stdout.destroy();
+        child.stderr.destroy();
+      }
+    }
+  }
+});
+
+test("thread failure rejected prompt visible no auto retry", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  await setupWorkspace(storageRoot, "alpha");
+  const perChild = { matchA: null };
+  const harness = fixtureHarness({
+    envFor: (args) => {
+      const nameIndex = args.indexOf("--name");
+      const threadId = nameIndex === -1 ? null : String(args[nameIndex + 1]).replace(/^discussion:/, "");
+      return threadId === perChild.matchA ? { FAKE_PI_FAIL_ON: "prompt" } : {};
+    },
+  });
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    spawn: harness.spawnImpl,
+  });
+  try {
+    const threadA = await service.create({ workspace_id: "alpha", title: "Reject A" });
+    const threadB = await service.create({ workspace_id: "alpha", title: "Reject B" });
+    perChild.matchA = threadA.thread_id;
+    const aId = randomUUID();
+    const bId = randomUUID();
+    await assert.rejects(
+      service.send({ workspace_id: "alpha", thread_id: threadA.thread_id, id: aId, text: "A" }),
+      { code: "delivery-uncertain" },
+    );
+    const aAfter = await readThread(storageRoot, "alpha", threadA.thread_id);
+    assert.equal(aAfter.queue.length, 1);
+    assert.equal(aAfter.queue[0].state, "queued");
+    assert.equal(aAfter.queue_paused, true);
+    assert.equal(aAfter.attention, "prompt-failed");
+
+    assert.equal(
+      (await service.send({ workspace_id: "alpha", thread_id: threadB.thread_id, id: bId, text: "B" })).state,
+      "queued",
+    );
+    await waitFor(async () =>
+      (await readThread(storageRoot, "alpha", threadB.thread_id)).accepted_message_ids.includes(bId),
+    );
+    assert.deepEqual(
+      harness.receipts.filter((receipt) => receipt.type === "prompt").map((receipt) => receipt.id),
+      [aId, bId],
+    );
+    assert.equal((await readThread(storageRoot, "alpha", threadA.thread_id)).queue_paused, true);
+  } finally {
+    await service.close();
+    for (const child of harness.children) {
+      try {
+        child.disconnect?.();
+      } catch {
+        // Channel already closed.
+      }
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+    }
   }
 });

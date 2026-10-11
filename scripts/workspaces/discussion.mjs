@@ -20,6 +20,7 @@ import { closeOwnedPiChild, createPiRpc } from "./pi-rpc.mjs";
 import {
   createFileExclusive,
   fetchWorkspace,
+  listWorkspaces,
   resolveStorageRoot,
   resolveWorkspacePath,
   writeFileAtomic,
@@ -540,8 +541,336 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
   const ownedDelivering = new Map();
   let responseLease = null;
 
+  let pumpRunning = false;
+  let pumpRequested = false;
+  let pumpPromise = null;
+  const dispatchOutcomes = new Map();
+  const waitingDispatches = new Set();
+  const MAX_OWNED_CHILDREN = 4;
+  let capacityReservations = 0;
+  let capacityMutex = Promise.resolve();
+
+  function acquireCapacity() {
+    const attempt = capacityMutex.then(async () => {
+      if (closed) throw serviceClosed();
+      if (ownedChildren.size + capacityReservations < MAX_OWNED_CHILDREN) {
+        capacityReservations += 1;
+        return;
+      }
+      // Full: try one ready, idle, non-current owned adapter ordered by the
+      // runtime's lastUsed (then key). Unknown or unconfirmed victims are kept.
+      const candidates = [];
+      for (const [key, entry] of ownedAdapters) {
+        if (entry.evicting === true) continue;
+        if (ownedDelivering.has(key)) continue;
+        if (responseLease !== null && entry.generation === responseLease.generation) continue;
+        if (!entry.child || typeof entry.child.pid !== "number") continue;
+        const runtime = runtimes.get(key);
+        candidates.push({ key, entry, lastUsed: runtime?.lastUsed ?? 0 });
+      }
+      const threadOf = (key) => key.slice(key.indexOf(":") + 1);
+      candidates.sort((a, b) => a.lastUsed - b.lastUsed || threadOf(a.key).localeCompare(threadOf(b.key)));
+      for (const { key, entry } of candidates) {
+        if (ownedDelivering.has(key)) continue;
+        if (responseLease !== null && entry.generation === responseLease.generation) continue;
+        let state;
+        try {
+          state = await entry.adapter.request({ type: "get_state" });
+        } catch {
+          continue;
+        }
+        if (
+          state.data?.isStreaming !== false ||
+          state.data?.isCompacting !== false ||
+          state.data?.pendingMessageCount !== 0
+        ) {
+          continue;
+        }
+        const [storedWorkspace, storedThread] = key.split(":");
+        let stored;
+        try {
+          stored = await readOwnedRecord(configuredRoot, storedWorkspace, storedThread);
+        } catch {
+          continue;
+        }
+        if (
+          stored.attention === "uncertain" ||
+          stored.attention === "stalled" ||
+          stored.attention === "live-owner" ||
+          stored.queue.some((item) => item.state === "uncertain" || item.state === "delivering")
+        ) {
+          continue;
+        }
+        if (ownedDelivering.has(key)) continue;
+        if (responseLease !== null && entry.generation === responseLease.generation) continue;
+        if (ownedAdapters.get(key) !== entry || entry.evicting === true) continue;
+        entry.evicting = true;
+        const shutdown = await entry.adapter.close().catch(() => null);
+        if (shutdown && shutdown.confirmed_death === true) {
+          if (ownedAdapters.get(key) === entry) ownedAdapters.delete(key);
+          ownedChildren.delete(entry.child);
+          void onOwnedExit(key, entry.adapter, entry.child, entry.process, entry.directory);
+          capacityReservations += 1;
+          return;
+        }
+        // Unconfirmed: retain the entry and child count; schedule visible
+        // attention and owned-exit cleanup off the capacity mutex.
+        const runtime = runtimes.get(key);
+        if (runtime) runtime.lastUsed = nowFn();
+        const [workspaceId, threadId] = key.split(":");
+        void withThreadLock(workspaceId, threadId, async () => {
+          try {
+            const { record, directory } = await loadServiceRecord(workspaceId, threadId);
+            if (record.attention !== "live-owner") {
+              await persistRecord(directory, {
+                ...record,
+                attention: "live-owner",
+                updated_at: new Date().toISOString(),
+              });
+            }
+          } catch {
+            // Visible through the next read.
+          }
+        });
+      }
+      throw typedError("child-limit", "owned discussion child limit reached");
+    });
+    capacityMutex = attempt.catch(() => {});
+    return attempt;
+  }
+
+  function reservationRelease() {
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      capacityReservations = Math.max(0, capacityReservations - 1);
+    };
+  }
+
+  // Unconfirmed closes keep the owned handle tracked so capacity cannot be
+  // freed on an unknown live child; deletion requires a real exit fact or a
+  // confirmed death from the owned handle.
+  function releaseOwnedChildIfDead(child, shutdown, exitFacts) {
+    if (!child) return;
+    const dead =
+      exitFacts === true || (shutdown !== null && shutdown !== undefined && shutdown.confirmed_death === true);
+    if (dead) ownedChildren.delete(child);
+  }
+
+  const idleTimers = new Map();
+
+  function clearIdleTimer(key) {
+    const handle = idleTimers.get(key);
+    if (handle !== undefined) {
+      clockImpl.clearTimeout(handle);
+      idleTimers.delete(key);
+    }
+  }
+
+  function clearAllIdleTimers() {
+    for (const handle of idleTimers.values()) clockImpl.clearTimeout(handle);
+    idleTimers.clear();
+  }
+
+  function resetIdleTimer(workspace_id, thread_id) {
+    const key = `${workspace_id}:${thread_id}`;
+    clearIdleTimer(key);
+    const entry = ownedAdapters.get(key);
+    const runtime = runtimes.get(key);
+    if (closed || !entry || entry.evicting === true || !runtime || runtime.generation !== entry.generation) return;
+    const generation = entry.generation;
+    const timer = clockImpl.setTimeout(() => {
+      idleTimers.delete(key);
+      void expireIdleChild(key, workspace_id, thread_id, generation);
+    }, 10 * 60 * 1000);
+    if (timer && typeof timer.unref === "function") timer.unref();
+    idleTimers.set(key, timer);
+  }
+
+  async function expireIdleChild(key, workspace_id, thread_id, generation) {
+    if (closed) return;
+    const entry = ownedAdapters.get(key);
+    if (!entry || entry.evicting === true || entry.generation !== generation) return;
+    if (responseLease !== null && responseLease.generation === generation) return;
+    if (ownedDelivering.has(key)) return;
+    let state;
+    try {
+      state = await entry.adapter.request({ type: "get_state" });
+    } catch {
+      return;
+    }
+    const idle =
+      state.data?.isStreaming === false &&
+      state.data?.isCompacting === false &&
+      state.data?.pendingMessageCount === 0;
+    if (!idle) {
+      resetIdleTimer(workspace_id, thread_id);
+      return;
+    }
+    try {
+      const record = await readOwnedRecord(configuredRoot, workspace_id, thread_id);
+      if (
+        record.attention === "uncertain" ||
+        record.attention === "stalled" ||
+        record.attention === "live-owner" ||
+        record.queue.some((item) => item.state === "uncertain" || item.state === "delivering")
+      ) {
+        resetIdleTimer(workspace_id, thread_id);
+        return;
+      }
+    } catch {
+      resetIdleTimer(workspace_id, thread_id);
+      return;
+    }
+    if (closed) return;
+    if (ownedAdapters.get(key) !== entry || entry.evicting === true || entry.generation !== generation) return;
+    if (responseLease !== null && responseLease.generation === generation) return;
+    if (ownedDelivering.has(key)) return;
+    entry.evicting = true;
+    const shutdown = await entry.adapter.close().catch(() => null);
+    if (shutdown && shutdown.confirmed_death === true) {
+      if (ownedAdapters.get(key) === entry) ownedAdapters.delete(key);
+      releaseOwnedChildIfDead(entry.child, shutdown, false);
+      void onOwnedExit(key, entry.adapter, entry.child, entry.process, entry.directory);
+    } else {
+      const runtime = runtimes.get(key);
+      if (runtime) runtime.lastUsed = nowFn();
+      void withThreadLock(workspace_id, thread_id, async () => {
+        try {
+          const current = ownedAdapters.get(key);
+          if (!current || current.generation !== generation) return;
+          const { record, directory } = await loadServiceRecord(workspace_id, thread_id);
+          const again = ownedAdapters.get(key);
+          if (!again || again.generation !== generation) return;
+          await persistRecord(directory, {
+            ...record,
+            process: entry.process,
+            attention: "live-owner",
+            updated_at: new Date().toISOString(),
+          });
+        } catch {
+          // Visible through the next read.
+        }
+      });
+    }
+  }
+
+  const runtimes = new Map();
+  const nowFn =
+    typeof clockImpl.now === "function"
+      ? () => clockImpl.now()
+      : typeof clockImpl.now === "number"
+        ? () => clockImpl.now
+        : () => Date.now();
+  let stallTimer = null;
+
+  function emitScoped(workspace_id, thread_id, generation, type, event) {
+    const listeners = subscribers.get(`${workspace_id}:${thread_id}`);
+    if (!listeners) return;
+    const payload = { workspace_id, thread_id, generation, type, event };
+    for (const listener of [...listeners]) {
+      try {
+        listener(payload);
+      } catch {
+        // A throwing subscriber must not affect scheduling or delivery.
+      }
+    }
+  }
+
+  function clearStallTimer() {
+    if (stallTimer !== null) {
+      clockImpl.clearTimeout(stallTimer);
+      stallTimer = null;
+    }
+  }
+
+  function resetStallTimer(generation) {
+    const lease = responseLease;
+    if (closed || !lease || lease.generation !== generation) return;
+    clearStallTimer();
+    stallTimer = clockImpl.setTimeout(() => {
+      stallTimer = null;
+      const current = responseLease;
+      if (closed || current !== lease || lease.generation !== generation) return;
+      void withThreadLock(lease.workspace_id, lease.thread_id, async () => {
+        try {
+          const { record, directory } = await loadServiceRecord(lease.workspace_id, lease.thread_id);
+          if (record.attention !== "stalled") {
+            await persistRecord(directory, { ...record, attention: "stalled", updated_at: new Date().toISOString() });
+          }
+        } catch {
+          // Visible through the next read.
+        }
+      });
+    }, 10 * 60 * 1000);
+    if (stallTimer && typeof stallTimer.unref === "function") stallTimer.unref();
+  }
+
+  function noteRuntimeEvent(workspace_id, thread_id, generation, event) {
+    const runtime = runtimes.get(`${workspace_id}:${thread_id}`);
+    if (!runtime || runtime.generation !== generation) return;
+    runtime.lastEventAt = nowFn();
+    runtime.lastUsed = runtime.lastEventAt;
+    if (!closed) {
+      resetIdleTimer(workspace_id, thread_id);
+    }
+    if (!closed && (event?.type === "transport_error" || event?.type === "policy_refusal")) {
+      const attention = event.type === "policy_refusal" ? "policy-refusal" : "uncertain";
+      const key = `${workspace_id}:${thread_id}`;
+      void withThreadLock(workspace_id, thread_id, async () => {
+        try {
+          const current = ownedAdapters.get(key);
+          if (!current || current.generation !== generation) return;
+          const { record, directory } = await loadServiceRecord(workspace_id, thread_id);
+          const again = ownedAdapters.get(key);
+          if (!again || again.generation !== generation) return;
+          if (record.attention !== attention) {
+            await persistRecord(directory, { ...record, attention, updated_at: new Date().toISOString() });
+          }
+        } catch {
+          // Visible through the next read.
+        }
+      });
+    }
+    let type = null;
+    if (event?.type === "message_update") {
+      type = "delta";
+      const delta = event.delta ?? event.assistantMessageEvent?.delta ?? "";
+      if (typeof delta === "string" && delta !== "") {
+        runtime.partial += delta;
+        if (Buffer.byteLength(runtime.partial, "utf8") > 256 * 1024) {
+          const bytes = Buffer.from(runtime.partial, "utf8");
+          let start = bytes.length - 256 * 1024;
+          while (start < bytes.length && (bytes[start] & 0xc0) === 0x80) start += 1;
+          runtime.partial = bytes.subarray(start).toString("utf8");
+        }
+      }
+    } else if (event?.type === "message_end") {
+      type = "message_end";
+      runtime.partial = "";
+    } else if (event?.type === "agent_settled") {
+      type = "settled";
+    } else if (event?.type === "tool_execution_start" || event?.type === "tool_execution_end") {
+      type = "tool";
+    } else if (event?.type === "entry_appended" || event?.type === "session_info") {
+      type = "state";
+    }
+    if (type === null) {
+      type =
+        event?.type === "extension_error" || event?.type === "transport_error" || event?.type === "policy_refusal"
+          ? "notice"
+          : "state";
+    }
+    emitScoped(workspace_id, thread_id, generation, type, event);
+    if (!closed) resetStallTimer(generation);
+  }
+
   function releaseLease(lease) {
-    if (responseLease === lease) responseLease = null;
+    if (responseLease !== lease) return;
+    clearStallTimer();
+    responseLease = null;
+    requestPump();
   }
 
   function withThreadLock(workspaceId, threadId, task) {
@@ -562,6 +891,20 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
   async function persistRecord(directory, record) {
     validateThread(record);
     await writeFileAtomic(join(directory, "threads", `${record.thread_id}.json`), `${JSON.stringify(record)}\n`);
+    const runtime = runtimes.get(`${record.workspace_id}:${record.thread_id}`);
+    const generation = runtime?.generation ?? null;
+    emitScoped(record.workspace_id, record.thread_id, generation, "state", {
+      type: "state",
+      queue: record.queue,
+      queue_paused: record.queue_paused,
+      attention: record.attention,
+    });
+    if (typeof record.attention === "string" && record.attention !== "") {
+      emitScoped(record.workspace_id, record.thread_id, generation, "notice", {
+        type: "notice",
+        attention: record.attention,
+      });
+    }
     return record;
   }
 
@@ -671,14 +1014,22 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
       await withThreadLock(workspaceId, threadId, async () => {
         const current = ownedAdapters.get(key);
         if (
-          !current ||
-          current.generation !== adapter.identity.generation ||
-          current.process.pid !== capturedProcess.pid ||
-          current.process.started_at !== capturedProcess.started_at
+          current &&
+          (current.generation !== adapter.identity.generation ||
+            current.process.pid !== capturedProcess.pid ||
+            current.process.started_at !== capturedProcess.started_at)
         ) {
           return;
         }
-        ownedAdapters.delete(key);
+        if (current) ownedAdapters.delete(key);
+        const runtime = runtimes.get(key);
+        if (runtime && runtime.generation === adapter.identity.generation) {
+          emitScoped(workspaceId, threadId, adapter.identity.generation, "state", {
+            type: "state",
+            state: "exited",
+          });
+          runtimes.delete(key);
+        }
         const record = await readOwnedRecord(configuredRoot, workspaceId, threadId);
         if (
           !record.process ||
@@ -830,7 +1181,7 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
     });
   }
 
-  async function list({ workspace_id } = {}) {
+  async function listRecords({ workspace_id } = {}) {
     if (typeof workspace_id !== "string" || !WORKSPACE_ID_PATTERN.test(workspace_id)) {
       throw invalidThread("workspace_id must be a workspace id");
     }
@@ -875,6 +1226,95 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
     return { threads, invalid };
   }
 
+  // Public FIFO projection: canonical records are copied and given 1-based
+  // queue_position for their globally eligible queued rows; stored ThreadV1
+  // bytes are never changed. Runtime state/partial/generation are transient.
+  async function list({ workspace_id } = {}) {
+    const requested = workspace_id ?? null;
+    if (requested !== null && (typeof requested !== "string" || !WORKSPACE_ID_PATTERN.test(requested))) {
+      throw invalidThread("workspace_id must be a workspace id");
+    }
+    const gathered = [];
+    if (requested !== null) {
+      gathered.push({ workspace_id: requested, listed: await listRecords({ workspace_id: requested }) });
+    }
+    const catalog = await listWorkspaces(configuredRoot);
+    for (const workspace of catalog.valid) {
+      if (requested !== null && workspace.id === requested) continue;
+      try {
+        gathered.push({ workspace_id: workspace.id, listed: await listRecords({ workspace_id: workspace.id }) });
+      } catch {
+        // Other workspaces are best-effort; the requested workspace already threw.
+      }
+    }
+
+    const currentItem = (head) => head.record.queue[head.index];
+    const compareHeads = (a, b) => {
+      const itemA = currentItem(a);
+      const itemB = currentItem(b);
+      return (
+        itemA.queued_at.localeCompare(itemB.queued_at) ||
+        a.record.thread_id.localeCompare(b.record.thread_id) ||
+        itemA.id.localeCompare(itemB.id)
+      );
+    };
+    let active = [];
+    for (const { workspace_id: id, listed } of gathered) {
+      for (const record of listed.threads) {
+        if (record.queue_paused || record.history_only) continue;
+        const head = record.queue[0];
+        if (!head || head.state !== "queued") continue;
+        if (record.attention === "missing-directory") continue;
+        active.push({ workspace_id: id, record, index: 0 });
+      }
+    }
+    const positions = new Map();
+    let position = 1;
+    while (active.length > 0) {
+      active.sort(compareHeads);
+      const head = active[0];
+      const item = currentItem(head);
+      positions.set(`${head.workspace_id}:${head.record.thread_id}:${item.id}`, position++);
+      const following = head.record.queue[head.index + 1];
+      if (following && following.state === "queued") head.index += 1;
+      else active.shift();
+    }
+
+    const threads = [];
+    const invalid = [];
+    for (const { workspace_id: id, listed } of gathered) {
+      if (requested !== null && id !== requested) continue;
+      invalid.push(...listed.invalid);
+      for (const record of listed.threads) {
+        const runtime = runtimes.get(`${id}:${record.thread_id}`);
+        const queue = record.queue.map((item) => ({
+          ...item,
+          queue_position: positions.get(`${id}:${record.thread_id}:${item.id}`) ?? null,
+        }));
+        let state;
+        if (record.history_only) state = "history-only";
+        else if (record.queue_paused) state = "paused";
+        else if (typeof record.attention === "string" && record.attention !== "") state = record.attention;
+        else {
+          const activeLease =
+            responseLease !== null &&
+            runtime !== undefined &&
+            runtime !== null &&
+            responseLease.generation === runtime.generation;
+          state = activeLease ? "active" : "idle";
+        }
+        threads.push({
+          ...record,
+          queue,
+          state,
+          partial: runtime?.partial ?? "",
+          generation: runtime?.generation ?? null,
+        });
+      }
+    }
+    return { threads, invalid };
+  }
+
   async function history({ workspace_id, thread_id, before, limit } = {}) {
     if (typeof workspace_id !== "string" || !WORKSPACE_ID_PATTERN.test(workspace_id)) {
       throw invalidThread("workspace_id must be a workspace id");
@@ -896,7 +1336,9 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
       throw invalidThread("workspace_id must be a workspace id");
     }
     if (!isUuid(thread_id)) throw invalidThread("thread_id must be a UUID");
-    return withThreadLock(workspace_id, thread_id, () => resumeLocked(workspace_id, thread_id));
+    const resumed = await withThreadLock(workspace_id, thread_id, () => resumeLocked(workspace_id, thread_id));
+    requestPump();
+    return resumed;
   }
 
   // Assumes the per-thread lock is held; send composes this same identity,
@@ -922,6 +1364,9 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
 
       const key = `${workspace_id}:${thread_id}`;
       const owned = ownedAdapters.get(key);
+      if (owned && owned.evicting === true) {
+        throw typedError("child-limit", "owned discussion child is being evicted");
+      }
       if (owned) {
         const observed = inspectProcess(owned.process.pid);
         const identityKnown = observed.state === "alive" && observed.started_at === owned.process.started_at;
@@ -938,6 +1383,9 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
         }
         try {
           const state = await owned.adapter.request({ type: "get_state" });
+          const ownedRuntime = runtimes.get(key);
+          if (ownedRuntime) ownedRuntime.lastUsed = nowFn();
+          resetIdleTimer(workspace_id, thread_id);
           const expectedFile = owned.adapter.identity.session_file ?? null;
           if (state.data?.sessionId !== current.session_id) {
             throw typedError("session-mismatch", "reused adapter session id does not match the thread");
@@ -951,18 +1399,20 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
             ...current,
             session_file: pinned ?? current.session_file,
             process: owned.process,
-            attention: resolved.attention[0] ?? current.attention,
+            attention:
+              resolved.attention[0] ?? (current.attention === "live-owner" ? null : current.attention),
             queue_paused: owned.process.started_at === null ? current.queue_paused : false,
           });
           return current;
         } catch (error) {
           const shutdown = await closeOwnedPiChild(owned.child, { clock: clockImpl });
-          ownedAdapters.delete(key);
-          ownedChildren.delete(owned.child);
           if (!shutdown.confirmed_death) {
+            owned.evicting = true;
             current = await persistRecord(directory, { ...current, process: owned.process, attention: "live-owner" });
             throw typedError("live-owner", "owned discussion process did not confirm death", { pid: owned.process.pid });
           }
+          ownedAdapters.delete(key);
+          ownedChildren.delete(owned.child);
           if (error.code === "session-mismatch") throw error;
         }
       }
@@ -997,6 +1447,8 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
       const assembled = await assembleContext({ root: configuredRoot, workspace, directory, record: current });
       if (closed) throw serviceClosed();
 
+      await acquireCapacity();
+      const releaseReservation = reservationRelease();
       let rawChild = null;
       let captured = null;
       let earlyPersist = null;
@@ -1016,6 +1468,7 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
             adapter: null,
             controller,
           });
+          releaseReservation();
           earlyPersist = persistRecord(directory, {
             ...current,
             session_file: spawnFile,
@@ -1039,6 +1492,8 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
         });
       } catch (error) {
         startupError = error;
+      } finally {
+        releaseReservation();
       }
 
       if (earlyPersist !== null) {
@@ -1046,8 +1501,11 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
           current = await earlyPersist;
         } catch (persistError) {
           if (rawChild !== null) {
-            await closeOwnedPiChild(rawChild, { clock: clockImpl }).catch(() => {});
-            ownedChildren.delete(rawChild);
+            const shutdown = await closeOwnedPiChild(rawChild, { clock: clockImpl }).catch(() => null);
+            const exitFacts =
+              typeof rawChild.exitCode === "number" ||
+              (rawChild.signalCode !== null && rawChild.signalCode !== undefined);
+            releaseOwnedChildIfDead(rawChild, shutdown, exitFacts);
           }
           throw persistError;
         }
@@ -1056,7 +1514,12 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
       if (startupError !== null) {
         const tracked = rawChild !== null ? ownedChildren.get(rawChild) : null;
         const shutdown = rawChild !== null ? await closeOwnedPiChild(rawChild, { clock: clockImpl }).catch(() => null) : null;
-        if (rawChild !== null) ownedChildren.delete(rawChild);
+        if (rawChild !== null) {
+          const exitFacts =
+            typeof rawChild.exitCode === "number" ||
+            (rawChild.signalCode !== null && rawChild.signalCode !== undefined);
+          releaseOwnedChildIfDead(rawChild, shutdown, exitFacts);
+        }
         if (tracked) {
           if (shutdown !== null && shutdown.confirmed_death === false) {
             current = await persistRecord(directory, { ...current, process: tracked.process, attention: "live-owner" });
@@ -1087,7 +1550,10 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
 
       const processInfo = captured ?? { pid: rawChild.pid, started_at: null };
       const stopClosedResume = async (shutdown) => {
-        ownedChildren.delete(rawChild);
+        const exitFacts =
+          typeof rawChild.exitCode === "number" ||
+          (rawChild.signalCode !== null && rawChild.signalCode !== undefined);
+        releaseOwnedChildIfDead(rawChild, shutdown, exitFacts);
         const unconfirmed = shutdown === null || shutdown === undefined || shutdown.confirmed_death === false;
         if (unconfirmed) {
           return persistRecord(directory, {
@@ -1122,7 +1588,10 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
         });
       } catch (persistError) {
         const shutdown = await closeOwnedPiChild(rawChild, { clock: clockImpl }).catch(() => null);
-        ownedChildren.delete(rawChild);
+        const exitFacts =
+          typeof rawChild.exitCode === "number" ||
+          (rawChild.signalCode !== null && rawChild.signalCode !== undefined);
+        releaseOwnedChildIfDead(rawChild, shutdown, exitFacts);
         if (shutdown && shutdown.confirmed_death === false && typeof rawChild?.pid === "number") {
           try {
             await persistRecord(directory, {
@@ -1163,13 +1632,36 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
       });
       const tracked = ownedChildren.get(rawChild);
       if (tracked) tracked.adapter = adapter;
+      runtimes.set(`${workspace_id}:${thread_id}`, {
+        generation: adapter.identity.generation,
+        lastEventAt: nowFn(),
+        lastUsed: nowFn(),
+        partial: "",
+        state: "ready",
+      });
+      resetIdleTimer(workspace_id, thread_id);
       adapter.events.on("event", (envelope) => {
         const event = envelope.event;
         if (event?.type === "exit") {
+          if (runtimes.get(key)?.generation === adapter.identity.generation) {
+            clearIdleTimer(key);
+          }
           const lease = responseLease;
-          if (lease && lease.generation === adapter.identity.generation) releaseLease(lease);
-          void onOwnedExit(key, adapter, rawChild, processInfo, directory);
-        } else if (event?.type === "agent_settled") {
+          if (lease && lease.generation === adapter.identity.generation) {
+            lease.settled = true;
+            void onOwnedExit(key, adapter, rawChild, processInfo, directory).then(() => {
+              const flight = ownedDelivering.get(key);
+              const hasAttempt = Boolean(flight && flight.id === lease.message_id);
+              if (!hasAttempt || lease.acknowledged) releaseLease(lease);
+            });
+          } else {
+            void onOwnedExit(key, adapter, rawChild, processInfo, directory);
+          }
+          return;
+        }
+        if (ownedAdapters.get(key)?.generation !== adapter.identity.generation) return;
+        noteRuntimeEvent(workspace_id, thread_id, adapter.identity.generation, event);
+        if (event?.type === "agent_settled") {
           const lease = responseLease;
           if (lease && lease.generation === adapter.identity.generation) {
             lease.settled = true;
@@ -1222,143 +1714,92 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
       throw typedError("invalid-message", `message text exceeds ${MAX_MESSAGE_BYTES} bytes`);
     }
 
-    const staged = await withThreadLock(workspace_id, thread_id, async () => {
+    // Admission only: dedup and enqueue under the per-thread lock. No lease or
+    // delivering work happens here; every prompt flows through the shared pump.
+    const admitted = await withThreadLock(workspace_id, thread_id, async () => {
       if (closed) throw serviceClosed();
       const { record, directory } = await loadServiceRecord(workspace_id, thread_id);
       if (record.history_only) throw typedError("history-only", "history-only threads cannot send");
       const existing = record.queue.find((item) => item.id === id);
-      if (existing) {
-        return { kind: "duplicate", record, message_id: id, state: existing.state };
-      }
+      if (existing) return { duplicate: true, state: existing.state, record };
       if (record.accepted_message_ids.includes(id)) {
-        return { kind: "duplicate", record, message_id: id, state: "accepted" };
+        return { duplicate: true, state: "accepted", record };
+      }
+      // A genuinely new ID on a paused queue must pass identity/context checks
+      // before any unpause; the new item is still durably enqueued and the
+      // queue stays paused when validation returns browse-only.
+      let latest = record;
+      if (record.queue_paused === true) {
+        latest = await resumeLocked(workspace_id, thread_id);
       }
       const item = { id, text, queued_at: new Date().toISOString(), state: "queued", attempt: 0 };
-      const queued = await persistRecord(directory, {
-        ...record,
-        queue: [...record.queue, item],
+      const updated = await persistRecord(directory, {
+        ...latest,
+        queue: [...latest.queue, item],
         updated_at: new Date().toISOString(),
       });
-      const head = queued.queue[0];
-      if (
-        !head ||
-        head.id !== id ||
-        head.state !== "queued" ||
-        queued.attention === "missing-directory" ||
-        responseLease !== null
-      ) {
-        return { kind: "queued", record: queued, message_id: id, state: "queued" };
-      }
-      const lease = {
-        workspace_id,
-        thread_id,
-        message_id: id,
-        generation: null,
-        settled: false,
-        acknowledged: false,
-      };
-      responseLease = lease;
-      let adapter;
-      try {
-        const resumed = await resumeLocked(workspace_id, thread_id);
-        const owned = ownedAdapters.get(`${workspace_id}:${thread_id}`);
-        const knownProcess =
-          resumed.process !== null &&
-          resumed.process !== undefined &&
-          typeof resumed.process.started_at === "string" &&
-          resumed.process.started_at !== "";
-        // Dispatch requires a validated known identity, an unpaused queue and a
-        // resolved target binding; an adapter entry alone is not sufficient.
-        if (!owned || resumed.queue_paused === true || !knownProcess || resumed.attention === "missing-directory") {
-          // Release only when there is no owner and no captured process that
-          // could still be live or unknown; otherwise retain exclusion.
-          if (!owned && (resumed.process === undefined || resumed.process === null)) releaseLease(lease);
-          return { kind: "queued", record: resumed, message_id: id, state: "queued" };
-        }
-        adapter = owned.adapter;
-        lease.generation = adapter.identity.generation;
-      } catch (error) {
-        let latest = null;
-        try {
-          latest = await readRecordAt(directory, workspace_id, thread_id);
-        } catch {
-          latest = null;
-        }
-        const hasOwner = Boolean(latest && latest.process) || ownedChildren.size > 0;
-        if (!hasOwner) releaseLease(lease);
-        throw error;
-      }
-      const latest = await readRecordAt(directory, workspace_id, thread_id);
-      let delivering;
-      try {
-        delivering = await persistRecord(directory, {
-          ...latest,
-          queue: latest.queue.map((entry) =>
-            entry.id === id ? { ...entry, state: "delivering", attempt: entry.attempt + 1 } : entry,
-          ),
-          updated_at: new Date().toISOString(),
-        });
-      } catch (error) {
-        // No prompt may be written; the item stays queued. Release the slot
-        // only after a confirmed idle observation, otherwise retain exclusion.
-        try {
-          const state = await adapter.request({ type: "get_state" });
-          if (
-            state.data?.isStreaming === false &&
-            state.data?.isCompacting === false &&
-            state.data?.pendingMessageCount === 0
-          ) {
-            releaseLease(lease);
-          }
-        } catch {
-          // Retain exclusion.
-        }
-        throw error;
-      }
-      const persistedAttempt = delivering.queue.find((entry) => entry.id === id)?.attempt ?? 0;
-      ownedDelivering.set(`${workspace_id}:${thread_id}`, {
-        id,
-        generation: lease.generation,
-        attempt: persistedAttempt,
-      });
-      if (closed) {
-        await persistRecord(directory, {
-          ...delivering,
-          queue: delivering.queue.map((entry) => (entry.id === id ? { ...entry, state: "uncertain" } : entry)),
-          attention: "uncertain",
-          updated_at: new Date().toISOString(),
-        }).catch(() => null);
-        ownedDelivering.delete(`${workspace_id}:${thread_id}`);
-        throw serviceClosed();
-      }
       return {
-        kind: "dispatch",
-        adapter,
-        directory,
-        record: delivering,
-        workspace_id,
-        thread_id,
-        message_id: id,
-        generation: lease.generation,
-        attempt: persistedAttempt,
-        lease,
+        duplicate: false,
+        queued: latest.queue_paused === true || latest.attention === "missing-directory",
+        record: updated,
       };
     });
 
-    if (staged.kind !== "dispatch") {
-      return {
-        thread: staged.record,
-        message_id: staged.message_id,
-        state: staged.state,
-        duplicate: staged.kind === "duplicate",
-      };
+    if (admitted.duplicate) {
+      return { thread: admitted.record, message_id: id, state: admitted.state, duplicate: true };
+    }
+    if (admitted.queued) {
+      requestPump();
+      return { thread: admitted.record, message_id: id, state: "queued", duplicate: false };
     }
 
+    const dispatchKey = `${workspace_id}:${thread_id}:${id}`;
+    waitingDispatches.add(dispatchKey);
+    let pass;
+    try {
+      pass = requestPumpPass();
+    } catch (error) {
+      waitingDispatches.delete(dispatchKey);
+      throw error;
+    }
+    if (pass === null) {
+      waitingDispatches.delete(dispatchKey);
+      requestPump();
+      return { thread: admitted.record, message_id: id, state: "queued", duplicate: false };
+    }
+    let failure = null;
+    try {
+      await pass;
+      failure = dispatchOutcomes.get(dispatchKey) ?? null;
+    } finally {
+      dispatchOutcomes.delete(dispatchKey);
+      waitingDispatches.delete(dispatchKey);
+    }
+    if (failure) throw failure;
+    const { record: latest } = await withThreadLock(workspace_id, thread_id, () =>
+      loadServiceRecord(workspace_id, thread_id),
+    );
+    if (latest.accepted_message_ids.includes(id)) {
+      return { thread: latest, message_id: id, state: "accepted", duplicate: false };
+    }
+    const item = latest.queue.find((entry) => entry.id === id);
+    return {
+      thread: latest,
+      message_id: id,
+      state: item ? item.state : "queued",
+      duplicate: false,
+    };
+  }
+
+  async function completeDispatch(staged) {
     // The RPC is awaited outside the per-thread lock so concurrent retries can
     // observe the durable delivering row and later Stop cannot deadlock.
+    const requestRuntime = runtimes.get(`${staged.workspace_id}:${staged.thread_id}`);
+    if (requestRuntime) requestRuntime.lastUsed = nowFn();
+    resetIdleTimer(staged.workspace_id, staged.thread_id);
     let response;
     try {
-      response = await staged.adapter.request({ type: "prompt", id: staged.message_id, message: text });
+      response = await staged.adapter.request({ type: "prompt", id: staged.message_id, message: staged.text });
     } catch (error) {
       await finalizeDeliveryFailure(staged, error);
       if (error.code === "command-failed" && !closed) {
@@ -1408,7 +1849,7 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
 
     let completed;
     try {
-      completed = await withThreadLock(workspace_id, thread_id, async () => {
+      completed = await withThreadLock(staged.workspace_id, staged.thread_id, async () => {
         const key = `${staged.workspace_id}:${staged.thread_id}`;
         const latest = await readRecordAt(staged.directory, staged.workspace_id, staged.thread_id);
         const flight = ownedDelivering.get(key);
@@ -1470,6 +1911,279 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
     return { thread: completed.record, message_id: staged.message_id, state: "accepted", duplicate: false };
   }
 
+  // Stage an already-queued eligible head for one thread. Takes the per-thread
+  // lock itself; callers must not hold it. The prompt text comes from the durable
+  // item, never from the latest request.
+  async function stageQueuedHead(workspace_id, thread_id, id) {
+    return withThreadLock(workspace_id, thread_id, async () => {
+      if (closed) return { kind: "skip", reason: "closed" };
+      const { record, directory } = await loadServiceRecord(workspace_id, thread_id);
+      if (record.history_only) return { kind: "skip", reason: "history-only" };
+      const head = record.queue[0];
+      if (!head || head.id !== id || head.state !== "queued") return { kind: "skip", reason: "not-head" };
+      if (record.queue_paused === true) return { kind: "skip", reason: "paused" };
+      if (record.attention === "missing-directory") return { kind: "skip", reason: "missing-directory" };
+      if (responseLease !== null) return { kind: "busy" };
+      const lease = { workspace_id, thread_id, message_id: id, generation: null, settled: false, acknowledged: false };
+      responseLease = lease;
+      let adapter;
+      try {
+        const resumed = await resumeLocked(workspace_id, thread_id);
+        const owned = ownedAdapters.get(`${workspace_id}:${thread_id}`);
+        const knownProcess =
+          resumed.process !== null &&
+          resumed.process !== undefined &&
+          typeof resumed.process.started_at === "string" &&
+          resumed.process.started_at !== "";
+        if (!owned || resumed.queue_paused === true || !knownProcess || resumed.attention === "missing-directory") {
+          if (!owned && (resumed.process === undefined || resumed.process === null)) releaseLease(lease);
+          return { kind: "skip", reason: "not-ready" };
+        }
+        adapter = owned.adapter;
+        lease.generation = adapter.identity.generation;
+        resetStallTimer(lease.generation);
+        const stagedRuntime = runtimes.get(`${workspace_id}:${thread_id}`);
+        if (stagedRuntime) stagedRuntime.lastUsed = nowFn();
+      } catch (error) {
+        let latest = null;
+        try {
+          latest = await readRecordAt(directory, workspace_id, thread_id);
+        } catch {
+          latest = null;
+        }
+        const recordedOwner =
+          latest && latest.process
+            ? inspectProcess(latest.process.pid).state !== "dead"
+            : false;
+        const rawOwner = [...ownedChildren.entries()].some(
+          ([child, entry]) =>
+            entry.threadId === thread_id &&
+            entry.workspaceId === workspace_id &&
+            !(typeof child.exitCode === "number" || (child.signalCode !== null && child.signalCode !== undefined)),
+        );
+        const hasOwner = recordedOwner || rawOwner;
+        if (!hasOwner) {
+          if (latest) {
+            const attention = attentionForError(error);
+            try {
+              await persistRecord(directory, {
+                ...latest,
+                queue_paused: true,
+                attention: attention ?? latest.attention,
+                updated_at: new Date().toISOString(),
+              });
+            } catch {
+              // The startup failure remains visible through the thrown error.
+            }
+          }
+          releaseLease(lease);
+        }
+        throw error;
+      }
+      const latest = await readRecordAt(directory, workspace_id, thread_id);
+      let delivering;
+      try {
+        delivering = await persistRecord(directory, {
+          ...latest,
+          queue: latest.queue.map((entry) =>
+            entry.id === id ? { ...entry, state: "delivering", attempt: entry.attempt + 1 } : entry,
+          ),
+          updated_at: new Date().toISOString(),
+        });
+      } catch (error) {
+        try {
+          const state = await adapter.request({ type: "get_state" });
+          if (
+            state.data?.isStreaming === false &&
+            state.data?.isCompacting === false &&
+            state.data?.pendingMessageCount === 0
+          ) {
+            releaseLease(lease);
+          }
+        } catch {
+          // Retain exclusion.
+        }
+        throw error;
+      }
+      const persistedAttempt = delivering.queue.find((entry) => entry.id === id)?.attempt ?? 0;
+      ownedDelivering.set(`${workspace_id}:${thread_id}`, {
+        id,
+        generation: lease.generation,
+        attempt: persistedAttempt,
+      });
+      if (closed) {
+        await persistRecord(directory, {
+          ...delivering,
+          queue: delivering.queue.map((entry) => (entry.id === id ? { ...entry, state: "uncertain" } : entry)),
+          attention: "uncertain",
+          updated_at: new Date().toISOString(),
+        }).catch(() => null);
+        ownedDelivering.delete(`${workspace_id}:${thread_id}`);
+        throw serviceClosed();
+      }
+      return {
+        kind: "dispatch",
+        adapter,
+        directory,
+        record: delivering,
+        workspace_id,
+        thread_id,
+        message_id: id,
+        generation: lease.generation,
+        attempt: persistedAttempt,
+        text: delivering.queue.find((entry) => entry.id === id)?.text ?? head.text,
+        lease,
+      };
+    });
+  }
+
+  // Service-global eligible head over all canonical workspaces, ordered by the
+  // durable queued_at, then thread_id, then message id. Paused, history-only,
+  // uncertain and delivering heads are excluded.
+  async function findEligibleHead(excluded) {
+    const catalog = await listWorkspaces(configuredRoot);
+    const heads = [];
+    for (const workspace of catalog.valid) {
+      let listed;
+      try {
+        listed = await listRecords({ workspace_id: workspace.id });
+      } catch {
+        continue;
+      }
+      for (const record of listed.threads) {
+        const key = `${workspace.id}:${record.thread_id}`;
+        const processInfo = record.process;
+        if (processInfo !== null && processInfo !== undefined) {
+          const observed = inspectProcess(processInfo.pid);
+          const owned = ownedAdapters.get(key);
+          const ownedMatches =
+            observed.state === "alive" &&
+            observed.started_at === processInfo.started_at &&
+            owned !== undefined &&
+            owned !== null &&
+            owned.evicting !== true &&
+            owned.process.pid === processInfo.pid &&
+            owned.process.started_at === processInfo.started_at;
+          if (observed.state !== "dead" && !ownedMatches) {
+            if (responseLease === null) {
+              responseLease = {
+                workspace_id: workspace.id,
+                thread_id: record.thread_id,
+                message_id: null,
+                generation: null,
+                settled: false,
+                acknowledged: true,
+                orphan: true,
+              };
+              void withThreadLock(workspace.id, record.thread_id, async () => {
+                try {
+                  const { record: latest, directory } = await loadServiceRecord(workspace.id, record.thread_id);
+                  if (latest.attention !== "live-owner") {
+                    await persistRecord(directory, {
+                      ...latest,
+                      attention: "live-owner",
+                      updated_at: new Date().toISOString(),
+                    });
+                  }
+                } catch {
+                  // Visible through the next read.
+                }
+              });
+            }
+            return null;
+          }
+        }
+        if (record.queue_paused || record.history_only) continue;
+        const head = record.queue[0];
+        if (!head || head.state !== "queued") continue;
+        if (record.attention === "missing-directory") continue;
+        if (excluded.has(`${workspace.id}:${record.thread_id}`)) continue;
+        heads.push({
+          workspace_id: workspace.id,
+          thread_id: record.thread_id,
+          message_id: head.id,
+          queued_at: head.queued_at,
+        });
+      }
+    }
+    heads.sort(
+      (a, b) =>
+        a.queued_at.localeCompare(b.queued_at) ||
+        a.thread_id.localeCompare(b.thread_id) ||
+        a.message_id.localeCompare(b.message_id),
+    );
+    return heads[0] ?? null;
+  }
+
+  function requestPumpPass() {
+    if (responseLease !== null || pumpRunning || closed) return null;
+    return requestPump();
+  }
+
+  function requestPump() {
+    pumpRequested = true;
+    if (!pumpRunning && !closed) {
+      const pass = runPump()
+        .catch(() => null)
+        .finally(() => {
+          if (pumpPromise === pass) pumpPromise = null;
+        });
+      pumpPromise = pass;
+    }
+    return pumpPromise;
+  }
+
+  // One serial pump pass at a time; it waits for the prompt ack (never for
+  // settlement) and drains free-lease candidates. Per-run exclusions prevent a
+  // failed or not-ready head from busy-looping. Dispatch errors for the
+  // initiating message are retained for that send to throw.
+  async function runPump() {
+    if (pumpRunning) return;
+    pumpRunning = true;
+    pumpRequested = false;
+    const excluded = new Set();
+    try {
+      while (!closed) {
+        if (responseLease !== null) return;
+        let candidate;
+        try {
+          candidate = await findEligibleHead(excluded);
+        } catch {
+          return;
+        }
+        if (!candidate) return;
+        const threadKey = `${candidate.workspace_id}:${candidate.thread_id}`;
+        const messageKey = `${threadKey}:${candidate.message_id}`;
+        let staged;
+        try {
+          staged = await stageQueuedHead(candidate.workspace_id, candidate.thread_id, candidate.message_id);
+        } catch (error) {
+          excluded.add(threadKey);
+          if (waitingDispatches.has(messageKey)) dispatchOutcomes.set(messageKey, error);
+          continue;
+        }
+        if (staged.kind !== "dispatch") {
+          excluded.add(threadKey);
+          continue;
+        }
+        try {
+          await completeDispatch(staged);
+          dispatchOutcomes.delete(messageKey);
+        } catch (error) {
+          excluded.add(threadKey);
+          if (waitingDispatches.has(messageKey)) dispatchOutcomes.set(messageKey, error);
+        }
+      }
+    } finally {
+      pumpRunning = false;
+      if (pumpRequested && !closed && responseLease === null) {
+        queueMicrotask(() => requestPump());
+      } else {
+        pumpRequested = false;
+      }
+    }
+  }
+
   // Best-effort uncertainty marking for a dispatched attempt that did not reach
   // acceptance. Only the exact persisted delivering attempt is finalized; a
   // stale tuple or a non-matching item is left untouched and the flight record
@@ -1505,7 +2219,12 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
         return commandFailed ? { ...entry, state: "queued" } : { ...entry, state: "uncertain" };
       });
       const next = { ...latest, queue, updated_at: new Date().toISOString() };
-      if (!commandFailed) next.attention = "uncertain";
+      if (commandFailed) {
+        next.queue_paused = true;
+        next.attention = "prompt-failed";
+      } else {
+        next.attention = "uncertain";
+      }
       let saved = false;
       try {
         await persistRecord(staged.directory, next);
@@ -1580,6 +2299,137 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
     });
   }
 
+  // Pauses this thread's queue before any RPC, then (outside the lock) stops the
+  // currently owned generation. The lease is released only through confirmed
+  // idle after abort, agent_settled, or real exit, and only once the attempt
+  // outcome is durable. Recorded tuples are inspected conservatively; numeric
+  // PIDs are never signalled and other queues are untouched.
+  async function stop({ workspace_id, thread_id } = {}) {
+    if (closed) throw serviceClosed();
+    if (typeof workspace_id !== "string" || !WORKSPACE_ID_PATTERN.test(workspace_id)) {
+      throw invalidThread("workspace_id must be a workspace id");
+    }
+    if (!isUuid(thread_id)) throw invalidThread("thread_id must be a UUID");
+
+    const key = `${workspace_id}:${thread_id}`;
+    const paused = await withThreadLock(workspace_id, thread_id, async () => {
+      if (closed) throw serviceClosed();
+      const { record, directory } = await loadServiceRecord(workspace_id, thread_id);
+      if (record.history_only) throw typedError("history-only", "history-only threads cannot stop");
+      return persistRecord(directory, {
+        ...record,
+        queue_paused: true,
+        updated_at: new Date().toISOString(),
+      });
+    });
+
+    const persistStopAttention = (attention) =>
+      withThreadLock(workspace_id, thread_id, async () => {
+        const { record, directory } = await loadServiceRecord(workspace_id, thread_id);
+        if (record.attention === attention) return record;
+        return persistRecord(directory, { ...record, attention, updated_at: new Date().toISOString() });
+      });
+
+    const owned = ownedAdapters.get(key);
+    const lease = responseLease;
+    const matchesLease =
+      lease !== null &&
+      lease.workspace_id === workspace_id &&
+      lease.thread_id === thread_id &&
+      (owned === null || owned === undefined || lease.generation === owned.generation);
+    const releaseSettledLease = () => {
+      if (matchesLease && lease.acknowledged && lease.settled) releaseLease(lease);
+    };
+
+    if (owned) {
+      const observed = inspectProcess(owned.process.pid);
+      const identityKnown = observed.state === "alive" && observed.started_at === owned.process.started_at;
+      if (!identityKnown) {
+        const latest = await persistStopAttention(observed.state === "dead" ? null : "live-owner");
+        if (matchesLease && observed.state === "dead" && ownedAdapters.get(key) === owned) {
+          lease.settled = true;
+        }
+        releaseSettledLease();
+        return { thread: latest, stopped: false };
+      }
+      try {
+        const before = await owned.adapter.request({ type: "get_state" });
+        if (typeof before.data?.pendingMessageCount === "number" && before.data.pendingMessageCount > 0) {
+          await owned.adapter.request({ type: "clear_queue" });
+        }
+        await owned.adapter.request({ type: "abort" });
+        const after = await owned.adapter.request({ type: "get_state" });
+        const idle =
+          after.data?.isStreaming === false &&
+          after.data?.isCompacting === false &&
+          after.data?.pendingMessageCount === 0;
+        if (idle) {
+          if (ownedAdapters.get(key) !== owned) {
+            const latest = await persistStopAttention("uncertain");
+            return { thread: latest, stopped: false };
+          }
+          const latest = await persistStopAttention(null);
+          if (matchesLease) {
+            lease.settled = true;
+            if (lease.acknowledged) releaseLease(lease);
+          }
+          return { thread: latest, stopped: true };
+        }
+        const latest = await persistStopAttention("uncertain");
+        return { thread: latest, stopped: false };
+      } catch (error) {
+        const attention = error && error.code === "policy-refusal" ? "policy-refusal" : "uncertain";
+        const latest = await persistStopAttention(attention);
+        return { thread: latest, stopped: false };
+      }
+    }
+
+    // No owned adapter: inspect the recorded tuple conservatively.
+    const recorded = paused.process;
+    if (recorded === null || recorded === undefined) {
+      const liveRaw = [...ownedChildren.entries()].some(
+        ([child, entry]) =>
+          entry.workspaceId === workspace_id &&
+          entry.threadId === thread_id &&
+          !(typeof child.exitCode === "number" || (child.signalCode !== null && child.signalCode !== undefined)),
+      );
+      if (matchesLease && lease.orphan === true && !liveRaw) {
+        lease.settled = true;
+        if (lease.acknowledged) releaseLease(lease);
+      } else {
+        releaseSettledLease();
+      }
+      return { thread: paused, stopped: false };
+    }
+    const observed = inspectProcess(recorded.pid);
+    if (observed.state === "dead") {
+      const cleaned = await withThreadLock(workspace_id, thread_id, async () => {
+        const { record, directory } = await loadServiceRecord(workspace_id, thread_id);
+        if (
+          record.process &&
+          record.process.pid === recorded.pid &&
+          record.process.started_at === recorded.started_at
+        ) {
+          const { process: _process, ...rest } = record;
+          return persistRecord(directory, {
+            ...rest,
+            attention: record.attention === "live-owner" ? null : record.attention,
+          });
+        }
+        return record;
+      });
+      if (matchesLease && lease.message_id === null && lease.generation === null) {
+        lease.settled = true;
+        if (lease.acknowledged) releaseLease(lease);
+      } else {
+        releaseSettledLease();
+      }
+      return { thread: cleaned, stopped: false };
+    }
+    const latest = await persistStopAttention("live-owner");
+    return { thread: latest, stopped: false };
+  }
+
   function subscribe({ workspace_id, thread_id } = {}, listener) {
     if (closed) throw serviceClosed();
     if (typeof workspace_id !== "string" || !WORKSPACE_ID_PATTERN.test(workspace_id)) {
@@ -1604,6 +2454,8 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
 
   function close() {
     if (closePromise !== null) return closePromise;
+    clearStallTimer();
+    clearAllIdleTimers();
     closed = true;
     for (const [key, listeners] of subscribers) {
       const [workspaceId, threadId] = key.split(":");
@@ -1631,7 +2483,10 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
         const result = entry.adapter
           ? await entry.adapter.close().catch(() => null)
           : await closeOwnedPiChild(child, { clock: clockImpl }).catch(() => null);
-        if (result && result.confirmed_death === false && typeof entry.process?.pid === "number") {
+        const confirmed = result !== null && result !== undefined && result.confirmed_death === true;
+        if (confirmed) {
+          ownedChildren.delete(child);
+        } else if (typeof entry.process?.pid === "number") {
           try {
             await withThreadLock(entry.workspaceId, entry.threadId, async () => {
               const record = await readOwnedRecord(configuredRoot, entry.workspaceId, entry.threadId);
@@ -1640,22 +2495,32 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
           } catch {
             // The unconfirmed result remains observable to the caller.
           }
-        } else {
-          ownedChildren.delete(child);
         }
         return result;
       }),
     );
+    // Drain exit cleanup and fault publication that were serialized under the
+    // per-thread locks or the pump, including locks registered while the owned
+    // children were closing. This stays inside the single existing 5s race.
+    const drain = (async () => {
+      await work.catch(() => {});
+      const first = [...threadLocks.values()];
+      const pumps = pumpPromise !== null ? [pumpPromise.catch(() => null)] : [];
+      await Promise.allSettled([...first, ...pumps]);
+      const late = [...threadLocks.values()];
+      if (late.length > 0) await Promise.allSettled(late);
+      if (pumpPromise !== null) await pumpPromise.catch(() => null);
+    })();
     closePromise = (async () => {
       let timer = null;
       const deadline = new Promise((resolvePromise) => {
         timer = clockImpl.setTimeout(resolvePromise, 5000);
       });
-      await Promise.race([work.catch(() => {}), deadline]);
+      await Promise.race([drain, deadline]);
       if (timer !== null) clockImpl.clearTimeout(timer);
     })();
     return closePromise;
   }
 
-  return { create, list, history, send, discard, subscribe, resume, close };
+  return { create, list, history, send, discard, subscribe, resume, stop, close };
 }
