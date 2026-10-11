@@ -49,6 +49,7 @@ Correct only substantive defects:
 - Missing acceptance coverage or non-automatable criteria.
 - Executable Evidence Plan defects: missing or invalid posture; incomplete AC → CL → FH → EV traceability; an EV item owned by no step or by more than one step; a gate that cannot reject its failure hypothesis; a hypothesis with no credible failure mechanism, invented to attach an assertion to a criterion; human review/manual QA used as a safety gate; or evidence forms, independence, environments, and deployment proof that do not fit actual risk.
 - Pre-mortem defects: a missing pre-mortem, or a credible concern with no disposition (AC, step, EV item, or explicitly accepted risk).
+- Unearned guards: an invariant, criterion, `FH-*`, or `EV-*` gate whose only basis is a `hypothetical` risk (no citation to an incident, bug report, failing run, record/log path, commit, or sourced requirement), or a gate for a `design-enforced` risk whose mechanism is not new code this spec builds. Remove it, move the risk to the spec's `Accepted risks` list, and keep the claim/gate mapping valid.
 - Steps that are not deterministic, minimal, self-contained, forward-only, or dependency ordered.
 - Non-flat step numbering, mismatched `Covers:` tags, or incorrect complexity/visual flags.
 - Steps large enough that independent concerns can be implemented and verified separately without a compatibility shim.
@@ -99,7 +100,7 @@ Run `node ~/.agents/skills/spec-work-tour/scripts/validate-evidence-plan.mjs <pa
 
 ### 4. Derive prose guardrails and invariants
 
-Walk Architecture, Notes, and Implementation Steps for normative statements that constrain ownership, placement, layering, negative boundaries, or licensed deviations from precedent. A reuse decision that names an existing symbol as the owner of a behavior is an ownership constraint. Do not restate acceptance criteria that tests already own and do not invent constraints.
+Walk Architecture, Notes, and Implementation Steps for normative statements that constrain ownership, placement, layering, negative boundaries, or licensed deviations from precedent. A reuse decision that names an existing symbol as the owner of a behavior is an ownership constraint. Do not restate acceptance criteria that tests already own and do not invent constraints. Only `observed` risks and sourced requirements produce entries; a `design-enforced` risk is cited by its mechanism in the existing entry or step, and a `hypothetical` one (see the spec's `Accepted risks`) never becomes a guardrail or invariant.
 
 When at least one implementation guardrail exists, atomically write `criteria.md` with:
 

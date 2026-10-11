@@ -260,7 +260,7 @@ back during spec-writing and implementation.]
 rationale, crossed boundaries, impacts, reversibility, uncertainty, required
 evidence layers, independence, environments/artifacts, merge/deploy gates,
 and QA mode. Then list provisional `CL-*` claims, credible `FH-*` failure
-hypotheses, and the executable or deterministic evidence capable of rejecting
+hypotheses (only `observed` risks), and the executable or deterministic evidence capable of rejecting
 each failure. Include exact project commands and production-like seams where
 verifiable. Evidence must establish the correct problem and real composition at the requested deliverable
 boundary (public exports for a library, application wiring for an integrated feature), with separate merge/deploy/post-deploy claims without depending on future human review
@@ -272,10 +272,23 @@ Optional exploration may supplement but never establish the merge verdict.
 ## Pre-mortem & Risks
 
 [Assume this change failed in its intended environment under resolved project context: what was the most likely
-cause? List the plausible failure modes with their mechanism. Mark the
-credible ones — each must either be addressed in this design or explicitly
-handed to the spec's Pre-mortem section for disposition. Include anything
-else needing special attention during implementation.]
+cause? List the plausible failure modes with their mechanism. Tag each risk,
+invariant, or proposed guard (lock, lease, recovery mode, incident record,
+evidence gate) with exactly one of:
+`observed` (cite the incident, bug report, failing run, record/log path, or
+commit), `design-enforced` (name the mechanism in this design or existing code
+that already prevents it), or `hypothetical` (neither). Only `observed` items
+justify a new invariant, gate, test, lock, or recovery path; `design-enforced`
+items need no new guard. Mark the credible `observed` ones — each must either
+be addressed in this design or explicitly handed to the spec's Pre-mortem
+section for disposition. Include anything else needing special attention
+during implementation.]
+
+## Accepted Risks
+
+[One line per `hypothetical` risk: the risk and why no guard is built. Never an
+invariant, evidence gate, test, lock, or recovery path unless the operator
+explicitly promotes it. If none: "None."]
 ```
 
 ### Guidance for writing proposals
@@ -405,4 +418,4 @@ These guide every decision in the skill:
 6. **Evidence over invention.** Do not fabricate file paths, versions, commands, dependencies, or architectural conventions. If a detail cannot be verified from the repository or user input, label it as an assumption or open question.
 
 7. **Necessary over complete.** Propose the least software that solves the stated problem — reuse before building, cut speculative flexibility, and list what you deliberately did not build. Use enough proof to reject credible failures; verification tooling and operational effects also
-need justification under project context.
+need justification under project context. A failure that has not happened and that the design does not already prevent is an accepted risk, not a built guard.

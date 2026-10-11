@@ -125,7 +125,7 @@ Reconciliation principles:
 
 - Be pragmatic, not exhaustive. A critique explores possibilities; the spec commits to decisions.
 - State your reasoning when deferring a critique recommendation.
-- Do not over-engineer to satisfy hypotheticals.
+- Do not over-engineer to satisfy hypotheticals. Carry the critique's `observed` / `design-enforced` / `hypothetical` tags into the spec; an untagged or uncited recommendation that adds a guard is `hypothetical`. See Risk Grounding below.
 - Resolve tensions using actual project context: team size, maturity, timeline, and current architecture.
 - Make the final spec read as one coherent plan, not an accumulated list of compromises.
 
@@ -197,6 +197,14 @@ enforcement owner, and AC/CL references. Preserve justified error/fallback behav
 fail-fast as a blanket replacement for a sourced contract. Use existing acceptance and evidence
 identifiers, not a parallel invariant schema.
 
+### Risk Grounding
+
+Every risk, invariant, or guard (lock, lease, recovery mode, incident record, evidence gate, extra test) in the proposal, critique, or this spec has exactly one tag. A generated proposal or critique cannot authorize itself, so an untagged item, or an `observed` item without a citation, is `hypothetical`.
+
+- `observed` — cites an incident, bug report, failing run, record/log path, commit, or sourced requirement. Only these become `invariants.md` entries, `criteria.md` guardrails, `FH-*` hypotheses, and `EV-*` gates.
+- `design-enforced` — cite the mechanism (spec step, or existing file/symbol) that prevents it. It gets no invariant and no gate of its own. Add a gate only when the mechanism is new code this spec builds, and then the gate tests that mechanism.
+- `hypothetical` — goes in the spec's **Accepted risks** list (see §7) as one line, with no invariant, criterion, gate, test, lock, or recovery path unless the operator explicitly promotes it. Remove proposal or critique content that builds a guard only for a hypothetical risk and note the removal in Notes.
+
 ### 5. Acceptance Criteria
 
 Create a numbered list (`AC-1`, `AC-2`, etc.) of observable, automatable assertions:
@@ -214,7 +222,7 @@ Then define stable, numbered:
 
 - `CL-*` falsifiable claims mapping every applicable acceptance criterion and sourced material
   architecture/deployment obligation, each with `phase: merge | deploy | post-deploy`.
-- `FH-*` credible ways each claim could be false while superficial checks pass.
+- `FH-*` credible ways each claim could be false while superficial checks pass. Per Risk Grounding, a hypothesis is `observed` or names how a `design-enforced` mechanism built by this spec could fail; never `hypothetical`.
 - `EV-*` executable commands or deterministic inspections capable of rejecting those failures.
 
 For every EV item name:
@@ -244,7 +252,9 @@ implementation behavior as approved business intent. Do not add per-test schema 
 
 ### 7. Pre-mortem
 
-Assume this change failed in its intended environment under the resolved project context. Create a numbered list (`PM-1`, `PM-2`, …) of the most plausible causes, each with its concrete failure mechanism. Disposition every item on a `Disposition:` line: covered by an acceptance criterion (`AC-n`), handled by a named implementation step, proven absent by an evidence item (`EV-n`), or explicitly accepted as a risk with rationale. A credible concern with no disposition is a spec defect. Do not pad the list with far-fetched scenarios to look thorough — a short list of real risks, each dispositioned, beats a long performative one.
+Assume this change failed in its intended environment under the resolved project context. Create a numbered list (`PM-1`, `PM-2`, …) of the most plausible causes, each with its concrete failure mechanism. Disposition every item on a `Disposition:` line: covered by an acceptance criterion (`AC-n`), handled by a named implementation step, proven absent by an evidence item (`EV-n`), or explicitly accepted as a risk with rationale. A `hypothetical` concern is not a `PM-*` item; list it under **Accepted risks** below with no AC, step, or EV item. A credible concern with no disposition is a spec defect. Do not pad the list with far-fetched scenarios to look thorough — a short list of real risks, each dispositioned, beats a long performative one.
+
+**Accepted risks.** After the pre-mortem list, add an `Accepted risks` list in `spec.md`: one line per `hypothetical` risk (the risk and why no guard is built; use `None.` when empty). They are not claims, hypotheses, or gates and do not appear in `evidence-plan.json`.
 
 ### 8. Notes
 
