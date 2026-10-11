@@ -3,9 +3,11 @@
 // mutation; refusals print one {error,path} JSON object to stderr and exit 1.
 // Reads never create anything and no target repository is ever written.
 
+import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
+import { createInterface } from 'node:readline/promises';
 import {
   addArtifact,
   addMaterial,
@@ -18,6 +20,7 @@ import {
   storageStatus,
 } from './store.mjs';
 import { formatScalar, planKitEdit } from './kit.mjs';
+import { launchAssignment, resolveAssignment } from './assignments.mjs';
 
 const USAGE = `Usage: node scripts/workspaces/cli.mjs <command> [options]
 
@@ -32,6 +35,7 @@ Commands:
   add-brief ID --title TITLE [--from FILE]
   add-note ID --title TITLE [--from FILE]
   add-artifact ID (--repository RID --path REL | --url URL) [--title T] [--note N]
+  launch ID --brief REL (--instructions TEXT | --instructions-file PATH) [--id UUID] [--target RID]
 
 Global options:
   --root PATH   Override ADJACENT_STORAGE_ROOT (default ~/Documents/adjacent-storage)
@@ -53,6 +57,31 @@ const COMMANDS = {
   'add-artifact': {
     positionals: 1,
     flags: { '--repository': 'value', '--path': 'value', '--url': 'value', '--title': 'value', '--note': 'value' },
+  },
+  launch: {
+    positionals: 1,
+    flags: {
+      '--brief': 'value',
+      '--skill': 'value',
+      '--instructions': 'value',
+      '--instructions-file': 'value',
+      '--id': 'value',
+      '--target': 'value',
+      '--spec-package': 'value',
+      '--provider': 'value',
+      '--model': 'value',
+      '--thinking': 'value',
+      '--trust': 'value',
+      '--authority': 'value',
+      '--workflow': 'value',
+      '--attempt': 'value',
+      '--supersedes': 'value',
+      '--tmux-socket': 'value',
+      '--tmux-session': 'value',
+      '--pi-path': 'value',
+      '--digest': 'value',
+      '--yes': 'boolean',
+    },
   },
 };
 const GLOBAL_FLAGS = { '--root': 'value', '--json': 'boolean' };
@@ -120,6 +149,17 @@ function parseArgs(argv) {
       if (!artifactPath) throw new UsageError('add-artifact requires --path with --repository');
     } else {
       throw new UsageError('add-artifact requires --url or --repository with --path');
+    }
+  }
+  if (command === 'launch') {
+    if (!('--brief' in options)) throw new UsageError('launch requires --brief');
+    const hasInstructions = '--instructions' in options;
+    const hasInstructionsFile = '--instructions-file' in options;
+    if (!hasInstructions && !hasInstructionsFile) {
+      throw new UsageError('launch requires --instructions or --instructions-file');
+    }
+    if (hasInstructions && hasInstructionsFile) {
+      throw new UsageError('launch accepts either --instructions or --instructions-file, not both');
     }
   }
   return { command, options, positionals };
@@ -203,6 +243,140 @@ async function kitEdit(command, root, id, options) {
   return applyKitEdit(root, id, plan);
 }
 
+// Launch preview and confirmation. Resolution is read-only; the confirmation
+// binds the displayed contract digest and the exact resolved result is handed
+// to launchAssignment, so the approved brief bytes and argv cannot change
+// between preview and spawn.
+async function buildLaunchInput(root, workspaceId, options) {
+  const instructions = options['--instructions-file'] !== undefined
+    ? await readFile(options['--instructions-file'], 'utf8')
+    : options['--instructions'];
+  return {
+    assignment_id: options['--id'] ?? randomUUID(),
+    workspace_id: workspaceId,
+    storageRoot: root,
+    home: homedir(),
+    brief: options['--brief'],
+    skill: options['--skill'] ?? 'general',
+    instructions,
+    target: options['--target'],
+    specPackage: options['--spec-package'],
+    workflow_id: options['--workflow'],
+    publication_authority: options['--authority'] ?? 'none',
+    attempt_kind: options['--attempt'] ?? 'initial',
+    supersedes: options['--supersedes'],
+    provider: options['--provider'],
+    model: options['--model'],
+    thinking: options['--thinking'],
+    project_trust: options['--trust'],
+    tmux_socket: options['--tmux-socket'],
+    tmux_session: options['--tmux-session'],
+    pi_path: options['--pi-path'],
+  };
+}
+
+function previewObject(preview) {
+  const { record } = preview;
+  return {
+    assignment_id: record.assignment_id,
+    workspace_id: record.workspace_id,
+    workspace_directory: record.workspace_directory,
+    storage_root: record.storage_root,
+    execution_dir: record.execution_dir,
+    repository_id: record.repository_id,
+    spec_package: record.spec_package,
+    brief: record.brief,
+    brief_sha256: record.brief_sha256,
+    brief_snapshot: record.brief_snapshot,
+    skill: record.skill,
+    skill_path: record.skill_path,
+    instructions: record.instructions,
+    provider: record.provider,
+    model: record.model,
+    thinking: record.thinking,
+    project_trust: record.project_trust,
+    publication_authority: record.publication_authority,
+    publication_authority_note: 'grants no merge/deploy',
+    workflow_id: record.workflow_id,
+    attempt_kind: record.attempt_kind,
+    supersedes: record.supersedes,
+    contract_digest: preview.contractDigest,
+    tmux_socket: record.tmux_socket,
+    tmux_session: record.tmux_session,
+    coordination_database: record.coordination_database,
+    pi_session_dir: record.pi_session_dir,
+    pi_path: record.pi_path,
+    piArgs: preview.piArgs,
+  };
+}
+
+async function printPreview(preview, options) {
+  const view = previewObject(preview);
+  if (options['--json'] === true) {
+    await print(JSON.stringify(view));
+    return;
+  }
+  const lines = ['launch preview'];
+  for (const [key, value] of Object.entries(view)) {
+    if (key === 'piArgs' || key === 'publication_authority_note') continue;
+    if (key === 'publication_authority') {
+      lines.push(`${key} ${value} (grants no merge/deploy)`);
+      continue;
+    }
+    lines.push(`${key} ${value === null || value === undefined ? 'null' : value}`);
+  }
+  lines.push('argv:');
+  for (const arg of view.piArgs) lines.push(`  ${arg}`);
+  await print(lines.join('\n'));
+}
+
+async function confirmLaunch(preview, options) {
+  if (options['--digest'] !== undefined) {
+    if (options['--digest'] !== preview.contractDigest) {
+      throw new Error(`digest mismatch: reviewed ${options['--digest']} does not match resolved ${preview.contractDigest}`);
+    }
+    return;
+  }
+  if (process.stdin.isTTY !== true || process.stdout.isTTY !== true) {
+    throw new Error('launch requires --digest when stdin and stdout are not a TTY');
+  }
+  if (options['--yes'] !== true) throw new Error('interactive launch requires --yes');
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  let answer;
+  try {
+    answer = await rl.question('Type yes to launch: ');
+  } finally {
+    rl.close();
+  }
+  if (answer.trim() !== 'yes') throw new Error('launch confirmation refused: expected "yes"');
+}
+
+async function printLaunchResult(record, preview, options) {
+  if (options['--json'] === true) {
+    await print(JSON.stringify({ record, digest: preview.contractDigest, argv: preview.piArgs }));
+    return;
+  }
+  await print([
+    `launched ${record.assignment_id}`,
+    `digest ${preview.contractDigest}`,
+    `socket ${record.tmux_socket}`,
+    `session ${record.tmux_session}`,
+    `execution_dir ${record.execution_dir}`,
+  ].join('\n'));
+}
+
+async function launchCommand(root, workspaceId, options) {
+  const input = await buildLaunchInput(root, workspaceId, options);
+  const preview = await resolveAssignment(input);
+  await printPreview(preview, options);
+  await confirmLaunch(preview, options);
+  const record = await launchAssignment(input, {
+    expectedDigest: preview.contractDigest,
+    resolved: preview,
+  });
+  await printLaunchResult(record, preview, options);
+}
+
 async function execute(command, root, options, positionals) {
   switch (command) {
     case 'status': return storageStatus(root);
@@ -222,6 +396,9 @@ async function execute(command, root, options, positionals) {
         kind: 'note', title: options['--title'], content: await readContent(options),
       });
     case 'add-artifact': return addArtifact(root, positionals[0], artifactOptions(options));
+    case 'launch':
+      await launchCommand(root, positionals[0], options);
+      return undefined;
     case 'add-repo':
     case 'set-role': return kitEdit(command, root, positionals[0], options);
     default: throw new UsageError(`Unknown command: ${command}`);
