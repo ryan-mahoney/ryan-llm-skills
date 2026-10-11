@@ -1350,22 +1350,27 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
           ...item,
           queue_position: positions.get(`${id}:${record.thread_id}:${item.id}`) ?? null,
         }));
+        // The single in-flight response lease is server-owned transient state.
+        // It is computed before attention collapses the projected state so a
+        // stalled-but-still-owned response keeps a truthful Stop path.
+        const ownsResponse =
+          responseLease !== null &&
+          responseLease.workspace_id === id &&
+          responseLease.thread_id === record.thread_id &&
+          runtime !== undefined &&
+          runtime !== null &&
+          responseLease.generation !== null &&
+          responseLease.generation === runtime.generation;
         let state;
         if (record.history_only) state = "history-only";
         else if (record.queue_paused) state = "paused";
         else if (typeof record.attention === "string" && record.attention !== "") state = record.attention;
-        else {
-          const activeLease =
-            responseLease !== null &&
-            runtime !== undefined &&
-            runtime !== null &&
-            responseLease.generation === runtime.generation;
-          state = activeLease ? "active" : "idle";
-        }
+        else state = ownsResponse ? "active" : "idle";
         threads.push({
           ...record,
           queue,
           state,
+          owns_response: ownsResponse,
           partial: runtime?.partial ?? "",
           generation: runtime?.generation ?? null,
         });

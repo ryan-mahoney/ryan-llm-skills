@@ -195,6 +195,7 @@ let selectedThread=null,threadGeneration=0,threadHistoryRequest=0;
 let threadHistoryEntries=[],threadHasOlder=false,threadHistoryLoading=false,threadHistoryTruncated=false,threadIncompleteTail=false;
 let threadPartial='',threadToolNote='',threadDraft='',threadSendId=null,threadSendDraft=null;
 let threadRequestError=null,threadPending=null,threadStickBottom=true,threadFocusTarget=null;
+let threadOpSeq=0,threadPendingToken=0;
 let threadSource=null,threadSourceKey=null,threadStreamState=null,threadLiveNotice='';
 let threadBriefTitle='',threadBriefContent='',threadBriefRequestId=null,threadBriefPendingId=null,threadBriefDraft=null;
 let threadBriefSavedTitle=null,threadBriefSavedContent=null,threadAssignmentId=null;
@@ -376,7 +377,7 @@ function handleThreadFrame(type,data){
  const event=data.event&&typeof data.event==='object'?data.event:{};
  if(type==='delta'){const delta=typeof event.delta==='string'?event.delta:typeof event.assistantMessageEvent?.delta==='string'?event.assistantMessageEvent.delta:'';if(delta){threadPartial+=delta;threadStickBottom=true;renderThreadTranscript();}return;}
  if(type==='tool'){const name=str(event.toolName||event.tool||event.name||'');threadToolNote=name?`Running tool: ${name}`:'Tool activity in progress';threadStickBottom=true;renderThreadTranscript();return;}
- if(type==='message_end'){const text=threadEventText(event);if(text)threadPartial=text;threadToolNote='';renderThreadTranscript();setTimeout(()=>refreshThreadTail(),400);return;}
+ if(type==='message_end'){const text=threadEventText(event);if(text)threadPartial=text;threadToolNote='';renderThreadTranscript();guardedThreadTailRefresh(selectedWorkspace,selectedThread,threadGeneration,400);return;}
  if(type==='state'){applyThreadLive(record,{queue:event.queue??data.queue,attention:event.attention??data.attention,queue_paused:event.queue_paused});renderThreadHead();renderThreadControls();renderThreadListBox();return;}
  if(type==='notice'){threadLiveNotice=str(event.message||event.error||event.attention||data.attention||'Thread notice');announceThread('Thread notice: '+threadLiveNotice);loadThreads();renderThreadControls();return;}
  if(type==='settled'){threadToolNote='';announceThread('Response settled; the next waiting message can deliver.');refreshThreadTail();loadThreads();renderThreadTranscript();}
@@ -409,6 +410,10 @@ function startThreadDetail(){
  loadThreadHistory();
  openThreadEvents();
 }
+// Polling-only reconcile: each accepted list response refreshes the selected
+// header and controls (Stop/Resume, queue positions) without replacing the
+// transcript, the composer draft or keyboard focus.
+function reconcileSelectedThread(){renderThreadHead();renderThreadControls();}
 async function loadThreads(){
  if(mode!=='workspaces'||!selectedWorkspace)return;
  if(threadsLoading&&threadsLoadedWorkspace===selectedWorkspace)return;
@@ -425,7 +430,7 @@ async function loadThreads(){
   threadsInvalid=Array.isArray(data.invalid)?data.invalid:[];
   threadsError=null;threadsLoading=false;
   if(!threads.some(t=>t.thread_id===selectedThread)){selectedThread=threads[0]?.thread_id||null;threadDraft='';threadSendId=null;threadSendDraft=null;resetThreadHandoff();startThreadDetail();renderThreads();return;}
-  renderThreadListBox();
+  renderThreadListBox();reconcileSelectedThread();
  }catch(e){
   if(request!==threadsRequest||mode!=='workspaces'||selectedWorkspace!==workspaceId)return;
   threadsLoading=false;threadsError=e.message||'Threads could not be loaded.';renderThreads();
@@ -453,6 +458,9 @@ async function loadThreadHistory(before,prepend=false){
   if(request!==threadHistoryRequest||generation!==threadGeneration||selectedThread!==threadId)return;
   threadHistoryLoading=false;threadRequestError=e.message||'The transcript could not be loaded.';threadFocusTarget='thread-error-retry';renderThreadHead();renderThreadTranscript();
  }
+}
+function guardedThreadTailRefresh(workspaceId,threadId,generation,delay=600){
+ setTimeout(()=>{if(mode!=='workspaces'||generation!==threadGeneration||selectedThread!==threadId||selectedWorkspace!==workspaceId)return;refreshThreadTail();},delay);
 }
 async function refreshThreadTail(){
  if(!selectedThread||!selectedWorkspace||!canReadThreads())return;
@@ -537,7 +545,7 @@ function threadControlsHtml(t){
  const queue=threadQueueHtml(t,canAct);
  let composer;
  if(historyOnly||!canAct){composer=`<div class="thread-state muted" role="status"><p>${esc(historyOnly?"This thread is history only: browsing and reading work, but sending and resuming are unavailable. Source sessions are never modified.":"Message controls are available on the host's local dashboard. Imported snapshots and remote pages stay read-only.")}</p></div>`;}
- else{const paused=t.queue_paused===true||state==='paused';composer=`<div class="thread-composer"><label for="thread-draft">Message thread</label><textarea id="thread-draft" rows="4" placeholder="Write a message. Enter sends; Shift+Enter adds a newline."></textarea><p class="small muted">Enter sends · Shift+Enter newline. Messages queue in order over the single local response slot.</p><div class="thread-actions"><button id="thread-send" class="primary" data-thread-send ${threadPending==='send'||!threadDraft.trim()?'disabled':''}>${threadPending==='send'?'Sending…':'Send'}</button>${state==='active'&&!paused?`<button id="thread-stop" data-thread-stop ${threadPending==='stop'?'disabled':''}>${threadPending==='stop'?'Stopping…':'Stop'}</button>`:''}${paused?`<button id="thread-resume" data-thread-resume ${threadPending==='resume'?'disabled':''}>${threadPending==='resume'?'Resuming…':'Resume'}</button>`:''}<button id="thread-refresh" data-thread-refresh>Refresh thread</button></div></div>`;}
+ else{const paused=t.queue_paused===true||state==='paused';const ownsResponse=t.owns_response===true;const showStop=(state==='active'||(state==='stalled'&&ownsResponse))&&!paused;composer=`<div class="thread-composer"><label for="thread-draft">Message thread</label><textarea id="thread-draft" rows="4" placeholder="Write a message. Enter sends; Shift+Enter adds a newline."></textarea><p class="small muted">Enter sends · Shift+Enter newline. Messages queue in order over the single local response slot.</p><div class="thread-actions"><button id="thread-send" class="primary" data-thread-send ${threadPending==='send'||!threadDraft.trim()?'disabled':''}>${threadPending==='send'?'Sending…':'Send'}</button>${showStop?`<button id="thread-stop" data-thread-stop ${threadPending==='stop'?'disabled':''}>${threadPending==='stop'?'Stopping…':'Stop'}</button>`:''}${paused?`<button id="thread-resume" data-thread-resume ${threadPending==='resume'?'disabled':''}>${threadPending==='resume'?'Resuming…':'Resume'}</button>`:''}<button id="thread-refresh" data-thread-refresh>Refresh thread</button></div></div>`;}
  const live=threadStreamState==='live'?'<span class="pill good">Live</span>':threadStreamState==='connecting'?'<span class="pill muted">Connecting live updates…</span>':threadStreamState==='reconnecting'?'<span class="pill warn">Live updates reconnecting…</span>':threadStreamState==='stopped'?'<span class="pill bad">Live updates stopped</span>':'<span class="pill muted">Live updates unavailable</span>';
  const notice=threadLiveNotice?`<p class="small muted">${esc(threadLiveNotice)}</p>`:'';
  return `<div id="thread-queue">${queue}</div>${composer}<p class="small muted">${live} · The local stream may stay silent for 15 seconds between keepalives.</p>${notice}`;
@@ -661,7 +669,8 @@ async function threadRouteError(response){
  return message||'The thread request could not be completed.';
 }
 async function threadAction(path,body,pendingOp){
- threadPending=pendingOp;threadRequestError=null;renderThreadHead();renderThreadControls();renderThreadHandoff();
+ const workspaceId=selectedWorkspace,threadId=selectedThread,generation=threadGeneration;
+ const token=++threadOpSeq;threadPendingToken=token;threadPending=pendingOp;threadRequestError=null;renderThreadHead();renderThreadControls();renderThreadHandoff();
  try{
   const response=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json','X-Sentinel-Token':payload.action_token},body:JSON.stringify(body),signal:AbortSignal.timeout(30000)});
   if(!response.ok){const error=Error(await threadRouteError(response));error.status=response.status;throw error;}
@@ -669,34 +678,45 @@ async function threadAction(path,body,pendingOp){
  }catch(e){
   if(e.name==='TimeoutError')throw Error('The request timed out. Its outcome may be uncertain; refresh to check the current thread state.');
   throw e;
- }finally{threadPending=null;}
+ }finally{if(threadPendingToken===token&&generation===threadGeneration&&selectedThread===threadId&&selectedWorkspace===workspaceId)threadPending=null;}
 }
 async function sendThreadMessage(){
  if(!threadsActionable()){threadRequestError="Message controls are available on the host's local dashboard.";threadFocusTarget='thread-draft';renderThreadHead();renderThreadControls();return;}
  const text=threadDraft.trim();if(!text||threadPending!==null)return;
  if(!threadSendId||threadSendDraft!==threadDraft){threadSendId=uuid();threadSendDraft=threadDraft;}
+ const workspaceId=selectedWorkspace,threadId=selectedThread,generation=threadGeneration;
+ const submittedDraft=threadDraft,submittedId=threadSendId;
+ const liveSelection=()=>mode==='workspaces'&&generation===threadGeneration&&selectedThread===threadId&&selectedWorkspace===workspaceId;
  try{
-  const data=await threadAction('/api/thread/send',{workspace_id:selectedWorkspace,thread_id:selectedThread,id:threadSendId,text},'send');
-  threadSendId=null;threadSendDraft=null;threadDraft='';
+  const data=await threadAction('/api/thread/send',{workspace_id:workspaceId,thread_id:threadId,id:submittedId,text},'send');
+  if(!liveSelection()){loadThreads();return;}
+  if(threadSendId===submittedId){threadSendId=null;threadSendDraft=null;}
+  if(threadDraft===submittedDraft)threadDraft='';
   announceThread(data.duplicate?'Message was already queued.':data.state==='accepted'?'Message accepted.':data.state==='uncertain'?'Message delivery is uncertain; it may already have been delivered.':'Message queued.');
   threadRequestError=data.state==='uncertain'?'The message may already have been delivered; use Discard or Retry under Pending messages. A retry can duplicate the response.':null;
-  loadThreads();setTimeout(()=>refreshThreadTail(),600);renderThreadHead();renderThreadControls();
- }catch(e){threadRequestError=e.message;threadFocusTarget='thread-draft';renderThreadHead();renderThreadControls();}
+  loadThreads();guardedThreadTailRefresh(workspaceId,threadId,generation);renderThreadHead();renderThreadControls();
+ }catch(e){if(!liveSelection())return;threadRequestError=e.message;threadFocusTarget='thread-draft';renderThreadHead();renderThreadControls();}
 }
 async function stopSelectedThread(){
  if(!threadsActionable())return;
- try{await threadAction('/api/thread/stop',{workspace_id:selectedWorkspace,thread_id:selectedThread},'stop');announceThread('Stop requested. The thread queue is paused.');loadThreads();renderThreadHead();renderThreadControls();}
- catch(e){threadRequestError=e.message;threadFocusTarget='thread-stop';renderThreadHead();renderThreadControls();}
+ const workspaceId=selectedWorkspace,threadId=selectedThread,generation=threadGeneration;
+ const liveSelection=()=>mode==='workspaces'&&generation===threadGeneration&&selectedThread===threadId&&selectedWorkspace===workspaceId;
+ try{await threadAction('/api/thread/stop',{workspace_id:workspaceId,thread_id:threadId},'stop');if(!liveSelection()){loadThreads();return;}announceThread('Stop requested. The thread queue is paused.');loadThreads();renderThreadHead();renderThreadControls();}
+ catch(e){if(!liveSelection())return;threadRequestError=e.message;threadFocusTarget='thread-stop';renderThreadHead();renderThreadControls();}
 }
 async function resumeSelectedThread(){
  if(!threadsActionable())return;
- try{await threadAction('/api/thread/resume',{workspace_id:selectedWorkspace,thread_id:selectedThread},'resume');announceThread('Thread resumed.');loadThreads();setTimeout(()=>refreshThreadTail(),600);renderThreadHead();renderThreadControls();}
- catch(e){threadRequestError=e.message;threadFocusTarget='thread-resume';loadThreads();renderThreadHead();renderThreadControls();}
+ const workspaceId=selectedWorkspace,threadId=selectedThread,generation=threadGeneration;
+ const liveSelection=()=>mode==='workspaces'&&generation===threadGeneration&&selectedThread===threadId&&selectedWorkspace===workspaceId;
+ try{await threadAction('/api/thread/resume',{workspace_id:workspaceId,thread_id:threadId},'resume');if(!liveSelection()){loadThreads();return;}announceThread('Thread resumed.');loadThreads();guardedThreadTailRefresh(workspaceId,threadId,generation);renderThreadHead();renderThreadControls();}
+ catch(e){if(!liveSelection()){loadThreads();return;}threadRequestError=e.message;threadFocusTarget='thread-resume';loadThreads();renderThreadHead();renderThreadControls();}
 }
 async function discardThreadMessage(id,resend){
  if(!threadsActionable())return;
- try{const data=await threadAction('/api/thread/discard',{workspace_id:selectedWorkspace,thread_id:selectedThread,id,resend},resend?'resend':'discard');announceThread(resend?(data.warning?'Message queued again. A duplicate response is possible.':'Message queued again.'):'Uncertain message discarded.');loadThreads();renderThreadHead();renderThreadControls();}
- catch(e){threadRequestError=e.message;threadFocusTarget='thread-error-retry';renderThreadHead();renderThreadControls();}
+ const workspaceId=selectedWorkspace,threadId=selectedThread,generation=threadGeneration;
+ const liveSelection=()=>mode==='workspaces'&&generation===threadGeneration&&selectedThread===threadId&&selectedWorkspace===workspaceId;
+ try{const data=await threadAction('/api/thread/discard',{workspace_id:workspaceId,thread_id:threadId,id,resend},resend?'resend':'discard');if(!liveSelection()){loadThreads();return;}announceThread(resend?(data.warning?'Message queued again. A duplicate response is possible.':'Message queued again.'):'Uncertain message discarded.');loadThreads();renderThreadHead();renderThreadControls();}
+ catch(e){if(!liveSelection())return;threadRequestError=e.message;threadFocusTarget='thread-error-retry';renderThreadHead();renderThreadControls();}
 }
 
 function applyModeChrome(){const workspaceMode=mode==='workspaces';$('sidebar-heading').textContent=workspaceMode?'Workspaces':'Repositories & packages';$('search-label').textContent=workspaceMode?'Find workspace':'Find repository or package';$('repo-search').placeholder=workspaceMode?'Search workspace names and paths…':'Search names, paths, activity…';$('package-filters').classList.toggle('hidden',workspaceMode);$('package-panel-heading').textContent=workspaceMode?'Workspace files':'Package files';}

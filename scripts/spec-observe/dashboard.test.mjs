@@ -1741,3 +1741,141 @@ test('threads UI saves the brief on Enter and preserves the Shift+Enter newline'
   await flush();
   assert.equal(posts.length, 2, 'Enter in the brief content saves the brief');
 });
+
+// ---- Threads UI (step 9 fix): mutation identity guards, selected reconcile, stalled Stop ----
+test('threads UI deferred send completion after a thread change keeps the new draft', async () => {
+  const resolvers = [];
+  const context = dashboardContext({ fetch: async (url, init = {}) => {
+    const path = String(url).split('?')[0];
+    if (path === '/api/thread/send') return new Promise(resolve => resolvers.push(() => resolve({ ok: true, json: async () => ({ thread: threadRecord(), message_id: 'message-1', state: 'queued', duplicate: false }) })));
+    if (path === '/api/threads') return { ok: true, json: async () => ({ threads: [threadRecord({ title: 'Alpha thread' }), threadRecord({ thread_id: otherThreadId, title: 'Beta thread' })], invalid: [] }) };
+    if (path === '/api/thread/history') return { ok: true, json: async () => ({ header: null, entries: [], leaf_id: null, incomplete_tail: false, skipped_lines: 0, truncated: false }) };
+    return { ok: false, status: 404, json: async () => ({}) };
+  } });
+  setThreadContext(context);
+  const alpha = threadRecord({ title: 'Alpha thread' });
+  const beta = threadRecord({ thread_id: otherThreadId, title: 'Beta thread' });
+  vm.runInContext(`threads=${JSON.stringify([alpha, beta])};threadDraft='alpha text';renderThreads()`, context);
+  const sending = vm.runInContext('sendThreadMessage()', context);
+  await flush();
+  assert.equal(resolvers.length, 1);
+  // Select the other thread and type its own draft while the POST awaits.
+  vm.runInContext(`selectThread(${JSON.stringify(otherThreadId)})`, context);
+  await flush();
+  vm.runInContext("threadDraft='beta unsent text';renderThreadControls()", context);
+  resolvers[0]();
+  await sending;
+  await flush();
+  await flush();
+  assert.equal(vm.runInContext('selectedThread', context), otherThreadId);
+  assert.equal(vm.runInContext('threadDraft', context), 'beta unsent text');
+  assert.equal(context.document.getElementById('thread-announcer').textContent, '');
+  assert.equal(vm.runInContext('threadRequestError', context), null);
+});
+
+test('threads UI stale send completion keeps a newer action pending', async () => {
+  const resolvers = [];
+  const context = dashboardContext({ fetch: async (url, init = {}) => {
+    const path = String(url).split('?')[0];
+    if (path === '/api/thread/send' || path === '/api/thread/stop') return new Promise(resolve => resolvers.push(() => resolve({ ok: true, json: async () => ({ thread: threadRecord({ state: 'active' }), message_id: 'message-1', state: 'queued', duplicate: false }) })));
+    if (path === '/api/threads') return { ok: true, json: async () => ({ threads: [threadRecord({ state: 'active' })], invalid: [] }) };
+    if (path === '/api/thread/history') return { ok: true, json: async () => ({ header: null, entries: [], leaf_id: null, incomplete_tail: false, skipped_lines: 0, truncated: false }) };
+    return { ok: false, status: 404, json: async () => ({}) };
+  } });
+  setThreadContext(context);
+  vm.runInContext(`threads=${JSON.stringify([threadRecord({ state: 'active' })])};threadDraft='send me';renderThreads()`, context);
+  const sending = vm.runInContext('sendThreadMessage()', context);
+  await flush();
+  assert.equal(vm.runInContext('threadPending', context), 'send');
+  const stopping = vm.runInContext('stopSelectedThread()', context);
+  await flush();
+  assert.equal(vm.runInContext('threadPending', context), 'stop');
+  resolvers[0]();
+  await sending;
+  await flush();
+  assert.equal(vm.runInContext('threadPending', context), 'stop');
+  resolvers[1]();
+  await stopping;
+  await flush();
+  assert.equal(vm.runInContext('threadPending', context), null);
+});
+
+test('threads UI send success keeps text typed during the request', async () => {
+  let resolveSend;
+  const context = dashboardContext({ fetch: async (url, init = {}) => {
+    const path = String(url).split('?')[0];
+    if (path === '/api/thread/send') return new Promise(resolve => { resolveSend = () => resolve({ ok: true, json: async () => ({ thread: threadRecord(), message_id: 'message-1', state: 'queued', duplicate: false }) }); });
+    if (path === '/api/threads') return { ok: true, json: async () => ({ threads: [threadRecord()], invalid: [] }) };
+    if (path === '/api/thread/history') return { ok: true, json: async () => ({ header: null, entries: [], leaf_id: null, incomplete_tail: false, skipped_lines: 0, truncated: false }) };
+    return { ok: false, status: 404, json: async () => ({}) };
+  } });
+  setThreadContext(context);
+  vm.runInContext(`threads=${JSON.stringify([threadRecord()])};threadDraft='first text';renderThreads()`, context);
+  const sending = vm.runInContext('sendThreadMessage()', context);
+  await flush();
+  assert.match(vm.runInContext('threadSendId', context), /^[0-9a-f-]{36}$/);
+  // Typing continues while the POST awaits; the late success must not drop it.
+  vm.runInContext("threadDraft='first text plus more'", context);
+  resolveSend();
+  await sending;
+  await flush();
+  assert.equal(vm.runInContext('threadDraft', context), 'first text plus more');
+  assert.equal(vm.runInContext('threadSendId', context), null);
+  assert.equal(context.document.getElementById('thread-announcer').textContent, 'Message queued.');
+});
+
+test('threads UI list refresh reconciles the selected controls without replacing transcript or draft', async () => {
+  let listed = [threadRecord({ title: 'Ready thread' })];
+  const context = dashboardContext({ fetch: async url => {
+    if (String(url).split('?')[0] === '/api/threads') return { ok: true, json: async () => ({ threads: listed, invalid: [] }) };
+    return { ok: false, status: 404, json: async () => ({}) };
+  } });
+  assert.equal(typeof context.EventSource, 'undefined', 'SSE stays unavailable in this VM');
+  setThreadContext(context);
+  const headBox = () => context.document.getElementById('thread-head-box').innerHTML;
+  const controlsBox = () => context.document.getElementById('thread-controls-box').innerHTML;
+  const entries = [threadEntry('entry-1', 'user', 'keep this transcript'), threadEntry('entry-2', 'assistant', 'keep this answer')];
+  vm.runInContext(`threads=${JSON.stringify([threadRecord({ title: 'Ready thread' })])};selectedThread=${JSON.stringify(threadId)};threadHistoryEntries=${JSON.stringify(entries)};threadDraft='unsent draft';threadPartial='';renderThreads()`, context);
+  assert.doesNotMatch(threadsBody(context), /id="thread-stop"/);
+  // The incremental reconcile path must leave the transcript renderer untouched.
+  vm.runInContext('let transcriptRenders=0;const origTranscriptRender=renderThreadTranscript;renderThreadTranscript=function(){transcriptRenders++;return origTranscriptRender();}', context);
+  // Ready to streaming through polling alone, with a fresh queue position.
+  listed = [threadRecord({ title: 'Ready thread', state: 'active',
+    queue: [{ id: 'message-1', state: 'queued', text: 'waiting text', queued_at: threadAt, queue_position: 2 }] })];
+  await vm.runInContext('loadThreads()', context);
+  await flush();
+  assert.match(headBox(), /Responding/);
+  assert.match(controlsBox(), /id="thread-stop"/);
+  assert.match(controlsBox(), /queue position 2/);
+  assert.match(controlsBox(), /waiting text/);
+  assert.equal(vm.runInContext('threadDraft', context), 'unsent draft');
+  assert.equal(vm.runInContext('threadHistoryEntries.length', context), 2);
+  assert.equal(vm.runInContext('transcriptRenders', context), 0);
+  assert.equal(context.document.activeElement, null);
+  // Streaming to settled removes Stop while the transcript and draft stay.
+  listed = [threadRecord({ title: 'Ready thread', state: 'idle' })];
+  await vm.runInContext('loadThreads()', context);
+  await flush();
+  assert.match(headBox(), /pill good">Ready/);
+  assert.doesNotMatch(controlsBox(), /id="thread-stop"/);
+  assert.equal(vm.runInContext('threadDraft', context), 'unsent draft');
+  assert.equal(vm.runInContext('threadHistoryEntries.length', context), 2);
+  assert.equal(vm.runInContext('transcriptRenders', context), 0);
+});
+
+test('threads UI stalled owner keeps Stop while a released stall shows Refresh only', () => {
+  const context = dashboardContext();
+  setThreadContext(context);
+  const owned = threadRecord({ state: 'stalled', attention: 'stalled', owns_response: true });
+  vm.runInContext(`threads=${JSON.stringify([owned])};selectedThread=${JSON.stringify(threadId)};threadRequestError=null;renderThreads()`, context);
+  let html = threadsBody(context);
+  assert.match(html, /Stalled/);
+  assert.match(html, /id="thread-stop"/);
+  assert.doesNotMatch(html, /id="thread-resume"/);
+  const released = threadRecord({ state: 'stalled', attention: 'stalled', owns_response: false });
+  vm.runInContext(`threads=${JSON.stringify([released])};renderThreads()`, context);
+  html = threadsBody(context);
+  assert.match(html, /Stalled/);
+  assert.doesNotMatch(html, /id="thread-stop"/);
+  assert.match(html, /data-thread-refresh/);
+});
