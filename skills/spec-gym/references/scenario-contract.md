@@ -11,8 +11,8 @@ scenarios/<exact-spec-skill-name>/
   <scenario-id>/
     scenario.json           # the scenario contract and checks
     input/repository/       # fixture repository files, copied into a fresh Git repo
-    input/package/          # fixture package files -> <repo>/.specs/<feature>/
-    input/project-context.md  # -> <repo>/.specs/project-context.md
+    input/package/          # fixture package files -> the cell's package_dir (spec-location)
+    input/project-context.md  # -> the cell's workspace project-context.md
 ```
 
 Only `input/` is materialized into a cell. `scenario.json` and the `scenarios/`
@@ -26,6 +26,8 @@ tree never enter a worker's repository.
 - `status` is `draft` or `ready`.
 - `timeout_ms` is a positive integer.
 - `task` and `purpose` are non-empty.
+- `task` may contain `{package}`; the runner replaces it with the cell's
+  package directory before the task is sent.
 - `fixture.feature` is a non-empty package folder name.
 - `managed-step` requires a positive `fixture.step` and a non-empty
   `roles.editor_model`; `roles`, when present, must be an object.

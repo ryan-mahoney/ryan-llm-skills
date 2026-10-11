@@ -70,7 +70,8 @@ mergeability, draft and merge-state fields do not establish readiness. Do not
 infer PR ownership from a branch name or an unverified repository URL.
 
 Prefer successful current observations over historical artifacts for the same
-repository or PR, including `.specs/` records such as `pr-url.json`. Failed remote
+repository or PR, including spec package records such as `pr-url.json` (in the package's
+`package_dir`, shape `{package_ref, targets: {<repo id>: {...}}}`). Failed remote
 reads validate nothing historical; label any retained historical value as stale
 and unverified. Read spec ledgers separately when the answer needs step counts,
 stages or next actions; the collector does not parse them.

@@ -13,8 +13,8 @@ metadata:
 Assemble the implemented spec's evidence into two commit-bound artifacts with separate merge,
 deployment-readiness, authorization and post-deployment states:
 
-- `.specs/<feature>/work-tour.json` — the machine-readable context, claim, proof, QA and phase verdicts.
-- `.specs/<feature>/work-tour.html` — a portable browser tour of what changed and why the evidence is sufficient.
+- `work-tour.json` in `package_dir` — the machine-readable context, claim, proof, QA and phase verdicts.
+- `work-tour.html` in `package_dir` — a portable browser tour of what changed and why the evidence is sufficient.
 
 The tour is not a narrative substitute for proof. It is a navigable projection of evidence that already exists and can be rerun. Read [references/executable-evidence.md](references/executable-evidence.md) before producing either artifact.
 
@@ -22,7 +22,7 @@ Apply the work-tour section of [Engineering Writing](../../rules/engineering-wri
 Write for an experienced engineer unfamiliar with this change. Describe the software and observed
 results directly; keep workflow provenance in machine fields. Before sharing the HTML, include
 needed supporting material with it or use accessible shared links. Do not make readers follow
-`.specs/`, uncommitted files, temporary reports, or paths outside the repository.
+workspace storage paths, uncommitted files, temporary reports, or paths outside the repository.
 
 ## Reader and layout
 
@@ -92,7 +92,7 @@ round budget. A stale completion remains a blocker.
 
 ## Resolve The Package And Commit
 
-Resolve an explicit `.specs/<feature>/` folder or contained artifact first, then the feature named in the conversation. Stop on ambiguity. Resolve the repository root, merge base, current branch, and exact `HEAD` SHA. The tour is commit-bound to that SHA.
+Run the first step of [Spec Location](../spec-end-to-end/references/spec-location.md): `spec-location check` on an explicit `workspace/slug`, package folder or contained artifact first, then the package named in the conversation. Stop on ambiguity. Read `locations.json`. For each target, resolve its worktree, merge base, current branch, and exact `HEAD` SHA. The tour is commit-bound to those SHAs (one per target, presented per repository) and covers the combined diff of all targets.
 
 Start with sourced `context.md`, `spec.md`, `spec-steps.json`, `evidence-plan.json`,
 the assembled `merge-evidence.json`/Markdown, blockers, and the current step review/fix completion (or explicitly selected branch completion). Use the history index to locate supporting learnings and decisions.
@@ -132,8 +132,8 @@ Record honest limits. A unit test proves the unit behavior it observes; it does 
 For standalone version 2 packages, apply the Assembly, Tour, And Publication section of [Engineering Decisions](references/standalone-engineering-decisions.md).
 Expose consequential domain rules and resolved challenges in `architecture.decisions`, ordinary
 entry observations in existing QA/gate fields, and accepted follow-ups in `context.omissions`.
-For a local follow-up, include the actionable brief and revisit condition, not just an ignored
-`.specs` path. Preserve the distinction between a bounded completed slice and an unmet merge
+For a local follow-up, include the actionable brief and revisit condition, not just a path
+into workspace storage. Preserve the distinction between a bounded completed slice and an unmet merge
 claim. Use the existing schema and renderer; do not add keys or a new readiness calculation.
 
 ## Build `work-tour.json`
@@ -153,7 +153,7 @@ Write version 2 JSON with a trailing newline:
   "verdict": "ready",
   "summary": "What changed and the user/system outcome.",
   "context": {
-    "artifact": ".specs/feature/context.md",
+    "artifact": "context.md",
     "summary": "Actual users, retained data, compatibility and release model.",
     "decisions": ["Decision and its user/project-policy source."],
     "omissions": ["No rollout flag: the existing release process does not require one."],
@@ -258,7 +258,7 @@ evidence. The operator/organization chooses further PR review, merge, and releas
 
 Never mark a claim `proven` on an optional gate while a required gate is unpassed. A runbook proves that a procedure exists; it does not prove that the procedure ran or that production recovered. Keep post-deploy execution `unproven` or restate the claim narrowly around the verified runbook artifact.
 
-Every acceptance criterion must appear in at least one claim. Every claim must name at least one gate. Every gate must name the failure hypothesis it rejects. Use portable artifact paths: resolve `.specs/` from the primary repository and code/test paths from the execution checkout. Pass canonical absolute input/output paths to the renderer while running it in the code checkout. Do not embed secrets, credentials, production records, or sensitive screenshots.
+Every acceptance criterion must appear in at least one claim. Every claim must name at least one gate. Every gate must name the failure hypothesis it rejects. Use portable artifact paths: package files are package-relative (`evidence/save-result.txt`), files in a target are `<repo id>:<path>`, and code/test paths resolve from that target's worktree. Pass absolute input/output paths under `package_dir` to the renderer while running it in a target worktree. Do not embed secrets, credentials, production records, or sensitive screenshots.
 
 Gate provenance: `commit` binds the evidence assessment to the candidate. Optional `observedCommit` records the full Git SHA where execution actually occurred; absence means it equals `commit` for existing records. When the revisions differ, require a nonempty `applicability` rationale assessing intervening changes. Keep results stale when applicability cannot be established. Pending procedures have no observed execution.
 
@@ -268,8 +268,8 @@ Run:
 
 ```bash
 node ~/.agents/skills/spec-work-tour/scripts/render-work-tour.mjs \
-  .specs/<feature>/work-tour.json \
-  .specs/<feature>/work-tour.html
+  <package_dir>/work-tour.json \
+  <package_dir>/work-tour.html
 ```
 
 The renderer retains version 1 reading for existing Design/SpecOps callers and labels those
@@ -279,7 +279,7 @@ skill and cannot satisfy its version 2 publication contract.
 The renderer validates the structural invariants and exits nonzero on an invalid manifest.
 Supporting files beside the output HTML must travel with it when shared. Other local links
 must reference committed content available in the reviewed revision; URLs must be accessible
-to the intended reader. The renderer omits explicit `.specs/` and absolute local references
+to the intended reader. The renderer omits absolute local references
 and marks unavailable supporting files without printing their paths. Explain essential results
 inline; do not make readers reconstruct them from local provenance. Check links in the form
 actually shared, not only in the author's checkout.
@@ -324,4 +324,4 @@ publication or run-owned workers remain active. The coordinator delivers
 the final tour link with the verified PR outcome. A standalone tour request may finish
 when its own requested artifacts are ready.
 
-Do not commit `.specs/` unless the repository explicitly tracks it. Do not describe a blocked tour as merge-ready.
+Never copy the tour or any package file into a checkout. Do not describe a blocked tour as merge-ready.

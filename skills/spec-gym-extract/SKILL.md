@@ -4,7 +4,7 @@ description: "Extract a draft spec-gym scenario from a real package and Git revi
 mode: coding
 scope: document
 disable-model-invocation: true
-argument-hint: "--source .specs/<feature> --repo DIR --revision REV --skill NAME --id ID [--step N] [--include PATH]..."
+argument-hint: "--source <package_dir> --repo DIR --revision REV --skill NAME --id ID [--step N] [--include PATH]..."
 license: MIT
 metadata:
   author: Ryan Mahoney
@@ -21,7 +21,7 @@ repository, including through linked parents, so run it from a separate gym
 checkout.
 
 ```bash
-node scripts/spec-gym/cli.mjs extract --source <source-repo>/.specs/<feature> \
+node scripts/spec-gym/cli.mjs extract --source <package_dir> \
   --repo <source-repo> --revision <rev> --skill <spec-skill> --id <scenario-id> \
   [--step N] [--include PATH]...
 ```
@@ -42,7 +42,9 @@ never copied.
 - `spec-step-run` (`managed-step`, requires `--step`) copies the prepared set
   (`context.md`, `spec.md`, `spec-prepare.md`, `evidence-plan.json`,
   `spec-steps.json`, `../project-context.md`), `criteria.md`/`invariants.md` when
-  present, and every indexed `step-NNN-subspec.md` card.
+  present, and every indexed `step-NNN-subspec.md` card. The draft's `task` is
+`spec={package}/spec.md step=N`; the runner substitutes the cell's package
+directory for `{package}`.
 
 Other skills fail fast as unsupported stage profiles.
 

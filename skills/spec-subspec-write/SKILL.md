@@ -4,7 +4,7 @@ description: "This skill should be used when the user asks to \"write a subspec\
 mode: coding
 scope: document
 disable-model-invocation: true
-argument-hint: "[step-number] [.specs/<feature>/spec.md]"
+argument-hint: "[step-number] [spec package ref or folder]"
 license: MIT
 metadata:
   author: Ryan Mahoney
@@ -26,7 +26,9 @@ The parent `spec-write` agent is the only writer of shared preparation artifacts
 
 ## Canonical Paths and Inputs
 
-Require the resolved `.specs/<feature>/spec.md`, step number. Write only sibling `step-<NNN>-subspec.md`. If any input is missing or multiple spec folders match, return `blocked`; never guess by modification time.
+Run the shared [spec-location step](../spec-end-to-end/references/spec-location.md) for the package
+(`node ~/.agents/scripts/spec-location/cli.mjs check <ref or folder>`) and require `<package_dir>/spec.md`
+from `locations.json`, plus the step number. Write only `<package_dir>/step-<NNN>-subspec.md`. If any input is missing or multiple spec folders match, return `blocked`; never guess by modification time.
 
 Write the complete Markdown body to a temporary file in the destination directory, then rename it over the final path. The file begins with a level-1 heading.
 
@@ -191,7 +193,7 @@ repository-relative entry-file path as `spec.md`, or `none` when preparation fou
 prototype or reference design:
 
 ```txt
-Visual reference: .specs/<feature>/<prototype-or-visual-references>/<entry-file>
+Visual reference: <package_dir>/<prototype-or-visual-references>/<entry-file>
 ```
 
 When no reference exists, use this line instead:
@@ -266,7 +268,7 @@ Do not mirror the verification YAML in prose, repeat `Covers:` tags, or add empt
 End with exactly:
 
 ```txt
-Subspec: .specs/<feature>/step-<NNN>-subspec.md (step <step-number>)
+Subspec: <package_dir>/step-<NNN>-subspec.md (step <step-number>)
 ```
 
 ## Output

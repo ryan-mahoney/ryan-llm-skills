@@ -11,9 +11,10 @@ Read and follow `spec-step-run` fully. It owns implementation, adaptation, verif
 checkpoint, decision and commit behavior; do not maintain a competing execution policy here.
 Implement exactly one assigned step without delegating or beginning the next step.
 
-Resolve the code checkout and primary-repository spec folder separately under the shared
-workspace handoff. All `.specs/` reads and writes use the primary repository, including
-learnings and evidence. Ignore tracked or copied worktree specs; run code and tests in the worktree.
+Resolve the code checkout and the package separately under the shared spec-location step. Read the
+package paths from `locations.json`. Write spec artifacts only inside the package_dir from
+`locations.json`; never create .specs/ in a checkout, including learnings and evidence. Ignore tracked
+or copied worktree specs; run code and tests in the worktree.
 
 Read the assigned ready card, shared contracts, owned evidence, and applicable rules
 under `spec-step-run`. Use the history index to locate relevant prior decisions and

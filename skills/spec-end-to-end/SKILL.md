@@ -1,6 +1,6 @@
 ---
 name: spec-end-to-end
-description: "Run the complete standalone spec-driven workflow from a feature goal or existing .specs package through architecture, specification, preparation, branch or worktree setup, implementation and step review/fix cycles, evidence assembly, work tour, and a published pull request. Use when the user says \"do the spec workflow end to end\", \"take this from idea to PR\", \"run the whole spec process\", \"finish this spec and open a PR\", or asks for the full workflow with modifiers such as a named subagent or worktree."
+description: "Run the complete standalone spec-driven workflow from a feature goal or existing spec package through architecture, specification, preparation, branch or worktree setup, implementation and step review/fix cycles, evidence assembly, work tour, and a published pull request. Use when the user says \"do the spec workflow end to end\", \"take this from idea to PR\", \"run the whole spec process\", \"finish this spec and open a PR\", or asks for the full workflow with modifiers such as a named subagent or worktree."
 license: MIT
 metadata:
   author: Ryan Mahoney
@@ -12,7 +12,7 @@ metadata:
 
 ## Standing Run Defaults
 
-For a prepared Pi run, reuse its recorded branch/worktree and completed work; create
+For a prepared Pi run, reuse each target's recorded branch/worktree (`targets[]` in `locations.json`) and completed work; create
 an isolated branch/worktree only when none is assigned. Resume the first unfinished
 obligation from current receipts and the ledger, including outstanding review or fixes.
 Use configured difficulty routing and retained owner/editor pairs through the managed
@@ -41,8 +41,8 @@ and honor user directives, then call `spec_dispatch action=startup` with `packag
 Omit `step` on first entry. `owner_override` pins a selected step's owner.
 This route takes precedence over the general startup reading sequence below.
 
-The runtime resolves canonical paths, uses the prepared index, routes hard steps,
-creates/reuses the checkout, acquires the writer lease and starts the pair in one call.
+The runtime reads the package's `locations.json`, uses the prepared index, routes hard steps,
+creates/reuses each target's worktree and starts the pair in one call.
 It returns pending inbox messages or existing progress instead of replaying work.
 On resume, consume that receipt and only the ledger/history entries needed to resolve
 its next obligation. A completed worker still needs its independent review/fix cycle.
@@ -61,7 +61,7 @@ completion. The handwritten stage ledger remains the fallback only outside manag
 do not keep a second ledger inside it.
 
 Trust the receipt's mechanical checks for that launch. Do not re-check Git paths,
-leases, model availability, installed profiles or nesting without a specific error
+model availability, installed profiles or nesting without a specific error
 or changed input. Owners read their card and applicable implementation policy.
 The coordinator loads review guidance when scheduling review, and assembly/tour/PR
 references at those stages. Do not pre-read scouting, paired-execution internals,
@@ -181,24 +181,25 @@ the next stage may proceed.
 
 ## Resolve The Run
 
-1. Resolve the repository root and read all applicable `AGENTS.md` files.
-2. Read [Project Context And Authority](references/project-context.md). Resolve the project context
-   and write or validate the feature's sourced `context.md` snapshot before architecture. Ask only
+1. Read [Spec Location](references/spec-location.md) and run its first step. For an existing package, run `check`
+   on its reference or folder. For a new goal, run `resolve --cwd .` from the repository (or pass `--workspace`) and
+   let `spec-architect-initial` create the package. Read all applicable `AGENTS.md` files in each target checkout.
+2. Read [Project Context And Authority](references/project-context.md). Read the project context from
+   `locations.project_context` and write or validate the feature's sourced `context.md` snapshot before architecture. Ask only
    unresolved consequential questions; continue independent local work. Existing packages must
    acquire this context before resuming. Record user decisions once for reuse across specs.
-3. Resolve the goal, existing `.specs/<feature>/` package, and any implementation branch or
-   worktree from the request and repository state.
-4. Resolve the package's epic: scan `<repositoryRoot>/.specs/_epics/*/epic.json` for a
-   member whose `package` equals the feature slug (and whose `repository`, if present, is this
-   primary checkout). Record `epic: <slug>` and the member position in the ledger. Report unmet
+3. Resolve the goal, existing package (a `package_ref` or folder), and any implementation branch or
+   worktree from the request and `locations.json`.
+4. Resolve the package's epic: read `locations.epic`; when it is set, find the member whose `package` equals
+   the package slug. Record `epic: <slug>` and the member position in the ledger. Report unmet
    `requires` (members neither merged nor manually complete) as a fact in the intake handoff and
    continue, unless the package's own prepared inputs make the dependency a prerequisite. The run
    never edits the record. See [Spec epics](../../docs/spec-epics.md).
 5. Inspect existing pipeline artifacts. Resume at the earliest incomplete, stale, invalid, or
    explicitly requested stage; do not recreate current valid artifacts merely to replay the list.
-6. Keep one canonical feature slug and spec-package path in the primary repository through the
-   run. Apply [Workspace Handoff](references/workspace-handoff.md) before resolving paths. A
-   worktree changes the code execution root, never the location of `.specs/`. Name a new
+6. Keep one `package_ref` and `package_dir` through the run. Apply
+   [Workspace Handoff](references/workspace-handoff.md) before creating or reusing a worktree. A
+   worktree changes the code execution root, never the location of the package. Name a new
    package by the [naming convention](../../docs/spec-epics.md#naming).
 7. In the managed Pi runtime, use `runtime/progress.json` as the generated workflow ledger.
    Worker lifecycle, verification receipts, canonical handoffs and review/fix artifact arrivals
@@ -207,7 +208,7 @@ the next stage may proceed.
    their contents. Do not also maintain a duplicate handwritten ledger. Preserve any existing
    legacy ledger as a historical source and carry its unresolved obligations forward.
    Outside the managed runtime, maintain one compact stage ledger with `pending`, `running`, `complete`, or `blocked` status,
-   the code checkout and primary-repository spec path, worker/session IDs, decisions, revision-bound evidence references,
+   the target checkouts, `package_ref` and `package_dir`, worker/session IDs, decisions, revision-bound evidence references,
    unresolved findings, consequential decisions/authority sources, and the next action. Update it at material handoffs and give concise
    progress updates. Keep any harness goal objective short and stable; reference the ledger and
    spec package instead of expanding the objective with execution history.
@@ -223,7 +224,7 @@ with the exact ambiguity. Do not choose by modification time.
 ## Receive Overseer Messages
 
 For non-runtime startup or when the runtime reports pending messages, read [Overseer Inbox](references/overseer-inbox.md).
-Initialize the canonical feature's `inbox/` and `processed/` folders and record the
+Initialize the package's `inbox/` and `processed/` folders and record the
 run ID and paths in the ledger. Messages arrive during implementation and review,
 never during planning. The parent owns intake and routing; addressed workers own
 interpretation and action. Pass archived message paths without translating their
@@ -262,7 +263,7 @@ known to lack nesting, retain that stage's coordination locally.
 Use known role profiles with the tools the stage needs. Do not probe every profile
 before dispatch. The independent review stage owner must read the checkout and
 canonical spec package, execute required verification commands, and write review
-and evidence artifacts in the primary repository's spec folder. A restriction on
+and evidence artifacts in the package folder. A restriction on
 editing implementation code does not mean the stage can use a filesystem-read-only
 agent. Resolve a genuinely unknown capability contract when selecting a profile;
 known installed profiles need no repeated capability audit.
@@ -285,7 +286,7 @@ substantial writing pass. It uses Mercury by default, read-only tools, fresh con
 and a one-minute deadline. The coordinator assesses its draft before use; no mandatory
 clerk, startup probe, engineering decisions or publication authority is added.
 
-Give each stage coordinator the canonical checkout and spec-package paths, assigned
+Give each stage coordinator `package_ref`, `package_dir`, the target checkout paths, assigned
 stage, owning skill path, run-wide constraints, and completion return contract. When
 delegation is requested, delegate whole implementation and refinement stages when
 the harness supports their workers; the parent need not manage every implementation
@@ -295,7 +296,7 @@ synchronous `spec_editor` tools, plus independent background step reviewers and 
 Do not launch implementation pairs through nested `pi-subagents`. For manual dispatch or paired-execution recovery, use the installed profiles and [paired execution contract](../spec-step-run/references/paired-execution.md).
 Only the editor writes implementation code while the pair is active.
 
-For an implementation worker, pass the checkout, canonical subspec path, owning
+For an implementation worker, pass the target checkout, subspec path, owning
 skill path, and paths to any newly routed messages. The subspec and its referenced
 package are the technical handoff. Supply the generated history-index path and
 intervening fix commits; retained workers load only relevant original records and
@@ -332,7 +333,7 @@ excluded by the routing policy above:
    path/context resolution and required readiness checks. Do not audit known model
    capabilities, run baseline broad checks, pre-read later-stage skills, or generate an
    orchestration workflow. In Pi, `spec_dispatch` can create the isolated worktree when
-   checkout is omitted. Otherwise establish the implementation checkout directly as top-level orchestration work. Honor an
+   checkout is omitted. Otherwise establish each target's implementation checkout directly as top-level orchestration work. Honor an
    explicit branch/worktree directive, reuse a clearly matching checkout when present, and use
    ordinary Git judgment otherwise. Read [workspace-handoff.md](references/workspace-handoff.md)
    before creating or reusing a worktree. Do not invoke a branch-management skill merely to run
@@ -352,7 +353,7 @@ excluded by the routing policy above:
    for CI.
 7. When enabled, run [spec-final-review](../spec-final-review/SKILL.md) after base
    reconciliation and completed step reviews/fixes. Pass `FINAL_REVIEWER`,
-   `EDITOR_MODEL`, canonical roots, branch/base, constraints, and existing push authority.
+   `EDITOR_MODEL`, `package_dir`, target checkouts, branch/base, constraints, and existing push authority.
    Require its completion report at current HEAD with no unresolved material concern;
    refresh affected merge evidence after its fixes. Reuse a current completed report on
    resume; material later implementation changes require reassessment within the recorded
@@ -402,10 +403,10 @@ directories explicitly, continue locally, or delegate later stages when authoriz
 editor, create a new editor window, start a replacement agent session, or install a continuation
 hook as part of worktree setup.
 
-Treat the selected worktree as the execution root for code, Git, builds, and tests. Re-read
-checkout-local instructions there. Read and write every `.specs/` artifact in the primary
-repository, including logs and tour outputs. Pass both absolute roots to every worker. Ignore
-any `.specs/` copy in the worktree, including one created by checking out tracked files.
+Treat each target's selected worktree as the execution root for that repository's code, Git, builds, and
+tests. Re-read checkout-local instructions there. Read and write every spec artifact in `package_dir`,
+including logs and tour outputs; spec files are never inside a checkout. Pass `package_dir` and the target
+worktree paths to every worker.
 
 ## Completion
 
@@ -436,8 +437,9 @@ outcome: published | blocked
 start: goal | proposal | spec | prepared
 feature: <slug>
 epic: <slug | none>
-checkout: <absolute repository or worktree path>
-spec-folder: <absolute feature path in the primary repository>
+checkout: <absolute worktree path per target, `<repo id>: <path>`>
+package-ref: <workspace/slug>
+spec-folder: <package_dir from locations.json>
 stages: <completed stages>
 pr: <url | none>
 blocker: <none | exact stage and reason>

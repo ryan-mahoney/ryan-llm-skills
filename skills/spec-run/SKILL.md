@@ -1,10 +1,10 @@
 ---
 name: spec-run
-description: "Implement every step from a standalone .specs package while escalating only unresolved consequential decisions. Use when the user asks to run or execute a prepared spec. Treat prepared subspecs as launchpads, preserve reviewable checkpoint commits, continue through imperfect results, review each finished step in the background and fix its findings between steps, and hand completed step review/fix cycles and evidence to publication without an automatic final branch review."
+description: "Implement every step from a standalone spec package while escalating only unresolved consequential decisions. Use when the user asks to run or execute a prepared spec. Treat prepared subspecs as launchpads, preserve reviewable checkpoint commits, continue through imperfect results, review each finished step in the background and fix its findings between steps, and hand completed step review/fix cycles and evidence to publication without an automatic final branch review."
 mode: coding
 scope: document
 disable-model-invocation: true
-argument-hint: "[.specs/<feature>/spec.md or spec folder]"
+argument-hint: "[workspace/slug or spec package folder]"
 license: MIT
 metadata:
   author: Ryan Mahoney
@@ -34,7 +34,7 @@ Connection errors, WebSocket failures and provider timeouts are transport observ
 not evidence that step difficulty or model capability was misclassified. Preserve the
 checkout, retained sessions, model assignments and existing evidence. Let an in-flight
 provider retry finish; never launch a competing worker. After a terminal transport
-failure and confirmed lease release, allow at most one coordinator retry with a new
+failure and confirmed coordinator exit, allow at most one coordinator retry with a new
 attempt ID and the same owner/editor, resuming the current diff and outstanding work.
 If it fails again, record the connection blocker and resume after recovery; do not
 reset budgets, replay completed edits or promote models to repair connectivity.
@@ -83,9 +83,9 @@ prepared scope; route consequential changes for correction and re-preparation.
 
 ## Resolve The Prepared Package
 
-Resolve an explicit `.specs/<feature>/spec.md` or `.specs/<feature>/` argument first, then the folder named in the conversation or `Spec folder:` footer. If exactly one prepared `.specs/*/spec.md` exists, use it. Do not ask for confirmation; choose the strongest title/footer/context match. Return `no-artifact` only when no intended package can be identified.
+Run the first step of [Spec Location](../spec-end-to-end/references/spec-location.md): `spec-location check` on an explicit `workspace/slug`, package folder, or file in one, then the package named in the conversation or the `Spec folder:` footer. Read `locations.json`; every path below comes from it. Do not ask for confirmation; choose the strongest title/footer/context match. Return `no-artifact` only when no intended package can be identified.
 
-Reuse the just-produced `spec-write` handoff: resolve canonical package, shared context,
+Reuse the just-produced `spec-write` handoff: `package_ref`, `package_dir`, shared context,
 step index, owned evidence and the next ready card. Dispatch without model capability
 probes, baseline broad checks, later-stage pre-reading or generated workflow files.
 Workers consume their assigned cards and applicable criteria/invariants. Use the history
@@ -112,7 +112,7 @@ Outside that runtime, build the index before first dispatch and refresh after le
 change. Reuse that refresh at the next dispatch; do not build it again merely to advance:
 
 ```bash
-node ~/.agents/skills/spec-run/scripts/build-history-index.mjs --spec-dir <canonical-spec-dir>
+node ~/.agents/skills/spec-run/scripts/build-history-index.mjs --spec-dir <package_dir>
 ```
 
 The generated `history-index.json` points to canonical learning/review/fix records,
@@ -149,12 +149,12 @@ For each selected executable step:
 1. Wait for the prior implementation assignment and its editor to finish. Run completed
    review fixes before assigning the next step; never overlap writers.
 2. Reuse the current history index, refreshing only after its source artifacts change.
-   Supply the checkout, canonical next-card path, index path,
+   Supply the target checkout, next-card path, index path,
    newly routed messages/constraints, and any intervening fix commits. Do not restate
    the technical brief or the skill. Require affected source refresh after external fixes.
 3. Select the owner under the run's routing policy, or use its single assigned owner.
-   In Pi, invoke `spec_dispatch` with canonical package/card, explicit model assignments,
-   constraints and checkout when selected. The runtime creates an isolated worktree when
+   In Pi, invoke `spec_dispatch` with the package (`package_dir`)/card, explicit model assignments,
+   constraints and checkout when selected (the target's `targets[].worktree` once recorded). The runtime creates an isolated worktree when
    checkout is omitted and retains owner/editor disk sessions. Use its tool schema; do
    not launch this pair through `subagent` or build a shell dispatch workflow.
 4. Await the native completion event. After interruption, inspect the exact known runtime
@@ -195,7 +195,7 @@ second-guess the implementation at the next stage transition.
 Managed receipts separate `state` (process lifecycle) from `handoff.status`. `completed` with
 `handoff_incomplete` means the process exited but the canonical structured handoff is missing
 or inconsistent. Preserve the commit and checks, arrange only a bounded handoff repair at a safe
-worker boundary, and retain the obligation in progress. Do not keep a settled writer lease or
+worker boundary, and retain the obligation in progress. Do not keep a settled worker running or
 restart implementation for paperwork. Legacy receipts remain `legacy_unchecked`; reconcile
 existing records without pretending the new validator ran. `recorded` validates structure,
 identity and evidence references, not implementation quality or review acceptance.
@@ -223,7 +223,7 @@ existing authority, carrying unresolved gaps to the responsible step owner befor
 
 Recognize a `decision-required` handoff whose learning lists startup clarification gaps
 with no commit or edits. Answer each gap from a sourced decision: `context.md`,
-`.specs/project-context.md`, the spec and card, prior learnings, or repository facts;
+`locations.project_context`, the spec and card, prior learnings, or repository facts;
 name the source with the answer. When no source settles a gap and plausible answers
 materially change behavior, preservation, compatibility or risk, escalate that one
 decision through the existing top-level `decision-required` path; do not guess. When an
@@ -275,10 +275,9 @@ Once the review range is pinned, launch one background reviewer for the commits 
 the previous review's `head` (or the branch base for the first review) to the pinned
 step-completion head. That range includes any step-fix commits
 made since the previous review. The reviewer needs to read files, run `git`, and write to
-the canonical spec folder, and it must not edit code. Require it to read
+`package_dir`, and it must not edit code. Require it to read
 `~/.agents/skills/spec-branch-review/SKILL.md` and follow Step Scope with
-`scope=step step=<NNN> since=<pinned base sha> head=<pinned head sha>`. Pass the checkout, the spec
-folder, and the model assigned to step review. Don't wait for it: it reads fixed commits,
+`scope=step step=<NNN> since=<pinned base sha> head=<pinned head sha>`. Pass the target checkout, `package_dir`, and the model assigned to step review. Don't wait for it: it reads fixed commits,
 so the next step worker can edit the checkout while it runs. Reviews may overlap.
 
 **Record results.** When a reviewer finishes, read only the leading `review:` YAML block
@@ -303,7 +302,7 @@ An unavailable selected model is a launch/configuration error; preserve the assi
 and diagnose it under the existing setup-error policy.
 Before dispatching the next step, take each completed step review
 with `verdict: needs-fix` and no `step-<NNN>-fix.md`, oldest first. Run
-`spec-branch-fix review=<spec-dir>/reviews/step-<NNN>-review.md` and wait for it to
+`spec-branch-fix review=<package_dir>/reviews/step-<NNN>-review.md` and wait for it to
 finish. Only one agent writes to the checkout at a time, so never run a fixer alongside a
 step worker. If a later step review raises a signature again after an earlier step fix
 marked it `fixed`, pass it as a terminalize instruction, as `spec-branch-refine` does.
@@ -331,7 +330,7 @@ non-empty range launches one `spec-branch-review` Step Scope review with
 `step=final-1 since=<base> head=<HEAD>` under the **In Pi** reviewer launch rules
 (profile, assigned review model, `timeoutMs: 2700000`), with no writer overlap. A
 `final-1` `pass` records `final-fix-review: pass`. A `needs-fix` runs
-`spec-branch-fix review=<spec-dir>/reviews/final-1-review.md`; the final fixer follows
+`spec-branch-fix review=<package_dir>/reviews/final-1-review.md`; the final fixer follows
 the **Fix between steps** override precedence, explicit selector passing and
 missing-assignment handling, except its default owner is the recorded effective owner of
 the highest-numbered indexed step.
@@ -389,7 +388,7 @@ for a different candidate `commit`. Do not duplicate worker
 checks in this coordinator or dispatch a final testing step; broad suites belong to CI or
 the operator after publication and are never collected here. The responsible step/fix owner closes concrete focused acceptance/failure gaps. Keep actual automated/smoke results distinct from unexecuted gates.
 
-Then atomically write both `.specs/<feature>/merge-evidence.md` and version 2 `.specs/<feature>/merge-evidence.json`. These are the evidence assembly bound to current HEAD. Record default review completion under the shared **Step Review Completion** contract; the next stage presents this evidence in a work tour, without another review.
+Then atomically write both `merge-evidence.md` and version 2 `merge-evidence.json` in `package_dir`. These are the evidence assembly bound to current HEAD. Record default review completion under the shared **Step Review Completion** contract; the next stage presents this evidence in a work tour, without another review.
 
 The Markdown begins with a level-1 heading and contains:
 

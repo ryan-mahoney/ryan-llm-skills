@@ -25,8 +25,8 @@ Invocation: `test-audit <behavior or path> [mode=assess|apply]`.
 Resolve the named behavior or path, code checkout, current revision, and uncommitted work.
 If no scope is supplied, inventory the suite and choose a bounded behavior group, stating
 the selection. Do not silently turn a local audit into a repository-wide rewrite.
-Preserve unrelated changes. Keep `.specs/` artifacts in the primary checkout when that
-workflow is in use. Application checks run in the selected code checkout.
+Preserve unrelated changes. Spec artifacts stay in the package_dir from `locations.json`
+when that workflow is in use, never in a worktree copy. Application checks run in the selected code checkout.
 
 ## Inspect protection and cost
 

@@ -1,6 +1,6 @@
 ---
 name: spec-architect-initial
-description: "Act as the first architecture stage in a standalone spec-driven workflow: review the current system and write .specs/<feature>/proposal.md with a compatible solution, or explain why the request does not fit. Use when the user says 'architect this', 'design a solution for', 'how should I implement', 'how would this fit into the codebase', 'propose an approach for', 'is this feasible in our architecture', or 'plan this feature'."
+description: "Act as the first architecture stage in a standalone spec-driven workflow: review the current system and write proposal.md in the feature's spec package with a compatible solution, or explain why the request does not fit. Use when the user says 'architect this', 'design a solution for', 'how should I implement', 'how would this fit into the codebase', 'propose an approach for', 'is this feasible in our architecture', or 'plan this feature'."
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -23,13 +23,38 @@ LLMs are bad at saying "this doesn't fit." They will cheerfully propose bolting 
 
 ---
 
+## Step 0 — Locate the Workspace and Create the Package
+
+This is the only skill that creates a package. Read [Spec Location](../spec-end-to-end/references/spec-location.md).
+
+- **Existing package** (a `workspace/slug` reference, a package folder, or a file inside one): run
+  `spec-location check` on it and read `locations.json`. Skip the rest of this step.
+- **New package:** run `node ~/.agents/scripts/spec-location/cli.mjs resolve --cwd .` from the repository, or with
+  `--workspace <name>` when the repository is in several kits or none applies. On refusal print `message` and
+  `remedy`, then stop. The result names the workspace, its project context, and the kit.
+  1. Choose the targets from the kit's repositories: every repository the change will modify, at minimum the
+     repository you were started in. A needed repository missing from the kit is a refusal with its own
+     remedy (`workspace-kit add-repo`); do not work around it.
+  2. Choose the slug by the convention in [Spec epics](../../docs/spec-epics.md#naming); `new` refuses a slug the
+     workspace already has. Decide the epic, plan, and design packages the package belongs to, if any.
+  3. Create it:
+
+     ```bash
+     node ~/.agents/scripts/spec-location/cli.mjs new --workspace <workspace> --slug <slug> --target <repo id>[:<branch>]... [--design <ref>]... [--plan <name>] [--epic <slug>]
+     ```
+
+     Branches default to `spec-<slug>`. Read `package_ref` and `package_dir` from the printed `locations`, and take every
+     later path from `locations.json` by field name. When the package joins an epic or uses a plan that does not
+     exist yet, `locations.epic` and `locations.plan` name the files to write in Step 5; `check` refuses until they
+     exist.
+
 ## Step 1 — Intake: Qualify the Request Before Doing Any Work
 
 Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Architecture owns the initial evidence posture. Resolve the shared project context and write the
-feature's sourced `context.md` before design; choose the smallest sustainable implementation and
+feature's sourced `context.md` in `package_dir` before design; choose the smallest sustainable implementation and
 proportionate evidence together. Distinguish actual deployment from isolated application wiring.
 
-Before detailed architecture work, make sure you understand what's actually being asked. When the resolved spec folder contains `requirements.md`, read it first. Restate the problem in your own words, covering:
+Before detailed architecture work, make sure you understand what's actually being asked. When `package_dir` contains `requirements.md`, read it first. Restate the problem in your own words, covering:
 
 - **What** needs to happen (the functional requirement)
 - **Who / what** triggers it (user action, cron job, webhook, another service)
@@ -40,7 +65,7 @@ Before detailed architecture work, make sure you understand what's actually bein
 
 Apply this rubric to the request text plus a quick glance at the repo (README, dependency manifest — minutes, not the full Step 2 analysis). The point is to catch missing decisions *before* any architecture work is sunk. For each category, decide whether it is answered by the request, answerable from the repo, or missing:
 
-- **Project context and authority** — Read `.specs/project-context.md` in the primary repository and AGENTS-linked policy sources.
+- **Project context and authority** — Read `locations.project_context` (one file per workspace; repository-specific facts sit under `## Repository: <id>` headings) and AGENTS-linked policy sources.
   Resolve users, data value/reset boundaries, compatibility, scale, release process, configuration
   policy, verification targets, and permitted operations independently. Unknown is not disposable.
 - **Compatibility posture** — Are there existing users, stored data, or API clients that must keep working? Or is this pre-launch / greenfield, where forward-only changes are cheaper and migration shims are waste?
@@ -86,7 +111,7 @@ architecture incompatibility. Resume the same package after the decision is sour
 
 ### 2a. Read AGENTS.md
 
-Check for `AGENTS.md` in the repository root. If it exists, read it fully — it is your primary source of truth for the system's architecture, conventions, tech stack, directory layout, routing patterns, and known gotchas.
+Check for `AGENTS.md` in the root of each target checkout (`targets[].primary`). If it exists, read it fully — it is your primary source of truth for the system's architecture, conventions, tech stack, directory layout, routing patterns, and known gotchas.
 
 If there is no `AGENTS.md`, you need to build the context yourself. Inspect the root files and dependency manifests, then trace the relevant entrypoints and adjacent
 contracts directly; no separate reconnaissance skill is required. You don't need to write an AGENTS.md — just internalize the same information.
@@ -386,15 +411,14 @@ the value of the feature.]
 
 ## Step 5 — Output
 
-Write the proposal to `.specs/<feature-slug>/proposal.md` in the current repository:
+Write the proposal to `proposal.md` in `package_dir`:
 
-- If the user supplies an existing `.specs/<feature-slug>/` folder or a file inside it, use that folder.
-- Otherwise derive a short kebab-case slug from the request and create `.specs/<feature-slug>/`. Name new packages by the convention in [Spec epics](../../docs/spec-epics.md#naming): `<epic><NN>-<slug>` for epic members, `<NN>-<slug>` or a bare slug for standalone packages, two-digit ordinals, a letter suffix for splits. Refuse a duplicate ordinal.
-- When one plan is decomposed into two or more packages, write `.specs/_epics/<slug>/epic.json` per [Spec epics](../../docs/spec-epics.md): the members, each member's `requires` taken from the plan's dependency statements, and `plan` pointing at the plan document (copy or move it to `_epics/<slug>/plan.md` when it is not already under `.specs/`). Do not create a record for a single package. When the plan implements design packages (`~/.agents/docs/design-packages.md`), list them under `designs` as `{ workspace, design, path }`, cut members on the screen inventory in each `design.json`, and name in every member's proposal the screens it implements: a screen claimed by no member is a plan gap to state, a screen claimed by two needs one owner.
-- Keep every pipeline artifact for the feature in that folder. Use package-relative paths between artifacts. Keep the folder in the primary repository when code runs in a worktree.
+- When the user supplies an existing package, use its folder; Step 0 created the folder for a new one. Names follow the convention in [Spec epics](../../docs/spec-epics.md#naming): `<epic><NN>-<slug>` for epic members, `<NN>-<slug>` or a bare slug for standalone packages, two-digit ordinals, a letter suffix for splits.
+- When one plan is decomposed into two or more packages, write the epic record at `locations.epic` per [Spec epics](../../docs/spec-epics.md): the members (package slugs in this workspace), each member's `requires` taken from the plan's dependency statements, and `plan` set to the plan's file name. Put the plan document at `locations.plan` when it is not already in the workspace; scope changes go through `spec-location scope`, not by editing files. Create each remaining member with its own Step 0 and `--epic`. Do not create a record for a single package. When the plan implements design packages (`~/.agents/docs/design-packages.md`), list them under `designs` as `{ workspace, design, path }` (take `path` from `locations.designs[].dir`), cut members on the screen inventory in each `design.json`, and name in every member's proposal the screens it implements: a screen claimed by no member is a plan gap to state, a screen claimed by two needs one owner.
+- Keep every pipeline artifact for the feature in `package_dir`. Use package-relative paths between artifacts.
 - Write atomically. Keep required front matter first and the level-1 heading immediately after it.
 - Report `outcome: proposed | rejected | decision-required | blocked`. For a completed proposal,
-  give its path and `next: spec-architect-critics | spec-write`. For an unresolved consequential
+  give `package_ref`, `package_dir`, the proposal path and `next: spec-architect-critics | spec-write`. For an unresolved consequential
   choice, report the context/decision artifact and exact next decision; for essential unavailable
   source, report the missing input. Do not emit a false compatible or incompatible verdict.
 - Present the document for optional challenge and product-direction feedback. Its safety case must stand without a person reviewing it.

@@ -28,7 +28,7 @@ subcommands you may use are:
   bin/ux-qa note   --run {RUN_DIR} [--about N|last] --observed T [--confusion none|mild|blocked]
   bin/ux-qa finish --run {RUN_DIR} --claim done|gave-up [--reason T] [--eyes host-vision|relayed-vision|source-only]
 
-You must not read any other file in the repository. You must not read `.specs`,
+You must not read any other file in the repository. You must not read the workspace captures or spec storage,
 `docs`, source files, tests, configuration or project documentation. You must not
 read any other file in the run directory — the run directory holds the harness's
 own output, not your instructions. Do not open a second browser, a second

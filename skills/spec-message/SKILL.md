@@ -17,13 +17,15 @@ message; the coordinator routes it and the addressed recipient interprets and ac
 
 ## Resolve the recipient
 
-Use the feature or run named by the caller. Apply
-[Workspace Handoff](../spec-end-to-end/references/workspace-handoff.md) to resolve
-the canonical package in the primary repository, even when invoked from a worktree:
+Use the feature or run named by the caller. Run the shared
+[spec-location step](../spec-end-to-end/references/spec-location.md) to resolve the package:
 
 ```bash
-node ~/.agents/skills/spec-end-to-end/scripts/resolve-spec-path.mjs .specs/<feature>/
+node ~/.agents/scripts/spec-location/cli.mjs check <ws/slug or package folder>
 ```
+
+On refusal, print the `message` and `remedy` and stop. On success, use `package_dir` from
+`locations.json` for the inbox and run paths.
 
 Read the run's existing stage ledger or coordinator handoff for its run ID, mailbox
 paths, current stage, and designated overseer/delegated scope. Do not guess the run
@@ -89,6 +91,6 @@ mailbox checkpoint.
 Example invocation:
 
 ```text
-$spec-message .specs/export-format/ — Tell the reviewer to check that empty input
+$spec-message transitops/export-format — Tell the reviewer to check that empty input
 preserves the documented CSV header order.
 ```

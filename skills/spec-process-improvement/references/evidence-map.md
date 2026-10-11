@@ -5,7 +5,7 @@ documentation on 2026-10-10. Use this map to avoid rediscovery; inspect the name
 implementation if a version or returned shape differs. These are locations and
 navigation hints, not a guarantee that every historical run produced every file.
 
-`PACKAGE` means the absolute canonical primary-checkout `.specs/<feature>` folder.
+`PACKAGE` means the `package_dir` from the package's `locations.json` (workspace storage, outside any checkout).
 `CHECKOUT` means the recorded implementation checkout. `AGENT_DIR` defaults to
 `~/.pi/agent`; Pi can override it with `PI_CODING_AGENT_DIR` or SDK configuration.
 The shared skills, runtime, and scripts live under `~/.agents/`; installed skill
@@ -63,8 +63,8 @@ Paths in this table are relative to `PACKAGE` unless stated otherwise.
 | Existing handwritten stage/experiment/performance records | Historical decisions, baselines and interventions. No universal filename is prescribed; use recorded links and a bounded package listing. |
 
 Use `rg --files --hidden --no-ignore "$spec_package"` when a package inventory is
-needed: `.specs/` is commonly ignored. Read selected files, not every artifact.
-Set `spec_package` to the resolved canonical path first.
+needed: packages live outside any checkout, so Git does not list them. Read selected files, not every artifact.
+Set `spec_package` to `package_dir` first.
 
 ## Managed assignment evidence
 

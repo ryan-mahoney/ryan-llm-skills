@@ -4,36 +4,37 @@ This contract applies to every standalone spec stage, including direct leaf-skil
 Specs are instructions for agents. People review the resulting evidence tour, not the spec or
 diff. An assumption buried in a document is neither a resolved product decision nor permission.
 
-Before locating or writing `.specs/`, apply [Workspace Handoff](workspace-handoff.md#keep-specs-in-the-primary-repository).
-The primary repository owns all spec artifacts; the selected checkout owns code and command
-execution. Resolve those roots separately even when this skill runs directly in a worktree.
+Before locating or writing any spec artifact, apply [Spec Location](spec-location.md). The workspace owns all spec
+artifacts; each target's checkout owns code and command execution. Resolve those separately even when this skill
+runs directly in a worktree.
 
 ## Resolve Once, Carry Through
 
-Read `<repositoryRoot>/.specs/project-context.md`, shared across features and worktrees.
-This is the canonical project context; never create or update it at the repository root or
-inside a linked worktree. Read any AGENTS-linked policy documents as sources for it. On first
+Read the file at `locations.project_context`: one project context per workspace, shared across packages, targets,
+and worktrees. Repository-specific facts sit under a `## Repository: <id>` heading; read the shared sections and the
+headings of this package's targets. Never create or update project context at a repository root, inside a worktree,
+or anywhere other than that path. Read any AGENTS-linked policy documents as sources for it. On first
 use, establish the relevant facts from current user instructions, existing project policy,
 and verifiable repository facts.
 Record unknowns honestly. A small repository or absent deployment file does not establish that
 there are no users, valuable data, or live services.
 
-When context is missing, create a concise `.specs/project-context.md` in the primary repository using the fields below and ask
+When context is missing, create a concise project context at that path using the fields below and ask
 only consequential unanswered questions. Record the user's decisions there for subsequent specs.
 Use `unknown` for unanswered fields; do not stall safe local investigation for unrelated gaps.
 Do not change established project policy merely to make a feature or evidence plan easier.
 
-If a legacy root-level `project-context.md` exists, reuse its valid facts when initializing the
-canonical file. Do not keep updating the old location or silently let it override newer decisions
-in `.specs/project-context.md`. Reconcile material conflicts from their sources; preserve unrelated
-repository documentation. Update workflow references to the canonical path when migrating a package.
+If a legacy root-level `project-context.md` exists in a repository, reuse its valid facts when initializing the
+workspace file. Do not keep updating the old location or silently let it override newer decisions
+in the workspace file. Reconcile material conflicts from their sources; preserve unrelated
+repository documentation.
 
-At intake, write `.specs/<feature>/context.md` in the primary repository: the relevant resolved facts, source references,
+At intake, write `context.md` in the package folder (`package_dir`): the relevant resolved facts, source references,
 decisions, unresolved questions, deliberate omissions, and permitted verification environments.
 Distinguish `user-confirmed`, `project-policy`, `repository-observed`, and `assumed` facts. Include
 source revision or precise location for project files and a dated quotation or precise reference for user
-decisions. Never include credentials. Reference this snapshot by its canonical path in `evidence-plan.json`; workers and reviewers read the relevant constraints. It records constraints, not new authority.
-The shared `.specs/project-context.md` is project-wide; this feature snapshot remains a separate artifact.
+decisions. Never include credentials. Reference this snapshot by its package-relative name in `evidence-plan.json`; workers and reviewers read the relevant constraints. It records constraints, not new authority.
+The workspace project context is project-wide; this feature snapshot remains a separate artifact.
 
 On resume, preparation, and before external actions, check relevant sources for material changes.
 If facts or decisions change, update the snapshot through intake/preparation, reassess only

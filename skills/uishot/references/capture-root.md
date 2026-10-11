@@ -6,37 +6,39 @@ them by ID rather than by path.
 
 ## Root
 
-The default capture root is `.specs/images/` in the primary checkout. Resolve it
-from any worktree with the repository's common git directory:
+Captures live in workspace storage, outside every checkout, so they are never
+committed. Resolve the root for the application checkout being captured:
 
 ```bash
-root="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/.specs/images"
+node ~/.agents/scripts/spec-location/cli.mjs resolve --cwd <app checkout>
 ```
 
-A repository that already commits its captures — for example under
-`docs/screenshots/` — may declare a different root in its instruction file or
+The JSON result has `capturesDir` and `repository`. The capture root is
+`<capturesDir>/<repository>/images/`. Any worktree of that repository resolves to
+the same root. A package whose `locations.json` is already materialized records
+the same directory as `captures_dir`.
+
+If the command refuses (exit 2, or exit 1 for an error), print its `message` and
+`remedy` and stop. Do not write captures under the checkout instead.
+
+`uishot shot --capture-root` applies this resolution itself and writes to
+`<capturesDir>/<repository>/images/`. It is mutually exclusive with `--out-dir`.
+On refusal it prints the remedy and exits 2.
+
+A repository that already commits its captures, for example under
+`docs/screenshots/`, may declare a different root in its instruction file or
 its documentation standard. Writers then use the declared root, and the layout
 below is unchanged under it. That declaration is the only override; it adds no
 config file and no second convention.
 
+The scratch folder `.uishot/` in the working directory is separate. It holds
+ad-hoc screenshots and is not a capture root.
+
 ## Safety
 
-Before writing any capture, prove the root is ignored, and run the check in the
-checkout that owns the root — `$root/../..` for the default root:
-
-```bash
-git -C "$root/../.." check-ignore -q "$root"
-```
-
-`check-ignore` applies a repository's ignore rules only for paths inside that
-repository, so from a linked worktree the default root lies outside the
-repository and the command fails with "is outside repository" even though the
-root is ignored. Running it in the primary checkout is the check that answers
-the question. A repository that declares another root runs the check in its own
-checkout.
-
-If that command fails, stop and ask for the root to be ignored. A committed
-capture file is the failure this check exists to prevent.
+The root is outside every checkout, so no ignore check applies. Write captures
+only under the resolved root. A repository that declares its own root inside its
+checkout runs its own ignore check there.
 
 ## Layout
 
@@ -60,7 +62,7 @@ folder, and the file's presence is the whole record: a missing file reads as
 ## Citing
 
 Committed documents cite a capture by its backticked ID in a `Capture ID`
-column, never by an embedded image link and never by a `.specs/` path. Say this
+column, never by an embedded image link and never by a storage path. Say this
 sentence in the document:
 
 > Captures are generated locally, are not committed, and resolve by ID under the capture root.
@@ -70,6 +72,7 @@ evidence table.
 
 ## Validation
 
-When the capture root exists in this checkout, check that every cited ID
-resolves to a file under it. When it does not exist here, the document says the
-check was not possible in this checkout rather than implying a pass.
+When the capture root exists on this machine, check that every cited ID
+resolves to a file under it. When it does not exist here, or `resolve` refused,
+the document says the check was not possible on this machine rather than
+implying a pass.

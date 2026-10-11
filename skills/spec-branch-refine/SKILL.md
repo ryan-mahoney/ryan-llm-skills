@@ -17,7 +17,7 @@ metadata:
 Apply [Verification and Review](../../rules/verification-and-review.md) for focused-check scheduling
 and batched Jev verification/review-triage checkpoints.
 
-> **`.specs/` is standalone working state and is often gitignored.** Read and write it directly; do not depend on git history to recover it. Diffing implementation code is unaffected.
+> **Spec packages live in workspace storage, outside any checkout.** Read and write them through the paths in `locations.json`; do not depend on git history to recover them. Diffing implementation code is unaffected.
 
 Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Drive the final branch evidence loop to convergence. Alternate the independent `spec-branch-review` audit and `spec-branch-fix`, re-auditing while rounds remain. Each iteration includes its fix pass; stop after the final
 fix and verification without requiring an extra review.
@@ -65,10 +65,12 @@ spec correction, or a convergence stop condition below.
 
 ## Resolve Inputs
 
-- **Spec.** Resolve explicit `spec=<path>` or `.specs/<feature>/` first, then the
-  folder named in the conversation or `Spec folder:` footer. If exactly one
-  `.specs/*/spec.md` exists, use it. Stop on ambiguity. `<spec-dir>` is the resolved
-  `.specs/<feature>/` folder.
+- **Spec.** Resolve explicit `spec=<ref or folder>` first, then the package named in the
+  conversation or `Spec folder:` footer. Run the shared
+  [spec-location step](../spec-end-to-end/references/spec-location.md)
+  (`node ~/.agents/scripts/spec-location/cli.mjs check <ref or folder>`); on refusal, print its
+  `message` and `remedy` and stop. `<package_dir>` is the `package_dir` field in
+  `<package_dir>/locations.json`. Stop on ambiguity.
 - **Max iterations.** `max-iterations=<n>`, a positive integer, default **10** for
   direct invocation. Each iteration is one review followed by its fix pass when needed:
   at most `n` reviews and `n` fixes. `max-iterations=2` means review → fix → review → fix.
@@ -99,7 +101,7 @@ handoff gap, not permission to silently reset the budget. Then:
    authorized publication scope. CI results belong to the operator after publication; do
    not collect or await them. Let review close actual evidence gaps without a duplicate
    broad pass. It
-   writes `<spec-dir>/reviews/branch-<i>-review.md` and dedupes against prior
+   writes `<package_dir>/reviews/branch-<i>-review.md` and dedupes against prior
    dismissals itself.
 2. **Read the verdict.** Parse the review file's leading `review:` YAML block — the
    `verdict` and the set of actionable finding `signature`s. Derive counts from `findings[].actionable`; ignore legacy counters and lens lists.
@@ -181,8 +183,8 @@ the blocker. Finishing the iteration budget does not make an unresolved defect p
 ## Artifact Policy
 
 Review and fix artifacts are durable iteration memory and are always written to
-`<spec-dir>/reviews/`. Do not stage or commit `.specs` unless the repository
-explicitly tracks it. A review pass whose only output is these artifacts produces
+`<package_dir>/reviews/`. Spec package files are not repository files; never stage or
+commit them. A review pass whose only output is these artifacts produces
 no commit; only code changes made by `spec-branch-fix` are committed.
 
 ## Reporting

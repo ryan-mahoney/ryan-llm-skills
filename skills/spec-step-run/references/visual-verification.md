@@ -29,7 +29,7 @@ another writer and notifies the coordinator.
 2. Use `uishot` as the default Playwright-backed observation runner for the real changed
    UI, including when the repository has its own Playwright suite. A local app, Storybook,
    or component preview may serve the production component with its real styles. Run
-   `uishot` from the worktree root, run its setup command when required, and keep its
+   `uishot` from the target worktree root, run its setup command when required, and keep its
    browser warm throughout the correction loop. `uishot` satisfies the Playwright-only
    screenshot requirement; do not classify it as a generic browser screenshot fallback.
 3. Reuse the repository's Playwright configuration and fixture helpers. Run only an affected
@@ -84,7 +84,7 @@ will regress silently in later edits, such as a state transition or a data-drive
 render, and schedule it under the shared policy. Baseline acceptance never substitutes
 for looking at the rendered pixels. Keep ad hoc
 screenshots out of the commit unless the repository explicitly tracks Playwright visual
-baselines, retain the final inspected images under `.specs/<feature>/evidence/` so they
+baselines, retain the final inspected images under `evidence/` in `package_dir` so they
 survive as merge evidence, and terminate any server or watcher started for capture. If the first `uishot` capture launched its warm
 browser, stop it after the final capture and confirm `uishot status` reports it stopped;
 preserve a browser that was already running. Record the cleanup commands and outcomes.
@@ -99,5 +99,5 @@ viewport and state coverage, screenshot paths, readiness and console evidence, w
 inspection found, corrections made, and the final visual assessment.
 
 The final captures and deterministic scenario/setup notes are QA-tour inputs. Preserve
-them under `.specs/<feature>/evidence/` with sensitive data removed. Rendered evidence
+them under `evidence/` in `package_dir` with sensitive data removed. Rendered evidence
 does not replace behavioral, data, policy, or production-reachability gates.

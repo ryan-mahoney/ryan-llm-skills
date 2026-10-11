@@ -33,9 +33,9 @@ Never invent a schema/path or assume the archive contains every worker/resumptio
 ## Summary commands and their scopes
 
 ```bash
-node ~/.agents/scripts/spec-observe/cli.mjs metrics --package /absolute/primary/.specs/FEATURE --all-sessions
-node ~/.agents/scripts/spec-observe/cli.mjs metrics --package /absolute/primary/.specs/FEATURE --session SESSION_ID --format text
-node ~/.agents/scripts/spec-observe/cli.mjs report --package /absolute/primary/.specs/FEATURE --session SESSION_ID
+node ~/.agents/scripts/spec-observe/cli.mjs metrics --package <package_dir> --all-sessions
+node ~/.agents/scripts/spec-observe/cli.mjs metrics --package <package_dir> --session SESSION_ID --format text
+node ~/.agents/scripts/spec-observe/cli.mjs report --package <package_dir> --session SESSION_ID
 ```
 
 JSON is the metrics default. Select `--all-sessions` **or** `--session`, not both.
@@ -96,7 +96,7 @@ and use the other for diagnostics, without adding both totals.
 |---|---|
 | Observed process span | First selected coordinator user message to last observed activity, including pauses. A reused session can begin before the selected task. |
 | Dispatch/step duration | Receipt/event boundaries for an assignment. Reviews and fixes outside dispatch are additional work, potentially overlapping another step. |
-| First checkout edit | Metrics recognize successful native `write`/`edit` outside `.specs`. Shell edits are not inferred; `report`'s first write-tool metric has a different, weaker meaning. |
+| First checkout edit | Metrics recognize successful native `write`/`edit` outside the spec package. Shell edits are not inferred; `report`'s first write-tool metric has a different, weaker meaning. |
 | Model calls/response time | Persisted assistant responses, including errors, and observed latency with coverage. Provider-internal retries are not fully visible. This is not total agent runtime. |
 | Tool/delegation waits | Submission-to-result upper bounds including queueing. Overlap means summed waits/latencies do not equal elapsed or recoverable time. |
 | Repeated reads/status calls | A candidate source of overhead. Inspect changed content, compaction, role boundaries and waiting mechanism before declaring the repeats avoidable. |

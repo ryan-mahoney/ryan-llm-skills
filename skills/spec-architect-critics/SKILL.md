@@ -1,6 +1,6 @@
 ---
 name: spec-architect-critics
-description: "Critique a standalone spec-driven architecture proposal in .specs/<feature>/proposal.md by selecting two real practitioners with relevant expertise and evaluating the proposal through their documented perspectives. Use for architecture critiques, proposal reviews, stress tests, expert perspectives, and gap-finding after spec-architect-initial."
+description: "Critique a standalone spec-driven architecture proposal (a package's proposal.md) by selecting two real practitioners with relevant expertise and evaluating the proposal through their documented perspectives. Use for architecture critiques, proposal reviews, stress tests, expert perspectives, and gap-finding after spec-architect-initial."
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -25,7 +25,7 @@ This is not a rubber stamp. The value of this skill is in finding flaws, blind s
 
 Look for the material to critique:
 
-- Resolve `proposal.md` from an explicit `.specs/<feature>/` folder or file first. Otherwise use the feature folder named in the conversation; if exactly one `.specs/*/proposal.md` exists, use it. Stop on ambiguity rather than guessing by modification time.
+- Resolve the package from an explicit package ref or folder first, otherwise the package named in the conversation. Run the shared [spec-location step](../spec-end-to-end/references/spec-location.md) (`node ~/.agents/scripts/spec-location/cli.mjs check <ref or folder>`); on refusal, print its `message` and `remedy` and stop. Read `proposal.md` from `package_dir` in `locations.json`. Stop on ambiguity rather than guessing by modification time.
 - An architecture document the user has shared or uploaded
 - A plan described in the current conversation
 - Code or PRs the user wants reviewed at the architectural level
@@ -291,7 +291,7 @@ claims and establish deployment safety; the specific missing or circular gates.]
 ## Step 6 — Output
 
 - Write the critique as a markdown document.
-- Write `critique.md` in the resolved `.specs/<feature>/` folder. For non-pipeline material, write `CRITIQUE-[name].md` beside the supplied source.
+- Write `critique.md` in `package_dir`. For non-pipeline material, write `CRITIQUE-[name].md` beside the supplied source.
 - Refer to sibling artifacts by filename or spec-folder-relative path, never by a machine-specific absolute path.
 - Write atomically with a level-1 heading on line 1.
 - Report `outcome: critiqued`, the path, Must/Should/Consider counts, and `next: spec-write`.

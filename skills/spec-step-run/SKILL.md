@@ -4,7 +4,7 @@ description: "Implement one prepared spec step autonomously, producing its code,
 mode: coding
 scope: document
 disable-model-invocation: true
-argument-hint: "spec=.specs/<feature>/spec.md step=<number-or-exact-step>"
+argument-hint: "spec=<package ref or folder> step=<number-or-exact-step>"
 license: MIT
 metadata:
   author: Ryan Mahoney
@@ -72,9 +72,12 @@ necessary later procedure, and record pending execution. A spec gate never grant
 
 ## Canonical Inputs
 
-The prompt supplies the code checkout and canonical subspec path, or feature folder
-and step. Resolve paths under [Workspace Handoff](../spec-end-to-end/references/workspace-handoff.md).
-Keep `.specs/` in the primary checkout; run code and checks in the implementation checkout.
+The prompt supplies the code checkout and subspec path, or `package_ref`/`package_dir`
+and step. Run the first step of [Spec Location](../spec-end-to-end/references/spec-location.md)
+(`spec-location check` on the package) and read `locations.json`; see also
+[Workspace Handoff](../spec-end-to-end/references/workspace-handoff.md). Run code and checks in the
+step's target worktree (`targets[].worktree`, selected by the step's `repository` when the package has several
+targets); spec files are never in a checkout.
 
 On first use, read `context.md`, the spec's shared contracts and assigned step, the
 matching `spec-steps.json` entry, owned `evidence-plan.json` gates, the subspec, and
@@ -83,17 +86,17 @@ Reuse those inputs across assignments; load new constraints and affected section
 when they change. Read other steps only to resolve a dependency or ownership question.
 Do not load the full preparation report and unrelated cards as routine startup work.
 
-Write `learnings/step-<NNN>-learning.md` and non-committed evidence under the canonical
-feature folder. Read the [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md)
+Write `learnings/step-<NNN>-learning.md` and non-committed evidence under
+`package_dir`. Read the [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md)
 when producing or interpreting evidence records; do not duplicate its schema in handoffs.
 
 ## Prior Step Handoff
 
-Use `<spec-dir>/history-index.json` to locate introduced symbols, decisions, handoffs,
+Use `<package_dir>/history-index.json` to locate introduced symbols, decisions, handoffs,
 and review/fix records relevant to this step. Read the original sources for applicable
 items and any unresolved or unknown entry that could affect its contracts. An index
 is navigation, not authority or proof of resolution. If absent, rebuild it with
-`node ~/.agents/skills/spec-run/scripts/build-history-index.mjs --spec-dir <spec-dir>`;
+`node ~/.agents/skills/spec-run/scripts/build-history-index.mjs --spec-dir <package_dir>`;
 if unavailable or incomplete, inspect the original records for affected prior steps.
 Never treat an indexing failure as an empty history. Prefer `learnings/` over historical
 root-level learning copies.
@@ -265,7 +268,7 @@ checks may run within existing scope/authority; operations awaiting a release or
 remain `pending`. Do not perform live operations to make this step pass. Committed evidence such as integration tests
 ships in the step's commit. Non-committed artifacts — a deterministic QA walkthrough,
 screenshots, dry-run logs, benchmark output — are written atomically to
-`.specs/<feature>/evidence/` under the prepared filename, with markdown artifacts
+`evidence/` in `package_dir` under the prepared filename, with markdown artifacts
 beginning with a level-1 heading. Make each artifact honest and specific: a QA
 walkthrough names exact preconditions, steps, expected observations, and the EV gates
 that automate each correctness claim, written
@@ -303,7 +306,7 @@ or another harness, use the manual record procedure below; never treat an eviden
 its replacement. Independent review/fix and coordinator acceptance remain separate.
 
 Inspect the changed-file list and separate unrelated user changes from the coherent
-artifact. Create `<spec-dir>/learnings/` if needed and atomically write the target
+artifact. Create `<package_dir>/learnings/` if needed and atomically write the target
 `learnings/step-<NNN>-learning.md` with a fenced `learning:` YAML
 block before prose:
 

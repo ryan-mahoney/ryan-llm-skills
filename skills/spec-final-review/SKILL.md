@@ -25,7 +25,8 @@ is given (`EDITOR_AGENT` is the existing alias). With no recorded editor, Pi use
 Record the effective selectors and pass them on every launch. Do not silently
 substitute an explicitly assigned model after a launch failure.
 
-Supply the checkout, primary repository, branch/base, canonical package if present,
+Supply the checkout, the primary checkout (`targets[].primary` from the package's
+`locations.json`), branch/base, the package ref and `package_dir` if present,
 current HEAD, run constraints, and commit/push authority. Read applicable AGENTS.md
 and [Verification and Review](../../rules/verification-and-review.md). Resolve the
 actual comparison range and remote target; do not assume the base is `main`. All
@@ -93,7 +94,7 @@ A rejected push needs ordinary reconciliation; never force-push over unknown wor
 Do not merge or wait for CI. If publication is outside scope, finish locally and
 report that limit without inventing a publication prerequisite.
 
-With a spec package, keep a concise `reviews/final-review.md` in the primary checkout:
+With a spec package, keep a concise `reviews/final-review.md` in `package_dir`:
 reviewed base/HEAD, exact model assignments, concerns and dispositions, changed
 commits, actual focused evidence/revisions, resulting HEAD, push result, unresolved
 findings, and outcome `complete` or `blocked`. Record that the same reviewer assessed
