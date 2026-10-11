@@ -49,6 +49,11 @@ body{max-width:100%;overflow-x:clip}
 .thread-handoff .thread-field{display:flex;flex-direction:column;gap:4px;min-width:0}
 .thread-handoff input[type=text],.thread-handoff textarea{width:100%;max-width:100%;background:#11141a;border:1px solid var(--line);border-radius:5px;color:var(--ink);padding:10px 12px;font:inherit}
 .thread-handoff textarea{min-height:110px;resize:vertical}
+.thread-new{display:grid;grid-template-columns:minmax(160px,280px) auto;justify-content:start;gap:10px;align-items:end;margin-bottom:14px}
+.thread-new .thread-field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.thread-new select{width:100%;max-width:100%;background:#11141a;border:1px solid var(--line);border-radius:5px;color:var(--ink);padding:10px 12px;font:inherit}
+.thread-new select:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.thread-new>p{grid-column:1/-1;margin:0}
 .thread-handoff input[type=text]:focus-visible,.thread-handoff textarea:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .thread-preview,.thread-result{border:1px solid var(--line);background:#11141a;padding:12px;display:flex;flex-direction:column;gap:8px;min-width:0}
 .thread-preview{border-left:3px solid var(--accent)}
@@ -57,7 +62,7 @@ body{max-width:100%;overflow-x:clip}
 .thread-facts div{display:contents}
 .thread-facts dt{color:var(--muted);font-size:12px}
 .thread-facts dd{margin:0}
-@media(max-width:650px){.threads-split{grid-template-columns:minmax(0,1fr)}.thread-list{max-height:280px;overflow:auto}.thread-facts{grid-template-columns:minmax(0,1fr);gap:2px 0}.thread-facts dd{margin-bottom:6px}}
+@media(max-width:650px){.threads-split,.thread-new{grid-template-columns:minmax(0,1fr)}.thread-list{max-height:280px;overflow:auto}.thread-facts{grid-template-columns:minmax(0,1fr);gap:2px 0}.thread-facts dd{margin-bottom:6px}}
 .epic-table th:last-child,.epic-table td:last-child{white-space:normal;text-align:left}.epic-table tr[aria-current=true] th{font-weight:650}.epic-table th button{min-height:32px;padding:0 8px;font-size:13px}
 </style>
 </head>
@@ -295,6 +300,7 @@ let threadSource=null,threadSourceKey=null,threadStreamState=null,threadLiveNoti
 let threadBriefTitle='',threadBriefContent='',threadBriefRequestId=null,threadBriefPendingId=null,threadBriefDraft=null;
 let threadBriefSavedTitle=null,threadBriefSavedContent=null,threadAssignmentId=null;
 let threadPreview=null,threadPreviewStale=false,threadResult=null,threadHandoffError=null;
+let threadNewTarget='',threadCreating=false,threadCreateError=null;
 function renderDetail(){const r=records.find(x=>x.key===selected);if(!r){if($('package-panel'))$('package-panel').hidden=true;$('observation-detail').innerHTML='<div class="empty"><h2>Select an observed package</h2><p>Choose a package to inspect its current obligation, activity, coverage and source paths.</p></div>';return;}const o=r.observer,c=r.coverage||{},observed=o.snapshot?.coverage?.observed_at;const detailFocus=document.activeElement?.id;const existing=[...$('run-detail').querySelectorAll('details[open]')].map(x=>x.id);$('observation-detail').innerHTML=`<article class="detail"><div class="eyebrow">${esc(base(r.repository?.replace(/\/\.git$/,'')))} / Spec package</div><div class="detail-title"><div><h2>${esc(base(r.package))}</h2><p class="subtitle mono">${esc(r.workflow_id||'Workflow unknown')} · ${esc(r.assignment_id||'Assignment unknown')}</p></div><span class="pill ${attention(r)?'warn':!activeRun(r)||runningUnconfirmed(r)||!r.execution||r.execution==='unknown'?'muted':'good'}">${esc(runState(r))}</span></div>${completionControl(r)}${!r.recent_completion&&runningUnconfirmed(r)?'<p class="small muted section">The saved run says running, but its worker lease or checkout is unavailable. Current activity is not confirmed.</p>':''}${r.recent_completion?`<section class="section activity"><h3>${esc(completionLabel(r))}</h3><p>Completed ${esc(time(r.completed_at))} · ${esc(age(r.completed_at))}</p><p class="small muted">${r.completion_basis==='manual'?'Marked complete by an operator. Step evidence and PR status remain as recorded.':r.merge?.state==='merged'?'Merge confirmed from the matching PR and branch head.':'Recorded workflow completion; merge status is unknown.'}</p></section>`:progress(r,true)}<div class="facts"><div><div class="fact-label">Time since spec start</div><span>${esc(specElapsed(r))}</span><p class="small muted">${r.timing?.started_at?esc(time(r.timing.started_at)):'Start not observed'}</p></div><div><div class="fact-label">Snapshot freshness</div><span class="${error||stale(observed)?'warn':'good'}">${error?'Last received':stale(observed)?'Stale':'Fresh'} · ${esc(age(observed))}</span><p class="small muted">${esc(time(observed))}</p></div><div><div class="fact-label">Last activity</div><span>${esc(age(r.observed_at))}</span><p class="small muted">${esc(time(r.observed_at))}</p></div><div><div class="fact-label">Run coverage</div><span class="${c.state==='complete'?'good':'warn'}">${esc(c.state||'Unknown')}</span><p class="small muted">Workspace ${esc(o.snapshot?.coverage?.state||'unknown')}</p></div>${epicFact(r)}</div>${r.epic&&epicOf(r)?epicMembers(epicOf(r),r,true):''}<section><div class="section-head"><h3>Implementation activity</h3><span class="small muted">Last observed hint</span></div><div class="activity status-markdown">${statusMarkdown(r.activity||'No activity hint was observed for this run.')}</div></section><section class="section"><div class="section-head"><h3>${r.recent_completion?'Final recorded obligation':'Current obligation'}</h3></div><div class="obligation status-markdown">${statusMarkdown(r.obligation||'No obligation summary was observed.')}</div></section>${workflowWorkers(r)}${stepTimings(r)}<section class="section"><div class="section-head"><h3>Conditions</h3><span class="small muted">${(r.conditions||[]).length} observed</span></div>${rows(r.conditions,'Conditions')}</section><section class="section"><div class="section-head"><h3>Verification incidents</h3><span class="small muted">${(r.incidents||[]).length} recorded</span></div>${rows(r.incidents,'Incidents')}</section><section class="section"><div class="section-head"><h3>Recorded actions</h3><span class="small muted">Read-only</span></div>${rows(r.actions,'Actions')}</section><section class="section"><h3>Workspace paths</h3><dl class="paths"><dt class="small muted">Repository</dt><dd class="mono" style="margin:0">${esc(r.repository||'Unknown')}</dd><dt class="small muted">Spec package</dt><dd class="mono" style="margin:0">${esc(r.package||'Unknown')}</dd><dt class="small muted">Checkout</dt><dd class="mono" style="margin:0">${esc(r.checkout||'Not observed')}</dd></dl><details id="sources"><summary id="sources-toggle">Source paths · ${(r.source_paths||[]).length}</summary>${(r.source_paths||[]).map(p=>`<p class="mono" style="margin:8px 0">${esc(p)}</p>`).join('')}</details><details id="coverage-reasons"><summary id="coverage-toggle">Coverage reasons</summary>${[...(c.reasons||[]),...(o.snapshot?.coverage?.reasons||[])].map(v=>`<p class="coverage-note">${inlineMarkdown(v)}</p>`).join('')||'<p class="small muted">No coverage reasons reported.</p>'}</details></section><div class="footer">Recorded worker: ${esc(r.execution||'unknown')} · Workflow: ${esc(r.workflow_state||'unknown')}<br>Observer ${esc(o.observer_id||'Unknown')} · ${esc(o.state||'Unknown')} · ${esc(o.mode||'Mode unknown')}<br>Heartbeat ${esc(time(o.published_at))} · ${esc(age(o.published_at))}${o.source?'<br><span class="mono">'+esc(o.source)+'</span>':''}${o.note?'<br>'+inlineMarkdown(o.note):''}<br>Snapshot freshness uses workspace observation time. Last activity and observer heartbeat are separate facts.</div></article>`;for(const id of existing){if($(id))$(id).open=true;}if(detailFocus&&$(detailFocus))$(detailFocus).focus({preventScroll:true});loadPackageFiles(r);}
 
 // UTF-8 bytes plus a standard base64 alphabet, in pure JS: the package-view
@@ -509,12 +515,12 @@ function threadStateHelp(state){switch(state){
  case'session-mismatch':return{title:'Session mismatch',help:'The stored session file does not match this thread record. No automatic recovery; inspect the workspace session copy, then retry.',tone:'bad'};
  case'missing-directory':return{title:'Execution directory missing',help:'The recorded execution directory is gone. Restore it or update the workspace record, then retry.',tone:'bad'};
  case'live-owner':return{title:'Owner not confirmed dead',help:'A prior discussion process is still recorded or observed. A second writer fails closed until the owner exits or Stop confirms it idle.',tone:'bad'};
- case'missing-context':return{title:'Context missing',help:'Required context files are missing or unreadable. Restore them, then Resume or send again.',tone:'bad'};
+ case'missing-context':return{title:'Context missing',help:'An earlier version required kit context files before starting. Threads no longer read them; Resume or send again to start.',tone:'bad'};
  case'policy-refusal':return{title:'Policy refusal',help:'The installed Pi read-tool policy refused the last request. Review the policy or context, then retry.',tone:'bad'};
  default:return{title:'Ready',help:'',tone:'good'};
  }}
 function announceThread(message){const el=$('thread-announcer');if(el)el.textContent=message;}
-function applyThreadLive(record,patch){if(!record)return;if(patch.queue)record.queue=patch.queue;if(patch.attention!==undefined)record.attention=patch.attention;if(patch.queue_paused!==undefined)record.queue_paused=patch.queue_paused;if(patch.owns_response!==undefined)record.owns_response=patch.owns_response;if(patch.generation!==undefined)record.generation=patch.generation;if(patch.state)record.state=patch.state;if(patch.partial!==undefined)record.partial=patch.partial;}
+function applyThreadLive(record,patch){if(!record)return;if(typeof patch.title==='string'&&patch.title)record.title=patch.title;if(patch.queue)record.queue=patch.queue;if(patch.attention!==undefined)record.attention=patch.attention;if(patch.queue_paused!==undefined)record.queue_paused=patch.queue_paused;if(patch.owns_response!==undefined)record.owns_response=patch.owns_response;if(patch.generation!==undefined)record.generation=patch.generation;if(patch.state)record.state=patch.state;if(patch.partial!==undefined)record.partial=patch.partial;}
 function handleThreadFrame(type,data){
  const record=selectedThreadRecord();
  if(type==='snapshot'){if(data.thread_id!==selectedThread)return;if(typeof data.partial==='string')threadPartial=data.partial;applyThreadLive(record,{state:data.state,queue:data.queue,attention:data.attention,generation:data.generation,partial:data.partial,owns_response:data.owns_response,queue_paused:data.queue_paused});renderThreadHead();renderThreadControls();renderThreadTranscript();const tailId=threadHistoryEntries[threadHistoryEntries.length-1]?.id??null;if(threadPartial===''&&typeof data.last_persisted_id==='string'&&data.last_persisted_id!==tailId)guardedThreadTailRefresh(selectedWorkspace,selectedThread,threadGeneration,0);return;}
@@ -522,7 +528,7 @@ function handleThreadFrame(type,data){
  if(type==='delta'){const delta=typeof event.delta==='string'?event.delta:typeof event.assistantMessageEvent?.delta==='string'?event.assistantMessageEvent.delta:'';if(delta){threadPartial+=delta;threadStickBottom=true;renderThreadTranscript();}return;}
  if(type==='tool'){const name=str(event.toolName||event.tool||event.name||'');threadToolNote=name?`Running tool: ${name}`:'Tool activity in progress';threadStickBottom=true;renderThreadTranscript();return;}
  if(type==='message_end'){const text=threadEventText(event);if(text)threadPartial=text;threadToolNote='';renderThreadTranscript();guardedThreadTailRefresh(selectedWorkspace,selectedThread,threadGeneration,400);return;}
- if(type==='state'){applyThreadLive(record,{queue:event.queue??data.queue,attention:event.attention??data.attention,queue_paused:event.queue_paused});renderThreadHead();renderThreadControls();renderThreadListBox();return;}
+ if(type==='state'){applyThreadLive(record,{title:event.title,queue:event.queue??data.queue,attention:event.attention??data.attention,queue_paused:event.queue_paused});renderThreadHead();renderThreadControls();renderThreadListBox();return;}
  if(type==='notice'){threadLiveNotice=str(event.message||event.error||event.attention||data.attention||'Thread notice');announceThread('Thread notice: '+threadLiveNotice);loadThreads();renderThreadControls();return;}
  if(type==='settled'){threadToolNote='';announceThread('Response settled; the next waiting message can deliver.');refreshThreadTail();loadThreads();renderThreadTranscript();}
 }
@@ -543,6 +549,7 @@ function resetThreads(){
  threads=null;threadsInvalid=[];threadsError=null;threadsLoading=false;threadsLoadedWorkspace=null;
  selectedThread=null;threadHistoryEntries=[];threadHasOlder=false;threadHistoryLoading=false;threadHistoryTruncated=false;threadIncompleteTail=false;
  threadPartial='';threadToolNote='';threadDraft='';threadSendId=null;threadSendDraft=null;threadRequestError=null;threadPending=null;threadStickBottom=true;threadLiveNotice='';
+ threadNewTarget='';threadCreating=false;threadCreateError=null;
  resetThreadHandoff();
 }
 function startThreadDetail(){
@@ -658,11 +665,44 @@ function threadsBodyHtml(){
  if(threadsError){const storage=catalog?.storage?.status,bad=storage&&storage!=='ok';return `<div class="empty" role="status" aria-live="polite"><h3>${bad?'Workspace thread storage is unavailable':'Threads are unavailable'}</h3><p class="small">${bad?`Storage status: ${esc(storage)}. Run <code class="mono">node scripts/workspaces/cli.mjs setup</code> on the dashboard host, then retry.`:`${esc(threadsError)}`}</p><p><button id="thread-list-retry" data-thread-retry="list">Retry</button></p></div>`;}
  if(!canReadThreads())return `<div class="empty"><h3>Threads require the local dashboard</h3><p class="small">Start the host's local dashboard to browse discussions. Imported snapshots and file:// pages cannot reach the thread routes and never expose remote message controls.</p></div>`;
  if(threads===null)return '<p class="empty">Loading threads…</p>';
- return `<div class="threads-split"><div id="thread-list-box" class="thread-list" role="list" aria-label="Threads">${threadListHtml()}</div><div id="thread-detail-box" class="thread-detail">${threadDetailHtml(selectedThreadRecord())}</div></div>${threadsInvalid.length?`<div class="info-row"><p><strong>Invalid thread records (${threadsInvalid.length})</strong></p>${threadsInvalid.map(x=>`<small class="warn">${esc(x.reason||x.error||x.message||'Invalid record')}</small>`).join('')}</div>`:''}`;
+ return `${threadCreateHtml()}<div class="threads-split"><div id="thread-list-box" class="thread-list" role="list" aria-label="Threads">${threadListHtml()}</div><div id="thread-detail-box" class="thread-detail">${threadDetailHtml(selectedThreadRecord())}</div></div>${threadsInvalid.length?`<div class="info-row"><p><strong>Invalid thread records (${threadsInvalid.length})</strong></p>${threadsInvalid.map(x=>`<small class="warn">${esc(x.reason||x.error||x.message||'Invalid record')}</small>`).join('')}</div>`:''}`;
+}
+// New threads start as "New thread"; the host names them from the first message.
+// The service assigns the thread id, so a repeated click would create a second
+// thread: the button stays disabled while a create request is in flight.
+function threadCreateHtml(){
+ if(!threadsActionable())return'';
+ const repos=Array.isArray(workspace?.repositories)?workspace.repositories:[];
+ const options=[`<option value="" ${threadNewTarget===''?'selected':''}>Whole workspace</option>`,...repos.map(r=>`<option value="${esc(r.id)}" ${threadNewTarget===r.id?'selected':''}>${esc(r.id)}${r.status&&r.status!=='ok'?` (${esc(r.status)})`:''}</option>`)].join('');
+ const error=threadCreateError?`<p id="thread-create-error" class="small warn" role="alert">${esc(threadCreateError)}</p>`:'';
+ return `<div class="thread-new" role="group" aria-label="New thread"><div class="thread-field"><label for="thread-new-target">Runs in</label><select id="thread-new-target">${options}</select></div><button id="thread-create" data-thread-create ${threadCreating?'disabled':''}>${threadCreating?'Creating…':'Create thread'}</button>${error}</div>`;
+}
+async function createThread(){
+ if(!threadsActionable()||threadCreating)return;
+ const workspaceId=selectedWorkspace,target=threadNewTarget?{kind:'repository',repository_id:threadNewTarget}:{kind:'workspace'};
+ const liveWorkspace=()=>mode==='workspaces'&&selectedWorkspace===workspaceId;
+ threadCreating=true;threadCreateError=null;threadFocusTarget='thread-create';renderThreads();
+ try{
+  const response=await fetch('/api/thread/create',{method:'POST',headers:{'Content-Type':'application/json','X-Sentinel-Token':payload.action_token},body:JSON.stringify({workspace_id:workspaceId,target}),signal:AbortSignal.timeout(30000)});
+  if(!response.ok)throw Error(response.status===404?'This workspace was not found. Refresh the workspace list.':await threadRouteError(response));
+  const record=await response.json();
+  if(!liveWorkspace())return;
+  threadCreating=false;threadNewTarget='';
+  // Discard any in-flight list response that predates this thread.
+  ++threadsRequest;threadsLoading=false;
+  threads=[record,...(threads||[]).filter(t=>t.thread_id!==record.thread_id)];
+  selectedThread=record.thread_id;threadDraft='';threadSendId=null;threadSendDraft=null;threadPending=null;
+  resetThreadHandoff();startThreadDetail();threadFocusTarget='thread-draft';renderThreads();
+  announceThread('Thread created. It is named after your first message.');loadThreads();
+ }catch(e){
+  if(!liveWorkspace())return;
+  threadCreating=false;threadCreateError=e.name==='TimeoutError'?'The request timed out. Refresh the thread list to check whether the thread was created before trying again.':(e.message||'The thread could not be created.');
+  threadFocusTarget='thread-create';renderThreads();
+ }
 }
 function threadListHtml(){
  if(threads===null)return '<p class="empty">Loading threads…</p>';
- if(!threads.length)return '<p class="empty">No discussion threads in this workspace yet.</p>';
+ if(!threads.length)return `<p class="empty">${threadsActionable()?'No threads yet. Create one above to discuss work in this workspace.':'No discussion threads in this workspace yet.'}</p>`;
  return threads.map(t=>{const state=threadDerivedState(t),pending=(t.queue||[]).length,waiting=(t.queue||[]).filter(item=>item.state==='queued').length;return `<button class="thread-row" data-thread="${esc(t.thread_id)}" aria-pressed="${t.thread_id===selectedThread}"><div class="flex justify-between gap-3"><span class="run-title">${esc(t.title||'Thread '+shortThreadId(t.thread_id))}</span><span class="pill ${threadStateTone(state)}">${esc(threadStateLabel(state))}</span></div><span class="small muted">${pending?`${waiting?waiting+' waiting':pending+' pending'}${t.queue_paused?' · paused queue':''}`:'No pending messages'}</span></button>`;}).join('');
 }
 function threadDetailHtml(t){return `<div id="thread-head-box" class="thread-head">${threadHeadHtml(t)}</div><div id="thread-transcript-box">${threadTranscriptHtml()}</div><div id="thread-controls-box">${threadControlsHtml(t)}</div><div id="thread-handoff-box">${threadHandoffHtml(t)}</div>`;}
@@ -873,6 +913,7 @@ $('run-list').addEventListener('click',e=>{const a=e.target.closest('[data-assig
 $('run-detail').addEventListener('click',e=>{
  if(mode!=='workspaces')return;
  const row=e.target.closest('[data-thread]');if(row){selectThread(row.dataset.thread);return;}
+ if(e.target.closest('[data-thread-create]')){createThread();return;}
  if(e.target.closest('[data-thread-send]')){sendThreadMessage();return;}
  if(e.target.closest('[data-thread-stop]')){stopSelectedThread();return;}
  if(e.target.closest('[data-thread-resume]')){resumeSelectedThread();return;}
@@ -887,7 +928,7 @@ $('run-detail').addEventListener('click',e=>{
  if(e.target.closest('[data-thread-discuss]')){discussThreadResult();return;}
  if(e.target.closest('[data-thread-brief-retry]')){threadHandoffError=null;threadFocusTarget=threadPreviewStale?'thread-brief-preview':'thread-brief-save';renderThreadHandoff();return;}
 });
-$('run-detail').addEventListener('input',e=>{if(mode!=='workspaces')return;if(e.target.id==='thread-draft'){threadDraft=e.target.value;const send=$('thread-send');if(send)send.disabled=threadPending!==null||!threadDraft.trim();return;}if(e.target.id==='thread-brief-title'||e.target.id==='thread-brief-content'){if(e.target.id==='thread-brief-title')threadBriefTitle=e.target.value;else threadBriefContent=e.target.value;const save=$('thread-brief-save'),preview=$('thread-brief-preview');if(save)save.disabled=threadPending==='brief'||!threadBriefTitle.trim();const dirty=threadBriefSavedContent!==null&&(threadBriefTitle!==threadBriefSavedTitle||threadBriefContent!==threadBriefSavedContent);if(preview)preview.disabled=threadPending==='preview'||!threadBriefRequestId||dirty;}});
+$('run-detail').addEventListener('input',e=>{if(mode!=='workspaces')return;if(e.target.id==='thread-new-target'){threadNewTarget=e.target.value;return;}if(e.target.id==='thread-draft'){threadDraft=e.target.value;const send=$('thread-send');if(send)send.disabled=threadPending!==null||!threadDraft.trim();return;}if(e.target.id==='thread-brief-title'||e.target.id==='thread-brief-content'){if(e.target.id==='thread-brief-title')threadBriefTitle=e.target.value;else threadBriefContent=e.target.value;const save=$('thread-brief-save'),preview=$('thread-brief-preview');if(save)save.disabled=threadPending==='brief'||!threadBriefTitle.trim();const dirty=threadBriefSavedContent!==null&&(threadBriefTitle!==threadBriefSavedTitle||threadBriefContent!==threadBriefSavedContent);if(preview)preview.disabled=threadPending==='preview'||!threadBriefRequestId||dirty;}});
 $('run-detail').addEventListener('keydown',e=>{
  if(mode!=='workspaces')return;
  if(e.target.id==='thread-draft'){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendThreadMessage();}return;}

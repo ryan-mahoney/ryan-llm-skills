@@ -452,7 +452,7 @@ test("authorized local writes map one-to-one onto service methods with unchanged
   const origin = `http://127.0.0.1:${port}`;
 
   const payloads = [
-    ["/api/thread/create", { workspace_id: "fixture", title: "Created over HTTP", target: { kind: "workspace" }, context: ["notes/a.md"] }],
+    ["/api/thread/create", { workspace_id: "fixture", title: "Created over HTTP", target: { kind: "workspace" } }],
     ["/api/thread/send", { workspace_id: "fixture", thread_id: THREAD_ID, id: MESSAGE_ID, text: "hello" }],
     ["/api/thread/stop", { workspace_id: "fixture", thread_id: THREAD_ID }],
     ["/api/thread/resume", { workspace_id: "fixture", thread_id: THREAD_ID }],
@@ -621,7 +621,6 @@ test("the real discussion service serves create/list/history/save-brief over the
     workspace_id: "fixture",
     title: "HTTP thread",
     target: { kind: "workspace" },
-    context: [],
   });
   assert.equal(createdResponse.status, 200);
   const created = JSON.parse(createdResponse.body);
@@ -718,7 +717,6 @@ test("the real discussion service serves a fresh SSE snapshot without replay", a
     workspace_id: "fixture",
     title: "SSE thread",
     target: { kind: "workspace" },
-    context: [],
   })).body);
   const path = `/api/thread/events?${new URLSearchParams({ workspace_id: "fixture", thread_id: created.thread_id })}`;
 
@@ -778,7 +776,6 @@ test("a real stop emits an attributed state event and client abort removes the s
     workspace_id: "fixture",
     title: "Stop thread",
     target: { kind: "workspace" },
-    context: [],
   })).body);
   const path = `/api/thread/events?${new URLSearchParams({ workspace_id: "fixture", thread_id: created.thread_id })}`;
   const handle = await openSse(port, path);

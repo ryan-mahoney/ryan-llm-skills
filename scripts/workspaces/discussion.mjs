@@ -10,7 +10,7 @@
 
 import { spawn as nodeSpawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, open, readFile, readdir, realpath } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { readSessionBranch } from "../spec-observe/core.mjs";
@@ -34,8 +34,9 @@ const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "ma
 const QUEUE_STATES = new Set(["queued", "delivering", "uncertain"]);
 const TARGET_KINDS = new Set(["workspace", "repository", "worktree"]);
 const MAX_TITLE_LENGTH = 200;
+// A thread keeps this title until its first message is named (see nameThread).
+export const DEFAULT_THREAD_TITLE = "New thread";
 const MAX_ACCEPTED_MESSAGE_IDS = 100;
-const CONTEXT_LIMIT_BYTES = 256 * 1024;
 const MAX_MESSAGE_BYTES = 64 * 1024;
 const PS_SCAN_TIMEOUT_MS = 2000;
 const PS_SCAN_MAX_BYTES = 1024 * 1024;
@@ -72,7 +73,6 @@ const invalidThread = (message, extra = {}) => typedError("invalid-thread", mess
 const serviceClosed = () => typedError("service-closed", "discussion service is closed");
 const threadExists = (threadId) => typedError("thread-exists", `thread already exists: ${threadId}`);
 const threadNotFound = (threadId) => typedError("thread-not-found", `thread not found: ${threadId}`);
-const contextFailure = (code, message, extra = {}) => typedError(code, message, extra);
 
 async function lstatOrNull(path) {
   try {
@@ -86,12 +86,6 @@ async function lstatOrNull(path) {
 function requirePlainObject(value, label) {
   if (!isPlainObject(value)) throw invalidThread(`${label} must be an object`);
   return value;
-}
-
-function contextBytes(context) {
-  let total = 0;
-  for (const entry of context) total += Buffer.byteLength(entry, "utf8") + 1;
-  return total;
 }
 
 function validateTargetShape(target) {
@@ -202,12 +196,6 @@ export function validateThread(record) {
   }
   if (record.session_file !== null && !isCanonicalAbsolutePath(record.session_file)) {
     throw invalidThread("session_file must be null or a canonical absolute path");
-  }
-  if (!Array.isArray(record.context) || record.context.some((entry) => typeof entry !== "string")) {
-    throw invalidThread("context must be an array of strings");
-  }
-  if (contextBytes(record.context) > CONTEXT_LIMIT_BYTES) {
-    throw invalidThread(`context exceeds ${CONTEXT_LIMIT_BYTES} bytes`);
   }
   if (typeof record.history_only !== "boolean") throw invalidThread("history_only must be a boolean");
   validateQueue(record.queue);
@@ -425,112 +413,6 @@ async function ownedSessionFile(record) {
   return files[0];
 }
 
-// Bounded context reference read: the size is checked against the remaining
-// budget before any buffer is allocated, so an oversized file is refused
-// without an unbounded read. Short reads are refused, and dev/ino/size/mtime
-// are recorded for the pre-spawn replacement check.
-async function readBoundedReference(physical, label, budget) {
-  let handle;
-  try {
-    handle = await open(physical, "r");
-  } catch {
-    throw contextFailure("missing-context", `context reference is unreadable: ${label}`);
-  }
-  try {
-    const info = await handle.stat();
-    if (!info.isFile()) throw contextFailure("missing-context", `context reference is not a regular file: ${label}`);
-    const header = `--- ${label} ---\n`;
-    const headerBytes = Buffer.byteLength(header, "utf8");
-    if (headerBytes > budget.remaining) throw contextFailure("invalid-context", "context exceeds the 256KiB budget");
-    if (info.size > budget.remaining - headerBytes) {
-      throw contextFailure("invalid-context", `context reference exceeds the remaining 256KiB budget: ${label}`);
-    }
-    const buffer = Buffer.alloc(info.size);
-    let offset = 0;
-    while (offset < info.size) {
-      const { bytesRead } = await handle.read(buffer, offset, info.size - offset, offset);
-      if (bytesRead <= 0) throw contextFailure("missing-context", `context reference changed while reading: ${label}`);
-      offset += bytesRead;
-    }
-    budget.remaining -= headerBytes + info.size;
-    return {
-      chunk: `${header}${buffer.toString("utf8")}`,
-      physical,
-      dev: info.dev,
-      ino: info.ino,
-      size: info.size,
-      mtimeMs: info.mtimeMs,
-    };
-  } finally {
-    await handle.close();
-  }
-}
-
-// Assemble fresh current kit context plus the record's selected material
-// references at spawn time. Missing, escaping, symlinked, oversize or
-// concurrently changed references refuse before any child is spawned and no
-// file is written. The pi-rpc append string joins chunks with "\n\n", so the
-// separators count against the 256KiB budget.
-async function assembleContext({ root, workspace, directory, record }) {
-  const budget = { remaining: CONTEXT_LIMIT_BYTES };
-  const chunks = [];
-  const refs = [];
-  const addReference = async (reference, label) => {
-    const separator = chunks.length === 0 ? 0 : 2;
-    if (separator > budget.remaining) throw contextFailure("invalid-context", "context exceeds the 256KiB budget");
-    budget.remaining -= separator;
-    const physical = await resolveWorkspacePath(directory, reference).catch(() => {
-      throw contextFailure("missing-context", `context is not an owned path: ${label}`);
-    });
-    const stamp = await readBoundedReference(physical, reference, budget);
-    chunks.push(stamp.chunk);
-    refs.push({ reference, stamp });
-  };
-  for (const entry of Array.isArray(workspace.context) ? workspace.context : []) {
-    if (entry.status !== "ok" || typeof entry.path !== "string" || entry.path === "") {
-      throw contextFailure("missing-context", `kit context is not available: ${String(entry.path)}`);
-    }
-    const reference = isAbsolute(entry.path) ? relative(directory, resolve(entry.path)) : entry.path;
-    if (reference === "" || reference.startsWith("..") || isAbsolute(reference)) {
-      throw contextFailure("missing-context", `kit context escapes the workspace: ${entry.path}`);
-    }
-    await addReference(reference, entry.path);
-  }
-  for (const reference of record.context) {
-    if (typeof reference !== "string" || reference === "" || isAbsolute(reference)) {
-      throw contextFailure("missing-context", `selected context must be a relative path: ${String(reference)}`);
-    }
-    await addReference(reference, reference);
-  }
-  for (const { reference, stamp } of refs) {
-    const again = await resolveWorkspacePath(directory, reference).catch(() => {
-      throw contextFailure("missing-context", `context disappeared during assembly: ${reference}`);
-    });
-    if (again !== stamp.physical) {
-      throw contextFailure("missing-context", `context was replaced during assembly: ${reference}`);
-    }
-    const info = await lstat(again).catch(() => null);
-    if (
-      !info ||
-      info.isSymbolicLink() ||
-      !info.isFile() ||
-      info.dev !== stamp.dev ||
-      info.ino !== stamp.ino ||
-      info.size !== stamp.size ||
-      info.mtimeMs !== stamp.mtimeMs
-    ) {
-      throw contextFailure("missing-context", `context changed during assembly: ${reference}`);
-    }
-  }
-  const refreshed = await fetchWorkspace(root, record.workspace_id);
-  const signature = (entries) =>
-    (Array.isArray(entries) ? entries : []).map((entry) => `${entry.path}\u0000${entry.status}`).join("\n");
-  if (signature(refreshed.context) !== signature(workspace.context)) {
-    throw contextFailure("missing-context", "kit context changed during assembly");
-  }
-  return chunks;
-}
-
 function parseDiscussionListing(text, threadId) {
   const token = `discussion:${threadId}`;
   const matches = [];
@@ -556,7 +438,7 @@ function parseDiscussionListing(text, threadId) {
  *   clock?: object, assignmentAdapters?: object|null}} options
  * @returns {object}
  */
-export function createDiscussionService({ root, agentDir = null, spawn = nodeSpawn, clock = defaultClock, assignmentAdapters = null } = {}) {
+export function createDiscussionService({ root, agentDir = null, spawn = nodeSpawn, clock = defaultClock, assignmentAdapters = null, suggestTitle = null } = {}) {
   const configuredRoot = root === undefined || root === null || root === "" ? resolveStorageRoot(process.env, homedir()) : root;
   if (typeof configuredRoot !== "string" || !isAbsolute(configuredRoot) || resolve(configuredRoot) !== configuredRoot) {
     throw new TypeError("root must be a lexical canonical absolute path");
@@ -567,6 +449,7 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
     }
   }
   const spawnImpl = typeof spawn === "function" ? spawn : nodeSpawn;
+  const suggestTitleImpl = typeof suggestTitle === "function" ? suggestTitle : null;
   const clockImpl = clock && typeof clock.setTimeout === "function" && typeof clock.clearTimeout === "function" ? clock : defaultClock;
   // Trusted final-boundary adapters are accepted only at construction; public
   // requests can never supply adapters, resolvers or paths.
@@ -958,6 +841,7 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
     const generation = runtime?.generation ?? null;
     emitScoped(record.workspace_id, record.thread_id, generation, "state", {
       type: "state",
+      title: record.title,
       queue: record.queue,
       queue_paused: record.queue_paused,
       attention: record.attention,
@@ -1163,12 +1047,11 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
   function attentionForError(error) {
     const code = error && error.code;
     if (code === "invalid-thread" || code === "service-closed") return null;
-    if (code === "missing-context" || code === "live-owner" || code === "session-mismatch") return code;
-    if (code === "invalid-context") return "missing-context";
+    if (code === "live-owner" || code === "session-mismatch") return code;
     return "start-failed";
   }
 
-  async function create({ workspace_id, title, target = { kind: "workspace" }, context = [], model, specPackage = null } = {}) {
+  async function create({ workspace_id, title = DEFAULT_THREAD_TITLE, target = { kind: "workspace" }, model, specPackage = null } = {}) {
     if (closed) throw serviceClosed();
     if (typeof workspace_id !== "string" || !WORKSPACE_ID_PATTERN.test(workspace_id)) {
       throw invalidThread("workspace_id must be a workspace id");
@@ -1177,10 +1060,6 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
       throw invalidThread(`title must be 1..${MAX_TITLE_LENGTH} characters`);
     }
     const preservedTarget = validateTargetShape({ ...requirePlainObject(target, "target") });
-    if (!Array.isArray(context) || context.some((entry) => typeof entry !== "string")) {
-      throw invalidThread("context must be an array of strings");
-    }
-    if (contextBytes(context) > CONTEXT_LIMIT_BYTES) throw invalidThread(`context exceeds ${CONTEXT_LIMIT_BYTES} bytes`);
     validateModel(model);
     if (specPackage !== null && specPackage !== undefined && (typeof specPackage !== "string" || specPackage === "")) {
       throw new TypeError("specPackage must be a non-empty string when provided");
@@ -1214,7 +1093,6 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
       execution_dir: executionDir,
       session_dir: join(directory, "sessions", threadId),
       session_file: null,
-      context: [...context],
       history_only: false,
       queue: [],
       queue_paused: false,
@@ -1401,7 +1279,7 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
 
   // Resume is the only process-producing public method in this batch. It never
   // sends a prompt: it guards recorded/observed owners, publishes the captured
-  // identity before the startup handshake, assembles context and keeps lazy
+  // identity before the startup handshake and keeps lazy
   // session files null until the owned file actually exists.
   async function resume({ workspace_id, thread_id } = {}) {
     if (closed) throw serviceClosed();
@@ -1414,8 +1292,8 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
     return resumed;
   }
 
-  // Assumes the per-thread lock is held; send composes this same identity,
-  // context and spawn ownership path without recursively locking.
+  // Assumes the per-thread lock is held; send composes this same identity
+  // and spawn ownership path without recursively locking.
   async function resumeLocked(workspace_id, thread_id) {
     if (closed) throw serviceClosed();
     const loaded = await loadServiceRecord(workspace_id, thread_id);
@@ -1517,9 +1395,6 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
         if (discovered !== null) spawnFile = discovered;
       }
 
-      const assembled = await assembleContext({ root: configuredRoot, workspace, directory, record: current });
-      if (closed) throw serviceClosed();
-
       await acquireCapacity();
       const releaseReservation = reservationRelease();
       let rawChild = null;
@@ -1557,8 +1432,7 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
       let startupError = null;
       try {
         adapter = await createPiRpc({
-          thread: { ...current, session_file: spawnFile, context: assembled },
-          context: assembled,
+          thread: { ...current, session_file: spawnFile },
           spawn: spawnBoundary,
           clock: clockImpl,
           signal: controller.signal,
@@ -1766,6 +1640,25 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
    * Returned shape for later batches and step 7:
    * `{ thread, message_id, state: 'queued'|'delivering'|'uncertain'|'accepted', duplicate }`.
    */
+  // Background naming for a thread still called DEFAULT_THREAD_TITLE: the
+  // title is stored only if nobody renamed the thread meanwhile, and every
+  // failure leaves the default in place without affecting delivery.
+  function nameThread(workspace_id, thread_id, text) {
+    if (suggestTitleImpl === null) return;
+    Promise.resolve()
+      .then(() => suggestTitleImpl(text))
+      .then((title) => {
+        if (closed || typeof title !== "string" || title === "" || title.length > MAX_TITLE_LENGTH) return null;
+        return withThreadLock(workspace_id, thread_id, async () => {
+          if (closed) return;
+          const { record, directory } = await loadServiceRecord(workspace_id, thread_id);
+          if (record.title !== DEFAULT_THREAD_TITLE) return;
+          await persistRecord(directory, { ...record, title, updated_at: new Date().toISOString() });
+        });
+      })
+      .catch(() => {});
+  }
+
   async function send(input = {}) {
     if (closed) throw serviceClosed();
     requirePlainObject(input, "send input");
@@ -1798,7 +1691,7 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
       if (record.accepted_message_ids.includes(id)) {
         return { duplicate: true, state: "accepted", record };
       }
-      // A genuinely new ID on a paused queue must pass identity/context checks
+      // A genuinely new ID on a paused queue must pass identity checks
       // before any unpause; the new item is still durably enqueued and the
       // queue stays paused when validation returns browse-only.
       let latest = record;
@@ -1806,6 +1699,7 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
         latest = await resumeLocked(workspace_id, thread_id);
       }
       const item = { id, text, queued_at: new Date().toISOString(), state: "queued", attempt: 0 };
+      const firstMessage = latest.queue.length === 0 && latest.accepted_message_ids.length === 0;
       const updated = await persistRecord(directory, {
         ...latest,
         queue: [...latest.queue, item],
@@ -1815,8 +1709,10 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
         duplicate: false,
         queued: latest.queue_paused === true || latest.attention === "missing-directory",
         record: updated,
+        name: firstMessage && latest.title === DEFAULT_THREAD_TITLE,
       };
     });
+    if (admitted.name) nameThread(workspace_id, thread_id, text);
 
     if (admitted.duplicate) {
       return { thread: admitted.record, message_id: id, state: admitted.state, duplicate: true };

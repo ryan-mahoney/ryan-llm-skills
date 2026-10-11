@@ -306,7 +306,6 @@ function manualRecord({ workspaceId, directory, threadId = randomUUID(), session
     execution_dir: directory,
     session_dir: join(directory, "sessions", threadId),
     session_file: null,
-    context: [],
     history_only: false,
     queue: [],
     queue_paused: false,
@@ -361,7 +360,7 @@ test("thread record create publishes exact ThreadV1 fields exclusively", async (
   const workspaceDirectory = await setupWorkspace(storageRoot, "alpha");
   const service = createDiscussionService({ root: storageRoot, agentDir: join(root, "agent") });
   try {
-    const record = await service.create({ workspace_id: "alpha", title: "First thread", context: ["notes/a.md"] });
+    const record = await service.create({ workspace_id: "alpha", title: "First thread" });
     assert.equal(record.schema_version, 1);
     assert.match(record.thread_id, UUID_RE);
     assert.equal(record.session_id, record.thread_id);
@@ -371,7 +370,7 @@ test("thread record create publishes exact ThreadV1 fields exclusively", async (
     assert.equal(record.execution_dir, workspaceDirectory);
     assert.equal(record.session_dir, join(workspaceDirectory, "sessions", record.thread_id));
     assert.equal(record.session_file, null);
-    assert.deepEqual(record.context, ["notes/a.md"]);
+    assert.equal("context" in record, false);
     assert.equal(record.history_only, false);
     assert.deepEqual(record.queue, []);
     assert.equal(record.queue_paused, false);
@@ -432,7 +431,6 @@ test("thread record validation rejects malformed records without repairing them"
     ["execution_dir relative", { execution_dir: "relative/path" }],
     ["session_dir relative", { session_dir: "relative/path" }],
     ["session_file relative", { session_file: "relative/path" }],
-    ["context non-string", { context: [1] }],
     ["history_only string", { history_only: "no" }],
     ["queue item id", { queue: [{ id: "x", text: "t", queued_at: "2026-01-01T00:00:00.000Z", state: "queued", attempt: 0 }] }],
     ["queue item state", { queue: [{ id: randomUUID(), text: "t", queued_at: "2026-01-01T00:00:00.000Z", state: "sending", attempt: 0 }] }],
@@ -495,29 +493,6 @@ test("thread preservation keeps unknown metadata and import provenance", async (
   assert.deepEqual(read.import.adjacent.provenance.nested, [1, 2, 3]);
   assert.deepEqual(read.custom.anything, [true, null]);
   assert.deepEqual(await readFile(file), before);
-});
-
-test("thread record context references are stored without writes", async (t) => {
-  const root = await tempRoot(t);
-  const storageRoot = join(root, "storage");
-  await setupStorage(storageRoot);
-  const workspaceDirectory = await setupWorkspace(storageRoot, "alpha");
-  const service = createDiscussionService({ root: storageRoot, agentDir: join(root, "agent") });
-  try {
-    const kitBefore = await readFile(join(workspaceDirectory, "kit.yaml"));
-    const listingBefore = (await readdir(workspaceDirectory)).sort();
-    const references = ["notes/missing.md", "briefs/also-missing.md"];
-    const record = await service.create({ workspace_id: "alpha", title: "Context refs", context: references });
-    assert.deepEqual(record.context, references);
-    await assert.rejects(lstat(join(workspaceDirectory, "notes", "missing.md")), { code: "ENOENT" });
-    assert.deepEqual(await readFile(join(workspaceDirectory, "kit.yaml")), kitBefore);
-    assert.deepEqual(
-      (await readdir(workspaceDirectory)).sort(),
-      [...listingBefore, "sessions", "threads"].sort(),
-    );
-  } finally {
-    service.close();
-  }
 });
 
 test("thread preservation history reads only the owned session copy", async (t) => {
@@ -977,29 +952,27 @@ test("thread identity resume reuses one owned child and permits a dead prior chi
   }
 });
 
-test("thread preservation resume assembles context and refuses invalid references", async (t) => {
+// A thread only needs its execution directory: kit context (including folder
+// entries such as Phoenix-era material roots) and any legacy per-record
+// context are never read, so neither can block a start.
+test("thread preservation resume starts Pi without kit or record context", async (t) => {
   const root = await tempRoot(t);
   const storageRoot = join(root, "storage");
   await setupStorage(storageRoot);
-  const workspaceDirectory = await setupWorkspace(storageRoot, "alpha", [], ["notes/current.md"]);
-  await mkdir(join(workspaceDirectory, "notes"), { recursive: true });
-  await writeFile(join(workspaceDirectory, "notes", "current.md"), "current kit context\n");
-  await mkdir(join(workspaceDirectory, "briefs"), { recursive: true });
-  await writeFile(join(workspaceDirectory, "briefs", "selected.md"), "selected material\n");
+  const workspaceDirectory = await setupWorkspace(storageRoot, "alpha", [], ["sources/material", "notes/missing.md"]);
+  await mkdir(join(workspaceDirectory, "sources", "material"), { recursive: true });
 
   const sourceSession = join(root, "imported-source.jsonl");
   await writeFile(sourceSession, sessionLines(randomUUID(), workspaceDirectory, ["source only"]));
   const snapshots = {
     kit: await readFile(join(workspaceDirectory, "kit.yaml")),
-    notes: await readFile(join(workspaceDirectory, "notes", "current.md")),
-    selected: await readFile(join(workspaceDirectory, "briefs", "selected.md")),
     source: await readFile(sourceSession),
   };
   const record = manualRecord({
     workspaceId: "alpha",
     directory: workspaceDirectory,
     overrides: {
-      context: ["briefs/selected.md"],
+      context: ["briefs/gone.md"],
       import: {
         source: "adj7",
         digest: "d".repeat(64),
@@ -1014,92 +987,20 @@ test("thread preservation resume assembles context and refuses invalid reference
   const service = createDiscussionService({ root: storageRoot, agentDir: join(root, "agent"), spawn: harness.spawnImpl });
   try {
     const resumed = await service.resume({ workspace_id: "alpha", thread_id: record.thread_id });
+    assert.equal(resumed.attention, null);
+    assert.deepEqual(resumed.context, ["briefs/gone.md"], "a legacy context field is retained as additive data");
     assert.deepEqual(resumed.import.adjacent.provenance.nested.kept, [1, 2, 3]);
     assert.deepEqual(resumed.custom, { anything: { deeper: true } });
     const piCall = harness.calls.find((call) => call.command === "pi");
-    assert.ok(piCall, "the Pi child is spawned after context assembly");
-    const flagIndex = piCall.args.indexOf("--append-system-prompt");
-    assert.ok(flagIndex !== -1);
-    const assembled = piCall.args[flagIndex + 1];
-    assert.ok(assembled.includes("--- notes/current.md ---"));
-    assert.ok(assembled.includes("current kit context"));
-    assert.ok(assembled.includes("--- briefs/selected.md ---"));
-    assert.ok(assembled.includes("selected material"));
+    assert.ok(piCall, "the Pi child is spawned despite a folder kit entry and a missing legacy reference");
+    assert.equal(piCall.options.cwd, workspaceDirectory);
+    assert.equal(piCall.args.includes("--append-system-prompt"), false);
   } finally {
     await service.close();
   }
   await waitFor(async () => (await readThread(storageRoot, "alpha", record.thread_id)).process === undefined);
   assert.deepEqual(await readFile(join(workspaceDirectory, "kit.yaml")), snapshots.kit);
-  assert.deepEqual(await readFile(join(workspaceDirectory, "notes", "current.md")), snapshots.notes);
-  assert.deepEqual(await readFile(join(workspaceDirectory, "briefs", "selected.md")), snapshots.selected);
   assert.deepEqual(await readFile(sourceSession), snapshots.source);
-
-  const missingRecord = manualRecord({
-    workspaceId: "alpha",
-    directory: workspaceDirectory,
-    overrides: { context: ["briefs/gone.md"] },
-  });
-  await publishRecord(workspaceDirectory, missingRecord);
-  const missingHarness = piHarness();
-  const missingService = createDiscussionService({
-    root: storageRoot,
-    agentDir: join(root, "agent"),
-    spawn: missingHarness.spawnImpl,
-  });
-  try {
-    await assert.rejects(missingService.resume({ workspace_id: "alpha", thread_id: missingRecord.thread_id }), {
-      code: "missing-context",
-    });
-    assert.equal(missingHarness.calls.filter((call) => call.command === "pi").length, 0);
-  } finally {
-    await missingService.close();
-  }
-
-  const outside = join(root, "outside.md");
-  await writeFile(outside, "outside\n");
-  await symlink(outside, join(workspaceDirectory, "briefs", "linked.md"));
-  const linkedRecord = manualRecord({
-    workspaceId: "alpha",
-    directory: workspaceDirectory,
-    overrides: { context: ["briefs/linked.md"] },
-  });
-  await publishRecord(workspaceDirectory, linkedRecord);
-  const linkedHarness = piHarness();
-  const linkedService = createDiscussionService({
-    root: storageRoot,
-    agentDir: join(root, "agent"),
-    spawn: linkedHarness.spawnImpl,
-  });
-  try {
-    await assert.rejects(linkedService.resume({ workspace_id: "alpha", thread_id: linkedRecord.thread_id }), {
-      code: "missing-context",
-    });
-    assert.equal(linkedHarness.calls.filter((call) => call.command === "pi").length, 0);
-  } finally {
-    await linkedService.close();
-  }
-
-  await writeFile(join(workspaceDirectory, "briefs", "huge.md"), "x".repeat(256 * 1024 + 1));
-  const hugeRecord = manualRecord({
-    workspaceId: "alpha",
-    directory: workspaceDirectory,
-    overrides: { context: ["briefs/huge.md"] },
-  });
-  await publishRecord(workspaceDirectory, hugeRecord);
-  const hugeHarness = piHarness();
-  const hugeService = createDiscussionService({
-    root: storageRoot,
-    agentDir: join(root, "agent"),
-    spawn: hugeHarness.spawnImpl,
-  });
-  try {
-    await assert.rejects(hugeService.resume({ workspace_id: "alpha", thread_id: hugeRecord.thread_id }), {
-      code: "invalid-context",
-    });
-    assert.equal(hugeHarness.calls.filter((call) => call.command === "pi").length, 0);
-  } finally {
-    await hugeService.close();
-  }
 
   const imported = manualRecord({
     workspaceId: "alpha",
@@ -1482,6 +1383,42 @@ test("thread durable queue concurrent same-ID enqueues once and preserves origin
     assert.equal(third.duplicate, true);
     assert.equal(third.state, "accepted");
     assert.equal((await readFile(logPath, "utf8")).split("\n").filter((line) => line.includes('"prompt"')).length, 1);
+  } finally {
+    await service.close();
+  }
+});
+
+// Run alone: node --test --test-name-pattern='named from its first message' scripts/workspaces/discussion.test.mjs
+test("thread named from its first message only while it keeps the default title", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  await setupWorkspace(storageRoot, "alpha");
+  const harness = piHarness();
+  const asked = [];
+  const titles = { "list the docs": "Docs listing", "this naming fails": null };
+  const suggestTitle = async (text) => {
+    asked.push(text);
+    return titles[text];
+  };
+  const service = createDiscussionService({ root: storageRoot, agentDir: join(root, "agent"), spawn: harness.spawnImpl, suggestTitle });
+  const send = (thread, text) => service.send({ workspace_id: "alpha", thread_id: thread.thread_id, id: randomUUID(), text });
+  try {
+    const named = await service.create({ workspace_id: "alpha" });
+    assert.equal(named.title, "New thread");
+    await send(named, "list the docs");
+    await waitFor(async () => (await readThread(storageRoot, "alpha", named.thread_id)).title === "Docs listing");
+    await send(named, "a later message");
+
+    const custom = await service.create({ workspace_id: "alpha", title: "Chosen title" });
+    await send(custom, "never named");
+    const failing = await service.create({ workspace_id: "alpha" });
+    await send(failing, "this naming fails");
+    await waitFor(async () => asked.includes("this naming fails"));
+
+    assert.deepEqual(asked, ["list the docs", "this naming fails"], "only first messages of default-titled threads are named");
+    assert.equal((await readThread(storageRoot, "alpha", custom.thread_id)).title, "Chosen title");
+    assert.equal((await readThread(storageRoot, "alpha", failing.thread_id)).title, "New thread");
   } finally {
     await service.close();
   }

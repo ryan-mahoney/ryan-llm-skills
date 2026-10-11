@@ -222,6 +222,15 @@ Selecting a workspace shows its local discussion threads. Thread routes, brief
 editing and assignment launch are local-only: a remote or imported page renders no
 message, brief or launch control.
 
+**Create thread** starts a thread called "New thread" in the whole workspace or a
+chosen repository. The thread's Pi runs in that directory and receives no kit or
+project context. When the first message is sent, the host asks
+`openrouter/inception/mercury-2.5` for a short title through a tool-less
+`pi --print` call and saves it only if the thread still has the default title;
+the open page updates without a reload. A failed or slow naming call leaves
+"New thread" in place and never delays delivery. The first message's text is
+sent to that model for naming.
+
 Below the transcript and composer, the thread detail shows the brief editor and
 the assignment handoff. **Save brief** publishes one canonical markdown brief for
 the typed title and content through `/api/thread/save-brief`; the browser

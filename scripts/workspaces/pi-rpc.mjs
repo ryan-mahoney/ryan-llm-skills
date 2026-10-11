@@ -16,7 +16,6 @@ import { createJsonlSplitter, readSessionBranch } from "../spec-observe/core.mjs
 
 const EXECUTABLE = "pi";
 const MAX_FRAME_BYTES = 1024 * 1024;
-const CONTEXT_LIMIT_BYTES = 256 * 1024;
 const STARTUP_TIMEOUT_MS = 10_000;
 const REQUEST_TIMEOUT_MS = 30_000;
 const CLOSE_GRACE_MS = 4_000;
@@ -143,18 +142,6 @@ async function canonicalDirectory(value, label) {
   return real;
 }
 
-function normalizeContext(context) {
-  if (Array.isArray(context) && context.some((entry) => typeof entry !== "string")) {
-    throw invalidThread("context entries must be strings");
-  }
-  const text = Array.isArray(context) ? context.join("\n\n") : context;
-  if (typeof text !== "string") throw invalidThread("context must be a string or an array of strings");
-  if (Buffer.byteLength(text, "utf8") > CONTEXT_LIMIT_BYTES) {
-    throw invalidThread(`context exceeds ${CONTEXT_LIMIT_BYTES} bytes`);
-  }
-  return text;
-}
-
 function modelArguments(model) {
   if (model === undefined || model === null) return [];
   if (typeof model !== "object" || Array.isArray(model)) throw invalidThread("model must be an object");
@@ -238,7 +225,7 @@ async function assertProspectiveFile(file, thread) {
   assertHeaderIdentity(await readHeader(file), thread, "new session file");
 }
 
-export async function createPiRpc({ thread, context, spawn: spawnImpl = nodeSpawn, clock = defaultClock, signal = null } = {}) {
+export async function createPiRpc({ thread, spawn: spawnImpl = nodeSpawn, clock = defaultClock, signal = null } = {}) {
   if (!thread || typeof thread !== "object" || Array.isArray(thread)) throw invalidThread("thread is required");
   if (!isUuid(thread.thread_id)) throw invalidThread("thread_id must be a UUID");
   if (!isUuid(thread.session_id)) throw invalidThread("session_id must be a UUID");
@@ -260,7 +247,6 @@ export async function createPiRpc({ thread, context, spawn: spawnImpl = nodeSpaw
     session_dir,
     session_file: thread.session_file ?? null,
   });
-  const contextText = normalizeContext(context);
   const extraArguments = modelArguments(thread.model);
   const mode = spawnThread.session_file === null ? "new" : "resume";
   if (mode === "resume") await assertResumeFile(spawnThread);
@@ -281,8 +267,6 @@ export async function createPiRpc({ thread, context, spawn: spawnImpl = nodeSpaw
     "--no-skills",
     "--no-prompt-templates",
     "--no-approve",
-    "--append-system-prompt",
-    contextText,
   ];
   if (mode === "resume") args.push("--session", spawnThread.session_file);
   else args.push("--session-id", spawnThread.session_id);

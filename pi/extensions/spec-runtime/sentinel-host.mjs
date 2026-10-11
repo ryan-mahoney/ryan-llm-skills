@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { normalizePublicHost } from '../../../scripts/spec-observe/dashboard.mjs';
 import { discoveryRoot } from '../../../scripts/spec-observe/discovery.mjs';
 import { createDiscussionService } from '../../../scripts/workspaces/discussion.mjs';
+import { suggestTitle } from '../../../scripts/workspaces/naming.mjs';
 import { resolveStorageRoot, storageStatus } from '../../../scripts/workspaces/store.mjs';
 import { claimHost } from './sentinel-host-owner.mjs';
 import { createDirectDashboard } from './sentinel-dashboard.mjs';
@@ -132,7 +133,7 @@ async function composeHost(options, signal) {
         const detail = status.errors.map(entry => entry.message).join('; ') || status.status;
         throw new Error(`storage root is not usable (${status.status}): ${detail}`);
       }
-      discussion = createDiscussionService({ root: configuredStorageRoot, agentDir: canonicalAgentDir });
+      discussion = createDiscussionService({ root: configuredStorageRoot, agentDir: canonicalAgentDir, suggestTitle });
     } catch (error) {
       if (error instanceof StartupCancelledError) throw error;
       process.stderr.write(`Sentinel discussions unavailable: ${error.message}\n`);
