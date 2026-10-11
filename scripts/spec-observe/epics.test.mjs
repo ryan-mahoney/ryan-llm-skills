@@ -13,6 +13,17 @@ test('parseEpic accepts a valid record and keeps allowlisted fields', () => {
   assert.deepEqual(epic.packages[0], { package: 'a', repository: '/repo/other', requires: [], note: 'folded' });
   assert.equal(epic.plan, '../_plans/demo.md');
   assert.equal('extra' in epic, false);
+  assert.deepEqual(epic.designs, []);
+});
+
+test('parseEpic keeps design references by identity and rejects malformed ones', () => {
+  const { epic } = parseEpic(record({ designs: [{ workspace: 'transitops', design: 'ladder-overview', path: '/store/projects/transitops/designs/ladder-overview' }, { workspace: 'transitops', design: 'import' }] }), { slug: 'demo' });
+  assert.deepEqual(epic.designs, [{ workspace: 'transitops', design: 'ladder-overview', path: '/store/projects/transitops/designs/ladder-overview' }, { workspace: 'transitops', design: 'import', path: null }]);
+  const bad = (designs, pattern) => assert.match(parseEpic(record({ designs }), { slug: 'demo' }).error ?? '', pattern);
+  bad({}, /list of at most 20/);
+  bad([{ design: 'x' }], /workspace and design slug/);
+  bad([{ workspace: 'w', design: 'Bad Slug' }], /workspace and design slug/);
+  bad([{ workspace: 'w', design: 'ok', path: 'relative' }], /not absolute/);
 });
 
 test('parseEpic rejects each invalid class with a short reason', () => {

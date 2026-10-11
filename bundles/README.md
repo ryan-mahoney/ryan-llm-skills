@@ -7,13 +7,13 @@ archives under `dist/skill-bundles/`. Generated artifacts are not committed.
 
 ## Bundles
 
-The build emits two installable bundles. `spec-skills` contains both architecture
-and design authoring because they use the same standalone `.specs/<feature>/`
-filename contract for preparation and execution.
+The build emits two installable bundles. `spec-skills` contains the architecture
+and spec authoring skills that share the standalone `.specs/<feature>/` filename
+contract for preparation and execution.
 
 ### spec-skills
 
-The spec-driven development workflow plus the design-spec front-half:
+The spec-driven development workflow:
 
 - `spec-end-to-end`
 - `spec-message`
@@ -32,10 +32,6 @@ The spec-driven development workflow plus the design-spec front-half:
 - `spec-work-tour`
 - `spec-pr`
 - `spec-issue`
-- `design-spec-architect`
-- `design-spec-prototype`
-- `design-spec-critique`
-- `design-spec-writer`
 
 Includes the Augment CLI subagent adapter:
 
@@ -87,13 +83,6 @@ The generated `spec-skills` README also includes a stage-by-stage overview:
 8. Publish with `spec-pr`.
 
 `spec-issue` remains an optional standalone GitHub mirror and does not participate in this sequence.
-
-It also includes the design-spec front-half:
-
-1. Run `design-spec-architect` to propose a design direction.
-2. Optionally run `design-spec-prototype` and `design-spec-critique`.
-3. Run `design-spec-writer`.
-4. Pass the existing spec to `spec-end-to-end`, or run the same preparation, workspace, execution, refinement, tour, and PR stages separately.
 
 ### specops-skills
 

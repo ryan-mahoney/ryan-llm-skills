@@ -80,7 +80,7 @@ for f in "${files[@]}"; do
   fi
 
   case "$dir" in
-    spec-*|design-spec-*)
+    spec-*|design-*)
       if grep -Eiq '(Canonical spec artifact paths|\.restory/spec|feature[- ]document|artifactsRoot|machineStateRoot|prototypeRoot|documentRoot)' "$f"; then
         echo "ERROR  $f: standalone skill contains a Restory-specific artifact contract"
         errors=$((errors + 1))

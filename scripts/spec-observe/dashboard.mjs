@@ -12,6 +12,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { authorizePackage, listPackageFiles, readPackageFile } from './package-files.mjs';
+import { listWorkspaceDesigns } from './designs.mjs';
 import { fetchWorkspace, listWorkspaces, resolveStorageRoot, storageStatus } from '../workspaces/store.mjs';
 import { createDiscussionRoutes } from '../workspaces/discussion-routes.mjs';
 import { applyManualCompletions, writeManualCompletion } from './manual-completion.mjs';
@@ -201,7 +202,7 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
           response.setHeader('Content-Type', view && /\.(?:js|mjs)$/i.test(requestedFile) ? 'text/javascript; charset=utf-8' : view && /\.css$/i.test(requestedFile) ? 'text/css; charset=utf-8' : file.type);
           response.setHeader('X-Package-File-Kind', file.kind);
           response.setHeader('X-Frame-Options', 'SAMEORIGIN');
-          response.setHeader('Content-Security-Policy', "sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'");
+          response.setHeader('Content-Security-Policy', "sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'");
           if (file.kind === 'download' || url.searchParams.has('download')) response.setHeader('Content-Disposition', 'attachment; filename="package-file"');
           response.end(request.method === 'HEAD' ? undefined : file.bytes);
         }
@@ -219,13 +220,17 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
         const directory = await authorizedWorkspace(url.searchParams.get('id'));
         response.setHeader('Content-Type', 'application/json; charset=utf-8');
         response.end(request.method === 'HEAD' ? undefined : JSON.stringify(await listPackageFiles(directory, url.searchParams.has('cursor') ? Number(url.searchParams.get('cursor')) : 0, { exclude: workspaceExclude })));
+      } else if (path === '/api/workspace-designs') {
+        const directory = await authorizedWorkspace(url.searchParams.get('id'));
+        response.setHeader('Content-Type', 'application/json; charset=utf-8');
+        response.end(request.method === 'HEAD' ? undefined : JSON.stringify(await listWorkspaceDesigns(directory)));
       } else if (path === '/api/workspace-file') {
         const directory = await authorizedWorkspace(url.searchParams.get('id'));
         const file = await readPackageFile(directory, url.searchParams.get('file'), { exclude: workspaceExclude });
         response.setHeader('Content-Type', file.type);
         response.setHeader('X-Package-File-Kind', file.kind);
         response.setHeader('X-Frame-Options', 'SAMEORIGIN');
-        response.setHeader('Content-Security-Policy', "sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'");
+        response.setHeader('Content-Security-Policy', "sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'");
         if (file.kind === 'download' || url.searchParams.has('download')) response.setHeader('Content-Disposition', 'attachment; filename="package-file"');
         response.end(request.method === 'HEAD' ? undefined : file.bytes);
       } else if (path === '/' || path === '/dashboard.html') {

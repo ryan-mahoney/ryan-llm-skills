@@ -29,6 +29,17 @@ export function parseEpic(record, { slug } = {}) {
     if (typeof record.plan !== 'string' || !record.plan || isAbsolute(record.plan) || record.plan.includes('\\')
       || !posix.resolve(`/.specs/_epics/${slug}`, record.plan).startsWith('/.specs/')) return fail('plan escapes .specs');
   }
+  const designs = [];
+  if (record.designs !== undefined) {
+    // Designs the epic implements (docs/design-packages.md). Identity is workspace/design; path is a convenience.
+    if (!Array.isArray(record.designs) || record.designs.length > 20) return fail('designs must be a list of at most 20 entries');
+    for (const item of record.designs) {
+      if (!item || typeof item !== 'object' || typeof item.workspace !== 'string' || !item.workspace
+        || typeof item.design !== 'string' || !/^[a-z][a-z0-9-]{0,47}$/.test(item.design)) return fail('design entries need workspace and design slug');
+      if (item.path !== undefined && (typeof item.path !== 'string' || !isAbsolute(item.path))) return fail(`design path of ${item.design} is not absolute`);
+      designs.push({ workspace: item.workspace, design: item.design, path: item.path ?? null });
+    }
+  }
   if (!Array.isArray(record.packages)) return fail('packages is not an array');
   if (record.packages.length > EPIC_LIMITS.members) return fail(`more than ${EPIC_LIMITS.members} packages`);
   const names = new Set();
@@ -50,7 +61,7 @@ export function parseEpic(record, { slug } = {}) {
     }
   }
   return { epic: { epic: slug, title: record.title, state: record.state, plan: record.plan ?? null,
-    created_at: record.created_at ?? null, note: record.note ?? null, packages } };
+    created_at: record.created_at ?? null, note: record.note ?? null, designs, packages } };
 }
 
 // Lists <specsDir>/_epics/* (real directories only) and reads each epic.json
@@ -133,7 +144,7 @@ export function buildEpics(entries) {
       if (!memberships.has(member.package)) memberships.set(member.package,
         { epic: epic.epic, repository: entry.repository, position: index + 1, total: members.length });
     });
-    return { epic: epic.epic, title: epic.title, state: epic.state, note: epic.note, repository: entry.repository,
+    return { epic: epic.epic, title: epic.title, state: epic.state, note: epic.note, designs: epic.designs, repository: entry.repository,
       record: entry.file, plan: epic.plan ? resolve(entry.dir, epic.plan) : null, members,
       summary: { total: members.length, merged: count('merged'), complete: count('complete'), published: count('published'),
         in_progress: count('in-progress'), prepared: count('prepared'), proposed: count('proposed'),

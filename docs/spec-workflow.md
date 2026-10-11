@@ -198,8 +198,9 @@ execution, and a passing verdict does not authorize it. Stopping services or cha
 be reversible and still require explicit authority. A local app/worktree may connect to production;
 inspect targets and setup/teardown effects before running commands or copying environment files.
 
-For a design-led change, run the design-spec authoring skills first, then pass the resulting spec
-package to `spec-end-to-end`. A proposal alone uses the architecture entry route.
+For a design-led change, produce the design package first (`design-plan`, then `design-run`;
+see [design packages](design-packages.md)), then run the architecture entry route and cite
+its screens from the spec. A proposal alone uses the architecture entry route.
 
 ## Engineering Decisions Across Stages
 

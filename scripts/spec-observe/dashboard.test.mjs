@@ -2497,3 +2497,77 @@ test('normalize rejects malformed epics and run epic fields', () => {
   check(epicPayload({ runs: [epicRun('a', { epic: 'adj' })] }), 'Invalid run epic.');
   check(epicPayload({ recently_completed: [{ completed_at: epicNow, completion_basis: 'merged-pr', epic: { epic: 3 } }] }), 'Invalid run epic.');
 });
+
+// Run independently: node --test --test-name-pattern='workspace designs route' scripts/spec-observe/dashboard.test.mjs
+test('workspace designs route lists valid indexes with derived status, reports invalid ones, and screens get font-src', async t => {
+  const { realpathSync } = await import('node:fs');
+  const f = fixture(t);
+  const base = realpathSync(f.dir);
+  const storageRoot = join(base, 'storage');
+  await setupStorage(storageRoot);
+  await createWorkspace(storageRoot, { id: 'studio' });
+  const workspace = join(storageRoot, 'projects', 'studio');
+  const demo = join(workspace, 'designs', 'demo');
+  mkdirSync(join(demo, 'screens'), { recursive: true });
+  mkdirSync(join(demo, 'captures'), { recursive: true });
+  mkdirSync(join(workspace, 'designs', 'broken'), { recursive: true });
+  writeFileSync(join(demo, 'design.json'), JSON.stringify({ schema_version: 1, design: 'demo', title: 'Demo design', viewport: { posture: 'desktop-only', widths: [1280] },
+    screens: [{ step: 1, id: 'overview', title: 'Overview', person: 'Planner', job: 'Pick the worst route', kind: 'decision', state: 'ideal' },
+      { step: 2, id: 'overview-empty', title: 'Overview, empty', person: 'Planner', job: 'Import a feed', kind: 'action', state: 'empty', shell_from: 1 }] }));
+  writeFileSync(join(demo, 'screens', '01-overview.html'), '<!doctype html><html><body><h1>Routes</h1></body></html>');
+  writeFileSync(join(demo, 'captures', '01-overview@1280.png'), 'png');
+  writeFileSync(join(workspace, 'designs', 'broken', 'design.json'), JSON.stringify({ schema_version: 1, design: 'broken', title: 'Broken', viewport: { posture: 'desktop-only', widths: [1280] }, screens: [] }));
+  const server = createDashboardServer({ agentDir: f.dir, storageRoot });
+  const listing = await request(server, `/api/workspace-designs?${new URLSearchParams({ id: 'studio' })}`);
+  assert.equal(listing.status, 200);
+  const body = JSON.parse(listing.body);
+  assert.equal(body.designs.length, 1);
+  assert.equal(body.designs[0].slug, 'demo');
+  assert.equal(body.designs[0].path, 'designs/demo');
+  assert.equal(body.designs[0].screens[0].produced, true);
+  assert.deepEqual(body.designs[0].screens[0].captured, { 1280: true });
+  assert.equal(body.designs[0].screens[1].produced, false);
+  assert.deepEqual(body.designs[0].summary, { total: 2, produced: 1, captured: 1 });
+  assert.ok(body.errors.some(e => e.name === 'designs/broken/design.json' && /screens is empty/.test(e.message)));
+  assert.notEqual((await request(server, `/api/workspace-designs?${new URLSearchParams({ id: 'ghost' })}`)).status, 200);
+  const screen = await request(server, `/api/workspace-file?${new URLSearchParams({ id: 'studio', file: 'designs/demo/screens/01-overview.html' })}`);
+  assert.equal(screen.status, 200);
+  assert.match(screen.headers['Content-Security-Policy'], /font-src 'self'/);
+  assert.match(screen.headers['Content-Security-Policy'], /connect-src 'none'/);
+  assert.doesNotMatch(screen.headers['Content-Security-Policy'], /allow-same-origin/);
+});
+
+// Run independently: node --test --test-name-pattern='Designs section' scripts/spec-observe/dashboard.test.mjs
+test('Designs section lists a workspace design and the viewer frames one screen per step', async () => {
+  const design = { slug: 'demo', path: 'designs/demo', title: 'Demo design', viewport: { posture: 'desktop-only', widths: [1280] }, design_system: { path: '/repo/docs/design-system.md' },
+    deviations: [{ screen: 1, token: 'row height', from: '44px', to: '36px', reason: 'dense comparison' }],
+    screens: [{ step: 1, id: 'overview', title: 'Overview', person: 'Planner', job: 'Pick the worst route', kind: 'decision', state: 'ideal', file: 'screens/01-overview.html', produced: true, captured: { 1280: true }, notes: 'Worst adherence leads.' },
+      { step: 2, id: 'overview-empty', title: 'Overview, empty', person: 'Planner', job: 'Import a feed', kind: 'action', state: 'empty', file: 'screens/02-overview-empty.html', shell_from: 1, produced: false, captured: { 1280: false } }],
+    summary: { total: 2, produced: 1, captured: 1 } };
+  const requested = [];
+  const context = dashboardContext({ fetch: async url => { requested.push(url); if (url.startsWith('/api/workspace-designs?')) return { ok: true, json: async () => ({ designs: [design], errors: [{ name: 'designs/broken/design.json', message: 'screens is empty' }] }) }; return { ok: false }; } });
+  vm.runInContext("mode='workspaces';selectedWorkspace='alpha';workspace={id:'alpha'}", context);
+  await vm.runInContext('loadDesigns()', context);
+  assert.ok(requested.some(url => url.startsWith('/api/workspace-designs?') && url.includes('id=alpha')));
+  const section = vm.runInContext("$('designs-body').innerHTML", context);
+  assert.match(section, /data-design="demo"/);
+  assert.match(section, /1\/2 screens produced · 1 captured/);
+  assert.match(section, /designs\/broken\/design\.json: screens is empty/);
+  vm.runInContext("openDesign('demo')", context);
+  let viewer = vm.runInContext("$('file-viewer').innerHTML", context);
+  assert.match(viewer, /<iframe [^>]*sandbox="allow-scripts"/);
+  assert.match(viewer, /file=designs%2Fdemo%2Fscreens%2F01-overview\.html/);
+  assert.match(viewer, /width:1280px/);
+  assert.match(viewer, /Pick the worst route/);
+  assert.match(viewer, /Worst adherence leads\./);
+  assert.match(viewer, /row height: 44px → 36px/);
+  assert.match(viewer, /step 1 of 2/);
+  vm.runInContext('designStep(1)', context);
+  viewer = vm.runInContext("$('file-viewer').innerHTML", context);
+  assert.match(viewer, /Screen 2 not produced/);
+  assert.doesNotMatch(viewer, /<iframe/);
+  assert.match(viewer, /Shell from<\/dt><dd[^>]*>step 1/);
+  // A workspace change clears the design view with the rest of the workspace state.
+  vm.runInContext('resetDesigns()', context);
+  assert.equal(vm.runInContext('designView', context), null);
+});

@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "26"
+  version: "27"
 ---
 
 # Spec Write
@@ -74,7 +74,7 @@ The folder contains fixed-name artifacts:
 - **Visual reference** - optional. When the proposal or conversation identifies existing visual work such as an HTML prototype, image, or mockup, resolve its exact entry-file path before writing. Treat that artifact as existing design input, not work to recreate.
 - **`spec.md`** - the output of this skill. Overwrite it only after producing the complete updated spec body.
 
-When a visual reference is outside the resolved spec folder, copy the smallest self-contained reference artifact into `.specs/<feature-slug>/visual-references/` without modifying it. For an HTML prototype, preserve the entry file and any local assets it loads with their relative layout. Reuse a byte-identical destination; stop on a same-name content conflict rather than overwriting. References already inside the feature folder, including `prototype/`, stay in place.
+When the visual reference is a screen of a design package (`<storage root>/projects/<workspace>/designs/<slug>/screens/NN-<id>.html`, see `~/.agents/docs/design-packages.md`), do not copy it. Record it by identity, absolute path and digest with `node ~/.agents/scripts/design/cli.mjs ref <design-dir> <step>`; the screen's `notes` and the `deviations` that name it in `design.json` are design decisions the spec must honor. Otherwise, when a visual reference is outside the resolved spec folder, copy the smallest self-contained reference artifact into `.specs/<feature-slug>/visual-references/` without modifying it. For an HTML prototype, preserve the entry file and any local assets it loads with their relative layout. Reuse a byte-identical destination; stop on a same-name content conflict rather than overwriting. References already inside the feature folder, including `prototype/`, stay in place.
 
 ### Phase specs
 
@@ -169,7 +169,13 @@ Include:
 - Design decisions and rationale.
 - Dependency map covering internal modules and external packages/services.
 
-When a visual reference exists, include a standalone line with its direct repository-relative entry-file path:
+When a visual reference exists, include a standalone line naming it. For a design package, name the design and the step range the spec implements, with the design directory:
+
+```txt
+Design reference: <workspace>/<design> steps 1–3 (<absolute design directory>)
+```
+
+For any other reference, give its direct repository-relative entry-file path:
 
 ```txt
 Visual reference: .specs/<feature-slug>/<prototype-or-visual-references>/<entry-file>
@@ -293,7 +299,7 @@ For each step include:
 5. Coverage: which acceptance criteria this step satisfies, as a tag line (`Covers: AC-3, AC-7`). Every criterion must be covered by at least one step; a step covering no criterion must trace to a stated architectural need instead.
 6. Complexity: how hard *this step* is, as a tag line (`Complexity: easy`). One of `easy`, `medium`, `hard` — see the rubric below. The system uses per-step tags to route each step to an appropriately strong implementation model, so score every step, not just the spec.
 7. Visual design: whether *this step* implements user-facing visual design, as a tag line (`Visual: yes` or `Visual: no`). See the Visual design rubric in Implementation Profile. The system routes `Visual: yes` steps to design-capable handling and visual verification, so flag every step, not just the spec.
-8. Visual reference: when a visual reference exists and the step is `Visual: yes`, repeat the exact `Visual reference: <repository-relative file path>` line in that step and require parity with it. Do not tell the implementer to create a replacement prototype or derive a new visual direction.
+8. Visual reference: when a visual reference exists and the step is `Visual: yes`, repeat the exact reference line in that step and require parity with it. For a design package the line is the one screen this step implements, as printed by `node ~/.agents/scripts/design/cli.mjs ref <design-dir> <step>`: `Design reference: <workspace>/<design> step N → <absolute screen path> sha256:<digest>`. The digest binds the step to the screen as prepared; an implementer that finds a different digest reports a departure for re-preparation and never builds to the newer file silently. For any other reference repeat `Visual reference: <repository-relative file path>`. Do not tell the implementer to create a replacement prototype or derive a new visual direction.
 9. Evidence: when this step owns one or more Executable Evidence Plan gates, an `Evidence:` tag line (`Evidence: EV-2` or `Evidence: EV-2, EV-5`). Producing merge evidence is part of the step's work. For later gates it owns the procedure and
 handoff, not premature execution; record the runtime result as pending until authorized and run. Steps owning no evidence omit the line.
 
@@ -423,6 +429,7 @@ Field contract:
 - `difficulty` — exactly one of `easy`, `medium`, `hard`, identical to the step's `Complexity:` tag.
 - `visualDesign` — boolean; `true` when the step implements user-facing visual design, identical to the step's `Visual:` flag (`Visual: yes` → `true`, `Visual: no` → `false`).
 - `evidence` — ordered array of owned EV identifiers, exactly matching the step's `Evidence:` tag; use `[]` when the step owns none.
+- `design` — only on `visualDesign: true` steps that carry a `Design reference:` line: `{ "workspace", "design", "step", "path", "sha256" }` copied from that line, so runners and Sentinel can find the screen without parsing Markdown. Omit the field on every other step.
 
 Write `spec-steps.json` only after the spec body is final, so the index matches the committed step list, numbering, complexity, visual, and evidence tags exactly. There must be exactly one entry per step, in the same order.
 

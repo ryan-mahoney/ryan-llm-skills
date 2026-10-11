@@ -466,73 +466,6 @@ references out of the PR; preserve the full verification record in supporting ar
 README
 }
 
-write_design_spec_workflow_howto() {
-  cat <<'README'
-
-## Design-Driven Front-Half
-
-The design-spec skills add a design-focused front-half to the same standalone `.specs/<feature>/` contract. They are useful when the next implementation needs design direction, not only architecture.
-
-### 1. Propose The Design Direction
-
-```bash
-/design-spec-architect describe the surface or redesign
-```
-
-This reviews the existing design system and applicable rules, classifies the surface as functional, expressive, or hybrid, and writes:
-
-```txt
-.specs/<feature>/proposal.md
-```
-
-### 2. Prototype The Direction (Optional)
-
-```bash
-/design-spec-prototype <feature-slug>
-```
-
-This builds a fast viewable prototype in:
-
-```txt
-.specs/<feature>/prototype/
-```
-
-Use this when the direction is expressive, high-visibility, unsettled, or worth reacting to visually before writing the implementation spec.
-
-### 3. Critique The Design (Optional)
-
-```bash
-/design-spec-critique <feature-slug>
-```
-
-This critiques the prototype when present, otherwise the proposal, and writes:
-
-```txt
-.specs/<feature>/critique.md
-```
-
-### 4. Write The Design Spec
-
-```bash
-/design-spec-writer <feature-slug>
-```
-
-The writer creates the standard implementation and evidence contract, including selected design rules, states, accessibility, responsive behavior, failure hypotheses, QA-tour gates, and deterministic steps. It writes `spec-steps.json` and `evidence-plan.json` beside the spec.
-
-After that, use the normal engineering back half:
-
-```bash
-/spec-write <feature-slug>
-# top-level agent establishes a branch or worktree
-/spec-run <feature-slug>
-# reconcile the base and collect required CI within publication authority
-/spec-work-tour <feature-slug>
-/spec-pr <feature-slug>
-```
-
-README
-}
-
 write_specops_workflow_howto() {
   cat <<'README'
 
@@ -756,7 +689,6 @@ write_bundle_files() {
     fi
     if [ "$name" = "spec-skills" ]; then
       write_spec_workflow_howto
-      write_design_spec_workflow_howto
     elif [ "$name" = "specops-skills" ]; then
       write_specops_workflow_howto
     elif [ "$name" = "repo-search" ]; then
@@ -914,10 +846,6 @@ spec_skills=(
   spec-gym
   spec-gym-extract
   spec-work-tour
-  design-spec-architect
-  design-spec-prototype
-  design-spec-critique
-  design-spec-writer
 )
 
 specops_skills=()

@@ -8,7 +8,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "12"
+  version: "13"
 ---
 
 # Spec Architect Initial — Solution Design Against Existing Architecture
@@ -377,7 +377,7 @@ Write the proposal to `.specs/<feature-slug>/proposal.md` in the current reposit
 
 - If the user supplies an existing `.specs/<feature-slug>/` folder or a file inside it, use that folder.
 - Otherwise derive a short kebab-case slug from the request and create `.specs/<feature-slug>/`. Name new packages by the convention in [Spec epics](../../docs/spec-epics.md#naming): `<epic><NN>-<slug>` for epic members, `<NN>-<slug>` or a bare slug for standalone packages, two-digit ordinals, a letter suffix for splits. Refuse a duplicate ordinal.
-- When one plan is decomposed into two or more packages, write `.specs/_epics/<slug>/epic.json` per [Spec epics](../../docs/spec-epics.md): the members, each member's `requires` taken from the plan's dependency statements, and `plan` pointing at the plan document (copy or move it to `_epics/<slug>/plan.md` when it is not already under `.specs/`). Do not create a record for a single package.
+- When one plan is decomposed into two or more packages, write `.specs/_epics/<slug>/epic.json` per [Spec epics](../../docs/spec-epics.md): the members, each member's `requires` taken from the plan's dependency statements, and `plan` pointing at the plan document (copy or move it to `_epics/<slug>/plan.md` when it is not already under `.specs/`). Do not create a record for a single package. When the plan implements design packages (`~/.agents/docs/design-packages.md`), list them under `designs` as `{ workspace, design, path }`, cut members on the screen inventory in each `design.json`, and name in every member's proposal the screens it implements: a screen claimed by no member is a plan gap to state, a screen claimed by two needs one owner.
 - Keep every pipeline artifact for the feature in that folder. Use package-relative paths between artifacts. Keep the folder in the primary repository when code runs in a worktree.
 - Write atomically. Keep required front matter first and the level-1 heading immediately after it.
 - Report `outcome: proposed | rejected | decision-required | blocked`. For a completed proposal,
