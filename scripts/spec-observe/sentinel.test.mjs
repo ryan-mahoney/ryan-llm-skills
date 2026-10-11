@@ -267,11 +267,11 @@ test('pointer reads that exhaust the total budget become an explicit unknown omi
   const f = sandbox(t);
   mkdirSync(f.indexDir, { recursive: true });
   // Valid ~60 KiB pointers charge the shared budget without producing
-  // per-file errors, so exhausting the 4 MiB workspace total is the visible
+  // per-file errors, so exhausting the workspace total is the visible
   // outcome for managed discovery.
   const pad = 'p'.repeat(61440 - 96);
-  for (let index = 0; index < 70; index++) {
-    writeFileSync(join(f.indexDir, `big-${String(index).padStart(2, '0')}.json`),
+  for (let index = 0; index < Math.ceil(SENTINEL_LIMITS.totalBytes / 61440) + 4; index++) {
+    writeFileSync(join(f.indexDir, `big-${String(index).padStart(3, '0')}.json`),
       JSON.stringify({ run_id: `run-${index}`, package: '/canonical/package', pad }));
   }
 
@@ -442,25 +442,78 @@ test('enrollment read failures project into workspace coverage, never healthy em
 });
 
 // Run alone: node --test --test-name-pattern='metadata-heavy checkpoints' scripts/spec-observe/sentinel.test.mjs
-test('metadata-heavy checkpoints preserve spec progress within the shared reconciliation byte ceiling', async t => {
-  const f = sandbox(t);
-  const repo = primary(f.dir, 'metadata-budget');
-  const packagePath = pack(repo);
+// Each package holds `count` valid ~62 KB checkpoints (about 6 MB per package).
+function heavyPackage(repo, name, count = 100) {
+  const packagePath = pack(repo, name);
   receipt(packagePath, { id: 'one', state: 'running', step: join(packagePath, 'step-002-subspec.md') });
   writeFileSync(join(packagePath, 'spec-steps.json'), JSON.stringify({ steps: [
     { step: 1, name: 'Start' }, { step: 2, name: 'Build' }, { step: 3, name: 'Finish' },
   ] }));
-  for (let index = 0; index < 80; index++) {
+  const padding = 'x'.repeat(62000);
+  for (let index = 0; index < count; index++) {
     const dir = join(packagePath, 'runtime', 'sentinel', `workflow-${index}`);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, 'checkpoint.json'), JSON.stringify({ package: packagePath, workers: [], padding: 'x'.repeat(60000) }));
+    writeFileSync(join(dir, 'checkpoint.json'), JSON.stringify({ package: packagePath, workers: [], padding }));
   }
-  const snapshot = await collectWorkspace({ roots: [repo], indexDir: f.indexDir, now });
+  return packagePath;
+}
+
+const budgetReasons = snapshot => snapshot.coverage.reasons.filter(reason => reason.startsWith('read-budget:'));
+
+test('metadata-heavy checkpoints preserve spec progress within the shared reconciliation byte ceiling', async t => {
+  const f = sandbox(t);
+  const repo = primary(f.dir, 'metadata-budget');
+  // Earlier packages drain the shared pool; the last one keeps its floor reads.
+  const heavy = ['a-one', 'a-two', 'a-three'].map(name => heavyPackage(repo, name));
+  const packagePath = heavyPackage(repo, 'z-last', 80);
+  // Explicit packages are observed in the given order; directory order is not stable.
+  const snapshot = await collectWorkspace({ roots: [repo], packages: [...heavy, packagePath], indexDir: f.indexDir, now });
   assert.ok(snapshot.coverage.bytes_read <= SENTINEL_LIMITS.totalBytes);
   assert.equal(snapshot.coverage.state, 'partial');
-  assert.ok(snapshot.coverage.reasons.some(reason => reason.startsWith('read-budget:')));
-  assert.deepEqual(snapshot.runs[0].spec_progress, { basis: 'step-position', total_steps: 3,
+  assert.ok(budgetReasons(snapshot).some(reason => reason.includes('/z-last/')));
+  assert.deepEqual(snapshot.runs.find(run => run.package === packagePath).spec_progress, { basis: 'step-position', total_steps: 3,
     current_step: 2, current_position: 2, current_name: 'Build', accepted_steps: null });
+});
+
+test('a package after budget-exhausting packages still reaches recently_completed from its floor', async t => {
+  const f = sandbox(t);
+  const repo = primary(f.dir, 'floor');
+  const heavy = ['a-one', 'a-two', 'a-three'].map(name => heavyPackage(repo, name));
+  const light = pack(repo, 'z-light');
+  receipt(light, { id: 'done', state: 'completed', started_at: ago(60000) });
+  const commit = 'a'.repeat(40);
+  writeFileSync(join(light, 'pr-url.json'), JSON.stringify({ package: light, kind: 'pr_submission', commit,
+    url: 'https://example.test/pull/1', submitted_at: ago(1000) }));
+  writeFileSync(join(light, 'work-tour.json'), JSON.stringify({ verdict: 'ready', commit }));
+  const snapshot = await collectWorkspace({ roots: [repo], packages: [...heavy, light], indexDir: f.indexDir, now });
+  const reasons = budgetReasons(snapshot);
+  assert.ok(reasons.some(reason => reason.includes('/a-three/')), 'the heavy packages exhaust the pool');
+  assert.ok(!reasons.some(reason => reason.includes('/z-light/')), JSON.stringify(reasons));
+  assert.deepEqual(snapshot.recently_completed.map(run => [run.package, run.completion_basis]), [[light, 'ready-pr']]);
+});
+
+test('the floor reservation stops at half the budget and unused floor returns to the pool', async t => {
+  const f = sandbox(t);
+  const repo = primary(f.dir, 'reservation');
+  const MiB = 1024 * 1024;
+  const heavy = [heavyPackage(repo, 'a-one'), heavyPackage(repo, 'a-two')];
+  // 100 floors (9.6 MiB) exceed half of the 16 MiB budget.
+  const lights = [];
+  for (let index = 0; index < 100; index++) {
+    const light = pack(repo, `b-${String(index).padStart(3, '0')}`);
+    receipt(light, { id: 'one', state: 'running' });
+    lights.push(light);
+  }
+  const snapshot = await collectWorkspace({ roots: [repo], packages: [...heavy, ...lights], indexDir: f.indexDir, now });
+  const reasons = budgetReasons(snapshot);
+  assert.ok(reasons.some(reason => reason.includes('/a-two/')), 'the first two packages exhaust the unreserved half');
+  // Every light run.json is read, including the ones past the 85th floor, because
+  // earlier lights return their unspent floor. (Reasons are capped at 50 entries,
+  // so the candidate count below is the stronger check.)
+  assert.ok(!reasons.some(reason => reason.includes('/b-')), JSON.stringify(reasons.slice(0, 3)));
+  assert.ok(snapshot.coverage.reasons.includes('assignments-cap: selected 50 of 102'), 'all 102 current receipts were read');
+  // Heavy packages read about half the budget (an uncapped reservation leaves about 6.4 MiB).
+  assert.ok(snapshot.coverage.bytes_read > 7.5 * MiB && snapshot.coverage.bytes_read < 9 * MiB, `bytes_read ${snapshot.coverage.bytes_read}`);
 });
 
 test('external activity ancestor symlinks remain unknown instead of importing foreign hints', async t => {

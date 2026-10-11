@@ -32,7 +32,8 @@ export const SENTINEL_LIMITS = Object.freeze({
   directoryEntryFactor: 4,
   smallJsonBytes: 65536,
   activityBytes: 32768,
-  totalBytes: 4 * 1024 * 1024,
+  totalBytes: 16 * 1024 * 1024,
+  packageFloorBytes: 96 * 1024,
   quietActivityMs: 120000,
   recentActivityMs: 24 * 60 * 60 * 1000,
   recentCompletionMs: 7 * 24 * 60 * 60 * 1000,
@@ -46,6 +47,8 @@ const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
 const ROLES = ['owner', 'editor'];
 const CONDITION_GENERATION = 1;
 const MAX_REASONS = 50;
+// Small lifecycle records read ahead of the receipt walk; later readers reuse them.
+const LIFECYCLE_FILES = ['pr-url.json', 'work-tour.json', COMPLETION_FILE, 'sentinel-merge.json'];
 
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 const validTime = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : null;
@@ -173,19 +176,48 @@ function makeCoverage(state, reasons, omitted, bytes_read, observed_at) {
 }
 
 // Reads are bounded twice: per file cap and one shared workspace byte budget.
-// A skipped read is a reported fact, never a guessed one.
+// A skipped read is a reported fact, never a guessed one. Before package reads
+// begin, reserve() holds back a floor per package: enter() lets one package draw
+// its floor from that hold, and leave() frees whatever it did not spend.
 function makeBudget() {
-  return { bytes: 0, cap: SENTINEL_LIMITS.totalBytes };
+  return {
+    bytes: 0, cap: SENTINEL_LIMITS.totalBytes,
+    reserved: 0, // held for packages not yet entered
+    allotted: 0, // floor granted to the entered package
+    start: 0,    // bytes already read when it entered
+    reserve(packages) {
+      this.reserved = Math.max(0, Math.min(packages * SENTINEL_LIMITS.packageFloorBytes, this.cap / 2, this.cap - this.bytes));
+    },
+    enter() {
+      this.allotted = Math.min(SENTINEL_LIMITS.packageFloorBytes, this.reserved);
+      this.reserved -= this.allotted;
+      this.start = this.bytes;
+    },
+    leave() { this.allotted = 0; this.start = this.bytes; },
+    // True when reading `extra` bytes leaves every other package's hold intact.
+    fits(extra) {
+      const floorLeft = Math.max(0, this.allotted - (this.bytes - this.start));
+      return this.bytes + extra + this.reserved + Math.max(0, floorLeft - extra) <= this.cap;
+    },
+  };
 }
 
 // Sources are opened only as in-containment regular files: a special file or
 // a foreign symlink is an explicit uncertainty, never an open or a follow.
 const OPEN_REGULAR = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0);
 
-async function readBounded(file, maxBytes, budget, { within = null } = {}) {
+async function readBounded(file, maxBytes, budget, { within = null, memo = null } = {}) {
+  if (memo?.has(file)) return memo.get(file);
+  const result = await readBoundedOnce(file, maxBytes, budget, within);
+  // A budget refusal is not memoized: it describes the pool, not the file.
+  if (memo && result.outcome !== 'read-budget') memo.set(file, result);
+  return result;
+}
+
+async function readBoundedOnce(file, maxBytes, budget, within) {
   // The budget is checked before the read and enforced again on the actual
   // bytes so coverage.bytes_read can never exceed the workspace total.
-  if (budget.bytes + maxBytes > budget.cap) {
+  if (!budget.fits(maxBytes)) {
     return { outcome: 'read-budget', reason: `read-budget: ${file}`, bytes: 0 };
   }
   try {
@@ -211,7 +243,7 @@ async function readBounded(file, maxBytes, budget, { within = null } = {}) {
     handle = await open(file, OPEN_REGULAR);
     const buffer = Buffer.alloc(maxBytes + 1);
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    if (budget.bytes + bytesRead > budget.cap) {
+    if (!budget.fits(bytesRead)) {
       return { outcome: 'read-budget', reason: `read-budget: ${file}`, bytes: 0 };
     }
     budget.bytes += bytesRead;
@@ -226,8 +258,8 @@ async function readBounded(file, maxBytes, budget, { within = null } = {}) {
 }
 
 // Read one bounded JSON file and allowlist only what callers may keep.
-async function readJson(file, maxBytes, budget, { prefix = 'read-error', oversize = true, allow, within = null } = {}) {
-  const result = await readBounded(file, maxBytes, budget, { within });
+async function readJson(file, maxBytes, budget, { prefix = 'read-error', oversize = true, allow, within = null, memo = null } = {}) {
+  const result = await readBounded(file, maxBytes, budget, { within, memo });
   if (result.outcome !== 'ok') {
     return { ...result, reason: result.reason ?? (oversize ? `${prefix}-oversized: ${file}` : null) };
   }
@@ -581,11 +613,24 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
   let staleReceipts = false;
   const note = reason => { if (reason && !reasons.includes(reason)) reasons.push(reason); };
   const noteUnknown = reason => { if (reason && !reasons.includes(reason)) { reasons.push(reason); unknownOmission = true; } };
+  // Each package draws its floor first; lifecycle files are read before the
+  // receipt walk and checkpoints so they land inside it.
+  budget.reserve(facts.size);
   const collectFact = async (fact, active = true) => {
-    const candidates = await collectPackage(fact, budget, note, noteUnknown);
-    // Cache the prepared index before checkpoints and later packages consume
-    // the shared budget. Selected runs must not lose known step counts just
-    // because their projection happens after all receipt collection.
+    budget.enter();
+    fact.reads = new Map();
+    try { await collectFactReads(fact, active); }
+    finally { budget.leave(); fact.reads = null; }
+  };
+  const collectFactReads = async (fact, active) => {
+    const candidates = await collectPackage(fact, budget, note, noteUnknown, async found => {
+      // Cache the prepared index before checkpoints and later packages consume
+      // the shared budget. Selected runs must not lose known step counts just
+      // because their projection happens after all receipt collection.
+      if (found) await readStepIndex(fact, budget);
+      for (const name of LIFECYCLE_FILES) await readBounded(join(fact.packagePath, name), SENTINEL_LIMITS.smallJsonBytes, budget,
+        { within: fact.packagePath, memo: fact.reads });
+    });
     if (candidates.length) await readStepIndex(fact, budget);
     // Keep the latest assignment as the package's current handoff, including
     // the interval after its worker exits and before review/next-step dispatch.
@@ -605,7 +650,7 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
     let completion = await packageCompletion(fact, candidates, budget, noteUnknown);
     if (!completion) {
       const saved = await readJson(join(fact.packagePath, COMPLETION_FILE), SENTINEL_LIMITS.smallJsonBytes, budget,
-        { within: fact.packagePath, allow: value => value });
+        { within: fact.packagePath, allow: value => value, memo: fact.reads });
       completion = manualCompletion(saved.record, fact.packagePath, fact.completionRevision, Date.parse(readTime),
         candidates.map(c => c.receipt.started_at ?? c.receipt.dispatch_requested_at));
     }
@@ -614,7 +659,7 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
       let evidence;
       if (reconcileMerge) { try { evidence = await reconcileMerge(mergeInput); } catch { evidence = { state: 'unknown', reason: 'merge-check-unavailable' }; } }
       else {
-        const read = await readJson(join(fact.packagePath, 'sentinel-merge.json'), SENTINEL_LIMITS.smallJsonBytes, budget, { within: fact.packagePath, allow: value => value });
+        const read = await readJson(join(fact.packagePath, 'sentinel-merge.json'), SENTINEL_LIMITS.smallJsonBytes, budget, { within: fact.packagePath, allow: value => value, memo: fact.reads });
         evidence = read.record;
         if (!await validateMergeCache(evidence, mergeInput)) evidence = null;
       }
@@ -732,7 +777,7 @@ async function packageMergeInput(fact, candidates, budget) {
   if (fact.checkpointNotes.some(reason => /^checkpoints?-/.test(reason))) return skip('checkpoint-unavailable');
   if (checkpoints.some(c => !validTime(c.observed_at))) return skip('checkpoint-time-unavailable');
   const prRead = await readJson(join(fact.packagePath, 'pr-url.json'), SENTINEL_LIMITS.smallJsonBytes, budget,
-    { within: fact.packagePath, allow: value => value });
+    { within: fact.packagePath, allow: value => value, memo: fact.reads });
   if (prRead.outcome !== 'ok') return skip(prRead.outcome === 'missing' ? 'missing-pr-record' : 'pr-record-unavailable');
   const pr = prRead.record;
   if (pr?.package !== fact.packagePath || pr.kind !== 'pr_submission'
@@ -764,7 +809,7 @@ async function packageCompletion(fact, candidates, budget, note) {
   } else {
     const read = async (name, allow) => {
       const result = await readJson(join(fact.packagePath, name), SENTINEL_LIMITS.smallJsonBytes, budget,
-        { within: fact.packagePath, prefix: 'completion', allow });
+        { within: fact.packagePath, prefix: 'completion', allow, memo: fact.reads });
       if (result.outcome !== 'ok' && result.outcome !== 'missing') note(result.reason ?? `completion-unavailable: ${name}`);
       return result.outcome === 'ok' ? result.record : null;
     };
@@ -787,7 +832,7 @@ async function packageCompletion(fact, candidates, budget, note) {
 
 // Receipts are examined in one bounded pass: identity mismatches are stale
 // evidence and the run is skipped, never re-attributed to another identity.
-async function collectPackage(fact, budget, report, reportUnknown) {
+async function collectPackage(fact, budget, report, reportUnknown, afterCurrent = async () => {}) {
   const note = reason => { fact.receiptsIncomplete = true; report(reason); };
   const noteUnknown = reason => { fact.receiptsIncomplete = true; reportUnknown(reason); };
   const runsDir = join(fact.packagePath, 'runtime', 'runs');
@@ -824,6 +869,7 @@ async function collectPackage(fact, budget, report, reportUnknown) {
   // The current receipt has a stable path. Read it directly so logs and result
   // files cannot push the latest run beyond the bounded directory scan.
   if (!await readReceipt(join(fact.packagePath, 'runtime', 'run.json'))) return [...found.values()];
+  await afterCurrent(found.size > 0);
   const listed = await listDirectory(runsDir, SENTINEL_LIMITS.receiptFiles,
     entry => entry.isFile() && entry.name.endsWith('.json')
       && !entry.name.endsWith('-verification.json') && !entry.name.endsWith('-completion.json'),
@@ -854,6 +900,7 @@ async function observeRun(candidate, budget, note, readTime) {
     get cap() { return budget.cap; },
     get bytes() { return budget.bytes; },
     set bytes(value) { runBytes.value += value - budget.bytes; budget.bytes = value; },
+    fits: extra => budget.fits(extra),
   };
   let stale = false;
   let partial = false;

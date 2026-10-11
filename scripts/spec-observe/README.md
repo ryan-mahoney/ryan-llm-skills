@@ -85,6 +85,10 @@ Snapshots carry `recently_completed` separately from monitored `runs`, so histor
 does not create recovery conditions or consume the 50-assignment display limit.
 History has its own 50-package cap and `completion_history` window/omission metadata;
 older packages are checked after current run details, within the shared read budget.
+One scan reads at most 16 MiB in total. Before any package is read, each package also
+gets a 96 KiB floor (reserved up to half the total) for its current receipt, step index and
+completion records, so earlier receipt-heavy packages cannot starve those lifecycle reads;
+a package's unused floor returns to the shared pool when it finishes.
 Recorded timestamps determine the window even when package files have older mtimes.
 The dashboard uses authoritative observer snapshots, without accumulating browser
 history. Older snapshots remain readable and explicitly show unavailable completion
