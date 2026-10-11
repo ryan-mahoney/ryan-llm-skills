@@ -96,3 +96,19 @@ test('publication complete finds this coordinator\'s workflows on disk when none
   assert.equal((await finish(pkg, [], location, ref))[0].outcome, 'complete');
   assert.deepEqual(await completeWorkflowsAfterPublication({ package: pkg, known: [], coordinator_session: 'other', input_revision: 3, location }), []);
 });
+
+test('with two targets, publication complete waits until both targets have a pull request URL', async t => {
+  const base = await makePackageFixture({ prefix: 'final-checkpoint-', repos: ['repo', 'second'], targets: ['repo', 'second'] });
+  t.after(() => rmSync(base.dir, { recursive: true, force: true }));
+  const pkg = base.packagePath;
+  mkdirSync(join(pkg, 'runtime', 'runs'), { recursive: true });
+  register(pkg, []);
+  const pr = targets => writeFileSync(join(pkg, 'pr-url.json'), JSON.stringify({ package_ref: base.ref, targets }));
+  pr({ repo: { url: 'https://github.com/o/r/pull/9' } });
+  assert.deepEqual(await finish(pkg, undefined, base.location), [{ workflow_id: 'wf-1', outcome: 'skipped', reason: 'pr-missing: second' }]);
+  assert.equal(readCheckpointRecord(pkg, 'wf-1').state, 'ready');
+  pr({ repo: { url: 'https://github.com/o/r/pull/9' }, second: { url: 'https://github.com/o/s/pull/4' } });
+  const [outcome] = await finish(pkg, undefined, base.location);
+  assert.equal(outcome.outcome, 'complete');
+  assert.equal(readCheckpointRecord(pkg, 'wf-1').obligation.summary, 'Publication complete');
+});

@@ -34,12 +34,17 @@ Call `spec_dispatch` once:
 `package` is a `workspace/slug` ref or the package folder (or a file inside it) in the
 adjacent storage root; spec-location (`scripts/spec-location`) maps it to paths, and a
 refusal (wrong host, missing locations, legacy location) is returned as an error with
-its code and remedy. The step must be a file of that package. The runtime dispatches
-exactly one target repository per package; a package with several targets is refused
-as `multiple-targets-unsupported`. The primary checkout, branch and git common directory
-come from the target in `locations.json`. The worktree is `targets[0].worktree` when
-recorded; otherwise the runtime creates a sibling named `<repository>-<slug>` on the
-target branch (`base` defaults to `HEAD`) and records it with spec-location. A caller
+its code and remedy. The step must be a file of that package. A step runs in one
+target repository: the step's `repository` in `spec-steps.json` (required when the package has
+several targets, optional for one). A missing or unknown value is refused as
+`step-repository-missing` or `step-repository-unknown` before any worktree is created. The
+target's primary checkout, branch and git common directory come from `locations.json`. The
+worktree is that target's `worktree` when recorded; otherwise the runtime creates a sibling
+named `<repository>-<slug>` on the target branch (`base` defaults to `HEAD`) and records it with
+spec-location. Other targets' worktrees are created only when a step targets them. The run
+record gains `target` (the repository id), and `checkout` is that target's worktree. Owner and
+editor sessions run there; the prompt lists the other targets' recorded worktrees as read-only
+context, and retained sessions are keyed by target so they never cross repositories. A caller
 cannot supply a checkout. A worktree on another branch or in another repository is an
 error. The runtime does not overwrite changes. Repository setup happens only when the
 actual step needs it.
@@ -508,10 +513,10 @@ path. A passed command is not automatically a passed EV: the owner maps it to th
 and states the proof boundary. Earlier/dirty-tree evidence requires applicability, not a rerun.
 External evidence remains explicitly owner-reported with command, actual SHA and artifact.
 
-Artifact paths are absolute, package-relative, `<repo id>:<path>` (in that target's worktree), or the legacy
+Artifact paths are absolute, package-relative (a bare relative path resolves against the step target's worktree), `<repo id>:<path>` (in that target's worktree), or the legacy
 `.specs/<slug>/<rest>` form, which maps to `<package folder>/<rest>`. `pr-url.json` is
 `{ package_ref, targets: { <repo id>: { url, number?, branch?, mode? } } }`; the final checkpoint summary
-uses the URL when the package has one target.
+uses the URL when the package has one target. With several targets, the final checkpoint stays open (`pr-missing: <ids>`) until every target has a URL in `pr-url.json`.
 
 Process `state: completed` means the worker exited. `handoff.status: recorded` means its structured
 record exists and matches the canonical learning. It does not accept implementation or independent

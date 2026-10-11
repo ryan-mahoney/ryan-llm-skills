@@ -61,7 +61,7 @@ export function loadRun(packagePath, id) {
 export function summary(record) {
   return { run_id: record.id, assignment_id: record.assignment_id, workflow_id: record.workflow_id ?? null,
     attempt_kind: record.attempt_kind ?? null, session_scope: record.session_scope ?? 'package', state: record.state, package: record.package, package_ref: record.package_ref ?? null, step: record.step,
-    checkout: record.checkout, owner_session: record.owner_session, editor_session: record.editor_session,
+    target: record.target ?? null, checkout: record.checkout, owner_session: record.owner_session, editor_session: record.editor_session,
     ledger: join(record.package, 'runtime/progress.json'), run_receipt: join(record.package, 'runtime/run.json'), events: join(record.package, 'runtime/events.jsonl'),
     checks: ['canonical package', 'checkout repository and target branch', 'no live coordinator already running this package'],
     owner_model: record.owner_model, editor_model: record.editor_model, routing_reason: record.routing_reason,
@@ -144,6 +144,21 @@ export function spawnManaged(record, role, command, args, onRegistered = () => {
   }
   return child;
 }
+// The target a step changes: its spec-steps.json `repository`, or the package's only target.
+function stepTarget(locations, packagePath, step) {
+  const number = /^step-(\d+)-subspec\.md$/.exec(basename(step))?.[1];
+  let declared;
+  try { declared = read(join(packagePath, 'spec-steps.json')).steps.find(entry => entry.step === Number(number))?.repository; } catch { /* no step list */ }
+  const ids = locations.targets.map(entry => entry.id).join(', ');
+  if (declared === undefined && locations.targets.length === 1) return locations.targets[0];
+  if (declared === undefined) throw refusalError({ code: 'step-repository-missing', message: `${basename(step)} names no repository and ${locations.package_ref} has ${locations.targets.length} targets (${ids}).`,
+    remedy: 'Set `repository` on the step in spec-steps.json.' });
+  const target = locations.targets.find(entry => entry.id === declared);
+  if (!target) throw refusalError({ code: 'step-repository-unknown', message: `${basename(step)} names repository ${JSON.stringify(declared)}, which is not a target of ${locations.package_ref} (${ids}).`,
+    remedy: 'Set `repository` on the step in spec-steps.json to one of the package targets.' });
+  return target;
+}
+
 export async function resolveInput(input, location = {}) {
   if (input.attempt_kind !== undefined && !['implementation', 'verification-continuation', 'implementation-repair', 'review-repair', 'launch-retry'].includes(input.attempt_kind))
     throw new Error('Unknown attempt_kind');
@@ -154,16 +169,13 @@ export async function resolveInput(input, location = {}) {
   const checked = await checkPackage(input.package, location);
   if (!checked.ok) throw refusalError(checked);
   const locations = checked.locations;
-  if (locations.targets.length !== 1)
-    throw refusalError({ code: 'multiple-targets-unsupported', message: `${locations.package_ref} has ${locations.targets.length} targets; the runtime dispatches one repository per package.`,
-      remedy: 'Dispatch a package with a single target.' });
-  const [target] = locations.targets;
   const packagePath = realpathSync(locations.package_dir);
-  const primary = realpathSync(target.primary);
-  const common = realpathSync(target.common);
   for (const key of ['owner_model', 'editor_model']) splitModelSelector(input[key]);
   const step = realpathSync(input.step);
   if (!inside(packagePath, step)) throw new Error('step must be inside the package');
+  const target = stepTarget(locations, packagePath, step);
+  const primary = realpathSync(target.primary);
+  const common = realpathSync(target.common);
   const worktree = target.worktree ?? resolve(join(dirname(primary), `${basename(primary)}-${basename(packagePath)}`));
   if (!existsSync(worktree)) {
     let existing = false;
@@ -177,8 +189,13 @@ export async function resolveInput(input, location = {}) {
     const recorded = await setWorktree(locations.package_ref, target.id, actual, location);
     if (!recorded.ok) throw refusalError(recorded);
   }
-  return { ...input, scout_model: input.scout_model || SCOUT_MODEL, package: packagePath, package_ref: locations.package_ref, primary, step, checkout: actual };
+  // Other targets' recorded worktrees are read-only context for the owner and editor.
+  const others = locations.targets.filter(entry => entry.id !== target.id && entry.worktree).map(({ id, worktree }) => ({ id, worktree }));
+  return { ...input, scout_model: input.scout_model || SCOUT_MODEL, package: packagePath, package_ref: locations.package_ref, target: target.id, primary, step, checkout: actual, other_targets: others };
 }
+
+// Prompt lines naming the step's target and, read-only, the package's other worktrees.
+const targetFacts = record => record.target ? `TARGET: ${record.target}\n${record.other_targets?.length ? `OTHER TARGETS (read-only context, never edit): ${record.other_targets.map(entry => `${entry.id}=${entry.worktree}`).join('; ')}\n` : ''}` : '';
 
 export function environmentFacts(checkout, primary) {
   const roots = [...new Set([checkout, primary])];
@@ -286,7 +303,7 @@ export class Runtime {
     const runtimeDir = join(config.package, 'runtime');
     mkdirSync(join(runtimeDir, 'runs'), { recursive: true });
     const assignmentFile = join(runtimeDir, 'assignments', `${createHash('sha256').update(key).digest('hex')}.json`);
-    const contractParts = [config.step, config.checkout, config.owner_model, config.editor_model, config.scout_model, config.child_extensions || [], config.instructions || ''];
+    const contractParts = [config.step, config.target, config.checkout, config.owner_model, config.editor_model, config.scout_model, config.child_extensions || [], config.instructions || ''];
     if (config.attempt_kind !== undefined || config.session_scope === 'step')
       contractParts.push({ attempt_kind: config.attempt_kind ?? null, session_scope: config.session_scope ?? 'package' });
     // A supplied workflow_id joins the launch contract so an existing assignment
@@ -312,12 +329,12 @@ export class Runtime {
       }
     }
     const id = randomUUID();
-    const sessionKey = [config.checkout, config.owner_model, config.editor_model, config.child_extensions || []];
+    const sessionKey = [config.target, config.checkout, config.owner_model, config.editor_model, config.child_extensions || []];
     if (config.session_scope === 'step') sessionKey.push(config.step);
     const pair = createHash('sha256').update(JSON.stringify(sessionKey)).digest('hex').slice(0, 16);
     const sessionDir = join(runtimeDir, 'sessions', pair);
     mkdirSync(sessionDir, { recursive: true });
-    const record = { schema_version: 1, completion_contract: 1, id, assignment_id: key, workflow_id: config.workflow_id ?? null, package: config.package, package_ref: config.package_ref, primary: config.primary,
+    const record = { schema_version: 1, completion_contract: 1, id, assignment_id: key, workflow_id: config.workflow_id ?? null, package: config.package, package_ref: config.package_ref, target: config.target, primary: config.primary, other_targets: config.other_targets,
       step: config.step, checkout: config.checkout, owner_model: config.owner_model, editor_model: config.editor_model, scout_model: config.scout_model,
       dispatch_requested_at: requestedAt, routing_reason: config.routing_reason,
       attempt_kind: config.attempt_kind ?? null, session_scope: config.session_scope ?? 'package',
@@ -328,7 +345,7 @@ export class Runtime {
     atomic(assignmentFile, { assignment_id: key, run_id: record.id, contract });
     mkdirSync(this.indexDir, { recursive: true });
     atomic(join(this.indexDir, `${id}.json`), { run_id: id, package: config.package, package_ref: config.package_ref, manifest: join(runtimeDir, 'runs', `${id}.json`), parent_session: parentSession });
-    const prompt = `Implement this prepared step as its architect/owner using spec_editor.\nPACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\nRead the card and required policy. Choose the implementation approach yourself, then send a short Change/Edits/Preserve/Return packet for a bounded transformation. Name affected symbols, the chosen approach and preservation constraints; let the editor choose local implementation details and batch related edits. The editor does not run tests, compile/lint checks or other executable verification. After it returns, use spec_verify for necessary focused checks and diagnose failures before assigning bounded corrections. Do not check every packet automatically; reuse valid evidence. Read/search missing source facts directly. The editor normally reads and edits in one assignment; reserve facts-only requests for a specific blocking fact unavailable through your tools. Request compact results with artifact paths, not source inventories. Do not delegate architecture, whole-step restoration, or an entire acceptance suite with open-ended repairs. Reuse retained context. Assess each returned diff/result before the next packet; commit is a separate assignment after acceptance of the completed changes and required evidence. Use spec_scout only for a bounded discovery gap worth delegating; direct reads remain the default. Do not discover models, run startup suites, poll, or start other agents outside that scout tool. The runtime retains both sessions. Before ending, call spec_complete with decisions, introduced symbols, gaps and step-owned evidence assessments. It writes the canonical learning from verification receipts; an evidence log is not a learning. Commit via the editor first when complete. Missing handoffs remain unfinished obligations. This owner assignment ends after this step; independent review belongs to the coordinator.\n${input.instructions || ''}`;
+    const prompt = `Implement this prepared step as its architect/owner using spec_editor.\nPACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\n${targetFacts(record)}Read the card and required policy. Choose the implementation approach yourself, then send a short Change/Edits/Preserve/Return packet for a bounded transformation. Name affected symbols, the chosen approach and preservation constraints; let the editor choose local implementation details and batch related edits. The editor does not run tests, compile/lint checks or other executable verification. After it returns, use spec_verify for necessary focused checks and diagnose failures before assigning bounded corrections. Do not check every packet automatically; reuse valid evidence. Read/search missing source facts directly. The editor normally reads and edits in one assignment; reserve facts-only requests for a specific blocking fact unavailable through your tools. Request compact results with artifact paths, not source inventories. Do not delegate architecture, whole-step restoration, or an entire acceptance suite with open-ended repairs. Reuse retained context. Assess each returned diff/result before the next packet; commit is a separate assignment after acceptance of the completed changes and required evidence. Use spec_scout only for a bounded discovery gap worth delegating; direct reads remain the default. Do not discover models, run startup suites, poll, or start other agents outside that scout tool. The runtime retains both sessions. Before ending, call spec_complete with decisions, introduced symbols, gaps and step-owned evidence assessments. It writes the canonical learning from verification receipts; an evidence log is not a learning. Commit via the editor first when complete. Missing handoffs remain unfinished obligations. This owner assignment ends after this step; independent review belongs to the coordinator.\n${input.instructions || ''}`;
     let task;
     try { task = this.launchProcess(record, 'owner', `${prompt}\nEnvironment paths (observations, not setup approval): ${JSON.stringify(record.environment)}`, { onEvent: this.onWorkerEvent }); }
     catch (error) { record.state = 'failed'; record.error = error.message; save(record); throw error; }
@@ -413,7 +430,7 @@ export async function runEditor(record, assignment, signal, launchProcess = laun
   let task;
   try {
     invalidateCompletion(record);
-    task = launchProcess(record, 'editor', `PACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\n${assignment}`);
+    task = launchProcess(record, 'editor', `PACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\n${targetFacts(record)}${assignment}`);
     event(record, 'editor_started', { pid: task.child.pid, editor_session: record.editor_session });
     let stopping;
     let reportUnconfirmed;

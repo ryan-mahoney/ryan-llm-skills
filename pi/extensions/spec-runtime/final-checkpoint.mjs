@@ -62,6 +62,14 @@ function summaryFor(packagePath) {
   return summary && summary.length <= SUMMARY_MAX ? summary : 'Publication complete';
 }
 
+// With several targets, every target needs its own pull request in pr-url.json.
+function unpublishedTargets(packagePath) {
+  const ids = (readJson(join(packagePath, 'locations.json'))?.targets ?? []).map(target => target.id);
+  if (ids.length < 2) return [];
+  const published = readJson(join(packagePath, 'pr-url.json'))?.targets ?? {};
+  return ids.filter(id => typeof published[id]?.url !== 'string');
+}
+
 // After the coordinator records publication complete, close each workflow it
 // registered for the package whose declared workers all have terminal receipts.
 // Never throws: a skip or failure leaves the explicit coordinator checkpoint as
@@ -75,7 +83,9 @@ export async function completeWorkflowsAfterPublication({ package: packageInput,
     try { if (await packageDirOf(value.package, location) === packagePath) registered.add(value.workflow_id); } catch { /* unrelated package */ }
   }
   const workflows = registered.size ? [...registered] : sentinelWorkflows(packagePath, coordinatorSession);
+  const unpublished = unpublishedTargets(packagePath);
   return workflows.map(workflowId => {
+    if (unpublished.length) return { workflow_id: workflowId, outcome: 'skipped', reason: `pr-missing: ${unpublished.join(', ')}` };
     try {
       const record = readCheckpointRecord(packagePath, workflowId);
       if (!record) return { workflow_id: workflowId, outcome: 'skipped', reason: 'checkpoint-unavailable' };

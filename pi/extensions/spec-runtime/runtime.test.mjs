@@ -192,18 +192,63 @@ test('start creates the target worktree on the target branch, records it in loca
   assert.deepEqual(readdirSync(join(f.packagePath, 'runtime')).filter(name => name.endsWith('.lock')), []);
 });
 
-test('a package ref starts the same run as its folder; a package with two targets is refused before any run or worktree', async t => {
+test('a package ref starts the same run as its folder', async t => {
   const f = await fixture(t);
   const receipt = await new Runtime(f.options).start({ ...f.input, package: f.ref });
   assert.equal(receipt.package, f.packagePath);
   await f.finished;
-  const two = await makePackageFixture({ repos: ['repo', 'second'], targets: ['repo', 'second'] });
-  t.after(() => rmSync(two.dir, { recursive: true, force: true }));
-  const step = join(two.packagePath, 'step-001-subspec.md'); writeFileSync(step, 'Prepared step');
-  await assert.rejects(new Runtime({ ...f.options, location: two.location }).start({ package: two.ref, step, owner_model: 'test/owner', editor_model: 'test/editor' }),
-    error => error.code === 'multiple-targets-unsupported' && /multiple-targets-unsupported/.test(error.message) && Boolean(error.remedy));
-  assert.equal(existsSync(join(two.dir, 'repo-feature')), false);
-  assert.equal(existsSync(join(two.packagePath, 'runtime')), false);
+});
+
+async function twoTargets(t, steps) {
+  const base = await makePackageFixture({ repos: ['repo', 'second'], targets: ['repo', 'second'] });
+  t.after(() => rmSync(base.dir, { recursive: true, force: true }));
+  writeFileSync(join(base.packagePath, 'spec-steps.json'), JSON.stringify({ steps }));
+  const cards = steps.map(({ step }) => { const card = join(base.packagePath, `step-${String(step).padStart(3, '0')}-subspec.md`); writeFileSync(card, 'Prepared step'); return card; });
+  const prompts = [];
+  const fake = join(base.dir, 'fake-pi.cjs');
+  writeFileSync(fake, `setTimeout(() => console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'ok'}]}})), 20);`);
+  const pids = [];
+  t.after(() => { for (const pid of pids) { try { process.kill(-pid, 'SIGKILL'); } catch {} } });
+  const dispatch = async (card, extra = {}) => {
+    let done; const finished = new Promise(resolve => { done = resolve; });
+    const runtime = new Runtime({ indexDir: join(base.dir, 'index'), notify: done, location: base.location, launchProcess: (record, role, prompt, options = {}) => {
+      prompts.push({ role, prompt }); const task = launch(record, role, prompt, { command: process.execPath, prefix: [fake], ...options }); pids.push(task.child.pid); return task;
+    } });
+    const receipt = await runtime.start({ package: base.ref, step: card, owner_model: 'test/owner', editor_model: 'test/editor', ...extra });
+    await finished;
+    return { receipt, record: loadRun(base.packagePath, receipt.run_id) };
+  };
+  return { ...base, cards, prompts, dispatch };
+}
+
+test('a two-target package runs each step in its own target worktree and creates the other worktree only when a step needs it', async t => {
+  const f = await twoTargets(t, [{ step: 1, repository: 'repo' }, { step: 2, repository: 'second' }]);
+  const first = await f.dispatch(f.cards[0]);
+  assert.equal(first.record.target, 'repo');
+  assert.equal(first.record.checkout, join(f.dir, 'repo-feature'));
+  assert.equal(first.record.primary, f.paths.repo);
+  assert.deepEqual(first.record.other_targets, []);
+  assert.equal(existsSync(join(f.dir, 'second-feature')), false);
+  const second = await f.dispatch(f.cards[1]);
+  assert.equal(second.record.target, 'second');
+  assert.equal(second.record.checkout, join(f.dir, 'second-feature'));
+  assert.equal(second.record.primary, f.paths.second);
+  assert.deepEqual(second.record.other_targets, [{ id: 'repo', worktree: first.record.checkout }]);
+  assert.equal(execFileSync('git', ['-C', second.record.checkout, 'branch', '--show-current'], { encoding: 'utf8' }).trim(), 'spec-feature');
+  assert.deepEqual(JSON.parse(readFileSync(join(f.packagePath, 'locations.json'), 'utf8')).targets.map(entry => entry.worktree), [first.record.checkout, second.record.checkout]);
+  assert.notEqual(first.record.owner_session, second.record.owner_session);
+  const secondPrompt = f.prompts.find(({ prompt }) => prompt.includes('TARGET: second')).prompt;
+  assert.match(secondPrompt, new RegExp(`CHECKOUT: ${second.record.checkout}\\n`));
+  assert.match(secondPrompt, new RegExp(`OTHER TARGETS \\(read-only context, never edit\\): repo=${first.record.checkout}`));
+});
+
+test('a multi-target step without a known repository is refused before any worktree or run', async t => {
+  const f = await twoTargets(t, [{ step: 1 }, { step: 2, repository: 'nowhere' }]);
+  await assert.rejects(f.dispatch(f.cards[0]), error => error.code === 'step-repository-missing' && Boolean(error.remedy));
+  await assert.rejects(f.dispatch(f.cards[1]), error => error.code === 'step-repository-unknown' && /nowhere/.test(error.message));
+  assert.equal(existsSync(join(f.dir, 'repo-feature')), false);
+  assert.equal(existsSync(join(f.dir, 'second-feature')), false);
+  assert.equal(existsSync(join(f.packagePath, 'runtime')), false);
 });
 
 test('a live coordinator refuses a second dispatch; a dead coordinator marks its run stale and the new run proceeds', async t => {
