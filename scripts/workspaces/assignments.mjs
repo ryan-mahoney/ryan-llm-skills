@@ -471,8 +471,11 @@ export async function resolveAssignment(input = {}) {
   const tmuxSession = optionalNonEmptyString(
     input.tmux_session,
     "tmux_session",
-    `adj-${assignmentId.replace(/-/g, "").slice(0, 12)}`,
+    `adj-${assignmentId.replace(/-/g, "").slice(0, 12).toLowerCase()}`,
   );
+  if (!SESSION_NAME_PATTERN.test(tmuxSession)) {
+    throw new Error("tmux_session is not an owned session name");
+  }
   const piPath = await resolvePiExecutable(input.pi_path ?? null);
   if (input.coordination_database !== undefined && input.coordination_database !== null) {
     throw new Error(
@@ -611,38 +614,37 @@ function coordinationPaths(physicalRoot) {
   };
 }
 
-// Create the owned coordination directory non-recursively with mode 0700.
-// The storage root itself is never created or replaced, and a symlink or
-// non-directory `.sentinel` is refused rather than followed.
-async function ensureSentinelDirectory(sentinelPath) {
-  const existing = await lstatOrNull(sentinelPath);
+// Create an owned directory non-recursively with mode 0700, never following a
+// symlink and never creating its parent.
+async function ensureOwnedDirectory(path, label) {
+  const existing = await lstatOrNull(path);
   if (existing) {
     if (existing.isSymbolicLink()) {
-      throw new Error(`coordination directory must not be a symlink: ${sentinelPath}`);
+      throw new Error(`${label} must not be a symlink: ${path}`);
     }
     if (!existing.isDirectory()) {
-      throw new Error(`coordination directory is not a directory: ${sentinelPath}`);
+      throw new Error(`${label} is not a directory: ${path}`);
     }
-    if ((await fs.realpath(sentinelPath)) !== sentinelPath) {
-      throw new Error(`coordination directory path contains a symbolic link: ${sentinelPath}`);
+    if ((await fs.realpath(path)) !== path) {
+      throw new Error(`${label} path contains a symbolic link: ${path}`);
     }
     return;
   }
   try {
-    await fs.mkdir(sentinelPath, { mode: 0o700 });
+    await fs.mkdir(path, { mode: 0o700 });
   } catch (error) {
     if (error && error.code === "EEXIST") {
-      const raced = await lstatOrNull(sentinelPath);
+      const raced = await lstatOrNull(path);
       if (raced && !raced.isSymbolicLink() && raced.isDirectory()
-        && (await fs.realpath(sentinelPath)) === sentinelPath) return;
+        && (await fs.realpath(path)) === path) return;
     }
     throw new Error(
-      `cannot create coordination directory ${sentinelPath}: ${error.code ?? error.message}`,
+      `cannot create ${label} ${path}: ${error.code ?? error.message}`,
     );
   }
-  const created = await lstatOrNull(sentinelPath);
+  const created = await lstatOrNull(path);
   if (!created || created.isSymbolicLink() || !created.isDirectory()) {
-    throw new Error(`coordination directory was not created as a real directory: ${sentinelPath}`);
+    throw new Error(`${label} was not created as a real directory: ${path}`);
   }
 }
 
@@ -684,7 +686,7 @@ export async function acquireRootClaim(root, overrides = {}) {
   }
   const physicalRoot = status.root;
   const paths = coordinationPaths(physicalRoot);
-  await ensureSentinelDirectory(paths.sentinel);
+  await ensureOwnedDirectory(paths.sentinel, "coordination directory");
 
   const deadline = Date.now() + ROOT_CLAIM_TIMEOUT_MS;
   let lastError = null;
@@ -1127,35 +1129,6 @@ async function assertNoObservedLeases(record) {
   }
 }
 
-// Create an owned directory non-recursively with mode 0700, never following a
-// symlink and never creating its parent.
-async function ensureOwnedDirectory(path, label) {
-  const existing = await lstatOrNull(path);
-  if (existing) {
-    if (existing.isSymbolicLink() || !existing.isDirectory()) {
-      throw new Error(`${label} is not a real directory: ${path}`);
-    }
-    if ((await fs.realpath(path)) !== path) {
-      throw new Error(`${label} path contains a symbolic link: ${path}`);
-    }
-    return;
-  }
-  try {
-    await fs.mkdir(path, { mode: 0o700 });
-  } catch (error) {
-    if (error && error.code === "EEXIST") {
-      const raced = await lstatOrNull(path);
-      if (raced && !raced.isSymbolicLink() && raced.isDirectory()
-        && (await fs.realpath(path)) === path) return;
-    }
-    throw new Error(`cannot create ${label} ${path}: ${error.code ?? error.message}`);
-  }
-  const created = await lstatOrNull(path);
-  if (!created || created.isSymbolicLink() || !created.isDirectory()) {
-    throw new Error(`${label} was not created as a real directory: ${path}`);
-  }
-}
-
 // Publish the durable launching reservation first, then the approved snapshot
 // and the owned session directory. A later publication failure retains the
 // reservation with a visible error and never spawns.
@@ -1280,6 +1253,14 @@ export async function launchAssignment(input = {}, options = {}) {
   if (target.execution_dir !== record.execution_dir) {
     throw new Error("approved execution_dir is not the canonical target directory");
   }
+  // Reuse the catalog's persisted-schema owner before acquiring a writing
+  // claim. No approved preview may publish a record that later scans reject.
+  await validateAssignmentRecord(
+    storageRoot,
+    workspace,
+    join(workspace.directory, "assignments", `${id}.json`),
+    { ...record, state: "launching", launcher_identity: self },
+  );
 
   const claim = await acquireRootClaim(storageRoot);
   let plan = null;

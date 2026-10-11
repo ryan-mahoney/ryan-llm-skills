@@ -124,6 +124,36 @@ test("launch reservation: missing or invalid storage root refuses without creati
   assert.equal(await exists(join(storageRoot, ".sentinel")), false);
 });
 
+// Run alone: node --test --test-name-pattern='launch reservation: invalid session' scripts/workspaces/launch.integration.test.mjs
+test("launch reservation: invalid session names leave the catalog and root unchanged", async (t) => {
+  const { root, storageRoot } = await makeStorageRoot(t);
+  const workspaceDirectory = await makeWorkspace(storageRoot, "invalid-session");
+  await mkdir(join(workspaceDirectory, "briefs"));
+  await writeFile(join(workspaceDirectory, "briefs", "brief.md"), "Brief.\n");
+  const piPath = await fakePi(join(root, "bin"));
+  const before = await treeSnapshot(storageRoot);
+  for (const tmux_session of ["bad", "adj-ABCDEF123456", "adj-123456789abc:"]) {
+    const input = {
+      assignment_id: randomUUID(),
+      workspace_id: "invalid-session",
+      storageRoot,
+      brief: "briefs/brief.md",
+      skill: "general",
+      instructions: "No launch.",
+      pi_path: piPath,
+      tmux_session,
+    };
+    await assert.rejects(resolveAssignment(input), /tmux_session/);
+    await assert.rejects(
+      launchAssignment(input, { expectedDigest: "0".repeat(64) }),
+      /tmux_session/,
+    );
+    assert.deepEqual(await treeSnapshot(storageRoot), before);
+    assert.deepEqual(await listAssignments(storageRoot), []);
+  }
+  assert.equal(await exists(join(storageRoot, ".sentinel")), false);
+});
+
 test("store preservation: root claim creates only the owned sentinel database", async (t) => {
   const { storageRoot } = await makeStorageRoot(t);
   const workspaceDirectory = await makeWorkspace(storageRoot, "claim-workspace");
@@ -756,9 +786,18 @@ test("crash recovery: durable reservation and locate recovery across the tmux se
 });
 
 test("repeat and retry: approval boundaries and snapshot stability", async (t) => {
-  const { storageRoot, home, piPath, socket, logPath, workspaces } = await launchScenario(t, 1);
+  const { root, storageRoot, home, piPath, socket, logPath, workspaces } = await launchScenario(t, 1);
   const workspaceDirectory = workspaces[0];
-  const input = launchInput({ workspaceId: "workspace-0", storageRoot, home, piPath });
+  const input = {
+    ...launchInput({
+      id: "ABCDEF12-3456-4789-ABCD-EF1234567890",
+      workspaceId: "workspace-0", storageRoot, home, piPath,
+    }),
+    provider: "openai",
+    model: "gpt-5",
+    thinking: "high",
+    project_trust: "approve",
+  };
   const preview = await resolveAssignment(input);
   const approvedBytes = Buffer.from(preview.briefBytes);
   const adjacentPath = join(workspaceDirectory, ".adjacent");
@@ -806,12 +845,27 @@ test("repeat and retry: approval boundaries and snapshot stability", async (t) =
 
   const launched = await launchAssignment(input, { resolved: preview, expectedDigest: preview.contractDigest });
   assert.equal(launched.state, "live");
+  assert.equal(launched.tmux_session, "adj-abcdef123456");
+  assert.deepEqual(await listAssignments(storageRoot), [launched]);
   const snapshotPath = join(workspaceDirectory, "assignments", `${input.assignment_id}.brief.md`);
   assert.deepEqual(await readFile(snapshotPath), approvedBytes);
   await waitForFixtureLog(logPath, socket, input.assignment_id);
   const entries = await fixtureEntries(logPath);
   assert.equal(entries.length, 1);
-  assert.ok(entries[0].argv.includes(`@${snapshotPath}`));
+  const executionDirectory = await realpath(join(root, "repos", "repo-0"));
+  assert.equal(entries[0].cwd, executionDirectory);
+  // Independent contract oracle: do not derive expectations from preview.piArgs.
+  assert.deepEqual(entries[0].argv, [
+    "--session-dir", join(workspaceDirectory, "sessions", input.assignment_id),
+    "--session-id", "ABCDEF12-3456-4789-ABCD-EF1234567890",
+    "--name", "workspace-0:workspace-0",
+    "--provider", "openai", "--model", "gpt-5",
+    "--thinking", "high", "--approve",
+    `@${snapshotPath}`,
+    "Integration instructions.\n\n" +
+      `Assignment ABCDEF12-3456-4789-ABCD-EF1234567890 workspace workspace-0 dir ${executionDirectory}. ` +
+      "Publication authority: none (grants no merge/deploy).",
+  ]);
   assert.equal(entries[0].snapshotSha256, sha256Hex(approvedBytes));
   assert.deepEqual(await readFile(adjacentPath), adjacentBytes);
   assert.equal((await sessionNames(socket)).filter((name) => name.startsWith("adj-")).length, 1);
