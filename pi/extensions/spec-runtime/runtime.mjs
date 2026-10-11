@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { activityRecorder } from './monitor.mjs';
 import { SCOUT_MODEL } from './scout.mjs';
 import { createLogSummary } from '../../../scripts/spec-facts/core.mjs';
-import { checkPackage, locatePackage, setWorktree } from '../../../scripts/spec-location/index.mjs';
+import { checkPackage, locatePackage, setWorktree, stamp } from '../../../scripts/spec-location/index.mjs';
 import { decide, collectFacts } from '../../../scripts/jev/core.mjs';
 import { preparedEntry } from './startup.mjs';
 import { splitModelSelector, configurationFailure, configurationAction } from './model-selector.mjs';
@@ -188,6 +188,9 @@ export async function resolveInput(input, location = {}) {
   if (target.worktree !== actual) {
     const recorded = await setWorktree(locations.package_ref, target.id, actual, location);
     if (!recorded.ok) throw refusalError(recorded);
+    // Cards written after the package was created get their Locations block on first dispatch; stamp is idempotent.
+    const stamped = await stamp(locations.package_ref, location);
+    if (!stamped.ok) throw refusalError(stamped);
   }
   // Other targets' recorded worktrees are read-only context for the owner and editor.
   const others = locations.targets.filter(entry => entry.id !== target.id && entry.worktree).map(({ id, worktree }) => ({ id, worktree }));

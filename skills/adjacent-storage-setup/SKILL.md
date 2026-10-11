@@ -33,7 +33,7 @@ Report `root` and `source`:
 - `config`: the root is already saved. Stop unless the operator wants a different root.
 - `default`: nothing is saved yet. Continue to Step 2.
 
-Report `boundary` too. `missing_root` or `missing_projects` means setup is still needed.
+Report `status` too. `missing_root` or `missing_projects` means setup is still needed.
 `invalid_*` or `unreadable` means stop and report the path; do not overwrite it.
 
 ## Step 2 — Confirm the root
@@ -65,8 +65,8 @@ no-ops. `--save` writes `{"storage_root": "/abs/path/adjacent-storage"}` to
 node ~/.agents/scripts/workspaces/cli.mjs status
 ```
 
-Expect `source: config` and `boundary: ok`. Any other result is a failure: report the
-boundary value and stop.
+Expect `status: ok` and `source: config`. Any other result is a failure: report the
+`status` value and stop.
 
 ## Step 5 — Create the first workspace (optional)
 
@@ -99,5 +99,5 @@ Do not restart a service while a spec run is active unless the operator confirms
 
 ## Report
 
-State the root, its source, the boundary from Step 4, whether a workspace was created,
+State the root, its source, the status from Step 4, whether a workspace was created,
 and whether Sentinel was restarted. If any step was skipped, say which and why.

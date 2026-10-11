@@ -37,7 +37,7 @@ no final branch review is automatic. Merge remains operator-owned.
 For an explicitly prepared package after `spec-write`, read applicable `AGENTS.md`
 and honor user directives, then call `spec_dispatch action=startup` with `package`,
 `owner_model` (DEFAULT_OWNER/IMPLEMENT_AGENT), `editor_model` (EDITOR_MODEL/EDITOR_AGENT), and optional
-`strong_owner_model`, `scout_model`, checkout/branch/base and step override.
+`strong_owner_model`, `scout_model`, base and step override. The worktree and branch come from `locations.json`, not from dispatch arguments.
 Omit `step` on first entry. `owner_override` pins a selected step's owner.
 This route takes precedence over the general startup reading sequence below.
 
@@ -332,9 +332,10 @@ excluded by the routing policy above:
 4. Proceed from prepared handoff to the first editor assignment with only canonical
    path/context resolution and required readiness checks. Do not audit known model
    capabilities, run baseline broad checks, pre-read later-stage skills, or generate an
-   orchestration workflow. In Pi, `spec_dispatch` can create the isolated worktree when
-   checkout is omitted. Otherwise establish each target's implementation checkout directly as top-level orchestration work. Honor an
-   explicit branch/worktree directive, reuse a clearly matching checkout when present, and use
+   orchestration workflow. In Pi, `spec_dispatch` takes each target's worktree and branch from `locations.json`.
+   Establish each target's implementation checkout directly as top-level orchestration work. Honor an
+   explicit branch/worktree directive, reuse a clearly matching checkout when present, record it with
+   `node ~/.agents/scripts/spec-location/cli.mjs worktree <package ref> <target id> <path>`, and use
    ordinary Git judgment otherwise. Read [workspace-handoff.md](references/workspace-handoff.md)
    before creating or reusing a worktree. Do not invoke a branch-management skill merely to run
    commands a capable agent already knows how to run.

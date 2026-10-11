@@ -273,7 +273,7 @@ Subspec: <package_dir>/step-<NNN>-subspec.md (step <step-number>)
 
 ## Output
 
-Write the subspec, then report its path, step, planning verdict, verification
+Write the subspec, then run `node ~/.agents/scripts/spec-location/cli.mjs stamp <package ref>` so it carries the generated Locations block (never hand-edit that block between the `spec-location:begin` and `spec-location:end` markers). Then report its path, step, planning verdict, verification
 strategy/commands, visual-reference and Playwright-plan summary when applicable, and any
 correction or blocker. Do not implement the step.
 

@@ -76,7 +76,7 @@ body{max-width:100%;overflow-x:clip}
 <dialog id="completion-dialog" aria-labelledby="completion-title"><form id="completion-form"><h2 id="completion-title">Mark package complete?</h2><p id="completion-name" class="mono"></p><p>This saves a completion record in the package and moves it to Recently completed. Running workers continue; step evidence and PR status stay as recorded. This applies even if the displayed status has changed. Only a new dispatch after this action makes the package current again.</p><p id="completion-error" role="alert" class="warn" hidden></p><div class="flex justify-end gap-3"><button type="button" id="completion-cancel">Cancel</button><button type="submit" id="completion-submit">Mark complete</button></div></form></dialog>
 <script>
 'use strict';
-const $=id=>document.getElementById(id), terminal=new Set(['completed','complete','failed','cancelled','stopped','closed','aborted','done']);
+const $=id=>document.getElementById(id), terminal=new Set(['completed','complete','failed','cancelled','stale','stopped','closed','aborted','done']);
 let payload=null,records=[],selected=null,filter='active',imported=false,fetching=false,error=null;
 let liveAnchor=null;
 let mode='packages',catalog=null,workspace=null,workspaceError=null,workspaceDetailError=null,workspaceUnavailable=null,selectedWorkspace=null,selectedEpic=null;

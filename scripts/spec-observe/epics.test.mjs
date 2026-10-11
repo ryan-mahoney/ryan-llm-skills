@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { EPIC_LIMITS, buildEpics, deriveMemberStatus, parseEpic } from './epics.mjs';
+import { join } from 'node:path';
+
+import { makeFixture, put } from '../spec-location/fixture.mjs';
+import { EPIC_LIMITS, buildEpics, deriveMemberStatus, parseEpic, readWorkspaceEpics } from './epics.mjs';
 
 const record = (extra = {}) => ({ schema_version: 1, epic: 'demo', title: 'Demo', state: 'active',
   packages: [{ package: 'a' }, { package: 'b', requires: ['a'] }], ...extra });
@@ -119,4 +122,19 @@ test('incomplete receipts yield unknown unless a completion is recorded, and lan
   assert.deepEqual(epics[0].members.map(m => [m.name, m.status, m.waiting_on]), [['a', 'unknown', []], ['b', 'merged', []], ['c', 'prepared', ['a']]]);
   assert.equal(epics[0].summary.unknown, 1);
   assert.equal(epics[0].next, null);
+});
+
+// Run alone: node --test --test-name-pattern='epic plan resolves' scripts/spec-observe/epics.test.mjs
+test('epic plan resolves to the epic directory first, else the workspace plans folder', async () => {
+  const fx = makeFixture();
+  try {
+    for (const [slug, plan] of [['local', 'plan.md'], ['shared', 'shared.md']]) {
+      put(join(fx.workspaceDir, 'epics', slug, 'epic.json'), JSON.stringify(record({ epic: slug, plan, packages: [{ package: 'a' }] })));
+    }
+    put(join(fx.workspaceDir, 'epics', 'local', 'plan.md'), '# plan\n');
+    const { entries } = await readWorkspaceEpics('demo', fx.options);
+    const plans = Object.fromEntries(entries.map(entry => [entry.slug, entry.plan]));
+    assert.equal(plans.local, join(fx.workspaceDir, 'epics', 'local', 'plan.md'));
+    assert.equal(plans.shared, join(fx.workspaceDir, 'plans', 'shared.md'));
+  } finally { fx.cleanup(); }
 });

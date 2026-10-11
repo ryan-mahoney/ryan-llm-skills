@@ -753,7 +753,7 @@ export function validateKit(document) {
         errors.push(`design_system.paths: expected a non-empty list, got ${inspectValue(rawPaths)}`);
       } else {
         rawPaths.forEach((entry, index) => {
-          if (typeof entry !== "string" || entry === "" || isAbsolute(entry)) {
+          if (!isRepositoryRelative(entry)) {
             errors.push(`design_system.paths[${index}]: expected a relative path, got ${inspectValue(entry)}`);
           } else {
             paths.push(entry);
@@ -1115,6 +1115,11 @@ function planRemoveRepository(text, parsed, operation) {
   return finishPlan(text, applyEdits(text, edits), expected);
 }
 
+// design.json applies the same rule to design-system files: relative, no `..` segment.
+function isRepositoryRelative(path) {
+  return typeof path === "string" && path !== "" && !isAbsolute(path) && !path.split(/[\\/]/).includes("..");
+}
+
 function planSetName(text, parsed, operation) {
   const name = requireText(operation.name, "set-name name");
   const expected = cloneKit(parsed.kit);
@@ -1123,7 +1128,11 @@ function planSetName(text, parsed, operation) {
 }
 
 function planSetExecutionHost(text, parsed, operation) {
-  const host = requireText(operation.host, "set-execution-host host");
+  // spec-location compares the first DNS label, case-insensitively; store that label.
+  const host = requireText(operation.host, "set-execution-host host").split(".")[0].toLowerCase();
+  if (!/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(host)) {
+    throw new Error("set-execution-host host must start with a DNS label of letters, digits and hyphens");
+  }
   const expected = cloneKit(parsed.kit);
   expected.execution_host = host;
   return planRootEntry(text, parsed, "execution_host", [`execution_host: ${formatScalar(host)}`], expected);
@@ -1169,6 +1178,9 @@ function planSetDesignSystem(text, parsed, operation) {
   const paths = operation.paths;
   if (!Array.isArray(paths) || paths.length === 0) {
     throw new Error("set-design-system requires at least one path");
+  }
+  for (const path of paths) {
+    if (!isRepositoryRelative(path)) throw new Error(`set-design-system requires a relative path with no ".." segment: ${inspectValue(path)}`);
   }
   const designSystem = { repository: repositoryId, paths: [...paths] };
   if (operation.applies_to !== undefined) designSystem.applies_to = requireText(operation.applies_to, "set-design-system applies_to");

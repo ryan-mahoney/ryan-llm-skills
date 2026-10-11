@@ -154,9 +154,10 @@ For each selected executable step:
    the technical brief or the skill. Require affected source refresh after external fixes.
 3. Select the owner under the run's routing policy, or use its single assigned owner.
    In Pi, invoke `spec_dispatch` with the package (`package_dir`)/card, explicit model assignments,
-   constraints and checkout when selected (the target's `targets[].worktree` once recorded). The runtime creates an isolated worktree when
-   checkout is omitted and retains owner/editor disk sessions. Use its tool schema; do
-   not launch this pair through `subagent` or build a shell dispatch workflow.
+   and constraints. Do not pass `checkout` or `branch`; the runtime takes each target's worktree and branch from
+   `locations.json` (`targets[].worktree`, `targets[].branch`) and retains owner/editor disk sessions. To use a specific
+   existing worktree, record it first with `node ~/.agents/scripts/spec-location/cli.mjs worktree <package ref> <target id> <path>`.
+   Use its tool schema; do not launch this pair through `subagent` or build a shell dispatch workflow.
 4. Await the native completion event. After interruption, inspect the exact known runtime
    ID only to recover state. Cancel through the runtime and establish actual owner/editor
    termination before replacement, escalation or a fixer. Failed or unknown cancellation
@@ -236,7 +237,7 @@ redispatch a held step until released. In managed Pi with a `workflow_id`, recor
 answer is native input. Read the prior attempt's `owner_model`, `editor_model`,
 `scout_model`, `child_extensions`, `session_scope`, `timeout_ms` and `workflow_id` from
 its run record (`runtime/runs/<run_id>.json`, also returned by `action: status`). Then
-call `spec_dispatch` with `action: start`, the same `package`, `step`, and `checkout`,
+call `spec_dispatch` with `action: start`, the same `package` and `step`,
 the recorded owner as `owner_model` or `owner_override`, the recorded `editor_model`,
 `scout_model`, `child_extensions`, `session_scope` and `timeout_ms`, plus the
 `workflow_id`, a new `assignment_id` such as `step-003-clarified-1`,

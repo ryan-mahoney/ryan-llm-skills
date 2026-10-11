@@ -266,7 +266,9 @@ Update only the authoritative `Complexity:` tag and its `spec-steps.json` `diffi
 
 ### 6. Validate the complete package
 
-After the last step, reread every final artifact. Confirm:
+After the last write to `context.md`, `spec.md`, or any `step-<NNN>-subspec.md`, run `node ~/.agents/scripts/spec-location/cli.mjs stamp <package ref>` so every file carries the generated Locations block. Never hand-edit that block between the `spec-location:begin` and `spec-location:end` markers.
+
+After the stamp, reread every final artifact. Confirm:
 
 - Step numbers are exactly the ascending `spec-steps.json` numbers.
 - There is exactly one canonical subspec per indexed step and no unexpected canonical step number.

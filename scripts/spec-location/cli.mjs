@@ -5,7 +5,7 @@
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import {
-  checkPackage, listEpics, listPackages, locatePackage, materialize, migrate, newPackage, resolveWorkspace, stamp, updateScope,
+  checkPackage, listEpics, listPackages, locatePackage, materialize, migrate, newPackage, recordWorktree, resolveWorkspace, stamp, updateScope,
 } from './index.mjs';
 
 const USAGE = `Usage: node scripts/spec-location/cli.mjs <command> [options]
@@ -17,11 +17,13 @@ const USAGE = `Usage: node scripts/spec-location/cli.mjs <command> [options]
   materialize REF
   stamp REF
   scope REF [--add-target ID[:BRANCH]] [--add-design REF] [--plan NAME|--no-plan] [--epic SLUG|--no-epic]
+  worktree REF TARGET_ID PATH
   packages --workspace W
   epics --workspace W
   migrate --workspace W [--apply] [--include-transcripts]
 
 REF is <workspace>/<slug>, a package directory, or a file inside one.
+worktree records PATH (the root of an existing git worktree of the target's repository) in locations.json and refreshes the stamps.
 Global: --root PATH (storage root; otherwise ADJACENT_STORAGE_ROOT, saved root, default). Output is always JSON.`;
 
 const OPTIONS = {
@@ -56,6 +58,7 @@ async function execute(command, positionals, v) {
       if (v['no-epic']) change.setEpic = null; else if (v.epic !== undefined) change.setEpic = v.epic;
       return updateScope(ref, change, options);
     }
+    case 'worktree': return recordWorktree(ref, positionals[1], positionals[2], { ...options, cwd: v.cwd });
     case 'packages': return listPackages(v.workspace, options);
     case 'epics': return listEpics(v.workspace, options);
     case 'migrate': return migrate({ ...options, workspace: v.workspace, apply: v.apply === true, includeTranscripts: v['include-transcripts'] === true });
@@ -67,7 +70,7 @@ async function main() {
   const { values, positionals } = parseArgs({ args: process.argv.slice(2), options: OPTIONS, allowPositionals: true });
   const [command, ...rest] = positionals;
   const needsRef = ['locate', 'check', 'materialize', 'stamp', 'scope'];
-  if (!command || (needsRef.includes(command) && rest.length !== 1)) throw new Error(USAGE);
+  if (!command || (needsRef.includes(command) && rest.length !== 1) || (command === 'worktree' && rest.length !== 3)) throw new Error(USAGE);
   const result = await execute(command, rest, values);
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   process.exitCode = result.ok === false ? 2 : 0;

@@ -4,6 +4,7 @@
 // is derived from package facts at read time and never stored. Nothing here
 // writes, follows symlinks, or reads package contents.
 
+import { existsSync } from 'node:fs';
 import { lstat, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, join, posix, resolve } from 'node:path';
 
@@ -79,9 +80,10 @@ export async function readWorkspaceEpics(workspace, options) {
     const parsed = parseEpic(found.epic, { slug: found.slug });
     if (parsed.error) { reasons.push(`epic-invalid: ${found.record} (${parsed.error})`); continue; }
     const dir = dirname(found.record);
-    // A bare name is a file under plans/; anything with a separator is relative to the epic directory.
+    // A plan file in the epic directory wins; otherwise the name is a file under the workspace's plans/ (docs/spec-epics.md).
     const plan = parsed.epic.plan === null ? null
-      : parsed.epic.plan.includes('/') ? resolve(dir, parsed.epic.plan) : join(dirname(dirname(dir)), 'plans', parsed.epic.plan);
+      : existsSync(join(dir, parsed.epic.plan)) ? resolve(dir, parsed.epic.plan)
+        : join(dirname(dirname(dir)), 'plans', parsed.epic.plan);
     entries.push({ slug: found.slug, workspace, dir, file: found.record, plan, epic: parsed.epic,
       packageDirs: found.members.map(member => ({ dir: member.packageDir })) });
   }

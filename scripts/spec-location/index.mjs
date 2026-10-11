@@ -33,8 +33,13 @@ const exists = async path => (await fs.stat(path).catch(() => null)) !== null;
 const readJson = async path => JSON.parse(await fs.readFile(path, 'utf8'));
 const writeJson = (path, value) => writeFileAtomic(path, `${JSON.stringify(value, null, 2)}\n`);
 
-function hostLabel(options) {
-  return (options.hostname ?? osHostname()).split('.')[0].toLowerCase();
+const firstLabel = host => host.split('.')[0].toLowerCase();
+const hostLabel = options => firstLabel(options.hostname ?? osHostname());
+const plainName = value => typeof value === 'string' && value !== '' && value !== '.' && value !== '..' && !/[\\/]/.test(value);
+
+// `git check-ref-format --branch` also expands @{-N}; requiring the echoed name to equal the input rejects that.
+async function validBranch(name) {
+  try { return typeof name === 'string' && (await run('git', ['check-ref-format', '--branch', name])).stdout.trim() === name; } catch { return false; }
 }
 
 async function commonDirOf(path) {
@@ -55,7 +60,9 @@ export async function legacySpecs(primary) {
   try {
     const { stdout } = await run('git', ['-C', primary, 'ls-files', '-z', '--', '.specs'], { maxBuffer: 64 * 1024 * 1024 });
     tracked = new Set(stdout.split('\0').filter(Boolean).map(file => file.split('/')[1]));
-  } catch { return []; }
+  } catch (error) {
+    throw new Error(`git ls-files failed in ${primary}: ${error.stderr?.trim() || error.message}`, { cause: error });
+  }
   return names.filter(name => !tracked.has(name)).sort();
 }
 
@@ -118,8 +125,8 @@ async function loadWorkspace(options) {
     return refuse('execution-host-unset', `Workspace ${located.workspace} has no execution_host.`,
       `Run: node scripts/workspaces/cli.mjs set-execution-host ${located.workspace} --host <hostname> --apply`);
   }
-  if (!options.anyHost && kit.execution_host.toLowerCase() !== hostLabel(options)) {
-    return refuse('wrong-host', `Workspace ${located.workspace} executes on ${kit.execution_host}; this machine is ${hostLabel(options)}.`,
+  if (!options.anyHost && firstLabel(kit.execution_host) !== hostLabel(options)) {
+    return refuse('wrong-host', `Workspace ${located.workspace} executes on ${firstLabel(kit.execution_host)}; this machine is ${hostLabel(options)}.`,
       `Run spec work on ${kit.execution_host}, or change the host with set-execution-host.`);
   }
   const base = located.workspaceDir;
@@ -177,7 +184,11 @@ export async function resolveWorkspace(options = {}) {
   if (!ws.ok) return ws;
   for (const repo of ws.kit.repositories) {
     const primary = primaryOf(ws, repo, options);
-    if ((await legacySpecs(primary)).length > 0) {
+    let legacy;
+    try { legacy = await legacySpecs(primary); } catch (error) {
+      return refuse('legacy-check-failed', error.message, `Fix the git repository at ${primary}, then rerun.`);
+    }
+    if (legacy.length > 0) {
       return refuse('legacy-specs-present', `${repo.id} (${primary}) still has untracked .specs/ entries.`,
         `Run: node scripts/spec-location/cli.mjs migrate --workspace ${ws.workspace}`);
     }
@@ -235,6 +246,10 @@ export async function newPackage(args) {
   const { workspace, slug, targets, designs = [], plan = null, epic = null, ...options } = args;
   if (!SLUG.test(slug ?? '')) return refuse('invalid-input', `Slug ${JSON.stringify(slug)} must match [a-z0-9][a-z0-9-]*.`, 'Choose another slug.');
   if (!Array.isArray(targets) || targets.length === 0) return refuse('invalid-input', 'At least one target is required.', 'Pass --target ID[:BRANCH].');
+  if (plan !== null && !plainName(plan)) return refuse('invalid-input', `Plan ${JSON.stringify(plan)} must be a plain file name.`, 'Use a name without / or .. ; plans live in the workspace plans/ directory.');
+  for (const target of targets) {
+    if (target.branch !== undefined && !await validBranch(target.branch)) return refuse('invalid-input', `Branch ${JSON.stringify(target.branch)} is not a valid git branch name.`, 'Choose another branch name.');
+  }
   const ws = await resolveWorkspace({ ...options, workspace });
   if (!ws.ok) return ws;
   const packageDir = join(ws.specsDir, slug);
@@ -395,6 +410,9 @@ export async function updateScope(input, change, options = {}) {
       return refuse('target-not-in-kit', `Target ${target.id} is not a repository in workspace ${ws.workspace}.`,
         `Run: node scripts/workspaces/cli.mjs add-repo ${ws.workspace} --id ${target.id} --path <path> --apply`);
     }
+    if (target.branch !== undefined && !await validBranch(target.branch)) {
+      return refuse('invalid-input', `Branch ${JSON.stringify(target.branch)} is not a valid git branch name.`, 'Choose another branch name.');
+    }
     if (scope.targets.some(entry => entry.id === target.id)) {
       return refuse('target-exists', `${opened.ref} already targets ${target.id}.`, 'Edit scope.json only through spec-location.');
     }
@@ -404,7 +422,10 @@ export async function updateScope(input, change, options = {}) {
     if (!REF.test(change.addDesign)) return refuse('invalid-input', `Design ref ${change.addDesign} must be <workspace>/<design>.`, 'Use ws/design.');
     scope.designs.push(change.addDesign);
   }
-  if (change.setPlan !== undefined) scope.plan = change.setPlan;
+  if (change.setPlan !== undefined) {
+    if (change.setPlan !== null && !plainName(change.setPlan)) return refuse('invalid-input', `Plan ${JSON.stringify(change.setPlan)} must be a plain file name.`, 'Use a name without / or .. ; plans live in the workspace plans/ directory.');
+    scope.plan = change.setPlan;
+  }
   if (change.setEpic !== undefined) {
     if (change.setEpic !== null && !SLUG.test(change.setEpic)) return refuse('invalid-input', `Epic ${change.setEpic} must be a slug.`, 'Use an epic slug.');
     scope.epic = change.setEpic;
@@ -425,6 +446,30 @@ export async function setWorktree(input, targetId, path, options = {}) {
   target.worktree = path;
   await writeJson(file, locations);
   return { ok: true, locations };
+}
+
+/**
+ * `setWorktree` for a path given by a person: PATH must be the root of a git
+ * worktree of the target's repository. Refreshes the stamps afterwards.
+ */
+export async function recordWorktree(input, targetId, path, options = {}) {
+  const found = await locatePackage(input, options);
+  if (!found.ok) return found;
+  const locations = await readJson(join(found.packageDir, 'locations.json')).catch(() => null);
+  if (!locations) return refuse('locations-missing', `${found.ref} has no readable locations.json.`, `Run: node scripts/spec-location/cli.mjs materialize ${found.ref}`);
+  const target = locations.targets.find(entry => entry.id === targetId);
+  if (!target) return refuse('target-not-in-scope', `${found.ref} does not target ${targetId}.`, 'Add it with: spec-location scope --add-target');
+  const absolute = resolve(options.cwd ?? process.cwd(), path);
+  const checkout = await resolveCheckout(absolute).catch(() => null);
+  const common = await commonDirOf(target.primary);
+  if (!checkout || checkout.root !== await fs.realpath(absolute) || !common || checkout.commonDir !== common) {
+    return refuse('not-a-worktree', `${absolute} is not the root of a git worktree of ${targetId} (${target.primary}).`,
+      `Create one with: git -C ${target.primary} worktree add <path> <branch>`);
+  }
+  const recorded = await setWorktree(input, targetId, checkout.root, options);
+  if (!recorded.ok) return recorded;
+  await stamp(input, options);
+  return recorded;
 }
 
 /** Package slugs of a workspace (directories under specs/ not starting with _ or .). */
@@ -506,9 +551,13 @@ const pathPattern = oldPackage => new RegExp(`${escapeRegExp(oldPackage)}(?![A-Z
 function transformer(kind, ctx) {
   if (kind === 'reshape') {
     return text => {
-      // Match the shape spec-pr writes: mode replaces the legacy draft flag.
-      const { package: _package, draft, schema_version: _version, kind: _kind, ...rest } = JSON.parse(text);
-      const target = draft === undefined || rest.mode !== undefined ? rest : { ...rest, mode: draft ? 'draft' : 'ready' };
+      // Match the shape spec-pr writes: mode replaces the legacy draft flags, submitted_at the camelCase key.
+      const { package: _package, schema_version: _version, kind: _kind, draft, isDraft, is_draft: isDraftSnake, submittedAt, ...rest } = JSON.parse(text);
+      const flag = [draft, isDraft, isDraftSnake].find(value => value !== undefined);
+      const target = { ...rest };
+      if (flag !== undefined && target.mode === undefined) target.mode = flag ? 'draft' : 'ready';
+      if (submittedAt !== undefined && target.submitted_at === undefined) target.submitted_at = submittedAt;
+      if (typeof target.tour === 'string') target.tour = target.tour.replace(pathPattern(ctx.oldPackage), () => ctx.newPackage);
       return `${JSON.stringify({ schema_version: 1, kind: 'pr_submission', package_ref: ctx.ref, targets: { [ctx.repoId]: target } }, null, 2)}\n`;
     };
   }
@@ -554,13 +603,18 @@ async function movePath(from, to) {
   }
 }
 
+// A rerun after a partial migrate: the destination package was written for this repository and slug.
+async function alreadyMigrated(ws, repoId, slug) {
+  const scope = await readJson(join(ws.specsDir, slug, 'scope.json')).catch(() => null);
+  return scope?.slug === slug && scope.targets?.length === 1 && scope.targets[0].id === repoId;
+}
+
 async function planRepository(ws, repo, options, includeTranscripts) {
   const primary = primaryOf(ws, repo, options);
   if (!await isDir(primary)) return { id: repo.id, primary, skipped: 'primary checkout not found on this machine' };
   const entries = await legacySpecs(primary);
   if (entries.length === 0) return null;
   const specs = join(primary, '.specs');
-  const skipRuns = rel => !includeTranscripts && rel.startsWith('runtime/runs/');
   const plan = { id: repo.id, primary, entries, packages: [], epics: [], plans: [], captures: [], projectContext: null, unmigrated: [], warnings: [] };
   for (const name of entries) {
     const path = join(specs, name);
@@ -572,16 +626,28 @@ async function planRepository(ws, repo, options, includeTranscripts) {
         plan.epics.push({ slug: epic.name, from: join(path, epic.name), files: await walk(join(path, epic.name), () => false) });
       }
     } else if ((name === 'images' || name === 'ux-qa') && isDirectory) {
-      plan.captures.push({ kind: name, from: path, files: await walk(path, () => false) });
+      // ux-qa/runs holds harness session files that embed database URLs; they stay in the legacy archive.
+      const files = await walk(path, rel => name === 'ux-qa' && rel.startsWith('runs/'));
+      plan.captures.push({ kind: name, from: path, files });
+      if (name === 'ux-qa' && await isDir(join(path, 'runs'))) {
+        plan.unmigrated.push({ name: 'ux-qa/runs', reason: 'harness session files contain database URLs; left in the legacy archive' });
+      }
     } else if (isDirectory && !name.startsWith('_') && !name.startsWith('.')) {
+      // Run receipts migrate; only raw transcripts and logs under runtime/runs/ are left in the archive.
+      const skipped = [];
+      const skipRuns = rel => {
+        const raw = !includeTranscripts && rel.startsWith('runtime/runs/') && /\.(jsonl|log)$/.test(rel);
+        if (raw) skipped.push(rel);
+        return raw;
+      };
       const files = await walk(path, skipRuns);
       const transforms = {};
       for (const rel of files) {
         const kind = await classify(path, rel, path);
         if (kind) transforms[rel] = kind;
       }
-      plan.packages.push({ slug: name, from: path, files, kinds: transforms, transcriptsExcluded: !includeTranscripts && await isDir(join(path, 'runtime', 'runs')) });
-    } else plan.unmigrated.push(name);
+      plan.packages.push({ slug: name, from: path, files, kinds: transforms, transcriptsExcluded: skipped.length > 0, migrated: await alreadyMigrated(ws, repo.id, name) });
+    } else plan.unmigrated.push({ name, reason: 'not a package, epic, plan or capture directory' });
   }
   return plan;
 }
@@ -591,7 +657,7 @@ async function activeRuns(plans) {
   for (const plan of plans) {
     for (const pkg of plan.packages ?? []) {
       const record = await readJson(join(pkg.from, 'runtime', 'run.json')).catch(() => null);
-      if (record && (record.state === 'running' || record.state === 'cancelling')
+      if (record && ['running', 'cancelling', 'blocked'].includes(record.state)
         && (pidAlive(record.coordinator_pid) || pidAlive(record.pid))) active.push(`${plan.id}/${pkg.slug}`);
     }
   }
@@ -603,7 +669,7 @@ function summarize(plan, ws, archive) {
     id: plan.id, primary: plan.primary, ...(plan.skipped ? { skipped: plan.skipped } : {
       packages: plan.packages.map(pkg => ({
         slug: pkg.slug, from: pkg.from, to: join(ws.specsDir, pkg.slug), files: pkg.files.length,
-        rewritten: Object.keys(pkg.kinds), transcripts_excluded: pkg.transcriptsExcluded,
+        rewritten: Object.keys(pkg.kinds), transcripts_excluded: pkg.transcriptsExcluded, already_migrated: pkg.migrated,
       })),
       epics: plan.epics.map(epic => ({ slug: epic.slug, from: epic.from, to: join(ws.epicsDir, epic.slug), files: epic.files.length })),
       plans: plan.plans.flatMap(entry => entry.files.map(file => ({ name: file, to: join(ws.plansDir, file) }))),
@@ -630,7 +696,11 @@ export async function migrate(args) {
 
   const plans = [];
   for (const repo of ws.kit.repositories) {
-    const plan = await planRepository(ws, repo, options, includeTranscripts);
+    let plan;
+    try { plan = await planRepository(ws, repo, options, includeTranscripts); } catch (error) {
+      if (!error.cause) throw error;
+      return refuse('legacy-check-failed', error.message, `Fix the git repository for ${repo.id}, then rerun.`);
+    }
     if (plan) plans.push(plan);
   }
   const migrating = plans.filter(plan => !plan.skipped);
@@ -651,7 +721,7 @@ export async function migrate(args) {
     for (const pkg of plan.packages) {
       if (!SLUG.test(pkg.slug)) collisions.push(`${plan.id}/${pkg.slug} is not a valid slug`);
       claim('package', pkg.slug, plan.id);
-      if (await exists(join(ws.specsDir, pkg.slug))) collisions.push(`package ${pkg.slug} already exists in ${ws.workspace}`);
+      if (!pkg.migrated && await exists(join(ws.specsDir, pkg.slug))) collisions.push(`package ${pkg.slug} already exists in ${ws.workspace}`);
     }
     for (const epic of plan.epics) {
       claim('epic', epic.slug, plan.id);
@@ -705,11 +775,17 @@ export async function migrate(args) {
     const created = [];
     try {
       for (const pkg of plan.packages) {
+        if (pkg.migrated) continue;
         const to = join(ws.specsDir, pkg.slug);
         created.push(to);
+        await fs.mkdir(to, { recursive: true });
         const ctx = { ref: `${ws.workspace}/${pkg.slug}`, repoId: plan.id, oldPackage: pkg.from, newPackage: to };
         const transforms = Object.fromEntries(Object.entries(pkg.kinds).map(([rel, kind]) => [rel, transformer(kind, ctx)]));
         await copyFiles(pkg.from, to, pkg.files, transforms);
+        await writeJson(join(to, 'scope.json'), {
+          schema_version: 1, workspace: ws.workspace, slug: pkg.slug,
+          targets: [{ id: plan.id, branch: `spec-${pkg.slug}` }], designs: [], plan: null, epic: epicOf.get(pkg.slug) ?? null,
+        });
       }
       for (const epic of plan.epics) {
         const to = join(ws.epicsDir, epic.slug);
@@ -738,12 +814,6 @@ export async function migrate(args) {
       await writeFileAtomic(ws.projectContext, `${current.endsWith('\n') ? current : `${current}\n`}\n## Repository: ${plan.id}\n\n${section}\n`);
     }
     for (const pkg of plan.packages) {
-      const packageDir = join(ws.specsDir, pkg.slug);
-      const epic = epicOf.get(pkg.slug) ?? null;
-      await writeJson(join(packageDir, 'scope.json'), {
-        schema_version: 1, workspace: ws.workspace, slug: pkg.slug,
-        targets: [{ id: plan.id, branch: `spec-${pkg.slug}` }], designs: [], plan: null, epic,
-      });
       const done = await materializeIn(ws, pkg.slug, options);
       if (!done.ok) return done;
     }

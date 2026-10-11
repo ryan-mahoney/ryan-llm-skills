@@ -71,7 +71,7 @@ Add `--apply` only after the preview is confirmed, for example
 
 `set-execution-host ID --host HOSTNAME` sets the machine that runs this workspace's live
 work. Spec work for the workspace runs only on that host; spec skills refuse elsewhere with
-`wrong-host`. Use the exact hostname the target machine reports. Set it before running spec
+`wrong-host`. Pass the machine's short hostname, the first label of its name, such as `restory-box`. The CLI normalizes a full name such as `Box.local` to its first label, `box`. Set it before running spec
 work, or those skills refuse with `execution-host-unset`.
 
 ## Refusals this skill fixes

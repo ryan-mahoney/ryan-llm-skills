@@ -187,6 +187,7 @@ test('start creates the target worktree on the target branch, records it in loca
   for (const field of ['lock', 'package_lock', 'token']) assert.equal(field in record, false, field);
   assert.equal(execFileSync('git', ['-C', record.checkout, 'branch', '--show-current'], { encoding: 'utf8' }).trim(), 'spec-feature');
   assert.equal(JSON.parse(readFileSync(join(f.packagePath, 'locations.json'), 'utf8')).targets[0].worktree, record.checkout);
+  assert.match(readFileSync(f.step, 'utf8'), /<!-- spec-location:begin -->[\s\S]*Prepared step/, 'a card written after package creation is stamped on first dispatch');
   assert.equal(JSON.parse(readFileSync(join(f.dir, 'index', `${record.id}.json`), 'utf8')).package_ref, 'demo/feature');
   assert.equal(existsSync(join(f.packagePath, 'runtime/package.lock')), false);
   assert.deepEqual(readdirSync(join(f.packagePath, 'runtime')).filter(name => name.endsWith('.lock')), []);

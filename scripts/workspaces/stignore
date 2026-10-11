@@ -8,6 +8,8 @@
 /projects/*/sessions
 /projects/*/assignments
 /projects/*/specs/*/runtime
+// Journey QA run output holds harness session files (database URLs):
+/projects/*/captures/*/ux-qa/runs
 // Retired Phoenix data (SQLite with WAL), at the root and per workspace:
 /.adjacent
 /projects/*/.adjacent

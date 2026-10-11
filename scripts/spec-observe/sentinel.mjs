@@ -45,7 +45,7 @@ export const SENTINEL_LIMITS = Object.freeze({
 
 const RECEIPT_KEYS = ['id', 'assignment_id', 'package', 'package_ref', 'step', 'checkout', 'parent_session', 'owner_session', 'editor_session',
   'owner_model', 'editor_model', 'state', 'started_at', 'finished_at', 'dispatch_requested_at'];
-const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
+const TERMINAL = new Set(['completed', 'failed', 'cancelled', 'stale']);
 const ROLES = ['owner', 'editor'];
 const CONDITION_GENERATION = 1;
 const MAX_REASONS = 50;

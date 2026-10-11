@@ -1062,3 +1062,11 @@ test("kit schema: design_system and execution_host validate and normalize", () =
   );
   assert.match(parseKit(OPS_KIT.replace("    - ds/README.md\n", "")).errors.join(), /design_system\.paths/);
 });
+
+test("kit edits: design-system paths cannot climb out of the repository and the host is stored as its first label", () => {
+  assert.match(parseKit(OPS_KIT.replace("ds/README.md", "../ds/README.md")).errors.join(), /design_system\.paths\[0\]/);
+  assert.throws(() => planKitEdit(OPS_KIT, { kind: "set-design-system", repository_id: "a", paths: ["ds/../../x"] }), /no "\.\." segment/);
+  assert.throws(() => planKitEdit(OPS_KIT, { kind: "set-design-system", repository_id: "a", paths: ["/abs/x"] }), /relative/);
+  assert.equal(planKitEdit(OPS_KIT, { kind: "set-execution-host", host: "Box.local" }).expected.execution_host, "box");
+  assert.throws(() => planKitEdit(OPS_KIT, { kind: "set-execution-host", host: ".local" }), /DNS label/);
+});

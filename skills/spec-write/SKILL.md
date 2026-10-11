@@ -455,6 +455,10 @@ Write `spec-steps.json` only after the spec body is final, so the index matches 
 
 Write `evidence-plan.json` in `package_dir` as version 2 JSON using the schema and invariants in the shared executable-evidence contract. `spec.md` remains canonical prose; this file is its claim/gate index. Use the same identifiers, owner steps, commands, artifacts, and posture values in both. Write it after the other outputs, then run `node ~/.agents/skills/spec-work-tour/scripts/validate-evidence-plan.mjs <path>`; a validation failure blocks handoff.
 
+## Stamp Locations
+
+After writing or rewriting `context.md` or `spec.md`, run `node ~/.agents/scripts/spec-location/cli.mjs stamp <package ref>` so each file carries the generated Locations block. Never hand-edit the block between the `spec-location:begin` and `spec-location:end` markers; edit the rest of the document. Step subspecs are stamped in the preparation step.
+
 ## Complete Both Planning Phases
 
 After drafting `spec.md`, `spec-steps.json`, and version 2 `evidence-plan.json`, read and

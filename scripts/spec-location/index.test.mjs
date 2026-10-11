@@ -4,10 +4,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  checkPackage, legacySpecs, listEpics, locatePackage, materialize, newPackage, resolveWorkspace, setWorktree, stamp, updateScope,
+  checkPackage, legacySpecs, listEpics, locatePackage, materialize, migrate, newPackage, recordWorktree, resolveWorkspace, setWorktree, stamp, updateScope,
 } from './index.mjs';
 import { gitInit, makeFixture, put } from './fixture.mjs';
 
@@ -49,11 +49,27 @@ test('resolveWorkspace: refusal codes', () => withFixture(async fx => {
   assert.equal(code(await resolveWorkspace({ ...options, workspace: 'demo' })), 'execution-host-unset');
 }));
 
+test('resolveWorkspace: hosts compare by lowercased first DNS label on both sides', () => withFixture(async fx => {
+  put(join(fx.workspaceDir, 'kit.yaml'), fx.kit('demo', 'execution_host: Box.local\n'));
+  assert.equal(code(await resolveWorkspace({ ...fx.options, workspace: 'demo', hostname: 'box' })), 'ok');
+  const refused = await resolveWorkspace({ ...fx.options, workspace: 'demo', hostname: 'Laptop.example.com' });
+  assert.equal(refused.code, 'wrong-host');
+  assert.match(refused.message, /executes on box; this machine is laptop/);
+}));
+
 test('resolveWorkspace: untracked .specs entries refuse with legacy-specs-present', () => withFixture(async fx => {
   put(join(fx.beta, '.specs', 'old', 'spec.md'), '# old\n');
   const result = await resolveWorkspace({ ...fx.options, workspace: 'demo' });
   assert.equal(result.code, 'legacy-specs-present');
   assert.match(result.remedy, /migrate --workspace demo/);
+}));
+
+test('legacySpecs: a git failure is surfaced, not read as "nothing to migrate"', () => withFixture(async fx => {
+  rmSync(join(fx.alpha, '.git'), { recursive: true });
+  put(join(fx.alpha, '.specs', 'old', 'spec.md'), '# old\n');
+  await assert.rejects(legacySpecs(fx.alpha), /git ls-files failed/);
+  assert.equal((await resolveWorkspace({ ...fx.options, workspace: 'demo' })).code, 'legacy-check-failed');
+  assert.equal((await migrate({ ...fx.options, workspace: 'demo' })).code, 'legacy-check-failed');
 }));
 
 test('legacySpecs: tracked entries are not legacy', async () => {
@@ -140,6 +156,42 @@ test('materialize: keeps an existing worktree and drops one that no longer exist
   assert.equal(locations.targets[0].worktree, trees.alpha);
   assert.equal(locations.targets[1].worktree, null);
   assert.equal((await setWorktree('demo/p1', 'gamma', '/x', fx.options)).code, 'target-not-in-scope');
+}));
+
+test('recordWorktree: records a real worktree of the target, refuses anything else, and restamps', () => withFixture(async fx => {
+  const commit = repo => execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '--allow-empty', '-qm', 'x']);
+  commit(fx.alpha);
+  commit(fx.beta);
+  await newPackage({ ...fx.options, workspace: 'demo', slug: 'p1', targets: [{ id: 'alpha' }] });
+  put(join(fx.workspaceDir, 'specs', 'p1', 'spec.md'), '# Spec\n');
+  const wt = join(fx.tmp, 'alpha-wt');
+  execFileSync('git', ['-C', fx.alpha, 'worktree', 'add', '-q', '-b', 'spec-p1', wt]);
+  const betaWt = join(fx.tmp, 'beta-wt');
+  execFileSync('git', ['-C', fx.beta, 'worktree', 'add', '-q', '-b', 'spec-p1', betaWt]);
+  const plain = join(fx.tmp, 'plain');
+  mkdirSync(plain);
+  mkdirSync(join(wt, 'sub'));
+
+  for (const path of [plain, betaWt, join(wt, 'sub')]) {
+    assert.equal(code(await recordWorktree('demo/p1', 'alpha', path, fx.options)), 'not-a-worktree');
+  }
+  assert.equal(json(join(fx.workspaceDir, 'specs', 'p1', 'locations.json')).targets[0].worktree, null);
+
+  const done = await recordWorktree('demo/p1', 'alpha', wt, fx.options);
+  assert.equal(done.ok, true);
+  assert.equal(json(join(fx.workspaceDir, 'specs', 'p1', 'locations.json')).targets[0].worktree, realpathSync(wt));
+  assert.match(readFileSync(join(fx.workspaceDir, 'specs', 'p1', 'spec.md'), 'utf8'), /worktree `.*alpha-wt`/);
+  assert.equal(code(await recordWorktree('demo/p1', 'beta', betaWt, fx.options)), 'target-not-in-scope');
+}));
+
+test('newPackage and updateScope: plan must be a plain file name, branches must be valid refs', () => withFixture(async fx => {
+  const base = { ...fx.options, workspace: 'demo', slug: 'p1', targets: [{ id: 'alpha' }] };
+  assert.equal(code(await newPackage({ ...base, plan: '../x.md' })), 'invalid-input');
+  assert.equal(code(await newPackage({ ...base, plan: 'a/b.md' })), 'invalid-input');
+  assert.equal(code(await newPackage({ ...base, targets: [{ id: 'alpha', branch: 'bad..name' }] })), 'invalid-input');
+  assert.equal(code(await newPackage({ ...base, targets: [{ id: 'alpha', branch: 'feature/ok' }] })), 'ok');
+  assert.equal(code(await updateScope('demo/p1', { setPlan: '../x.md' }, fx.options)), 'invalid-input');
+  assert.equal(code(await updateScope('demo/p1', { addTarget: { id: 'beta', branch: '-x' } }, fx.options)), 'invalid-input');
 }));
 
 test('stamp: block follows the H1, repeated runs change nothing, headingless files get it on top', () => withFixture(async fx => {

@@ -26,7 +26,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { addArtifact, addMaterial, applyKitEdit, createFileExclusive, createWorkspace, describeStorageRoot, fetchWorkspace, listKitBackups, listWorkspaces, readKitBackup, resolveRepositoryPath, resolveStorageRoot, resolveWorkspacePath, saveStorageRoot, setupStorage, storageConfigPath, storageStatus, writeFileAtomic } from "./store.mjs";
+import { addArtifact, addMaterial, applyKitEdit, createFileExclusive, createWorkspace, describeStorageRoot, fetchWorkspace, listKitBackups, listWorkspaces, readKitBackup, repositoryReferences, resolveRepositoryPath, resolveStorageRoot, resolveWorkspacePath, saveStorageRoot, setupStorage, storageConfigPath, storageStatus, writeFileAtomic } from "./store.mjs";
 import { parseKit, planKitEdit } from "./kit.mjs";
 
 const STORE_URL = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), "store.mjs")).href;
@@ -2043,6 +2043,17 @@ test("repository paths: ~ expands with the local home, relative paths use the wo
   assert.equal(resolveRepositoryPath("/ws/a", "/abs/x", "/home/u"), "/abs/x");
   assert.equal(resolveRepositoryPath("/ws/a", "../repo", "/home/u"), "/ws/repo");
   assert.equal(resolveRepositoryPath("/ws/a", "~other/x", "/home/u"), "/ws/a/~other/x");
+});
+
+test("repository references: lists spec packages whose scope targets the repository", async (t) => {
+  const { root, created } = await replacementRoot(t, "refs");
+  for (const [slug, targets] of [["hits", [{ id: "web" }, { id: "docs" }]], ["misses", [{ id: "docs" }]]]) {
+    await mkdir(join(created.directory, "specs", slug), { recursive: true });
+    await writeFile(join(created.directory, "specs", slug, "scope.json"), JSON.stringify({ targets }));
+  }
+  await mkdir(join(created.directory, "specs", "no-scope"), { recursive: true });
+  const references = await repositoryReferences(root, "refs", "web");
+  assert.deepEqual(references.packages, ["hits"]);
 });
 
 test("kit replacement: keeps the newest 20 backups, lists them and reads one for restore", async (t) => {

@@ -289,7 +289,7 @@ async function printPlan(header, plan, options) {
   for (const line of plan.hunk.after_lines) lines.push(`+ ${stripBreak(line)}`);
   if (plan.references) {
     const found = Object.entries(plan.references).filter(([, names]) => names.length > 0);
-    lines.push(found.length === 0 ? 'No threads, assignments, artifacts or designs reference this repository.'
+    lines.push(found.length === 0 ? 'No threads, assignments, artifacts, designs or spec packages reference this repository.'
       : 'Records that reference this repository stay in place:');
     for (const [kind, names] of found) lines.push(`  ${kind}: ${names.join(', ')}`);
   }

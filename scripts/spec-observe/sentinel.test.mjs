@@ -1358,12 +1358,14 @@ test('a running run whose coordinator process is gone is flagged; a live or term
   receipt(pkg, { id: 'gone', assignment_id: 'assign-gone', state: 'running', started_at: ago(60000), coordinator_pid: dead });
   receipt(pkg, { id: 'alive', assignment_id: 'assign-alive', state: 'running', started_at: ago(60000), coordinator_pid: process.pid });
   receipt(pkg, { id: 'ended', assignment_id: 'assign-ended', state: 'failed', started_at: ago(60000), coordinator_pid: dead });
+  receipt(pkg, { id: 'superseded', assignment_id: 'assign-stale', state: 'stale', started_at: ago(60000), coordinator_pid: dead });
   const snapshot = await collect({ roots: [repo], indexDir: f.indexDir, now });
   const row = id => snapshot.runs.find(run => run.assignment_id === id);
   assert.ok(row('assign-gone').coverage.reasons.includes('coordinator-gone'));
   assert.deepEqual(condition(row('assign-gone'), 'coordinator-gone'), { ...condition(row('assign-gone'), 'coordinator-gone'), severity: 'attention', state: 'open' });
   assert.equal(condition(row('assign-alive'), 'coordinator-gone'), undefined);
   assert.equal(condition(row('assign-ended'), 'coordinator-gone'), undefined);
+  assert.equal(condition(row('assign-stale'), 'coordinator-gone'), undefined, 'a stale run is terminal');
 });
 
 test('a receipt names its package by reference, and a foreign reference is stale evidence', async t => {

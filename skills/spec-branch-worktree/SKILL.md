@@ -65,13 +65,24 @@ Require a git repository before mutating anything.
 
 ## Create Or Reuse
 
-- If `dest` is an existing worktree on branch `<slug>`, reuse it.
-- If `dest` exists but is not that worktree/branch, stop with `reason: worktree-path-conflict`; never force-remove it.
-- If branch `<slug>` exists elsewhere, stop with `reason: branch-already-checked-out`.
-- If the branch exists and is free, run `git worktree add "$dest" <slug>`.
-- Otherwise run `git worktree add --no-track -b <slug> "$dest" "$base_ref"`.
+Let `<branch>` be the target's `targets[].branch` from `locations.json`; when none is recorded, use `spec-<slug>`. Never use the bare slug as the branch name.
 
-Verify `git -C "$dest" rev-parse --abbrev-ref HEAD` equals `<slug>`, then remove upstream tracking with `git -C "$dest" branch --unset-upstream <slug> 2>/dev/null || true`.
+- If `targets[].worktree` is set and exists, reuse it and verify it is on `<branch>`.
+- If `dest` is an existing worktree on branch `<branch>`, reuse it.
+- If `dest` exists but is not that worktree/branch, stop with `reason: worktree-path-conflict`; never force-remove it.
+- If branch `<branch>` exists elsewhere, stop with `reason: branch-already-checked-out`.
+- If the branch exists and is free, run `git worktree add "$dest" <branch>`.
+- Otherwise run `git worktree add --no-track -b <branch> "$dest" "$base_ref"`.
+
+Verify `git -C "$dest" rev-parse --abbrev-ref HEAD` equals `<branch>`, then remove upstream tracking with `git -C "$dest" branch --unset-upstream <branch> 2>/dev/null || true`.
+
+Record the worktree for the target unless `targets[].worktree` already names this path:
+
+```bash
+node ~/.agents/scripts/spec-location/cli.mjs worktree <package ref> <target id> "$dest"
+```
+
+Re-read `locations.json` afterward. Do not write `locations.json` yourself.
 
 ## Prepare The Worktree
 
@@ -88,9 +99,6 @@ Keep the spec package in workspace storage. Do not copy, move, or symlink spec a
 older run left one there, leave it untouched and ignore it for all spec reads and writes. Return
 `package_dir` along with the worktree path. All subsequent plans, updates, learnings, logs, reviews,
 and tours go to `package_dir`.
-
-After creating or reusing the worktree, the runtime records the worktree in `locations.json`
-(`targets[].worktree`). Do not write `locations.json` yourself.
 
 Read visual references from their canonical source locations. Confirm required files exist;
 worktree creation does not rebase reference paths, rewrite specs, or invalidate preparation.
@@ -116,7 +124,7 @@ Return one compact, definitive summary:
 
 ```txt
 outcome: ready
-branch: <slug>
+branch: <targets[].branch from locations.json>
 worktree: <absolute path>
 base: <base ref>
 tracking: none

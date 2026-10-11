@@ -1623,11 +1623,12 @@ async function jsonRecords(directory) {
 /**
  * Workspace records that name a kit repository, for the remove-repo preview:
  * threads, assignments and artifacts by `repository_id`; designs whose
- * design-system files lie inside the repository's checkout. Read-only.
+ * design-system files lie inside the repository's checkout; spec packages
+ * whose `scope.json` targets it. Read-only.
  * @param {string} root
  * @param {string} id workspace id
  * @param {string} repositoryId
- * @returns {Promise<{threads: string[], assignments: string[], artifacts: string[], designs: string[]}>}
+ * @returns {Promise<{threads: string[], assignments: string[], artifacts: string[], designs: string[], packages: string[]}>}
  */
 export async function repositoryReferences(root, id, repositoryId) {
   const { directory, kit } = await catalogWorkspace(root, id);
@@ -1646,11 +1647,17 @@ export async function repositoryReferences(root, id, repositoryId) {
       designs.push(entry);
     }
   }
+  const packages = [];
+  for (const entry of await fs.readdir(join(directory, "specs")).catch(() => [])) {
+    const scope = await fs.readFile(join(directory, "specs", entry, "scope.json"), "utf8").then(JSON.parse, () => null);
+    if (Array.isArray(scope?.targets) && scope.targets.some((target) => target?.id === repositoryId)) packages.push(entry);
+  }
   return {
     threads: await named("threads"),
     assignments: await named("assignments"),
     artifacts: await named("artifacts"),
     designs,
+    packages,
   };
 }
 
