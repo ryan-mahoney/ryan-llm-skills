@@ -14,7 +14,7 @@
 // snapshot publication (assignments/<id>.brief.md), session directory
 // creation and record persistence.
 
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
@@ -232,139 +232,6 @@ function projectTrustFlags(projectTrust) {
   }
 }
 
-// Resolve exactly one usable kit repository to its physical checkout root.
-async function resolveRepositoryCheckout({ workspace, directory, repositoryId, attention }) {
-  if (typeof repositoryId !== "string" || repositoryId === "") {
-    throw new Error("repository id must be a non-empty string");
-  }
-  const matches = (Array.isArray(workspace.repositories) ? workspace.repositories : [])
-    .filter((record) => record && record.id === repositoryId);
-  if (matches.length === 0) {
-    throw new Error(`repository is not available in workspace: ${repositoryId}`);
-  }
-  if (matches.length > 1) throw new Error(`repository is ambiguous: ${repositoryId}`);
-  const record = matches[0];
-  if (record.status !== "ok") {
-    throw new Error(`repository is not usable: ${repositoryId} (${String(record.status)})`);
-  }
-  if (typeof record.path !== "string" || record.path === "") {
-    throw new Error(`repository path is missing: ${repositoryId}`);
-  }
-  const declared = isAbsolute(record.path)
-    ? resolve(record.path)
-    : resolve(directory, record.path);
-  let physical;
-  try {
-    physical = await fs.realpath(declared);
-  } catch (error) {
-    throw new Error(`repository path is not resolvable: ${repositoryId}`, { cause: error });
-  }
-  let identity;
-  try {
-    identity = await resolveCheckout(physical, { deadline: Date.now() + GIT_TIMEOUT_MS });
-  } catch (error) {
-    throw new Error(`repository is not a Git work tree: ${repositoryId}`, { cause: error });
-  }
-  if (identity.root !== physical) {
-    throw new Error(`repository path is not a Git top level: ${repositoryId}`);
-  }
-  return {
-    identity,
-    executionDir: identity.root,
-    repositoryId,
-    attention: mergeAttention(attention, record.attention),
-  };
-}
-
-const WORKTREE_LIST_MAX_BYTES = 1024 * 1024;
-
-function listWorktreePaths(cwd, deadline) {
-  const remaining = deadline - Date.now();
-  if (remaining <= 0) {
-    return Promise.reject(Object.assign(new Error("git deadline expired"), { code: "timeout" }));
-  }
-  return new Promise((resolvePromise, rejectPromise) => {
-    execFile(
-      "git",
-      ["-c", "core.fsmonitor=false", "-C", cwd, "worktree", "list", "--porcelain", "-z"],
-      {
-        timeout: Math.min(GIT_TIMEOUT_MS, remaining),
-        killSignal: "SIGKILL",
-        maxBuffer: WORKTREE_LIST_MAX_BYTES,
-        encoding: "utf8",
-        windowsHide: true,
-        env: {
-          ...process.env,
-          GIT_OPTIONAL_LOCKS: "0",
-          GIT_TERMINAL_PROMPT: "0",
-        },
-      },
-      (error, stdout) => {
-        if (error) rejectPromise(error);
-        else resolvePromise(stdout);
-      },
-    );
-  });
-}
-
-function parseWorktreePaths(output) {
-  const paths = [];
-  for (const record of output.split("\0\0")) {
-    for (const field of record.split("\0")) {
-      if (field.startsWith("worktree ")) {
-        paths.push(resolve(field.slice("worktree ".length)));
-        break;
-      }
-    }
-  }
-  return paths;
-}
-
-async function resolveWorktreeCheckout({ workspace, directory, path, attention }) {
-  if (typeof path !== "string" || !isAbsolute(path)) {
-    throw new Error("worktree target path must be an absolute string");
-  }
-  const requested = resolve(path);
-  let identity;
-  try {
-    identity = await resolveCheckout(requested, { deadline: Date.now() + GIT_TIMEOUT_MS });
-  } catch (error) {
-    throw new Error("worktree path is not a Git work tree", { cause: error });
-  }
-  if (identity.primary) throw new Error("worktree path is not a linked worktree");
-  if (identity.root !== requested) {
-    throw new Error("worktree path is not the exact canonical top level");
-  }
-  const usable = (Array.isArray(workspace.repositories) ? workspace.repositories : [])
-    .filter((record) => record && record.status === "ok" && typeof record.path === "string" && record.path !== "");
-  const matches = [];
-  for (const record of usable) {
-    const declared = isAbsolute(record.path) ? resolve(record.path) : resolve(directory, record.path);
-    let candidate;
-    try {
-      candidate = await resolveCheckout(declared, { deadline: Date.now() + GIT_TIMEOUT_MS });
-    } catch {
-      continue;
-    }
-    if (candidate.commonDir === identity.commonDir) matches.push(record);
-  }
-  if (matches.length === 0) throw new Error("worktree does not belong to a usable workspace repository");
-  if (matches.length > 1) throw new Error("worktree matches multiple workspace repositories");
-  let registered;
-  try {
-    registered = parseWorktreePaths(await listWorktreePaths(identity.root, Date.now() + GIT_TIMEOUT_MS));
-  } catch (error) {
-    throw new Error("worktree registration could not be read", { cause: error });
-  }
-  if (!registered.includes(identity.root)) throw new Error("worktree is not registered in git worktree list");
-  return {
-    identity,
-    executionDir: identity.root,
-    repositoryId: matches[0].id,
-    attention: mergeAttention(attention, matches[0].attention),
-  };
-}
-
 /**
  * Resolve the physical execution directory for a workspace target.
  *
@@ -372,17 +239,13 @@ async function resolveWorktreeCheckout({ workspace, directory, path, attention }
  * `target` must match exactly one retained kit repository whose recorded
  * status is `ok`; the declared path (absolute or workspace-relative) is
  * resolved to its physical checkout root through `resolveCheckout`.
- * An object target accepts `{kind:'workspace'}`, `{kind:'repository',
- * repository_id}` or `{kind:'worktree', path}`. A linked worktree must belong
- * to exactly one usable workspace repository common directory and be listed
- * by the bounded `git worktree list --porcelain -z` registration read.
  * Workspace and repository attention entries are preserved.
  *
  * When `specPackage` is supplied, `canonicalPackage` must resolve it to the
  * primary checkout of the execution directory's repository; the canonical
  * package path is returned as `spec_package`.
  *
- * @param {{workspace: object, target?: string|object|null, specPackage?: string|null}} input
+ * @param {{workspace: object, target?: string|null, specPackage?: string|null}} input
  * @returns {Promise<{execution_dir: string, repository_id: string|null,
  *   spec_package: string|null, attention: string[]}>}
  */
@@ -397,43 +260,44 @@ export async function resolveTarget({ workspace, target = null, specPackage = nu
   let repositoryId = null;
 
   if (target !== null && target !== undefined) {
-    if (typeof target === "string") {
-      const resolved = await resolveRepositoryCheckout({ workspace, directory, repositoryId: target, attention });
-      checkout = resolved.identity;
-      executionDir = resolved.executionDir;
-      repositoryId = resolved.repositoryId;
-      attention = resolved.attention;
-    } else if (typeof target === "object" && !Array.isArray(target)) {
-      if (target.kind === "workspace") {
-        // The workspace directory itself remains the execution directory.
-      } else if (target.kind === "repository") {
-        const resolved = await resolveRepositoryCheckout({
-          workspace,
-          directory,
-          repositoryId: target.repository_id,
-          attention,
-        });
-        checkout = resolved.identity;
-        executionDir = resolved.executionDir;
-        repositoryId = resolved.repositoryId;
-        attention = resolved.attention;
-      } else if (target.kind === "worktree") {
-        const resolved = await resolveWorktreeCheckout({
-          workspace,
-          directory,
-          path: target.path,
-          attention,
-        });
-        checkout = resolved.identity;
-        executionDir = resolved.executionDir;
-        repositoryId = resolved.repositoryId;
-        attention = resolved.attention;
-      } else {
-        throw new Error(`unsupported target kind: ${String(target.kind)}`);
-      }
-    } else {
+    if (typeof target !== "string" || target === "") {
       throw new Error("target must be a repository id string");
     }
+    const matches = (Array.isArray(workspace.repositories) ? workspace.repositories : [])
+      .filter((record) => record && record.id === target);
+    if (matches.length === 0) {
+      throw new Error(`repository is not available in workspace: ${target}`);
+    }
+    if (matches.length > 1) throw new Error(`repository is ambiguous: ${target}`);
+    const record = matches[0];
+    if (record.status !== "ok") {
+      throw new Error(`repository is not usable: ${target} (${String(record.status)})`);
+    }
+    if (typeof record.path !== "string" || record.path === "") {
+      throw new Error(`repository path is missing: ${target}`);
+    }
+    const declared = isAbsolute(record.path)
+      ? resolve(record.path)
+      : resolve(directory, record.path);
+    let physical;
+    try {
+      physical = await fs.realpath(declared);
+    } catch (error) {
+      throw new Error(`repository path is not resolvable: ${target}`, { cause: error });
+    }
+    let identity;
+    try {
+      identity = await resolveCheckout(physical, { deadline: Date.now() + GIT_TIMEOUT_MS });
+    } catch (error) {
+      throw new Error(`repository is not a Git work tree: ${target}`, { cause: error });
+    }
+    if (identity.root !== physical) {
+      throw new Error(`repository path is not a Git top level: ${target}`);
+    }
+    checkout = identity;
+    executionDir = identity.root;
+    repositoryId = target;
+    attention = mergeAttention(attention, record.attention);
   }
 
   let specPackagePath = null;

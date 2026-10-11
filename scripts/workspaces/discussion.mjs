@@ -354,6 +354,39 @@ async function intendedExecutionPath(workspace, directory, target) {
   return canonicalIfPossible(resolve(target.path));
 }
 
+// Map one stored ThreadV1 target to the adj4 resolveTarget input: workspace
+// targets are unbound (null), repository targets pass their id, and worktree
+// targets bind only to the unique recorded repository whose absolute or
+// workspace-relative path resolves to the same physical worktree path.
+// Unresolvable entry paths are ignored; absent or ambiguous bindings throw so
+// callers keep their existing browse-only missing-directory attention.
+async function adj4TargetFor(workspace, target) {
+  if (target.kind === "workspace") return null;
+  if (target.kind === "repository") return target.repository_id;
+  let worktree;
+  try {
+    worktree = await realpath(target.path);
+  } catch (error) {
+    throw new Error(`worktree target is not resolvable: ${target.path}`, { cause: error });
+  }
+  const matches = [];
+  for (const entry of Array.isArray(workspace.repositories) ? workspace.repositories : []) {
+    if (!entry || typeof entry.id !== "string" || typeof entry.path !== "string" || entry.path === "") continue;
+    const declared = isAbsolute(entry.path) ? resolve(entry.path) : resolve(workspace.directory, entry.path);
+    let physical;
+    try {
+      physical = await realpath(declared);
+    } catch {
+      continue;
+    }
+    if (physical === worktree) matches.push(entry.id);
+  }
+  if (matches.length !== 1) {
+    throw new Error(`worktree target has no unique recorded repository: ${target.path}`);
+  }
+  return matches[0];
+}
+
 async function ensureOwnedDirectory(parent, name) {
   const path = join(parent, name);
   let info = await lstatOrNull(path);
@@ -1149,7 +1182,11 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
     let resolved = null;
     let failureAttention = null;
     try {
-      resolved = await resolveTarget({ workspace, target: preservedTarget, specPackage: specPackage ?? null });
+      resolved = await resolveTarget({
+        workspace,
+        target: await adj4TargetFor(workspace, preservedTarget),
+        specPackage: specPackage ?? null,
+      });
     } catch (error) {
       if (specPackage !== null && specPackage !== undefined) throw error;
       failureAttention = "missing-directory";
@@ -1374,7 +1411,7 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
     let current = original;
     let resolved;
     try {
-      resolved = await resolveTarget({ workspace, target: original.target });
+      resolved = await resolveTarget({ workspace, target: await adj4TargetFor(workspace, original.target) });
     } catch {
       return persistRecord(directory, { ...original, attention: "missing-directory" });
     }
@@ -2562,8 +2599,10 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
 
   // Build the trusted adj4 input for a saved handoff. All authority fields
   // (root, brief path, target) come from the service construction and the saved
-  // ThreadV1 record, never from the caller.
-  function handoffInput(record, handoff, input) {
+  // ThreadV1 record, never from the caller. The stored target object is adapted
+  // to adj4's repository-id input; an absent or ambiguous worktree binding
+  // rejects the handoff instead of falling back to a workspace launch.
+  async function handoffInput(record, handoff, input, workspace) {
     return {
       assignment_id: input.assignment_id,
       workspace_id: record.workspace_id,
@@ -2571,7 +2610,7 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
       brief: handoff.brief,
       instructions: input.instructions,
       skill: input.skill ?? "general",
-      target: record.target,
+      target: await adj4TargetFor(workspace, record.target),
       specPackage: input.specPackage ?? null,
       provider: input.provider ?? null,
       model: input.model ?? null,
@@ -2594,10 +2633,10 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
     const { workspace_id, thread_id, requestId } = validateHandoffRequest(input, "previewAssignment");
     return withThreadLock(workspace_id, thread_id, async () => {
       if (closed) throw serviceClosed();
-      const { record } = await loadServiceRecord(workspace_id, thread_id);
+      const { record, workspace } = await loadServiceRecord(workspace_id, thread_id);
       const handoff = record.handoffs.find((entry) => entry.request_id === requestId);
       if (!handoff) throw typedError("brief-not-found", `saved brief not found: ${requestId}`);
-      const resolved = await resolveAssignment(handoffInput(record, handoff, input));
+      const resolved = await resolveAssignment(await handoffInput(record, handoff, input, workspace));
       if (!resolved.record || resolved.record.execution_dir !== record.execution_dir) {
         throw typedError("stale-preview", "preview target no longer matches the stored execution binding");
       }
@@ -2620,7 +2659,7 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
     }
     return withThreadLock(workspace_id, thread_id, async () => {
       if (closed) throw serviceClosed();
-      const { record, directory } = await loadServiceRecord(workspace_id, thread_id);
+      const { record, directory, workspace } = await loadServiceRecord(workspace_id, thread_id);
       const handoff = record.handoffs.find((entry) => entry.request_id === requestId);
       if (!handoff) throw typedError("brief-not-found", `saved brief not found: ${requestId}`);
       if (handoff.assignment_id !== undefined && handoff.assignment_id !== assignmentId) {
@@ -2628,7 +2667,7 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
           request_id: requestId,
         });
       }
-      const trustedInput = handoffInput(record, handoff, input);
+      const trustedInput = await handoffInput(record, handoff, input, workspace);
       const fresh = await resolveAssignment(trustedInput);
       if (!fresh.record || fresh.record.execution_dir !== record.execution_dir) {
         throw typedError("stale-preview", "launch target no longer matches the stored execution binding");

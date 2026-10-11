@@ -648,7 +648,10 @@ test("thread identity resolves repository and registered worktree targets", asyn
   const worktreePath = join(root, "repos", "linked");
   await git(primary, ["worktree", "add", "--quiet", worktreePath]);
   const linked = await realpath(worktreePath);
-  await setupWorkspace(storageRoot, "repo-ws", [{ id: "app", path: primary }]);
+  await setupWorkspace(storageRoot, "repo-ws", [
+    { id: "app", path: primary },
+    { id: "app-linked", path: linked },
+  ]);
   const service = createDiscussionService({ root: storageRoot, agentDir: join(root, "agent") });
   try {
     const repository = await service.create({
@@ -669,8 +672,10 @@ test("thread identity resolves repository and registered worktree targets", asyn
     assert.deepEqual(worktree.target, { kind: "worktree", path: linked });
     assert.equal(worktree.attention, null);
 
-    const unregistered = join(root, "repos", "plain");
-    await mkdir(unregistered, { recursive: true });
+    const unregisteredPath = join(root, "repos", "extra");
+    await git(primary, ["worktree", "add", "--quiet", unregisteredPath]);
+    const unregistered = await realpath(unregisteredPath);
+    assert.equal((await git(unregistered, ["rev-parse", "--is-inside-work-tree"])).trim(), "true");
     const missing = await service.create({
       workspace_id: "repo-ws",
       title: "Unregistered worktree",
@@ -678,6 +683,7 @@ test("thread identity resolves repository and registered worktree targets", asyn
     });
     assert.equal(missing.attention, "missing-directory");
     assert.equal(missing.execution_dir, unregistered);
+    assert.deepEqual(missing.target, { kind: "worktree", path: unregistered });
   } finally {
     service.close();
   }
