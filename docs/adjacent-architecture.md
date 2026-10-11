@@ -397,8 +397,8 @@ must never treat that success as restored history.
 
 ## Unverified assumptions
 
-- No workspace-store write or import has been performed; the storage-root backup
-  prerequisite still stands.
+- No workspace-store write or import has been performed. The storage-root backup
+  is confirmed (see "Decisions and unresolved authority").
 - Host ownership transactions, launchd installation, Tailscale exposure, and
   remote attach remain unobserved.
 - The application UI remains unobserved.
@@ -412,9 +412,15 @@ must never treat that success as restored history.
   workspace storage, the storage-root variable, and the launchd plist. This
   document records that project-policy decision and makes no project-policy
   change.
-- The storage root holds the only copy of moved Adjacent material (about 1.85 GB)
-  and has no confirmed backup. The backup prerequisite remains: no program writes
-  into the store until a backup path is confirmed.
+- The storage root holds the only copy of moved Adjacent material (about 1.85 GB).
+  A backup of the whole root except `.adjacent/asr-cache` (the Whisper model cache)
+  was confirmed on 2026-10-11 by file count, byte comparison and a SQLite
+  integrity check, which resolves the backup prerequisite. Writes into the store
+  are now permitted under the C-3 rules.
+- The Phoenix application will not run again. The storage root stays in use as
+  the workspace root; Phoenix-only data (`.adjacent/` at the root and in each
+  project) is not read or written by the new system and can be retired with the
+  application once its three discussion threads are migrated by hand.
 - tmux 3.5+ is now installed (3.8 observed) and belongs to operator setup.
 - Remote write-action authority (whether **Mark complete** is reachable remotely
   and under which guards), deployment, and the application UI remain unresolved.
