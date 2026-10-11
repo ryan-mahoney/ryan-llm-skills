@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 import { processIdentity } from "../spec-observe/process-identity.mjs";
 import { createDiscussionService, readThread, validateThread } from "./discussion.mjs";
 import { createWorkspace, setupStorage, addMaterial } from "./store.mjs";
-import { resolveAssignment } from "./assignments.mjs";
+import { findAssignment, resolveAssignment } from "./assignments.mjs";
 
 const PI_FIXTURE = fileURLToPath(new URL("./fixtures/fake-pi-rpc.mjs", import.meta.url));
 
@@ -232,6 +232,67 @@ function shutdownHarness({ record, pid, ready }) {
     return child;
   };
   return { calls, child, spawnImpl };
+}
+
+// Owned inert process used as the real pane PID for the tmux transport
+// fixture: the canonical processIdentity inspector observes it through a real
+// OS probe, and cleanup kills exactly this child.
+function dummyProcess(t) {
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  t.after(() => {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // Already gone.
+    }
+  });
+  return child;
+}
+
+// Final tmux transport boundary for thread handoff launches: every command
+// queue is recorded, no real session is created, has-session reports absence
+// until the fixture has captured an assignment, unexpected commands refuse,
+// and read-only probes for the recorded assignment answer with the owned dummy
+// pane PID. `dummyPid` is supplied only by tests that expect a session.
+function tmuxHarness({ dummyPid = null } = {}) {
+  const calls = [];
+  let assignmentId = null;
+  const run = (socketPath, args) => {
+    calls.push({ socketPath, args: [...args] });
+    if (args.includes("new-session")) {
+      const marker = args.find((arg) => typeof arg === "string" && arg.startsWith("ADJACENT_ASSIGNMENT_ID="));
+      if (marker) assignmentId = marker.slice("ADJACENT_ASSIGNMENT_ID=".length);
+      return Promise.resolve({ ok: true, code: 0, stdout: "", stderr: "" });
+    }
+    if (args.includes("has-session")) {
+      return Promise.resolve(
+        assignmentId === null
+          ? { ok: false, code: 1, stdout: "", stderr: "can't find session" }
+          : { ok: true, code: 0, stdout: "", stderr: "" },
+      );
+    }
+    if (args.includes("list-clients")) {
+      return Promise.resolve({ ok: true, code: 0, stdout: "", stderr: "" });
+    }
+    if (args.includes("display-message")) {
+      return Promise.resolve({ ok: true, code: 0, stdout: `%1 ${dummyPid}\n`, stderr: "" });
+    }
+    if (args.includes("show-options")) {
+      return Promise.resolve({ ok: true, code: 0, stdout: `${assignmentId}\n`, stderr: "" });
+    }
+    return Promise.reject(new Error(`unexpected tmux command: ${args.join(" ")}`));
+  };
+  return {
+    calls,
+    run,
+    newSessionCount: () => calls.filter((call) => call.args.includes("new-session")).length,
+    destructiveCount: () =>
+      calls.filter((call) =>
+        call.args.some((arg) =>
+          ["kill-session", "kill-server", "kill-pane", "kill-window"].includes(arg),
+        ),
+      ).length,
+  };
 }
 
 function manualRecord({ workspaceId, directory, threadId = randomUUID(), sessionId = randomUUID(), overrides = {} }) {
@@ -3708,7 +3769,7 @@ test("thread handoff preview matches the canonical assignment resolution", async
       brief: saved.brief,
       instructions,
       skill: "general",
-      target: thread.target,
+      target: null,
     });
     assert.equal(preview.contractDigest, oracle.contractDigest);
     assert.deepEqual(preview.piArgs, oracle.piArgs);
@@ -3778,5 +3839,442 @@ test("thread handoff preview matches the canonical assignment resolution", async
       child.stdout.destroy();
       child.stderr.destroy();
     }
+  }
+});
+
+test("thread handoff launch links the durable assignment without owning tmux", { timeout: 30000 }, async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const workspaceDirectory = await setupWorkspace(storageRoot, "alpha");
+  const binDirectory = join(root, "bin");
+  await mkdir(binDirectory, { recursive: true });
+  const piPath = join(binDirectory, "pi");
+  await writeFile(piPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await chmod(piPath, 0o755);
+  const savedPath = process.env.PATH;
+  process.env.PATH = `${binDirectory}${delimiter}${savedPath}`;
+  t.after(() => {
+    if (savedPath === undefined) delete process.env.PATH;
+    else process.env.PATH = savedPath;
+  });
+
+  const dummy = dummyProcess(t);
+  const tmux = tmuxHarness({ dummyPid: dummy.pid });
+  const makeService = () =>
+    createDiscussionService({
+      root: storageRoot,
+      agentDir: join(root, "agent"),
+      assignmentAdapters: {
+        tmuxRun: tmux.run,
+        observationProbes: {
+          tmuxRun: tmux.run,
+          psRun: () => ({ stdout: "", complete: true }),
+        },
+      },
+    });
+
+  const instructions = "Deliver the handoff.";
+  const requestId = randomUUID();
+  const assignmentId = randomUUID();
+  let threadId = null;
+  let previewDigest = null;
+  const launchInput = () => ({
+    workspace_id: "alpha",
+    thread_id: threadId,
+    request_id: requestId,
+    assignment_id: assignmentId,
+    expectedDigest: previewDigest,
+    instructions,
+  });
+
+  const service = makeService();
+  try {
+    const thread = await service.create({ workspace_id: "alpha", title: "Handoff launch" });
+    threadId = thread.thread_id;
+    const saved = await service.saveBrief({
+      workspace_id: "alpha",
+      thread_id: threadId,
+      request_id: requestId,
+      title: "Title",
+      content: "body\n",
+    });
+    const preview = await service.previewAssignment({
+      workspace_id: "alpha",
+      thread_id: threadId,
+      request_id: requestId,
+      assignment_id: assignmentId,
+      instructions,
+    });
+    previewDigest = preview.contractDigest;
+    assert.equal(preview.record.execution_dir, workspaceDirectory);
+
+    const launched = await service.launchAssignment(launchInput());
+    assert.equal(launched.assignment.assignment_id, assignmentId);
+    assert.equal(launched.assignment.state, "live");
+    assert.equal(launched.assignment.brief, saved.brief);
+    assert.equal(launched.assignment.execution_dir, workspaceDirectory);
+    assert.equal(launched.assignment.pi_identity.pid, dummy.pid);
+    assert.equal(launched.observation.state, "live");
+    assert.equal(launched.handoff.assignment_id, assignmentId);
+    assert.equal(tmux.newSessionCount(), 1);
+
+    const stored = await findAssignment(storageRoot, assignmentId);
+    assert.equal(stored.assignment_id, assignmentId);
+    assert.equal(stored.state, "live");
+    assert.equal(
+      await readFile(join(workspaceDirectory, "assignments", `${assignmentId}.brief.md`), "utf8"),
+      "# Title\n\nbody\n",
+    );
+    assert.deepEqual(
+      (await readdir(join(workspaceDirectory, "assignments"))).filter((name) => name.endsWith(".json")),
+      [`${assignmentId}.json`],
+    );
+
+    const repeat = await service.launchAssignment(launchInput());
+    assert.equal(repeat.assignment.assignment_id, assignmentId);
+    assert.equal(repeat.assignment.state, "live");
+    assert.equal(repeat.handoff.assignment_id, assignmentId);
+    assert.equal(tmux.newSessionCount(), 1);
+
+    await assert.rejects(
+      service.launchAssignment({ ...launchInput(), assignment_id: randomUUID() }),
+      { code: "request-conflict" },
+    );
+  } finally {
+    await service.close();
+  }
+
+  // Service close must leave the assignment's tmux work untouched.
+  assert.equal(tmux.newSessionCount(), 1);
+  assert.equal(tmux.destructiveCount(), 0);
+  assert.equal(dummy.exitCode, null);
+  assert.doesNotThrow(() => process.kill(dummy.pid, 0));
+
+  const restarted = makeService();
+  try {
+    const repeat = await restarted.launchAssignment(launchInput());
+    assert.equal(repeat.assignment.assignment_id, assignmentId);
+    assert.equal(repeat.handoff.assignment_id, assignmentId);
+    assert.equal(tmux.newSessionCount(), 1);
+
+    // Assignment-published but handoff-unlinked crash: removing only the
+    // durable handoff assignment_id must relink on the same-ID launch.
+    const threadFile = join(workspaceDirectory, "threads", `${threadId}.json`);
+    const unlinked = JSON.parse(await readFile(threadFile, "utf8"));
+    delete unlinked.handoffs[0].assignment_id;
+    await writeFile(threadFile, `${JSON.stringify(unlinked)}\n`);
+
+    const relinked = await restarted.launchAssignment(launchInput());
+    assert.equal(relinked.assignment.assignment_id, assignmentId);
+    assert.equal(relinked.handoff.assignment_id, assignmentId);
+    assert.equal(tmux.newSessionCount(), 1);
+    assert.equal((await findAssignment(storageRoot, assignmentId)).assignment_id, assignmentId);
+    assert.deepEqual(
+      (await readdir(join(workspaceDirectory, "assignments"))).filter((name) => name.endsWith(".json")),
+      [`${assignmentId}.json`],
+    );
+    const persisted = JSON.parse(await readFile(threadFile, "utf8"));
+    assert.equal(persisted.handoffs[0].assignment_id, assignmentId);
+  } finally {
+    await restarted.close();
+  }
+});
+
+test("thread handoff launch refuses stale preview after brief bytes change", { timeout: 30000 }, async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const workspaceDirectory = await setupWorkspace(storageRoot, "alpha");
+  const binDirectory = join(root, "bin");
+  await mkdir(binDirectory, { recursive: true });
+  const piPath = join(binDirectory, "pi");
+  await writeFile(piPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await chmod(piPath, 0o755);
+  const savedPath = process.env.PATH;
+  process.env.PATH = `${binDirectory}${delimiter}${savedPath}`;
+  t.after(() => {
+    if (savedPath === undefined) delete process.env.PATH;
+    else process.env.PATH = savedPath;
+  });
+
+  const tmux = tmuxHarness();
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    assignmentAdapters: { tmuxRun: tmux.run },
+  });
+  try {
+    const thread = await service.create({ workspace_id: "alpha", title: "Stale brief" });
+    const requestId = randomUUID();
+    const assignmentId = randomUUID();
+    const instructions = "Deliver the handoff.";
+    const saved = await service.saveBrief({
+      workspace_id: "alpha",
+      thread_id: thread.thread_id,
+      request_id: requestId,
+      title: "Title",
+      content: "body\n",
+    });
+    const preview = await service.previewAssignment({
+      workspace_id: "alpha",
+      thread_id: thread.thread_id,
+      request_id: requestId,
+      assignment_id: assignmentId,
+      instructions,
+    });
+    await writeFile(join(workspaceDirectory, saved.brief), "# Title\n\nchanged bytes\n");
+    await assert.rejects(
+      service.launchAssignment({
+        workspace_id: "alpha",
+        thread_id: thread.thread_id,
+        request_id: requestId,
+        assignment_id: assignmentId,
+        expectedDigest: preview.contractDigest,
+        instructions,
+      }),
+      { code: "stale-preview" },
+    );
+    assert.equal(tmux.calls.length, 0);
+    await assert.rejects(lstat(join(workspaceDirectory, "assignments")), { code: "ENOENT" });
+  } finally {
+    await service.close();
+  }
+});
+
+test("thread handoff launch refuses stale preview after repository rebinding", { timeout: 30000 }, async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const first = await makeRepo(join(root, "repos", "first"));
+  const second = await makeRepo(join(root, "repos", "second"));
+  const workspaceDirectory = await setupWorkspace(storageRoot, "repo-ws", [{ id: "app", path: first }]);
+  const binDirectory = join(root, "bin");
+  await mkdir(binDirectory, { recursive: true });
+  const piPath = join(binDirectory, "pi");
+  await writeFile(piPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await chmod(piPath, 0o755);
+  const savedPath = process.env.PATH;
+  process.env.PATH = `${binDirectory}${delimiter}${savedPath}`;
+  t.after(() => {
+    if (savedPath === undefined) delete process.env.PATH;
+    else process.env.PATH = savedPath;
+  });
+
+  const tmux = tmuxHarness();
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    assignmentAdapters: { tmuxRun: tmux.run },
+  });
+  try {
+    const thread = await service.create({
+      workspace_id: "repo-ws",
+      title: "Rebound repository",
+      target: { kind: "repository", repository_id: "app" },
+    });
+    assert.equal(thread.execution_dir, first);
+    const requestId = randomUUID();
+    const assignmentId = randomUUID();
+    const instructions = "Deliver the handoff.";
+    await service.saveBrief({
+      workspace_id: "repo-ws",
+      thread_id: thread.thread_id,
+      request_id: requestId,
+      title: "Title",
+      content: "body\n",
+    });
+    const preview = await service.previewAssignment({
+      workspace_id: "repo-ws",
+      thread_id: thread.thread_id,
+      request_id: requestId,
+      assignment_id: assignmentId,
+      instructions,
+    });
+    assert.equal(preview.record.execution_dir, first);
+
+    await writeFile(
+      join(workspaceDirectory, "kit.yaml"),
+      kitYaml({ id: "repo-ws", name: "repo-ws", repositories: [{ id: "app", path: second }] }),
+    );
+    await assert.rejects(
+      service.launchAssignment({
+        workspace_id: "repo-ws",
+        thread_id: thread.thread_id,
+        request_id: requestId,
+        assignment_id: assignmentId,
+        expectedDigest: preview.contractDigest,
+        instructions,
+      }),
+      { code: "stale-preview" },
+    );
+    assert.equal(tmux.calls.length, 0);
+    await assert.rejects(lstat(join(workspaceDirectory, "assignments")), { code: "ENOENT" });
+  } finally {
+    await service.close();
+  }
+});
+
+test("thread handoff worktree target launches into the registered repository", { timeout: 30000 }, async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const primary = await makeRepo(join(root, "repos", "primary"));
+  const worktreePath = join(root, "repos", "linked");
+  await git(primary, ["worktree", "add", "--quiet", worktreePath]);
+  const linked = await realpath(worktreePath);
+  await setupWorkspace(storageRoot, "wt-ws", [
+    { id: "app", path: primary },
+    { id: "app-linked", path: linked },
+  ]);
+  const binDirectory = join(root, "bin");
+  await mkdir(binDirectory, { recursive: true });
+  const piPath = join(binDirectory, "pi");
+  await writeFile(piPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await chmod(piPath, 0o755);
+  const savedPath = process.env.PATH;
+  process.env.PATH = `${binDirectory}${delimiter}${savedPath}`;
+  t.after(() => {
+    if (savedPath === undefined) delete process.env.PATH;
+    else process.env.PATH = savedPath;
+  });
+
+  const dummy = dummyProcess(t);
+  const tmux = tmuxHarness({ dummyPid: dummy.pid });
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    assignmentAdapters: {
+      tmuxRun: tmux.run,
+      observationProbes: {
+        tmuxRun: tmux.run,
+        psRun: () => ({ stdout: "", complete: true }),
+      },
+    },
+  });
+  try {
+    const thread = await service.create({
+      workspace_id: "wt-ws",
+      title: "Registered worktree",
+      target: { kind: "worktree", path: linked },
+    });
+    assert.equal(thread.execution_dir, linked);
+    assert.equal(thread.attention, null);
+    const requestId = randomUUID();
+    const assignmentId = randomUUID();
+    const instructions = "Deliver the worktree handoff.";
+    await service.saveBrief({
+      workspace_id: "wt-ws",
+      thread_id: thread.thread_id,
+      request_id: requestId,
+      title: "Title",
+      content: "body\n",
+    });
+    const preview = await service.previewAssignment({
+      workspace_id: "wt-ws",
+      thread_id: thread.thread_id,
+      request_id: requestId,
+      assignment_id: assignmentId,
+      instructions,
+    });
+    assert.equal(preview.record.execution_dir, linked);
+    assert.equal(preview.record.repository_id, "app-linked");
+
+    const launched = await service.launchAssignment({
+      workspace_id: "wt-ws",
+      thread_id: thread.thread_id,
+      request_id: requestId,
+      assignment_id: assignmentId,
+      expectedDigest: preview.contractDigest,
+      instructions,
+    });
+    assert.equal(launched.assignment.execution_dir, linked);
+    assert.equal(launched.assignment.repository_id, "app-linked");
+    assert.equal(tmux.newSessionCount(), 1);
+    const session = tmux.calls.find((call) => call.args.includes("new-session"));
+    assert.equal(session.args[session.args.indexOf("-c") + 1], linked);
+  } finally {
+    await service.close();
+  }
+  assert.equal(dummy.exitCode, null);
+  assert.equal(tmux.destructiveCount(), 0);
+});
+
+test("thread handoff refuses a Git worktree with no registered repository", { timeout: 30000 }, async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const primary = await makeRepo(join(root, "repos", "primary"));
+  const worktreePath = join(root, "repos", "extra");
+  await git(primary, ["worktree", "add", "--quiet", worktreePath]);
+  const linked = await realpath(worktreePath);
+  const workspaceDirectory = await setupWorkspace(storageRoot, "wt-ws", [{ id: "app", path: primary }]);
+  const binDirectory = join(root, "bin");
+  await mkdir(binDirectory, { recursive: true });
+  const piPath = join(binDirectory, "pi");
+  await writeFile(piPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await chmod(piPath, 0o755);
+  const savedPath = process.env.PATH;
+  process.env.PATH = `${binDirectory}${delimiter}${savedPath}`;
+  t.after(() => {
+    if (savedPath === undefined) delete process.env.PATH;
+    else process.env.PATH = savedPath;
+  });
+
+  const tmux = tmuxHarness();
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    assignmentAdapters: { tmuxRun: tmux.run },
+  });
+  try {
+    assert.equal((await git(linked, ["rev-parse", "--is-inside-work-tree"])).trim(), "true");
+    const thread = await service.create({
+      workspace_id: "wt-ws",
+      title: "Unregistered worktree",
+      target: { kind: "worktree", path: linked },
+    });
+    assert.equal(thread.attention, "missing-directory");
+    assert.equal(thread.execution_dir, linked);
+    assert.notEqual(thread.execution_dir, workspaceDirectory);
+    const requestId = randomUUID();
+    const instructions = "Deliver the handoff.";
+    await service.saveBrief({
+      workspace_id: "wt-ws",
+      thread_id: thread.thread_id,
+      request_id: requestId,
+      title: "Title",
+      content: "body\n",
+    });
+    await assert.rejects(
+      service.previewAssignment({
+        workspace_id: "wt-ws",
+        thread_id: thread.thread_id,
+        request_id: requestId,
+        assignment_id: randomUUID(),
+        instructions,
+      }),
+      /worktree target has no unique recorded repository/,
+    );
+    await assert.rejects(
+      service.launchAssignment({
+        workspace_id: "wt-ws",
+        thread_id: thread.thread_id,
+        request_id: requestId,
+        assignment_id: randomUUID(),
+        expectedDigest: "0".repeat(64),
+        instructions,
+      }),
+      /worktree target has no unique recorded repository/,
+    );
+    assert.equal(tmux.calls.length, 0);
+    await assert.rejects(lstat(join(workspaceDirectory, "assignments")), { code: "ENOENT" });
+    const stored = JSON.parse(
+      await readFile(join(workspaceDirectory, "threads", `${thread.thread_id}.json`), "utf8"),
+    );
+    assert.equal(stored.handoffs[0].assignment_id, undefined);
+    assert.deepEqual(stored.target, { kind: "worktree", path: linked });
+  } finally {
+    await service.close();
   }
 });
