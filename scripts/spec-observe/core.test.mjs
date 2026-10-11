@@ -270,6 +270,17 @@ test('session branch treats missing as empty, unreadable and oversized as typed 
   const linearBranch = await readSessionBranch(linear);
   assert.deepEqual(linearBranch.entries.map(item => item.id), ['a', 'b']);
   assert.equal(linearBranch.leaf_id, 'b');
+  const legacy = path.join(directory, 'legacy-unversioned.jsonl');
+  await log(legacy, [{ type: 'session', id: 's0', timestamp: '2026-10-05T07:00:00Z', cwd: '/project' },
+    { type: 'message', timestamp: '2026-10-05T07:00:01Z', message: { role: 'user', content: 'first' } },
+    { type: 'message', timestamp: '2026-10-05T07:00:02Z', message: { role: 'assistant', content: 'second' } }]);
+  const legacyBefore = await readFile(legacy, 'utf8');
+  const legacyBranch = await readSessionBranch(legacy);
+  assert.equal(legacyBranch.entries.length, 2);
+  assert.deepEqual(legacyBranch.entries.map(item => item.message.role), ['user', 'assistant']);
+  assert.deepEqual(legacyBranch.entries.map(item => item.message.content), ['first', 'second']);
+  assert.equal(legacyBranch.header.version, undefined);
+  assert.equal(await readFile(legacy, 'utf8'), legacyBefore);
   await assert.rejects(readSessionBranch(linear, { limit: 201 }), RangeError);
   await assert.rejects(readSessionBranch(linear, { limit: 0 }), RangeError);
   const oversized = path.join(directory, 'oversized.jsonl');

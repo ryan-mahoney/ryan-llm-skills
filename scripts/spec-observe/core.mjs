@@ -171,8 +171,10 @@ export async function readSessionBranch(file, { before, limit = 100 } = {}) {
   const valid = candidates.filter(record => typeof record.id === 'string' && record.id);
   let leaf_id = valid.length ? valid[valid.length - 1].id : null;
   let chain;
-  if (Number.isInteger(header?.version) && header.version < 2) {
+  const version = header ? (header.version ?? 1) : undefined;
+  if (Number.isInteger(version) && version < 2) {
     // Version 1 sessions are linear: file order is the active branch.
+    // An absent header version defaults to 1 (legacy file-order contract).
     chain = candidates;
   } else {
     const byId = new Map();
