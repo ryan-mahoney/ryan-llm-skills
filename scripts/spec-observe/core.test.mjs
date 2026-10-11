@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, truncate, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { discover, discoverManaged, discoverPackage, report, summarize } from './core.mjs';
+import { createJsonlSplitter, discover, discoverManaged, discoverPackage, readSessionBranch, report, summarize } from './core.mjs';
 
 async function fixture(t) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'spec-observe-'));
@@ -171,4 +171,120 @@ test('managed pointer discovery reports selection omission separately from candi
   assert.equal(flooded.candidates_truncated, true);
   assert.equal(flooded.runs.length, 5);
   assert.equal(flooded.runs_truncated, true);
+});
+
+test('LF splitter frames literal LF, keeps split UTF-8 and U+2028, and reports malformed lines only', () => {
+  const lines = [], errors = [];
+  const splitter = createJsonlSplitter({ onLine: (record, raw) => lines.push([record, raw]), onError: (error, raw) => errors.push(raw) });
+  const record = { type: 'message', id: 'a', message: { role: 'user', content: 'left\u2028right \u26c4' } };
+  const bytes = Buffer.from(JSON.stringify(record) + '\n');
+  const splitAt = bytes.indexOf(Buffer.from('\u26c4')) + 1;
+  splitter.write(bytes.subarray(0, splitAt));
+  splitter.write(Buffer.concat([bytes.subarray(splitAt), Buffer.from('{"broken":\n{"ok":1}\r\n')]));
+  assert.equal(splitter.end(), '');
+  assert.equal(lines.length, 2);
+  assert.equal(lines[0][0].message.content, 'left\u2028right \u26c4');
+  assert.equal(lines[0][0].message.content.includes('\uFFFD'), false);
+  assert.equal(JSON.parse(lines[1][1]).ok, 1);
+  assert.deepEqual(errors, ['{"broken":']);
+  // A torn final line is returned, never emitted or reported as malformed.
+  const torn = createJsonlSplitter({ onLine: () => { throw new Error('must not emit'); }, onError: () => { throw new Error('must not report'); } });
+  torn.write('{"type":"message"');
+  assert.equal(torn.end(), '{"type":"message"');
+});
+
+test('session branch follows the active parentId chain and preserves Unicode with a torn final line', async t => {
+  const directory = await fixture(t);
+  const file = path.join(directory, 'active.jsonl');
+  const rows = [
+    { type: 'session', version: 3, id: 's1', timestamp: '2026-10-05T07:00:00Z', cwd: '/project' },
+    { type: 'message', id: 'a', parentId: null, timestamp: '2026-10-05T07:00:01Z', message: { role: 'user', content: 'start\u2028snow \u26c4' } },
+    { type: 'model_change', id: 'm', parentId: 'a', timestamp: '2026-10-05T07:00:02Z', provider: 'p', modelId: 'm' },
+    { type: 'message', id: 'b', parentId: 'm', timestamp: '2026-10-05T07:00:03Z', message: { role: 'assistant', content: [{ type: 'text', text: 'abandoned' }] } },
+    { type: 'message', id: 'c', parentId: 'b', timestamp: '2026-10-05T07:00:04Z', message: { role: 'user', content: 'abandoned tip' } },
+    { type: 'message', id: 'd', parentId: 'a', timestamp: '2026-10-05T07:00:05Z', message: { role: 'user', content: 'new branch \u26c4' } },
+    { type: 'message', id: 'e', parentId: 'd', timestamp: '2026-10-05T07:00:06Z', message: { role: 'assistant', content: [{ type: 'text', text: 'reply' }] } },
+  ];
+  const text = rows.map(JSON.stringify).join('\n') + '\nnot json\n' + '{"type":"message","id":"torn"';
+  await writeFile(file, text);
+  const branch = await readSessionBranch(file);
+  assert.equal(branch.header.id, 's1');
+  assert.equal(branch.header.version, 3);
+  assert.deepEqual(branch.entries.map(item => item.id), ['a', 'd', 'e']);
+  assert.equal(branch.entries[2].message.content[0].text, 'reply');
+  assert.equal(branch.leaf_id, 'e');
+  assert.equal(branch.incomplete_tail, true);
+  assert.equal(branch.skipped_lines, 1);
+  assert.equal(branch.truncated, false);
+  assert.equal(branch.entries[0].message.content, 'start\u2028snow \u26c4');
+  assert.equal(JSON.stringify(branch).includes('\uFFFD'), false);
+  assert.equal((await readFile(file, 'utf8')).length, text.length);
+  await assert.rejects(readSessionBranch(file, { before: 'm' }), error => error.code === 'invalid-cursor');
+});
+
+test('session branch pages before an active entry and refuses invalid cursors, missing parents and cycles', async t => {
+  const directory = await fixture(t);
+  const header = { type: 'session', version: 3, id: 's1', timestamp: '2026-10-05T07:00:00Z', cwd: '/project' };
+  const file = path.join(directory, 'page.jsonl');
+  await log(file, [header,
+    { type: 'message', id: 'a', parentId: null, timestamp: '2026-10-05T07:00:01Z', message: { role: 'user', content: 'one' } },
+    { type: 'model_change', id: 'm', parentId: 'a', timestamp: '2026-10-05T07:00:02Z', provider: 'p', modelId: 'm' },
+    { type: 'message', id: 'b', parentId: 'm', timestamp: '2026-10-05T07:00:03Z', message: { role: 'assistant', content: 'two' } },
+    { type: 'message', id: 'c', parentId: 'b', timestamp: '2026-10-05T07:00:04Z', message: { role: 'user', content: 'three' } },
+    { type: 'message', id: 'd', parentId: 'c', timestamp: '2026-10-05T07:00:05Z', message: { role: 'assistant', content: 'four' } }]);
+  const page = await readSessionBranch(file, { limit: 2 });
+  assert.deepEqual(page.entries.map(item => item.id), ['c', 'd']);
+  assert.equal(page.truncated, true);
+  assert.equal(page.leaf_id, 'd');
+  const older = await readSessionBranch(file, { before: 'c' });
+  assert.deepEqual(older.entries.map(item => item.id), ['a', 'b']);
+  assert.equal(older.truncated, false);
+  const olderStill = await readSessionBranch(file, { before: 'd', limit: 1 });
+  assert.deepEqual(olderStill.entries.map(item => item.id), ['c']);
+  assert.equal(olderStill.truncated, true);
+  // before may name a non-message entry on the active branch.
+  const beforeModel = await readSessionBranch(file, { before: 'm', limit: 1 });
+  assert.deepEqual(beforeModel.entries.map(item => item.id), ['a']);
+  await assert.rejects(readSessionBranch(file, { before: 'absent' }), error => error.code === 'invalid-cursor');
+  await assert.rejects(readSessionBranch(file, { before: 's1' }), error => error.code === 'invalid-cursor');
+  const cyclic = path.join(directory, 'cyclic.jsonl');
+  await log(cyclic, [header,
+    { type: 'message', id: 'x', parentId: 'y', timestamp: '2026-10-05T07:00:01Z', message: { role: 'user', content: 'x' } },
+    { type: 'message', id: 'y', parentId: 'x', timestamp: '2026-10-05T07:00:02Z', message: { role: 'user', content: 'y' } }]);
+  await assert.rejects(readSessionBranch(cyclic), error => error.code === 'corrupt-session');
+  const missingParent = path.join(directory, 'missing-parent.jsonl');
+  await log(missingParent, [header,
+    { type: 'message', id: 'x', parentId: 'ghost', timestamp: '2026-10-05T07:00:01Z', message: { role: 'user', content: 'x' } }]);
+  await assert.rejects(readSessionBranch(missingParent), error => error.code === 'corrupt-session');
+});
+
+test('session branch treats missing as empty, unreadable and oversized as typed failures, and version 1 as order', async t => {
+  const directory = await fixture(t);
+  assert.deepEqual(await readSessionBranch(path.join(directory, 'absent.jsonl')),
+    { header: null, entries: [], leaf_id: null, incomplete_tail: false, skipped_lines: 0, truncated: false });
+  await assert.rejects(readSessionBranch(directory), error => error.code === 'unreadable-session');
+  const linear = path.join(directory, 'linear.jsonl');
+  await log(linear, [{ type: 'session', version: 1, id: 's1', timestamp: '2026-10-05T07:00:00Z', cwd: '/project' },
+    { type: 'message', id: 'a', timestamp: '2026-10-05T07:00:01Z', message: { role: 'user', content: 'first' } },
+    { type: 'message', id: 'b', timestamp: '2026-10-05T07:00:02Z', message: { role: 'assistant', content: 'second' } }]);
+  const linearBranch = await readSessionBranch(linear);
+  assert.deepEqual(linearBranch.entries.map(item => item.id), ['a', 'b']);
+  assert.equal(linearBranch.leaf_id, 'b');
+  const legacy = path.join(directory, 'legacy-unversioned.jsonl');
+  await log(legacy, [{ type: 'session', id: 's0', timestamp: '2026-10-05T07:00:00Z', cwd: '/project' },
+    { type: 'message', timestamp: '2026-10-05T07:00:01Z', message: { role: 'user', content: 'first' } },
+    { type: 'message', timestamp: '2026-10-05T07:00:02Z', message: { role: 'assistant', content: 'second' } }]);
+  const legacyBefore = await readFile(legacy, 'utf8');
+  const legacyBranch = await readSessionBranch(legacy);
+  assert.equal(legacyBranch.entries.length, 2);
+  assert.deepEqual(legacyBranch.entries.map(item => item.message.role), ['user', 'assistant']);
+  assert.deepEqual(legacyBranch.entries.map(item => item.message.content), ['first', 'second']);
+  assert.equal(legacyBranch.header.version, undefined);
+  assert.equal(await readFile(legacy, 'utf8'), legacyBefore);
+  await assert.rejects(readSessionBranch(linear, { limit: 201 }), RangeError);
+  await assert.rejects(readSessionBranch(linear, { limit: 0 }), RangeError);
+  const oversized = path.join(directory, 'oversized.jsonl');
+  await writeFile(oversized, '{"type":"session","version":3,"id":"s1"}\n');
+  await truncate(oversized, 64 * 1024 * 1024 + 1);
+  await assert.rejects(readSessionBranch(oversized), error => error.code === 'session-too-large');
 });

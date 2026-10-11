@@ -1,17 +1,21 @@
-// Real ordinary-entry acceptance for the observe-only Sentinel host. Every
-// case runs the actual sentinel-host.mjs subprocess (or the public factory for
-// scenario D) against isolated canonical temporary agentDir/root fixtures with
-// a sanitized environment; no live repository, credential, gh, Pi, launchd or
-// Tailscale state is touched.
+// Real ordinary-entry acceptance for the Sentinel host: read-only observation
+// plus the local discussion service. Every case runs the actual
+// sentinel-host.mjs subprocess (or the public factory for scenario D) against
+// isolated canonical temporary agentDir/root fixtures with a sanitized
+// environment; no live repository, credential, gh, Pi, launchd or Tailscale
+// state is touched.
 //
 // Focused command: node --test pi/extensions/spec-runtime/sentinel-host.test.mjs
 // Selectable case: node --test --test-name-pattern 'scenario A' pi/extensions/spec-runtime/sentinel-host.test.mjs
 // Selectable case: node --test --test-name-pattern 'scenario B' pi/extensions/spec-runtime/sentinel-host.test.mjs
 // Selectable case: node --test --test-name-pattern 'scenario C' pi/extensions/spec-runtime/sentinel-host.test.mjs
 // Selectable case: node --test --test-name-pattern 'scenario D' pi/extensions/spec-runtime/sentinel-host.test.mjs
+// Selectable case: node --test --test-name-pattern 'scenario E' pi/extensions/spec-runtime/sentinel-host.test.mjs
+// Selectable case: node --test --test-name-pattern 'scenario F' pi/extensions/spec-runtime/sentinel-host.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
 import { connect as tcpConnect, createServer } from 'node:net';
@@ -21,6 +25,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { inspectProcess, sameProcess } from '../../../scripts/spec-observe/process-identity.mjs';
 import { workspaceKey } from '../../../scripts/spec-observe/sentinel.mjs';
+import { createWorkspace, setupStorage } from '../../../scripts/workspaces/store.mjs';
 import { createSentinelHost } from './sentinel-host.mjs';
 
 const HOST_FILE = fileURLToPath(new URL('./sentinel-host.mjs', import.meta.url));
@@ -134,25 +139,55 @@ function createFixture(t, name) {
   const agentDir = join(base, 'agent');
   const home = join(base, 'home');
   const root = join(base, 'root');
+  const storageRoot = join(base, 'storage');
+  const binDir = join(base, 'bin');
+  const promptLog = join(base, 'pi-prompts.jsonl');
   mkdirSync(home, { recursive: true });
   mkdirSync(root, { recursive: true });
+  mkdirSync(binDir, { recursive: true });
+  const fakePi = fileURLToPath(new URL('../../../scripts/workspaces/fixtures/fake-pi-rpc.mjs', import.meta.url));
+  const runner = join(base, 'pi-runner.mjs');
+  writeFileSync(runner, `import { appendFileSync } from 'node:fs';
+process.env.FAKE_PI_HANG = '1';
+const LOG = ${JSON.stringify(promptLog)};
+await import(${JSON.stringify(pathToFileURL(fakePi).href)});
+appendFileSync(LOG, JSON.stringify({ pid: process.pid }) + String.fromCharCode(10));
+let pending = '';
+process.stdin.on('data', chunk => {
+  pending += chunk;
+  if (pending.length > 1024 * 1024) pending = pending.slice(-1024 * 1024);
+  let index = pending.indexOf(String.fromCharCode(10));
+  while (index !== -1) {
+    const line = pending.slice(0, index);
+    pending = pending.slice(index + 1);
+    let message = null;
+    try { message = JSON.parse(line); } catch { /* framing stays the fake transport's concern */ }
+    if (message && message.type === 'prompt') appendFileSync(LOG, JSON.stringify({ pid: process.pid, command: message }) + String.fromCharCode(10));
+    index = pending.indexOf(String.fromCharCode(10));
+  }
+});
+`);
+  writeFileSync(join(binDir, 'pi'), `#!/bin/sh\nexec '${process.execPath}' '${runner}' "$@"\n`, { mode: 0o755 });
   const tracked = [];
   const servers = [];
   // No credential or provider environment crosses into the host: only the
-  // isolated PATH/HOME, the owned agent dir/scope and a temp TMPDIR.
-  const environment = () => {
+  // isolated PATH/HOME, the owned agent dir/scope, the temp storage root and a
+  // temp TMPDIR.
+  const environment = (overrides = {}) => {
     const env = {
-      PATH: process.env.PATH ?? '/usr/bin:/bin:/usr/sbin:/sbin',
+      PATH: `${binDir}:${process.env.PATH ?? '/usr/bin:/bin:/usr/sbin:/sbin'}`,
       HOME: home,
       PI_CODING_AGENT_DIR: agentDir,
       PI_INTERCOM_SCOPE_ID: SCOPE,
+      ADJACENT_STORAGE_ROOT: storageRoot,
       LC_ALL: 'C',
+      ...overrides,
     };
     if (process.env.TMPDIR) env.TMPDIR = process.env.TMPDIR;
     return env;
   };
-  const spawnOwned = argv => {
-    const child = spawn(process.execPath, argv, { env: environment(), stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+  const spawnOwned = (argv, env = environment()) => {
+    const child = spawn(process.execPath, argv, { env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
     const io = { stdout: '', stderr: '' };
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
@@ -177,7 +212,8 @@ function createFixture(t, name) {
     for (const server of servers) await new Promise(resolve => server.close(resolve));
     rmSync(base, { recursive: true, force: true });
   });
-  return { base, agentDir, home, root, servers, environment, spawnOwned, spawnHost: extra => spawnOwned([HOST_FILE, ...extra]), baseArgs };
+  return { base, agentDir, home, root, storageRoot, binDir, promptLog, servers, environment, spawnOwned,
+    spawnHost: (extra, env) => spawnOwned([HOST_FILE, ...extra], env), baseArgs };
 }
 
 async function waitForReady(host, timeoutMs = READY_TIMEOUT_MS) {
@@ -260,7 +296,8 @@ async function scenarioOrdinaryPublicHost(t) {
 
   // Owned children are observed exactly, never assumed from numeric pids.
   const hostChildren = directChildren(host.pid).map(describeProcess).filter(identity => identity !== null);
-  assert.ok(hostChildren.length >= 2, `expected owned reader and dashboard children, saw ${hostChildren.length}`);
+  assert.ok(hostChildren.length >= 1, `expected the owned reader child, saw ${hostChildren.length}`);
+  assert.ok(hostChildren.some(identity => identity.pid === first.snapshot.reader.pid), 'the reader child identity is owned');
   const sleeper = f.spawnOwned(['-e', 'setInterval(() => {}, 1000)']);
   const sleeperIdentity = describeProcess(sleeper.pid);
   assert.ok(sleeperIdentity, 'the unrelated owned process is alive');
@@ -380,11 +417,12 @@ async function scenarioPublicFactory(t) {
   const ownedChildren = [];
   let handle = null;
   try {
-    handle = await createSentinelHost({ agentDir: f.agentDir, root: f.root, port: 0, scope: SCOPE });
+    handle = await createSentinelHost({ agentDir: f.agentDir, storageRoot: f.storageRoot, root: f.root, port: 0, scope: SCOPE });
     const receipt = handle.receipt;
     assert.equal(receipt.type, 'ready');
     assert.equal(receipt.state, 'observing');
     assert.match(receipt.dashboard_url, /^http:\/\/127\.0\.0\.1:\d+\/$/);
+    assert.equal(receipt.discussion_state, 'unavailable', 'a missing temp storage root never resolves the live store');
     const snapshot = JSON.parse(readFileSync(receipt.snapshot_path, 'utf8'));
     assert.equal(snapshot.state, 'observing');
 
@@ -393,7 +431,8 @@ async function scenarioPublicFactory(t) {
       const identity = describeProcess(pid);
       if (identity) ownedChildren.push(identity);
     }
-    assert.ok(ownedChildren.length >= 2, 'the public factory owns real reader and dashboard children');
+    assert.ok(ownedChildren.length >= 1, 'the public factory owns the real reader child');
+    assert.ok(ownedChildren.some(identity => identity.pid === snapshot.snapshot.reader.pid), 'the reader child identity is owned');
 
     assert.equal(handle.close(), handle.close(), 'two close callers share one promise');
     await handle.close();
@@ -416,6 +455,154 @@ async function scenarioPublicFactory(t) {
   }
 }
 
+function readPromptLog(f) {
+  if (!existsSync(f.promptLog)) return [];
+  return readFileSync(f.promptLog, 'utf8').split('\n').filter(Boolean)
+    .map(line => { try { return JSON.parse(line); } catch { return null; } })
+    .filter(entry => entry !== null);
+}
+
+function factoryScript(f) {
+  return `const { createSentinelHost } = await import(${JSON.stringify(pathToFileURL(HOST_FILE).href)});
+const handle = await createSentinelHost({ agentDir: ${JSON.stringify(f.agentDir)}, storageRoot: ${JSON.stringify(f.storageRoot)}, root: ${JSON.stringify(f.root)}, port: 0, publicHost: 'dashboard.example', scope: ${JSON.stringify(SCOPE)} });
+console.log(JSON.stringify(handle.receipt));
+process.on('SIGTERM', () => { handle.close().then(() => process.exit(0), error => { console.error(error); process.exit(1); }); });
+`;
+}
+
+// Scenario E: the public factory composes the real discussion service, serves
+// browsing and live thread writes from the explicit store, not a different
+// environment store with the same workspace id, and releases the claim after a
+// signal shutdown that kills the owned fake Pi (which ignores stdin close).
+async function scenarioDiscussionFactory(t) {
+  const f = createFixture(t, 'discussion');
+  const workspaceId = 'fixture';
+  await setupStorage(f.storageRoot);
+  const workspace = await createWorkspace(f.storageRoot, { id: workspaceId, name: 'Explicit fixture' });
+  const environmentRoot = join(f.base, 'environment-storage');
+  await setupStorage(environmentRoot);
+  const otherWorkspace = await createWorkspace(environmentRoot, { id: workspaceId, name: 'Environment fixture' });
+  const host = f.spawnOwned(['--input-type=module', '-e', factoryScript(f)],
+    f.environment({ ADJACENT_STORAGE_ROOT: environmentRoot }));
+  const receipt = await waitForReady(host);
+  assert.equal(receipt.type, 'ready');
+  assert.equal(receipt.state, 'observing');
+  assert.equal(receipt.dashboard_state, 'ready');
+  assert.equal(receipt.discussion_state, 'ready');
+  assert.match(receipt.dashboard_url, /^http:\/\/127\.0\.0\.1:\d+\/$/);
+  const snapshot = JSON.parse(readFileSync(receipt.snapshot_path, 'utf8'));
+  assert.equal(snapshot.state, 'observing');
+
+  const port = Number(new URL(receipt.dashboard_url).port);
+  const catalog = await requestOnce({ port, path: '/api/workspaces' });
+  assert.equal(catalog.status, 200, catalog.text);
+  assert.equal(catalog.body.storage.root, f.storageRoot, 'workspace browsing uses the explicit factory root');
+  assert.deepEqual(catalog.body.valid.map(entry => entry.kit.name), ['Explicit fixture']);
+  const material = await requestOnce({ port, path: `/api/workspace-file?${new URLSearchParams({ id: workspaceId, file: 'kit.yaml' })}` });
+  assert.equal(material.status, 200, material.text);
+  assert.equal(material.text, readFileSync(workspace.kit, 'utf8'), 'workspace file browsing uses the explicit store too');
+  const state = await requestOnce({ port, path: '/api/state' });
+  assert.equal(state.status, 200);
+  assert.ok(state.body.observers.some(observer => observer.state === 'observing'), 'the dashboard serves the observing snapshot');
+  const token = state.body.action_token;
+  assert.match(token, /^[a-f0-9]{64}$/);
+  const origin = `http://127.0.0.1:${port}`;
+  const write = (path, payload) => requestOnce({ port, method: 'POST', path,
+    headers: { Origin: origin, 'x-sentinel-token': token, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload) });
+
+  const createdResponse = await write('/api/thread/create', {
+    workspace_id: workspaceId, title: 'Fixture thread', target: { kind: 'workspace' }, context: [],
+  });
+  assert.equal(createdResponse.status, 200, createdResponse.text);
+  const created = createdResponse.body;
+  assert.match(created.thread_id, /^[0-9a-f-]{36}$/);
+  const threadFile = join(workspace.directory, 'threads', `${created.thread_id}.json`);
+  assert.equal(JSON.parse(readFileSync(threadFile, 'utf8')).execution_dir, workspace.directory,
+    'discussion persistence and execution use the browsed explicit workspace');
+  assert.equal(existsSync(join(otherWorkspace.directory, 'threads', `${created.thread_id}.json`)), false,
+    'the same-id environment workspace receives no discussion write');
+
+  const text = `concrete discussion prompt ${randomUUID()}`;
+  const sent = await write('/api/thread/send', { workspace_id: workspaceId, thread_id: created.thread_id, id: randomUUID(), text });
+  assert.equal(sent.status, 200, sent.text);
+
+  // The concrete prompt reached the owned fake Pi through the real transport;
+  // the send receipt alone is not the evidence.
+  const logged = await waitFor(() => readPromptLog(f).find(entry => JSON.stringify(entry.command ?? null).includes(text)) ?? null,
+    'logged concrete fake Pi prompt', READY_TIMEOUT_MS, 50);
+  const piIdentity = describeProcess(logged.pid);
+  assert.ok(piIdentity, 'the owned fake Pi is alive after the prompt');
+
+  const listed = await requestOnce({ port, path: `/api/threads?${new URLSearchParams({ workspace_id: workspaceId })}` });
+  assert.equal(listed.status, 200);
+  assert.ok(listed.body.threads.some(thread => thread.thread_id === created.thread_id), 'the created thread is listed');
+
+  const remoteThreads = await requestOnce({ port, path: '/api/threads',
+    headers: { Host: 'dashboard.example', Origin: 'https://dashboard.example' } });
+  assert.equal(remoteThreads.status, 403, 'the public Host cannot read threads');
+  const remoteState = await requestOnce({ port, path: '/api/state',
+    headers: { Host: 'dashboard.example', Origin: 'https://dashboard.example' } });
+  assert.equal(remoteState.status, 200);
+  assert.equal(Object.hasOwn(remoteState.body, 'action_token'), false, 'the public Host reads no action token');
+
+  // A foreign process carrying a discussion marker is never signalled.
+  const foreign = f.spawnOwned(['-e', "process.title = 'discussion:foreign'; setInterval(() => {}, 1000);"]);
+  const foreignIdentity = describeProcess(foreign.pid);
+  assert.ok(foreignIdentity, 'the foreign discussion process is alive');
+
+  host.child.kill('SIGTERM');
+  const hostExit = await withDeadline(host.exit, SHUTDOWN_TIMEOUT_MS, 'discussion host shutdown');
+  assert.equal(hostExit.code, 0, host.io.stderr);
+  assert.equal(sameProcess(foreignIdentity), true, 'a foreign discussion marker process is not signalled');
+  assert.equal(sameProcess(piIdentity), false, 'the owned fake Pi exited with the factory');
+  assert.equal(JSON.parse(readFileSync(receipt.snapshot_path, 'utf8')).state, 'closed');
+
+  // The released claim admits an ordinary CLI successor on the same agentDir.
+  const successor = f.spawnHost(f.baseArgs(['--port', '0']));
+  const successorReceipt = await waitForReady(successor);
+  assert.equal(successorReceipt.state, 'observing');
+  successor.child.kill('SIGTERM');
+  const successorExit = await withDeadline(successor.exit, SHUTDOWN_TIMEOUT_MS, 'successor shutdown');
+  assert.equal(successorExit.code, 0);
+}
+
+// Scenario F: an unusable ADJACENT_STORAGE_ROOT degrades the ordinary CLI host
+// to observation-only; every subprocess keeps the isolated temporary HOME and
+// never reaches the live store.
+async function scenarioUnavailableDiscussions(t) {
+  const f = createFixture(t, 'unavailable');
+  const file = join(f.base, 'storage-file');
+  writeFileSync(file, 'not a directory\n');
+  const cases = [
+    ['missing storage root', { ADJACENT_STORAGE_ROOT: f.storageRoot }, 'ready'],
+    ['file storage root', { ADJACENT_STORAGE_ROOT: file }, 'ready'],
+    ['relative storage root', { ADJACENT_STORAGE_ROOT: 'relative/storage' }, 'unavailable'],
+  ];
+  for (const [label, overrides, dashboardState] of cases) {
+    const host = f.spawnHost(f.baseArgs(['--port', '0']), f.environment(overrides));
+    const receipt = await waitForReady(host);
+    assert.equal(receipt.state, 'observing', label);
+    assert.equal(receipt.dashboard_state, dashboardState, label);
+    assert.equal(receipt.discussion_state, 'unavailable', label);
+    assert.match(host.io.stderr, /Sentinel discussions unavailable: /, label);
+    if (dashboardState === 'ready') {
+      const port = Number(new URL(receipt.dashboard_url).port);
+      const threads = await requestOnce({ port, path: `/api/threads?${new URLSearchParams({ workspace_id: 'fixture' })}` });
+      assert.equal(threads.status, 503, label);
+      const state = await requestOnce({ port, path: '/api/state' });
+      assert.equal(state.status, 200, label);
+      assert.match(state.body.action_token, /^[a-f0-9]{64}$/, label);
+    } else {
+      assert.equal(receipt.dashboard_url, null, label);
+    }
+    assert.equal(existsSync(f.promptLog), false, `${label}: no fake Pi was spawned`);
+    host.child.kill('SIGTERM');
+    const exit = await withDeadline(host.exit, SHUTDOWN_TIMEOUT_MS, `${label} shutdown`);
+    assert.equal(exit.code, 0, label);
+  }
+}
+
 test('scenario A and scenario B real host journeys', { concurrency: 2 }, async t => {
   await Promise.all([
     t.test('scenario A: public host preserves observation, locality and singleton ownership across signal shutdown', t => scenarioOrdinaryPublicHost(t)),
@@ -429,4 +616,11 @@ test('scenario C: import is inert and invalid argv/root/publicHost refuse before
 
 test('scenario D: the public factory composes real resources and one shared close', async t => {
   await scenarioPublicFactory(t);
+});
+
+test('scenario E and scenario F discussion host journeys', { concurrency: 2 }, async t => {
+  await Promise.all([
+    t.test('scenario E: the public factory browses its explicit store, serves live discussions and shuts down owned children', t => scenarioDiscussionFactory(t)),
+    t.test('scenario F: unusable ADJACENT_STORAGE_ROOT degrades an ordinary host to observation', t => scenarioUnavailableDiscussions(t)),
+  ]);
 });

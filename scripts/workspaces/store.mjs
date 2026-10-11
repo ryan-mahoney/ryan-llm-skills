@@ -9,7 +9,8 @@
 // fsync and no power-loss durability claim.
 
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -1004,6 +1005,8 @@ export async function createWorkspace(root, options = {}) {
 // workspace-relative paths; nothing replaces or deletes existing bytes and no
 // target repository is ever written.
 
+const REQUEST_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 function materialSlug(title) {
   const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   return slug === "" ? "material" : slug;
@@ -1042,12 +1045,23 @@ function assertRelativeArtifactPath(path) {
 }
 
 /**
- * Add an exclusive brief or note as `<UTC date>-<slug>.md` inside the
- * workspace material directory. Existing files are never replaced; name
- * collisions allocate `-2` through `-1000` before failing with EEXIST.
+ * Add an exclusive brief or note inside the workspace material directory.
+ *
+ * Without `request_id` the destination is `<UTC date>-<slug>.md` and name
+ * collisions allocate `-2` through `-1000` before failing with EEXIST; the
+ * raw content is written unchanged.
+ *
+ * With a canonical RFC 4122 `request_id` the destination is deterministic:
+ * `<folder>/brief-<sha256(workspace id NUL kind NUL request id)>.md` holding
+ * the canonical markdown `# <title>\n\n<content>` (a trailing newline is
+ * added when the content lacks one). An existing destination is idempotent
+ * only when it is a regular non-symlink file with identical bytes; a
+ * symlink, non-regular file or different bytes never get overwritten, and
+ * different bytes refuse with typed `request-conflict`.
  * @param {string} root
  * @param {string} id
- * @param {{kind: "brief"|"note", title: string, content: string}} options
+ * @param {{kind: "brief"|"note", title: string, content: string,
+ *   request_id?: string}} options
  * @returns {Promise<{path: string}>} workspace-relative material path
  */
 export async function addMaterial(root, id, options = {}) {
@@ -1058,16 +1072,68 @@ export async function addMaterial(root, id, options = {}) {
     throw new TypeError("id must be a non-empty string");
   }
   const catalogEntry = await catalogWorkspace(root, id);
-  const { kind, title, content } = options ?? {};
+  const { kind, title, content, request_id: requestId } = options ?? {};
   const folder = kind === "brief" ? "briefs" : kind === "note" ? "notes" : null;
   if (folder === null) throw new Error(`invalid material kind: ${String(kind)}`);
   if (typeof title !== "string" || title.trim() === "") throw new Error("invalid material title");
   if (typeof content !== "string") throw new Error("invalid material content");
+  if (requestId !== undefined && (typeof requestId !== "string" || !REQUEST_ID_PATTERN.test(requestId))) {
+    throw Object.assign(new Error(`invalid material request_id: ${String(requestId)}`), {
+      code: "invalid-request-id",
+    });
+  }
 
   const directory = await ensureRealDirectory(
     join(catalogEntry.directory, folder),
     `${folder} directory`,
   );
+
+  if (requestId !== undefined) {
+    const bytes = `# ${title}\n\n${content}${content.endsWith("\n") ? "" : "\n"}`;
+    const digest = createHash("sha256").update(`${id}\0${kind}\0${requestId}`, "utf8").digest("hex");
+    const name = `brief-${digest}.md`;
+    const relativePath = `${folder}/${name}`;
+    try {
+      await createFileExclusive(join(directory, name), bytes);
+      return { path: relativePath };
+    } catch (error) {
+      if (!error || error.code !== "EEXIST") throw error;
+      // Only an identical regular canonical file is an idempotent repeat.
+      let leaf;
+      try {
+        leaf = await resolveWorkspacePath(catalogEntry.directory, relativePath);
+      } catch {
+        throw error;
+      }
+      let info;
+      try {
+        info = await fs.lstat(leaf);
+      } catch {
+        throw error;
+      }
+      if (!info.isFile()) throw error;
+      let existing;
+      try {
+        const handle = await fs.open(leaf, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+        try {
+          const handleInfo = await handle.stat();
+          if (!handleInfo.isFile()) throw error;
+          existing = await handle.readFile();
+        } finally {
+          await handle.close();
+        }
+      } catch {
+        throw error;
+      }
+      if (Buffer.isBuffer(existing) && existing.equals(Buffer.from(bytes, "utf8"))) {
+        return { path: relativePath };
+      }
+      throw Object.assign(new Error(`material request conflicts with published bytes: ${relativePath}`), {
+        code: "request-conflict",
+      });
+    }
+  }
+
   const date = new Date().toISOString().slice(0, 10);
   const slug = materialSlug(title);
   let failure = null;

@@ -168,13 +168,46 @@ server with Ctrl+C; sentinel does not own or stop independently launched viewers
 build step. It can also open directly from disk: use **Import snapshot** to inspect
 a saved observer JSON file offline. Live refresh requires the local service.
 
+### Thread briefs and assignment handoff
+
+Selecting a workspace shows its local discussion threads. Thread routes, brief
+editing and assignment launch are local-only: a remote or imported page renders no
+message, brief or launch control.
+
+Below the transcript and composer, the thread detail shows the brief editor and
+the assignment handoff. **Save brief** publishes one canonical markdown brief for
+the typed title and content through `/api/thread/save-brief`; the browser
+generates the request UUID per save and reuses it when retrying an unchanged
+draft after a failure. A conflict or any error keeps both fields, shows the
+conflict text and returns focus to the save control. Saving publishes material
+automatically; it never launches an assignment.
+
+**Preview assignment** calls `/api/thread/preview-assignment` with the saved
+brief and shows the resolved target, execution directory, brief, model and the
+64-character `contractDigest` before anything starts. **Launch assignment** sends
+that exact `expectedDigest` to `/api/thread/launch-assignment`; the service
+refuses when the fresh resolution no longer matches. A refused launch (409)
+keeps the preview visible, marks it stale, disables Launch and requires a new
+preview, so an operator can never dispatch a stale contract. Repeating the same
+assignment ID is idempotent and does not spawn a second session.
+
+After a launch the result card shows the assignment ID, recorded state,
+attention and a read-only anchor; the page never fetches the assignment
+automatically. **Discuss result** only fills the composer with a summary draft.
+Nothing is sent or launched until the operator reviews the text and presses the
+existing **Send** control, which uses the queued-message path.
+
 ## Observe-only host (operator)
 
 One long-lived, authority-free host process observes every enrolled/discovered
 repository and serves the same dashboard on loopback. It is separate from Pi:
-it arms no policy, starts no workers and never opens a browser. Its localhost
-dashboard keeps the existing local **Mark complete** write for the operator,
-while remote reads are local-only and cannot complete.
+it arms no policy, starts no observation workers and never opens a browser. The
+composed local discussion service starts a Pi child only for an explicit
+operator **Resume** or **Send**; it never sends provider prompts or deploys on
+its own. Its localhost dashboard keeps the existing local **Mark complete**
+write for the operator, while remote reads are local-only and cannot complete.
+Generic workspace-file routes neither list nor serve the private `threads`
+records; only the dedicated local-only thread routes read them.
 
 ```bash
 # Ordinary foreground use; replace /absolute/Projects with a real directory.
@@ -202,10 +235,10 @@ symlinked alias, is refused while the live owner holds
 experimental `node:sqlite`; Node v24.9 is the current implementation target and
 the experimental warning is retained. SIGTERM/SIGINT shutdown is bounded. The
 host prints exactly one JSON line
-`{type:"ready",state,snapshot_path,dashboard_url,dashboard_state}` after
-initialization; `dashboard_state` is `ready` or `unavailable`, and an
-unavailable dashboard is reported to stderr with a null URL while observation
-continues.
+`{type:"ready",state,snapshot_path,dashboard_url,dashboard_state,discussion_state}`
+after initialization; `dashboard_state` and `discussion_state` are `ready` or
+`unavailable`, and an unavailable dashboard is reported to stderr with a null
+URL while observation continues.
 
 Observation publishes one snapshot file per observer under
 `<agentDir>/spec-sentinel/<workspace-key>/observers/<observer-id>.json`. The

@@ -1,6 +1,8 @@
 #!/usr/bin/env node
-// Local sentinel presentation with one explicit package-completion write action.
-// Never imports transcripts or invokes models/workers.
+// Local sentinel presentation with one explicit package-completion write action
+// and an optional local discussion service passed in by the caller. This module
+// never imports sessions or constructs workers itself; a supplied service is
+// only wired to the bounded local thread routes.
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
@@ -11,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 
 import { authorizePackage, listPackageFiles, readPackageFile } from './package-files.mjs';
 import { fetchWorkspace, listWorkspaces, resolveStorageRoot, storageStatus } from '../workspaces/store.mjs';
+import { createDiscussionRoutes } from '../workspaces/discussion-routes.mjs';
 import { applyManualCompletions, writeManualCompletion } from './manual-completion.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -107,16 +110,19 @@ export function isRemoteRequest(request) {
     .some(name => Object.hasOwn(headers, name));
 }
 
-// Components that workspace read routes never list or serve. Any `.env.`
-// variant (for example `.env.local`) is excluded by prefix.
-const WORKSPACE_EXCLUDED = new Set(['.adjacent', 'sessions', '.git', '.env', 'node_modules', '_build', 'deps']);
+// Components that workspace read routes never list or serve. `threads` holds
+// durable private discussion records (queued prompt text), reachable only
+// through the dedicated local-only thread routes. Any `.env.` variant (for
+// example `.env.local`) is excluded by prefix.
+const WORKSPACE_EXCLUDED = new Set(['.adjacent', 'sessions', 'threads', '.git', '.env', 'node_modules', '_build', 'deps']);
 function workspaceExclude(component) {
   return WORKSPACE_EXCLUDED.has(component) || component.startsWith('.env.');
 }
 
-export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi/agent'), publicHost, storageRoot } = {}) {
+export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi/agent'), publicHost, storageRoot, discussion } = {}) {
   let cached, read;
   const actionToken = randomBytes(32).toString('hex');
+  const discussionRoutes = createDiscussionRoutes({ discussion, actionToken });
   const publicName = normalizePublicHost(publicHost);
   const workspaceRoot = storageRoot ?? resolveStorageRoot(process.env, homedir());
   // Fresh catalog per request: only an id with exactly one valid kit maps to a directory.
@@ -148,8 +154,11 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
     const remote = isRemoteRequest(request);
     const url = new URL(request.url, `http://${host}`), path = url.pathname;
     const completionRequest = path === '/api/package-completion' && request.method === 'POST';
-    if (!['GET', 'HEAD'].includes(request.method) && !completionRequest) { response.writeHead(405, { Allow: 'GET, HEAD' }); response.end(); return; }
     try {
+      // Thread routes refuse before the generic method gate: remote classification
+      // wins over every thread path, including unknown routes and a missing service.
+      if (await discussionRoutes(request, response, url, { remote })) return;
+      if (!['GET', 'HEAD'].includes(request.method) && !completionRequest) { response.writeHead(405, { Allow: 'GET, HEAD' }); response.end(); return; }
       if (completionRequest) {
         if (remote || request.headers.origin !== `http://${host}` || request.headers['x-sentinel-token'] !== actionToken
           || request.headers['content-type'] !== 'application/json') {

@@ -2,6 +2,7 @@ import { constants as fsConstants, createReadStream } from 'node:fs';
 import { open, opendir, readFile, readdir, stat } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import path from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 
 const TOKEN_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning', 'totalTokens'];
 const validTime = (value) => Number.isFinite(Date.parse(value)) ? value : null;
@@ -87,6 +88,126 @@ export async function header(file) {
     }
     return result;
   } finally { await handle.close(); }
+}
+
+const SESSION_MAX_BYTES = 64 * 1024 * 1024;
+const HISTORY_LIMIT = { min: 1, max: 200 };
+const failure = (code, message) => Object.assign(new Error(message), { code });
+const emptyBranch = () => ({ header: null, entries: [], leaf_id: null, incomplete_tail: false, skipped_lines: 0, truncated: false });
+const isMessageEntry = (record) => record.type === 'message' || record.type === 'custom_message';
+
+// LF-only framing: the StringDecoder retains split multibyte sequences and only
+// a literal LF ends a line, so U+2028/U+2029 inside a JSON value never split.
+// onLine receives the parsed record and its raw line; onError receives malformed
+// complete lines without throwing. end() returns the non-LF-terminated remainder
+// instead of emitting it, so a torn final line stays visible to the caller.
+export function createJsonlSplitter({ onLine = () => {}, onError = () => {} } = {}) {
+  const decoder = new StringDecoder('utf8');
+  let buffered = '';
+  let ended = false;
+  const consume = (text) => {
+    buffered += text;
+    let index;
+    while ((index = buffered.indexOf('\n')) !== -1) {
+      let line = buffered.slice(0, index);
+      buffered = buffered.slice(index + 1);
+      if (line.endsWith('\r')) line = line.slice(0, -1);
+      if (line === '') continue;
+      let record;
+      try { record = JSON.parse(line); }
+      catch (error) { onError(error, line); continue; }
+      onLine(record, line);
+    }
+  };
+  const decode = (chunk) => typeof chunk === 'string' ? chunk : decoder.write(chunk);
+  return {
+    write(chunk) {
+      if (ended) throw new Error('splitter already ended');
+      consume(decode(chunk));
+    },
+    end(chunk) {
+      if (ended) throw new Error('splitter already ended');
+      ended = true;
+      if (chunk !== undefined && chunk !== null) consume(decode(chunk));
+      consume(decoder.end());
+      const remainder = buffered;
+      buffered = '';
+      return remainder;
+    },
+  };
+}
+
+// Bounded, read-only active-branch view. The file is read once into a snapshot
+// of at most 64 MiB; v2/v3 branches walk backwards from the last valid entry
+// through parentId, never through the appended lines of abandoned branches.
+// Records and the header are returned as parsed, never rewritten.
+export async function readSessionBranch(file, { before, limit = 100 } = {}) {
+  if (!Number.isInteger(limit) || limit < HISTORY_LIMIT.min || limit > HISTORY_LIMIT.max) {
+    throw new RangeError(`limit must be an integer ${HISTORY_LIMIT.min}..${HISTORY_LIMIT.max}`);
+  }
+  let size;
+  try { size = (await stat(file)).size; }
+  catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return emptyBranch();
+    throw failure('unreadable-session', `session is unreadable: ${error.code ?? 'unknown'}`);
+  }
+  if (size > SESSION_MAX_BYTES) throw failure('session-too-large', `session exceeds ${SESSION_MAX_BYTES} bytes`);
+  if (!size) return emptyBranch();
+  const records = [];
+  let skipped_lines = 0;
+  const splitter = createJsonlSplitter({
+    onLine: (record) => { if (record && typeof record === 'object') records.push(record); },
+    onError: () => { skipped_lines++; },
+  });
+  try {
+    for await (const chunk of createReadStream(file, { start: 0, end: size - 1 })) splitter.write(chunk);
+  } catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return emptyBranch();
+    throw failure('unreadable-session', `session is unreadable: ${error.code ?? 'unknown'}`);
+  }
+  const incomplete_tail = splitter.end().length > 0;
+  const header = records.length && records[0].type === 'session' ? records[0] : null;
+  const candidates = header ? records.slice(1) : records;
+  const valid = candidates.filter(record => typeof record.id === 'string' && record.id);
+  let leaf_id = valid.length ? valid[valid.length - 1].id : null;
+  let chain;
+  const version = header ? (header.version ?? 1) : undefined;
+  if (Number.isInteger(version) && version < 2) {
+    // Version 1 sessions are linear: file order is the active branch.
+    // An absent header version defaults to 1 (legacy file-order contract).
+    chain = candidates;
+  } else {
+    const byId = new Map();
+    for (const record of valid) byId.set(record.id, record);
+    chain = [];
+    const seen = new Set();
+    let current = valid.length ? valid[valid.length - 1] : undefined;
+    while (current) {
+      if (seen.has(current.id)) throw failure('corrupt-session', 'session entry chain is cyclic');
+      seen.add(current.id);
+      chain.push(current);
+      if (current.parentId === undefined || current.parentId === null) break;
+      if (typeof current.parentId !== 'string') throw failure('corrupt-session', 'session entry has an invalid parentId');
+      const parent = byId.get(current.parentId);
+      if (!parent) throw failure('corrupt-session', `session entry parent is missing: ${current.parentId}`);
+      current = parent;
+    }
+    chain.reverse();
+  }
+  const messages = chain.filter(isMessageEntry);
+  let entries;
+  let truncated;
+  if (before === undefined) {
+    truncated = messages.length > limit;
+    entries = truncated ? messages.slice(messages.length - limit) : messages.slice();
+  } else {
+    const cursor = typeof before === 'string' ? chain.findIndex(record => record.id === before) : -1;
+    if (cursor === -1) throw failure('invalid-cursor', 'before must identify an entry on the active branch');
+    const prior = chain.slice(0, cursor).filter(isMessageEntry);
+    truncated = prior.length > limit;
+    entries = truncated ? prior.slice(prior.length - limit) : prior;
+  }
+  return { header, entries, leaf_id, incomplete_tail, skipped_lines, truncated };
 }
 
 export async function discover(directory, { cwd, limit = 20 } = {}) {

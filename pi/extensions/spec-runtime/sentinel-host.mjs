@@ -1,6 +1,8 @@
-// Observe-only Sentinel host: the ordinary argv entry and a reusable factory
-// composing the shared singleton claim, the headless observer and the owned
-// dashboard. Importing this module creates no host, listener, child or claim.
+// Sentinel host: the ordinary argv entry and a reusable factory composing the
+// shared singleton claim, the local discussion service, the headless observer
+// and the owned dashboard. Observation authority remains read-only; the
+// discussion service is a separate local capability. Importing this module
+// creates no host, listener, child or claim.
 import { realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -8,8 +10,10 @@ import { fileURLToPath } from 'node:url';
 
 import { normalizePublicHost } from '../../../scripts/spec-observe/dashboard.mjs';
 import { discoveryRoot } from '../../../scripts/spec-observe/discovery.mjs';
+import { createDiscussionService } from '../../../scripts/workspaces/discussion.mjs';
+import { resolveStorageRoot, storageStatus } from '../../../scripts/workspaces/store.mjs';
 import { claimHost } from './sentinel-host-owner.mjs';
-import { createSentinelDashboard } from './sentinel-dashboard.mjs';
+import { createDirectDashboard } from './sentinel-dashboard.mjs';
 import { createSentinelObserver } from './sentinel.mjs';
 
 // Cleanup waits 8 s and the default bounded SQLite release may wait 2 s more;
@@ -52,7 +56,7 @@ function existingRoot(root) {
 
 async function composeHost(options, signal) {
   const { agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi', 'agent'),
-    port = 4319, publicHost, root, scope = process.env.PI_INTERCOM_SCOPE_ID ?? null } = options ?? {};
+    port = 4319, publicHost, root, scope = process.env.PI_INTERCOM_SCOPE_ID ?? null, storageRoot } = options ?? {};
   if (!Number.isInteger(port) || port < MIN_PORT || port > MAX_PORT) throw new Error(PORT_ERROR);
   if (typeof agentDir !== 'string' || agentDir.trim() === '') {
     throw new Error('Sentinel host requires a nonempty agentDir.');
@@ -63,6 +67,8 @@ async function composeHost(options, signal) {
   const claim = claimHost({ agentDir: resolve(agentDir) });
   let dashboard = null;
   let observer = null;
+  let discussion = null;
+  let configuredStorageRoot = storageRoot;
   let closing = null;
   let abortListener = null;
 
@@ -78,7 +84,9 @@ async function composeHost(options, signal) {
         // Start every owned stop before awaiting any of them.
         const observerStopping = observer ? Promise.resolve(observer.close()) : Promise.resolve();
         const dashboardStopping = dashboard ? dashboard.stop() : Promise.resolve();
-        const settled = await Promise.allSettled([observerStopping, dashboardStopping]);
+        // The service already bounds its own close at 5 s inside this deadline.
+        const discussionStopping = discussion ? discussion.close() : Promise.resolve();
+        const settled = await Promise.allSettled([observerStopping, dashboardStopping, discussionStopping]);
         for (const outcome of settled) if (outcome.status === 'rejected') throw outcome.reason;
       })(), CLEANUP_DEADLINE_MS, `Sentinel host cleanup timed out after ${CLEANUP_DEADLINE_MS} ms.`);
     } catch (error) {
@@ -104,10 +112,8 @@ async function composeHost(options, signal) {
   try {
     if (signal?.aborted) throw new StartupCancelledError();
     const canonicalAgentDir = realpathSync(resolve(agentDir));
-    dashboard = createSentinelDashboard({ agentDir: canonicalAgentDir, port, publicHost: normalizedPublicHost, open: () => {} });
-    observer = createSentinelObserver({ agentDir: canonicalAgentDir, scope, headless: true, isolateReader: true, dashboard });
-    // Registered once owned resources exist and before the first await, so a
-    // startup signal closes what was already created.
+    // Registered before the storage probe, so a startup signal closes the
+    // claim and any resource that is created later.
     if (signal) {
       abortListener = () => { void close().catch(() => {}); };
       signal.addEventListener('abort', abortListener, { once: true });
@@ -116,6 +122,27 @@ async function composeHost(options, signal) {
         throw new StartupCancelledError();
       }
     }
+    // Discussions degrade to observation-only when storage is unusable;
+    // cancellation must stay a cancellation.
+    try {
+      configuredStorageRoot ??= resolveStorageRoot(process.env, homedir());
+      const status = await storageStatus(configuredStorageRoot);
+      if (signal?.aborted || closing) throw new StartupCancelledError();
+      if (status.status !== 'ok') {
+        const detail = status.errors.map(entry => entry.message).join('; ') || status.status;
+        throw new Error(`storage root is not usable (${status.status}): ${detail}`);
+      }
+      discussion = createDiscussionService({ root: configuredStorageRoot, agentDir: canonicalAgentDir });
+    } catch (error) {
+      if (error instanceof StartupCancelledError) throw error;
+      process.stderr.write(`Sentinel discussions unavailable: ${error.message}\n`);
+      discussion = null;
+    }
+    // Cleanup may already have run for the abort above; nothing else may be
+    // created after it did.
+    if (signal?.aborted || closing) throw new StartupCancelledError();
+    dashboard = createDirectDashboard({ agentDir: canonicalAgentDir, port, publicHost: normalizedPublicHost, storageRoot: configuredStorageRoot, discussion });
+    observer = createSentinelObserver({ agentDir: canonicalAgentDir, scope, headless: true, isolateReader: true, dashboard });
     const lifecycle = await observer.lifecycle({ action: 'observe', root: canonicalRoot });
     if (signal?.aborted) {
       await close();
@@ -136,6 +163,7 @@ async function composeHost(options, signal) {
       snapshot_path: lifecycle.snapshot_path,
       dashboard_url: dashboard.url ?? null,
       dashboard_state: dashboard.url ? 'ready' : 'unavailable',
+      discussion_state: discussion ? 'ready' : 'unavailable',
     };
     return { receipt, close };
   } catch (error) {
