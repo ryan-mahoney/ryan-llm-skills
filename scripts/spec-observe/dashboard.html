@@ -138,6 +138,12 @@ function linkedRun(a){const pkg=str(a.spec_package||'').replace(/\/+$/,'');const
 function agentHoldState(run){if(!run)return false;if(run.workflow_state==='user-held')return true;return (run.conditions||[]).some(c=>c.state!=='resolved'&&(c.kind==='user-held'||c.kind==='hold-active'||String(c.kind||'').includes('hold')));}
 function renderAgentsList(){
  const focusedAssignment=document.activeElement?.dataset?.assignmentKey;
+ if(payload===null){
+  $('run-count').textContent='—';
+  $('filter-note').textContent='';
+  $('run-list').innerHTML=error?'<div class="empty"><h3>Workspace state unavailable</h3><p class="small" style="margin-top:8px">Check the local dashboard server, then refresh state. You can also import a published snapshot.</p></div>':'<div class="empty"><h3>Loading observer snapshots…</h3><p class="small" style="margin-top:8px">Reading published sentinel snapshots.</p></div>';
+  return;
+ }
  $('run-count').textContent=`${assignments.length} agent${assignments.length===1?'':'s'}`;
  const coverage=authoritativeObservers(payload?.observers||[]).map(o=>o.snapshot?.assignment_coverage).find(c=>c&&(c.state==='partial'||(c.reasons||[]).length));
  $('filter-note').textContent=coverage?`Assignment coverage ${coverage.state||'partial'}${(coverage.reasons||[]).length?` · ${(coverage.reasons||[]).length} reason(s)`:''}`:'';
@@ -155,6 +161,11 @@ function renderEvidenceSection(run){const e=run?.evidence;
  const body=e.state==='recorded'?`Declared ${esc(e.verdict)} at commit <span class="mono">${esc(e.commit)}</span>`:e.state==='unavailable'?'Declared artifact is unavailable.':'No declared artifact was assessed.';
  return `<section class="section"><div class="section-head"><h3>Declared evidence</h3><span class="pill ${tone}">${esc(e.state)}</span></div><div class="rows"><div class="info-row"><p>${body}</p><small>${esc(e.source||'work-tour.json')} · scope ${esc(e.scope||'declared-artifact')}${e.observed_at?` · ${esc(time(e.observed_at))}`:''}${e.reason?` · ${esc(e.reason)}`:''}</small></div></div><p class="small muted">Declared artifact scope only; this never proves the current checkout, merge or deployment.</p></section>`;}
 function renderAgentsDetail(){
+ if(payload===null){
+  if($('package-panel'))$('package-panel').hidden=true;
+  $('observation-detail').innerHTML=error?'<div class="empty"><h2>Workspace state unavailable</h2><p>Check the local dashboard server, then refresh state. You can also import a published snapshot.</p></div>':'<div class="empty"><h2>Loading workspace state</h2><p>Reading published sentinel snapshots.</p></div>';
+  return;
+ }
  const a=assignments.find(x=>x.key===selectedAssignment);
  if(!a){if($('package-panel'))$('package-panel').hidden=true;$('observation-detail').innerHTML='<div class="empty"><h2>Select an observed agent</h2><p>Choose an assignment to inspect its execution, lifecycle and declared evidence. This view is read-only.</p></div>';return;}
  const run=linkedRun(a),o=a.observer,observed=o?.snapshot?.coverage?.observed_at,ac=o?.snapshot?.assignment_coverage||null;

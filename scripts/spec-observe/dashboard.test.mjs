@@ -2375,3 +2375,20 @@ test('assignment dashboard projection preserves keyboard focus across list repla
   vm.runInContext('render()', context);
   assert.equal(replacement.focusCalls, 1, 'a polling refresh preserves focus without scrolling');
 });
+
+// Final-1 fix (F3): Agents shows an explicit loading state before the first
+// observation instead of asserting that no agents exist.
+test('assignment dashboard projection shows loading before the first observation', () => {
+  const context = dashboardContext({ fetch: () => new Promise(() => {}) });
+  vm.runInContext("mode='agents';render()", context);
+  assert.match(context.document.getElementById('run-list').innerHTML, /Loading observer snapshots/,
+    'the agent list waits for snapshots instead of reporting no observers');
+  assert.match(context.document.getElementById('observation-detail').innerHTML, /Loading workspace state/,
+    'the agent detail waits for snapshots instead of inviting a selection');
+  assert.equal(context.document.getElementById('connection-status').textContent, 'Loading observers');
+  assert.doesNotMatch(context.document.getElementById('run-list').innerHTML, /No agents observed/);
+  vm.runInContext("error='Could not refresh workspace state.';render()", context);
+  assert.match(context.document.getElementById('run-list').innerHTML, /Workspace state unavailable/,
+    'a failed first refresh stays unavailable instead of flipping back to loading');
+  assert.match(context.document.getElementById('observation-detail').innerHTML, /Workspace state unavailable/);
+});
