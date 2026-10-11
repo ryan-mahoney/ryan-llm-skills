@@ -26,6 +26,19 @@ const UUID_PATTERN =
 const SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 const PUBLICATION_AUTHORITIES = new Set(["none", "draft-pr", "pr"]);
 const ATTEMPT_KINDS = new Set(["initial", "launch-retry"]);
+// Supported thinking levels mirror installed Pi dist/cli/args.js VALID_THINKING_LEVELS
+// (pi 1.1.0: off, minimal, low, medium, high, xhigh, max). ResolveAssignment
+// validates explicitly so an invalid level fails visibly instead of Pi
+// silently omitting it and executing with another effective setting.
+const SUPPORTED_THINKING_LEVELS = new Set([
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]);
 
 async function lstatOrNull(path) {
   try {
@@ -320,6 +333,19 @@ export async function resolveAssignment(input = {}) {
       throw new Error("thinking must be a non-empty string");
     }
     if (model === null) throw new Error("thinking requires an explicit model");
+    if (!SUPPORTED_THINKING_LEVELS.has(thinking)) {
+      throw new Error(
+        `invalid thinking level: ${thinking} (valid: ${[...SUPPORTED_THINKING_LEVELS].join(", ")})`,
+      );
+    }
+  }
+  if (model !== null && thinking !== null && model.includes(":")) {
+    const suffix = model.slice(model.lastIndexOf(":") + 1);
+    if (SUPPORTED_THINKING_LEVELS.has(suffix)) {
+      throw new Error(
+        `model-embedded thinking conflicts with explicit thinking: ${model} + ${thinking}`,
+      );
+    }
   }
 
   const projectTrust = input.project_trust ?? null;
@@ -372,11 +398,12 @@ export async function resolveAssignment(input = {}) {
     `adj-${assignmentId.replace(/-/g, "").slice(0, 12)}`,
   );
   const piPath = await resolvePiExecutable(input.pi_path ?? null);
-  const coordinationDatabase = optionalNonEmptyString(
-    input.coordination_database,
-    "coordination_database",
-    join(storageRootPhysical, ".sentinel", "coordination.sqlite"),
-  );
+  if (input.coordination_database !== undefined && input.coordination_database !== null) {
+    throw new Error(
+      "coordination_database must not be supplied: derived from the physical storage root",
+    );
+  }
+  const coordinationDatabase = join(storageRootPhysical, ".sentinel", "coordination.sqlite");
   const piSessionDir = optionalNonEmptyString(
     input.pi_session_dir,
     "pi_session_dir",

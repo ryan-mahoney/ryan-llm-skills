@@ -461,3 +461,154 @@ test("assignment resolution delivers plain skill path and @snapshot without /ski
 
   await assertNoWrites(workspaceDirectory, storageRoot);
 });
+
+test("assignment resolution refuses coordination override and invalid thinking without writes", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  const workspaceDirectory = join(storageRoot, "projects", "guard-workspace");
+  await mkdir(workspaceDirectory, { recursive: true });
+  const appPath = await makeRepo(join(root, "repos", "app"));
+  const home = join(root, "home");
+  await mkdir(home, { recursive: true });
+  const piPath = await fakePi(join(root, "bin"));
+  await briefFixture(workspaceDirectory, "Guard brief bytes.\n");
+
+  await writeFile(join(workspaceDirectory, "kit.yaml"), kitYaml({
+    id: "guard-workspace",
+    name: "Guard Workspace",
+    repositories: [{ id: "app", path: appPath }],
+  }));
+
+  const base = {
+    assignment_id: randomUUID(),
+    workspace_id: "guard-workspace",
+    storageRoot,
+    home,
+    brief: "briefs/brief.md",
+    skill: "general",
+    instructions: "Do the guarded thing.",
+    target: "app",
+    pi_path: piPath,
+  };
+
+  // A caller-supplied coordination database would split the single
+  // root-wide coordination domain, so it must fail visibly.
+  await assert.rejects(
+    resolveAssignment({ ...base, coordination_database: join(root, "other.sqlite") }),
+    /must not be supplied/,
+  );
+
+  // Pi omits an invalid --thinking level with a warning and executes with
+  // another effective setting, so the preview must refuse it instead.
+  await assert.rejects(
+    resolveAssignment({ ...base, provider: "test-provider", model: "test-model", thinking: "bogus" }),
+    /invalid thinking level/,
+  );
+
+  // A model-embedded thinking suffix plus an explicit --thinking flag leaves
+  // Pi precedence to decide silently; refuse the conflict visibly.
+  await assert.rejects(
+    resolveAssignment({
+      ...base,
+      provider: "test-provider",
+      model: "test-model:high",
+      thinking: "low",
+    }),
+    /conflicts with explicit thinking/,
+  );
+  await assert.rejects(
+    resolveAssignment({
+      ...base,
+      provider: "test-provider",
+      model: "test-model:high",
+      thinking: "high",
+    }),
+    /conflicts with explicit thinking/,
+  );
+
+  // A supported level with an explicit model still resolves.
+  const valid = await resolveAssignment({
+    ...base,
+    provider: "test-provider",
+    model: "test-model",
+    thinking: "medium",
+  });
+  assert.equal(valid.record.thinking, "medium");
+  assert.ok(valid.piArgs.includes("--thinking") && valid.piArgs.includes("medium"));
+
+  await assertNoWrites(workspaceDirectory, storageRoot);
+});
+
+test("assignment resolution verifies installed Pi input assembly model-free", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  const workspaceDirectory = join(storageRoot, "projects", "assembly-workspace");
+  await mkdir(workspaceDirectory, { recursive: true });
+  const appPath = await makeRepo(join(root, "repos", "app"));
+  const home = join(root, "home");
+  await mkdir(home, { recursive: true });
+  const skillPath = await writeSkill(home, "demo");
+  const piPath = await fakePi(join(root, "bin"));
+  const briefBytes = Buffer.from("Assembly brief bytes.\n", "utf8");
+  await briefFixture(workspaceDirectory, briefBytes);
+
+  await writeFile(join(workspaceDirectory, "kit.yaml"), kitYaml({
+    id: "assembly-workspace",
+    name: "Assembly Workspace",
+    repositories: [{ id: "app", path: appPath }],
+  }));
+
+  const id = randomUUID();
+  const resolved = await resolveAssignment({
+    assignment_id: id,
+    workspace_id: "assembly-workspace",
+    storageRoot,
+    home,
+    brief: "briefs/brief.md",
+    skill: "demo",
+    instructions: "Apply the demo skill.",
+    target: "app",
+    provider: "test-provider",
+    model: "test-model",
+    thinking: "medium",
+    pi_path: piPath,
+  });
+  assert.deepEqual(resolved.briefBytes, briefBytes);
+
+  // Exercise the installed Pi input assembler (pi 1.1.0
+  // dist/cli/args.js parseArgs + dist/cli/initial-message.js
+  // buildInitialMessage) model-free: the @snapshot file text plus the
+  // returned plain instruction must compose into one initial prompt without
+  // a /skill: expansion command.
+  const piBase = "/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/dist";
+  const { parseArgs } = await import(`${piBase}/cli/args.js`);
+  const { buildInitialMessage } = await import(`${piBase}/cli/initial-message.js`);
+  const packageJson = JSON.parse(
+    await readFile("/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/package.json", "utf8"),
+  );
+  assert.match(String(packageJson.version), /^\d+\.\d+\.\d+/);
+  t.diagnostic(`installed pi version: ${packageJson.version}`);
+
+  const parsed = parseArgs(resolved.piArgs);
+  const workspacePhysical = (await fetchWorkspace(storageRoot, "assembly-workspace")).directory;
+  const snapshotPath = join(workspacePhysical, "assignments", `${id}.brief.md`);
+  assert.ok(parsed.fileArgs.includes(snapshotPath));
+  assert.equal(parsed.thinking, "medium");
+  assert.deepEqual(parsed.diagnostics.filter((entry) => entry.message.includes("thinking")), []);
+  const instruction = resolved.piArgs[resolved.piArgs.length - 1];
+  assert.equal(parsed.messages[parsed.messages.length - 1], instruction);
+
+  const { initialMessage } = buildInitialMessage({
+    parsed,
+    fileText: resolved.briefBytes.toString("utf8"),
+    fileImages: [],
+    stdinContent: undefined,
+  });
+  assert.ok(initialMessage.includes("Assembly brief bytes."));
+  assert.ok(initialMessage.includes(`Read the skill at ${skillPath}`));
+  assert.ok(initialMessage.includes("Apply the demo skill."));
+  assert.ok(!initialMessage.split("\n").some((line) => line.trimStart().startsWith("/skill:")));
+  t.diagnostic(`assembled initial message bytes: ${Buffer.byteLength(initialMessage, "utf8")}`);
+
+  await assertNoWrites(workspaceDirectory, storageRoot);
+});
