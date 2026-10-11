@@ -14,12 +14,43 @@
 .status-markdown p{margin:0 0 .65rem}.status-markdown p:last-child{margin-bottom:0}.status-markdown ul,.status-markdown ol{margin:.5rem 0;padding-left:1.4rem}.status-markdown ul{list-style:disc}.status-markdown ol{list-style:decimal}.status-markdown li{margin:.25rem 0}.status-markdown code,.summary code{font-family:ui-monospace,monospace;background:#ffffff0d;border-radius:3px;padding:.1rem .25rem}.status-markdown pre{overflow:auto;padding:.75rem;background:#0d1117;border:1px solid #30363d;border-radius:5px}.status-markdown pre code{padding:0;background:none;white-space:pre}.status-markdown a{color:#a5b4fc;text-decoration:underline}.status-markdown strong,.summary strong,.status-heading{font-weight:650}.status-markdown em,.summary em{font-style:italic}
 .timing-scroll{overflow-x:auto}.timing-table{width:100%;border-collapse:collapse;text-align:left;font-size:13px}.timing-table th,.timing-table td{padding:12px 10px;border-bottom:1px solid var(--line);vertical-align:top}.timing-table th:first-child{padding-left:0}.timing-table thead th{font-size:12px;color:var(--muted);font-weight:400}.timing-table tbody th{font-weight:400;overflow-wrap:anywhere}.timing-table small{display:block;margin-top:5px}.timing-table th:last-child,.timing-table td:last-child{white-space:nowrap;text-align:right}
 dialog{max-width:480px;width:calc(100% - 32px);padding:24px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:8px}dialog::backdrop{background:#0009}dialog p{margin:14px 0}button:disabled{cursor:default;opacity:.55}.completion-control{margin-top:18px}.completion-control p{margin-top:8px}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+body{max-width:100%;overflow-x:clip}
+.threads-split{display:grid;grid-template-columns:minmax(220px,320px) minmax(0,1fr);gap:16px;align-items:start}
+.threads-split>*{min-width:0;max-width:100%}
+.thread-list{border:1px solid var(--line);border-radius:5px;overflow:hidden;background:#141720}
+.thread-row{display:block;width:100%;text-align:left;border:0;border-radius:0;border-left:3px solid transparent;padding:12px 14px;min-height:56px}
+.thread-row+.thread-row{border-top:1px solid var(--line)}
+.thread-row[aria-pressed=true]{border-left-color:var(--accent);background:#222638}
+.thread-row .run-title{display:block;overflow-wrap:anywhere}
+.thread-detail{min-width:0;display:flex;flex-direction:column;gap:14px}
+.thread-head .section-head{margin-bottom:8px}
+.thread-head h4{margin:0;font-size:14px;font-weight:650}
+.thread-transcript{max-width:100%;max-height:420px;overflow:auto;border:1px solid var(--line);border-left:3px solid var(--accent);background:#141720;padding:14px;display:flex;flex-direction:column;gap:10px;overflow-wrap:anywhere}
+.thread-transcript:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.thread-entry{max-width:100%;overflow-wrap:anywhere}
+.thread-entry.user{border-left:3px solid var(--accent);padding-left:10px}
+.thread-entry.assistant{border-left:3px solid var(--green);padding-left:10px}
+.thread-text{white-space:pre-wrap;overflow-wrap:anywhere}
+.thread-partial{opacity:.85}
+.thread-state{border:1px solid var(--line);border-left:3px solid var(--amber);padding:10px 12px;background:#211e16;overflow-wrap:anywhere}
+.thread-state.bad{border-left-color:var(--red)}
+.thread-state.good{border-left-color:var(--green)}
+.thread-state.muted{border-left-color:var(--muted);color:var(--muted);background:#141720}
+.thread-composer{display:flex;flex-direction:column;gap:8px;max-width:100%}
+.thread-composer textarea{width:100%;max-width:100%;min-height:88px;background:#11141a;border:1px solid var(--line);border-radius:5px;color:var(--ink);padding:10px 12px;resize:vertical;font:inherit}
+.thread-composer textarea:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.thread-actions{display:flex;flex-wrap:wrap;gap:10px}
+.thread-actions .primary{background:#2c2d4c;border-color:#6568a1;color:#d8dfff}
+.thread-actions .primary:hover{background:#35376b}
+@media(max-width:650px){.threads-split{grid-template-columns:minmax(0,1fr)}.thread-list{max-height:280px;overflow:auto}}
 </style>
 </head>
 <body>
 <header class="flex items-center gap-3 border-b"><span class="brand" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></span><div><h1>Spec sentinel</h1><p class="small muted">Workspace observation</p></div><div class="top-actions flex items-center gap-3"><span id="connection-status" class="pill muted" role="status">Loading observers</span><button id="refresh-button">Refresh state</button><button id="import-button">Import snapshot</button><input id="import-file" type="file" accept=".json,application/json" hidden></div></header>
 <div id="notice" class="notice hidden" role="status"></div>
 <div id="completion-feedback" role="status" class="notice" hidden></div>
+<div id="thread-announcer" class="sr-only" role="status" aria-live="polite"></div>
 <div class="shell" id="shell"><aside aria-label="Observed packages"><div class="sidebar-head"><div class="flex justify-between items-center" style="margin-bottom:18px"><h3 id="sidebar-heading">Repositories & packages</h3><span id="run-count" class="small muted">—</span></div><label for="repo-search" id="search-label">Find repository or package</label><input id="repo-search" type="search" placeholder="Search names, paths, activity…"><div class="filters" id="package-filters" aria-label="Package filters"><button data-filter="active" aria-pressed="true">Active</button><button data-filter="attention" aria-pressed="false">Attention</button><button data-filter="completed" aria-pressed="false">Recently completed</button></div><div class="filters" aria-label="View mode" style="grid-template-columns:repeat(2,minmax(0,1fr))"><button data-mode="packages" aria-pressed="true">Packages</button><button data-mode="workspaces" aria-pressed="false">Workspaces</button></div><p id="filter-note" class="small muted" role="status" aria-live="polite" style="margin-top:10px"></p></div><div id="run-list" class="run-list scroll"><p class="empty">Loading observer snapshots…</p></div><div id="observer-summary" class="sidebar-foot">Refreshes every 5 seconds</div></aside><main id="run-detail" aria-label="Selected package detail"><div id="observation-detail"><div class="empty"><h2>Loading workspace state</h2><p>Reading published sentinel snapshots.</p></div></div><section id="package-panel" class="detail section" hidden><h3 id="package-panel-heading">Package files</h3><div id="package-files" class="small" style="max-height:240px;overflow:auto;margin-bottom:16px"></div><div id="file-viewer"></div></section></main></div>
 <dialog id="completion-dialog" aria-labelledby="completion-title"><form id="completion-form"><h2 id="completion-title">Mark package complete?</h2><p id="completion-name" class="mono"></p><p>This saves a completion record in the package and moves it to Recently completed. Running workers continue; step evidence and PR status stay as recorded. This applies even if the displayed status has changed. Only a new dispatch after this action makes the package current again.</p><p id="completion-error" role="alert" class="warn" hidden></p><div class="flex justify-end gap-3"><button type="button" id="completion-cancel">Cancel</button><button type="submit" id="completion-submit">Mark complete</button></div></form></dialog>
 <script>
@@ -145,6 +176,12 @@ async function submitCompletion(event){
  finally{completionSaving=false;$('completion-submit').disabled=false;$('completion-cancel').disabled=false;$('completion-submit').textContent='Mark complete';}
 }
 let fileSelection=null, fileOwner=null, fileContent=null,listingOwner=null,listingLoaded=false;
+let threads=null,threadsInvalid=[],threadsError=null,threadsLoading=false,threadsLoadedWorkspace=null,threadsRequest=0;
+let selectedThread=null,threadGeneration=0,threadHistoryRequest=0;
+let threadHistoryEntries=[],threadHasOlder=false,threadHistoryLoading=false,threadHistoryTruncated=false,threadIncompleteTail=false;
+let threadPartial='',threadToolNote='',threadDraft='',threadSendId=null,threadSendDraft=null;
+let threadRequestError=null,threadPending=null,threadStickBottom=true,threadFocusTarget=null;
+let threadSource=null,threadSourceKey=null,threadStreamState=null,threadLiveNotice='';
 function renderDetail(){const r=records.find(x=>x.key===selected);if(!r){if($('package-panel'))$('package-panel').hidden=true;$('observation-detail').innerHTML='<div class="empty"><h2>Select an observed package</h2><p>Choose a package to inspect its current obligation, activity, coverage and source paths.</p></div>';return;}const o=r.observer,c=r.coverage||{},observed=o.snapshot?.coverage?.observed_at;const detailFocus=document.activeElement?.id;const existing=[...$('run-detail').querySelectorAll('details[open]')].map(x=>x.id);$('observation-detail').innerHTML=`<article class="detail"><div class="eyebrow">${esc(base(r.repository?.replace(/\/\.git$/,'')))} / Spec package</div><div class="detail-title"><div><h2>${esc(base(r.package))}</h2><p class="subtitle mono">${esc(r.workflow_id||'Workflow unknown')} · ${esc(r.assignment_id||'Assignment unknown')}</p></div><span class="pill ${attention(r)?'warn':!activeRun(r)||runningUnconfirmed(r)||!r.execution||r.execution==='unknown'?'muted':'good'}">${esc(runState(r))}</span></div>${completionControl(r)}${!r.recent_completion&&runningUnconfirmed(r)?'<p class="small muted section">The saved run says running, but its worker lease or checkout is unavailable. Current activity is not confirmed.</p>':''}${r.recent_completion?`<section class="section activity"><h3>${esc(completionLabel(r))}</h3><p>Completed ${esc(time(r.completed_at))} · ${esc(age(r.completed_at))}</p><p class="small muted">${r.completion_basis==='manual'?'Marked complete by an operator. Step evidence and PR status remain as recorded.':r.merge?.state==='merged'?'Merge confirmed from the matching PR and branch head.':'Recorded workflow completion; merge status is unknown.'}</p></section>`:progress(r,true)}<div class="facts"><div><div class="fact-label">Time since spec start</div><span>${esc(specElapsed(r))}</span><p class="small muted">${r.timing?.started_at?esc(time(r.timing.started_at)):'Start not observed'}</p></div><div><div class="fact-label">Snapshot freshness</div><span class="${error||stale(observed)?'warn':'good'}">${error?'Last received':stale(observed)?'Stale':'Fresh'} · ${esc(age(observed))}</span><p class="small muted">${esc(time(observed))}</p></div><div><div class="fact-label">Last activity</div><span>${esc(age(r.observed_at))}</span><p class="small muted">${esc(time(r.observed_at))}</p></div><div><div class="fact-label">Run coverage</div><span class="${c.state==='complete'?'good':'warn'}">${esc(c.state||'Unknown')}</span><p class="small muted">Workspace ${esc(o.snapshot?.coverage?.state||'unknown')}</p></div></div><section><div class="section-head"><h3>Implementation activity</h3><span class="small muted">Last observed hint</span></div><div class="activity status-markdown">${statusMarkdown(r.activity||'No activity hint was observed for this run.')}</div></section><section class="section"><div class="section-head"><h3>${r.recent_completion?'Final recorded obligation':'Current obligation'}</h3></div><div class="obligation status-markdown">${statusMarkdown(r.obligation||'No obligation summary was observed.')}</div></section>${workflowWorkers(r)}${stepTimings(r)}<section class="section"><div class="section-head"><h3>Conditions</h3><span class="small muted">${(r.conditions||[]).length} observed</span></div>${rows(r.conditions,'Conditions')}</section><section class="section"><div class="section-head"><h3>Verification incidents</h3><span class="small muted">${(r.incidents||[]).length} recorded</span></div>${rows(r.incidents,'Incidents')}</section><section class="section"><div class="section-head"><h3>Recorded actions</h3><span class="small muted">Read-only</span></div>${rows(r.actions,'Actions')}</section><section class="section"><h3>Workspace paths</h3><dl class="paths"><dt class="small muted">Repository</dt><dd class="mono" style="margin:0">${esc(r.repository||'Unknown')}</dd><dt class="small muted">Spec package</dt><dd class="mono" style="margin:0">${esc(r.package||'Unknown')}</dd><dt class="small muted">Checkout</dt><dd class="mono" style="margin:0">${esc(r.checkout||'Not observed')}</dd></dl><details id="sources"><summary id="sources-toggle">Source paths · ${(r.source_paths||[]).length}</summary>${(r.source_paths||[]).map(p=>`<p class="mono" style="margin:8px 0">${esc(p)}</p>`).join('')}</details><details id="coverage-reasons"><summary id="coverage-toggle">Coverage reasons</summary>${[...(c.reasons||[]),...(o.snapshot?.coverage?.reasons||[])].map(v=>`<p class="coverage-note">${inlineMarkdown(v)}</p>`).join('')||'<p class="small muted">No coverage reasons reported.</p>'}</details></section><div class="footer">Recorded worker: ${esc(r.execution||'unknown')} · Workflow: ${esc(r.workflow_state||'unknown')}<br>Observer ${esc(o.observer_id||'Unknown')} · ${esc(o.state||'Unknown')} · ${esc(o.mode||'Mode unknown')}<br>Heartbeat ${esc(time(o.published_at))} · ${esc(age(o.published_at))}${o.source?'<br><span class="mono">'+esc(o.source)+'</span>':''}${o.note?'<br>'+inlineMarkdown(o.note):''}<br>Snapshot freshness uses workspace observation time. Last activity and observer heartbeat are separate facts.</div></article>`;for(const id of existing){if($(id))$(id).open=true;}if(detailFocus&&$(detailFocus))$(detailFocus).focus({preventScroll:true});loadPackageFiles(r);}
 
 const packageViewUrl=(r,name)=>'/package-view/'+btoa(unescape(encodeURIComponent(r.package))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')+'/'+name.split('/').map(encodeURIComponent).join('/');
@@ -240,7 +277,8 @@ function updateWorkspaceDetail(){
  const context=(w.context||[]).map(c=>`<div class="info-row"><p class="mono">${esc(c.path)}</p><small>${esc(c.status)}</small></div>`).join('')||'<p class="small muted">No context entries recorded.</p>';
  const fileList=(names,prefix,label)=>names.map(n=>`<p><button data-workspace-file="${esc(prefix+n)}">${esc(n)}</button></p>`).join('')||`<p class="small muted">No ${label} recorded.</p>`;
  const artifacts=(w.artifacts||[]).map(a=>{const target=a.target||{},targetText=a.kind==='url'?str(typeof target==='string'?target:target.url):[target.repository_id,target.path].filter(v=>v!=null&&v!=='').join(' · ');return `<div class="info-row"><p><strong>${esc(a.title||'Artifact')}</strong> · ${esc(a.kind||'unknown')} · ${esc(a.status||'unknown')}</p>${targetText?`<small class="mono">${esc(targetText)}</small>`:''}${a.note?`<small>${esc(a.note)}</small>`:''}${a.reason?`<small class="warn">${esc(a.reason)}</small>`:''}${a.path?`<small class="mono">${esc(a.path)}</small>`:''}</div>`;}).join('')||'<p class="small muted">No artifacts recorded.</p>';
- $('observation-detail').innerHTML=`<article class="detail"><div class="eyebrow">${esc(base(w.directory))} / Workspace</div><div class="detail-title"><div><h2>${esc(w.name||w.id)}</h2><p class="subtitle mono">${esc(w.id)} · ${esc(w.directory)}</p></div><span class="pill muted">Read-only</span></div>${attention}<section class="section"><div class="section-head"><h3>Repositories</h3><span class="small muted">${(w.repositories||[]).length} recorded</span></div>${repositories}</section><section class="section"><div class="section-head"><h3>Context</h3><span class="small muted">${(w.context||[]).length} recorded</span></div>${context}</section><section class="section"><div class="section-head"><h3>Briefs</h3><span class="small muted">${count((w.briefs||[]).length,'file')}</span></div>${fileList(w.briefs||[],'briefs/','briefs')}</section><section class="section"><div class="section-head"><h3>Notes</h3><span class="small muted">${count((w.notes||[]).length,'file')}</span></div>${fileList(w.notes||[],'notes/','notes')}</section><section class="section"><div class="section-head"><h3>Artifacts</h3><span class="small muted">${count((w.artifacts||[]).length,'record')}</span></div>${artifacts}</section><section class="section"><div class="section-head"><h3>Kit</h3></div><p class="small muted mono">${esc(w.kit?.id||'')} · ${esc(w.kit?.name||'')}</p></section></article>`;
+ $('observation-detail').innerHTML=`<article class="detail"><div class="eyebrow">${esc(base(w.directory))} / Workspace</div><div class="detail-title"><div><h2>${esc(w.name||w.id)}</h2><p class="subtitle mono">${esc(w.id)} · ${esc(w.directory)}</p></div><span class="pill muted">Read-only</span></div>${attention}<section class="section"><div class="section-head"><h3>Repositories</h3><span class="small muted">${(w.repositories||[]).length} recorded</span></div>${repositories}</section><section class="section"><div class="section-head"><h3>Context</h3><span class="small muted">${(w.context||[]).length} recorded</span></div>${context}</section><section class="section"><div class="section-head"><h3>Briefs</h3><span class="small muted">${count((w.briefs||[]).length,'file')}</span></div>${fileList(w.briefs||[],'briefs/','briefs')}</section><section class="section"><div class="section-head"><h3>Notes</h3><span class="small muted">${count((w.notes||[]).length,'file')}</span></div>${fileList(w.notes||[],'notes/','notes')}</section><section class="section"><div class="section-head"><h3>Artifacts</h3><span class="small muted">${count((w.artifacts||[]).length,'record')}</span></div>${artifacts}</section><section class="section"><div class="section-head"><h3>Kit</h3></div><p class="small muted mono">${esc(w.kit?.id||'')} · ${esc(w.kit?.name||'')}</p></section>${threadsSectionHtml()}</article>`;
+ threadsMounted();
  if($('package-panel'))$('package-panel').hidden=false;
  if($('package-files')&&listingOwner!==fileOwnerKey('workspace',{id:selectedWorkspace}))$('package-files').innerHTML='<p class="small muted">Read-only listing with private components excluded. Select a file to preview it below.</p><p><button data-refresh-workspace-files>Refresh files</button></p>';
 }
@@ -270,7 +308,7 @@ function selectWorkspace(id){
  if(mode!=='workspaces'||!id)return;
  if(workspaceDetailPending?.id===id&&workspaceDetailPending.request===workspaceDetailRequest)return;
  const changed=id!==selectedWorkspace;selectedWorkspace=id;workspaceDetailError=null;workspaceUnavailable=null;
- if(changed){workspace=null;listingOwner=null;listingLoaded=false;fileOwner=null;fileSelection=null;fileContent=null;++listingRequest;++fileRequest;if($('file-viewer'))$('file-viewer').innerHTML='';if($('package-files'))$('package-files').textContent='';}
+ if(changed){workspace=null;listingOwner=null;listingLoaded=false;fileOwner=null;fileSelection=null;fileContent=null;++listingRequest;++fileRequest;if($('file-viewer'))$('file-viewer').innerHTML='';if($('package-files'))$('package-files').textContent='';resetThreads();}
  const request=++workspaceDetailRequest;workspaceDetailPending={id,request};renderWorkspaceList();renderWorkspaceDetail();
  fetch('/api/workspace?'+new URLSearchParams({id}),{signal:AbortSignal.timeout(60000)}).then(response=>{if(!response.ok)throw Error();return response.json();}).then(value=>{
   if(request!==workspaceDetailRequest||mode!=='workspaces'||selectedWorkspace!==id)return;
@@ -283,10 +321,283 @@ async function loadWorkspaceFiles(cursor=0,force=false){
 }
 async function openWorkspaceFile(name){return openPackageFile(name,'workspace');}
 
+// ---- Threads (step 9): workspace discussion browsing, transcript and composer ----
+const THREAD_HISTORY_LIMIT=100;
+const threadStateLabels={active:'Responding',idle:'Ready',paused:'Paused','history-only':'History only',uncertain:'Delivery uncertain',stalled:'Stalled','start-failed':'Start failed','session-mismatch':'Session mismatch','missing-directory':'Directory missing','live-owner':'Owner not confirmed dead','missing-context':'Context missing','policy-refusal':'Policy refusal'};
+const threadStateTones={active:'good',idle:'good',paused:'warn',stalled:'warn','history-only':'muted',uncertain:'bad','start-failed':'bad','session-mismatch':'bad','missing-directory':'bad','live-owner':'bad','missing-context':'bad','policy-refusal':'bad'};
+const threadStateLabel=state=>threadStateLabels[state]||(state&&state!=='unknown'?str(state):'Unknown');
+const threadStateTone=state=>threadStateTones[state]||'muted';
+const shortThreadId=id=>str(id).slice(0,8);
+const uuid=()=>typeof crypto!=='undefined'&&typeof crypto.randomUUID==='function'?crypto.randomUUID():'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.random()*16|0;return(c==='x'?r:(r&3|8)).toString(16);});
+const canReadThreads=()=>typeof location!=='undefined'&&location.protocol!=='file:'&&!imported;
+const threadsActionable=()=>canReadThreads()&&!error&&Boolean(payload?.action_token);
+const selectedThreadRecord=()=>threads&&selectedThread?threads.find(t=>t.thread_id===selectedThread)||null:null;
+function threadRole(entry){const message=entry?.message&&typeof entry.message==='object'?entry.message:entry;return str(message?.role||entry?.role||'');}
+function threadContentText(content){if(typeof content==='string')return content;if(!Array.isArray(content))return content==null?'':str(content);return content.map(part=>{if(typeof part==='string')return part;if(!part||typeof part!=='object')return'';if(typeof part.text==='string')return part.text;if(part.type==='toolCall'||part.type==='tool_use')return`[tool ${str(part.name||part.toolName||'call')}]`;if(part.type==='image')return'[image]';return'';}).filter(Boolean).join('\n');}
+function threadEntryText(entry){const message=entry?.message&&typeof entry.message==='object'?entry.message:entry;return threadContentText(message?.content??message?.text??entry?.content??'');}
+function threadEventText(event){return threadContentText(event?.message?.content??event?.message?.text??event?.content??event?.text??'');}
+function threadDerivedState(record){if(!record)return'unknown';if(record.history_only===true)return'history-only';if(record.queue_paused===true)return'paused';if(typeof record.attention==='string'&&record.attention)return record.attention;return record.state==='active'?'active':'idle';}
+function threadStateHelp(state){switch(state){
+ case'active':return{title:'Responding',help:'A response is being delivered to the head message. Stop pauses this queue first; the response slot is released only after confirmed idle or process death.',tone:'good'};
+ case'paused':return{title:'Queue paused',help:'Pending messages wait until Resume. Resume unpauses after identity and context checks; delivery continues in FIFO order.',tone:'warn'};
+ case'history-only':return{title:'History only',help:'This record was imported without an owned process. Browsing works; send and resume are unavailable.',tone:'muted'};
+ case'uncertain':return{title:'Delivery uncertain',help:'A message was persisted before its acknowledgement was lost, so it may or may not have been delivered. Use Discard or Retry under Pending messages; a retry may duplicate the response.',tone:'bad'};
+ case'stalled':return{title:'Stalled',help:'No child events for ten minutes. The response may still be running; nothing is released automatically. Refresh to check again, or Stop if the thread still owns the slot.',tone:'warn'};
+ case'start-failed':return{title:'Start failed',help:'The discussion process failed before startup completed. Send a new message or Resume to retry the owned session.',tone:'bad'};
+ case'session-mismatch':return{title:'Session mismatch',help:'The stored session file does not match this thread record. No automatic recovery; inspect the workspace session copy, then retry.',tone:'bad'};
+ case'missing-directory':return{title:'Execution directory missing',help:'The recorded execution directory is gone. Restore it or update the workspace record, then retry.',tone:'bad'};
+ case'live-owner':return{title:'Owner not confirmed dead',help:'A prior discussion process is still recorded or observed. A second writer fails closed until the owner exits or Stop confirms it idle.',tone:'bad'};
+ case'missing-context':return{title:'Context missing',help:'Required context files are missing or unreadable. Restore them, then Resume or send again.',tone:'bad'};
+ case'policy-refusal':return{title:'Policy refusal',help:'The installed Pi read-tool policy refused the last request. Review the policy or context, then retry.',tone:'bad'};
+ default:return{title:'Ready',help:'',tone:'good'};
+ }}
+function announceThread(message){const el=$('thread-announcer');if(el)el.textContent=message;}
+function applyThreadLive(record,patch){if(!record)return;if(patch.queue)record.queue=patch.queue;if(patch.attention!==undefined)record.attention=patch.attention;if(patch.queue_paused!==undefined)record.queue_paused=patch.queue_paused;if(patch.generation!==undefined)record.generation=patch.generation;if(patch.state)record.state=patch.state;if(patch.partial!==undefined)record.partial=patch.partial;}
+function handleThreadFrame(type,data){
+ const record=selectedThreadRecord();
+ if(type==='snapshot'){if(data.thread_id!==selectedThread)return;if(typeof data.partial==='string'&&data.partial.length>=threadPartial.length)threadPartial=data.partial;applyThreadLive(record,{state:data.state,queue:data.queue,attention:data.attention,generation:data.generation,partial:data.partial});renderThreadHead();renderThreadControls();renderThreadTranscript();return;}
+ const event=data.event&&typeof data.event==='object'?data.event:{};
+ if(type==='delta'){const delta=typeof event.delta==='string'?event.delta:typeof event.assistantMessageEvent?.delta==='string'?event.assistantMessageEvent.delta:'';if(delta){threadPartial+=delta;threadStickBottom=true;renderThreadTranscript();}return;}
+ if(type==='tool'){const name=str(event.toolName||event.tool||event.name||'');threadToolNote=name?`Running tool: ${name}`:'Tool activity in progress';threadStickBottom=true;renderThreadTranscript();return;}
+ if(type==='message_end'){const text=threadEventText(event);if(text)threadPartial=text;threadToolNote='';renderThreadTranscript();setTimeout(()=>refreshThreadTail(),400);return;}
+ if(type==='state'){applyThreadLive(record,{queue:event.queue??data.queue,attention:event.attention??data.attention,queue_paused:event.queue_paused});renderThreadHead();renderThreadControls();renderThreadListBox();return;}
+ if(type==='notice'){threadLiveNotice=str(event.message||event.error||event.attention||data.attention||'Thread notice');announceThread('Thread notice: '+threadLiveNotice);loadThreads();renderThreadControls();return;}
+ if(type==='settled'){threadToolNote='';announceThread('Response settled; the next waiting message can deliver.');refreshThreadTail();loadThreads();renderThreadTranscript();}
+}
+function closeThreadEvents(){if(threadSource){threadSource.onopen=null;threadSource.onerror=null;threadSource.close();threadSource=null;}threadSourceKey=null;threadStreamState=null;}
+function openThreadEvents(){
+ closeThreadEvents();
+ if(typeof EventSource!=='function'||!canReadThreads()||!selectedThread||!selectedWorkspace)return;
+ const workspaceId=selectedWorkspace,threadId=selectedThread,generation=threadGeneration;
+ const source=new EventSource('/api/thread/events?'+new URLSearchParams({workspace_id:workspaceId,thread_id:threadId}));
+ threadSource=source;threadSourceKey=`${workspaceId}:${threadId}`;threadStreamState='connecting';
+ const current=()=>source===threadSource&&generation===threadGeneration&&selectedThread===threadId&&selectedWorkspace===workspaceId&&mode==='workspaces';
+ source.onopen=()=>{if(!current())return;threadStreamState='live';renderThreadControls();};
+ source.onerror=()=>{if(!current())return;if(source.readyState===EventSource.CLOSED){threadStreamState='stopped';announceThread('Live updates stopped. Refresh the thread to reconnect.');}else{threadStreamState='reconnecting';}renderThreadControls();};
+ for(const type of ['snapshot','delta','tool','message_end','state','notice','settled'])source.addEventListener(type,event=>{if(!current())return;let data={};try{data=JSON.parse(event.data);}catch{return;}handleThreadFrame(type,data);});
+}
+function resetThreads(){
+ closeThreadEvents();++threadsRequest;++threadGeneration;++threadHistoryRequest;
+ threads=null;threadsInvalid=[];threadsError=null;threadsLoading=false;threadsLoadedWorkspace=null;
+ selectedThread=null;threadHistoryEntries=[];threadHasOlder=false;threadHistoryLoading=false;threadHistoryTruncated=false;threadIncompleteTail=false;
+ threadPartial='';threadToolNote='';threadDraft='';threadSendId=null;threadSendDraft=null;threadRequestError=null;threadPending=null;threadStickBottom=true;threadLiveNotice='';
+}
+function startThreadDetail(){
+ ++threadGeneration;++threadHistoryRequest;
+ threadHistoryEntries=[];threadHasOlder=false;threadHistoryLoading=false;threadHistoryTruncated=false;threadIncompleteTail=false;
+ threadPartial='';threadToolNote='';threadRequestError=null;threadStickBottom=true;threadLiveNotice='';threadPending=null;
+ closeThreadEvents();
+ if(!selectedThread||!canReadThreads())return;
+ loadThreadHistory();
+ openThreadEvents();
+}
+async function loadThreads(){
+ if(mode!=='workspaces'||!selectedWorkspace)return;
+ if(threadsLoading&&threadsLoadedWorkspace===selectedWorkspace)return;
+ const request=++threadsRequest,workspaceId=selectedWorkspace;
+ threadsLoading=true;threadsLoadedWorkspace=workspaceId;
+ if(threads===null)renderThreads();else renderThreadListBox();
+ if(!canReadThreads()){threads=[];threadsInvalid=[];threadsLoading=false;threadsError=null;selectedThread=null;threadHistoryEntries=[];renderThreads();return;}
+ try{
+  const response=await fetch('/api/threads?'+new URLSearchParams({workspace_id:workspaceId}),{signal:AbortSignal.timeout(30000)});
+  if(!response.ok)throw Error(response.status===503?'Discussion service unavailable on this host.':response.status===403?"Thread reads require the host's local dashboard.":'Threads could not be loaded.');
+  const data=await response.json();
+  if(request!==threadsRequest||mode!=='workspaces'||selectedWorkspace!==workspaceId)return;
+  threads=Array.isArray(data.threads)?data.threads:Array.isArray(data)?data:[];
+  threadsInvalid=Array.isArray(data.invalid)?data.invalid:[];
+  threadsError=null;threadsLoading=false;
+  if(!threads.some(t=>t.thread_id===selectedThread)){selectedThread=threads[0]?.thread_id||null;threadDraft='';threadSendId=null;threadSendDraft=null;startThreadDetail();renderThreads();return;}
+  renderThreadListBox();
+ }catch(e){
+  if(request!==threadsRequest||mode!=='workspaces'||selectedWorkspace!==workspaceId)return;
+  threadsLoading=false;threadsError=e.message||'Threads could not be loaded.';renderThreads();
+ }
+}
+async function loadThreadHistory(before,prepend=false){
+ if(!selectedThread||!selectedWorkspace||!canReadThreads())return;
+ const request=++threadHistoryRequest,generation=threadGeneration,workspaceId=selectedWorkspace,threadId=selectedThread;
+ const scroller=$('thread-transcript'),top=scroller?scroller.scrollTop:0,height=scroller?scroller.scrollHeight:0;
+ threadHistoryLoading=true;if(!prepend)threadRequestError=null;renderThreadTranscript();
+ const params={workspace_id:workspaceId,thread_id:threadId,limit:String(THREAD_HISTORY_LIMIT)};
+ if(typeof before==='string')params.before=before;
+ try{
+  const response=await fetch('/api/thread/history?'+new URLSearchParams(params),{signal:AbortSignal.timeout(30000)});
+  if(!response.ok)throw Error('The transcript could not be loaded.');
+  const data=await response.json();
+  if(request!==threadHistoryRequest||generation!==threadGeneration||selectedThread!==threadId||mode!=='workspaces'||selectedWorkspace!==workspaceId)return;
+  const entries=Array.isArray(data.entries)?data.entries:[];
+  if(prepend)threadHistoryEntries=[...entries,...threadHistoryEntries];else threadHistoryEntries=entries;
+  threadHasOlder=data.truncated===true;threadHistoryTruncated=data.truncated===true;threadIncompleteTail=data.incomplete_tail===true;
+  threadHistoryLoading=false;threadRequestError=null;threadStickBottom=!prepend;
+  renderThreadTranscript();
+  if(prepend){const next=$('thread-transcript');if(next)next.scrollTop=top+(next.scrollHeight-height);}
+ }catch(e){
+  if(request!==threadHistoryRequest||generation!==threadGeneration||selectedThread!==threadId)return;
+  threadHistoryLoading=false;threadRequestError=e.message||'The transcript could not be loaded.';threadFocusTarget='thread-error-retry';renderThreadHead();renderThreadTranscript();
+ }
+}
+async function refreshThreadTail(){
+ if(!selectedThread||!selectedWorkspace||!canReadThreads())return;
+ const generation=threadGeneration,threadId=selectedThread,workspaceId=selectedWorkspace;
+ try{
+  const response=await fetch('/api/thread/history?'+new URLSearchParams({workspace_id:workspaceId,thread_id:threadId,limit:String(THREAD_HISTORY_LIMIT)}),{signal:AbortSignal.timeout(30000)});
+  if(!response.ok)return;
+  const data=await response.json();
+  if(generation!==threadGeneration||selectedThread!==threadId||mode!=='workspaces'||selectedWorkspace!==workspaceId)return;
+  const page=Array.isArray(data.entries)?data.entries:[];
+  if(!page.length)return;
+  const beforeLast=threadHistoryEntries[threadHistoryEntries.length-1]?.id??null;
+  const ids=new Set(threadHistoryEntries.map(e=>e.id));
+  const first=page.findIndex(e=>ids.has(e.id));
+  if(first===-1){for(const entry of page)if(!ids.has(entry.id))threadHistoryEntries.push(entry);}
+  else{const index=threadHistoryEntries.findIndex(e=>e.id===page[first].id);threadHistoryEntries=threadHistoryEntries.slice(0,index).concat(page);}
+  const afterLast=threadHistoryEntries[threadHistoryEntries.length-1]?.id??null;
+  threadHistoryTruncated=data.truncated===true;threadIncompleteTail=data.incomplete_tail===true;
+  if(first===-1||afterLast!==beforeLast)threadPartial='';
+  renderThreadTranscript();
+ }catch{/* The transcript stays usable; live text remains until the next event. */}
+}
+function selectThread(id){
+ if(mode!=='workspaces'||!id||id===selectedThread)return;
+ selectedThread=id;threadDraft='';threadSendId=null;threadSendDraft=null;threadPending=null;
+ startThreadDetail();renderThreadDetail();renderThreadListBox();
+}
+function refreshSelectedThread(){threadFocusTarget='thread-refresh';threadRequestError=null;startThreadDetail();loadThreads();}
+function applyThreadFocus(){
+ const ta=$('thread-draft');if(ta&&ta.value!==threadDraft)ta.value=threadDraft;
+ if(threadFocusTarget){const el=$(threadFocusTarget);threadFocusTarget=null;if(el)el.focus({preventScroll:true});else{const fallback=$('thread-draft')||$('thread-list-box')?.querySelector('.thread-row')||$('thread-list-retry');fallback?.focus?.({preventScroll:true});}}
+ const scroller=$('thread-transcript');if(scroller&&threadStickBottom)scroller.scrollTop=scroller.scrollHeight;
+}
+function renderThreads(){
+ if(mode!=='workspaces')return;
+ const active=document.activeElement,draftFocused=active?.id==='thread-draft';
+ const selStart=draftFocused?active.selectionStart:null,selEnd=draftFocused?active.selectionEnd:null;
+ preserveWorkspaceFocus($('observation-detail'),()=>{const body=$('threads-body');if(body)body.innerHTML=threadsBodyHtml();});
+ applyThreadFocus();
+ if(draftFocused){const ta=$('thread-draft');if(ta){ta.focus({preventScroll:true});try{ta.setSelectionRange(selStart,selEnd);}catch{}}}
+}
+function renderThreadListBox(){const box=$('thread-list-box');if(!box)return;preserveWorkspaceFocus($('observation-detail'),()=>{box.innerHTML=threadListHtml();});applyThreadFocus();}
+function renderThreadHead(){const box=$('thread-head-box');if(!box)return;preserveWorkspaceFocus($('observation-detail'),()=>{box.innerHTML=threadHeadHtml(selectedThreadRecord());});applyThreadFocus();}
+function renderThreadTranscript(){const box=$('thread-transcript-box');if(!box)return;preserveWorkspaceFocus($('observation-detail'),()=>{box.innerHTML=threadTranscriptHtml();});applyThreadFocus();}
+function renderThreadControls(){const box=$('thread-controls-box');if(!box)return;preserveWorkspaceFocus($('observation-detail'),()=>{box.innerHTML=threadControlsHtml(selectedThreadRecord());});applyThreadFocus();}
+function renderThreadDetail(){const box=$('thread-detail-box');if(!box)return;preserveWorkspaceFocus($('observation-detail'),()=>{box.innerHTML=threadDetailHtml(selectedThreadRecord());});applyThreadFocus();}
+function threadsSectionHtml(){return `<section class="section" id="threads-section" aria-labelledby="threads-heading"><div class="section-head"><h3 id="threads-heading">Threads</h3><span class="small muted">Local discussions · one response slot</span></div><div id="threads-body"><p class="small muted">Loading threads…</p></div></section>`;}
+function threadsMounted(){if(mode!=='workspaces'||!workspace)return;if(threadsLoadedWorkspace===selectedWorkspace){renderThreads();return;}loadThreads();}
+function threadsBodyHtml(){
+ if(threadsError){const storage=catalog?.storage?.status,bad=storage&&storage!=='ok';return `<div class="empty" role="status" aria-live="polite"><h3>${bad?'Workspace thread storage is unavailable':'Threads are unavailable'}</h3><p class="small">${bad?`Storage status: ${esc(storage)}. Run <code class="mono">node scripts/workspaces/cli.mjs setup</code> on the dashboard host, then retry.`:`${esc(threadsError)}`}</p><p><button id="thread-list-retry" data-thread-retry="list">Retry</button></p></div>`;}
+ if(!canReadThreads())return `<div class="empty"><h3>Threads require the local dashboard</h3><p class="small">Start the host's local dashboard to browse discussions. Imported snapshots and file:// pages cannot reach the thread routes and never expose remote message controls.</p></div>`;
+ if(threads===null)return '<p class="empty">Loading threads…</p>';
+ return `<div class="threads-split"><div id="thread-list-box" class="thread-list" role="list" aria-label="Threads">${threadListHtml()}</div><div id="thread-detail-box" class="thread-detail">${threadDetailHtml(selectedThreadRecord())}</div></div>${threadsInvalid.length?`<div class="info-row"><p><strong>Invalid thread records (${threadsInvalid.length})</strong></p>${threadsInvalid.map(x=>`<small class="warn">${esc(x.reason||x.error||x.message||'Invalid record')}</small>`).join('')}</div>`:''}`;
+}
+function threadListHtml(){
+ if(threads===null)return '<p class="empty">Loading threads…</p>';
+ if(!threads.length)return '<p class="empty">No discussion threads in this workspace yet.</p>';
+ return threads.map(t=>{const state=threadDerivedState(t),pending=(t.queue||[]).length,waiting=(t.queue||[]).filter(item=>item.state==='queued').length;return `<button class="thread-row" data-thread="${esc(t.thread_id)}" aria-pressed="${t.thread_id===selectedThread}"><div class="flex justify-between gap-3"><span class="run-title">${esc(t.title||'Thread '+shortThreadId(t.thread_id))}</span><span class="pill ${threadStateTone(state)}">${esc(threadStateLabel(state))}</span></div><span class="small muted">${pending?`${waiting?waiting+' waiting':pending+' pending'}${t.queue_paused?' · paused queue':''}`:'No pending messages'}</span></button>`;}).join('');
+}
+function threadDetailHtml(t){return `<div id="thread-head-box" class="thread-head">${threadHeadHtml(t)}</div><div id="thread-transcript-box">${threadTranscriptHtml()}</div><div id="thread-controls-box">${threadControlsHtml(t)}</div>`;}
+function threadHeadHtml(t){
+ if(!t)return '<div class="empty"><p class="small muted">Select a thread to read its transcript and compose a message.</p></div>';
+ const state=threadDerivedState(t),help=threadStateHelp(state);
+ const helpBox=help.help?`<div class="thread-state ${help.tone}" role="status"><p><strong>${esc(help.title)}</strong></p><p class="small">${esc(help.help)}</p></div>`:'';
+ const errorBox=threadRequestError?`<div class="thread-state bad" role="alert"><p>${esc(threadRequestError)}</p><p><button id="thread-error-retry" data-thread-retry="error">Retry</button></p></div>`:'';
+ return `<div class="section-head"><div><h4>${esc(t.title||'Thread '+shortThreadId(t.thread_id))}</h4><p class="small muted mono">${esc(t.thread_id)}${t.generation!=null?` · generation ${esc(t.generation)}`:''}${t.updated_at?` · updated ${esc(time(t.updated_at))} (${esc(age(t.updated_at))})`:''}</p></div><span class="pill ${threadStateTone(state)}">${esc(threadStateLabel(state))}</span></div>${helpBox}${errorBox}`;
+}
+function threadTranscriptHtml(){
+ const older=threadHasOlder&&threadHistoryEntries.length?`<p><button data-thread-older ${threadPending==='discard'||threadPending==='resend'?'disabled':''}>Load older messages</button></p>`:'';
+ const loading=threadHistoryLoading?'<p class="small muted">Loading transcript…</p>':'';
+ const entries=threadHistoryEntries.map(entry=>{const role=threadRole(entry),text=threadEntryText(entry),mine=role==='user',label=mine?'You':role==='assistant'?'Pi':role||'Entry';const stamp=entry?.timestamp&&Number.isFinite(Date.parse(entry.timestamp))?` · ${esc(entry.timestamp)}`:'';const body=mine?`<p class="thread-text">${esc(text)}</p>`:`<div class="status-markdown">${statusMarkdown(text)}</div>`;return `<div class="thread-entry ${mine?'user':'assistant'}"><p class="small muted">${esc(label)}${stamp}</p>${body}</div>`;}).join('');
+ const partial=threadPartial?`<div class="thread-entry assistant"><p class="small muted">Pi · responding</p><div class="status-markdown thread-partial">${statusMarkdown(threadPartial)}</div></div>`:'';
+ const tool=threadToolNote?`<p class="small muted">${esc(threadToolNote)}</p>`:'';
+ const empty=!entries&&!partial&&!tool&&!threadHistoryLoading?'<p class="small muted">No messages recorded for this thread yet.</p>':'';
+ const tail=threadIncompleteTail?'<p class="small warn">The session file ends with an incomplete line; it is excluded from parsed history.</p>':'';
+ return `<div id="thread-transcript" class="thread-transcript" role="log" aria-label="Thread transcript" tabindex="0">${older}${loading}${entries}${partial}${tool}${empty}${tail}</div>`;
+}
+function threadControlsHtml(t){
+ if(!t)return'';
+ const state=threadDerivedState(t),canAct=threadsActionable(),historyOnly=state==='history-only'||t.history_only===true;
+ const queue=threadQueueHtml(t,canAct);
+ let composer;
+ if(historyOnly||!canAct){composer=`<div class="thread-state muted" role="status"><p>${esc(historyOnly?"This thread is history only: browsing and reading work, but sending and resuming are unavailable. Source sessions are never modified.":"Message controls are available on the host's local dashboard. Imported snapshots and remote pages stay read-only.")}</p></div>`;}
+ else{const paused=t.queue_paused===true||state==='paused';composer=`<div class="thread-composer"><label for="thread-draft">Message thread</label><textarea id="thread-draft" rows="4" placeholder="Write a message. Enter sends; Shift+Enter adds a newline."></textarea><p class="small muted">Enter sends · Shift+Enter newline. Messages queue in order over the single local response slot.</p><div class="thread-actions"><button id="thread-send" class="primary" data-thread-send ${threadPending==='send'||!threadDraft.trim()?'disabled':''}>${threadPending==='send'?'Sending…':'Send'}</button>${state==='active'&&!paused?`<button id="thread-stop" data-thread-stop ${threadPending==='stop'?'disabled':''}>${threadPending==='stop'?'Stopping…':'Stop'}</button>`:''}${paused?`<button id="thread-resume" data-thread-resume ${threadPending==='resume'?'disabled':''}>${threadPending==='resume'?'Resuming…':'Resume'}</button>`:''}<button id="thread-refresh" data-thread-refresh>Refresh thread</button></div></div>`;}
+ const live=threadStreamState==='live'?'<span class="pill good">Live</span>':threadStreamState==='connecting'?'<span class="pill muted">Connecting live updates…</span>':threadStreamState==='reconnecting'?'<span class="pill warn">Live updates reconnecting…</span>':threadStreamState==='stopped'?'<span class="pill bad">Live updates stopped</span>':'<span class="pill muted">Live updates unavailable</span>';
+ const notice=threadLiveNotice?`<p class="small muted">${esc(threadLiveNotice)}</p>`:'';
+ return `<div id="thread-queue">${queue}</div>${composer}<p class="small muted">${live} · The local stream may stay silent for 15 seconds between keepalives.</p>${notice}`;
+}
+function threadQueueHtml(t,canAct){
+ const queue=Array.isArray(t?.queue)?t.queue:[];
+ if(!queue.length)return'';
+ const queueBusy=threadPending==='discard'||threadPending==='resend';
+ return `<div class="rows" aria-label="Pending messages">${queue.map(item=>{const state=str(item.state||'queued'),uncertain=state==='uncertain';const position=item.queue_position!=null?` · queue position ${esc(item.queue_position)}`:'';const controls=uncertain&&canAct?`<p class="thread-actions"><button data-thread-discard="${esc(item.id)}" ${queueBusy?'disabled':''}>Discard message</button><button data-thread-resend="${esc(item.id)}" ${queueBusy?'disabled':''}>Retry as new message</button></p>`:'';return `<div class="info-row"><p><strong>${esc(uncertain?'Delivery uncertain':state==='delivering'?'Delivering':'Queued')}</strong>${position}</p><p class="small thread-text">${esc(item.text||'')}</p>${uncertain?'<small class="warn">The prompt may or may not have been delivered. Discard removes it; retrying sends it again and may duplicate the response.</small>':''}${controls}</div>`;}).join('')}</div>`;
+}
+async function threadRouteError(response){
+ let message='';
+ try{const data=await response.json();if(data&&typeof data.error==='string')message=data.error;}catch{}
+ if(response.status===403)return"Thread actions require the host's local dashboard.";
+ if(response.status===404)return'Thread or message was not found. Refresh the thread list.';
+ if(response.status===409)return message||'The request conflicts with the current thread state.';
+ if(response.status===413)return'The message is too large (64 KiB maximum).';
+ if(response.status===400)return message||'The thread request was refused as invalid.';
+ if(response.status===503)return message||'The discussion service is unavailable on this host.';
+ return message||'The thread request could not be completed.';
+}
+async function threadAction(path,body,pendingOp){
+ threadPending=pendingOp;threadRequestError=null;renderThreadHead();renderThreadControls();
+ try{
+  const response=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json','X-Sentinel-Token':payload.action_token},body:JSON.stringify(body),signal:AbortSignal.timeout(30000)});
+  if(!response.ok)throw Error(await threadRouteError(response));
+  return await response.json();
+ }catch(e){
+  if(e.name==='TimeoutError')throw Error('The request timed out. Its outcome may be uncertain; refresh to check the current thread state.');
+  throw e;
+ }finally{threadPending=null;}
+}
+async function sendThreadMessage(){
+ if(!threadsActionable()){threadRequestError="Message controls are available on the host's local dashboard.";threadFocusTarget='thread-draft';renderThreadHead();renderThreadControls();return;}
+ const text=threadDraft.trim();if(!text||threadPending!==null)return;
+ if(!threadSendId||threadSendDraft!==threadDraft){threadSendId=uuid();threadSendDraft=threadDraft;}
+ try{
+  const data=await threadAction('/api/thread/send',{workspace_id:selectedWorkspace,thread_id:selectedThread,id:threadSendId,text},'send');
+  threadSendId=null;threadSendDraft=null;threadDraft='';
+  announceThread(data.duplicate?'Message was already queued.':data.state==='accepted'?'Message accepted.':data.state==='uncertain'?'Message delivery is uncertain; it may already have been delivered.':'Message queued.');
+  threadRequestError=data.state==='uncertain'?'The message may already have been delivered; use Discard or Retry under Pending messages. A retry can duplicate the response.':null;
+  loadThreads();setTimeout(()=>refreshThreadTail(),600);renderThreadHead();renderThreadControls();
+ }catch(e){threadRequestError=e.message;threadFocusTarget='thread-draft';renderThreadHead();renderThreadControls();}
+}
+async function stopSelectedThread(){
+ if(!threadsActionable())return;
+ try{await threadAction('/api/thread/stop',{workspace_id:selectedWorkspace,thread_id:selectedThread},'stop');announceThread('Stop requested. The thread queue is paused.');loadThreads();renderThreadHead();renderThreadControls();}
+ catch(e){threadRequestError=e.message;threadFocusTarget='thread-stop';renderThreadHead();renderThreadControls();}
+}
+async function resumeSelectedThread(){
+ if(!threadsActionable())return;
+ try{await threadAction('/api/thread/resume',{workspace_id:selectedWorkspace,thread_id:selectedThread},'resume');announceThread('Thread resumed.');loadThreads();setTimeout(()=>refreshThreadTail(),600);renderThreadHead();renderThreadControls();}
+ catch(e){threadRequestError=e.message;threadFocusTarget='thread-resume';loadThreads();renderThreadHead();renderThreadControls();}
+}
+async function discardThreadMessage(id,resend){
+ if(!threadsActionable())return;
+ try{const data=await threadAction('/api/thread/discard',{workspace_id:selectedWorkspace,thread_id:selectedThread,id,resend},resend?'resend':'discard');announceThread(resend?(data.warning?'Message queued again. A duplicate response is possible.':'Message queued again.'):'Uncertain message discarded.');loadThreads();renderThreadHead();renderThreadControls();}
+ catch(e){threadRequestError=e.message;threadFocusTarget='thread-error-retry';renderThreadHead();renderThreadControls();}
+}
+
 function applyModeChrome(){const workspaceMode=mode==='workspaces';$('sidebar-heading').textContent=workspaceMode?'Workspaces':'Repositories & packages';$('search-label').textContent=workspaceMode?'Find workspace':'Find repository or package';$('repo-search').placeholder=workspaceMode?'Search workspace names and paths…':'Search names, paths, activity…';$('package-filters').classList.toggle('hidden',workspaceMode);$('package-panel-heading').textContent=workspaceMode?'Workspace files':'Package files';}
 function render(){const listScroll=$('run-list').scrollTop,detailScroll=$('run-detail').scrollTop;if(mode==='workspaces'){renderWorkspaceList();renderWorkspaceDetail();$('run-list').scrollTop=listScroll;$('run-detail').scrollTop=detailScroll;return;}const focus=document.activeElement?.dataset?.key,previous=records.find(r=>r.key===selected);collect();if(previous?.is_current_assignment===true){const current=records.find(r=>r.repository===previous.repository&&r.package===previous.package&&r.is_current_assignment===true);if(current)selected=current.key;}const visible=visibleRecords();if(!selected||!records.some(r=>r.key===selected))selected=visible[0]?.key||null;status();renderList();renderDetail();$('run-list').scrollTop=listScroll;$('run-detail').scrollTop=detailScroll;if(focus){[...$('run-list').querySelectorAll('button')].find(b=>b.dataset.key===focus)?.focus({preventScroll:true});}}
 async function refresh(manual=false){if(fetching)return;if(manual)imported=false;if(imported)return;if(location.protocol==='file:'){error='Live state requires the local dashboard server.';status();$('run-list').innerHTML='<div class="empty">Import a published JSON snapshot to inspect it offline.</div>';$('observation-detail').innerHTML='<div class="empty"><h2>Open a snapshot</h2><p>Import a sentinel observer JSON file, or open this dashboard through its local server for live observation.</p></div>';return;}fetching=true;const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),10000);$('refresh-button').setAttribute('aria-busy','true');try{const response=await fetch('/api/state',{cache:'no-store',signal:controller.signal});if(!response.ok)throw Error('The local server could not provide workspace state.');payload=normalize(await response.json());const generated=Date.parse(payload.generated_at);liveAnchor=Number.isFinite(generated)?{at:generated,perf:performance.now()}:null;error=null;render();}catch(e){error=e.name==='AbortError'?'Workspace refresh timed out.':'Could not refresh workspace state.';if(payload)render();else status();if(!payload){$('run-list').innerHTML='<div class="empty">Workspace state unavailable</div>';$('observation-detail').innerHTML='<div class="empty"><h2>Workspace state unavailable</h2><p>Check the local dashboard server, then refresh state. You can also import a published snapshot.</p></div>';}}finally{clearTimeout(timeout);fetching=false;$('refresh-button').removeAttribute('aria-busy');}}
-$('run-list').addEventListener('click',e=>{const b=e.target.closest('[data-key]');if(!b)return;selected=b.dataset.key;renderList();renderDetail();$('run-detail').scrollTop=0;[...$('run-list').querySelectorAll('button')].find(x=>x.dataset.key===selected)?.focus({preventScroll:true});});$('run-detail').addEventListener('click',e=>{if(e.target.closest('#mark-complete'))openCompletion();const b=e.target.closest('[data-package-file]');if(b)openPackageFile(b.dataset.packageFile);const refreshFiles=e.target.closest('[data-refresh-files]');if(refreshFiles){const r=records.find(x=>x.key===selected);if(r)loadPackageFiles(r,0,true);}const more=e.target.closest('[data-more-files]');if(more){const r=records.find(x=>x.key===selected);if(r)loadPackageFiles(r,Number(more.dataset.moreFiles));}});document.querySelectorAll('[data-mode]').forEach(b=>b.addEventListener('click',()=>{if(mode===b.dataset.mode)return;mode=b.dataset.mode;selected=null;selectedWorkspace=null;workspace=null;workspaceError=null;workspaceDetailError=null;workspaceUnavailable=null;listingOwner=null;listingLoaded=false;fileOwner=null;fileSelection=null;fileContent=null;++catalogRequest;++workspaceDetailRequest;++listingRequest;++fileRequest;if($('file-viewer'))$('file-viewer').innerHTML='';if($('package-files'))$('package-files').textContent='';if($('package-panel'))$('package-panel').hidden=true;applyModeChrome();document.querySelectorAll('[data-mode]').forEach(x=>x.setAttribute('aria-pressed',String(x.dataset.mode===mode)));render();if(mode==='workspaces')loadWorkspaces();$('run-detail').scrollTop=0;}));$('run-list').addEventListener('click',e=>{if(mode!=='workspaces')return;const b=e.target.closest('[data-workspace]');if(b)selectWorkspace(b.dataset.workspace);else if(e.target.closest('[data-workspace-retry]'))loadWorkspaces();});$('run-detail').addEventListener('click',e=>{if(mode!=='workspaces')return;const b=e.target.closest('[data-workspace-file]');if(b)openWorkspaceFile(b.dataset.workspaceFile);else if(e.target.closest('[data-refresh-workspace-files]'))loadWorkspaceFiles(0,true);else if(e.target.closest('[data-workspace-detail-retry]'))selectWorkspace(selectedWorkspace);else{const more=e.target.closest('[data-more-workspace-files]');if(more)loadWorkspaceFiles(Number(more.dataset.moreWorkspaceFiles));}});$('repo-search').addEventListener('input',render);document.querySelectorAll('[data-filter]').forEach(b=>b.addEventListener('click',()=>{filter=b.dataset.filter;selected=null;document.querySelectorAll('[data-filter]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));render();$('run-detail').scrollTop=0;}));$('refresh-button').addEventListener('click',()=>{refresh(true);if(mode==='workspaces')loadWorkspaces();});$('import-button').addEventListener('click',()=>$('import-file').click());$('import-file').addEventListener('change',async e=>{const file=e.target.files[0];if(!file)return;try{if(file.size>12*1024*1024)throw Error('File too large.');payload=normalize(JSON.parse(await file.text()));imported=true;liveAnchor=null;error=null;render();}catch(e){error='Could not import snapshot. Choose a valid sentinel JSON file smaller than 12 MB.';if(payload)render();else status();}finally{$('import-file').value='';}});refresh();setInterval(()=>{if(imported){if(payload)render();return;}if(mode==='workspaces'){loadWorkspaces();return;}refresh();},5000);
+$('run-list').addEventListener('click',e=>{const b=e.target.closest('[data-key]');if(!b)return;selected=b.dataset.key;renderList();renderDetail();$('run-detail').scrollTop=0;[...$('run-list').querySelectorAll('button')].find(x=>x.dataset.key===selected)?.focus({preventScroll:true});});$('run-detail').addEventListener('click',e=>{if(e.target.closest('#mark-complete'))openCompletion();const b=e.target.closest('[data-package-file]');if(b)openPackageFile(b.dataset.packageFile);const refreshFiles=e.target.closest('[data-refresh-files]');if(refreshFiles){const r=records.find(x=>x.key===selected);if(r)loadPackageFiles(r,0,true);}const more=e.target.closest('[data-more-files]');if(more){const r=records.find(x=>x.key===selected);if(r)loadPackageFiles(r,Number(more.dataset.moreFiles));}});document.querySelectorAll('[data-mode]').forEach(b=>b.addEventListener('click',()=>{if(mode===b.dataset.mode)return;mode=b.dataset.mode;selected=null;selectedWorkspace=null;workspace=null;workspaceError=null;workspaceDetailError=null;workspaceUnavailable=null;listingOwner=null;listingLoaded=false;fileOwner=null;fileSelection=null;fileContent=null;++catalogRequest;++workspaceDetailRequest;++listingRequest;++fileRequest;if($('file-viewer'))$('file-viewer').innerHTML='';if($('package-files'))$('package-files').textContent='';if($('package-panel'))$('package-panel').hidden=true;resetThreads();applyModeChrome();document.querySelectorAll('[data-mode]').forEach(x=>x.setAttribute('aria-pressed',String(x.dataset.mode===mode)));render();if(mode==='workspaces')loadWorkspaces();$('run-detail').scrollTop=0;}));$('run-list').addEventListener('click',e=>{if(mode!=='workspaces')return;const b=e.target.closest('[data-workspace]');if(b)selectWorkspace(b.dataset.workspace);else if(e.target.closest('[data-workspace-retry]'))loadWorkspaces();});$('run-detail').addEventListener('click',e=>{if(mode!=='workspaces')return;const b=e.target.closest('[data-workspace-file]');if(b)openWorkspaceFile(b.dataset.workspaceFile);else if(e.target.closest('[data-refresh-workspace-files]'))loadWorkspaceFiles(0,true);else if(e.target.closest('[data-workspace-detail-retry]'))selectWorkspace(selectedWorkspace);else{const more=e.target.closest('[data-more-workspace-files]');if(more)loadWorkspaceFiles(Number(more.dataset.moreWorkspaceFiles));}});
+$('run-detail').addEventListener('click',e=>{
+ if(mode!=='workspaces')return;
+ const row=e.target.closest('[data-thread]');if(row){selectThread(row.dataset.thread);return;}
+ if(e.target.closest('[data-thread-send]')){sendThreadMessage();return;}
+ if(e.target.closest('[data-thread-stop]')){stopSelectedThread();return;}
+ if(e.target.closest('[data-thread-resume]')){resumeSelectedThread();return;}
+ const discard=e.target.closest('[data-thread-discard]');if(discard){discardThreadMessage(discard.dataset.threadDiscard,false);return;}
+ const resend=e.target.closest('[data-thread-resend]');if(resend){discardThreadMessage(resend.dataset.threadResend,true);return;}
+ if(e.target.closest('[data-thread-refresh]')){refreshSelectedThread();return;}
+ const older=e.target.closest('[data-thread-older]');if(older){const first=threadHistoryEntries[0]?.id;if(typeof first==='string')loadThreadHistory(first,true);return;}
+ const retry=e.target.closest('[data-thread-retry]');if(retry){threadFocusTarget=retry.id||'thread-error-retry';if(retry.dataset.threadRetry==='list')loadThreads();else{threadRequestError=null;renderThreadHead();renderThreadControls();if(selectedThread)loadThreadHistory();}return;}
+});
+$('run-detail').addEventListener('input',e=>{if(mode!=='workspaces'||e.target.id!=='thread-draft')return;threadDraft=e.target.value;const send=$('thread-send');if(send)send.disabled=threadPending!==null||!threadDraft.trim();});
+$('run-detail').addEventListener('keydown',e=>{if(mode!=='workspaces'||e.target.id!=='thread-draft')return;if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendThreadMessage();}});
+$('run-detail').addEventListener('scroll',e=>{if(e.target.id==='thread-transcript')threadStickBottom=e.target.scrollHeight-e.target.scrollTop-e.target.clientHeight<40;},true);$('repo-search').addEventListener('input',render);document.querySelectorAll('[data-filter]').forEach(b=>b.addEventListener('click',()=>{filter=b.dataset.filter;selected=null;document.querySelectorAll('[data-filter]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));render();$('run-detail').scrollTop=0;}));$('refresh-button').addEventListener('click',()=>{refresh(true);if(mode==='workspaces'){loadWorkspaces();loadThreads();}});$('import-button').addEventListener('click',()=>$('import-file').click());$('import-file').addEventListener('change',async e=>{const file=e.target.files[0];if(!file)return;try{if(file.size>12*1024*1024)throw Error('File too large.');payload=normalize(JSON.parse(await file.text()));imported=true;liveAnchor=null;error=null;render();}catch(e){error='Could not import snapshot. Choose a valid sentinel JSON file smaller than 12 MB.';if(payload)render();else status();}finally{$('import-file').value='';}});refresh();setInterval(()=>{if(imported){if(payload)render();return;}if(mode==='workspaces'){loadWorkspaces();loadThreads();return;}refresh();},5000);
 $('completion-form').addEventListener('submit',submitCompletion);
 $('completion-cancel').addEventListener('click',()=>$('completion-dialog').close());
 $('completion-dialog').addEventListener('cancel',event=>{if(completionSaving)event.preventDefault();});

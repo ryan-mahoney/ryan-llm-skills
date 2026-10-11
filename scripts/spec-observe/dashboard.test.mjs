@@ -703,8 +703,11 @@ function inlineScript() {
 // Real inline script with only final Date/performance/fetch/location boundaries replaced.
 function dashboardContext({ fetch, wallNow = Date.now, perfNow = () => 0, location = { protocol: 'http:' } } = {}) {
   const elements = new Map();
-  const document = { querySelectorAll: () => [], getElementById(id) {
+  const document = { activeElement: null, querySelectorAll: () => [], getElementById(id) {
     if (!elements.has(id)) elements.set(id, { innerHTML: '', textContent: '', value: '', scrollTop: 0, hidden: false,
+      focusCalls: 0, listeners: {},
+      focus() { this.focusCalls += 1; document.activeElement = this; },
+      addEventListener(type, handler) { (this.listeners[type] ??= []).push(handler); },
       querySelectorAll: () => [], setAttribute() {}, removeAttribute() {}, append() {}, insertAdjacentHTML() {},
       classList: { toggle() {} } });
     return elements.get(id);
@@ -1210,4 +1213,321 @@ test('partial workspace coverage: keyboard selection, retry, escaping and packag
   // Returning to packages keeps completion semantics for packages only.
   vm.runInContext("mode='packages';payload={action_token:'local-token'};liveAnchor={at:Date.parse('2026-10-10T00:00:00Z'),perf:0};render()", context);
   assert.match(vm.runInContext('completionControl({is_current_assignment:true})', context), /id="mark-complete"/);
+});
+
+// ---- Threads UI (step 9): browsing, transcript, composer and stale-response guards ----
+const threadId = '11111111-1111-4111-8111-111111111111';
+const otherThreadId = '22222222-2222-4222-8222-222222222222';
+const threadAt = '2026-10-10T00:00:00.000Z';
+function threadRecord(over = {}) {
+  return { thread_id: threadId, workspace_id: 'alpha', title: 'Thread one', queue: [], queue_paused: false,
+    history_only: false, attention: null, state: 'idle', generation: 1, updated_at: threadAt, ...over };
+}
+function threadEntry(id, role, text) {
+  return { id, type: 'message', timestamp: threadAt, message: { role, content: [{ type: 'text', text }] } };
+}
+// Direct payload assignment always carries the adj2 server-relative anchor and
+// the performance boundary, matching the production freshness contract.
+function setThreadContext(context, selected = threadId) {
+  vm.runInContext(`mode='workspaces';selectedWorkspace='alpha';workspace={id:'alpha'};error=null;payload={action_token:'local-token'};liveAnchor={at:Date.parse('2026-10-10T00:00:00Z'),perf:performance.now()};selectedThread=${JSON.stringify(selected)}`, context);
+}
+const threadsBody = context => context.document.getElementById('threads-body').innerHTML;
+const buttonTag = (html, id) => html.match(new RegExp(`<button id="${id}"[^>]*>`))?.[0] ?? '';
+
+test('threads UI renders loading, empty, waiting, streaming and interrupted states with controls', () => {
+  const context = dashboardContext();
+  setThreadContext(context);
+
+  vm.runInContext('threads=null;renderThreads()', context);
+  assert.match(threadsBody(context), /Loading threads/);
+
+  vm.runInContext('threads=[];selectedThread=null;renderThreads()', context);
+  assert.match(threadsBody(context), /No discussion threads in this workspace yet/);
+
+  const waiting = threadRecord({ queue: [{ id: 'message-1', state: 'queued', text: 'waiting text', queued_at: threadAt, queue_position: 2 }] });
+  vm.runInContext(`threads=${JSON.stringify([waiting])};selectedThread=${JSON.stringify(threadId)};threadPartial='';renderThreads()`, context);
+  assert.match(threadsBody(context), /Queued/);
+  assert.match(threadsBody(context), /queue position 2/);
+  assert.match(threadsBody(context), /waiting text/);
+  assert.match(threadsBody(context), /id="thread-draft"/);
+  assert.match(threadsBody(context), /id="thread-send"/);
+
+  const streaming = threadRecord({ state: 'active' });
+  vm.runInContext(`threads=${JSON.stringify([streaming])};threadPartial='partial answer';renderThreads()`, context);
+  assert.match(threadsBody(context), /Responding/);
+  assert.match(threadsBody(context), /A response is being delivered/);
+  assert.match(threadsBody(context), /role="status"/);
+  assert.match(threadsBody(context), /partial answer/);
+  assert.match(threadsBody(context), /id="thread-stop"/);
+  assert.doesNotMatch(threadsBody(context), /id="thread-resume"/);
+
+  // Interrupted delivery is Stop's paused queue: it explains and offers Resume.
+  const interrupted = threadRecord({ state: 'paused', queue_paused: true, queue: [{ id: 'message-2', state: 'queued', text: 'after resume', queued_at: threadAt, queue_position: 1 }] });
+  vm.runInContext(`threads=${JSON.stringify([interrupted])};threadPartial='';renderThreads()`, context);
+  assert.match(threadsBody(context), /Queue paused/);
+  assert.match(threadsBody(context), /Pending messages wait until Resume/);
+  assert.match(threadsBody(context), /id="thread-resume"/);
+  assert.doesNotMatch(threadsBody(context), /id="thread-stop"/);
+});
+
+test('threads UI explains attention states and keeps recovery controls', () => {
+  const context = dashboardContext();
+  setThreadContext(context);
+  const cases = [
+    ['stalled', /Stalled/, /No child events for ten minutes/, /data-thread-refresh/],
+    ['uncertain', /Delivery uncertain/, /may or may not have been delivered/, /data-thread-discard/],
+    ['start-failed', /Start failed/, /failed before startup completed/, /data-thread-refresh/],
+    ['session-mismatch', /Session mismatch/, /does not match this thread record/, /data-thread-refresh/],
+    ['missing-directory', /Execution directory missing/, /execution directory is gone/, /data-thread-refresh/],
+    ['live-owner', /Owner not confirmed dead/, /fails closed/, /data-thread-refresh/],
+    ['missing-context', /Context missing/, /missing or unreadable/, /data-thread-refresh/],
+  ];
+  for (const [state, label, explanation, control] of cases) {
+    const queue = state === 'uncertain' ? [{ id: 'uncertain-1', state: 'uncertain', text: 'maybe sent', queued_at: threadAt }] : [];
+    const record = threadRecord({ state, attention: state, queue });
+    vm.runInContext(`threads=${JSON.stringify([record])};selectedThread=${JSON.stringify(threadId)};threadRequestError=null;renderThreads()`, context);
+    assert.match(threadsBody(context), label, state);
+    assert.match(threadsBody(context), explanation, state);
+    assert.match(threadsBody(context), /role="status"/, state);
+    assert.match(threadsBody(context), control, state);
+  }
+  const historyOnly = threadRecord({ history_only: true, state: 'history-only' });
+  vm.runInContext(`threads=${JSON.stringify([historyOnly])};renderThreads()`, context);
+  assert.match(threadsBody(context), /History only/);
+  assert.match(threadsBody(context), /sending and resuming are unavailable/);
+  assert.doesNotMatch(threadsBody(context), /id="thread-draft"/);
+  assert.doesNotMatch(threadsBody(context), /id="thread-resume"/);
+});
+
+test('threads UI storage-missing and request-error expose retry plus the polite live region', () => {
+  const html = readFileSync(new URL('./dashboard.html', import.meta.url), 'utf8');
+  assert.match(html, /id="thread-announcer"[^>]*role="status"[^>]*aria-live="polite"/);
+  const context = dashboardContext();
+  setThreadContext(context);
+
+  vm.runInContext("threads=null;threadsError='Discussion service unavailable on this host.';catalog={storage:{status:'missing_root'}};renderThreads()", context);
+  assert.match(threadsBody(context), /Workspace thread storage is unavailable/);
+  assert.match(threadsBody(context), /missing_root/);
+  assert.match(threadsBody(context), /cli\.mjs setup/);
+  assert.match(threadsBody(context), /data-thread-retry="list"/);
+
+  vm.runInContext(`threadsError=null;threads=${JSON.stringify([threadRecord()])};selectedThread=${JSON.stringify(threadId)};threadRequestError='The transcript could not be loaded.';renderThreads()`, context);
+  assert.match(threadsBody(context), /The transcript could not be loaded/);
+  assert.match(threadsBody(context), /id="thread-error-retry"/);
+  assert.match(threadsBody(context), /role="alert"/);
+
+  vm.runInContext("announceThread('Thread notice: delivery uncertain')", context);
+  assert.equal(context.document.getElementById('thread-announcer').textContent, 'Thread notice: delivery uncertain');
+});
+
+test('threads UI failed send keeps the draft, reuses its retry id and restores composer focus', async () => {
+  const posts = [];
+  const context = dashboardContext({ fetch: async (url, init = {}) => {
+    if (String(url).startsWith('/api/thread/send')) { posts.push(JSON.parse(init.body)); return { ok: false, status: 503, json: async () => ({ error: 'Discussion service unavailable.' }) }; }
+    return { ok: false, status: 404, json: async () => ({}) };
+  } });
+  setThreadContext(context);
+  vm.runInContext(`threads=${JSON.stringify([threadRecord({ state: 'active' })])};threadDraft='please keep this draft'`, context);
+  await vm.runInContext('sendThreadMessage()', context);
+  assert.equal(vm.runInContext('threadDraft', context), 'please keep this draft');
+  assert.match(context.document.getElementById('thread-head-box').innerHTML, /Discussion service unavailable/);
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].text, 'please keep this draft');
+  assert.match(posts[0].id, /^[0-9a-f-]{36}$/);
+  assert.equal(vm.runInContext('threadSendId', context), posts[0].id);
+  const composer = context.document.getElementById('thread-draft');
+  assert.ok(composer.focusCalls >= 1, 'failed send restores focus to the composer');
+  assert.equal(context.document.activeElement, composer);
+  await vm.runInContext('sendThreadMessage()', context);
+  assert.equal(posts.length, 2);
+  assert.equal(posts[1].id, posts[0].id, 'retry keeps the client message id for dedupe');
+});
+
+test('threads UI announces send, stop, resume and discard through the polite live region', async () => {
+  const posts = [];
+  const context = dashboardContext({ fetch: async (url, init = {}) => {
+    const path = String(url).split('?')[0];
+    if (path !== '/api/thread/history' && path !== '/api/threads' && path !== '/api/state') {
+      posts.push({ path, method: init.method ?? 'GET', body: init.body ? JSON.parse(init.body) : null, headers: init.headers ?? {} });
+    }
+    if (path === '/api/threads') return { ok: true, json: async () => ({ threads: [threadRecord({ state: 'active' })], invalid: [] }) };
+    if (path === '/api/thread/history') return { ok: true, json: async () => ({ header: null, entries: [], leaf_id: null, incomplete_tail: false, skipped_lines: 0, truncated: false }) };
+    if (path === '/api/thread/send') return { ok: true, json: async () => ({ thread: threadRecord(), message_id: 'message-1', state: 'queued', duplicate: false }) };
+    if (path === '/api/thread/stop') return { ok: true, json: async () => ({ thread: threadRecord({ state: 'paused', queue_paused: true }) }) };
+    if (path === '/api/thread/resume') return { ok: true, json: async () => ({ thread: threadRecord() }) };
+    if (path === '/api/thread/discard') return { ok: true, json: async () => ({ thread: threadRecord(), message_id: 'uncertain-1', state: 'discarded', duplicate: false }) };
+    return { ok: false, status: 404, json: async () => ({}) };
+  } });
+  setThreadContext(context);
+  const announcer = context.document.getElementById('thread-announcer');
+
+  vm.runInContext(`threads=${JSON.stringify([threadRecord({ state: 'active' })])};threadDraft='hello'`, context);
+  await vm.runInContext('sendThreadMessage()', context);
+  assert.equal(announcer.textContent, 'Message queued.');
+  assert.equal(vm.runInContext('threadDraft', context), '');
+  await vm.runInContext('stopSelectedThread()', context);
+  assert.equal(announcer.textContent, 'Stop requested. The thread queue is paused.');
+  await vm.runInContext('resumeSelectedThread()', context);
+  assert.equal(announcer.textContent, 'Thread resumed.');
+  vm.runInContext("threads=[Object.assign({},threads[0],{attention:'uncertain',state:'uncertain',queue:[{id:'uncertain-1',state:'uncertain',text:'maybe',queued_at:'2026-10-10T00:00:00.000Z'}]})];renderThreads()", context);
+  await vm.runInContext("discardThreadMessage('uncertain-1',false)", context);
+  assert.equal(announcer.textContent, 'Uncertain message discarded.');
+
+  const mutations = posts.filter(call => call.method === 'POST');
+  assert.equal(mutations.length, 4);
+  for (const call of mutations) {
+    assert.equal(call.headers['X-Sentinel-Token'], 'local-token');
+    assert.equal(call.headers['Content-Type'], 'application/json');
+    assert.equal(call.body.workspace_id, 'alpha');
+    assert.equal(call.body.thread_id, threadId);
+  }
+});
+
+test('threads UI sends on Enter and preserves the newline on Shift+Enter', async () => {
+  const posts = [];
+  const context = dashboardContext({ fetch: async (url, init = {}) => {
+    const path = String(url).split('?')[0];
+    if (path === '/api/thread/send') { posts.push(JSON.parse(init.body)); return { ok: true, json: async () => ({ thread: threadRecord(), message_id: 'message-1', state: 'queued', duplicate: false }) }; }
+    if (path === '/api/threads') return { ok: true, json: async () => ({ threads: [threadRecord({ state: 'active' })], invalid: [] }) };
+    if (path === '/api/thread/history') return { ok: true, json: async () => ({ header: null, entries: [], leaf_id: null, incomplete_tail: false, skipped_lines: 0, truncated: false }) };
+    return { ok: false, status: 503, json: async () => ({}) };
+  } });
+  context.setInterval = () => 0;
+  context.clearInterval = () => {};
+  context.EventSource = class { constructor(url) { this.url = String(url); } addEventListener() {} close() {} };
+  vm.runInContext(inlineScript().slice(inlineScript().indexOf("$('run-list').addEventListener")), context);
+  setThreadContext(context);
+  vm.runInContext(`threads=${JSON.stringify([threadRecord({ state: 'active' })])};threadDraft='send with enter';renderThreads()`, context);
+
+  const keydown = context.document.getElementById('run-detail').listeners.keydown[0];
+  assert.equal(typeof keydown, 'function');
+  let prevented = false;
+  keydown({ target: { id: 'thread-draft' }, key: 'Enter', shiftKey: false, preventDefault() { prevented = true; } });
+  assert.equal(prevented, true, 'Enter submits the composer');
+  await flush();
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].text, 'send with enter');
+  let preventCalls = 0;
+  keydown({ target: { id: 'thread-draft' }, key: 'Enter', shiftKey: true, preventDefault() { preventCalls += 1; } });
+  await flush();
+  assert.equal(preventCalls, 0, 'Shift+Enter keeps the textarea newline behavior');
+  assert.equal(posts.length, 1, 'Shift+Enter does not send');
+});
+
+test('threads UI disables only the affected control while an action is pending', () => {
+  const context = dashboardContext();
+  setThreadContext(context);
+  const render = (record, pending) => {
+    vm.runInContext(`threads=${JSON.stringify([record])};selectedThread=${JSON.stringify(threadId)};threadDraft='draft text';threadPending=${pending};threadRequestError=null;renderThreads()`, context);
+    return threadsBody(context);
+  };
+
+  const active = threadRecord({ state: 'active' });
+  let html = render(active, 'null');
+  assert.doesNotMatch(buttonTag(html, 'thread-send'), /disabled/);
+  assert.doesNotMatch(buttonTag(html, 'thread-stop'), /disabled/);
+  assert.doesNotMatch(buttonTag(html, 'thread-refresh'), /disabled/);
+
+  html = render(active, "'send'");
+  assert.match(buttonTag(html, 'thread-send'), /disabled/);
+  assert.doesNotMatch(buttonTag(html, 'thread-stop'), /disabled/);
+  assert.doesNotMatch(buttonTag(html, 'thread-refresh'), /disabled/);
+
+  html = render(active, "'stop'");
+  assert.match(buttonTag(html, 'thread-stop'), /disabled/);
+  assert.doesNotMatch(buttonTag(html, 'thread-send'), /disabled/);
+
+  html = render(threadRecord({ state: 'paused', queue_paused: true }), "'resume'");
+  assert.match(buttonTag(html, 'thread-resume'), /disabled/);
+  assert.doesNotMatch(buttonTag(html, 'thread-send'), /disabled/);
+
+  const uncertain = threadRecord({ attention: 'uncertain', state: 'uncertain', queue: [{ id: 'uncertain-1', state: 'uncertain', text: 'maybe', queued_at: threadAt }] });
+  html = render(uncertain, "'discard'");
+  assert.match(html, /<button data-thread-discard="uncertain-1" disabled>/);
+  assert.doesNotMatch(buttonTag(html, 'thread-refresh'), /disabled/);
+});
+
+test('threads UI discards a delayed list response after a newer workspace selection', async () => {
+  const pending = new Map();
+  const context = dashboardContext({ fetch: url => new Promise(resolve => pending.set(String(url), resolve)) });
+  setThreadContext(context);
+  const alpha = threadRecord({ title: 'Alpha thread' });
+  const beta = threadRecord({ thread_id: otherThreadId, title: 'Beta thread' });
+
+  const first = vm.runInContext('loadThreads()', context);
+  const alphaCall = [...pending.keys()].find(url => url.includes('workspace_id=alpha'));
+  assert.ok(alphaCall, 'alpha list request is in flight');
+  vm.runInContext("selectedWorkspace='beta'", context);
+  const second = vm.runInContext('loadThreads()', context);
+  const betaCall = [...pending.keys()].find(url => url.includes('workspace_id=beta'));
+  assert.ok(betaCall, 'beta list request is in flight');
+
+  pending.get(betaCall)({ ok: true, json: async () => ({ threads: [beta], invalid: [] }) });
+  await second;
+  await flush();
+  pending.get(alphaCall)({ ok: true, json: async () => ({ threads: [alpha], invalid: [] }) });
+  await first;
+  assert.equal(vm.runInContext('threads.length', context), 1);
+  assert.equal(vm.runInContext('threads[0].thread_id', context), otherThreadId);
+  assert.match(threadsBody(context), /Beta thread/);
+  assert.doesNotMatch(threadsBody(context), /Alpha thread/);
+});
+
+test('threads UI delayed history and SSE frames cannot cross a selected-thread change', async () => {
+  const sources = [];
+  const pending = new Map();
+  const context = dashboardContext({ fetch: url => new Promise(resolve => pending.set(String(url), resolve)) });
+  context.EventSource = class { constructor(url) { this.url = String(url); this.handlers = {}; sources.push(this); }
+    addEventListener(type, handler) { (this.handlers[type] ??= []).push(handler); }
+    emit(type, data) { for (const handler of this.handlers[type] ?? []) handler({ data: JSON.stringify(data) }); }
+    close() { this.closed = true; } };
+  context.EventSource.CLOSED = 2;
+  setThreadContext(context, null);
+  const alpha = threadRecord({ title: 'Alpha thread' });
+  const beta = threadRecord({ thread_id: otherThreadId, title: 'Beta thread' });
+  vm.runInContext(`threads=${JSON.stringify([alpha, beta])};renderThreads()`, context);
+
+  vm.runInContext(`selectThread(${JSON.stringify(threadId)})`, context);
+  const alphaHistory = [...pending.keys()].find(url => url.includes('/api/thread/history') && url.includes(threadId));
+  assert.ok(alphaHistory, 'alpha history request is in flight');
+  vm.runInContext(`selectThread(${JSON.stringify(otherThreadId)})`, context);
+  const betaHistory = [...pending.keys()].find(url => url.includes('/api/thread/history') && url.includes(otherThreadId));
+  assert.ok(betaHistory, 'beta history request is in flight');
+  const transcript = () => context.document.getElementById('thread-transcript-box').innerHTML;
+
+  pending.get(betaHistory)({ ok: true, json: async () => ({ header: null, entries: [threadEntry('entry-b', 'assistant', 'beta response')], leaf_id: 'entry-b', incomplete_tail: false, skipped_lines: 0, truncated: false }) });
+  await flush();
+  pending.get(alphaHistory)({ ok: true, json: async () => ({ header: null, entries: [threadEntry('entry-a', 'assistant', 'alpha response')], leaf_id: 'entry-a', incomplete_tail: false, skipped_lines: 0, truncated: false }) });
+  await flush();
+  assert.match(transcript(), /beta response/);
+  assert.doesNotMatch(transcript(), /alpha response/);
+  assert.equal(vm.runInContext('threadHistoryEntries.map(entry => entry.id).join(",")', context), 'entry-b');
+
+  const staleSource = sources.find(source => source.url.includes(threadId));
+  const liveSource = sources.find(source => source.url.includes(otherThreadId));
+  assert.ok(staleSource && liveSource, 'one stream per selected thread');
+  staleSource.emit('delta', { thread_id: threadId, generation: 1, type: 'delta', event: { type: 'message_update', delta: 'stale text' } });
+  assert.doesNotMatch(transcript(), /stale text/);
+  assert.equal(vm.runInContext('threadPartial', context), '');
+  liveSource.emit('delta', { thread_id: otherThreadId, generation: 2, type: 'delta', event: { type: 'message_update', delta: 'live text' } });
+  assert.match(transcript(), /live text/);
+  liveSource.emit('settled', { thread_id: otherThreadId, generation: 2, type: 'settled', event: { type: 'agent_settled' } });
+  assert.equal(context.document.getElementById('thread-announcer').textContent, 'Response settled; the next waiting message can deliver.');
+});
+
+test('threads UI escapes hostile titles and content and renders safe markdown only', () => {
+  const context = dashboardContext();
+  setThreadContext(context);
+  const hostile = threadRecord({ title: 'Thread <img src=x onerror=alert(1)>', queue: [{ id: 'message-1', state: 'queued', text: '<script>alert(1)</script>', queued_at: threadAt }] });
+  const entries = [threadEntry('entry-user', 'user', '<script>alert(2)</script>'), threadEntry('entry-assistant', 'assistant', '**bold** plan with <img src=x> and [link](javascript:alert(3))')];
+  vm.runInContext(`threads=${JSON.stringify([hostile])};selectedThread=${JSON.stringify(threadId)};threadHistoryEntries=${JSON.stringify(entries)};threadHasOlder=false;renderThreads()`, context);
+  const body = threadsBody(context);
+  assert.doesNotMatch(body, /<img\b/);
+  assert.doesNotMatch(body, /<script/i);
+  assert.doesNotMatch(body, /javascript:alert/);
+  assert.match(body, /&lt;img/);
+  assert.match(body, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.match(body, /<strong>bold<\/strong>/);
+  assert.match(body, /link/);
+  assert.ok(vm.runInContext('Number.isFinite(liveAnchor.at)', context), 'direct payload assignment keeps the server-relative anchor');
 });
