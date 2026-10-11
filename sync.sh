@@ -101,14 +101,6 @@ if [ -d "$HOME/.pi/agent" ]; then
     fi
     ln -sfn "${extension%/}" "$extension_target"
   done
-  # Install locked dependencies for the extensions and for Jev, which spec-runtime
-  # imports in-process. Skip when node_modules already matches the lockfile.
-  for package_dir in "$AGENTS_DIR/pi/extensions"/*/ "$AGENTS_DIR/scripts/jev/"; do
-    [ -f "$package_dir/package-lock.json" ] || continue
-    if [ ! "$package_dir/node_modules/.package-lock.json" -nt "$package_dir/package-lock.json" ]; then
-      (cd "$package_dir" && npm ci --no-audit --no-fund)
-    fi
-  done
   echo "Synced Pi profiles and execution extensions; restart Pi to load extension changes."
 fi
 
