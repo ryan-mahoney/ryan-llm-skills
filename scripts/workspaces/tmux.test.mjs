@@ -209,8 +209,10 @@ test("tmux adapter: first launch bootstraps keys and runs fixture with exact arg
   assert.equal(typeof result.piIdentity.started_at, "string");
   assert.ok(result.piIdentity.started_at.length > 0);
 
-  // First server bootstrap enables extended keys and records the full UUID.
+  // First server bootstrap enables extended keys with the CSI-u format and
+  // records the full UUID.
   assert.equal(await tmuxOutput(socketPath, ["show-options", "-sv", "extended-keys"]), "on");
+  assert.equal(await tmuxOutput(socketPath, ["show-options", "-sv", "extended-keys-format"]), "csi-u");
   assert.equal(
     await tmuxOutput(socketPath, ["show-options", "-v", "-t", `=${name}:`, "@adjacent_assignment_id"]),
     assignmentId,
@@ -233,6 +235,38 @@ test("tmux adapter: first launch bootstraps keys and runs fixture with exact arg
     "-t",
     `=${name}`,
   ]);
+});
+
+test("tmux adapter: literal semicolons survive tmux argv parsing with exact delivery", async (t) => {
+  const { root, state } = await tempRoot(t);
+  const socketPath = join(root, "s.sock");
+  // A cwd with a trailing semicolon exercises the same tmux-level escaping
+  // as Pi arguments: it must not split the bootstrap queue.
+  const cwd = join(root, "work;");
+  await mkdir(cwd, { recursive: true });
+  const logPath = join(root, "fake-pi.jsonl");
+  process.env.FAKE_PI_LOG = logPath;
+  state.socketPath = socketPath;
+
+  const name = sessionName();
+  const assignmentId = randomUUID();
+  const args = [";", ";;", "trailing;", "a;;", "a;b", ";x", "\\;", "abc\\;", "plain", "--name", "ws:title;"];
+  const result = await startSession({
+    socketPath,
+    sessionName: name,
+    cwd,
+    piPath: process.execPath,
+    piArgs: [FIXTURE_PATH, ...args],
+    assignmentId,
+  });
+  state.pids.push(result.panePid);
+
+  const entry = await waitForLogEntry(logPath, result.panePid);
+  assert.deepEqual(entry.argv, [FIXTURE_PATH, ...args]);
+  assert.equal(entry.cwd, cwd);
+
+  // No semicolon became a tmux command separator: exactly one session runs.
+  assert.equal(await tmuxOutput(socketPath, ["list-sessions", "-F", "#{session_name}"]), name);
 });
 
 test("tmux adapter: foreign short-name collision refuses adoption of a different full id", async (t) => {
@@ -296,19 +330,75 @@ test("tmux adapter: foreign short-name collision refuses adoption of a different
   );
   assert.equal((await logEntries(logPath)).length, 2);
 
-  // An owned repeat with the same full id adopts the existing pane instead.
+  // An owned repeat with the same full id adopts the existing pane only when
+  // the caller supplies the saved pane identity; without that evidence
+  // adoption refuses fail-closed even though the UUID matches.
   const ownedName = sessionName();
   const ownedId = randomUUID();
   const input = startInput({ socketPath, name: ownedName, cwd, args: ["owned"], assignmentId: ownedId });
   const owned = await startSession(input);
   state.pids.push(owned.panePid);
   await waitForLogEntry(logPath, owned.panePid);
-  const repeated = await startSession(input);
+  const expectedPane = { paneId: owned.paneId, piIdentity: owned.piIdentity };
+  await assert.rejects(startSession(input), /pane identity/);
+  const repeated = await startSession({ ...input, expectedPane });
   assert.equal(repeated.paneId, owned.paneId);
   assert.equal(repeated.panePid, owned.panePid);
   assert.equal(repeated.piIdentity.pid, owned.piIdentity.pid);
   assert.ok(sameProcess(owned.piIdentity));
   assert.equal((await logEntries(logPath)).length, 3);
+});
+
+test("tmux adapter: same-UUID adoption requires the recorded pane and Pi process", async (t) => {
+  const { root, state } = await tempRoot(t);
+  const socketPath = join(root, "s.sock");
+  const cwd = join(root, "work");
+  await mkdir(cwd, { recursive: true });
+  const logPath = join(root, "fake-pi.jsonl");
+  process.env.FAKE_PI_LOG = logPath;
+  state.socketPath = socketPath;
+
+  const name = sessionName();
+  const assignmentId = randomUUID();
+  const input = startInput({ socketPath, name, cwd, args: ["owned"], assignmentId });
+  const owned = await startSession(input);
+  state.pids.push(owned.panePid);
+  await waitForLogEntry(logPath, owned.panePid);
+  const expectedPane = { paneId: owned.paneId, piIdentity: owned.piIdentity };
+
+  // Splitting a second pane selects it: the same UUID with a different
+  // active pane must refuse adoption instead of taking over the sibling.
+  const split = await tmuxExec(socketPath, [
+    "split-window", "-t", `=${name}:`, "-c", cwd,
+    "--", process.execPath, FIXTURE_PATH, "sibling",
+  ]);
+  assert.equal(split.ok, true, split.stderr);
+  const sibling = await waitFor(async () => {
+    const current = await sessionPanePid({ socketPath, sessionName: name });
+    return current !== null && current.paneId !== owned.paneId ? current : null;
+  }, `sibling pane in ${name}`);
+  state.pids.push(sibling.panePid);
+  await waitForLogEntry(logPath, sibling.panePid);
+  await assert.rejects(startSession({ ...input, expectedPane }), /pane identity mismatch/);
+
+  // Replacing the recorded pane process keeps the pane id but ends the
+  // recorded Pi identity: adoption must still refuse.
+  const reselect = await tmuxExec(socketPath, ["select-pane", "-t", owned.paneId]);
+  assert.equal(reselect.ok, true, reselect.stderr);
+  const respawn = await tmuxExec(socketPath, [
+    "respawn-pane", "-k", "-t", owned.paneId,
+    process.execPath, FIXTURE_PATH, "replacement",
+  ]);
+  assert.equal(respawn.ok, true, respawn.stderr);
+  const replacement = await waitFor(async () => {
+    const current = await sessionPanePid({ socketPath, sessionName: name });
+    return current !== null && current.panePid !== owned.panePid ? current : null;
+  }, `replacement process in ${owned.paneId}`);
+  state.pids.push(replacement.panePid);
+  await waitForLogEntry(logPath, replacement.panePid);
+  assert.equal(replacement.paneId, owned.paneId);
+  await assert.rejects(startSession({ ...input, expectedPane }), /pane process mismatch/);
+  assert.ok(!sameProcess(owned.piIdentity));
 });
 
 test("tmux adapter: owned PTY attach and detach preserve pane and Pi identity; default server untouched", async (t) => {

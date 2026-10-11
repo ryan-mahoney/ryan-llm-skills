@@ -9,20 +9,24 @@
 // `startSession` bootstraps a fresh server in one command queue, runs the
 // direct Pi argv in the new pane and records the full assignment UUID as an
 // exact session user option. Adoption of an existing session happens only
-// when that recorded UUID equals the requested assignment, and the pane
-// process identity must be observable; a short-name match alone never adopts.
+// when that recorded UUID equals the requested assignment AND the caller
+// supplies the saved pane identity (`expectedPane`) that still matches the
+// live pane process; a short-name match alone never adopts, and adoption
+// without (or with mismatched) saved pane evidence refuses fail-closed.
 //
 // tmux 3.8 target syntax: session-target commands (`has-session`,
 // `attach-session`) accept `=name` for exact matching, while pane-target
 // commands (`set-option`, `display-message`) need `=name:` so the session
 // part is still matched exactly. tmux 3.8 exposes a single
-// `extended-keys [on|off|always]` server option; the planner's separate
-// `extended-keys-always` command does not exist on the installed version and
-// the retained observable is `extended-keys on`.
+// `extended-keys [on|off|always]` server option (the planner's separate
+// `extended-keys-always` command does not exist on the installed version)
+// plus the independent `extended-keys-format [csi-u|xterm]` server option;
+// the bootstrap sets both, and the retained observables are
+// `extended-keys on` and `extended-keys-format csi-u`.
 
 import { execFile } from "node:child_process";
 import { isAbsolute } from "node:path";
-import { processIdentity } from "../spec-observe/process-identity.mjs";
+import { processIdentity, sameProcess } from "../spec-observe/process-identity.mjs";
 
 const TMUX_TIMEOUT_MS = 10000;
 const IDENTITY_READY_MS = 2000;
@@ -50,6 +54,30 @@ function assertUuid(value, label) {
   if (typeof value !== "string" || !UUID_PATTERN.test(value)) {
     throw new Error(`${label} must be an RFC4122 UUID`);
   }
+}
+
+function assertExpectedPane(value) {
+  if (value === undefined) return;
+  const paneIdOk = typeof value === "object" && value !== null
+    && typeof value.paneId === "string" && /^%\d+$/.test(value.paneId);
+  const identity = paneIdOk ? value.piIdentity : null;
+  const identityOk = typeof identity === "object" && identity !== null
+    && Number.isSafeInteger(identity.pid) && identity.pid > 0
+    && typeof identity.started_at === "string" && identity.started_at !== "";
+  if (!paneIdOk || !identityOk) {
+    throw new Error("expectedPane must be {paneId: '%N', piIdentity: {pid, started_at}}");
+  }
+}
+
+// tmux 3.8 parses its own argv after the shell: a standalone ";" token and
+// a trailing ";" both act as command separators, so a literal argument in
+// either position must escape the final ";" as "\;". Leading and
+// interior semicolons pass through untouched (verified against tmux 3.8 on
+// an isolated socket: ";x", "a;b" and "x;;y" arrive unchanged, while
+// unescaped ";" splits the queue and "abc;" arrives as "abc").
+function escapeTmuxArg(argument) {
+  if (argument.endsWith(";")) return `${argument.slice(0, -1)}\\;`;
+  return argument;
 }
 
 // Bounded single argv-array tmux invocation. A non-zero exit resolves with
@@ -170,8 +198,11 @@ async function resolveOwnedSession(socketPath, sessionName) {
 }
 
 // A pre-existing session is adopted only when its full recorded assignment
-// UUID equals the requested one and its pane process identity is observable.
-async function adoptExisting(socketPath, sessionName, assignmentId) {
+// UUID equals the requested one AND the caller's saved pane identity still
+// matches the live pane process. Without saved evidence, or on any pane or
+// process mismatch, adoption refuses fail-closed: an observable process in
+// the active pane is not a matching recorded Pi process.
+async function adoptExisting(socketPath, sessionName, assignmentId, expectedPane) {
   const tag = await runTmux(socketPath, [
     "show-options",
     "-v",
@@ -191,21 +222,48 @@ async function adoptExisting(socketPath, sessionName, assignmentId) {
       `tmux session name collision: ${sessionName} records assignment ${recorded}`,
     );
   }
-  return resolveOwnedSession(socketPath, sessionName);
+  if (expectedPane === undefined) {
+    throw new Error(
+      `tmux session pane identity is unavailable for adoption: ${sessionName} records assignment ${recorded}`,
+    );
+  }
+  const current = await resolveOwnedSession(socketPath, sessionName);
+  if (current.paneId !== expectedPane.paneId) {
+    throw new Error(
+      `tmux session pane identity mismatch: ${sessionName} active pane ${current.paneId} is not the recorded ${expectedPane.paneId}`,
+    );
+  }
+  const expected = expectedPane.piIdentity;
+  if (
+    current.piIdentity.pid !== expected.pid
+    || current.piIdentity.started_at !== expected.started_at
+    || !sameProcess(expected)
+  ) {
+    throw new Error(
+      `tmux session pane process mismatch: ${sessionName} pane ${current.paneId} no longer runs the recorded Pi process`,
+    );
+  }
+  return current;
 }
 
 /**
  * Start the assignment's isolated tmux session and run the direct Pi argv.
  *
  * One `-S socketPath` command queue bootstraps the server, enables extended
- * keys, creates the detached session (200x50) in `cwd` with
- * `ADJACENT_ASSIGNMENT_ID`, executes `piPath` + `piArgs` without a shell, and
- * records the exact assignment UUID as `@adjacent_assignment_id`. An existing
- * same-name session is adopted only when its recorded UUID matches and its
- * pane identity is observable; otherwise a collision error is thrown.
+ * keys with the CSI-u reporting format, creates the detached session (200x50)
+ * in `cwd` with `ADJACENT_ASSIGNMENT_ID`, executes `piPath` + `piArgs`
+ * without a shell, and records the exact assignment UUID as
+ * `@adjacent_assignment_id`. Literal `cwd`, `piPath` and `piArgs` values are
+ * encoded for tmux's own argv parser (a standalone or trailing `";"` would
+ * otherwise split the queue or be stripped); intentional queue separators
+ * stay bare. An existing same-name session is adopted only when its recorded
+ * UUID matches and `expectedPane` (`{paneId, piIdentity}` saved from the
+ * original launch) still matches the live pane process; missing or
+ * mismatched pane evidence refuses adoption, and any other collision throws.
  *
  * @param {{socketPath: string, sessionName: string, cwd: string,
- *   piPath: string, piArgs: string[], assignmentId: string}} input
+ *   piPath: string, piArgs: string[], assignmentId: string,
+ *   expectedPane?: {paneId: string, piIdentity: {pid: number, started_at: string}}}} input
  * @returns {Promise<{socketPath: string, sessionName: string, paneId: string,
  *   panePid: number, piIdentity: {pid: number, started_at: string}}>}
  */
@@ -216,12 +274,14 @@ export async function startSession({
   piPath,
   piArgs,
   assignmentId,
+  expectedPane,
 } = {}) {
   assertAbsolutePath(socketPath, "socketPath");
   assertSessionName(sessionName);
   assertAbsolutePath(cwd, "cwd");
   assertAbsolutePath(piPath, "piPath");
   assertUuid(assignmentId, "assignmentId");
+  assertExpectedPane(expectedPane);
   if (!Array.isArray(piArgs) || piArgs.length === 0
     || piArgs.some((argument) => typeof argument !== "string")) {
     throw new Error("piArgs must be a non-empty array of strings");
@@ -231,8 +291,9 @@ export async function startSession({
   const commands = [
     "start-server", ";",
     "set-option", "-s", "extended-keys", "on", ";",
-    "new-session", "-d", "-x", "200", "-y", "50", "-s", sessionName, "-c", cwd,
-    "-e", `ADJACENT_ASSIGNMENT_ID=${assignmentId}`, "--", piPath, ...piArgs, ";",
+    "set-option", "-s", "extended-keys-format", "csi-u", ";",
+    "new-session", "-d", "-x", "200", "-y", "50", "-s", sessionName, "-c", escapeTmuxArg(cwd),
+    "-e", `ADJACENT_ASSIGNMENT_ID=${assignmentId}`, "--", escapeTmuxArg(piPath), ...piArgs.map(escapeTmuxArg), ";",
     "set-option", "-t", `=${sessionName}:`, "@adjacent_assignment_id", assignmentId,
   ];
   const created = await runTmux(socketPath, commands);
@@ -245,7 +306,7 @@ export async function startSession({
     } catch {
       exists = false;
     }
-    if (exists) return adoptExisting(socketPath, sessionName, assignmentId);
+    if (exists) return adoptExisting(socketPath, sessionName, assignmentId, expectedPane);
     throw tmuxFailure("start-session", created);
   }
   return resolveOwnedSession(socketPath, sessionName);
