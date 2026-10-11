@@ -967,12 +967,12 @@ export async function setupStorage(root) {
 
 /**
  * Create an empty workspace kit exclusively: the projects directory must
- * already exist, the id is validated before any mkdir, id and name are
- * emitted through formatScalar, and kit.yaml is published through
- * createFileExclusive. Any failure after the mkdir leaves the newly owned
- * directory visible; the kit may be absent or, when publication linked
- * before its cleanup failed, complete — callers must inspect visible state
- * rather than assume absence.
+ * already exist, the id and name are validated and emitted through
+ * formatScalar before any mkdir, and kit.yaml is published through
+ * createFileExclusive. A refused id or name creates nothing. Any failure
+ * after the mkdir leaves the newly owned directory visible; the kit may be
+ * absent or, when publication linked before its cleanup failed, complete —
+ * callers must inspect visible state rather than assume absence.
  * @param {string} root
  * @param {{id: string, name?: string}} options
  * @returns {Promise<{id: string, name: string, directory: string, kit: string}>}
@@ -989,13 +989,13 @@ export async function createWorkspace(root, options = {}) {
     throw new Error(`invalid workspace id: ${String(id)}`);
   }
   const resolvedName = name === undefined ? id : name;
-  const directory = join(projects, id);
-  await fs.mkdir(directory, { recursive: false });
   if (typeof resolvedName !== "string" || resolvedName === "") {
     throw new Error(`invalid workspace name: ${String(resolvedName)}`);
   }
-  const kit = join(directory, "kit.yaml");
   const bytes = `version: 1\nid: ${formatScalar(id)}\nname: ${formatScalar(resolvedName)}\nrepositories: []\n`;
+  const directory = join(projects, id);
+  await fs.mkdir(directory, { recursive: false });
+  const kit = join(directory, "kit.yaml");
   await createFileExclusive(kit, bytes);
   return { id, name: resolvedName, directory, kit };
 }

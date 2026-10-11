@@ -1189,11 +1189,6 @@ test("workspace create: sets up storage and creates exclusive empty workspace ki
   assert.deepEqual(await readFile(betaPath), betaBytes);
   assert.equal((await lstat(join(fresh, "projects", "beta"))).isDirectory(), true);
 
-  // A failure after the exclusive directory mkdir keeps the owned directory visible.
-  await assert.rejects(createWorkspace(fresh, { id: "partial", name: 42 }));
-  assert.equal((await lstat(join(fresh, "projects", "partial"))).isDirectory(), true);
-  await assert.rejects(lstat(join(fresh, "projects", "partial", "kit.yaml")), { code: "ENOENT" });
-
   // Numeric/keyword ids stay strings and comment-like/escaped names survive.
   await createWorkspace(fresh, { id: "1", name: "Alpha # beta" });
   const numericRaw = await readFile(join(fresh, "projects", "1", "kit.yaml"), "utf8");
@@ -1211,11 +1206,6 @@ test("workspace create: sets up storage and creates exclusive empty workspace ki
   assert.equal(keyword.ok, true);
   assert.equal(keyword.kit.id, "true");
   assert.equal(keyword.kit.name, 'a"b\\c');
-
-  // Control-bearing names refuse but keep the incomplete directory visible.
-  await assert.rejects(createWorkspace(fresh, { id: "control-refusal", name: "a\nb" }));
-  assert.equal((await lstat(join(fresh, "projects", "control-refusal"))).isDirectory(), true);
-  await assert.rejects(lstat(join(fresh, "projects", "control-refusal", "kit.yaml")), { code: "ENOENT" });
 
   // The generated empty kit is accepted by the installed Adjacent loader.
   const oraclePath = process.env.ADJ3_KIT_ORACLE
@@ -1296,6 +1286,21 @@ test("workspace create: sets up storage and creates exclusive empty workspace ki
   assert.equal(observed.observations[1].kit.id, "1");
   assert.equal(observed.observations[1].kit.name, "Alpha # beta");
   assert.deepEqual(observed.observations[1].kit.repositories, []);
+});
+
+test("workspace create: refuses an invalid name without leaving a directory", async (t) => {
+  const root = await createRoot();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await setupStorage(root);
+  const projects = join(root, "projects");
+
+  for (const name of ["", "a\nb", 42]) {
+    await assert.rejects(createWorkspace(root, { id: "retry", name }), /invalid workspace name|control/);
+    assert.deepEqual(await readdir(projects), []);
+  }
+
+  await createWorkspace(root, { id: "retry", name: "Retry" });
+  assert.equal(parseKit(await readFile(join(projects, "retry", "kit.yaml"), "utf8")).kit.name, "Retry");
 });
 
 test("workspace material: adds briefs, notes and artifact records exclusively", async (t) => {
