@@ -139,17 +139,3 @@ if [ -d "$HOME/.opencode" ]; then
   sync_dir_symlinks "$AGENTS_DIR/skills" "$HOME/.opencode/skills"
   echo "Synced OpenCode rules and skills."
 fi
-
-# Syncthing: deploy the storage ignore list. Syncthing does not sync .stignore, so
-# each machine needs its own copy. Acts only when the storage root resolves and
-# Syncthing has already created .stfolder there; it installs and creates nothing.
-storage_root="$(node "$AGENTS_DIR/scripts/workspaces/cli.mjs" status --json 2>/dev/null \
-  | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>process.stdout.write(JSON.parse(s).root||""))' 2>/dev/null || true)"
-if [ -n "$storage_root" ] && [ -d "$storage_root/.stfolder" ]; then
-  if cmp -s "$AGENTS_DIR/scripts/workspaces/stignore" "$storage_root/.stignore"; then
-    echo "Syncthing ignore list already current in $storage_root."
-  else
-    cp "$AGENTS_DIR/scripts/workspaces/stignore" "$storage_root/.stignore"
-    echo "Deployed Syncthing ignore list to $storage_root/.stignore."
-  fi
-fi

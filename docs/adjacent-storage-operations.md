@@ -1,6 +1,6 @@
 # Adjacent storage operations
 
-Operator runbook for running workspace storage on two machines: the Linux execution host (`<host>`) and a Mac client. The host owns all live state (threads, sessions, assignments, `.sentinel/`, spec `runtime/`). Syncthing carries only authored material between machines. Design and rationale: `docs/adjacent-architecture.md`. CLI reference: `scripts/workspaces/README.md` and `scripts/spec-location/README.md`.
+Operator runbook for running workspace storage on two machines: the Linux execution host (`<host>`) and a Mac client. The host owns all live state (threads, sessions, assignments, `.sentinel/`, spec `runtime/`). Authored material moves between machines with `adjacent-sync` (Unison over SSH, run on demand). Design and rationale: `docs/adjacent-architecture.md`. CLI reference: `scripts/workspaces/README.md` and `scripts/spec-location/README.md`. Sync reference: `scripts/adjacent-sync/README.md`.
 
 Each step is tagged with where it runs: **[Mac]**, **[Host]**, or **[Both]**. `W` is a workspace id. `WS` is the CLI shorthand used below:
 
@@ -9,7 +9,7 @@ WS="node $HOME/.agents/scripts/workspaces/cli.mjs"
 SL="node $HOME/.agents/scripts/spec-location/cli.mjs"
 ```
 
-Run `~/.agents/sync.sh` on each machine first so it has the current code and the ignore list.
+Run `~/.agents/sync.sh` on each machine first so it has the current code, the ignore list, and the `adjacent-sync` link.
 
 ## a. Set up storage on a machine
 
@@ -37,7 +37,7 @@ Run `~/.agents/sync.sh` on each machine first so it has the current code and the
 
 ## b. Seed the host from the Mac
 
-The host starts its own live state. Copy only the cold set: everything except what `scripts/workspaces/stignore` lists.
+The host starts its own live state. The first `adjacent-sync run` copies the authored set from the Mac. `scripts/adjacent-sync/ignore.prf` keeps host-owned live state and secrets out of the transfer.
 
 1. **[Mac]** Back up the whole store, live state included.
 
@@ -45,26 +45,20 @@ The host starts its own live state. Copy only the cold set: everything except wh
    cp -R ~/Documents/adjacent-storage ~/adjacent-storage-backup-$(date +%F)
    ```
 
-2. **[Host]** Run step a.1 so the host has a root and `projects/`. Confirm Tailscale SSH works: `tailscale up --ssh` on the host, then `ssh <host> true` from the Mac.
+2. **[Host]** Run step a.1 so the host has a root. Make sure `~/Documents/adjacent-storage` exists and is empty before the first sync; the step may create `projects/`, and empty directories are fine. Confirm Tailscale SSH works: `tailscale up --ssh` on the host, then `ssh <host> true` from the Mac. Install Unison on both machines first (section c).
 
-3. **[Mac]** Copy the cold set with rsync. The `sed` turns the Syncthing ignore list into rsync excludes (it drops comments and the `(?d)` prefix). Run once with `-n` to preview.
-
-   ```bash
-   sed -e '/^\/\//d' -e '/^$/d' -e 's/^(?d)//' ~/.agents/scripts/workspaces/stignore > /tmp/seed-excludes
-   rsync -an --stats --exclude-from=/tmp/seed-excludes ~/Documents/adjacent-storage/ <host>:Documents/adjacent-storage/
-   rsync -a  --stats --exclude-from=/tmp/seed-excludes ~/Documents/adjacent-storage/ <host>:Documents/adjacent-storage/
-   ```
-
-   Tar alternative when rsync is unavailable. `COPYFILE_DISABLE=1` keeps macOS `._*` files out of the archive.
+3. **[Mac]** Create the sync config, check it, and review the preview before the first run.
 
    ```bash
-   COPYFILE_DISABLE=1 tar -C ~/Documents/adjacent-storage \
-     --exclude='./.sentinel' --exclude='./.adjacent' --exclude='./projects/*/.adjacent' \
-     --exclude='./projects/*/threads' --exclude='./projects/*/sessions' --exclude='./projects/*/assignments' \
-     --exclude='projects/*/specs/*/runtime' --exclude='.DS_Store' --exclude='*.lock' --exclude='*.tmp' --exclude='*.sqlite*' \
-     --exclude='.workspace-publish-*' --exclude='.syncthing.*' -cf - . \
-   | ssh <host> 'tar -C ~/Documents/adjacent-storage -xf -'
+   adjacent-sync init                 # creates ~/.config/adjacent/sync.json (owner-only)
+   # edit the config: ssh_host = <host>, local_root = ~/Documents/adjacent-storage,
+   # remote_root = the absolute host path, for example /home/<user>/Documents/adjacent-storage
+   adjacent-sync status               # SSH, host folder, and Unison version
+   adjacent-sync preview              # transfers nothing; review the list
+   adjacent-sync run                  # first run copies the authored set
    ```
+
+   Stop before `run` if the preview lists anything under `threads/`, `sessions/`, `assignments/`, `runtime/`, `.sentinel/`, or `.adjacent/`. Check that `ignore.prf` is current on this machine (`~/.agents/sync.sh`) and preview again.
 
 4. **[Host]** Verify that no live state arrived, then check the kits.
 
@@ -73,43 +67,43 @@ The host starts its own live state. Copy only the cold set: everything except wh
    $WS list
    ```
 
-## c. Syncthing
+## c. Syncing with adjacent-sync
 
-Syncthing does not sync `.stignore`, so put it in place before the folder exists in Syncthing. Otherwise the first scan sees everything. After that, `sync.sh` keeps it current on any machine where Syncthing has created `.stfolder`.
-
-**[Both]** `cp ~/.agents/scripts/workspaces/stignore ~/Documents/adjacent-storage/.stignore`
+`adjacent-sync` uses Unison over SSH to sync the authored workspace content between the Mac and the host. It runs only when you start it. No timer or daemon runs it.
 
 ### Install
 
-**[Host]** Linux, systemd user unit with linger (the service survives logout, as the Sentinel host does):
+Install Unison on both machines. Both need Unison 2.52 or a newer compatible version.
 
-```bash
-sudo apt install syncthing          # or the Syncthing apt repository for a current version
-systemctl --user enable --now syncthing.service
-loginctl enable-linger "$USER"
-systemctl --user status syncthing --no-pager
-```
-
-The GUI listens on `127.0.0.1:8384`. Reach it from the Mac with `ssh -L 8384:127.0.0.1:8384 <host>`, then open `http://127.0.0.1:8384`.
+**[Host]** `sudo apt-get install unison`, or a user-local binary. For a user-local binary, set `remote_unison` in the config to its absolute path.
 
 **[Mac]**
 
 ```bash
-brew install syncthing
-brew services start syncthing
+brew install unison
 ```
 
-The GUI is at `http://127.0.0.1:8384`. macOS must let the daemon read `~/Documents`: allow the prompt, or in System Settings > Privacy & Security > Files and Folders grant `syncthing` access to Documents. If the scan reports permission errors, grant Full Disk Access to `/opt/homebrew/opt/syncthing/bin/syncthing`.
+### Use
 
-### Pair over the tailnet
+**[Mac]** Run these from the Mac, which holds the private config (`~/.config/adjacent/sync.json`):
 
-1. **[Both]** In Settings > Connections, turn off Global Discovery, Local Discovery, and Relaying. Devices connect only over Tailscale.
-2. **[Both]** Add the other device under Add Remote Device with its device ID (Actions > Show ID). Set its address to `tcp://<tailnet-name>:22000`, using the MagicDNS name from `tailscale status`. Accept the request on the other side.
-3. **[Host]** Add the folder: ID `adjacent-storage`, path `~/Documents/adjacent-storage`, type Send & Receive, no versioning. Share it with the Mac.
-4. **[Mac]** Accept the share with the same path and type **Receive Only**. Because the Mac already holds the same files, the first scan should find nothing to transfer.
-5. **[Mac]** When the folder reads Up to Date with no "Locally changed items", change its type to Send & Receive (Folder > Edit > Advanced). If locally changed items appear, read the list first. Do not click Revert Local Changes unless the host's version should replace the Mac's, because revert deletes Mac-only files. The backup from step b.1 is the recovery copy.
+```bash
+adjacent-sync status      # config, dependencies, SSH, and host readiness; changes no data
+adjacent-sync preview     # shows what would change; propagates nothing
+adjacent-sync run         # propagates nonconflicting changes
+```
 
-Check: edit a kit on the Mac, for example `$WS set-name W --name "..." --apply`, and confirm it reaches the host in under a minute. Nothing under `threads/`, `sessions/`, `assignments/`, `.sentinel/` or `runtime/` should ever appear on the other machine.
+Run `preview` before `run`. The config fields are documented in `scripts/adjacent-sync/README.md`, and the exclusion list is `scripts/adjacent-sync/ignore.prf`.
+
+### Conflicts
+
+`run` exits nonzero when a file changed on both machines and needs a decision. Resolve each conflicting file so the version you want is the only one left, then run `adjacent-sync preview` again, then `adjacent-sync run`.
+
+### When to sync
+
+There is no schedule. Run `preview` and then `run` when you switch between the Mac and the host. Syncing before you start work on the other machine is a manual habit, not a timer.
+
+Check: edit a kit on the Mac, for example `$WS set-name W --name "..." --apply`, run `adjacent-sync run`, and confirm the change appears on the host. Nothing under `threads/`, `sessions/`, `assignments/`, `.sentinel/` or `runtime/` should ever appear on the other machine.
 
 ## d. Client access to live work
 
@@ -130,7 +124,7 @@ ssh -t <host> 'node ~/.agents/scripts/workspaces/cli.mjs attach <assignment-id>'
 
 ## e. Back up the host store
 
-Syncthing is not a backup: it propagates deletions and corruption. **[Host]** snapshot the store daily and exclude the Whisper model cache and raw run transcripts.
+`adjacent-sync` is not a backup: it propagates deletions and corruption. **[Host]** snapshot the store daily and exclude the Whisper model cache and raw run transcripts.
 
 restic, to a local or mounted repository:
 
@@ -167,7 +161,7 @@ Do one workspace at a time. Until it is migrated, spec skills refuse in it with 
    Add `--include-transcripts` only if the raw `runtime/runs/*` should move into storage. It leaves the transcripts in the legacy archive otherwise.
 
 3. **[Mac]** Review `projects/W/project-context.md`. Migration appends one `## Repository: <id>` section per repository, and the sections can contradict each other.
-4. **[Both]** Wait for Syncthing to show both folders Up to Date.
+4. **[Mac]** Run `adjacent-sync preview`, then `adjacent-sync run`, so the migrated packages reach the host.
 5. **[Host]** Materialize each package for the host (needs `jq`). `check` confirms the result.
 
    ```bash

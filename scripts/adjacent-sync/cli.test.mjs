@@ -96,7 +96,10 @@ test('real Unison previews without transfers, then syncs additions, edits, renam
   const f = await fixture(t);
   await writeFile(join(f.client, 'client-note.md'), 'client original');
   await writeFile(join(f.host, 'host-note.md'), 'host original');
-  const excluded = ['.sentinel/local.json', '.adjacent/state.sqlite3', 'projects/example/threads/local.json', 'projects/example/sessions/local.json', 'projects/example/assignments/local.json', 'projects/example/specs/a/runtime/local.json', 'kit.yaml.lock', '.DS_Store'];
+  const excluded = ['.sentinel/local.json', '.adjacent/state.sqlite3', 'projects/example/threads/local.json', 'projects/example/sessions/local.json', 'projects/example/assignments/local.json', 'projects/example/specs/a/runtime/local.json', 'projects/example/captures/app/ux-qa/runs/session.json', 'kit.yaml.lock', '.DS_Store'];
+  // Only spec-package runtime is host-owned; a runtime folder in research sources syncs.
+  await mkdir(join(f.client, 'projects/example/sources/runtime'), { recursive: true });
+  await writeFile(join(f.client, 'projects/example/sources/runtime/notes.md'), 'research');
   for (const path of excluded) {
     await mkdir(dirname(join(f.host, path)), { recursive: true });
     await writeFile(join(f.host, path), 'host-owned');
@@ -115,6 +118,7 @@ test('real Unison previews without transfers, then syncs additions, edits, renam
   assert.equal(await readFile(join(f.client, 'host-note.md'), 'utf8'), 'host original');
   assert.equal(await readFile(join(f.host, 'client-note.md'), 'utf8'), 'client original');
   for (const path of excluded) await assert.rejects(stat(join(f.client, path)), { code: 'ENOENT' });
+  assert.equal(await readFile(join(f.host, 'projects/example/sources/runtime/notes.md'), 'utf8'), 'research');
   await writeFile(join(f.client, 'client-note.md'), 'client edited');
   await rename(join(f.host, 'host-note.md'), join(f.host, 'renamed-host-note.md'));
   const reorganized = f.run('run');
