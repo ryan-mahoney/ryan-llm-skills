@@ -27,6 +27,8 @@ node scripts/workspaces/cli.mjs <command> [options]
 | `locate` | `locate ID [--json]` — reconcile one assignment and print its envelope |
 | `assignments` | `assignments [--workspace ID] [--json]` — list assignment envelopes |
 | `attach` | `attach ID` — attach this terminal to a live assignment's recorded session (requires a TTY) |
+| `takeover` | `takeover ID [--run RUN]` — deliver a coordinator hold for a spec assignment, then attach when a TTY is present |
+| `resume` | `resume ID --hold ID [--run RUN]` — deliver a release direction naming one retained hold; never releases it |
 
 `add-brief` and `add-note` read stdin completely when `--from` is absent; with
 `--from FILE` the file is the only source and stdin is never touched.
@@ -89,6 +91,35 @@ node scripts/workspaces/cli.mjs attach <uuid>
 # Remote: ssh -t forces a TTY so attach is accepted.
 ssh -t user@host 'node ~/scripts/workspaces/cli.mjs attach <uuid> --root ~/Documents/adjacent-storage'
 ```
+
+## Takeover and resume
+
+`takeover ID [--run RUN]` reads the persisted assignment. It requires a
+recorded `spec_package`; without one it attaches only (see the non-spec note
+below). A spec record must resolve a run: `--run` may fill a missing
+`workflow_id` but never overrides a differing recorded one, and the run must
+have an exact retained, non-complete checkpoint in the canonical package at
+implementation or review stage. The command publishes one `kind: hold`,
+`audience: coordinator` original through the single overseer writer and prints
+its id, path, sha256 and status before any attach. A TTY attaches only after
+the delivery status is confirmed; without a TTY it prints the copy-pasteable
+attach command and stops. A hold is a safe boundary, not immediate control:
+effects already in flight and the running process are not stopped, and the
+hold is released only when the coordinator records an `applied` outcome bound
+to both the hold and direction hashes. If the attach fails after delivery, the
+receipt reports the error and the message stays held pending; no extra
+original is written.
+
+`resume ID --hold ID [--run RUN]` verifies through the real inbox guard that
+the named original is a retained `kind: hold` for the same run, then publishes
+one `kind: direction` original naming the hold id and hash. It never attaches,
+archives, edits or releases anything; the result stays "release requested,
+waiting for the coordinator". Wrong run, unknown hold id, a missing checkpoint
+and symlinked or absent mailboxes refuse with the ordinary `{error,path}`
+envelope and write nothing.
+
+A non-spec assignment has no automatic actor: `takeover` prints that note,
+writes no inbox file and attaches only when a TTY is present.
 
 ## Storage root resolution
 
