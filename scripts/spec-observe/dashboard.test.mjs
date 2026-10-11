@@ -71,6 +71,22 @@ test('dashboard serves only its page and read-only same-origin state endpoint', 
   assert.match(page.headers['Content-Security-Policy'], /frame-ancestors 'none'/);
 });
 
+test('thread routes stay local-only through the dashboard seam', async t => {
+  const f = fixture(t);
+  const server = createDashboardServer({ agentDir: f.dir, publicHost: 'dashboard.example' });
+  assert.equal((await request(server, '/api/threads?workspace_id=alpha')).status, 503);
+  for (const variant of [
+    { host: 'dashboard.example' },
+    { host: 'dashboard.example:443' },
+    { headers: { 'x-forwarded-for': '' } },
+    { headers: { 'tailscale-user-login': '' } },
+  ]) {
+    const refused = await request(server, '/api/threads?workspace_id=alpha', variant);
+    assert.equal(refused.status, 403, JSON.stringify(variant));
+    assert.equal(refused.bodyRead, false, JSON.stringify(variant));
+  }
+});
+
 
 test('dashboard uses current workspace snapshots without reviving old completed runs', () => {
   const html = readFileSync(new URL('./dashboard.html', import.meta.url), 'utf8');
