@@ -903,7 +903,7 @@ async function readWorkspaceAssignments(physicalRoot, workspace, budget = null, 
     try {
       lookup = await lstatOrNull(directory);
     } catch (error) {
-      noteCatalogUnavailable(
+      noteCatalogOmission(
         budget,
         `assignments-directory-unavailable:${directory}:${error.code ?? error.message}`,
       );
@@ -987,21 +987,21 @@ function offerAssignmentCandidate(state, budget, entry) {
 // detect duplicates, including ids whose first occurrence was dropped.
 async function readWorkspaceAssignmentsBounded(physicalRoot, workspace, directory, lookup, budget, candidates) {
   if (lookup.isSymbolicLink() || !lookup.isDirectory()) {
-    noteCatalogUnavailable(budget, `assignments-directory-unavailable:${directory}`);
+    noteCatalogOmission(budget, `assignments-directory-unavailable:${directory}`);
     return;
   }
   let physical;
   try {
     physical = await fs.realpath(directory);
   } catch (error) {
-    noteCatalogUnavailable(
+    noteCatalogOmission(
       budget,
       `assignments-directory-unavailable:${directory}:${error.code ?? error.message}`,
     );
     return;
   }
   if (physical !== directory) {
-    noteCatalogUnavailable(budget, `assignments-directory-unavailable:${directory}`);
+    noteCatalogOmission(budget, `assignments-directory-unavailable:${directory}`);
     return;
   }
   try {
@@ -1034,7 +1034,7 @@ async function readWorkspaceAssignmentsBounded(physicalRoot, workspace, director
       offerAssignmentCandidate(candidates, budget, { record, path });
     }
   } catch (error) {
-    noteCatalogUnavailable(
+    noteCatalogOmission(
       budget,
       `assignments-directory-unreadable:${directory}:${error.code ?? error.message}`,
     );

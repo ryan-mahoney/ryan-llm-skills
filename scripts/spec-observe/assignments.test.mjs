@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -841,6 +842,105 @@ function sessionEvidence(piIdentity) {
     tmuxRun: tmuxRunPresent(ASSIGNMENT_ID, '%5', piIdentity.pid),
   };
 }
+
+// Focused: node --test --test-name-pattern='assignment collection: mismatched terminal PID' scripts/spec-observe/assignments.test.mjs
+test('assignment collection: mismatched terminal PID cannot attach a still-live saved Pi', async (t) => {
+  const context = await sessionFixture(t, 'readable');
+  await persistRecord(context.workspace, context.record, {
+    state: 'live',
+    pane_id: '%5',
+    launcher_identity: LAUNCHER_IDENTITY,
+    pi_identity: AGENT_IDENTITY,
+  });
+  const result = await assignmentsModule.collectAssignments({
+    storageRoot: context.root,
+    probes: {
+      ...sessionEvidence(AGENT_IDENTITY),
+      tmuxRun: tmuxRunPresent(ASSIGNMENT_ID, '%5', AGENT_IDENTITY.pid + 1),
+    },
+  });
+  const row = rowFor(result, ASSIGNMENT_ID);
+  assert.equal(row.display, 'unknown');
+  assert.equal(row.nextAction, 'Fix probe; no relaunch');
+  assert.equal(row.coverage, 'partial');
+  assert.equal(result.coverage.state, 'partial');
+});
+
+// Focused: node --test --test-name-pattern='assignment collection: unavailable assignments directory' scripts/spec-observe/assignments.test.mjs
+test('assignment collection: unavailable assignments directory makes neighbor uniqueness unknown', async (t) => {
+  for (const mode of [
+    'absent', 'symlink', 'dangling', 'not-directory',
+    'lstat-error', 'realpath-error', 'opendir-error', 'partial-walk',
+  ]) {
+    await t.test(mode, async (subtest) => {
+      const context = await sessionFixture(subtest, 'readable');
+      await persistRecord(context.workspace, context.record, {
+        state: 'live',
+        pane_id: '%5',
+        launcher_identity: LAUNCHER_IDENTITY,
+        pi_identity: AGENT_IDENTITY,
+      });
+      const second = await createWorkspace(context.root, { id: 'ws-hidden', name: 'Hidden' });
+      const directory = join(second.directory, 'assignments');
+      if (mode === 'symlink' || mode === 'dangling') {
+        await symlink(mode === 'symlink'
+          ? join(context.workspace.directory, 'assignments')
+          : join(second.directory, 'missing'), directory);
+      } else if (mode === 'not-directory') {
+        await writeFile(directory, 'not a directory');
+      } else if (mode !== 'absent') {
+        await mkdir(directory);
+      }
+      const error = Object.assign(new Error('unavailable fixture directory'), { code: 'EACCES' });
+      const method = {
+        'lstat-error': 'lstat',
+        'realpath-error': 'realpath',
+        'opendir-error': 'opendir',
+        'partial-walk': 'opendir',
+      }[mode];
+      if (method) {
+        const original = fs[method];
+        subtest.mock.method(fs, method, async (path, ...args) => {
+          if (path !== directory) return original(path, ...args);
+          if (mode !== 'partial-walk') throw error;
+          let reads = 0;
+          return {
+            read: async () => {
+              if (reads++ === 0) return { name: 'known.txt' };
+              throw error;
+            },
+            close: async () => {},
+          };
+        });
+      }
+      if (method === 'opendir') {
+        const original = fs.readdir;
+        subtest.mock.method(fs, 'readdir', async (path, ...args) => {
+          if (path === directory) throw error;
+          return original(path, ...args);
+        });
+      }
+      const result = await assignmentsModule.collectAssignments({
+        storageRoot: context.root,
+        probes: sessionEvidence(AGENT_IDENTITY),
+      });
+      const row = rowFor(result, ASSIGNMENT_ID);
+      assert.ok(row, 'valid neighbor is retained');
+      if (mode === 'absent') {
+        assert.equal(result.coverage.omitted, 0);
+        assert.equal(row.display, 'live');
+        assert.equal(row.coverage, 'complete');
+      } else {
+        assert.equal(result.coverage.omitted, null);
+        assert.equal(row.display, 'unknown');
+        assert.equal(row.nextAction, 'Fix probe; no relaunch');
+        assert.equal(row.coverage, 'partial');
+        await assert.rejects(listAssignments(context.root));
+        await assert.rejects(findAssignment(context.root, ASSIGNMENT_ID));
+      }
+    });
+  }
+});
 
 test('assignment collection: quiet marks only positive live rows with old readable session metadata', async (t) => {
   const context = await sessionFixture(t, 'readable');

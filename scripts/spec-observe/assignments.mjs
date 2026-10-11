@@ -125,7 +125,8 @@ function observationStatus(observations, key) {
 
 // A structured terminal is usable only when present, for this exact
 // assignment and, when the record saved a pane, for the exact recorded pane.
-function structuredTerminalUnusable(normalized, observations) {
+// A positive classified Pi must also be the process in that pane.
+function structuredTerminalUnusable(normalized, observed, observations) {
   const terminal = observations?.terminal;
   if (terminal === null || typeof terminal !== "object") return true;
   if (terminal.status === "unknown") return true;
@@ -133,6 +134,7 @@ function structuredTerminalUnusable(normalized, observations) {
   if (asString(terminal.assignment_id) !== normalized.assignmentId) return true;
   const terminalPane = asString(terminal.pane_id);
   if (normalized.paneId !== null && terminalPane !== normalized.paneId) return true;
+  if (observed.piIdentity !== null && terminal.pid !== observed.piIdentity.pid) return true;
   return false;
 }
 
@@ -228,9 +230,9 @@ function displayFor(normalized, observed, nowMs, observations) {
     };
   }
   // Structured observations are authoritative over attention prose: an
-  // unknown terminal or a terminal for another assignment or pane can never
+  // unknown terminal or a terminal for another assignment, pane or Pi can never
   // become terminal-lost or live.
-  if (observations !== null && structuredTerminalUnusable(normalized, observations)) {
+  if (observations !== null && structuredTerminalUnusable(normalized, observed, observations)) {
     return { display: "unknown", nextAction: UNKNOWN_ACTION, unrecorded: false };
   }
   // Unavailable probes are unknown, especially not ended. With structured
