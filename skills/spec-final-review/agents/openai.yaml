@@ -1,0 +1,4 @@
+interface:
+  display_name: "Spec Final Review"
+  short_description: "Catch branch red flags and apply quick improvements"
+  default_prompt: "Use $spec-final-review to review this branch for red flags and quick improvements, delegate edits to EDITOR_MODEL, and push the fixes."

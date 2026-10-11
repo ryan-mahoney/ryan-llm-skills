@@ -34,6 +34,15 @@ blocks it. No branch audit artifact is required. Do not launch a final review or
 artifact assembly into one. Additional PR review and merge decisions belong to the
 operator/organization.
 
+### Selected Final Review
+
+When the run selected `spec-final-review`, consume its current completion report
+under the shared **Selected Final Red-Flag Review** policy before ready publication.
+Require resolved material concerns and affected evidence at current HEAD. Preserve
+the existing step audit scope and original review SHAs. Do not launch this stage
+from publication or infer selection from missing artifacts. Draft checkpoints may
+precede this stage.
+
 ### Explicit Branch Refinement
 
 Apply the shared **Bounded Refinement Completion** policy when refinement returns

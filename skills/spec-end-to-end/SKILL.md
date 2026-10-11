@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "23"
+  version: "24"
 ---
 
 # Spec End To End
@@ -16,7 +16,8 @@ For a prepared Pi run, reuse its recorded branch/worktree and completed work; cr
 an isolated branch/worktree only when none is assigned. Resume the first unfinished
 obligation from current receipts and the ledger, including outstanding review or fixes.
 Use configured difficulty routing and retained owner/editor pairs through the managed
-Pi runtime. `REVIEW_AGENT` selects independent step reviews; `SCOUT_AGENT` selects
+Pi runtime. `REVIEW_AGENT` selects independent step reviews; `FINAL_REVIEWER` selects
+the optional fresh final red-flag review and delegated improvements; `SCOUT_AGENT` selects
 optional bounded source discovery for owners and reviewers. Reuse deterministic fact,
 history and rendering helpers. The owner calls `spec_advice` at shared Jev checkpoints;
 use the installed Mercury clerk only for useful bounded prose transformation under
@@ -27,13 +28,15 @@ An invocation requesting continuation through PR publication authorizes ordinary
 task-owned commits, safe pushes and PR creation/update within that outcome. Reuse
 that authority; ask only for a consequential unresolved decision or action outside
 the request. Complete independent step review/fix cycles and required evidence, then
-publish. No final branch review or merge is automatic.
+publish. Assigning `FINAL_REVIEWER` or explicitly requesting final red-flag review
+enables `spec-final-review` before the final tour and ready publication. Otherwise,
+no final branch review is automatic. Merge remains operator-owned.
 
 ## Prepared Pi entry
 
 For an explicitly prepared package after `spec-write`, read applicable `AGENTS.md`
 and honor user directives, then call `spec_dispatch action=startup` with `package`,
-`owner_model` (DEFAULT_OWNER/IMPLEMENT_AGENT), `editor_model`, and optional
+`owner_model` (DEFAULT_OWNER/IMPLEMENT_AGENT), `editor_model` (EDITOR_MODEL/EDITOR_AGENT), and optional
 `strong_owner_model`, `scout_model`, checkout/branch/base and step override.
 Omit `step` on first entry. `owner_override` pins a selected step's owner.
 This route takes precedence over the general startup reading sequence below.
@@ -135,7 +138,7 @@ Treat workflow modifiers in the request as run-wide constraints. Examples includ
 - delegate named stages to a named subagent or agent type;
 - include or skip the optional architecture critique;
 - assign a model or provider to a role such as step owner, step editor, step implementation, step review, step
-  fix, branch review, or branch fix;
+  fix, branch review, branch fix, or final red-flag review;
 - target a specific base branch, repository, feature package, or PR shape.
 
 Record role model assignments in the ledger as exact `provider/id[:thinking]` values
@@ -151,6 +154,16 @@ a model. The Pi step editor defaults to `openrouter/inception/mercury-2.5:high`;
 unassigned roles use agent/settings defaults. A legacy step-implementation assignment
 selects the capable owner model; an explicit editor assignment overrides Mercury.
 Record owner/editor models separately.
+
+`FINAL_REVIEWER` enables and selects `spec-final-review`; it does not replace
+`REVIEW_AGENT` or select the iterative `spec-branch-refine` audit. Pass its exact
+selector to a fresh reviewer session. `EDITOR_MODEL` names the editor assignment
+(`EDITOR_AGENT` is the existing alias) and selects its editing subagent; without a
+final-stage override, reuse the recorded step editor. Preserve explicitly separate
+step and final editor assignments.
+An explicit final-review request without a selector uses the harness reviewer default.
+Honor explicit skips. Record the stage and effective selectors even on prepared entry
+or resume; these are orchestration roles, not new `spec_dispatch` parameters.
 
 Accept `DEFAULT_OWNER` (or legacy `IMPLEMENT_AGENT`) and optional `STRONG_OWNER`
 assignments. Supplying a stronger owner enables difficulty routing for implementation
@@ -330,15 +343,24 @@ excluded by the routing policy above:
    owning step's review/fix cycle. Reuse unchanged reviewed work and original review ranges.
    Push every coherent task-owned commit, including final fixes. Do not collect or wait
    for CI.
-7. Run `spec-work-tour` from the completed step-review/fix records and current merge evidence.
+7. When enabled, run [spec-final-review](../spec-final-review/SKILL.md) after base
+   reconciliation and completed step reviews/fixes. Pass `FINAL_REVIEWER`,
+   `EDITOR_MODEL`, canonical roots, branch/base, constraints, and existing push authority.
+   Require its completion report at current HEAD with no unresolved material concern;
+   refresh affected merge evidence after its fixes. Reuse a current completed report on
+   resume; material later implementation changes require reassessment within the recorded
+   budget. This is a fresh engineering sanity check, separate from branch refinement.
+8. Run `spec-work-tour` from the completed step-review/fix records, enabled final-review
+   report, and current merge evidence.
    Require merge `verdict: ready` at current HEAD; deployment readiness, authority, and
    post-deployment observations remain separate. No final branch review is automatic.
    Invoke `spec-branch-refine` only for an explicit user request or sourced project requirement;
    a `REVIEW_AGENT` assignment, missing branch audit, or legacy default is not such a request.
    Preserve any explicitly selected refinement budget through resume and publication.
-8. Run `spec-pr mode=ready` to publish/update the PR after known acceptance/review gaps
+9. Run `spec-pr mode=ready` to publish/update the PR after known acceptance/review gaps
    close. Reuse current step completion, evidence, and tour; do not
-   add a review during publication or resume. Push all remaining task-owned commits and
+   add an unrequested review during publication or replay a current completed review on
+   resume. Push all remaining task-owned commits and
    verify the remote HEAD matches. Preserve draft-only requests and keep unresolved required
    evidence honest in a draft. The operator/organization chooses subsequent PR review and
    merge; this workflow never merges automatically.

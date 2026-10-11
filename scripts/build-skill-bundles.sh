@@ -907,6 +907,7 @@ spec_skills=(
   spec-branch-refine
   spec-branch-review
   spec-branch-fix
+  spec-final-review
   spec-pr
   spec-issue
   spec-gym

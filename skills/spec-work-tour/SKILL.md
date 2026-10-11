@@ -73,6 +73,14 @@ step reviews and fixes, including the last step, from current merge evidence. No
 audit artifact is required. Do not launch a final review or turn artifact assembly into
 one. Additional PR review and merge decisions belong to the operator/organization.
 
+### Selected Final Review
+
+When `FINAL_REVIEWER` or an explicit request selected `spec-final-review`, apply the
+shared **Selected Final Red-Flag Review** policy. Consume its current completion
+report and affected evidence before assembling the tour. Preserve step audit scope
+and original review SHAs; disclose the fresh final assessment and its limits. Do not
+launch this stage from tour assembly or infer selection from missing artifacts.
+
 ### Explicit Branch Refinement
 
 Apply the shared **Bounded Refinement Completion** policy when refinement returns
@@ -301,7 +309,7 @@ render/inspection result in the normal handoff so publication can reuse it.
 
 ## Freshness Rule
 
-Any material context/authority change or code, test, migration, configuration, lockfile, or deployment-file change after the tour's evidence was assembled invalidates the tour. Refresh affected evidence and route uncovered implementation to its scoped step review/fix cycle; preserve valid earlier observations and review ranges. Refresh explicitly requested branch completion only under its existing budget. Update `work-tour.json` and render again. `spec-pr` must compare the tour commit to the pushed HEAD and refuse ready status when they differ; an authorized draft may precede the ready tour.
+Any material context/authority change or code, test, migration, configuration, lockfile, or deployment-file change after the tour's evidence was assembled invalidates the tour. Refresh affected evidence and route uncovered implementation to its scoped step review/fix cycle, or consume the selected final-review assessment of its delegated fixes under the shared policy; preserve valid earlier observations and review ranges. Refresh explicitly requested branch completion only under its existing budget. Update `work-tour.json` and render again. `spec-pr` must compare the tour commit to the pushed HEAD and refuse ready status when they differ; an authorized draft may precede the ready tour.
 
 ## Output
 

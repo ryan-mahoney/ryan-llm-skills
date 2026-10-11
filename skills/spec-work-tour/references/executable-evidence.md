@@ -137,6 +137,29 @@ status as a fact; completion of reviews alone does not establish readiness. For 
 final branch review defaults are superseded by this policy without regenerating specs.
 Actual explicit user/project review requirements still apply.
 
+## Selected Final Red-Flag Review
+
+Assigning `FINAL_REVIEWER` or explicitly requesting `spec-final-review` adds a fresh
+whole-branch sanity check after step reviews and base reconciliation. It is separate
+from `spec-branch-refine` and does not replace required step reviews. Otherwise the
+default above is unchanged.
+
+Consume `reviews/final-review.md` at current HEAD with outcome `complete`, resolved
+material concerns, and actual affected evidence. Keep `audit.scope: steps` and the
+original step-review ranges; link the final-review report and any added commits in
+merge evidence. The final reviewer assesses its delegated edits and their affected
+integration paths; that assessment covers those changes without automatically
+restarting a step review or branch-refinement loop. Do not present this report as
+an exhaustive branch audit or a separate independent post-fix pass. Disclose the
+selected final review and its limits in the tour's existing context/evidence fields.
+
+After final-review fixes, refresh affected evidence and assemble the tour at current
+HEAD. An unresolved concern or stale required final-review report blocks ready status.
+Honor separately selected branch-refinement requirements and their recorded budgets;
+this stage does not waive them. Tour/publication consume completion rather than
+launching another review. A later material implementation change requires scoped
+reassessment under the final-review budget, not relabeling the report to a new SHA.
+
 ## Bounded Refinement Completion
 
 Branch refinement is opt-in: run it only when explicitly requested or required by sourced

@@ -25,7 +25,7 @@ The sequence is:
 
 ```text
 project context and consequential decisions → architecture → optional critique → combined specification and preparation → workspace setup
-→ step implementation + independent step reviews/fixes → base reconciliation → final push → work tour → PR publication
+→ step implementation + independent step reviews/fixes → base reconciliation → selected final red-flag review/fixes → final push → work tour → PR publication
 ```
 
 `spec-run` reviews each finished step in the background while the next step is built,
@@ -33,8 +33,10 @@ and fixes those findings before the following step. It finishes the last step's 
 and fixes, then runs the bounded final fix review over the trailing fix range before
 recording completion in merge evidence. After base reconciliation and affected
 evidence refresh, push all task-owned commits. `spec-work-tour`
-presents the existing evidence, then `spec-pr` publishes the PR. No final branch review or
-merge is automatic; further PR review and merge belong to the operator/organization.
+presents the existing evidence, then `spec-pr` publishes the PR. Assigning
+`FINAL_REVIEWER` enables a fresh final red-flag review and delegated improvements
+before the tour; otherwise no final branch review is automatic. Further PR review
+and merge belong to the operator/organization.
 `spec-branch-refine` remains available for explicit requests or sourced project requirements.
 Each stage is separately resumable; missing branch audit files do not trigger it.
 See [the evidence audit guide](reviews.md) for artifact paths and proof requirements.
@@ -98,13 +100,15 @@ independent reviewer directly. For example:
 ```text
 Use spec-end-to-end to resume after spec-write for PACKAGE.
 Create a new branch/worktree. Use IMPLEMENT_AGENT as the step architect/owner,
-EDITOR_AGENT as its dedicated editor, and REVIEW_AGENT for independent step reviews. No automatic final branch review or merge.
+EDITOR_MODEL as its dedicated editor, REVIEW_AGENT for independent step reviews,
+and FINAL_REVIEWER for a fresh final red-flag review and quick improvements.
 Reuse the implementation owner/editor across steps.
 
 PACKAGE: /absolute/primary-repo/.specs/feature/
 IMPLEMENT_AGENT: <provider/model:thinking>
-EDITOR_AGENT: openrouter/inception/mercury-2.5:high
+EDITOR_MODEL: openrouter/inception/mercury-2.5:high
 REVIEW_AGENT: <provider/model:thinking>
+FINAL_REVIEWER: <provider/model:thinking>
 ```
 
 The top-level session runs `spec-run` and calls `spec_dispatch` for each prepared step.
@@ -112,6 +116,10 @@ The runtime retains owner/editor disk sessions, creates or reuses the selected w
 and sends a completion event. The owner calls `spec_editor` synchronously; only the editor
 writes implementation code. Independent fixes run between completed steps; the retained
 pair receives those commits and refreshes affected source before continuing.
+`EDITOR_AGENT` remains an alias for the editor assignment. The final-review stage
+uses a fresh `spec-final-reviewer` session with `FINAL_REVIEWER` and bounded
+`spec-final-editor` subagents with `EDITOR_MODEL`; it does not use step-card dispatch.
+Omit `FINAL_REVIEWER` to keep the step-review-only workflow.
 `sync.sh` installs the profiles and extension. Restart Pi after syncing.
 See [runtime setup and API](../pi/extensions/spec-runtime/README.md) and
 [run observation](spec-runtime-observation.md) for persistent ledgers and session discovery.
@@ -125,6 +133,31 @@ The generated `history-index.json` points to canonical decisions, introduced sym
 handoffs, and review/fix records. Handoffs carry paths and unresolved exceptions;
 detailed evidence stays in the original records. A persistent worker still completes
 one assigned step and commit at a time.
+
+## Final Red-Flag Review
+
+Use `spec-final-review` independently after an implementation run as well:
+
+```text
+Use spec-final-review on this branch/worktree. Do you see any red flags,
+implementation concerns, or quick opportunities for improvement?
+Apply selected changes with EDITOR_MODEL as a subagent and push them.
+
+FINAL_REVIEWER: <provider/model:thinking>
+EDITOR_MODEL: <provider/model:thinking>
+```
+
+The final reviewer assesses the integrated implementation, selects bounded fixes,
+checks the editor's work and affected behavior, then commits and safely pushes within
+the request's authority. It records concerns, dispositions, and verification limits
+in `reviews/final-review.md` when a canonical spec package exists. One initial review
+and one assessment of the fixes form the default budget. Larger redesigns remain
+follow-up; unresolved material defects block completion. This stage never merges.
+
+In end-to-end runs it follows final base reconciliation and precedes tour/ready
+publication, so fixes enter the final evidence and tour. A standalone run after
+publication leaves an earlier tour stale until refreshed. `spec-branch-refine`
+remains a separately requested iterative evidence audit.
 
 ## Context, Scope, And Operational Authority
 
