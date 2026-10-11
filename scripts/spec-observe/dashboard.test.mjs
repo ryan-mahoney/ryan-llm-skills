@@ -201,18 +201,22 @@ test('partial workspace coverage: storage failures and scan diagnostics differ f
   const context = dashboardContext();
   vm.runInContext("mode='workspaces'", context);
   for (const status of ['invalid_root', 'invalid_projects', 'unreadable']) {
-    context.input = { storage: { status, root: '/store/<root>', errors: ['<denied>'] }, valid: [], invalid: [], errors: ['scan <failed>'] };
+    // listWorkspaces copies storage.errors into catalog.errors, so the same error arrives twice.
+    const denied = { path: '/store/<root>/projects', message: '<denied>' };
+    context.input = { storage: { status, root: '/store/<root>', errors: [denied] }, valid: [], invalid: [], errors: [denied, { path: '/store/<root>', message: 'scan <failed>' }] };
     vm.runInContext('catalog=input;renderWorkspaceList();renderWorkspaceDetail()', context);
     const list = vm.runInContext("$('run-list').innerHTML", context);
     assert.match(list, /Workspace storage unavailable/);
     assert.match(list, /&lt;root&gt;/);
-    assert.match(list, /&lt;denied&gt;/);
+    assert.equal(list.split('&lt;denied&gt;').length - 1, 1);
+    assert.match(list, /<span class="mono">\/store\/&lt;root&gt;\/projects<\/span>/);
     assert.match(list, /scan &lt;failed&gt;/);
+    assert.doesNotMatch(list, /&quot;(message|path)&quot;/);
     assert.match(list, /data-workspace-retry/);
     assert.doesNotMatch(list, /No workspaces/);
     assert.match(vm.runInContext("$('observation-detail').innerHTML", context), /Repair the configured storage boundary/);
   }
-  context.input = { storage: { status: 'ok', root: '/store', errors: [] }, valid: [{ id: 'alpha', directory: '/store/alpha' }], invalid: [], errors: ['scan <failed>'] };
+  context.input = { storage: { status: 'ok', root: '/store', errors: [] }, valid: [{ id: 'alpha', directory: '/store/alpha' }], invalid: [], errors: [{ path: '/store', message: 'scan <failed>' }] };
   vm.runInContext('catalog=input;renderWorkspaceList()', context);
   assert.match(vm.runInContext("$('run-list').innerHTML", context), /Workspace catalog incomplete/);
   assert.match(vm.runInContext("$('run-list').innerHTML", context), /data-workspace="alpha"/);
@@ -330,10 +334,9 @@ test('partial workspace coverage: artifact relationships and operator copy stay 
   vm.runInContext("mode='workspaces'", context);
 
   vm.runInContext("catalog={storage:{root:'/store/w <root>',status:'missing_root',errors:[]},valid:[],invalid:[],errors:[]};workspace=null;selectedWorkspace=null;render()", context);
-  assert.match(detail().innerHTML, /setup/);
+  assert.match(detail().innerHTML, /<code class="mono">node scripts\/workspaces\/cli\.mjs setup<\/code> on the dashboard host/);
   assert.match(detail().innerHTML, /missing_root/);
   assert.match(detail().innerHTML, /\/store\/w &lt;root&gt;/);
-  assert.doesNotMatch(detail().innerHTML, /cli\.mjs|workspace CLI/i);
   vm.runInContext("catalog.storage.status='missing_projects';render()", context);
   assert.match(detail().innerHTML, /missing_projects/);
   assert.match(detail().innerHTML, /setup/);
@@ -1068,9 +1071,11 @@ test('partial workspace coverage: catalog states render through the split-pane o
   assert.match(list().innerHTML, /Loading workspaces/);
 
   // Missing storage reports the status and shows the setup command as text.
-  vm.runInContext("catalog={storage:{root:'/store',status:'missing_root',errors:[]},valid:[],invalid:[],errors:[]};render()", context);
+  vm.runInContext("catalog={storage:{root:'/store',status:'missing_root',errors:[]},valid:[],invalid:[],errors:[{path:'/store',message:'missing_root'}]};render()", context);
   assert.match(detail().innerHTML, /missing_root/);
   assert.match(detail().innerHTML, /setup/);
+  // The status placeholder error is not repeated beside the status line.
+  assert.equal(list().innerHTML.split('missing_root').length - 1, 1);
   vm.runInContext("catalog.storage.status='missing_projects';render()", context);
   assert.match(detail().innerHTML, /missing_projects/);
 
@@ -1088,6 +1093,9 @@ test('partial workspace coverage: catalog states render through the split-pane o
   assert.match(detail().innerHTML, /unreadable/);
   assert.match(detail().innerHTML, /directory_mismatch/);
   assert.match(detail().innerHTML, /2026-10-10-brief\.md/);
+  assert.match(detail().innerHTML, />1 file</);
+  assert.match(detail().innerHTML, />0 files</);
+  assert.match(detail().innerHTML, />1 record</);
   assert.doesNotMatch(detail().innerHTML, /mark-complete/);
   vm.runInContext("workspace={id:'writer',name:'Writer',directory:'/store/projects/writer',kit:{version:1,id:'writer',name:'Writer',repositories:[]},repositories:[{id:'docs',path:'/repo',status:'ok',attention:[]}],context:[{path:'context/notes.md',status:'ok'}],briefs:[],notes:[],artifacts:[],has_workspace_specs:false,attention:[]};render()", context);
   assert.match(detail().innerHTML, /ok/);
