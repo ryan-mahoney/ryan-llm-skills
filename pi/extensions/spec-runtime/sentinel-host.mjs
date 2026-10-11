@@ -142,7 +142,7 @@ async function composeHost(options, signal) {
     // created after it did.
     if (signal?.aborted || closing) throw new StartupCancelledError();
     dashboard = createDirectDashboard({ agentDir: canonicalAgentDir, port, publicHost: normalizedPublicHost, storageRoot: configuredStorageRoot, discussion });
-    observer = createSentinelObserver({ agentDir: canonicalAgentDir, scope, headless: true, isolateReader: true, dashboard });
+    observer = createSentinelObserver({ agentDir: canonicalAgentDir, scope, headless: true, isolateReader: true, dashboard, storageRoot: configuredStorageRoot ?? null });
     const lifecycle = await observer.lifecycle({ action: 'observe', root: canonicalRoot });
     if (signal?.aborted) {
       await close();

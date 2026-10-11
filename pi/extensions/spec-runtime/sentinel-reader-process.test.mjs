@@ -6,6 +6,9 @@ import { realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createSentinelReaderProcess } from './sentinel-reader-process.mjs';
+import { setupStorage, createWorkspace } from '../../../scripts/workspaces/store.mjs';
+import { resolveAssignment } from '../../../scripts/workspaces/assignments.mjs';
+import { collectWorkspace } from '../../../scripts/spec-observe/sentinel.mjs';
 
 function fixture(t) {
   const directory = mkdtempSync(join(tmpdir(), 'sentinel-reader-'));
@@ -17,7 +20,7 @@ test('isolated reader returns workspace data and can restart after stop', async 
   const dir = fixture(t);
   const reader = createSentinelReaderProcess();
   t.after(() => reader.stop());
-  const options = { agentDir: dir, indexDir: join(dir, 'index'), root: dir };
+  const options = { agentDir: dir, indexDir: join(dir, 'index'), root: dir, storageRoot: join(dir, 'storage') };
   const result = await reader.read(options);
   assert.equal(result.snapshot.version, 1);
   assert.deepEqual(result.snapshot.runs, []);
@@ -58,11 +61,57 @@ test('isolated reader finds indexed active work outside the discovery root', asy
   writeFileSync(join(indexDir, 'active.json'), JSON.stringify({ run_id: 'active', package: packagePath }));
   const reader = createSentinelReaderProcess();
   t.after(() => reader.stop());
-  const { snapshot } = await reader.read({ agentDir: dir, root, indexDir });
+  const { snapshot } = await reader.read({ agentDir: dir, root, indexDir, storageRoot: join(dir, 'storage') });
   assert.equal(snapshot.coverage.state, 'complete');
   assert.equal(snapshot.runs[0].package, packagePath);
   assert.equal(snapshot.runs[0].execution, 'running');
   assert.equal(snapshot.runs[0].checkout, repo);
   assert.equal(snapshot.reader.isolated, true);
   assert.notEqual(snapshot.reader.pid, process.pid);
+});
+
+test('assignment reader: isolated reader returns the temporary root assignment row and keeps it across restart', async t => {
+  const dir = realpathSync(fixture(t));
+  const storageRoot = join(dir, 'storage');
+  await setupStorage(storageRoot);
+  const workspace = await createWorkspace(storageRoot, { id: 'ws-reader', name: 'Reader Workspace' });
+  mkdirSync(join(workspace.directory, 'briefs'), { recursive: true });
+  writeFileSync(join(workspace.directory, 'briefs', 'brief.md'), '# Reader brief\n');
+  const assignmentId = '11111111-1111-4111-8111-111111111111';
+  const resolved = await resolveAssignment({
+    assignment_id: assignmentId,
+    workspace_id: 'ws-reader',
+    brief: 'briefs/brief.md',
+    instructions: 'Remain read-only while observed.',
+    storageRoot,
+    workflow_id: 'workflow-reader',
+    pi_path: process.execPath,
+  });
+  mkdirSync(join(workspace.directory, 'assignments'), { recursive: true });
+  writeFileSync(join(workspace.directory, 'assignments', `${assignmentId}.json`),
+    JSON.stringify({ ...resolved.record, state: 'live' }));
+
+  const reader = createSentinelReaderProcess();
+  t.after(() => reader.stop());
+  const options = { agentDir: dir, indexDir: join(dir, 'index'), root: dir, storageRoot };
+  const result = await reader.read(options);
+  assert.equal(result.snapshot.reader.isolated, true);
+  assert.notEqual(result.snapshot.reader.pid, process.pid);
+  const row = result.snapshot.assignments.find(item => item.assignment_id === assignmentId);
+  assert.ok(row, 'the isolated reader returns the persisted assignment row');
+
+  const direct = await collectWorkspace({ roots: [dir], indexDir: join(dir, 'index'), agentDir: dir, storageRoot });
+  const directRow = direct.assignments.find(item => item.assignment_id === assignmentId);
+  assert.ok(directRow, 'direct collectWorkspace sees the same row');
+  const stable = value => {
+    const { observed_at, ...rest } = value;
+    return rest;
+  };
+  assert.deepEqual(stable(row), stable(directRow), 'reader and direct rows agree apart from timing metadata');
+
+  await reader.stop();
+  const restarted = await reader.read(options);
+  assert.equal(restarted.snapshot.reader.isolated, true);
+  assert.ok(restarted.snapshot.assignments.some(item => item.assignment_id === assignmentId),
+    'the assignment row remains after stop/restart');
 });

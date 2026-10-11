@@ -1,12 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, symlinkSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, symlinkSync, statSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import childProcess, { execFileSync } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 
 import { SENTINEL_LIMITS, collectWorkspace, reduceConditions, renderWorkspace, enrollmentReasons } from './sentinel.mjs';
+import { createWorkspace, setupStorage } from '../workspaces/store.mjs';
+import { resolveAssignment } from '../workspaces/assignments.mjs';
 
 const FIXED = Date.parse('2026-10-06T12:00:00.000Z');
 const now = () => FIXED;
@@ -973,4 +976,163 @@ test('declared tour evidence leaves ready-pr completion and recent lifecycle rul
   assert.equal(snapshot.recently_completed[0].evidence.commit, commit);
   assert.equal(snapshot.recently_completed[0].evidence.scope, 'declared-artifact');
   assert.equal(snapshot.recently_completed[0].execution, 'completed');
+});
+
+const ASSIGNMENT_READER_ID = '11111111-1111-4111-8111-111111111111';
+
+test('assignment reader: a persisted live assignment stays unknown under unavailable final probes', async t => {
+  const f = sandbox(t);
+  const repo = primary(f.dir, 'assignments-reader');
+  const packagePath = pack(repo);
+  receipt(packagePath, { id: 'run-reader', assignment_id: ASSIGNMENT_READER_ID, state: 'running', started_at: ago(60000) });
+
+  // Real adj3 storage plus a real adj4 resolved record persisted as a live
+  // assignment in the temporary root. Nothing is launched and no model runs.
+  const storageRoot = join(f.dir, 'storage');
+  await setupStorage(storageRoot);
+  const workspace = await createWorkspace(storageRoot, { id: 'ws-reader', name: 'Reader Workspace' });
+  mkdirSync(join(workspace.directory, 'briefs'), { recursive: true });
+  writeFileSync(join(workspace.directory, 'briefs', 'brief.md'), '# Reader brief\n');
+  const resolved = await resolveAssignment({
+    assignment_id: ASSIGNMENT_READER_ID,
+    workspace_id: 'ws-reader',
+    brief: 'briefs/brief.md',
+    instructions: 'Remain read-only while observed.',
+    storageRoot,
+    workflow_id: 'workflow-reader',
+    pi_path: process.execPath,
+  });
+  mkdirSync(join(workspace.directory, 'assignments'), { recursive: true });
+  writeFileSync(
+    join(workspace.directory, 'assignments', `${ASSIGNMENT_READER_ID}.json`),
+    JSON.stringify({ ...resolved.record, state: 'live', updated_at: new Date(FIXED).toISOString() }),
+  );
+
+  const snapshot = await collectWorkspace({
+    roots: [repo],
+    packages: [packagePath],
+    indexDir: f.indexDir,
+    now,
+    storageRoot,
+    assignmentProbes: {
+      inspect: pid => ({ state: 'unknown', pid, reason: 'synthetic-unavailable' }),
+      psRun: async () => ({ stdout: '', complete: false }),
+      tmuxRun: async () => {
+        const error = new Error('synthetic tmux unavailable');
+        error.code = 'ENOENT';
+        throw error;
+      },
+    },
+  });
+
+  assert.equal(SENTINEL_LIMITS.workspaceAssignments, 100);
+  assert.ok(Array.isArray(snapshot.assignments), 'collectWorkspace must expose additive assignment rows');
+  const row = snapshot.assignments.find(entry => entry.assignment_id === ASSIGNMENT_READER_ID);
+  assert.ok(row, 'the persisted live assignment must be exposed');
+  assert.equal(row.assignment_id, ASSIGNMENT_READER_ID);
+  assert.equal(row.display, 'unknown');
+  assert.equal(row.hasControl, false);
+  assert.equal(snapshot.assignment_coverage.state, 'partial');
+
+  const run = snapshot.runs.find(entry => entry.assignment_id === ASSIGNMENT_READER_ID);
+  assert.ok(run, 'the existing run row stays present');
+  assert.equal(run.execution, 'running');
+
+  const rendered = renderWorkspace(snapshot).join('\n');
+  assert.ok(rendered.includes(ASSIGNMENT_READER_ID), 'the full assignment id must render');
+  assert.match(rendered, /unknown/);
+  assert.match(rendered, /no relaunch/i);
+});
+
+test('missing assignment root stays explicit and changes no run facts', async t => {
+  const f = sandbox(t);
+  const repo = primary(f.dir, 'missing-assignment-root');
+  const packagePath = pack(repo);
+  receipt(packagePath, { id: 'run-root', assignment_id: 'assign-root', state: 'running', started_at: ago(60000) });
+  const omitted = await collectWorkspace({ roots: [repo], packages: [packagePath], indexDir: f.indexDir, now });
+  const missingRoot = join(f.dir, 'no-such-storage-root');
+  const missing = await collectWorkspace({ roots: [repo], packages: [packagePath], indexDir: f.indexDir, now, storageRoot: missingRoot });
+  assert.deepEqual(missing.runs, omitted.runs, 'run rows are unchanged by the missing assignment source');
+  assert.deepEqual(missing.coverage, omitted.coverage, 'run coverage is unchanged by the missing assignment source');
+  assert.deepEqual(missing.recently_completed, omitted.recently_completed);
+  assert.equal(omitted.assignments.length, 0);
+  assert.equal(omitted.assignment_coverage.state, 'unavailable');
+  assert.equal(missing.assignments.length, 0);
+  assert.equal(missing.assignment_coverage.state, 'unavailable');
+  assert.ok(missing.assignment_coverage.reasons.some(reason => reason.startsWith('storage-')),
+    JSON.stringify(missing.assignment_coverage.reasons));
+  assert.equal(existsSync(missingRoot), false, 'the missing storage root is never created');
+});
+
+test('assignment reader: CLI status and inspect expose one exact sanitized row', async t => {
+  const f = sandbox(t);
+  const repo = primary(f.dir, 'cli-assignment-reader');
+  const packagePath = pack(repo);
+  receipt(packagePath, { id: 'run-cli-reader', assignment_id: ASSIGNMENT_READER_ID, state: 'running', started_at: ago(60000) });
+  const storageRoot = join(f.dir, 'storage');
+  await setupStorage(storageRoot);
+  const workspace = await createWorkspace(storageRoot, { id: 'ws-cli-reader', name: 'CLI Reader Workspace' });
+  mkdirSync(join(workspace.directory, 'briefs'), { recursive: true });
+  writeFileSync(join(workspace.directory, 'briefs', 'brief.md'), '# CLI Reader brief\n');
+  const resolved = await resolveAssignment({
+    assignment_id: ASSIGNMENT_READER_ID,
+    workspace_id: 'ws-cli-reader',
+    brief: 'briefs/brief.md',
+    instructions: 'Remain read-only while observed.',
+    storageRoot,
+    workflow_id: 'workflow-cli-reader',
+    pi_path: process.execPath,
+  });
+  mkdirSync(join(workspace.directory, 'assignments'), { recursive: true });
+  writeFileSync(join(workspace.directory, 'assignments', `${ASSIGNMENT_READER_ID}.json`),
+    JSON.stringify({ ...resolved.record, state: 'live',
+      attention: ['injected\u0007control\nsecond line', 'plain attention'] }));
+  const agentDir = join(f.dir, 'agent');
+  mkdirSync(agentDir, { recursive: true });
+  const cli = fileURLToPath(new URL('./cli.mjs', import.meta.url));
+  const runCli = args => {
+    try {
+      return { status: 0, stdout: execFileSync(process.execPath, [cli, ...args], { encoding: 'utf8', timeout: 10000,
+        env: { PATH: process.env.PATH, HOME: f.dir, PI_CODING_AGENT_DIR: agentDir, PI_INTERCOM_SCOPE_ID: '', ADJACENT_STORAGE_ROOT: storageRoot, LC_ALL: 'C', TMPDIR: tmpdir() } }) };
+    } catch (error) {
+      return { status: error.status ?? 1, stdout: String(error.stdout ?? ''), stderr: String(error.stderr ?? '') };
+    }
+  };
+
+  const status = runCli(['sentinel', 'status', '--root', f.dir, '--format', 'json']);
+  assert.equal(status.status, 0, status.stderr);
+  const statusSnapshot = JSON.parse(status.stdout);
+  assert.ok(statusSnapshot.assignments.some(row => row.assignment_id === ASSIGNMENT_READER_ID));
+
+  const inspect = runCli(['sentinel', 'inspect', ASSIGNMENT_READER_ID, '--root', f.dir, '--format', 'json']);
+  assert.equal(inspect.status, 0, inspect.stderr);
+  const inspected = JSON.parse(inspect.stdout);
+  assert.equal(inspected.assignment.assignment_id, ASSIGNMENT_READER_ID);
+  assert.equal(inspected.assignment.hasControl, false);
+  assert.equal(inspected.assignment.display, 'unknown');
+
+  const direct = await collectWorkspace({ roots: [repo], packages: [packagePath], indexDir: f.indexDir, now: Date.now, storageRoot });
+  const directRow = direct.assignments.find(row => row.assignment_id === ASSIGNMENT_READER_ID);
+  assert.ok(directRow, 'direct real producers see the same assignment');
+  assert.equal(inspected.assignment.display, directRow.display);
+  assert.equal(inspected.assignment.recordedState, directRow.recordedState);
+  assert.equal(inspected.assignment.observedState, directRow.observedState);
+  assert.equal(inspected.assignment.hasControl, directRow.hasControl);
+  assert.equal(inspected.assignment.quiet, directRow.quiet);
+
+  const prefix = runCli(['sentinel', 'inspect', ASSIGNMENT_READER_ID.slice(0, 8), '--root', f.dir, '--format', 'json']);
+  assert.notEqual(prefix.status, 0, 'a short prefix is rejected');
+  assert.match(prefix.stderr, /full assignment UUID/);
+  const wrong = runCli(['sentinel', 'inspect', '99999999-9999-4999-8999-999999999999', '--root', f.dir, '--format', 'json']);
+  assert.notEqual(wrong.status, 0, 'an unknown full UUID is rejected');
+  assert.match(wrong.stderr, /No observed assignment matches/);
+
+  const text = runCli(['sentinel', 'inspect', ASSIGNMENT_READER_ID, '--root', f.dir]);
+  assert.equal(text.status, 0, text.stderr);
+  assert.equal(/[\u0000-\u0009\u000b-\u001f]/.test(text.stdout), false,
+    'no injected control characters survive the text render');
+  assert.ok(text.stdout.includes('injectedcontrol'),
+    'publicHint keeps the injected text on one collapsed safe line');
+  assert.equal(text.stdout.includes('second line'), false,
+    'the injected newline never becomes a rendered line');
 });

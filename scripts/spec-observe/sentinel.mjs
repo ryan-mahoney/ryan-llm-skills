@@ -16,10 +16,12 @@ import { applicableMerge, validateMergeCache } from './merge-reconciliation.mjs'
 import { manualCompletion, COMPLETION_FILE } from './manual-completion.mjs';
 import { publicHint } from '../../pi/extensions/spec-runtime/monitor.mjs';
 import { discoverManaged } from './core.mjs';
+import { collectAssignments } from './assignments.mjs';
 
 export const SENTINEL_LIMITS = Object.freeze({
   roots: 20,
   assignments: 50,
+  workspaceAssignments: 100,
   packageChildren: 100,
   receiptFiles: 100,
   receiptDirectoryEntries: 5000,
@@ -392,6 +394,21 @@ export function renderWorkspace(snapshot) {
       lines.push(renderDetail('    ', run.conditions.map(condition => `${condition.kind} [${condition.severity}/${condition.state}]`).join(' · ')));
     }
   }
+  const assignments = snapshot?.assignments ?? [];
+  const assignmentCoverage = snapshot?.assignment_coverage;
+  if (assignmentCoverage) {
+    const omittedAssignments = Number.isFinite(assignmentCoverage.omitted) ? ` · omitted ${assignmentCoverage.omitted}` : '';
+    const assignmentReasons = assignmentCoverage.reasons?.length ? ` (${assignmentCoverage.reasons.join(', ')})` : '';
+    lines.push(renderLine(`  Assignments: coverage ${assignmentCoverage.state}${omittedAssignments}${assignmentReasons}`));
+  }
+  for (const assignment of assignments) {
+    lines.push(renderLine(`  ${assignment.assignment_id} · ${assignment.display} · ${publicHint(assignment.nextAction || 'no action')}`));
+  }
+  if (assignments.length === 0) {
+    lines.push(assignmentCoverage?.state === 'unavailable'
+      ? '  Assignment source unavailable (no storage or unknown); assignment state is not known.'
+      : '  No observed assignments.');
+  }
   if (!runs.length) lines.push(['unavailable', 'stale'].includes(coverage.state)
     ? '  Workspace observation unavailable; running work is unknown.' : '  No observed runs.');
   if (snapshot.activity_filter?.window_ms) lines.push(`Activity window: last 24 hours · ${snapshot.activity_filter.hidden_packages} inactive package(s), ${snapshot.activity_filter.hidden_completed_packages ?? 0} completed package(s) hidden; status --all includes history.`);
@@ -426,7 +443,8 @@ async function packageRecentlyModified(directory, cutoff, scan) {
 }
 
 export async function collectWorkspace({ roots = [], packages = [], enrollmentErrors = [], discovery = null, indexDir = join(homedir(), '.pi/agent/spec-runtime'),
-  now = Date.now, agentDir, scope, includeInactive = false, reconcileMerge = null, skipManagedIndex = false } = {}) {
+  now = Date.now, agentDir, scope, includeInactive = false, reconcileMerge = null, skipManagedIndex = false,
+  storageRoot = null, assignmentProbes = null } = {}) {
   const tick = clock(now);
   const readTime = clockIso(tick);
   const budget = makeBudget();
@@ -632,6 +650,32 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
   }
 
   const packageRequested = enrolled.length > 0 || (Array.isArray(packages) && packages.length > 0);
+
+  // Assignment observation is additive: assignment source failures never
+  // change run coverage, identity, completion or activity. Without an explicit
+  // storageRoot the source stays explicitly unavailable; the operator root is
+  // never resolved or read implicitly here.
+  let assignments = [];
+  let assignmentCoverage;
+  if (typeof storageRoot !== 'string' || storageRoot === '') {
+    assignmentCoverage = makeCoverage('unavailable', ['assignment-storage-root-unavailable'], null, 0, readTime);
+  } else {
+    try {
+      const collected = await collectAssignments({
+        storageRoot,
+        runs,
+        now: tick,
+        limits: { maxRows: SENTINEL_LIMITS.workspaceAssignments },
+        probes: assignmentProbes ?? {},
+      });
+      assignments = collected.assignments;
+      assignmentCoverage = makeCoverage(collected.coverage.state, collected.coverage.reasons,
+        collected.coverage.omitted, collected.coverage.bytes_read, collected.coverage.observed_at);
+    } catch (error) {
+      assignmentCoverage = makeCoverage('unavailable', [`assignment-source-unavailable: ${codeOf(error)}`], null, 0, readTime);
+    }
+  }
+
   let state;
   if (!packageRequested && !facts.size && !reasons.length) {
     state = 'complete';
@@ -647,6 +691,7 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
   }
   const coverage = makeCoverage(state, reasons, unknownOmission ? null : knownOmitted, budget.bytes, readTime);
   return reduceConditions({ version: 1, workspace, coverage, activity_filter: activityFilter, runs,
+    assignments, assignment_coverage: assignmentCoverage,
     recently_completed: recentlyCompleted,
     completion_history: { window_ms: SENTINEL_LIMITS.recentCompletionMs, cutoff: new Date(completionCutoff).toISOString(),
       limit: SENTINEL_LIMITS.completedPackages, omitted: Math.max(0, completed.length - recentlyCompleted.length) },
