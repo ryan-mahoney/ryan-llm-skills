@@ -416,14 +416,15 @@ required work must be finished and no run-owned worker or required command may s
 be active. Retained inactive sessions are fine. Do not sweep unrelated processes,
 add another code review, or rerun checks to establish this lifecycle state.
 
-Then tell the sentinel. In managed Pi, record one final `spec_sentinel_checkpoint` for the
-run's `workflow_id` with `state: complete`, every declared worker in a terminal state, and
-the publication receipt among its artifacts, and record `spec_checkpoint` with
-`stage: publication, status: complete`. Sentinel treats any package that has sentinel
-checkpoints as current until one of them says `complete` with no active worker; a last
-checkpoint left at `ready` or `waiting-worker` keeps a finished package on the active list
-until someone prompts the coordinator. A blocked ending records `state: blocked` the same
-way. Do this before the user-facing completion response, not in reply to a later question.
+Then tell the sentinel. In managed Pi, record `spec_checkpoint` with
+`stage: publication, status: complete`. When every declared worker has a terminal run
+receipt, the runtime records the final `complete` `spec_sentinel_checkpoint` for the run's
+`workflow_id` itself; sentinel keeps a package current until one says `complete`. Check the
+returned `sentinel` outcome. If it reports a skipped active worker, reconcile that worker
+and record the final `complete` checkpoint yourself, with every declared worker terminal.
+A blocked ending records `state: blocked` the same way. Do this before the user-facing
+completion response, not in reply to a later question. Outside managed Pi, the ready PR
+record and tour remain the completion evidence.
 
 During finalization, report the remaining action plainly, such as "Tour generated;
 publishing the PR." A tour-stage handoff is progress,

@@ -513,6 +513,20 @@ Stage receipts live in `runtime/stages/`; preserve explicit holds/authority ther
 referenced canonical records. Artifact presence is not a passing review. The existing
 `run-ledger.md`, if present, remains a legacy source and is not overwritten.
 
+Recording `spec_checkpoint` with stage `publication` (including the `spec-pr` alias) and status
+`complete` also closes the package's sentinel workflows. For each workflow this coordinator
+registered for the package (or, after a session restart, each `runtime/sentinel/<workflow_id>`
+checkpoint it owns), the runtime resolves every declared worker still shown as active against
+`runtime/runs/*.json` (matching run `id` or `assignment_id`; `completed`, `failed` and `cancelled`
+map to worker states). If every worker is terminal, it records a `complete` sentinel checkpoint
+with obligation `publication-complete`, the carried inbox outcomes, and the current native input
+revision, so the observer moves the package to recently completed without a further prompt. A
+workflow with a running or receipt-less worker, a `user-held` or `decision-required` state, or an
+unresolved inbox direction is left unchanged. The tool result lists each outcome under `sentinel`;
+a skipped active worker carries a `next` hint to reconcile it and record the final checkpoint
+explicitly. Failure here never fails `spec_checkpoint`. `publication-draft` and other stages do not
+trigger it.
+
 The coordinator watches canonical learning/review/fix directories and runtime records, coalesces
 notifications, and repairs missed events with a 15-second metadata reconciliation. History-index
 and progress writes are serialized per process. Errors remain visible; the watcher never triggers
