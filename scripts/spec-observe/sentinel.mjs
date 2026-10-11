@@ -572,6 +572,10 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
   const noteUnknown = reason => { if (reason && !reasons.includes(reason)) { reasons.push(reason); unknownOmission = true; } };
   const collectFact = async (fact, active = true) => {
     const candidates = await collectPackage(fact, budget, note, noteUnknown);
+    // Cache the prepared index before checkpoints and later packages consume
+    // the shared budget. Selected runs must not lose known step counts just
+    // because their projection happens after all receipt collection.
+    if (candidates.length) await readStepIndex(fact, budget);
     // Keep the latest assignment as the package's current handoff, including
     // the interval after its worker exits and before review/next-step dispatch.
     fact.currentAssignment = [...candidates].sort((a, b) =>

@@ -441,11 +441,15 @@ test('enrollment read failures project into workspace coverage, never healthy em
     ['enrollment-cap: /a (ENROLLMENT_CAP)']);
 });
 
-test('metadata-heavy checkpoints cannot exceed the shared reconciliation byte ceiling', async t => {
+// Run alone: node --test --test-name-pattern='metadata-heavy checkpoints' scripts/spec-observe/sentinel.test.mjs
+test('metadata-heavy checkpoints preserve spec progress within the shared reconciliation byte ceiling', async t => {
   const f = sandbox(t);
   const repo = primary(f.dir, 'metadata-budget');
   const packagePath = pack(repo);
-  receipt(packagePath, { id: 'one', state: 'running' });
+  receipt(packagePath, { id: 'one', state: 'running', step: join(packagePath, 'step-002-subspec.md') });
+  writeFileSync(join(packagePath, 'spec-steps.json'), JSON.stringify({ steps: [
+    { step: 1, name: 'Start' }, { step: 2, name: 'Build' }, { step: 3, name: 'Finish' },
+  ] }));
   for (let index = 0; index < 80; index++) {
     const dir = join(packagePath, 'runtime', 'sentinel', `workflow-${index}`);
     mkdirSync(dir, { recursive: true });
@@ -455,6 +459,8 @@ test('metadata-heavy checkpoints cannot exceed the shared reconciliation byte ce
   assert.ok(snapshot.coverage.bytes_read <= SENTINEL_LIMITS.totalBytes);
   assert.equal(snapshot.coverage.state, 'partial');
   assert.ok(snapshot.coverage.reasons.some(reason => reason.startsWith('read-budget:')));
+  assert.deepEqual(snapshot.runs[0].spec_progress, { basis: 'step-position', total_steps: 3,
+    current_step: 2, current_position: 2, current_name: 'Build', accepted_steps: null });
 });
 
 test('external activity ancestor symlinks remain unknown instead of importing foreign hints', async t => {
