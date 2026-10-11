@@ -24,6 +24,9 @@ node scripts/workspaces/cli.mjs <command> [options]
 | `add-brief` | `add-brief ID --title TITLE [--from FILE]` |
 | `add-note` | `add-note ID --title TITLE [--from FILE]` |
 | `add-artifact` | `add-artifact ID (--repository RID --path REL \| --url URL) [--title T] [--note N]` |
+| `locate` | `locate ID [--json]` — reconcile one assignment and print its envelope |
+| `assignments` | `assignments [--workspace ID] [--json]` — list assignment envelopes |
+| `attach` | `attach ID` — attach this terminal to a live assignment's recorded session (requires a TTY) |
 
 `add-brief` and `add-note` read stdin completely when `--from` is absent; with
 `--from FILE` the file is the only source and stdin is never touched.
@@ -39,6 +42,53 @@ fetched.
 - `--json` — print structured JSON to stdout instead of human text. With
   `--apply`, two NDJSON documents are printed: the exact plan first, then the
   `{path,backup}` result.
+
+## Assignment observation and attach
+
+`locate ID` reconciles one persisted assignment under the shared root claim
+and prints a stable envelope `{record, attach_command, attention}`.
+`assignments [--workspace ID]` prints an array of the same envelopes. `--json`
+prints the raw envelope(s); the human form lists the assignment id, state,
+execution directory, socket, session, a copy-pasteable `attach` command and
+any attention entries. `attach_command` is an argv array that round-trips
+through this CLI and the resolved root.
+
+`attach ID` requires a TTY on stdin and stdout, a `live` reconciled state, an
+absolute recorded tmux socket, a saved pane id, and the recorded pane still
+resolving to that exact id with a pane process whose PID and start time still
+match the reconciled Pi identity; a mismatch or unknown identity refuses
+before any client starts. It then runs `tmux` with an argument array against
+the recorded socket and exact `=session` target, with inherited stdio and no
+shell. The root claim is released before the attach client starts, so an
+attached terminal never blocks a launch, and detaching only ends the client.
+The launcher never stops, kills or signals the Pi process; ending an assignment
+is operator-owned.
+
+`live` records a confirmed, observable Pi identity and is retained until
+reconciliation confirms the assignment is gone. It does not guarantee ongoing
+progress or liveness under ambiguous reads: an unreachable tmux server or an
+unreadable process identity is unknown, not gone, so the record stays `live`.
+A trust prompt or provider wait that the Pi process is sitting in is still
+`live`, usually with attention entries, and `attach` is how an operator
+answers such a prompt.
+
+Process observation is conservative: the default flattened `ps` scan treats
+any process whose argv contains the assignment UUID as a positive candidate.
+The `locate` command's own argv contains the UUID, so a `locate` run can list
+itself as a candidate and keep reporting `live` plus attention after the Pi
+process exited. That evidence only reserves the assignment; no automatic retry
+or state change follows from it, and a later observation or operator action
+decides.
+
+Local and remote usage:
+
+```bash
+node scripts/workspaces/cli.mjs locate <uuid> --json
+node scripts/workspaces/cli.mjs attach <uuid>
+
+# Remote: ssh -t forces a TTY so attach is accepted.
+ssh -t user@host 'node ~/scripts/workspaces/cli.mjs attach <uuid> --root ~/Documents/adjacent-storage'
+```
 
 ## Storage root resolution
 

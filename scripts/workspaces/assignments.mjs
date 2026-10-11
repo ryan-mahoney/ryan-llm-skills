@@ -14,6 +14,7 @@
 // snapshot publication (assignments/<id>.brief.md), session directory
 // creation and record persistence.
 
+import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
@@ -22,7 +23,7 @@ import { basename, delimiter, isAbsolute, join, relative, resolve } from "node:p
 import { isDeepStrictEqual } from "node:util";
 import { canonicalPackage } from "../../pi/extensions/spec-runtime/runtime.mjs";
 import { resolveCheckout } from "../repo-search/identity.mjs";
-import { processIdentity } from "../spec-observe/process-identity.mjs";
+import { processIdentity, sameProcess } from "../spec-observe/process-identity.mjs";
 import { claimOwner } from "../spec-observe/owner-claim.mjs";
 import { observeAssignment } from "./reconcile.mjs";
 import {
@@ -33,7 +34,7 @@ import {
   storageStatus,
   writeFileAtomic,
 } from "./store.mjs";
-import { probeSession, startSession } from "./tmux.mjs";
+import { attachArgs, probeSession, sessionPanePid, startSession } from "./tmux.mjs";
 
 const GIT_TIMEOUT_MS = 5000;
 const UUID_PATTERN =
@@ -1447,4 +1448,73 @@ export async function locateAssignment(root, id, options = {}) {
   } finally {
     claim.release();
   }
+}
+
+/**
+ * Attach the current terminal to one live assignment's recorded tmux session.
+ *
+ * The UUID and TTY gate run before any root claim. `locateAssignment`
+ * reconciles the record under the shared root claim and releases it, then the
+ * live state, saved absolute socket and saved pane id are required, and the
+ * recorded pane must still resolve to the exact saved pane id and its pane
+ * process must still be the exact reconciled Pi identity (transport failures
+ * are unknown and never adopted; a dead, replaced or unknown pane process
+ * refuses before the client starts). The returned argv comes from
+ * `attachArgs` with the recorded socket and exact `=session` target; the tmux
+ * client is spawned with an argument array, no shell, the caller's stdio and
+ * no new-session/-A/kill/send-keys. The root claim is never held while the
+ * attach client runs and no Pi process is ever signaled.
+ *
+ * @param {string} root
+ * @param {string} id
+ * @param {{isTTY?: boolean, stdio?: object|string, adapters?: object}} [options]
+ * @returns {Promise<{exitCode: number|null, signal: string|null}>}
+ */
+export async function attachAssignment(root, id, { isTTY, stdio, adapters } = {}) {
+  if (typeof id !== "string" || !UUID_PATTERN.test(id)) {
+    throw new Error("assignment id must be an RFC4122 UUID");
+  }
+  if (isTTY !== true) {
+    throw new Error("attach requires a TTY on stdin and stdout");
+  }
+  const options = adapters ?? {};
+  const reconciled = await locateAssignment(root, id, { adapters: options });
+  if (reconciled.state !== "live") {
+    throw new Error(`assignment is not live: ${id} (${String(reconciled.state)})`);
+  }
+  if (typeof reconciled.tmux_socket !== "string" || !isAbsolute(reconciled.tmux_socket)) {
+    throw new Error(`assignment has no absolute tmux socket: ${id}`);
+  }
+  if (typeof reconciled.pane_id !== "string" || reconciled.pane_id === "") {
+    throw new Error(`assignment has no saved pane identity: ${id}`);
+  }
+  const tmuxOptions = options.tmuxRun === undefined ? {} : { run: options.tmuxRun };
+  const pane = await sessionPanePid(
+    { socketPath: reconciled.tmux_socket, sessionName: reconciled.tmux_session },
+    tmuxOptions,
+  );
+  if (pane === null) throw new Error(`assignment session is absent: ${id}`);
+  if (pane.paneId !== reconciled.pane_id) {
+    throw new Error(
+      `assignment pane identity changed: ${id} (${pane.paneId} is not ${reconciled.pane_id})`,
+    );
+  }
+  // A matching pane id is not enough: the live pane process must still be the
+  // exact reconciled Pi process (same pid and start time). A mismatch or an
+  // unknown identity refuses here, before the attach client starts; no
+  // process is ever signaled.
+  if (pane.panePid !== reconciled.pi_identity?.pid || !sameProcess(reconciled.pi_identity)) {
+    throw new Error(
+      `assignment pane process changed: ${id} (pane ${pane.paneId} no longer runs the reconciled Pi process)`,
+    );
+  }
+  const argv = attachArgs({
+    socketPath: reconciled.tmux_socket,
+    sessionName: reconciled.tmux_session,
+  });
+  return await new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn("tmux", argv, { stdio: stdio ?? "inherit" });
+    child.on("error", rejectPromise);
+    child.on("exit", (exitCode, signal) => resolvePromise({ exitCode, signal }));
+  });
 }

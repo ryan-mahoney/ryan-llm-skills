@@ -8,6 +8,7 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
+import { fileURLToPath } from 'node:url';
 import {
   addArtifact,
   addMaterial,
@@ -20,7 +21,15 @@ import {
   storageStatus,
 } from './store.mjs';
 import { formatScalar, planKitEdit } from './kit.mjs';
-import { launchAssignment, resolveAssignment } from './assignments.mjs';
+import {
+  attachAssignment,
+  launchAssignment,
+  listAssignments,
+  locateAssignment,
+  resolveAssignment,
+} from './assignments.mjs';
+
+const CLI_PATH = fileURLToPath(import.meta.url);
 
 const USAGE = `Usage: node scripts/workspaces/cli.mjs <command> [options]
 
@@ -36,6 +45,9 @@ Commands:
   add-note ID --title TITLE [--from FILE]
   add-artifact ID (--repository RID --path REL | --url URL) [--title T] [--note N]
   launch ID --brief REL (--instructions TEXT | --instructions-file PATH) [--id UUID] [--target RID]
+  locate ID --json                                           Reconcile and print one assignment envelope
+  assignments [--workspace ID]                               List assignment envelopes
+  attach ID                                                  Attach this terminal to a live assignment session
 
 Global options:
   --root PATH   Override ADJACENT_STORAGE_ROOT (default ~/Documents/adjacent-storage)
@@ -83,7 +95,11 @@ const COMMANDS = {
       '--yes': 'boolean',
     },
   },
+  locate: { positionals: 1, flags: {} },
+  assignments: { positionals: 0, flags: { '--workspace': 'value' } },
+  attach: { positionals: 1, flags: {} },
 };
+
 const GLOBAL_FLAGS = { '--root': 'value', '--json': 'boolean' };
 
 class UsageError extends Error {}
@@ -377,6 +393,61 @@ async function launchCommand(root, workspaceId, options) {
   await printLaunchResult(record, preview, options);
 }
 
+// Stable assignment envelope shared by locate and assignments. attach_command
+// is a round-trippable argv array naming this exact CLI and root.
+function assignmentEnvelope(root, record) {
+  return {
+    record,
+    attach_command: ['node', CLI_PATH, 'attach', record.assignment_id, '--root', root],
+    attention: record.attention ?? [],
+  };
+}
+
+function humanEnvelope(envelope) {
+  const { record } = envelope;
+  const lines = [
+    `${record.assignment_id} ${record.state} ${record.workspace_id}`,
+    `execution_dir ${record.execution_dir}`,
+    `socket ${record.tmux_socket}`,
+    `session ${record.tmux_session}`,
+    `attach ${envelope.attach_command.join(' ')}`,
+  ];
+  for (const entry of envelope.attention) lines.push(`attention ${entry}`);
+  return lines.join('\n');
+}
+
+async function locateCommand(root, id, options) {
+  const record = await locateAssignment(root, id);
+  const envelope = assignmentEnvelope(root, record);
+  if (options['--json'] === true) {
+    await print(JSON.stringify(envelope));
+    return;
+  }
+  await print(humanEnvelope(envelope));
+}
+
+async function assignmentsCommand(root, options) {
+  const records = await listAssignments(root, options['--workspace'] ?? null);
+  const envelopes = records.map((record) => assignmentEnvelope(root, record));
+  if (options['--json'] === true) {
+    await print(JSON.stringify(envelopes));
+    return;
+  }
+  if (envelopes.length === 0) {
+    await print('no assignments');
+    return;
+  }
+  await print(envelopes.map(humanEnvelope).join('\n\n'));
+}
+
+async function attachCommand(root, id) {
+  const { exitCode, signal } = await attachAssignment(root, id, {
+    isTTY: process.stdin.isTTY === true && process.stdout.isTTY === true,
+    stdio: 'inherit',
+  });
+  process.exitCode = signal != null ? 1 : (exitCode ?? 1);
+}
+
 async function execute(command, root, options, positionals) {
   switch (command) {
     case 'status': return storageStatus(root);
@@ -398,6 +469,15 @@ async function execute(command, root, options, positionals) {
     case 'add-artifact': return addArtifact(root, positionals[0], artifactOptions(options));
     case 'launch':
       await launchCommand(root, positionals[0], options);
+      return undefined;
+    case 'locate':
+      await locateCommand(root, positionals[0], options);
+      return undefined;
+    case 'assignments':
+      await assignmentsCommand(root, options);
+      return undefined;
+    case 'attach':
+      await attachCommand(root, positionals[0]);
       return undefined;
     case 'add-repo':
     case 'set-role': return kitEdit(command, root, positionals[0], options);
