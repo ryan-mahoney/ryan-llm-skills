@@ -892,6 +892,7 @@ build_bundle() {
 }
 
 spec_skills=(
+  epic-end-to-end
   spec-end-to-end
   spec-message
   spec-upgrade

@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "18"
+  version: "19"
 ---
 
 # Spec PR
@@ -112,7 +112,7 @@ In an end-to-end run, the coordinator applies this procedure before final eviden
 fetched base is still an ancestor of HEAD and no relevant state has changed.
 
 1. Read current project context and validate the snapshot/decision sources before publication.
-   Resolve the default branch from `refs/remotes/origin/HEAD`, then repository convention, then `main`/`master`. Stop if HEAD is that branch.
+   Use the explicit user/coordinator PR base or the existing recorded package PR base first, including a predecessor branch in a stack. Reconcile conflicting recorded and requested bases before mutation. Only when no base is assigned, resolve the default branch from `refs/remotes/origin/HEAD`, then repository convention, then `main`/`master`. Stop if HEAD is the selected base branch. Keep the selected base through rebase, review comparisons, evidence and PR creation/update; link a stacked predecessor PR when present.
 2. Fetch `origin/<base>` and rebase when it is not an ancestor of HEAD.
 3. Resolve conflicts from intent: read both sides, the spec, changed history, and relevant surrounding code. Integrate both intents when compatible; never mechanically choose ours/theirs.
 4. For every non-trivial conflict, run safe, authorized focused merge tests and EV gates for the affected claims;

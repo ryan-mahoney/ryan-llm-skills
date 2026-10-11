@@ -185,6 +185,7 @@ as `Use STRONG_OWNER for steps 4 and 7.` Existing prepared specs need no new fie
 
 | Skill | Command | Purpose |
 |---|---|---|
+| **epic-end-to-end** | `/epic-end-to-end` with `PACKAGES:` | Run related specs in dependency order through publication and authorized merge, updating downstream plans from feedback |
 | **spec-end-to-end** | `/spec-end-to-end [goal-or-feature] [modifiers]` | Run the complete workflow from goal or existing spec to a published PR |
 | **spec-upgrade** | `/spec-upgrade [spec-paths or all pending specs]` | Bring unimplemented specs up to the current context and evidence rules; stop after preparation |
 | **spec-message** | `/spec-message [feature] [message]` | Send a direction, information update, or hold to a running spec through its inbox |
