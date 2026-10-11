@@ -1531,3 +1531,213 @@ test('threads UI escapes hostile titles and content and renders safe markdown on
   assert.match(body, /link/);
   assert.ok(vm.runInContext('Number.isFinite(liveAnchor.at)', context), 'direct payload assignment keeps the server-relative anchor');
 });
+
+// ---- Threads UI (step 10): brief editor, assignment preview/launch and explicit result dispatch ----
+test('threads UI handoff controls stay hidden without the local dashboard', () => {
+  const context = dashboardContext();
+  setThreadContext(context);
+  vm.runInContext(`threads=${JSON.stringify([threadRecord()])};imported=true;renderThreads()`, context);
+  assert.doesNotMatch(threadsBody(context), /id="thread-brief-save"/);
+  vm.runInContext('imported=false;payload={};renderThreads()', context);
+  const html = threadsBody(context);
+  assert.doesNotMatch(html, /id="thread-brief-save"/);
+  assert.doesNotMatch(html, /id="thread-assignment-launch"/);
+  assert.match(html, /available on the host/);
+});
+
+test('threads UI save brief keeps both fields, disables only save and reuses the retry request id', async () => {
+  const posts = [];
+  let release;
+  let saveCalls = 0;
+  const context = dashboardContext({ fetch: async (url, init = {}) => {
+    const path = String(url).split('?')[0];
+    if (path === '/api/thread/save-brief') {
+      posts.push(JSON.parse(init.body));
+      saveCalls += 1;
+      if (saveCalls === 1) return new Promise(resolve => { release = resolve; });
+      if (saveCalls === 2) return { ok: false, status: 503, json: async () => ({ error: 'Discussion service unavailable.' }) };
+      return { ok: true, json: async () => ({ thread: threadRecord(), brief: '/storage/briefs/brief.md', handoff: { request_id: JSON.parse(init.body).request_id }, duplicate: false }) };
+    }
+    if (path === '/api/threads') return { ok: true, json: async () => ({ threads: [threadRecord()], invalid: [] }) };
+    return { ok: false, status: 404, json: async () => ({}) };
+  } });
+  setThreadContext(context);
+  vm.runInContext(`threads=${JSON.stringify([threadRecord()])};threadBriefTitle='Keep the brief';threadBriefContent='Keep the content';renderThreads()`, context);
+  const pending = vm.runInContext('saveThreadBrief()', context);
+  await flush();
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].title, 'Keep the brief');
+  assert.equal(posts[0].content, 'Keep the content');
+  assert.match(posts[0].request_id, /^[0-9a-f-]{36}$/);
+  const pendingHtml = context.document.getElementById('thread-handoff-box').innerHTML;
+  assert.match(buttonTag(pendingHtml, 'thread-brief-save'), /disabled/);
+  assert.match(pendingHtml, /value="Keep the brief"/);
+  assert.match(pendingHtml, /Keep the content/);
+  release({ ok: false, status: 503, json: async () => ({ error: 'Discussion service unavailable.' }) });
+  await pending;
+  assert.equal(vm.runInContext('threadBriefTitle', context), 'Keep the brief');
+  assert.equal(vm.runInContext('threadBriefContent', context), 'Keep the content');
+  const failedHtml = context.document.getElementById('thread-handoff-box').innerHTML;
+  assert.match(failedHtml, /Discussion service unavailable/);
+  assert.match(failedHtml, /role="alert"/);
+  assert.ok(context.document.getElementById('thread-brief-save').focusCalls >= 1, 'failed save returns focus to the save control');
+  await vm.runInContext('saveThreadBrief()', context);
+  assert.equal(posts.length, 2);
+  assert.equal(posts[1].request_id, posts[0].request_id, 'retry after the failure keeps the request id for dedupe');
+  assert.equal(vm.runInContext('threadBriefRequestId', context), null, 'a refused retry does not publish a saved brief id');
+});
+
+test('threads UI save-brief conflict keeps both fields and shows the conflict text', async () => {
+  const context = dashboardContext({ fetch: async url => {
+    const path = String(url).split('?')[0];
+    if (path === '/api/thread/save-brief') return { ok: false, status: 409, json: async () => ({ error: 'Discussion request conflicts with current state.' }) };
+    return { ok: true, json: async () => ({ threads: [threadRecord()], invalid: [] }) };
+  } });
+  setThreadContext(context);
+  vm.runInContext(`threads=${JSON.stringify([threadRecord()])};threadBriefTitle='Conflicted title';threadBriefContent='Conflicted body';renderThreads()`, context);
+  await vm.runInContext('saveThreadBrief()', context);
+  assert.equal(vm.runInContext('threadBriefTitle', context), 'Conflicted title');
+  assert.equal(vm.runInContext('threadBriefContent', context), 'Conflicted body');
+  const html = context.document.getElementById('thread-handoff-box').innerHTML;
+  assert.match(html, /conflicts with current state/);
+  assert.match(html, /role="alert"/);
+});
+
+test('threads UI preview shows the resolved target, brief, model and contract digest', async () => {
+  const digest = 'a'.repeat(64);
+  const previews = [];
+  const context = dashboardContext({ fetch: async (url, init = {}) => {
+    const path = String(url).split('?')[0];
+    if (path === '/api/thread/preview-assignment') {
+      const body = JSON.parse(init.body);
+      previews.push(body);
+      return { ok: true, json: async () => ({ record: { assignment_id: body.assignment_id, repository_id: 'adjacent-repo', execution_dir: '/srv/work', brief: '/storage/briefs/brief-ready.md', model: 'pi-medium' }, piArgs: ['--mode', 'rpc'], contractDigest: digest, briefBytes: 'bytes' }) };
+    }
+    return { ok: true, json: async () => ({ threads: [threadRecord()], invalid: [] }) };
+  } });
+  setThreadContext(context);
+  vm.runInContext(`threads=${JSON.stringify([threadRecord()])};threadBriefRequestId='33333333-3333-4333-8333-333333333333';threadBriefSavedTitle='Ready';threadBriefSavedContent='Do the work';threadBriefTitle='Ready';threadBriefContent='Do the work';renderThreads()`, context);
+  await vm.runInContext('previewThreadAssignment()', context);
+  assert.equal(previews.length, 1);
+  assert.equal(previews[0].request_id, '33333333-3333-4333-8333-333333333333');
+  assert.equal(previews[0].instructions, 'Do the work');
+  assert.match(previews[0].assignment_id, /^[0-9a-f-]{36}$/);
+  const html = context.document.getElementById('thread-handoff-box').innerHTML;
+  assert.match(html, /Assignment preview/);
+  assert.match(html, /adjacent-repo/);
+  assert.match(html, /pi-medium/);
+  assert.match(html, new RegExp(digest));
+  assert.doesNotMatch(buttonTag(html, 'thread-assignment-launch'), /disabled/);
+  assert.match(context.document.getElementById('thread-announcer').textContent, /Assignment preview ready/);
+});
+
+test('threads UI stale launch keeps the preview and requires a new preview', async () => {
+  const digest = 'b'.repeat(64);
+  const posts = [];
+  const context = dashboardContext({ fetch: async (url, init = {}) => {
+    const path = String(url).split('?')[0];
+    if (path === '/api/thread/launch-assignment') { posts.push(JSON.parse(init.body)); return { ok: false, status: 409, json: async () => ({ error: 'Discussion request conflicts with current state.' }) }; }
+    return { ok: true, json: async () => ({ threads: [threadRecord()], invalid: [] }) };
+  } });
+  setThreadContext(context);
+  vm.runInContext(`threads=${JSON.stringify([threadRecord()])};threadBriefRequestId='44444444-4444-4444-8444-444444444444';threadBriefSavedTitle='Ready';threadBriefSavedContent='Do it';threadBriefTitle='Ready';threadBriefContent='Do it';threadAssignmentId='55555555-5555-4555-8555-555555555555';threadPreview={requestId:'44444444-4444-4444-8444-444444444444',assignmentId:'55555555-5555-4555-8555-555555555555',digest:${JSON.stringify(digest)},record:{assignment_id:'55555555-5555-4555-8555-555555555555',repository_id:'adjacent-repo',execution_dir:'/srv/work',brief:'/storage/briefs/brief-ready.md',model:'pi-medium'},piArgs:[]};threadPreviewStale=false;renderThreads()`, context);
+  await vm.runInContext('launchThreadAssignment()', context);
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].expectedDigest, digest, 'launch binds the preview digest');
+  assert.equal(vm.runInContext('threadPreviewStale', context), true);
+  assert.equal(vm.runInContext('threadPreview && threadPreview.digest', context), digest, 'the reviewed preview stays visible');
+  const html = context.document.getElementById('thread-handoff-box').innerHTML;
+  assert.match(html, new RegExp(digest));
+  assert.match(buttonTag(html, 'thread-assignment-launch'), /disabled/);
+  assert.match(html, /Re-preview required/);
+  assert.match(html, /Preview again before launching/);
+  assert.ok(context.document.getElementById('thread-brief-preview').focusCalls >= 1, 'stale refusal returns focus to the preview control');
+});
+
+test('threads UI launch sends expectedDigest and renders a read-only result card', async () => {
+  const digest = 'c'.repeat(64);
+  const assignmentId = '77777777-7777-4777-8777-777777777777';
+  const posts = [];
+  const context = dashboardContext({ fetch: async (url, init = {}) => {
+    const path = String(url).split('?')[0];
+    if (path === '/api/thread/launch-assignment') {
+      const body = JSON.parse(init.body);
+      posts.push(body);
+      return { ok: true, json: async () => ({ thread: threadRecord(), handoff: { request_id: body.request_id }, assignment: { assignment_id: assignmentId, state: 'live', attention: [], tmux_session: 'adj-1' }, observation: { state: 'live', attention: [] } }) };
+    }
+    if (path === '/api/threads') return { ok: true, json: async () => ({ threads: [threadRecord()], invalid: [] }) };
+    return { ok: false, status: 404, json: async () => ({}) };
+  } });
+  setThreadContext(context);
+  vm.runInContext(`threads=${JSON.stringify([threadRecord()])};threadBriefRequestId='88888888-8888-4888-8888-888888888888';threadBriefSavedTitle='Ship';threadBriefSavedContent='Ship the fix';threadBriefTitle='Ship';threadBriefContent='Ship the fix';threadAssignmentId=${JSON.stringify(assignmentId)};threadPreview={requestId:'88888888-8888-4888-8888-888888888888',assignmentId:${JSON.stringify(assignmentId)},digest:${JSON.stringify(digest)},record:{assignment_id:${JSON.stringify(assignmentId)},repository_id:'adjacent-repo',execution_dir:'/srv/work',brief:'/storage/briefs/brief-ship.md',model:'pi-medium'},piArgs:[]};threadPreviewStale=false;renderThreads()`, context);
+  await vm.runInContext('launchThreadAssignment()', context);
+  await flush();
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].expectedDigest, digest);
+  assert.equal(posts[0].instructions, 'Ship the fix');
+  assert.equal(posts[0].request_id, '88888888-8888-4888-8888-888888888888');
+  assert.equal(context.document.getElementById('thread-announcer').textContent, 'Assignment launched.');
+  const html = context.document.getElementById('thread-handoff-box').innerHTML;
+  assert.match(html, /Assignment result/);
+  assert.match(html, /id="thread-assignment-link"/);
+  assert.match(html, new RegExp(assignmentId));
+  assert.match(html, /id="thread-discuss-result"/);
+  assert.equal(posts.length, 1, 'the result card never auto-fetches or relaunches the assignment');
+});
+
+test('threads UI Discuss result fills the composer without sending or launching', async () => {
+  const calls = [];
+  const context = dashboardContext({ fetch: async (url, init = {}) => {
+    const path = String(url).split('?')[0];
+    calls.push({ path, method: init.method ?? 'GET' });
+    if (path === '/api/threads') return { ok: true, json: async () => ({ threads: [threadRecord({ state: 'active' })], invalid: [] }) };
+    if (path === '/api/thread/history') return { ok: true, json: async () => ({ header: null, entries: [], leaf_id: null, incomplete_tail: false, skipped_lines: 0, truncated: false }) };
+    return { ok: false, status: 503, json: async () => ({}) };
+  } });
+  setThreadContext(context);
+  const assignmentId = '66666666-6666-4666-8666-666666666666';
+  vm.runInContext(`threads=${JSON.stringify([threadRecord({ state: 'active' })])};threadDraft='';threadResult={assignment:{assignment_id:${JSON.stringify(assignmentId)},state:'live',attention:[]},observation:{state:'live',attention:[]}};renderThreads()`, context);
+  vm.runInContext('discussThreadResult()', context);
+  const draft = vm.runInContext('threadDraft', context);
+  assert.match(draft, new RegExp(assignmentId));
+  assert.match(draft, /state live/);
+  assert.equal(context.document.getElementById('thread-draft').value, draft, 'the composer shows the result summary');
+  assert.equal(context.document.activeElement, context.document.getElementById('thread-draft'));
+  assert.match(context.document.getElementById('thread-announcer').textContent, /Nothing is sent/);
+  await flush();
+  assert.equal(calls.filter(call => call.method === 'POST').length, 0, 'Discuss result never dispatches');
+});
+
+test('threads UI saves the brief on Enter and preserves the Shift+Enter newline', async () => {
+  const posts = [];
+  const context = dashboardContext({ fetch: async (url, init = {}) => {
+    const path = String(url).split('?')[0];
+    if (path === '/api/thread/save-brief') { posts.push(JSON.parse(init.body)); return { ok: true, json: async () => ({ thread: threadRecord(), brief: '/storage/briefs/brief.md', handoff: { request_id: JSON.parse(init.body).request_id }, duplicate: false }) }; }
+    if (path === '/api/threads') return { ok: true, json: async () => ({ threads: [threadRecord()], invalid: [] }) };
+    return { ok: false, status: 503, json: async () => ({}) };
+  } });
+  context.setInterval = () => 0;
+  context.clearInterval = () => {};
+  context.EventSource = class { constructor() {} addEventListener() {} close() {} };
+  vm.runInContext(inlineScript().slice(inlineScript().indexOf("$('run-list').addEventListener")), context);
+  setThreadContext(context);
+  vm.runInContext(`threads=${JSON.stringify([threadRecord()])};threadBriefTitle='Keyboard brief';threadBriefContent='line one';renderThreads()`, context);
+  const keydown = context.document.getElementById('run-detail').listeners.keydown[0];
+  let prevented = false;
+  keydown({ target: { id: 'thread-brief-title' }, key: 'Enter', shiftKey: false, preventDefault() { prevented = true; } });
+  await flush();
+  assert.equal(prevented, true, 'Enter in the brief title saves the brief');
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].title, 'Keyboard brief');
+  let shiftPrevented = false;
+  keydown({ target: { id: 'thread-brief-content' }, key: 'Enter', shiftKey: true, preventDefault() { shiftPrevented = true; } });
+  await flush();
+  assert.equal(shiftPrevented, false, 'Shift+Enter keeps the textarea newline');
+  assert.equal(posts.length, 1);
+  // The mocked state poll above fails and would otherwise clear the action-token
+  // gate; this test owns the brief keyboard behavior only.
+  vm.runInContext('error=null', context);
+  keydown({ target: { id: 'thread-brief-content' }, key: 'Enter', shiftKey: false, preventDefault() { prevented = true; } });
+  await flush();
+  assert.equal(posts.length, 2, 'Enter in the brief content saves the brief');
+});
