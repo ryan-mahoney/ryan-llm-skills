@@ -464,7 +464,7 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
   const addPackage = canonical => {
     let fact = facts.get(canonical.packagePath);
     if (!fact) {
-      fact = { ...canonical, sources: new Map(), checkpoints: null, stepIndex: null, stepIndexNotes: [], checkpointNotes: [], checkouts: new Map() };
+      fact = { ...canonical, sources: new Map(), checkpoints: null, stepIndex: null, stepIndexNotes: [], checkpointNotes: [], checkouts: new Map(), tourEvidence: null };
       facts.set(canonical.packagePath, fact);
     }
     return fact;
@@ -848,6 +848,10 @@ async function observeRun(candidate, budget, note, readTime) {
   for (const item of [...incidents, ...actions]) source.push(item.source);
 
   const observed_at = activity.observed ?? validTime(receipt.started_at ?? null) ?? readTime;
+  // Declared work-tour evidence is presentation only: it never changes
+  // completion, lifecycle, lease or condition decisions in this collector.
+  const tour = await readTourEvidence(fact, runBudget, observed_at);
+  if (tour.digest) source.push({ file: tour.file, digest: tour.digest });
   // The recorded checkout is a claim, not an identity: validate its Git common
   // directory read-only against the package repository before asserting it.
   let checkout = null;
@@ -882,6 +886,7 @@ async function observeRun(candidate, budget, note, readTime) {
     spec_progress,
     timing: packageTiming(fact, steps, checkpoints, readTime),
     activity: activity.activity,
+    evidence: tour.evidence,
     incidents: incidents.map(({ source, ...item }) => item),
     actions: actions.map(({ source, ...item }) => item),
     source_paths: source.map(entry => entry.file),
@@ -913,6 +918,48 @@ function packageTiming(fact, index, checkpoints, observedAt) {
     && Date.parse(a.started_at) <= Date.parse(completion)) ? completion : null;
   return { basis: 'first-recorded-dispatch', started_at: starts[0] ?? null,
     finished_at: finished, observed_at: observedAt, attempts };
+}
+
+// Declared artifact evidence is bounded presentation only: a valid verdict
+// names the commit the author declared, never proof of the current checkout,
+// and a missing artifact stays not-assessed rather than failed.
+async function readTourEvidence(fact, budget, observedAt) {
+  if (fact.tourEvidence === null) {
+    const file = join(fact.packagePath, 'work-tour.json');
+    const result = await readJson(file, SENTINEL_LIMITS.smallJsonBytes, budget, {
+      prefix: 'work-tour', within: fact.packagePath,
+      allow: value => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+        if (value.version !== undefined && value.version !== 1 && value.version !== 2) return null;
+        if (value.verdict !== 'ready' && value.verdict !== 'blocked') return null;
+        if (typeof value.commit !== 'string' || !/^[a-f0-9]{40,64}$/.test(value.commit)) return null;
+        return { verdict: value.verdict, commit: value.commit };
+      },
+    });
+    if (result.outcome === 'ok') {
+      fact.tourEvidence = { state: 'recorded', verdict: result.record.verdict, commit: result.record.commit,
+        source: 'work-tour.json', scope: 'declared-artifact', reason: null, digest: result.digest };
+    } else if (result.outcome === 'missing') {
+      fact.tourEvidence = { state: 'not-assessed', verdict: null, commit: null,
+        source: 'work-tour.json', scope: 'declared-artifact', reason: null, digest: null };
+    } else {
+      fact.tourEvidence = { state: 'unavailable', verdict: null, commit: null,
+        source: 'work-tour.json', scope: 'declared-artifact', reason: result.reason ?? 'work-tour-invalid', digest: null };
+    }
+  }
+  return {
+    file: join(fact.packagePath, 'work-tour.json'),
+    digest: fact.tourEvidence.digest,
+    evidence: {
+      state: fact.tourEvidence.state,
+      verdict: fact.tourEvidence.verdict,
+      commit: fact.tourEvidence.commit,
+      source: fact.tourEvidence.source,
+      scope: fact.tourEvidence.scope,
+      observed_at: observedAt,
+      reason: fact.tourEvidence.reason,
+    },
+  };
 }
 
 async function readStepIndex(fact, budget) {

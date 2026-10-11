@@ -825,3 +825,146 @@ test('cold local merge cache stays tied to the fetched base ref',async t=>{
  const options={packages:[pkg],indexDir:f.indexDir,now};assert.equal((await collectWorkspace(options)).recently_completed.length,1);
  git('update-ref','refs/remotes/origin/main',head);const rewound=await collectWorkspace(options);assert.equal(rewound.recently_completed.length,0);assert.equal(rewound.runs.length,1);assert.equal(rewound.runs[0].merge.reason,'merge-evidence-unavailable');
 });
+
+// Run independently: node --test --test-name-pattern='declared tour evidence' scripts/spec-observe/sentinel.test.mjs
+test('declared tour evidence records a ready verdict at the declared old commit with explicit scope', async t => {
+  const f = sandbox(t);
+  const repo = primary(f.dir, 'tour-recorded');
+  const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim();
+  const oldCommit = git('rev-parse', 'HEAD');
+  writeFileSync(join(repo, 'next'), 'next\n');
+  git('add', 'next');
+  git('commit', '-qm', 'Advance fixture');
+  assert.notEqual(git('rev-parse', 'HEAD'), oldCommit, 'the declared commit is older than current HEAD');
+  const packagePath = pack(repo);
+  writeFileSync(join(packagePath, 'work-tour.json'), JSON.stringify({ verdict: 'ready', commit: oldCommit }));
+  receipt(packagePath, { id: 'run-tour', assignment_id: 'assign-tour', state: 'running', started_at: ago(60000) });
+
+  const snapshot = await collectWorkspace({ roots: [repo], indexDir: f.indexDir, now });
+  const run = snapshot.runs.find(item => item.assignment_id === 'assign-tour');
+  assert.ok(run);
+  assert.deepEqual(run.evidence, {
+    state: 'recorded', verdict: 'ready', commit: oldCommit, source: 'work-tour.json',
+    scope: 'declared-artifact', observed_at: run.observed_at, reason: null,
+  });
+  assert.equal(run.execution, 'running');
+  assert.ok(run.source_paths.includes(join(packagePath, 'work-tour.json')), 'recorded evidence retains its source');
+  assert.equal(run.source_hashes.length, run.source_paths.length);
+  assert.deepEqual(snapshot.recently_completed, [], 'declared evidence alone is not completion');
+});
+
+test('declared tour evidence stays not-assessed when the package has no work-tour artifact', async t => {
+  const f = sandbox(t);
+  const repo = primary(f.dir, 'tour-missing');
+  const packagePath = pack(repo);
+  receipt(packagePath, { id: 'run-none', assignment_id: 'assign-none', state: 'running', started_at: ago(60000) });
+  const snapshot = await collectWorkspace({ roots: [repo], indexDir: f.indexDir, now });
+  const run = snapshot.runs.find(item => item.assignment_id === 'assign-none');
+  assert.deepEqual(run.evidence, { state: 'not-assessed', verdict: null, commit: null,
+    source: 'work-tour.json', scope: 'declared-artifact', observed_at: run.observed_at, reason: null });
+  assert.equal(run.coverage.state, 'complete', 'an absent declared artifact is not a coverage gap');
+});
+
+test('declared tour evidence stays not-assessed under manual completion and never implies acceptance', async t => {
+  const f = sandbox(t);
+  const repo = primary(f.dir, 'tour-manual');
+  const packagePath = pack(repo);
+  receipt(packagePath, { id: 'run-manual', assignment_id: 'assign-manual', state: 'running', started_at: ago(60000) });
+  writeFileSync(join(packagePath, 'sentinel-completion.json'), JSON.stringify({ schema_version: 2,
+    kind: 'manual_completion', package: packagePath, completed_at: ago(1000) }));
+  const input = { roots: [repo], indexDir: f.indexDir, now };
+
+  const hidden = await collectWorkspace(input);
+  assert.deepEqual(hidden.runs, []);
+  assert.equal(hidden.recently_completed.length, 1);
+  assert.equal(hidden.recently_completed[0].completion_basis, 'manual');
+  assert.equal(hidden.recently_completed[0].evidence.state, 'not-assessed');
+  assert.equal(hidden.recently_completed[0].evidence.verdict, null);
+
+  const visible = await collectWorkspace({ ...input, includeInactive: true });
+  const run = visible.runs.find(item => item.assignment_id === 'assign-manual');
+  assert.equal(run.execution, 'running');
+  assert.equal(run.evidence.state, 'not-assessed', 'manual completion never invents declared evidence');
+});
+
+test('declared tour evidence does not derive lifecycle from a terminal worker receipt', async t => {
+  const f = sandbox(t);
+  const repo = primary(f.dir, 'tour-terminal');
+  const packagePath = pack(repo);
+  receipt(packagePath, { id: 'run-done', assignment_id: 'assign-done', state: 'completed',
+    started_at: ago(60000), finished_at: ago(30000) });
+  const snapshot = await collectWorkspace({ roots: [repo], indexDir: f.indexDir, now });
+  const run = snapshot.runs.find(item => item.assignment_id === 'assign-done');
+  assert.equal(run.execution, 'completed');
+  assert.equal(run.evidence.state, 'not-assessed');
+  assert.equal(run.coverage.state, 'complete');
+  assert.deepEqual(snapshot.recently_completed, [], 'a worker receipt is not workflow completion');
+});
+
+test('declared tour evidence reports malformed and symlinked artifacts as unavailable', async t => {
+  const f = sandbox(t);
+  const repo = primary(f.dir, 'tour-invalid');
+  const packagePath = pack(repo);
+  receipt(packagePath, { id: 'run-bad', assignment_id: 'assign-bad', state: 'running', started_at: ago(60000) });
+  const file = join(packagePath, 'work-tour.json');
+  const input = { roots: [repo], indexDir: f.indexDir, now };
+
+  writeFileSync(file, JSON.stringify({ version: 1, verdict: 'ready' }));
+  const missingCommit = (await collectWorkspace(input)).runs.find(item => item.assignment_id === 'assign-bad');
+  assert.equal(missingCommit.evidence.state, 'unavailable');
+  assert.equal(missingCommit.evidence.reason, `work-tour-invalid: ${file}`);
+
+  writeFileSync(file, '{not json');
+  const broken = (await collectWorkspace(input)).runs.find(item => item.assignment_id === 'assign-bad');
+  assert.equal(broken.evidence.state, 'unavailable');
+  assert.match(broken.evidence.reason, /work-tour-invalid/);
+
+  rmSync(file);
+  writeFileSync(join(packagePath, 'tour-target.json'), JSON.stringify({ version: 2, verdict: 'blocked', commit: 'a'.repeat(40) }));
+  symlinkSync(join(packagePath, 'tour-target.json'), file);
+  const linked = (await collectWorkspace(input)).runs.find(item => item.assignment_id === 'assign-bad');
+  assert.equal(linked.evidence.state, 'unavailable');
+  assert.match(linked.evidence.reason, /source-not-regular/);
+});
+
+test('declared tour evidence reports an oversized artifact as unavailable without touching completion', async t => {
+  const f = sandbox(t);
+  const repo = primary(f.dir, 'tour-oversized');
+  const packagePath = pack(repo);
+  receipt(packagePath, { id: 'run-fat', assignment_id: 'assign-fat', state: 'running', started_at: ago(60000) });
+  const file = join(packagePath, 'work-tour.json');
+  writeFileSync(file, JSON.stringify({ version: 1, verdict: 'ready', commit: 'a'.repeat(40),
+    padding: 'x'.repeat(SENTINEL_LIMITS.smallJsonBytes) }));
+  const snapshot = await collectWorkspace({ roots: [repo], indexDir: f.indexDir, now });
+  const run = snapshot.runs.find(item => item.assignment_id === 'assign-fat');
+  assert.equal(run.evidence.state, 'unavailable');
+  assert.equal(run.evidence.reason, `work-tour-oversized: ${file}`);
+  assert.equal(snapshot.coverage.state, 'complete');
+  assert.deepEqual(snapshot.recently_completed, []);
+});
+
+test('declared tour evidence leaves ready-pr completion and recent lifecycle rules unchanged', async t => {
+  const f = sandbox(t);
+  const repo = primary(f.dir, 'tour-completion');
+  const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim();
+  const commit = git('rev-parse', 'HEAD');
+  writeFileSync(join(repo, 'next'), 'next\n');
+  git('add', 'next');
+  git('commit', '-qm', 'Advance fixture');
+  const packagePath = pack(repo);
+  writeFileSync(join(packagePath, 'work-tour.json'), JSON.stringify({ version: 2, verdict: 'ready', commit }));
+  writeFileSync(join(packagePath, 'pr-url.json'), JSON.stringify({ kind: 'pr_submission', package: packagePath,
+    url: 'https://github.com/o/r/pull/9', commit, submitted_at: ago(1000) }));
+  receipt(packagePath, { id: 'run-published', assignment_id: 'assign-published', state: 'completed', started_at: ago(60000) });
+
+  const snapshot = await collectWorkspace({ roots: [repo], indexDir: f.indexDir, now });
+  assert.deepEqual(snapshot.runs, [], 'ready publication still leaves monitoring');
+  assert.equal(snapshot.activity_filter.hidden_completed_packages, 1);
+  assert.equal(snapshot.recently_completed.length, 1);
+  assert.equal(snapshot.recently_completed[0].completion_basis, 'ready-pr');
+  assert.equal(snapshot.recently_completed[0].evidence.state, 'recorded');
+  assert.equal(snapshot.recently_completed[0].evidence.verdict, 'ready');
+  assert.equal(snapshot.recently_completed[0].evidence.commit, commit);
+  assert.equal(snapshot.recently_completed[0].evidence.scope, 'declared-artifact');
+  assert.equal(snapshot.recently_completed[0].execution, 'completed');
+});
