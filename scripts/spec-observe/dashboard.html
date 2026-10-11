@@ -588,7 +588,8 @@ function threadResultHtml(){
  const state=str(assignment.state||observation.state||'unknown'),live=state==='live';
  const attention=[...(Array.isArray(assignment.attention)?assignment.attention:[]),...(Array.isArray(observation.attention)?observation.attention:[])].filter(Boolean);
  const id=str(assignment.assignment_id||'');
- return `<div class="thread-result" id="thread-result"><div class="section-head"><h6>Assignment result</h6><span class="pill ${live?'good':'warn'}">${esc(live?'Live':'Not confirmed live')}</span></div><p class="small">Assignment <a id="thread-assignment-link" class="mono" href="#thread-assignment-${esc(id)}">${esc(id)}</a> is recorded read-only; this page never fetches it automatically.</p><p class="small muted">State: ${esc(state)}${typeof assignment.tmux_session==='string'?` · tmux session ${esc(assignment.tmux_session)}`:''}</p>${attention.length?`<p class="small warn">Attention: ${esc(attention.join(', '))}</p>`:''}<div class="thread-actions"><button id="thread-discuss-result" data-thread-discuss>Discuss result</button></div><p class="small muted">Discuss result only fills the composer. Review the text, then press Send; nothing is sent or launched automatically.</p></div>`;
+ const anchor=`thread-assignment-${id}`;
+ return `<div class="thread-result" id="thread-result"><div class="section-head"><h6>Assignment result</h6><span class="pill ${live?'good':'warn'}">${esc(live?'Live':'Not confirmed live')}</span></div><p class="small">Assignment <a id="thread-assignment-link" class="mono" href="#${esc(anchor)}">${esc(id)}</a> is recorded read-only; this page never fetches it automatically.</p><div id="${esc(anchor)}"><p class="small muted">State: ${esc(state)}${typeof assignment.tmux_session==='string'?` · tmux session ${esc(assignment.tmux_session)}`:''}</p>${attention.length?`<p class="small warn">Attention: ${esc(attention.join(', '))}</p>`:''}</div><div class="thread-actions"><button id="thread-discuss-result" data-thread-discuss>Discuss result</button></div><p class="small muted">Discuss result only fills the composer. Review the text, then press Send; nothing is sent or launched automatically.</p></div>`;
 }
 async function saveThreadBrief(){
  if(!threadsActionable()){threadHandoffError="Brief controls require the host's local dashboard.";renderThreadHandoff();return;}
@@ -597,11 +598,13 @@ async function saveThreadBrief(){
  const signature=briefSignature(threadBriefTitle,threadBriefContent);
  if(!threadBriefPendingId||threadBriefDraft!==signature){threadBriefPendingId=uuid();threadBriefDraft=signature;}
  const requestId=threadBriefPendingId,generation=threadGeneration,threadId=selectedThread,workspaceId=selectedWorkspace;
+ const submittedTitle=threadBriefTitle;
  try{
   const data=await threadAction('/api/thread/save-brief',{workspace_id:workspaceId,thread_id:threadId,request_id:requestId,title,content},'brief');
   if(generation!==threadGeneration||selectedThread!==threadId||selectedWorkspace!==workspaceId)return;
   threadBriefRequestId=requestId;threadBriefPendingId=null;threadBriefDraft=null;
   threadBriefSavedTitle=title;threadBriefSavedContent=content;
+  if(threadBriefTitle===submittedTitle)threadBriefTitle=title;
   threadPreview=null;threadPreviewStale=false;threadResult=null;threadHandoffError=null;threadAssignmentId=null;
   announceThread(data.duplicate?'Brief was already saved with this request.':'Brief saved. Preview the assignment before launching.');
   loadThreads();renderThreadHandoff();renderThreadHead();renderThreadControls();

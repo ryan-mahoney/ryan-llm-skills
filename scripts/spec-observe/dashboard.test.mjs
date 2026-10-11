@@ -1685,6 +1685,84 @@ test('threads UI launch sends expectedDigest and renders a read-only result card
   assert.equal(posts.length, 1, 'the result card never auto-fetches or relaunches the assignment');
 });
 
+test('threads UI assignment link reaches the read-only result detail without dispatching', async () => {
+  const calls = [];
+  const context = dashboardContext({ fetch: async (url, init = {}) => {
+    const path = String(url).split('?')[0];
+    calls.push({ path, method: init.method ?? 'GET' });
+    if (path === '/api/threads') return { ok: true, json: async () => ({ threads: [threadRecord()], invalid: [] }) };
+    if (path === '/api/thread/history') return { ok: true, json: async () => ({ header: null, entries: [], leaf_id: null, incomplete_tail: false, skipped_lines: 0, truncated: false }) };
+    return { ok: false, status: 503, json: async () => ({}) };
+  } });
+  context.setInterval = () => 0;
+  context.clearInterval = () => {};
+  context.EventSource = class { constructor() {} addEventListener() {} close() {} };
+  setThreadContext(context);
+  const assignmentId = '99999999-9999-4999-8999-999999999999';
+  vm.runInContext(`threads=${JSON.stringify([threadRecord()])};threadResult={assignment:{assignment_id:${JSON.stringify(assignmentId)},state:'live',attention:[],tmux_session:'adj-9'},observation:{state:'live',attention:[]}};renderThreads()`, context);
+  const html = threadsBody(context);
+  const href = html.match(/id="thread-assignment-link"[^>]*href="([^"]+)"/)?.[1] ?? html.match(/href="([^"]+)"[^>]*id="thread-assignment-link"/)?.[1];
+  assert.equal(href, `#thread-assignment-${assignmentId}`, 'the link fragment names the assignment destination');
+  assert.ok(html.includes(`id="thread-assignment-${assignmentId}"`), 'the result card renders the matching destination anchor');
+  assert.match(html, /State: live/);
+  assert.match(html, /tmux session adj-9/);
+  vm.runInContext(inlineScript().slice(inlineScript().indexOf("$('run-list').addEventListener")), context);
+  const clicks = context.document.getElementById('run-detail').listeners.click;
+  assert.ok(clicks.length >= 2, 'the thread action click handler is attached');
+  const click = clicks[1];
+  assert.equal(typeof click, 'function');
+  await flush();
+  calls.length = 0;
+  click({ target: { id: 'thread-assignment-link', closest: () => null } });
+  await flush();
+  assert.equal(calls.filter(call => call.method === 'POST').length, 0, 'following the assignment link launches and sends nothing');
+  assert.equal(calls.filter(call => String(call.path).startsWith('/api/thread')).length, 0, 'following the assignment link fetches nothing');
+});
+
+test('threads UI whitespace-surrounded brief title saves trimmed and keeps Preview enabled', async () => {
+  const posts = [];
+  const context = dashboardContext({ fetch: async (url, init = {}) => {
+    const path = String(url).split('?')[0];
+    if (path === '/api/thread/save-brief') { posts.push(JSON.parse(init.body)); return { ok: true, json: async () => ({ thread: threadRecord(), brief: '/storage/briefs/brief.md', handoff: { request_id: JSON.parse(init.body).request_id }, duplicate: false }) }; }
+    if (path === '/api/threads') return { ok: true, json: async () => ({ threads: [threadRecord()], invalid: [] }) };
+    return { ok: false, status: 404, json: async () => ({}) };
+  } });
+  setThreadContext(context);
+  vm.runInContext(`threads=${JSON.stringify([threadRecord()])};threadBriefTitle='  Padded Title  ';threadBriefContent='Body text';renderThreads()`, context);
+  await vm.runInContext('saveThreadBrief()', context);
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].title, 'Padded Title');
+  assert.equal(vm.runInContext('threadBriefTitle', context), 'Padded Title', 'the editor normalizes to the saved title when untouched mid-request');
+  assert.equal(vm.runInContext('threadBriefSavedTitle', context), 'Padded Title');
+  const html = context.document.getElementById('thread-handoff-box').innerHTML;
+  assert.doesNotMatch(buttonTag(html, 'thread-brief-preview'), /disabled/, 'Preview stays enabled after a whitespace-surrounded save');
+  assert.doesNotMatch(html, /unsaved changes/);
+});
+
+test('threads UI brief edits made during the save request are preserved', async () => {
+  let release;
+  const posts = [];
+  const context = dashboardContext({ fetch: async (url, init = {}) => {
+    const path = String(url).split('?')[0];
+    if (path === '/api/thread/save-brief') { posts.push(JSON.parse(init.body)); return new Promise(resolve => { release = resolve; }); }
+    if (path === '/api/threads') return { ok: true, json: async () => ({ threads: [threadRecord()], invalid: [] }) };
+    return { ok: false, status: 404, json: async () => ({}) };
+  } });
+  setThreadContext(context);
+  vm.runInContext(`threads=${JSON.stringify([threadRecord()])};threadBriefTitle='  Submitted Title  ';threadBriefContent='Body text';renderThreads()`, context);
+  const pending = vm.runInContext('saveThreadBrief()', context);
+  await flush();
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].title, 'Submitted Title');
+  vm.runInContext(`threadBriefTitle='Edited mid-flight';renderThreadHandoff()`, context);
+  release({ ok: true, json: async () => ({ thread: threadRecord(), brief: '/storage/briefs/brief.md', handoff: { request_id: posts[0].request_id }, duplicate: false }) });
+  await pending;
+  assert.equal(vm.runInContext('threadBriefSavedTitle', context), 'Submitted Title');
+  assert.equal(vm.runInContext('threadBriefTitle', context), 'Edited mid-flight', 'mid-request edits survive the save');
+  const html = context.document.getElementById('thread-handoff-box').innerHTML;
+  assert.match(buttonTag(html, 'thread-brief-preview'), /disabled/, 'the newer edit correctly reads as unsaved');
+});
+
 test('threads UI Discuss result fills the composer without sending or launching', async () => {
   const calls = [];
   const context = dashboardContext({ fetch: async (url, init = {}) => {
