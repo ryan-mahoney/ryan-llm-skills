@@ -13,8 +13,11 @@ export const STATES = ['ideal', 'empty', 'loading', 'error', 'partial', 'denied'
 
 const optionalString = value => value === undefined || typeof value === 'string';
 const nonEmpty = value => typeof value === 'string' && value.trim() !== '';
+const isRepoRelative = value => nonEmpty(value) && !value.startsWith('/') && !value.split('/').includes('..');
 export const screenFile = (step, id) => `screens/${String(step).padStart(2, '0')}-${id}.html`;
 export const captureFile = (step, id, width) => `captures/${String(step).padStart(2, '0')}-${id}@${width}.png`;
+
+const designSystem = ds => !ds ? null : ds.repository !== undefined ? { repository: ds.repository, paths: [...ds.paths] } : { path: ds.path, tokens: ds.tokens ?? null };
 
 // Validates one index against its directory slug. Returns { design } with the
 // allowlisted fields or { error } naming the first violation.
@@ -28,7 +31,11 @@ export function parseDesign(record, { slug } = {}) {
   if (![record.brief, record.created_at, record.note].every(optionalString)) return fail('brief, created_at and note must be strings');
   if (record.design_system !== undefined) {
     const ds = record.design_system;
-    if (!ds || typeof ds !== 'object' || !nonEmpty(ds.path) || !optionalString(ds.tokens)) return fail('design_system needs a path string');
+    if (!ds || typeof ds !== 'object') return fail('design_system must be an object');
+    // New form {repository, paths} matches the kit; legacy {path, tokens} holds absolute paths.
+    if (ds.repository !== undefined) {
+      if (!nonEmpty(ds.repository) || !Array.isArray(ds.paths) || !ds.paths.length || !ds.paths.every(isRepoRelative)) return fail('design_system needs a repository id and a non-empty list of repository-relative paths');
+    } else if (!nonEmpty(ds.path) || !optionalString(ds.tokens)) return fail('design_system needs a repository and paths');
   }
   const viewport = record.viewport;
   if (!viewport || typeof viewport !== 'object' || !POSTURES.includes(viewport.posture)) return fail('viewport.posture is not desktop-only or responsive');
@@ -73,7 +80,7 @@ export function parseDesign(record, { slug } = {}) {
     }
   }
   return { design: { design: record.design, title: record.title, brief: record.brief ?? null, created_at: record.created_at ?? null,
-    note: record.note ?? null, design_system: record.design_system ? { path: record.design_system.path, tokens: record.design_system.tokens ?? null } : null,
+    note: record.note ?? null, design_system: designSystem(record.design_system),
     viewport: { posture: viewport.posture, widths: [...viewport.widths] }, context: record.context ?? [], screens, deviations } };
 }
 

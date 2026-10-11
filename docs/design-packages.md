@@ -25,7 +25,7 @@ the screens, capture, review). The rule that governs the content of every screen
 The storage root resolves as the workspace CLI resolves it: `--root`, then
 `ADJACENT_STORAGE_ROOT`, then `~/Documents/adjacent-storage`. The workspace must exist
 (`node scripts/workspaces/cli.mjs show <id>`); its `kit.yaml` names the repositories the
-design is for and, under the supplemental `design_system` key, the design system to mirror.
+design is for and, under its `design_system` key, the design system to mirror.
 Design skills write only inside `designs/<slug>/`.
 
 The `agent-tooling` workspace uses the [design system](../design-system/README.md)
@@ -65,8 +65,8 @@ design system's tokens in an inline `tailwind.config`.
   "title": "Route ladder overview for planners",
   "brief": "brief.md",
   "created_at": "2026-10-11",
-  "design_system": { "path": "/abs/transitops.co/transitops-cms/public/design-system/index.html",
-                     "tokens": "/abs/transitops.co/transitops-cms/app/design-system.css" },
+  "design_system": { "repository": "transitops-cms",
+                     "paths": ["public/design-system/index.html", "app/design-system.css"] },
   "viewport": { "posture": "desktop-only", "widths": [1280] },
   "context": ["context/project.txt", "sources/gtfs-planner/README.md"],
   "screens": [
@@ -91,7 +91,7 @@ design system's tokens in an inline `tailwind.config`.
 | `design` | yes | Slug `^[a-z][a-z0-9-]{0,47}$`, equal to the directory name. |
 | `title` | yes | One line. |
 | `brief`, `created_at`, `note` | no | Brief path relative to the design directory; ISO date; free text. |
-| `design_system` | no | `path` (entry document) and optional `tokens` (config or CSS). Absolute paths. |
+| `design_system` | no | `repository` (a kit repository id) and `paths` (repository-relative; entry document first, then tokens as config or CSS). Same shape as the kit's `design_system`, so the file moves between machines. `node scripts/design/cli.mjs system <dir>` resolves the absolute paths through the kit. The legacy form `{path, tokens}` with absolute paths is still read. |
 | `viewport.posture` | yes | `desktop-only` or `responsive`. Declared before any screen is built. |
 | `viewport.widths` | yes | One to four distinct integers, 320 to 3840. `responsive` needs at least two. Every width is captured. |
 | `context` | no | Paths of the inputs the plan was derived from, relative to the workspace. |

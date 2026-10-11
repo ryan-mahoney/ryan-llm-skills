@@ -33,7 +33,8 @@ output.
 
 ## Step 0 — Preflight
 
-1. Read `design.json`, `brief.md`, the design-system documents and token source it names,
+1. Read `design.json`, `brief.md`, the design-system documents and token source it names (absolute paths from
+   `node ~/.agents/scripts/design/cli.mjs system <design-dir>`),
    the posture rule the brief chose, [prototype-design.md](../../rules/prototype-design.md),
    [ux-states.md](../../rules/ux-states.md), and the wording rules that apply
    ([cta-design.md](../../rules/cta-design.md), [form-design.md](../../rules/form-design.md),

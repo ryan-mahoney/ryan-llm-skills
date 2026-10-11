@@ -1639,8 +1639,10 @@ export async function repositoryReferences(root, id, repositoryId) {
   const designs = [];
   for (const entry of await fs.readdir(join(directory, "designs")).catch(() => [])) {
     const { record } = (await jsonRecords(join(directory, "designs", entry))).find(({ name }) => name === "design.json") ?? {};
-    const files = [record?.design_system?.path, record?.design_system?.tokens];
-    if (checkout !== null && files.some((file) => typeof file === "string" && insideRoot(checkout, file))) {
+    const system = record?.design_system;
+    const files = [system?.path, system?.tokens];
+    if (system?.repository === repositoryId
+      || (checkout !== null && files.some((file) => typeof file === "string" && insideRoot(checkout, file)))) {
       designs.push(entry);
     }
   }

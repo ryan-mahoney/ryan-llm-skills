@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 
 import { parseDesign, lintScreen, screenStatus, DESIGN_LIMITS } from './schema.mjs';
-import { lintDesign, referenceLine, vendorTailwind, TAILWIND } from './cli.mjs';
+import { lintDesign, referenceLine, resolveDesignSystem, vendorTailwind, TAILWIND } from './cli.mjs';
 
 const record = (extra = {}) => ({ schema_version: 1, design: 'demo', title: 'Demo', viewport: { posture: 'desktop-only', widths: [1280] },
   screens: [
@@ -24,6 +24,28 @@ test('parseDesign accepts a valid index, derives file names and keeps allowliste
   assert.equal(design.screens[1].shell_from, 1);
   assert.equal(design.deviations.length, 1);
   assert.equal('extra' in design, false);
+});
+
+test('parseDesign accepts the kit-shaped design_system and the legacy absolute form, and rejects malformed ones', () => {
+  const parse = design_system => parseDesign(record({ design_system }), { slug: 'demo' });
+  assert.deepEqual(parse({ repository: 'cms', paths: ['public/design-system/index.html', 'app/design-system.css'] }).design.design_system,
+    { repository: 'cms', paths: ['public/design-system/index.html', 'app/design-system.css'] });
+  assert.deepEqual(parse({ path: '/abs/index.html', tokens: '/abs/tokens.css' }).design.design_system, { path: '/abs/index.html', tokens: '/abs/tokens.css' });
+  for (const bad of [{ repository: 'cms', paths: [] }, { repository: 'cms' }, { repository: 'cms', paths: ['/etc/passwd'] }, { repository: 'cms', paths: ['../x'] }, { paths: ['a'] }]) {
+    assert.match(parse(bad).error ?? '', /design_system/);
+  }
+});
+
+test('resolveDesignSystem resolves paths through the workspace kit and rejects an unknown repository', async t => {
+  const root = fixture(t), workspace = join(root, 'transit'), dir = join(workspace, 'designs', 'demo');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(workspace, 'kit.yaml'), 'version: 1\nid: transit\nname: Transit\nrepositories:\n  - id: cms\n    path: /abs/cms\n    role: primary\n');
+  writeFileSync(join(dir, 'design.json'), JSON.stringify(record({ design_system: { repository: 'cms', paths: ['public/index.html'] } })));
+  assert.deepEqual(await resolveDesignSystem(dir), { repository: 'cms', paths: ['/abs/cms/public/index.html'] });
+  writeFileSync(join(dir, 'design.json'), JSON.stringify(record({ design_system: { repository: 'other', paths: ['x'] } })));
+  await assert.rejects(resolveDesignSystem(dir), /not in the workspace kit/);
+  writeFileSync(join(dir, 'design.json'), JSON.stringify(record({ design_system: { path: '/abs/i.html', tokens: '/abs/t.css' } })));
+  assert.deepEqual(await resolveDesignSystem(dir), { repository: null, paths: ['/abs/i.html', '/abs/t.css'] });
 });
 
 test('parseDesign rejects each invalid class with a short reason', () => {

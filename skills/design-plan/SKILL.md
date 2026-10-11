@@ -27,7 +27,7 @@ Contract: [Design packages](../../docs/design-packages.md). Content rule for eve
 - `design-slug` — `^[a-z][a-z0-9-]{0,47}$`; becomes `designs/<slug>/`. Refuse a slug whose folder already holds a `design.json`; use `design-run` to continue an existing design.
 - `context-path...` — one or more files or folders: research, notes, briefs, feature lists, journey pages, screenshots, existing UI. Workspace-relative paths resolve against the workspace directory; absolute paths are read as given.
 - `--posture` — `desktop-only` or `responsive`. When absent, decide from the context and declare the decision as an assumption.
-- `--design-system PATH` — overrides the kit's `design_system` entry. Without either, report `outcome: blocked`, `reason: missing-design-system`.
+- `--design-system PATH` — overrides the kit's `design_system` entry; it must lie inside a kit repository and is recorded as that repository id plus the relative path. Without either, report `outcome: blocked`, `reason: missing-design-system`.
 
 ## Non-interactive operation
 
@@ -40,10 +40,12 @@ and convert every gap into a declared assumption in `brief.md`.
 1. Resolve the storage root as the workspace CLI does (`--root`, `ADJACENT_STORAGE_ROOT`,
    then `~/Documents/adjacent-storage`). Run `show <id> --json`; stop with
    `outcome: blocked`, `reason: workspace-unavailable` when the id is not a valid workspace.
-2. Read `kit.yaml`. Note the repositories and their roles. Read the `design_system` key:
-   `repository` plus `paths`, resolved against that repository's path. Read every listed
-   design-system document and the token source (Tailwind config or CSS variables). Record
-   the absolute entry path and token path for `design.json`.
+2. From the `show <id> --json` result, note the kit's repositories and their roles and read
+   its `design_system` (`repository` plus `paths`, relative to that repository's checkout).
+   Resolve each path against the repository's absolute `path` in the same result. Read every
+   listed design-system document and the token source (Tailwind config or CSS variables).
+   Record `repository` and the repository-relative `paths` for `design.json`; never an
+   absolute path.
 3. The design directory is `<workspace-dir>/designs/<slug>/`. Create it; write nothing
    outside it.
 
@@ -137,7 +139,7 @@ Write both files atomically (temporary file in the design directory, then rename
 
 Per the index schema in [design-packages.md](../../docs/design-packages.md): `schema_version`
 1, `design` equal to the slug, `title`, `brief: "brief.md"`, `created_at`, `design_system`
-with absolute paths, `viewport`, `context` (workspace-relative where possible), `screens` in
+as `{repository, paths}` (repository-relative, copied from the kit), `viewport`, `context` (workspace-relative where possible), `screens` in
 step order with `step` running 1..N, and any `deviations`. Omit `file`; the schema derives
 it.
 

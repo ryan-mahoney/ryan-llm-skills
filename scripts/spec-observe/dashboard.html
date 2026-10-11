@@ -467,7 +467,7 @@ function renderDesigns(){
  const body=$('designs-body');if(!body)return;
  if(designsError){body.innerHTML=`<p class="warn">${esc(designsError)}</p>`;return;}
  if(!designs){body.innerHTML='<p class="small muted">Loading designs…</p>';return;}
- const rows=(designs.designs||[]).map(d=>`<div class="info-row"><p><button data-design="${esc(d.slug)}" aria-pressed="${designView?.slug===d.slug}">${esc(d.title)}</button> <span class="pill muted">${esc(d.viewport.posture)}</span></p><small>${d.summary.produced}/${d.summary.total} screens produced · ${d.summary.captured} captured${d.design_system?` · <span class="mono">${esc(base(d.design_system.path))}</span>`:''}</small></div>`).join('');
+ const rows=(designs.designs||[]).map(d=>`<div class="info-row"><p><button data-design="${esc(d.slug)}" aria-pressed="${designView?.slug===d.slug}">${esc(d.title)}</button> <span class="pill muted">${esc(d.viewport.posture)}</span></p><small>${d.summary.produced}/${d.summary.total} screens produced · ${d.summary.captured} captured${d.design_system?` · <span class="mono">${esc(d.design_system.repository?`${d.design_system.repository}: ${(d.design_system.paths||[])[0]||""}`:base(d.design_system.path))}</span>`:''}</small></div>`).join('');
  const errors=(designs.errors||[]).map(e=>`<p class="warn">${esc(e.name)}: ${esc(e.message)}</p>`).join('');
  body.innerHTML=(rows||`<p class="small muted">${esc('No designs recorded. design-plan writes designs/<slug>/design.json; see docs/design-packages.md.')}</p>`)+errors;
 }
