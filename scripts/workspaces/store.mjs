@@ -12,6 +12,7 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { formatScalar, parseKit } from "./kit.mjs";
 import { resolveCheckout } from "../repo-search/identity.mjs";
 
@@ -1179,4 +1180,173 @@ export async function addArtifact(root, id, options = {}) {
   const name = `${record.artifact_id}.json`;
   await createFileExclusive(join(directory, name), JSON.stringify(record));
   return { record, path: `artifacts/${name}` };
+}
+
+// Exclusive kit replacement. The operator exclusion window covers the
+// compare-to-rename gap: the step-10 CLI prints plan.hunk before this call and
+// the operator does not edit kit.yaml while the apply runs. Ancestor
+// directories are assumed stable during the call. There is no directory fsync
+// and no power-loss durability claim.
+
+async function requireRegularKit(kitPath) {
+  const lookup = await storageLstat(kitPath);
+  if (lookup.permission) throw new Error(`kit.yaml is not readable: ${kitPath}`);
+  if (lookup.info === null) throw new Error(`kit.yaml does not exist: ${kitPath}`);
+  if (lookup.info.isSymbolicLink()) throw new Error(`kit.yaml must not be a symlink: ${kitPath}`);
+  if (!lookup.info.isFile()) throw new Error(`kit.yaml is not a regular file: ${kitPath}`);
+  const physical = await fs.realpath(kitPath);
+  if (physical !== resolve(kitPath)) {
+    throw new Error(`kit.yaml path contains a symbolic link: ${kitPath}`);
+  }
+  return physical;
+}
+
+async function assertRepositoryTopLevel(repositoryPath) {
+  if (!isAbsolute(repositoryPath)) {
+    throw new Error(`repository path must be absolute: ${String(repositoryPath)}`);
+  }
+  const physical = await existingRealDirectory(repositoryPath, "repository path");
+  if (physical === null) throw new Error(`repository path does not exist: ${repositoryPath}`);
+  let identity;
+  try {
+    identity = await resolveCheckout(physical, { deadline: Date.now() + WORKSPACE_GIT_TIMEOUT_MS });
+  } catch {
+    throw new Error(`repository path is not a Git work tree: ${repositoryPath}`);
+  }
+  if (identity.root !== physical) {
+    throw new Error(`repository path is not a Git top level: ${repositoryPath}`);
+  }
+  return physical;
+}
+
+function requirePlan(plan) {
+  if (plan === null || typeof plan !== "object" || Array.isArray(plan)) {
+    throw new TypeError("plan must be an object");
+  }
+  const { before, after, expected } = plan;
+  if (typeof before !== "string" || typeof after !== "string") {
+    throw new TypeError("plan before and after must be strings");
+  }
+  if (expected === null || typeof expected !== "object" || Array.isArray(expected)) {
+    throw new TypeError("plan expected must be a kit object");
+  }
+  return { before, after, expected };
+}
+
+/**
+ * Apply a previewed kit replacement as an exclusive filesystem transaction.
+ *
+ * Order: validate the plan and compare the actual original bytes; publish a
+ * unique `kit.yaml.prev-<UTC ISO>-<UUID>` copy of the original bytes before
+ * acquiring `kit.yaml.lock` (`wx`); after acquisition re-resolve the regular
+ * kit, re-read and byte-compare immediately before the atomic replacement. A
+ * held lock refuses without touching it; a completed prior copy may remain.
+ * Errors after the backup carry `error.backup` for operator recovery. Only the
+ * owning lock is closed and unlinked; prior copies are never deleted here.
+ * This library does not print; the CLI prints plan.hunk before calling.
+ *
+ * @param {string} root
+ * @param {string} id
+ * @param {{before: string, after: string, expected: object}} plan
+ * @returns {Promise<{path: string, backup: string}>}
+ */
+export async function applyKitEdit(root, id, plan) {
+  if (typeof root !== "string" || root === "") throw new TypeError("root must be a non-empty string");
+  if (typeof id !== "string" || id === "") throw new TypeError("id must be a non-empty string");
+  const { before, after, expected } = requirePlan(plan);
+
+  const parsedBefore = parseKit(before);
+  if (!parsedBefore.ok) throw new Error(`plan before is not a valid kit: ${parsedBefore.errors.join("; ")}`);
+  const parsedAfter = parseKit(after);
+  if (!parsedAfter.ok) throw new Error(`plan after is not a valid kit: ${parsedAfter.errors.join("; ")}`);
+  if (parsedBefore.kit.id !== id) {
+    throw new Error(`plan before id ${JSON.stringify(parsedBefore.kit.id)} does not match workspace ${JSON.stringify(id)}`);
+  }
+  if (parsedAfter.kit.id !== id) {
+    throw new Error(`plan after id ${JSON.stringify(parsedAfter.kit.id)} does not match workspace ${JSON.stringify(id)}`);
+  }
+  if (!isDeepStrictEqual(parsedAfter.kit, expected)) {
+    throw new Error("plan after does not match the expected kit");
+  }
+
+  const catalogEntry = await catalogWorkspace(root, id);
+  const workspace = await existingRealDirectory(catalogEntry.directory, "workspace directory");
+  if (workspace === null) throw new Error(`workspace directory does not exist: ${id}`);
+  const kitPath = join(workspace, "kit.yaml");
+  const physicalKit = await requireRegularKit(kitPath);
+  if (!insideRoot(workspace, physicalKit)) throw new Error(`kit.yaml escapes the workspace: ${kitPath}`);
+
+  const original = Buffer.from(before, "utf8");
+  const actual = await fs.readFile(physicalKit);
+  if (!actual.equals(original)) {
+    throw new Error("kit.yaml no longer matches the planned original bytes");
+  }
+
+  const beforePaths = new Map(parsedBefore.kit.repositories.map((repository) => [repository.id, repository.path]));
+  for (const repository of parsedAfter.kit.repositories) {
+    const previousPath = beforePaths.get(repository.id);
+    const isNew = previousPath === undefined;
+    const pathChanged = !isNew && previousPath !== repository.path;
+    if (isNew || pathChanged) await assertRepositoryTopLevel(repository.path);
+  }
+
+  const backup = join(workspace, `kit.yaml.prev-${new Date().toISOString()}-${randomUUID()}`);
+  await createFileExclusive(backup, original);
+
+  const lockPath = join(workspace, "kit.yaml.lock");
+  let lockHandle = null;
+  let ownedLock = false;
+  let primaryError = null;
+  try {
+    try {
+      lockHandle = await fs.open(lockPath, "wx", 0o600);
+      ownedLock = true;
+    } catch (lockError) {
+      if (lockError && lockError.code === "EEXIST") {
+        const held = new Error(`kit.yaml.lock is held; kit replacement refused: ${lockPath}`);
+        held.code = "EEXIST";
+        held.backup = backup;
+        throw held;
+      }
+      if (lockError && lockError.backup === undefined) lockError.backup = backup;
+      throw lockError;
+    }
+
+    const rechecked = await requireRegularKit(kitPath);
+    if (rechecked !== physicalKit) {
+      const changedPath = new Error("kit.yaml path changed during the apply window");
+      changedPath.backup = backup;
+      throw changedPath;
+    }
+    const current = await fs.readFile(rechecked);
+    if (!current.equals(original)) {
+      const changed = new Error("kit.yaml changed during the apply window");
+      changed.backup = backup;
+      throw changed;
+    }
+    await writeFileAtomic(rechecked, after);
+    return { path: rechecked, backup };
+  } catch (error) {
+    primaryError = error;
+    if (error && error.backup === undefined) error.backup = backup;
+    throw error;
+  } finally {
+    if (ownedLock) {
+      let cleanupFailure = null;
+      try {
+        await lockHandle.close();
+      } catch (closeError) {
+        cleanupFailure = closeError;
+      }
+      try {
+        await fs.unlink(lockPath);
+      } catch (cleanupError) {
+        if (cleanupFailure === null) cleanupFailure = cleanupError;
+      }
+      if (cleanupFailure !== null) {
+        if (cleanupFailure.backup === undefined) cleanupFailure.backup = backup;
+        if (!primaryError) throw cleanupFailure;
+      }
+    }
+  }
 }

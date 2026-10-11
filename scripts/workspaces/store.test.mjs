@@ -23,10 +23,10 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { addArtifact, addMaterial, createFileExclusive, createWorkspace, fetchWorkspace, listWorkspaces, resolveStorageRoot, resolveWorkspacePath, setupStorage, storageStatus, writeFileAtomic } from "./store.mjs";
-import { parseKit } from "./kit.mjs";
+import { parseKit, planKitEdit } from "./kit.mjs";
 
 const STORE_URL = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), "store.mjs")).href;
 
@@ -43,6 +43,9 @@ const finalPath = process.env.FINAL_PATH;
 const failAt = process.env.FAIL_AT || "";
 const fill = Number(process.env.FILL || "65");
 const size = Number(process.env.SIZE || "4096");
+const planPath = process.env.PLAN_PATH || "";
+const rootPath = process.env.ROOT || "";
+const workspaceId = process.env.WORKSPACE_ID || "";
 const payload = Buffer.alloc(size, fill);
 
 const sendMessage = (message) =>
@@ -96,6 +99,22 @@ if (failAt === "rename") {
     throw new Error("injected rename failure");
   };
 }
+if (mode === "kit-apply" && process.env.LOCK_PAUSE) {
+  const realOpen = fs.open.bind(fs);
+  fs.open = async (target, flags, ...rest) => {
+    const isLock = flags === "wx" && String(target).endsWith("kit.yaml.lock");
+    if (!isLock) return realOpen(target, flags, ...rest);
+    if (process.env.LOCK_PAUSE === "before") {
+      await sendMessage({ event: "locked", path: target });
+      await new Promise((resolve) => process.once("message", resolve));
+      return realOpen(target, flags, ...rest);
+    }
+    const handle = await realOpen(target, flags, ...rest);
+    await sendMessage({ event: "lock-held", path: target });
+    await new Promise((resolve) => process.once("message", resolve));
+    return handle;
+  };
+}
 
 (async () => {
   try {
@@ -106,6 +125,11 @@ if (failAt === "rename") {
       await store.createFileExclusive(finalPath, payload);
     } else if (mode === "create") {
       await store.createFileExclusive(finalPath, payload);
+    } else if (mode === "kit-apply") {
+      const plan = JSON.parse(require("node:fs").readFileSync(planPath, "utf8"));
+      const applied = await store.applyKitEdit(rootPath, workspaceId, plan);
+      await sendMessage({ event: "result", ok: true, path: applied.path, backup: applied.backup });
+      return;
     } else {
       await store.writeFileAtomic(finalPath, payload);
     }
@@ -115,6 +139,7 @@ if (failAt === "rename") {
       event: "result",
       ok: false,
       code: error && error.code ? error.code : null,
+      backup: error && error.backup ? error.backup : null,
       message: String((error && error.message) || error),
     });
   } finally {
@@ -214,6 +239,41 @@ async function waitForClose(entry, timeoutMs = 15000) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+function initializeGit(repo) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn("git", ["init", "--quiet"], {
+      cwd: repo,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 15000,
+      killSignal: "SIGKILL",
+    });
+    let stderr = "";
+    child.stdout.resume();
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", rejectPromise);
+    child.on("close", (code) => resolvePromise({ code, stderr }));
+  });
+}
+
+function replacementKit(id, repositoryLines = []) {
+  const repositories = repositoryLines.length === 0 ? ["repositories: []"] : ["repositories:", ...repositoryLines];
+  return ["version: 1", `id: ${id}`, "name: Replacement", ...repositories, "context: []", ""].join("\n");
+}
+
+async function replacementRoot(t, id = "replacement") {
+  const root = await createRoot();
+  const children = [];
+  t.after(async () => {
+    for (const child of children) await stopChild(child);
+    await rm(root, { recursive: true, force: true });
+  });
+  await setupStorage(root);
+  const created = await createWorkspace(root, { id, name: "Replacement" });
+  return { root, created, children };
 }
 
 test("file publication: creates exclusively with 0600 and preserves existing targets", async (t) => {
@@ -1524,4 +1584,295 @@ test("workspace material: concurrent first additions allocate distinct names", a
   for (const entry of results) {
     assert.equal(dirname(join(workspace, entry.path)), join(workspace, "briefs"));
   }
+});
+
+test("kit replacement preserves exact prior bytes and untouched spans", async (t) => {
+  const root = await createRoot();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await setupStorage(root);
+  const created = await createWorkspace(root, { id: "replacement", name: "Replacement" });
+
+  const text =
+    "\uFEFFversion: 1\r\n" +
+    "# retained comment\r\n" +
+    "id: replacement\r\n" +
+    "name: Replacement\r\n" +
+    "repositories:\r\n" +
+    "  - id: missing\r\n" +
+    `    path: ${join(root, "missing-repo")}\r\n` +
+    "    remote: git@example.com:missing.git\r\n" +
+    "    meta:\r\n" +
+    "      retained: true\r\n" +
+    "design_system:\r\n" +
+    "  tokens:\r\n" +
+    "    radius: 4\r\n" +
+    "context: []\r\n";
+  await writeFile(created.kit, text);
+
+  const plan = planKitEdit(text, { kind: "set-role", repository_id: "missing", role: "design-system" });
+  assert.equal(plan.before, text);
+
+  const store = await import("./store.mjs");
+  assert.equal(typeof store.applyKitEdit, "function");
+  const result = await store.applyKitEdit(root, "replacement", plan);
+
+  assert.equal(isAbsolute(result.path), true);
+  assert.equal(isAbsolute(result.backup), true);
+  assert.equal(result.path, created.kit);
+  assert.equal(result.backup.startsWith(`${root}${sep}`), true);
+  const backupName = basename(result.backup);
+  assert.match(backupName, /^kit\.yaml\.prev-/);
+  assert.match(backupName, /Z-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  assert.deepEqual(await readFile(result.backup), Buffer.from(text, "utf8"));
+
+  const replaced = await readFile(created.kit);
+  assert.deepEqual(replaced, Buffer.from(plan.after, "utf8"));
+  const replacedText = replaced.toString("utf8");
+  assert.equal(replacedText.includes("# retained comment"), true);
+  assert.equal(replacedText.includes("retained: true"), true);
+
+  const secondPlan = planKitEdit(plan.after, { kind: "set-role", repository_id: "missing", role: "reviewer" });
+  const second = await store.applyKitEdit(root, "replacement", secondPlan);
+  assert.notEqual(second.backup, result.backup);
+  assert.deepEqual(await readFile(result.backup), Buffer.from(text, "utf8"));
+  assert.deepEqual(await readFile(second.backup), Buffer.from(plan.after, "utf8"));
+  assert.deepEqual(await readFile(created.kit), Buffer.from(secondPlan.after, "utf8"));
+
+  assert.deepEqual(
+    (await readdir(created.directory)).sort(),
+    ["kit.yaml", basename(result.backup), basename(second.backup)].sort(),
+  );
+  await assert.rejects(lstat(join(created.directory, "kit.yaml.lock")), { code: "ENOENT" });
+  await assert.rejects(lstat(join(root, "assignments.lock")), { code: "ENOENT" });
+});
+
+test("kit replacement: a stale plan preserves changed bytes and creates no backup", async (t) => {
+  const { root, created } = await replacementRoot(t);
+  const baseline = replacementKit("replacement", ["  - id: missing", `    path: ${join(root, "missing-repo")}`, "    remote: git@example.com:missing.git"]);
+  await writeFile(created.kit, baseline);
+  const plan = planKitEdit(baseline, { kind: "set-role", repository_id: "missing", role: "design-system" });
+  const changed = baseline.replace("name: Replacement", "name: Changed Externally");
+  await writeFile(created.kit, changed);
+  const store = await import("./store.mjs");
+  await assert.rejects(store.applyKitEdit(root, "replacement", plan), /no longer matches/);
+  assert.equal(await readFile(created.kit, "utf8"), changed);
+  assert.deepEqual(await readdir(created.directory), ["kit.yaml"]);
+});
+
+test("kit replacement: malformed plans, mismatched identity and unsafe targets are refused", async (t) => {
+  const { root, created } = await replacementRoot(t);
+  const baseline = replacementKit("replacement", ["  - id: missing", `    path: ${join(root, "missing-repo")}`]);
+  await writeFile(created.kit, baseline);
+  const plan = planKitEdit(baseline, { kind: "set-role", repository_id: "missing", role: "design-system" });
+  const store = await import("./store.mjs");
+
+  await assert.rejects(store.applyKitEdit(root, "replacement", null), TypeError);
+  await assert.rejects(store.applyKitEdit(root, "replacement", { before: baseline }), TypeError);
+  await assert.rejects(store.applyKitEdit(root, "replacement", { ...plan, before: "id: [" }), /before is not a valid kit/);
+  await assert.rejects(store.applyKitEdit(root, "replacement", { ...plan, after: "id: [" }), /after is not a valid kit/);
+  await assert.rejects(
+    store.applyKitEdit(root, "replacement", { ...plan, expected: { ...plan.expected, name: "Other" } }),
+    /expected/,
+  );
+  await assert.rejects(
+    store.applyKitEdit(root, "replacement", { ...plan, before: baseline.replace("id: replacement", "id: other") }),
+    /does not match workspace/,
+  );
+  const mutatedAfter = baseline.replace("id: replacement", "id: other");
+  await assert.rejects(
+    store.applyKitEdit(root, "replacement", { before: baseline, after: mutatedAfter, expected: parseKit(mutatedAfter).kit }),
+    /after id .* does not match workspace/,
+  );
+
+  const realKit = join(created.directory, "kit.real");
+  await writeFile(realKit, baseline);
+  await rm(created.kit);
+  await symlink(realKit, created.kit);
+  await assert.rejects(store.applyKitEdit(root, "replacement", plan), /not uniquely available/);
+  assert.equal((await lstat(created.kit)).isSymbolicLink(), true);
+  assert.equal(await readFile(realKit, "utf8"), baseline);
+  await rm(created.kit);
+  await mkdir(created.kit);
+  await assert.rejects(store.applyKitEdit(root, "replacement", plan), /not uniquely available/);
+  assert.equal((await lstat(created.kit)).isDirectory(), true);
+
+  const unsafe = await replacementRoot(t, "unsafe");
+  const unsafeBaseline = replacementKit("unsafe", ["  - id: missing", `    path: ${join(unsafe.root, "missing-repo")}`]);
+  const unsafePlan = planKitEdit(unsafeBaseline, { kind: "set-role", repository_id: "missing", role: "design-system" });
+  await rm(join(unsafe.root, "projects", "unsafe"), { recursive: true, force: true });
+  await symlink(created.directory, join(unsafe.root, "projects", "unsafe"));
+  await assert.rejects(store.applyKitEdit(unsafe.root, "unsafe", unsafePlan), /uniquely available|symlink|invalid/);
+});
+
+test("kit replacement: new and path-changed repositories must be physical Git top levels", async (t) => {
+  const { root, created } = await replacementRoot(t, "repos");
+  const store = await import("./store.mjs");
+  const repo = join(root, "repo");
+  await mkdir(repo, { recursive: true });
+  const initialized = await initializeGit(repo);
+  assert.equal(initialized.code, 0, initialized.stderr);
+  const nested = join(repo, "nested");
+  await mkdir(nested, { recursive: true });
+  const plain = join(root, "plain");
+  await mkdir(plain, { recursive: true });
+  const link = join(root, "link");
+  await symlink(repo, link);
+  const repoB = join(root, "repo-b");
+  await mkdir(repoB, { recursive: true });
+  const initializedB = await initializeGit(repoB);
+  assert.equal(initializedB.code, 0, initializedB.stderr);
+
+  const attempts = [
+    ["relative/repo", /absolute/],
+    [join(root, "missing-repo"), /does not exist/],
+    [plain, /not a Git work tree/],
+    [nested, /not a Git top level/],
+    [link, /symlink/],
+  ];
+  for (const [repositoryPath, pattern] of attempts) {
+    const baseline = replacementKit("repos");
+    await writeFile(created.kit, baseline);
+    const plan = planKitEdit(baseline, { kind: "add-repository", repository: { id: "r", path: repositoryPath } });
+    await assert.rejects(store.applyKitEdit(root, "repos", plan), pattern);
+    assert.equal(await readFile(created.kit, "utf8"), baseline);
+  }
+
+  const accepted = planKitEdit(replacementKit("repos"), {
+    kind: "add-repository",
+    repository: { id: "r", path: repo },
+  });
+  const result = await store.applyKitEdit(root, "repos", accepted);
+  assert.equal(result.path, created.kit);
+  assert.deepEqual(await readFile(created.kit), Buffer.from(accepted.after, "utf8"));
+  assert.deepEqual((await readdir(created.directory)).sort(), ["kit.yaml", basename(result.backup)].sort());
+
+  const current = accepted.after;
+  const unsafeChange = current.replace(JSON.stringify(repo), JSON.stringify(plain));
+  await assert.rejects(
+    store.applyKitEdit(root, "repos", { before: current, after: unsafeChange, expected: parseKit(unsafeChange).kit }),
+    /not a Git work tree/,
+  );
+  assert.equal(await readFile(created.kit, "utf8"), current);
+
+  const changed = current.replace(JSON.stringify(repo), JSON.stringify(repoB));
+  const changedPlan = { before: current, after: changed, expected: parseKit(changed).kit };
+  const changedResult = await store.applyKitEdit(root, "repos", changedPlan);
+  assert.deepEqual(await readFile(created.kit), Buffer.from(changed, "utf8"));
+  assert.notEqual(changedResult.backup, result.backup);
+  assert.deepEqual(
+    (await readdir(created.directory)).sort(),
+    ["kit.yaml", basename(result.backup), basename(changedResult.backup)].sort(),
+  );
+});
+
+test("kit replacement: a held lock is refused and preserved", async (t) => {
+  const { root, created, children } = await replacementRoot(t, "locked");
+  const baseline = replacementKit("locked", ["  - id: missing", `    path: ${join(root, "missing-repo")}`]);
+  await writeFile(created.kit, baseline);
+  const plan = planKitEdit(baseline, { kind: "set-role", repository_id: "missing", role: "design-system" });
+  const planPath = join(root, "plan.json");
+  await writeFile(planPath, JSON.stringify(plan));
+  const entry = startStoreChild(
+    { MODE: "kit-apply", ROOT: root, WORKSPACE_ID: "locked", PLAN_PATH: planPath, LOCK_PAUSE: "held" },
+    root,
+  );
+  children.push(entry);
+
+  const held = await entry.inbox.take((message) => message.event === "lock-held");
+  assert.equal(held.path.endsWith("kit.yaml.lock"), true);
+  assert.equal((await lstat(held.path)).isFile(), true);
+
+  const store = await import("./store.mjs");
+  let refusedBackup = null;
+  await assert.rejects(store.applyKitEdit(root, "locked", plan), (error) => {
+    refusedBackup = error.backup;
+    assert.match(String(error.message), /held/);
+    return true;
+  });
+  assert.equal(typeof refusedBackup, "string");
+  assert.equal((await lstat(held.path)).isFile(), true);
+  assert.equal(await readFile(created.kit, "utf8"), baseline);
+
+  entry.child.send("release");
+  const result = await entry.inbox.take((message) => message.event === "result");
+  const close = await waitForClose(entry);
+  assert.equal(close.timedOut, false);
+  assert.equal(result.ok, true);
+  assert.notEqual(result.backup, refusedBackup);
+  assert.deepEqual(await readFile(created.kit), Buffer.from(plan.after, "utf8"));
+  assert.deepEqual(
+    (await readdir(created.directory)).sort(),
+    ["kit.yaml", basename(result.backup), basename(refusedBackup)].sort(),
+  );
+  await assert.rejects(lstat(held.path), { code: "ENOENT" });
+});
+
+test("kit replacement: an external change during the apply window refuses and keeps the backup", async (t) => {
+  const { root, created, children } = await replacementRoot(t, "window");
+  const baseline = replacementKit("window", ["  - id: missing", `    path: ${join(root, "missing-repo")}`]);
+  await writeFile(created.kit, baseline);
+  const plan = planKitEdit(baseline, { kind: "set-role", repository_id: "missing", role: "design-system" });
+  const planPath = join(root, "plan.json");
+  await writeFile(planPath, JSON.stringify(plan));
+  const entry = startStoreChild(
+    { MODE: "kit-apply", ROOT: root, WORKSPACE_ID: "window", PLAN_PATH: planPath, LOCK_PAUSE: "held" },
+    root,
+  );
+  children.push(entry);
+
+  const held = await entry.inbox.take((message) => message.event === "lock-held");
+  assert.equal(held.path.endsWith("kit.yaml.lock"), true);
+  assert.equal((await lstat(held.path)).isFile(), true);
+  const externallyChanged = baseline.replace("name: Replacement", "name: External Editor");
+  await writeFile(created.kit, externallyChanged);
+  entry.child.send("release");
+
+  const result = await entry.inbox.take((message) => message.event === "result");
+  const close = await waitForClose(entry);
+  assert.equal(close.timedOut, false);
+  assert.equal(result.ok, false);
+  assert.match(result.message, /changed during the apply window/);
+  assert.equal(typeof result.backup, "string");
+  assert.deepEqual(await readFile(result.backup), Buffer.from(baseline, "utf8"));
+  assert.equal(await readFile(created.kit, "utf8"), externallyChanged);
+  assert.deepEqual((await readdir(created.directory)).sort(), ["kit.yaml", basename(result.backup)].sort());
+  await assert.rejects(lstat(held.path), { code: "ENOENT" });
+});
+
+test("kit replacement: backup failure refuses and replacement failure keeps the backup and kit", async (t) => {
+  const { root, created, children } = await replacementRoot(t, "failures");
+  const baseline = replacementKit("failures", ["  - id: missing", `    path: ${join(root, "missing-repo")}`]);
+  await writeFile(created.kit, baseline);
+  const plan = planKitEdit(baseline, { kind: "set-role", repository_id: "missing", role: "design-system" });
+  const planPath = join(root, "plan.json");
+  await writeFile(planPath, JSON.stringify(plan));
+
+  const backupFailure = startStoreChild(
+    { MODE: "kit-apply", ROOT: root, WORKSPACE_ID: "failures", PLAN_PATH: planPath, FAIL_AT: "link" },
+    root,
+  );
+  children.push(backupFailure);
+  const first = await backupFailure.inbox.take((message) => message.event === "result");
+  const firstClose = await waitForClose(backupFailure);
+  assert.equal(firstClose.timedOut, false);
+  assert.equal(first.ok, false);
+  assert.match(first.message, /injected link failure/);
+  assert.equal(first.backup, null);
+  assert.equal(await readFile(created.kit, "utf8"), baseline);
+  assert.deepEqual(await readdir(created.directory), ["kit.yaml"]);
+
+  const replacementFailure = startStoreChild(
+    { MODE: "kit-apply", ROOT: root, WORKSPACE_ID: "failures", PLAN_PATH: planPath, FAIL_AT: "rename" },
+    root,
+  );
+  children.push(replacementFailure);
+  const second = await replacementFailure.inbox.take((message) => message.event === "result");
+  const secondClose = await waitForClose(replacementFailure);
+  assert.equal(secondClose.timedOut, false);
+  assert.equal(second.ok, false);
+  assert.match(second.message, /injected rename failure/);
+  assert.equal(typeof second.backup, "string");
+  assert.deepEqual(await readFile(second.backup), Buffer.from(baseline, "utf8"));
+  assert.equal(await readFile(created.kit, "utf8"), baseline);
+  assert.deepEqual((await readdir(created.directory)).sort(), ["kit.yaml", basename(second.backup)].sort());
 });
