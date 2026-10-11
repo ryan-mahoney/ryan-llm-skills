@@ -121,8 +121,8 @@ function tmuxFailure(command, result) {
 
 // A read-only reachability probe: `list-clients` exits 0 on a running server
 // (with or without attached clients) and exits 1 when no server answers.
-async function serverReachable(socketPath) {
-  const probe = await runTmux(socketPath, ["list-clients"]);
+async function serverReachable(socketPath, run = runTmux) {
+  const probe = await run(socketPath, ["list-clients"]);
   if (probe.ok) return true;
   if (probe.code === 1) return false;
   throw tmuxFailure("list-clients", probe);
@@ -135,13 +135,13 @@ async function serverReachable(socketPath) {
  * @param {{socketPath: string, sessionName: string}} input
  * @returns {Promise<boolean>}
  */
-export async function hasSession({ socketPath, sessionName } = {}) {
+export async function hasSession({ socketPath, sessionName } = {}, { run = runTmux } = {}) {
   assertAbsolutePath(socketPath, "socketPath");
   assertSessionName(sessionName);
-  const result = await runTmux(socketPath, ["has-session", "-t", `=${sessionName}`]);
+  const result = await run(socketPath, ["has-session", "-t", `=${sessionName}`]);
   if (result.ok) return true;
   if (result.code === 1) {
-    if (await serverReachable(socketPath)) return false;
+    if (await serverReachable(socketPath, run)) return false;
     throw new Error(`tmux server is unreachable: ${socketPath}`);
   }
   throw tmuxFailure("has-session", result);
@@ -153,11 +153,11 @@ export async function hasSession({ socketPath, sessionName } = {}) {
  * @param {{socketPath: string, sessionName: string}} input
  * @returns {Promise<{paneId: string, panePid: number}|null>}
  */
-export async function sessionPanePid({ socketPath, sessionName } = {}) {
+export async function sessionPanePid({ socketPath, sessionName } = {}, { run = runTmux } = {}) {
   assertAbsolutePath(socketPath, "socketPath");
   assertSessionName(sessionName);
-  if (!(await hasSession({ socketPath, sessionName }))) return null;
-  const result = await runTmux(socketPath, [
+  if (!(await hasSession({ socketPath, sessionName }, { run }))) return null;
+  const result = await run(socketPath, [
     "display-message",
     "-p",
     "-t",
@@ -167,7 +167,7 @@ export async function sessionPanePid({ socketPath, sessionName } = {}) {
   if (!result.ok) {
     // The session may have vanished after the has-session probe: re-check to
     // distinguish confirmed absence from a transport failure.
-    if (!(await hasSession({ socketPath, sessionName }))) return null;
+    if (!(await hasSession({ socketPath, sessionName }, { run }))) return null;
     throw tmuxFailure("display-message", result);
   }
   const match = /^(%\d+)\s+(\d+)$/.exec(result.stdout.trim());
@@ -322,4 +322,98 @@ export function attachArgs({ socketPath, sessionName } = {}) {
   assertAbsolutePath(socketPath, "socketPath");
   assertSessionName(sessionName);
   return ["-S", socketPath, "attach-session", "-t", `=${sessionName}`];
+}
+
+function terminalUnknown(reason) {
+  return { status: "unknown", reason };
+}
+
+// Injected final boundaries may throw; normalize to the same result shape as
+// runTmux so failure handling is uniform.
+async function probeCommand(run, socketPath, args) {
+  try {
+    return await run(socketPath, args);
+  } catch (error) {
+    const message = error && error.message ? String(error.message) : String(error);
+    return { ok: false, code: null, stdout: "", stderr: message, message };
+  }
+}
+
+/**
+ * Read-only terminal observation for one assignment record.
+ *
+ * The saved explicit socket and exact `=name` session are probed with
+ * `has-session`; exit 1 is confirmed absence only while another read-only
+ * `list-clients` shows the server is reachable, so an unreachable server or
+ * any transport failure is `unknown`. A reachable session proves ownership
+ * only through the exact full assignment UUID in the
+ * `@adjacent_assignment_id` user option; a missing or mismatched option is
+ * `unknown` (never safe foreign adoption). The live pane must then resolve
+ * through `display-message`, and when the record carries a saved `pane_id`
+ * the observed pane must match it exactly.
+ *
+ * @param {{tmux_socket?: string, tmux_session?: string, assignment_id?: string,
+ *   pane_id?: string|null}} record
+ * @param {{run?: (socketPath: string, args: string[]) => Promise<object>}} [options]
+ * @returns {Promise<{status: 'present', assignment_id: string, pane_id: string, pid: number}
+ *   | {status: 'absent'} | {status: 'unknown', reason: string}>}
+ */
+export async function probeSession(record, { run = runTmux } = {}) {
+  const socketPath = record?.tmux_socket;
+  const sessionName = record?.tmux_session;
+  const assignmentId = record?.assignment_id;
+  if (typeof socketPath !== "string" || !isAbsolute(socketPath)) {
+    return terminalUnknown("missing-socket");
+  }
+  if (typeof sessionName !== "string" || !SESSION_NAME_PATTERN.test(sessionName)) {
+    return terminalUnknown("missing-session");
+  }
+  if (typeof assignmentId !== "string" || !UUID_PATTERN.test(assignmentId)) {
+    return terminalUnknown("missing-assignment-id");
+  }
+  const savedPaneId = record.pane_id ?? null;
+  if (savedPaneId !== null
+    && (typeof savedPaneId !== "string" || !/^%\d+$/.test(savedPaneId))) {
+    return terminalUnknown("invalid-saved-pane-id");
+  }
+
+  let exists;
+  try {
+    exists = await hasSession({ socketPath, sessionName }, { run });
+  } catch (error) {
+    return terminalUnknown(error && error.message ? String(error.message) : "session-probe-failed");
+  }
+  if (!exists) return { status: "absent" };
+
+  const tag = await probeCommand(run, socketPath, [
+    "show-options",
+    "-v",
+    "-t",
+    `=${sessionName}:`,
+    "@adjacent_assignment_id",
+  ]);
+  if (!tag.ok) return terminalUnknown("assignment-id-option-unavailable");
+  const recorded = typeof tag.stdout === "string" ? tag.stdout.trim() : "";
+  if (recorded === "") return terminalUnknown("assignment-id-option-empty");
+  if (recorded !== assignmentId) return terminalUnknown("assignment-id-mismatch");
+
+  const pane = await probeCommand(run, socketPath, [
+    "display-message",
+    "-p",
+    "-t",
+    `=${sessionName}:`,
+    "#{pane_id} #{pane_pid}",
+  ]);
+  if (!pane.ok) return terminalUnknown("pane-identity-unavailable");
+  const paneText = typeof pane.stdout === "string" ? pane.stdout.trim() : "";
+  const match = /^(%\d+)\s+(\d+)$/.exec(paneText);
+  if (!match) return terminalUnknown("unexpected-pane-identity");
+  const panePid = Number(match[2]);
+  if (!Number.isSafeInteger(panePid) || panePid <= 0) {
+    return terminalUnknown("invalid-pane-pid");
+  }
+  if (savedPaneId !== null && match[1] !== savedPaneId) {
+    return terminalUnknown("pane-id-mismatch");
+  }
+  return { status: "present", assignment_id: assignmentId, pane_id: match[1], pid: panePid };
 }
