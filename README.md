@@ -216,6 +216,10 @@ screens where they live by identity, path and digest; nothing is copied into `.s
 Contract: [design packages](docs/design-packages.md). Content rule:
 [prototype design](rules/prototype-design.md).
 
+The [design system](design-system/README.md) provides the `agent-tooling`
+workspace's palettes, component styles, HTML examples, and JavaScript helpers. Its
+[offline catalog](design-system/index.html) opens without a build.
+
 | Skill | Command | Purpose |
 |---|---|---|
 | **design-plan** | `/design-plan <workspace> <slug> <context>... [--posture ...]` | Read the context, choose expert and designer lenses, inventory screen × state with the person and job each serves, declare the posture, write `brief.md` and `design.json` |
