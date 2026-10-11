@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "local_root": "/absolute/path/to/client-data",
+  "ssh_host": "your-ssh-alias",
+  "remote_root": "/absolute/path/to/host-data",
+  "unison": "unison",
+  "remote_unison": "unison"
+}

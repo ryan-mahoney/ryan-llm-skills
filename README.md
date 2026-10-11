@@ -338,6 +338,9 @@ It only updates harness directories that already exist. It also installs the loc
 dependencies for the Pi execution extension and the Jev tool, so a fresh clone needs no
 separate install step; run `scripts/install-deps.sh --force` to refresh them.
 
+The same command links the optional `adjacent-sync` tool into `~/.local/bin`. See the
+[adjacent sync guide](scripts/adjacent-sync/README.md) to configure and run it between machines.
+
 ```bash
 ~/.agents/sync.sh
 ```
