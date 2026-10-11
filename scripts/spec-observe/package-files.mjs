@@ -12,17 +12,21 @@ export async function authorizePackage(state, requested) {
   if (await realpath(dirname(root)) !== dirname(root)) throw Error('Package is not canonical');
   return root;
 }
-async function safePath(root, name) {
+async function safePath(root, name, { exclude } = {}) {
   if (typeof name !== 'string' || !name || name.includes('\\') || name.includes('\0')) throw Error('Invalid file path');
   const parts = name.split('/');
   if (parts.some(p => !p || p === '.' || p === '..')) throw Error('Invalid file path');
   let path = root;
-  for (const part of parts) { path = join(path, part); if ((await lstat(path)).isSymbolicLink()) throw Error('Symbolic links are unavailable'); }
+  for (const part of parts) {
+    if (typeof exclude === 'function' && exclude(part)) throw Error('File is unavailable');
+    path = join(path, part);
+    if ((await lstat(path)).isSymbolicLink()) throw Error('Symbolic links are unavailable');
+  }
   const real = await realpath(path);
   if (!real.startsWith(root + sep)) throw Error('File is outside the package');
   return real;
 }
-export async function listPackageFiles(root, cursor = 0) {
+export async function listPackageFiles(root, cursor = 0, { exclude } = {}) {
   if(!Number.isSafeInteger(cursor)||cursor<0||cursor>=PACKAGE_FILE_LIMITS.totalEntries)throw Error('Invalid listing cursor');
   const files = [], errors = []; let scanned = 0, truncated = false, pageLimit = Math.min(cursor+PACKAGE_FILE_LIMITS.entries,PACKAGE_FILE_LIMITS.totalEntries);
   let depthTruncated=false;
@@ -32,12 +36,13 @@ export async function listPackageFiles(root, cursor = 0) {
     try {
       handle = await opendir(path);
       for await (const entry of handle) {
+        if (typeof exclude === 'function' && exclude(entry.name)) continue;
         if (++scanned > pageLimit) { truncated = true; break; }
         const name = prefix + entry.name;
-        if (scanned <= cursor) { if(entry.isDirectory()) await walk(await safePath(root,name),name+'/',depth+1); if(truncated)break; continue; }
+        if (scanned <= cursor) { if (entry.isDirectory()) await walk(await safePath(root, name, { exclude }), name + '/', depth + 1); if (truncated) break; continue; }
         if (entry.isSymbolicLink()) files.push({ name, available: false, reason: 'Symbolic link' });
-        else if (entry.isDirectory()) await walk(await safePath(root, name), name + '/', depth + 1);
-        else if (entry.isFile()) { const info = await lstat(await safePath(root, name)); files.push({ name, size: info.size, available: info.size <= PACKAGE_FILE_LIMITS.bytes, reason: info.size > PACKAGE_FILE_LIMITS.bytes ? 'Exceeds 8 MiB limit' : null }); }
+        else if (entry.isDirectory()) await walk(await safePath(root, name, { exclude }), name + '/', depth + 1);
+        else if (entry.isFile()) { const info = await lstat(await safePath(root, name, { exclude })); files.push({ name, size: info.size, available: info.size <= PACKAGE_FILE_LIMITS.bytes, reason: info.size > PACKAGE_FILE_LIMITS.bytes ? 'Exceeds 8 MiB limit' : null }); }
         else files.push({ name, available: false, reason: 'Not a regular file' });
         if (truncated) break;
       }
@@ -46,8 +51,8 @@ export async function listPackageFiles(root, cursor = 0) {
   await walk(root, '', 0);
   return { files: files.sort((a,b) => a.name.localeCompare(b.name)), truncated:truncated||depthTruncated, next_cursor:truncated&&pageLimit<PACKAGE_FILE_LIMITS.totalEntries?pageLimit:null, errors, limits: PACKAGE_FILE_LIMITS };
 }
-export async function readPackageFile(root, name) {
-  const path = await safePath(root, name);
+export async function readPackageFile(root, name, { exclude } = {}) {
+  const path = await safePath(root, name, { exclude });
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const info = await handle.stat();

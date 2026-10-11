@@ -190,6 +190,11 @@ Invalid `--root`, `--public-host`, `--port`, unknown flags, duplicates and
 missing values exit nonzero before any observation effect; importing the module
 creates nothing.
 
+Workspace browsing reads the storage root from `ADJACENT_STORAGE_ROOT`, defaulting
+to `~/Documents/adjacent-storage`. A host installed through launchd must set
+`ADJACENT_STORAGE_ROOT` in the plist's `EnvironmentVariables` dictionary when the
+root is not the default, because launchd starts the host with a minimal environment.
+
 Ownership is one keyed claim per canonical agent directory, independent of scope
 or dashboard port: a second host for the same real agentDir, including through a
 symlinked alias, is refused while the live owner holds

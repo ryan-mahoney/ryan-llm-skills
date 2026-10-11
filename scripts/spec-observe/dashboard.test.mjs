@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, existsSync, readdirSync, lstatSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { readDashboardState, createDashboardServer, isRemoteRequest, normalizePublicHost } from './dashboard.mjs';
 import { COMPLETION_FILE } from './manual-completion.mjs';
+import { setupStorage, createWorkspace, addMaterial } from '../workspaces/store.mjs';
 
 function fixture(t) {
   const dir = mkdtempSync(join(tmpdir(), 'sentinel-dashboard-'));
@@ -132,6 +133,254 @@ test('partial workspace coverage stays in the footer while connection failures u
   vm.runInContext("error='Could not refresh workspace state.';status()", context);
   assert.match(elements.get('notice').innerHTML, /Could not refresh workspace state/);
   assert.equal(elements.get('notice').classList.hidden, false);
+});
+
+const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+
+test('partial workspace coverage: delayed workspace file responses cannot cross selections or modes', async () => {
+  const deferred = [];
+  const context = dashboardContext({ fetch: async url => {
+    if (url.startsWith('/api/workspace-file?')) return new Promise(resolve => deferred.push(resolve));
+    if (url.startsWith('/api/workspace?')) return { ok: true, json: async () => ({ id: 'beta' }) };
+    return { ok: false };
+  } });
+  vm.runInContext("mode='workspaces';selectedWorkspace='alpha';workspace={id:'alpha'}", context);
+  const alphaOpen = vm.runInContext("openWorkspaceFile('briefs/alpha.md')", context);
+  assert.equal(deferred.length, 1);
+  vm.runInContext("selectWorkspace('beta')", context);
+  await flush();
+  deferred[0]({ ok: true, headers: { get: () => 'markdown' }, text: async () => '# Alpha brief' });
+  await alphaOpen;
+  assert.equal(vm.runInContext('workspace.id', context), 'beta');
+  assert.equal(vm.runInContext('fileContent', context), null);
+  assert.doesNotMatch(vm.runInContext("$('file-viewer').innerHTML", context), /Alpha brief/);
+
+  const departed = dashboardContext({ fetch: async url => {
+    if (url.startsWith('/api/workspace-file?')) return new Promise(resolve => deferred.push(resolve));
+    return { ok: false };
+  } });
+  vm.runInContext("mode='workspaces';selectedWorkspace='alpha';workspace={id:'alpha'}", departed);
+  const departedOpen = vm.runInContext("openWorkspaceFile('briefs/alpha.md')", departed);
+  vm.runInContext("mode='packages';selected=null", departed);
+  deferred[1]({ ok: true, headers: { get: () => 'markdown' }, text: async () => '# Alpha brief' });
+  await departedOpen;
+  assert.equal(vm.runInContext('fileContent', departed), null);
+  assert.doesNotMatch(vm.runInContext("$('file-viewer').innerHTML", departed), /Alpha brief/);
+});
+
+test('partial workspace coverage: listing failures cannot overwrite a different selection', async () => {
+  let rejectListing = null;
+  const context = dashboardContext({ fetch: async url => {
+    if (url.startsWith('/api/workspace-files?')) return new Promise((resolve, reject) => { rejectListing = reject; });
+    if (url.startsWith('/api/workspace?')) return { ok: true, json: async () => ({ id: 'beta' }) };
+    return { ok: false };
+  } });
+  vm.runInContext("mode='workspaces';selectedWorkspace='alpha';workspace={id:'alpha'};listingLoaded=false;listingOwner=null", context);
+  const listing = vm.runInContext('loadWorkspaceFiles(0)', context);
+  assert.ok(rejectListing);
+  vm.runInContext("selectWorkspace('beta')", context);
+  await flush();
+  vm.runInContext("$('package-files').textContent='Beta listing'", context);
+  rejectListing(new Error('listing failed'));
+  await listing;
+  assert.equal(vm.runInContext("$('package-files').textContent", context), 'Beta listing');
+
+  const packageContext = dashboardContext({ fetch: async url => {
+    if (url.startsWith('/api/package-files?')) return new Promise((resolve, reject) => { rejectListing = reject; });
+    return { ok: false };
+  } });
+  vm.runInContext("mode='packages';records=[{key:'a',package:'/p/a'}];selected='a';listingLoaded=false;listingOwner=null", packageContext);
+  const packageListing = vm.runInContext('loadPackageFiles(records[0],0,true)', packageContext);
+  vm.runInContext("records.push({key:'b',package:'/p/b'});selected='b';$('package-files').textContent='Beta package listing'", packageContext);
+  rejectListing(new Error('listing failed'));
+  await packageListing;
+  assert.equal(vm.runInContext("$('package-files').textContent", packageContext), 'Beta package listing');
+});
+
+test('partial workspace coverage: storage failures and scan diagnostics differ from healthy empty', () => {
+  const context = dashboardContext();
+  vm.runInContext("mode='workspaces'", context);
+  for (const status of ['invalid_root', 'invalid_projects', 'unreadable']) {
+    // listWorkspaces copies storage.errors into catalog.errors, so the same error arrives twice.
+    const denied = { path: '/store/<root>/projects', message: '<denied>' };
+    context.input = { storage: { status, root: '/store/<root>', errors: [denied] }, valid: [], invalid: [], errors: [denied, { path: '/store/<root>', message: 'scan <failed>' }] };
+    vm.runInContext('catalog=input;renderWorkspaceList();renderWorkspaceDetail()', context);
+    const list = vm.runInContext("$('run-list').innerHTML", context);
+    assert.match(list, /Workspace storage unavailable/);
+    assert.match(list, /&lt;root&gt;/);
+    assert.equal(list.split('&lt;denied&gt;').length - 1, 1);
+    assert.match(list, /<span class="mono">\/store\/&lt;root&gt;\/projects<\/span>/);
+    assert.match(list, /scan &lt;failed&gt;/);
+    assert.doesNotMatch(list, /&quot;(message|path)&quot;/);
+    assert.match(list, /data-workspace-retry/);
+    assert.doesNotMatch(list, /No workspaces/);
+    assert.match(vm.runInContext("$('observation-detail').innerHTML", context), /Repair the configured storage boundary/);
+  }
+  context.input = { storage: { status: 'ok', root: '/store', errors: [] }, valid: [{ id: 'alpha', directory: '/store/alpha' }], invalid: [], errors: [{ path: '/store', message: 'scan <failed>' }] };
+  vm.runInContext('catalog=input;renderWorkspaceList()', context);
+  assert.match(vm.runInContext("$('run-list').innerHTML", context), /Workspace catalog incomplete/);
+  assert.match(vm.runInContext("$('run-list').innerHTML", context), /data-workspace="alpha"/);
+  vm.runInContext('catalog.valid=[];catalog.errors=[];renderWorkspaceList()', context);
+  assert.match(vm.runInContext("$('run-list').innerHTML", context), /No workspaces/);
+  assert.doesNotMatch(vm.runInContext("$('run-list').innerHTML", context), /unavailable|incomplete/);
+});
+
+test('partial workspace coverage: multiple polling ticks coalesce slow catalog and same-selection detail', async () => {
+  let resolveCatalog, resolveDetail, catalogs = 0, details = 0;
+  const signals = [];
+  const context = dashboardContext({ fetch: (url, options) => {
+    signals.push(options.signal);
+    if (url === '/api/workspaces') {
+      catalogs++;
+      return new Promise(resolve => { resolveCatalog = resolve; });
+    }
+    if (url.startsWith('/api/workspace?')) {
+      details++;
+      return new Promise(resolve => { resolveDetail = resolve; });
+    }
+    throw Error('unexpected request');
+  } });
+  vm.runInContext("mode='workspaces';selectedWorkspace='alpha'", context);
+  const pending = vm.runInContext('loadWorkspaces()', context);
+  for (let tick = 0; tick < 3; tick++) await vm.runInContext('loadWorkspaces()', context);
+  assert.equal(catalogs, 1);
+  const catalogResponse = { ok: true, json: async () => ({ storage: { status: 'ok' }, valid: [{ id: 'alpha' }], invalid: [] }) };
+  resolveCatalog(catalogResponse);
+  await pending;
+  assert.equal(details, 1);
+  for (let tick = 0; tick < 3; tick++) {
+    const poll = vm.runInContext('loadWorkspaces()', context);
+    resolveCatalog(catalogResponse);
+    await poll;
+  }
+  assert.equal(details, 1);
+  resolveDetail({ ok: true, json: async () => ({ id: 'alpha', name: 'Settled slow workspace' }) });
+  await flush();
+  assert.match(vm.runInContext("$('observation-detail').innerHTML", context), /Settled slow workspace/);
+  assert.ok(signals.every(signal => signal instanceof AbortSignal));
+  vm.runInContext('selectWorkspace(selectedWorkspace)', context);
+  assert.equal(details, 2, 'refresh resumes after settlement');
+  resolveDetail({ ok: false });
+  await flush();
+  assert.match(vm.runInContext("$('observation-detail').innerHTML", context), /Could not load workspace/);
+});
+
+test('partial workspace coverage: detail failure announces an error and offers a selection retry', async () => {
+  let fail = true;
+  const context = dashboardContext({ fetch: async url => {
+    if (url.startsWith('/api/workspace?')) return fail ? { ok: false } : { ok: true, json: async () => ({ id: 'alpha', repositories: [] }) };
+    return { ok: false };
+  } });
+  vm.runInContext("mode='workspaces';catalog={storage:{status:'ok'},valid:[{id:'alpha',directory:'/w/alpha'}],invalid:[]}", context);
+  vm.runInContext("selectWorkspace('alpha')", context);
+  await flush();
+  const detail = vm.runInContext("$('observation-detail').innerHTML", context);
+  assert.match(detail, /Workspace unavailable/);
+  assert.match(detail, /Could not load workspace\./);
+  assert.match(detail, /data-workspace-detail-retry/);
+  assert.doesNotMatch(detail, /data-workspace-retry/);
+  assert.equal(vm.runInContext('workspaceDetailError', context), 'Could not load workspace.');
+  fail = false;
+  vm.runInContext('selectWorkspace(selectedWorkspace)', context);
+  await flush();
+  assert.equal(vm.runInContext('workspaceDetailError', context), null);
+  assert.equal(vm.runInContext('workspace.id', context), 'alpha');
+  assert.doesNotMatch(vm.runInContext("$('observation-detail').innerHTML", context), /Workspace unavailable/);
+});
+
+test('partial workspace coverage: fresh catalog invalidation drops the selection without fallback', async () => {
+  const context = dashboardContext({ fetch: async url => {
+    if (url.startsWith('/api/workspaces')) return { ok: true, json: async () => ({ storage: { status: 'ok' }, valid: [{ id: 'beta', directory: '/w/beta' }], invalid: [] }) };
+    return { ok: false };
+  } });
+  vm.runInContext("mode='workspaces';selectedWorkspace='alpha';workspace={id:'alpha'};fileContent={kind:'markdown',text:'# Alpha brief'};fileSelection='briefs/alpha.md';fileOwner='workspace:alpha';listingOwner='workspace:alpha';listingLoaded=true", context);
+  await vm.runInContext('loadWorkspaces()', context);
+  assert.equal(vm.runInContext('workspace', context), null);
+  assert.match(vm.runInContext('workspaceUnavailable', context), /no longer in the catalog/);
+  assert.equal(vm.runInContext('selectedWorkspace', context), 'alpha');
+  assert.equal(vm.runInContext('fileContent', context), null);
+  assert.equal(vm.runInContext('listingOwner', context), null);
+  const detail = vm.runInContext("$('observation-detail').innerHTML", context);
+  assert.match(detail, /Workspace unavailable/);
+  assert.doesNotMatch(detail, /Alpha brief/);
+  assert.doesNotMatch(vm.runInContext("$('run-list').innerHTML", context), /aria-pressed="true"/);
+});
+
+test('partial workspace coverage: catalog invalidation wins over a pending detail response', async () => {
+  let resolveDetail = null;
+  const context = dashboardContext({ fetch: async url => {
+    if (url.startsWith('/api/workspace?')) return new Promise(resolve => { resolveDetail = resolve; });
+    if (url.startsWith('/api/workspaces')) return { ok: true, json: async () => ({ storage: { status: 'ok' }, valid: [{ id: 'beta', directory: '/w/beta' }], invalid: [] }) };
+    return { ok: false };
+  } });
+  vm.runInContext("mode='workspaces';selectedWorkspace='alpha';workspace=null;catalog={storage:{status:'ok'},valid:[{id:'alpha',directory:'/w/alpha'}],invalid:[]}", context);
+  vm.runInContext("selectWorkspace('alpha')", context);
+  await flush();
+  assert.ok(resolveDetail);
+  await vm.runInContext('loadWorkspaces()', context);
+  assert.match(vm.runInContext('workspaceUnavailable', context), /no longer in the catalog/);
+  resolveDetail({ ok: true, json: async () => ({ id: 'alpha' }) });
+  await flush();
+  assert.equal(vm.runInContext('workspace', context), null);
+  assert.match(vm.runInContext('workspaceUnavailable', context), /no longer in the catalog/);
+  assert.match(vm.runInContext("$('observation-detail').innerHTML", context), /Workspace unavailable/);
+  assert.doesNotMatch(vm.runInContext("$('observation-detail').innerHTML", context), /Alpha/);
+});
+
+test('partial workspace coverage: artifact relationships and operator copy stay explicit and escaped', () => {
+  const context = dashboardContext();
+  const detail = () => context.document.getElementById('observation-detail');
+  const list = () => context.document.getElementById('run-list');
+  vm.runInContext("mode='workspaces'", context);
+
+  vm.runInContext("catalog={storage:{root:'/store/w <root>',status:'missing_root',errors:[]},valid:[],invalid:[],errors:[]};workspace=null;selectedWorkspace=null;render()", context);
+  assert.match(detail().innerHTML, /<code class="mono">node scripts\/workspaces\/cli\.mjs setup<\/code> on the dashboard host/);
+  assert.match(detail().innerHTML, /missing_root/);
+  assert.match(detail().innerHTML, /\/store\/w &lt;root&gt;/);
+  vm.runInContext("catalog.storage.status='missing_projects';render()", context);
+  assert.match(detail().innerHTML, /missing_projects/);
+  assert.match(detail().innerHTML, /setup/);
+
+  vm.runInContext("catalog={storage:{root:'/store',status:'ok',errors:[]},valid:[],invalid:[],errors:[]};render()", context);
+  assert.match(list().innerHTML, /operator creates/i);
+  assert.doesNotMatch(list().innerHTML, /cli\.mjs|workspace CLI/i);
+
+  vm.runInContext("selectedWorkspace='writer';workspace={id:'writer',name:'Writer',directory:'/store/projects/writer',kit:{version:1,id:'writer',name:'Writer',repositories:[]},repositories:[],context:[],briefs:[],notes:[],artifacts:[{title:'<img src=x>',kind:'repository',target:{repository_id:'repo',path:'<b>notes.md</b>'},note:'<script>alert(1)</script>',status:'missing',reason:'missing_target',path:'artifacts/abc.json'}],has_workspace_specs:false,attention:[]};render()", context);
+  const html = detail().innerHTML;
+  assert.match(html, /&lt;img src=x&gt;/);
+  assert.doesNotMatch(html, /<img src=x>/);
+  assert.match(html, /repo · &lt;b&gt;notes\.md&lt;\/b&gt;/);
+  assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.doesNotMatch(html, /<script>alert/);
+  assert.match(html, /missing_target/);
+  assert.match(html, /artifacts\/abc\.json/);
+  assert.equal((html.match(/Workspace files/g) || []).length, 0);
+  assert.match(context.document.getElementById('package-files').innerHTML, /data-refresh-workspace-files/);
+});
+
+test('partial workspace coverage: shared listing and opening owners use explicit source routes', async () => {
+  const requested = [];
+  const context = dashboardContext({ fetch: async url => {
+    requested.push(url);
+    if (url.startsWith('/api/workspace-files?')) return { ok: true, json: async () => ({ files: [{ name: 'briefs/alpha.md', available: true, size: 3 }] }) };
+    if (url.startsWith('/api/workspace-file?')) return { ok: true, headers: { get: () => 'markdown' }, text: async () => '# Alpha' };
+    return { ok: false };
+  } });
+  vm.runInContext("mode='workspaces';selectedWorkspace='alpha';workspace={id:'alpha'};listingLoaded=false;listingOwner=null", context);
+  await vm.runInContext('loadWorkspaceFiles(0)', context);
+  await vm.runInContext("openWorkspaceFile('briefs/alpha.md')", context);
+  assert.ok(requested.some(url => url.startsWith('/api/workspace-files?') && url.includes('id=alpha')));
+  assert.ok(requested.some(url => url.startsWith('/api/workspace-file?') && url.includes('id=alpha') && url.includes('file=briefs%2Falpha.md')));
+  assert.ok(!requested.some(url => url.startsWith('/api/package-file')));
+  const listingHtml = vm.runInContext("$('package-files').innerHTML", context);
+  assert.match(listingHtml, /data-workspace-file/);
+  assert.doesNotMatch(listingHtml, /data-more-workspace-files/);
+
+  const packageRequested = [];
+  const packageContext = dashboardContext({ fetch: async url => { packageRequested.push(url); return { ok: true, json: async () => ({ files: [] }) }; } });
+  vm.runInContext("mode='packages';records=[{key:'k',package:'/p'}];selected='k';listingLoaded=false;listingOwner=null", packageContext);
+  await vm.runInContext('loadPackageFiles(records[0],0,true)', packageContext);
+  assert.ok(packageRequested.some(url => url.startsWith('/api/package-files?') && url.includes('package=%2Fp')));
 });
 
 test('dashboard renders spec position and names without inferring accepted completion', () => {
@@ -450,7 +699,7 @@ function dashboardContext({ fetch, wallNow = Date.now, perfNow = () => 0, locati
     static now() { return wallNow(); }
   }
   const context = vm.createContext({ document, Date: TestDate, Map, Set, JSON, performance: { now: perfNow }, fetch,
-    AbortController, setTimeout, clearTimeout, location });
+    AbortController, AbortSignal, setTimeout, clearTimeout, location, URL, URLSearchParams });
   vm.runInContext(inlineScript().slice(0, inlineScript().indexOf("$('run-list').addEventListener")), context);
   return context;
 }
@@ -533,4 +782,416 @@ test('remote completion help explains the host-local-only restriction and keeps 
   assert.doesNotMatch(help(), /host's local dashboard/);
   context.run = { is_current_assignment: false };
   assert.equal(help(), '');
+});
+
+test('workspace HTTP serves catalog, detail, listing and brief bytes and refuses private, traversal and symlinked reads', async t => {
+  const f = fixture(t);
+  const base = realpathSync(f.dir);
+  const storageRoot = join(base, 'storage');
+  await setupStorage(storageRoot);
+  await createWorkspace(storageRoot, { id: 'writer' });
+  const workspace = join(storageRoot, 'projects', 'writer');
+  const repo = join(base, 'repo');
+  mkdirSync(repo, { recursive: true });
+  writeFileSync(join(workspace, 'kit.yaml'), [
+    'version: 1',
+    'id: writer',
+    'name: Writer',
+    'repositories:',
+    '  - id: docs',
+    `    path: ${JSON.stringify(repo)}`,
+    '',
+  ].join('\n'));
+  const brief = await addMaterial(storageRoot, 'writer', { kind: 'brief', title: 'First Brief', content: '# Brief\n' });
+  mkdirSync(join(workspace, '.adjacent'), { recursive: true });
+  writeFileSync(join(workspace, '.adjacent', 'inner.txt'), 'private');
+  mkdirSync(join(workspace, 'sessions'), { recursive: true });
+  writeFileSync(join(workspace, 'sessions', 's1.json'), '{}');
+  writeFileSync(join(workspace, '.env.local'), 'SECRET=1');
+  writeFileSync(join(base, 'outside.txt'), 'outside');
+  symlinkSync(join(base, 'outside.txt'), join(workspace, 'link.txt'));
+  const server = createDashboardServer({ agentDir: f.dir, storageRoot });
+  const detailPath = `/api/workspace?${new URLSearchParams({ id: 'writer' })}`;
+  const listingPath = `/api/workspace-files?${new URLSearchParams({ id: 'writer' })}`;
+  const filePath = `/api/workspace-file?${new URLSearchParams({ id: 'writer', file: brief.path })}`;
+
+  // Recursive content/mtime snapshot: reads must leave the storage root unchanged.
+  const snapshot = directory => {
+    const entries = [];
+    const digest = value => {
+      let hash = 2166136261;
+      for (let index = 0; index < value.length; index += 1) {
+        hash ^= value.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+      }
+      return hash >>> 0;
+    };
+    const walk = (current, prefix) => {
+      for (const name of readdirSync(current).sort()) {
+        const path = join(current, name);
+        const relative = prefix ? `${prefix}/${name}` : name;
+        const info = lstatSync(path);
+        if (info.isDirectory()) {
+          entries.push(`${relative}:dir:${info.mtimeMs}`);
+          walk(path, relative);
+        } else {
+          entries.push(`${relative}:file:${info.size}:${info.mtimeMs}:${digest(readFileSync(path).toString('base64'))}`);
+        }
+      }
+    };
+    walk(directory, '');
+    return entries;
+  };
+  const before = snapshot(storageRoot);
+
+  const catalog = await request(server, '/api/workspaces');
+  assert.equal(catalog.status, 200);
+  const catalogBody = JSON.parse(catalog.body);
+  assert.equal(catalogBody.storage.status, 'ok');
+  assert.ok(catalogBody.valid.some(entry => entry.id === 'writer' && entry.directory === workspace));
+
+  const detail = await request(server, detailPath);
+  assert.equal(detail.status, 200);
+  const detailBody = JSON.parse(detail.body);
+  assert.equal(detailBody.id, 'writer');
+  assert.equal(detailBody.directory, workspace);
+  assert.ok(detailBody.kit.repositories.some(repository => repository.id === 'docs' && repository.path === repo));
+  assert.ok(detailBody.briefs.includes(brief.path.slice('briefs/'.length)));
+  assert.equal(detailBody.artifacts.length, 0);
+
+  const listing = await request(server, listingPath);
+  assert.equal(listing.status, 200);
+  const names = JSON.parse(listing.body).files.map(entry => entry.name);
+  assert.ok(names.includes(brief.path));
+  assert.ok(!names.some(name => name.startsWith('.adjacent/') || name.startsWith('sessions/') || name === '.env.local'));
+
+  const file = await request(server, filePath);
+  assert.equal(file.status, 200);
+  assert.equal(file.body, '# Brief\n');
+
+  for (let round = 0; round < 2; round += 1) {
+    for (const path of ['/api/workspaces', detailPath, listingPath, filePath]) {
+      assert.equal((await request(server, path)).status, 200, path);
+      assert.equal((await request(server, path, { method: 'HEAD' })).status, 200, path);
+    }
+  }
+
+  for (const method of ['POST', 'PUT']) {
+    const refused = await request(server, detailPath, { method, body: '{}' });
+    assert.equal(refused.status, 405, method);
+    assert.equal(refused.bodyRead, false, method);
+  }
+
+  for (const candidate of ['../x', 'link.txt', '.adjacent/inner.txt', 'sessions/s1.json', '.env.local']) {
+    const denied = await request(server, `/api/workspace-file?${new URLSearchParams({ id: 'writer', file: candidate })}`);
+    assert.notEqual(denied.status, 200, candidate);
+  }
+
+  assert.deepEqual(snapshot(storageRoot), before);
+
+  for (const body of [catalog.body, detail.body, listing.body, file.body]) {
+    assert.doesNotMatch(body, /action_token/);
+  }
+
+  // A later-invalidated kit denies the same id: authorization reads the fresh catalog.
+  writeFileSync(join(workspace, 'kit.yaml'), 'version: 1\nid: writer\nrepositories: [\n');
+  assert.notEqual((await request(server, detailPath)).status, 200);
+  assert.notEqual((await request(server, filePath)).status, 200);
+});
+
+test('workspace HTTP serves identical bodies to accepted public and forwarded hosts and refuses lookalikes', async t => {
+  const f = fixture(t);
+  const base = realpathSync(f.dir);
+  const storageRoot = join(base, 'storage');
+  await setupStorage(storageRoot);
+  await createWorkspace(storageRoot, { id: 'writer' });
+  const workspace = join(storageRoot, 'projects', 'writer');
+  const repo = join(base, 'repo');
+  mkdirSync(repo, { recursive: true });
+  writeFileSync(join(workspace, 'kit.yaml'), [
+    'version: 1',
+    'id: writer',
+    'name: Writer',
+    'repositories:',
+    '  - id: docs',
+    `    path: ${JSON.stringify(repo)}`,
+    '',
+  ].join('\n'));
+  const brief = await addMaterial(storageRoot, 'writer', { kind: 'brief', title: 'First Brief', content: '# Brief\n' });
+  const server = createDashboardServer({ agentDir: f.dir, publicHost: 'dashboard.example', storageRoot });
+  const paths = [
+    '/api/workspaces',
+    `/api/workspace?${new URLSearchParams({ id: 'writer' })}`,
+    `/api/workspace-files?${new URLSearchParams({ id: 'writer' })}`,
+    `/api/workspace-file?${new URLSearchParams({ id: 'writer', file: brief.path })}`,
+  ];
+  const loopback = [];
+  for (const path of paths) {
+    const response = await request(server, path);
+    assert.equal(response.status, 200, path);
+    assert.doesNotMatch(response.body, /action_token/, path);
+    loopback.push(response.body);
+  }
+  const variants = [
+    { host: 'dashboard.example' },
+    { host: 'dashboard.example:443', origin: 'https://dashboard.example' },
+    { headers: { 'x-forwarded-for': '' } },
+  ];
+  for (const variant of variants) {
+    for (const [index, path] of paths.entries()) {
+      const response = await request(server, path, variant);
+      assert.equal(response.status, 200, path);
+      assert.equal(response.body, loopback[index], path);
+      assert.doesNotMatch(response.body, /action_token/, path);
+    }
+  }
+  for (const path of paths) {
+    for (const host of ['evil-dashboard.example', 'dashboard.example.evil', 'dashboard.example:4319']) {
+      assert.equal((await request(server, path, { host })).status, 403, `${host} ${path}`);
+    }
+    assert.equal((await request(server, path, { origin: 'http://dashboard.example' })).status, 403, path);
+  }
+  const kitBefore = readFileSync(join(workspace, 'kit.yaml'), 'utf8');
+  const briefBefore = readFileSync(join(workspace, brief.path), 'utf8');
+  for (const method of ['POST', 'PUT']) {
+    for (const variant of [{ host: 'dashboard.example' }, { host: 'dashboard.example:443', origin: 'https://dashboard.example' }, { headers: { 'x-forwarded-for': '' } }]) {
+      const refused = await request(server, paths[1], { method, body: '{}', ...variant });
+      assert.equal(refused.status, 405, `${method} ${JSON.stringify(variant)}`);
+      assert.equal(refused.bodyRead, false, `${method} ${JSON.stringify(variant)}`);
+    }
+  }
+  assert.equal(readFileSync(join(workspace, 'kit.yaml'), 'utf8'), kitBefore);
+  assert.equal(readFileSync(join(workspace, brief.path), 'utf8'), briefBefore);
+  const plain = createDashboardServer({ agentDir: f.dir, storageRoot });
+  assert.equal((await request(plain, '/api/workspaces', { host: 'dashboard.example' })).status, 403);
+});
+
+// Run independently: node --test --test-name-pattern='workspace HTTP serves reads over a real listening' scripts/spec-observe/dashboard.test.mjs
+test('workspace HTTP serves reads over a real listening port-0 server', async t => {
+  const f = fixture(t);
+  const base = realpathSync(f.dir);
+  const storageRoot = join(base, 'storage');
+  await setupStorage(storageRoot);
+  await createWorkspace(storageRoot, { id: 'writer' });
+  const workspace = join(storageRoot, 'projects', 'writer');
+  const repo = join(base, 'repo');
+  mkdirSync(repo, { recursive: true });
+  writeFileSync(join(workspace, 'kit.yaml'), [
+    'version: 1',
+    'id: writer',
+    'name: Writer',
+    'repositories:',
+    '  - id: docs',
+    `    path: ${JSON.stringify(repo)}`,
+    '',
+  ].join('\n'));
+  const brief = await addMaterial(storageRoot, 'writer', { kind: 'brief', title: 'First Brief', content: '# Brief\n' });
+  writeFileSync(join(workspace, '.env.local'), 'SECRET=1');
+  const server = createDashboardServer({ agentDir: f.dir, publicHost: 'dashboard.example', storageRoot });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
+  const port = server.address().port;
+  // node:http (not fetch) so the wire Host header can name the accepted
+  // public host while the TCP connection stays loopback.
+  const { request: httpRequest } = await import('node:http');
+  const httpCall = (path, { host, origin, method = 'GET', headers = {}, body } = {}) => new Promise((resolve, reject) => {
+    const outgoing = httpRequest({ host: '127.0.0.1', port, path, method,
+      headers: { ...(host !== undefined ? { host } : {}), ...(origin !== undefined ? { origin } : {}), ...headers } },
+      incoming => {
+        const chunks = [];
+        incoming.on('data', chunk => chunks.push(chunk));
+        incoming.on('end', () => resolve({ status: incoming.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
+      });
+    outgoing.on('error', reject);
+    if (body !== undefined) outgoing.write(body);
+    outgoing.end();
+  });
+  const detailPath = `/api/workspace?${new URLSearchParams({ id: 'writer' })}`;
+  const listingPath = `/api/workspace-files?${new URLSearchParams({ id: 'writer' })}`;
+  const filePath = `/api/workspace-file?${new URLSearchParams({ id: 'writer', file: brief.path })}`;
+  const paths = ['/api/workspaces', detailPath, listingPath, filePath];
+
+  const loopback = [];
+  for (const path of paths) {
+    const response = await httpCall(path);
+    assert.equal(response.status, 200, path);
+    assert.doesNotMatch(response.body, /action_token/, path);
+    loopback.push(response.body);
+  }
+  assert.equal(JSON.parse(loopback[0]).storage.status, 'ok');
+  assert.equal(JSON.parse(loopback[1]).id, 'writer');
+  assert.equal(loopback[3], '# Brief\n');
+
+  for (const variant of [{ host: 'dashboard.example' }, { host: 'dashboard.example:443', origin: 'https://dashboard.example' }, { headers: { 'x-forwarded-for': '' } }]) {
+    for (const [index, path] of paths.entries()) {
+      const response = await httpCall(path, variant);
+      assert.equal(response.status, 200, `${JSON.stringify(variant)} ${path}`);
+      assert.equal(response.body, loopback[index], `${JSON.stringify(variant)} ${path}`);
+    }
+  }
+
+  for (const path of paths) {
+    const head = await httpCall(path, { method: 'HEAD' });
+    assert.equal(head.status, 200, `HEAD ${path}`);
+    assert.equal(head.body, '', `HEAD ${path}`);
+    for (const host of ['evil-dashboard.example', 'dashboard.example.evil', 'dashboard.example:4319']) {
+      assert.equal((await httpCall(path, { host })).status, 403, `${host} ${path}`);
+    }
+    assert.equal((await httpCall(path, { origin: 'http://dashboard.example' })).status, 403, path);
+  }
+  assert.notEqual((await httpCall(`/api/workspace-file?${new URLSearchParams({ id: 'writer', file: '.env.local' })}`)).status, 200);
+
+  const kitBefore = readFileSync(join(workspace, 'kit.yaml'), 'utf8');
+  const briefBefore = readFileSync(join(workspace, brief.path), 'utf8');
+  const kitMtime = lstatSync(join(workspace, 'kit.yaml')).mtimeMs;
+  const briefMtime = lstatSync(join(workspace, brief.path)).mtimeMs;
+  for (const method of ['POST', 'PUT']) {
+    for (const variant of [{ host: 'dashboard.example' }, { headers: { 'x-forwarded-for': '' } }]) {
+      assert.equal((await httpCall(detailPath, { method, body: '{}', ...variant })).status, 405, `${method} ${JSON.stringify(variant)}`);
+    }
+  }
+  assert.equal(readFileSync(join(workspace, 'kit.yaml'), 'utf8'), kitBefore);
+  assert.equal(readFileSync(join(workspace, brief.path), 'utf8'), briefBefore);
+  assert.equal(lstatSync(join(workspace, 'kit.yaml')).mtimeMs, kitMtime);
+  assert.equal(lstatSync(join(workspace, brief.path)).mtimeMs, briefMtime);
+});
+
+// Run independently: node --test --test-name-pattern='partial workspace coverage' scripts/spec-observe/dashboard.test.mjs
+test('partial workspace coverage: catalog states render through the split-pane owners', async () => {
+  const validCatalog = { storage: { root: '/store', status: 'ok', errors: [] },
+    valid: [{ id: 'writer', name: 'Writer', directory: '/store/projects/writer',
+      kit: { version: 1, id: 'writer', name: 'Writer', repositories: [] }, attention: [] }], invalid: [], errors: [] };
+  const context = dashboardContext({ fetch: async () => ({ ok: true, json: async () => ({}) }) });
+  const list = () => context.document.getElementById('run-list');
+  const detail = () => context.document.getElementById('observation-detail');
+  vm.runInContext("mode='workspaces'", context);
+
+  // Loading with no catalog yet is announced in the list region.
+  vm.runInContext('catalog=null;workspace=null;workspaceError=null;selectedWorkspace=null;render()', context);
+  assert.match(list().innerHTML, /Loading workspaces/);
+
+  // Missing storage reports the status and shows the setup command as text.
+  vm.runInContext("catalog={storage:{root:'/store',status:'missing_root',errors:[]},valid:[],invalid:[],errors:[{path:'/store',message:'missing_root'}]};render()", context);
+  assert.match(detail().innerHTML, /missing_root/);
+  assert.match(detail().innerHTML, /setup/);
+  // The status placeholder error is not repeated beside the status line.
+  assert.equal(list().innerHTML.split('missing_root').length - 1, 1);
+  vm.runInContext("catalog.storage.status='missing_projects';render()", context);
+  assert.match(detail().innerHTML, /missing_projects/);
+
+  // An empty catalog differs from an invalid one.
+  vm.runInContext("catalog={storage:{root:'/store',status:'ok',errors:[]},valid:[],invalid:[],errors:[]};render()", context);
+  assert.match(list().innerHTML, /No workspaces/i);
+  vm.runInContext("catalog.invalid=[{directory:'/store/projects/broken',errors:['kit.yaml: invalid']}];render()", context);
+  assert.match(list().innerHTML, /broken/);
+  assert.match(list().innerHTML, /kit\.yaml: invalid/);
+
+  // A partial workspace keeps association statuses visible; the ideal case is clean.
+  vm.runInContext(`catalog=${JSON.stringify(validCatalog)};selectedWorkspace='writer';workspace={id:'writer',name:'Writer',directory:'/store/projects/writer',kit:{version:1,id:'writer',name:'Writer',repositories:[]},repositories:[{id:'docs',path:'/repo',status:'missing',attention:['unreadable']}],context:[{path:'context/notes.md',status:'outside_root'}],briefs:['2026-10-10-brief.md'],notes:[],artifacts:[{path:'artifacts/a.json',status:'unreadable'}],has_workspace_specs:false,attention:['directory_mismatch']};render()`, context);
+  assert.match(detail().innerHTML, /missing/);
+  assert.match(detail().innerHTML, /outside_root/);
+  assert.match(detail().innerHTML, /unreadable/);
+  assert.match(detail().innerHTML, /directory_mismatch/);
+  assert.match(detail().innerHTML, /2026-10-10-brief\.md/);
+  assert.match(detail().innerHTML, />1 file</);
+  assert.match(detail().innerHTML, />0 files</);
+  assert.match(detail().innerHTML, />1 record</);
+  assert.doesNotMatch(detail().innerHTML, /mark-complete/);
+  vm.runInContext("workspace={id:'writer',name:'Writer',directory:'/store/projects/writer',kit:{version:1,id:'writer',name:'Writer',repositories:[]},repositories:[{id:'docs',path:'/repo',status:'ok',attention:[]}],context:[{path:'context/notes.md',status:'ok'}],briefs:[],notes:[],artifacts:[],has_workspace_specs:false,attention:[]};render()", context);
+  assert.match(detail().innerHTML, /ok/);
+  assert.doesNotMatch(detail().innerHTML, /outside_root|unreadable|directory_mismatch/);
+
+  // A refresh keeps existing rows visible and announces loading in the small note region.
+  let release;
+  const refreshing = dashboardContext({ fetch: () => new Promise(resolve => { release = resolve; }) });
+  vm.runInContext(`mode='workspaces';catalog=${JSON.stringify(validCatalog)};selectedWorkspace='writer';render()`, refreshing);
+  const rows = refreshing.document.getElementById('run-list').innerHTML;
+  vm.runInContext('loadWorkspaces()', refreshing);
+  assert.equal(refreshing.document.getElementById('run-list').innerHTML, rows);
+  assert.match(refreshing.document.getElementById('filter-note').textContent, /Loading|Refreshing/);
+  release({ ok: true, json: async () => validCatalog });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(refreshing.document.getElementById('run-list').innerHTML, /data-workspace="writer"/);
+});
+
+test('partial workspace coverage: stale workspace responses are discarded after selection and mode changes', async () => {
+  const pending = new Map(), calls = [];
+  const context = dashboardContext({ fetch: url => { const call = String(url); calls.push(call); return new Promise(resolve => pending.set(call, resolve)); } });
+  const detail = () => context.document.getElementById('observation-detail');
+  const catalog = { storage: { root: '/store', status: 'ok', errors: [] },
+    valid: [{ id: 'alpha', name: 'Alpha', directory: '/store/projects/alpha',
+      kit: { version: 1, id: 'alpha', name: 'Alpha', repositories: [] }, attention: [] },
+    { id: 'beta', name: 'Beta', directory: '/store/projects/beta',
+      kit: { version: 1, id: 'beta', name: 'Beta', repositories: [] }, attention: [] }], invalid: [], errors: [] };
+  const workspaceDetail = (id, name) => ({ id, name, directory: `/store/projects/${id}`,
+    kit: { version: 1, id, name, repositories: [] }, repositories: [], context: [], briefs: [], notes: [], artifacts: [],
+    has_workspace_specs: false, attention: [] });
+  vm.runInContext(`mode='workspaces';catalog=${JSON.stringify(catalog)};selectedWorkspace=null;workspace=null;render()`, context);
+
+  vm.runInContext("selectWorkspace('alpha');selectWorkspace('beta')", context);
+  const alphaCall = calls.find(url => url.includes('id=alpha'));
+  const betaCall = calls.find(url => url.includes('id=beta'));
+  assert.ok(alphaCall && betaCall, 'both selections request workspace detail');
+  pending.get(betaCall)({ ok: true, json: async () => workspaceDetail('beta', 'Beta') });
+  await new Promise(resolve => setImmediate(resolve));
+  pending.get(alphaCall)({ ok: true, json: async () => workspaceDetail('alpha', 'Alpha') });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(vm.runInContext('selectedWorkspace', context), 'beta');
+  assert.match(detail().innerHTML, /Beta/);
+  assert.doesNotMatch(detail().innerHTML, /Alpha/);
+
+  // Leaving workspace mode discards a still-pending workspace response.
+  vm.runInContext("selectWorkspace('alpha')", context);
+  const lateCall = calls.filter(url => url.includes('id=alpha')).pop();
+  vm.runInContext("mode='packages';render()", context);
+  pending.get(lateCall)({ ok: true, json: async () => workspaceDetail('alpha', 'Alpha') });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.doesNotMatch(detail().innerHTML, /Alpha/);
+});
+
+test('partial workspace coverage: keyboard selection, retry, escaping and package completion stay safe', async () => {
+  const fetched = [];
+  const context = dashboardContext({ fetch: async url => {
+    fetched.push(String(url));
+    return { ok: true, headers: { get: () => 'text' }, text: async () => 'body', json: async () => ({}) };
+  } });
+  const list = () => context.document.getElementById('run-list');
+  const detail = () => context.document.getElementById('observation-detail');
+  const workspace = { id: 'writer', name: '<img src=x onerror=alert(1)>', directory: '/store/projects/writer',
+    kit: { version: 1, id: '<i>', name: '<b>', repositories: [] }, repositories: [], context: [],
+    briefs: ['<script>alert(1)</script>.md'], notes: [], artifacts: [], has_workspace_specs: false, attention: [] };
+  const catalog = { storage: { root: '/store', status: 'ok', errors: [] },
+    valid: [{ id: 'writer', name: workspace.name, directory: workspace.directory, kit: workspace.kit, attention: [] }],
+    invalid: [], errors: [] };
+  vm.runInContext(`mode='workspaces';catalog=${JSON.stringify(catalog)};selectedWorkspace='writer';workspace=${JSON.stringify(workspace)};render()`, context);
+
+  // Workspace rows are keyboard buttons and announce selection and count.
+  assert.match(list().innerHTML, /data-workspace="writer"/);
+  assert.match(list().innerHTML, /aria-pressed="true"/);
+  assert.match(vm.runInContext("$('run-count').textContent", context), /workspace/i);
+  assert.doesNotMatch(detail().innerHTML, /mark-complete/);
+
+  // Every kit and file value is escaped before HTML.
+  assert.match(list().innerHTML, /&lt;img/);
+  assert.doesNotMatch(list().innerHTML, /<img/);
+  assert.match(detail().innerHTML, /&lt;script/);
+  assert.doesNotMatch(detail().innerHTML, /<script/i);
+
+  // Retry announces the request failure with a keyboard control.
+  vm.runInContext("workspaceError='Could not load workspaces.';render()", context);
+  assert.match(list().innerHTML, /data-workspace-retry/);
+  assert.match(list().innerHTML, /Retry/);
+
+  // Brief preview uses the workspace file route, never the package route.
+  vm.runInContext("workspaceError=null;render();openWorkspaceFile('briefs/2026-10-10-brief.md')", context);
+  await new Promise(resolve => setImmediate(resolve));
+  const fileCall = fetched.find(url => url.includes('/api/workspace-file') && url.includes('file='));
+  assert.ok(fileCall, 'workspace file preview uses /api/workspace-file');
+  assert.match(fileCall, /id=writer/);
+  assert.match(fileCall, /file=briefs%2F2026-10-10-brief\.md/);
+  assert.equal(fetched.some(url => url.includes('/api/package-file')), false);
+
+  // Returning to packages keeps completion semantics for packages only.
+  vm.runInContext("mode='packages';payload={action_token:'local-token'};liveAnchor={at:Date.parse('2026-10-10T00:00:00Z'),perf:0};render()", context);
+  assert.match(vm.runInContext('completionControl({is_current_assignment:true})', context), /id="mark-complete"/);
 });

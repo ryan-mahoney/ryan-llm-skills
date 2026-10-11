@@ -10,6 +10,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { authorizePackage, listPackageFiles, readPackageFile } from './package-files.mjs';
+import { fetchWorkspace, listWorkspaces, resolveStorageRoot, storageStatus } from '../workspaces/store.mjs';
 import { applyManualCompletions, writeManualCompletion } from './manual-completion.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -106,10 +107,25 @@ export function isRemoteRequest(request) {
     .some(name => Object.hasOwn(headers, name));
 }
 
-export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi/agent'), publicHost } = {}) {
+// Components that workspace read routes never list or serve. Any `.env.`
+// variant (for example `.env.local`) is excluded by prefix.
+const WORKSPACE_EXCLUDED = new Set(['.adjacent', 'sessions', '.git', '.env', 'node_modules', '_build', 'deps']);
+function workspaceExclude(component) {
+  return WORKSPACE_EXCLUDED.has(component) || component.startsWith('.env.');
+}
+
+export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi/agent'), publicHost, storageRoot } = {}) {
   let cached, read;
   const actionToken = randomBytes(32).toString('hex');
   const publicName = normalizePublicHost(publicHost);
+  const workspaceRoot = storageRoot ?? resolveStorageRoot(process.env, homedir());
+  // Fresh catalog per request: only an id with exactly one valid kit maps to a directory.
+  const authorizedWorkspace = async id => {
+    if (typeof id !== 'string' || id === '') throw new Error('Workspace id is required');
+    const match = (await listWorkspaces(workspaceRoot)).valid.filter(entry => entry.kit && entry.kit.id === id);
+    if (match.length !== 1) throw new Error('Workspace is unavailable');
+    return match[0].directory;
+  };
   return createServer(async (request, response) => {
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
@@ -180,6 +196,29 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
           if (file.kind === 'download' || url.searchParams.has('download')) response.setHeader('Content-Disposition', 'attachment; filename="package-file"');
           response.end(request.method === 'HEAD' ? undefined : file.bytes);
         }
+      } else if (path === '/api/workspaces') {
+        response.setHeader('Content-Type', 'application/json; charset=utf-8');
+        response.end(request.method === 'HEAD' ? undefined : JSON.stringify({ storage: await storageStatus(workspaceRoot), ...(await listWorkspaces(workspaceRoot)) }));
+      } else if (path === '/api/workspace') {
+        const id = url.searchParams.get('id');
+        if (typeof id !== 'string' || id === '') throw new Error('Workspace id is required');
+        // fetchWorkspace checks the fresh catalog itself; HEAD skips it, so check here.
+        if (request.method === 'HEAD') await authorizedWorkspace(id);
+        response.setHeader('Content-Type', 'application/json; charset=utf-8');
+        response.end(request.method === 'HEAD' ? undefined : JSON.stringify(await fetchWorkspace(workspaceRoot, id)));
+      } else if (path === '/api/workspace-files') {
+        const directory = await authorizedWorkspace(url.searchParams.get('id'));
+        response.setHeader('Content-Type', 'application/json; charset=utf-8');
+        response.end(request.method === 'HEAD' ? undefined : JSON.stringify(await listPackageFiles(directory, url.searchParams.has('cursor') ? Number(url.searchParams.get('cursor')) : 0, { exclude: workspaceExclude })));
+      } else if (path === '/api/workspace-file') {
+        const directory = await authorizedWorkspace(url.searchParams.get('id'));
+        const file = await readPackageFile(directory, url.searchParams.get('file'), { exclude: workspaceExclude });
+        response.setHeader('Content-Type', file.type);
+        response.setHeader('X-Package-File-Kind', file.kind);
+        response.setHeader('X-Frame-Options', 'SAMEORIGIN');
+        response.setHeader('Content-Security-Policy', "sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'");
+        if (file.kind === 'download' || url.searchParams.has('download')) response.setHeader('Content-Disposition', 'attachment; filename="package-file"');
+        response.end(request.method === 'HEAD' ? undefined : file.bytes);
       } else if (path === '/' || path === '/dashboard.html') {
         response.setHeader('Content-Type', 'text/html; charset=utf-8');
         response.end(request.method === 'HEAD' ? undefined : await readFile(join(here, 'dashboard.html')));

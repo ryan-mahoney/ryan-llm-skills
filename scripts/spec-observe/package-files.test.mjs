@@ -25,3 +25,30 @@ test('package viewer pagination reaches files beyond the first bounded page',asy
  assert.equal(first.files.length,500);assert.equal(first.next_cursor,500);assert.equal(second.files.length,10);assert.equal(second.next_cursor,null);
  assert.equal(new Set([...first.files,...second.files].map(f=>f.name)).size,510);
 });
+
+test('workspace exclusions omit private components from listings, reads and later pages',async t=>{
+ const parent=await realpath(mkdtempSync(join(tmpdir(),'package-exclusions-')));t.after(()=>rmSync(parent,{recursive:true,force:true}));
+ const root=join(parent,'root');mkdirSync(join(root,'.adjacent'),{recursive:true});mkdirSync(join(root,'sessions'),{recursive:true});
+ writeFileSync(join(root,'visible.txt'),'visible text');writeFileSync(join(root,'.adjacent','inner.txt'),'private');writeFileSync(join(root,'.env.local'),'SECRET=1');writeFileSync(join(root,'sessions','s1.md'),'# session');
+ writeFileSync(join(parent,'traversal'),'outside');symlinkSync(join(parent,'traversal'),join(root,'link'));
+ const exclude=component=>component==='.adjacent'||component==='.env.local'||component==='sessions';
+ const isExcluded=name=>name==='.env.local'||name.startsWith('.adjacent/')||name.startsWith('sessions/');
+ // Default behavior is unchanged: private entries stay listed and readable without options.
+ const plain=(await listPackageFiles(root)).files.map(f=>f.name);
+ for(const name of ['visible.txt','.adjacent/inner.txt','.env.local','sessions/s1.md'])assert.ok(plain.includes(name),`default listing lost ${name}`);
+ assert.equal((await readPackageFile(root,'.adjacent/inner.txt')).kind,'text');assert.equal((await readPackageFile(root,'.env.local')).kind,'text');assert.equal((await readPackageFile(root,'sessions/s1.md')).kind,'markdown');
+ // A component predicate removes excluded paths from listings and reads.
+ const filtered=(await listPackageFiles(root,0,{exclude})).files.map(f=>f.name);
+ assert.ok(filtered.includes('visible.txt'));assert.equal(filtered.some(isExcluded),false);
+ for(const name of ['.adjacent/inner.txt','.env.local','sessions/s1.md'])await assert.rejects(readPackageFile(root,name,{exclude}));
+ assert.equal((await readPackageFile(root,'visible.txt',{exclude})).kind,'text');
+ // More than one page: excluded entries must not leak onto the second page.
+ const padded=i=>`visible-${String(i).padStart(3,'0')}.txt`;for(let i=0;i<520;i++)writeFileSync(join(root,padded(i)),'text');
+ const first=await listPackageFiles(root,0,{exclude}),second=await listPackageFiles(root,first.next_cursor,{exclude});
+ assert.equal(first.next_cursor,500);assert.equal(second.next_cursor,null);
+ const visible=new Set(['visible.txt',...Array.from({length:520},(_,i)=>padded(i))]);
+ for(const page of [first.files,second.files]){assert.equal(page.some(f=>isExcluded(f.name)),false);assert.equal(page.every(f=>visible.has(f.name)||f.name==='link'),true);}
+ assert.equal([...first.files,...second.files].filter(f=>visible.has(f.name)).length,521);
+ // Refusals survive when exclusions are requested.
+ await assert.rejects(readPackageFile(root,'../traversal',{exclude}));await assert.rejects(readPackageFile(root,'link',{exclude}));
+});
