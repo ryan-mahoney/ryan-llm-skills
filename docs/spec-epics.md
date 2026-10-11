@@ -60,6 +60,7 @@ repository explicitly (below).
 | `state` | yes | The epic's own lifecycle: `planned`, `active`, `complete`, `abandoned`. This is a coordinator or operator decision, like `sentinel-completion.json` for a package. It is the only lifecycle value stored in the record. |
 | `created_at` | no | ISO date. |
 | `note` | no | Free text about the epic. |
+| `designs` | no | Design packages the epic implements, at most 20: `{ workspace, design, path? }` with the storage workspace id, the design slug and optionally the absolute design directory. See [Design packages](design-packages.md). |
 | `packages` | yes | Ordered members. Array order is the intended tie-break order when several members are eligible. At most 100. |
 | `packages[].package` | yes | Directory name under `.specs/` (no path separators). Unique within the epic. |
 | `packages[].repository` | no | Absolute path of the member's primary checkout when it differs from the record's repository. |
@@ -104,6 +105,7 @@ completion window and the 24-hour activity filter. The snapshot carries:
 ```
 snapshot.epics[] = {
   epic, title, state, note,
+  designs[] = { workspace, design, path },
   repository,            // primary checkout holding the record
   record,                // absolute path of epic.json
   plan,                  // absolute path or null
@@ -145,6 +147,8 @@ The ordinal records creation order and grouping. It is not a dependency; use
 - **Planning.** When architecture decomposes one plan into two or more packages,
   the planning stage creates `_epics/<slug>/epic.json` with the members, their
   `requires`, and the plan path, and names the members by the convention above.
+  When the plan implements design packages, it lists them under `designs` and cuts
+  members on the screen inventory ([Design packages](design-packages.md)).
 - **epic-end-to-end.** Reads membership, order and dependencies from the record,
   writes `run.md` beside it, and updates `state`. Given a `PACKAGES` list and no
   record, it writes one first.

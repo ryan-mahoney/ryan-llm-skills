@@ -206,20 +206,24 @@ as `Use STRONG_OWNER for steps 4 and 7.` Existing prepared specs need no new fie
 | **spec-gym-extract** | `node scripts/spec-gym/cli.mjs extract ...` | Extract a draft scenario from a real package and pinned Git revision without modifying the source |
 | **test-audit** | `/test-audit <behavior or path> [mode=assess\|apply]` | Find redundant, weak, brittle, or costly tests in a scoped suite, and optionally apply the fixes |
 
-### Design entry point
+### Design packages
 
-The design stages replace architecture for UI work and hand off to the same back half. Each
-surface is classified as **functional** ([functionalist design](rules/functionalist-design.md))
-or **expressive** ([expressive design](rules/expressive-design.md)), and as a prototype or a
-real in-code deliverable. The selected rule follows the spec into every step. Prototypes give
-rendered-state evidence, but production code must still prove its wiring and accessibility.
+UI work starts from a design package: one self-contained HTML/Tailwind file per screen-state
+plus a `design.json` index, produced by one model from context files and the workspace's
+design system, stored in workspace storage (`projects/<workspace>/designs/<slug>/`) rather
+than a repository, and browsed in Sentinel's workspace view. Epics and specs reference
+screens where they live by identity, path and digest; nothing is copied into `.specs/`.
+Contract: [design packages](docs/design-packages.md). Content rule:
+[prototype design](rules/prototype-design.md).
 
 | Skill | Command | Purpose |
 |---|---|---|
-| **design-spec-architect** | `/design-spec-architect [surface-or-feature]` | Classify the surface and propose a design direction |
-| **design-spec-prototype** | `/design-spec-prototype [feature]` | Build and serve a viewable prototype (optional) |
-| **design-spec-critique** | `/design-spec-critique [feature]` | Critique the prototype or proposal (optional) |
-| **design-spec-writer** | `/design-spec-writer [feature]` | Write `spec.md`, its step index, and `evidence-plan.json`, then hand off to `spec-write` or `spec-end-to-end` |
+| **design-plan** | `/design-plan <workspace> <slug> <context>... [--posture ...]` | Read the context, choose expert and designer lenses, inventory screen × state with the person and job each serves, declare the posture, write `brief.md` and `design.json` |
+| **design-run** | `/design-run <workspace> <slug> [--step N]` | Produce each screen as its own file, lint, capture and inspect at every declared width, then review the set through the brief's lenses |
+
+`node scripts/design/cli.mjs` owns the mechanical part: index validation, screen lint
+(no external resources, no self-referential copy), derived produced/captured status, the
+pinned Tailwind runtime, and the reference line a spec cites.
 
 ## Other workflows
 
@@ -279,7 +283,7 @@ See the [product documentation guide](docs/product-documentation.md).
 | **repo-status** | Collect local Git facts across repositories and worktrees, with optional open PR observations |
 | **architect-inspect**, **identify-where**, **feature-list** | Describe architecture around a file, locate where a behavior lives, or inventory features |
 | **controller-refactor-plan** | Find dead handlers and misplaced responsibilities in a controller |
-| **ux-auditor**, **design-align**, **form-modernizer** | Check UI against a prototype or design system, or modernize a form |
+| **ux-auditor**, **form-modernizer** | Check UI against a prototype, or modernize a form |
 | **ux-page-critique**, **ux-information-critique**, **ux-cover-critique** | Critique an application page, informational page, or book cover |
 | **see**, **uishot** | Check whether the model can view images, and screenshot a running page |
 | **angular-pr-complexity**, **bun-test-fix** | Score an Angular merge commit, or fix a Bun test file |
@@ -331,7 +335,7 @@ and restart Pi. The runtime keeps dispatch and worker termination separate from 
 ### Bundles
 
 `scripts/build-skill-bundles.sh` builds two portable archives under `dist/skill-bundles/`:
-`spec-skills` (spec and design-spec skills, rules, and workflow docs) and `specops-skills`.
+`spec-skills` (spec skills, rules, and workflow docs) and `specops-skills`.
 Each contains `skills/`, `bundle.json`, a README, and `install.sh` (see `./install.sh --help`).
 Set `VERSION` to name the archive. Pushing a `v*` tag builds both bundles in GitHub Actions and
 attaches them with `SHA256SUMS` to the release.

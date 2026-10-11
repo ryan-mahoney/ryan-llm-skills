@@ -24,11 +24,19 @@ node scripts/workspaces/cli.mjs <command> [options]
 | `add-brief` | `add-brief ID --title TITLE [--from FILE]` |
 | `add-note` | `add-note ID --title TITLE [--from FILE]` |
 | `add-artifact` | `add-artifact ID (--repository RID --path REL \| --url URL) [--title T] [--note N]` |
+| `launch` | `launch ID --brief REL (--instructions TEXT \| --instructions-file PATH) [--target RID] [--skill NAME] [--id UUID] [--yes \| --digest SHA]` — preview the resolved contract, then start Pi in a dedicated tmux session after confirmation |
 | `locate` | `locate ID [--json]` — reconcile one assignment and print its envelope |
 | `assignments` | `assignments [--workspace ID] [--json]` — list assignment envelopes |
 | `attach` | `attach ID` — attach this terminal to a live assignment's recorded session (requires a TTY) |
 | `takeover` | `takeover ID [--run RUN]` — deliver a coordinator hold for a spec assignment, then attach when a TTY is present |
 | `resume` | `resume ID --hold ID [--run RUN]` — deliver a release direction naming one retained hold; never releases it |
+
+`launch` always prints the resolved contract and its `contract_digest` first. In a
+terminal, `--yes` then typing `yes` confirms; without a TTY, `--digest` must match
+the previewed digest. `--brief` is relative to the workspace directory (for example
+the `briefs/...` path `add-brief` prints). `--target` names a repository id from
+`kit.yaml`; by default the session uses the root's dedicated socket
+`<root>/.sentinel/adjacent.sock`.
 
 `add-brief` and `add-note` read stdin completely when `--from` is absent; with
 `--from FILE` the file is the only source and stdin is never touched.

@@ -472,7 +472,7 @@ skip a fired lens because its preferred skill is absent.
   (`.tsx`/`.jsx`/`.vue`/`.svelte`/`.css`/`.scss` or component/view directories) **or**
   the spec's Applicable Rules list design rules. Looks for: design-system token
   drift, missing UX states (loading/empty/error/disabled), and accessibility
-  regressions. When `design-align` or `ux-auditor` is available, delegate to it. When
+  regressions. When `ux-auditor` is available, delegate to it. When
   the branch has a reachable dev server, Storybook, or component harness, render the
   changed views before judging them if current inspected captures do not establish
   the relevant state. Reuse applicable step captures and inspection records, checking

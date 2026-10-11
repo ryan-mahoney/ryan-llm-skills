@@ -203,6 +203,19 @@ server with Ctrl+C; sentinel does not own or stop independently launched viewers
 build step. It can also open directly from disk: use **Import snapshot** to inspect
 a saved observer JSON file offline. Live refresh requires the local service.
 
+### Designs
+
+The workspace detail lists the workspace's design packages
+(`projects/<id>/designs/<slug>/design.json`, read through `/api/workspace-designs`:
+up to 50 designs, 64 KiB per index) with posture and derived produced/captured
+counts, and reports invalid indexes beside them. Selecting a design opens a screen
+viewer in the file panel: previous/next by step, a width toggle from the declared
+widths, the screen in the same sandboxed iframe as other workspace HTML, and the
+index entry's person, job, kind, state, primary action, notes and deviations beside
+it. Workspace HTML may load fonts from inside the workspace (`font-src 'self'`);
+network access stays disabled. Read-only; nothing writes a design record. Contract:
+[docs/design-packages.md](../../docs/design-packages.md).
+
 ### Thread briefs and assignment handoff
 
 Selecting a workspace shows its local discussion threads. Thread routes, brief
