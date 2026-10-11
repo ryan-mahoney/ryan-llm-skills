@@ -119,6 +119,13 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
   const actionToken = randomBytes(32).toString('hex');
   const publicName = normalizePublicHost(publicHost);
   const workspaceRoot = storageRoot ?? resolveStorageRoot(process.env, homedir());
+  // Fresh catalog per request: only an id with exactly one valid kit maps to a directory.
+  const authorizedWorkspace = async id => {
+    if (typeof id !== 'string' || id === '') throw new Error('Workspace id is required');
+    const match = (await listWorkspaces(workspaceRoot)).valid.filter(entry => entry.kit && entry.kit.id === id);
+    if (match.length !== 1) throw new Error('Workspace is unavailable');
+    return match[0].directory;
+  };
   return createServer(async (request, response) => {
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
@@ -195,23 +202,17 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
       } else if (path === '/api/workspace') {
         const id = url.searchParams.get('id');
         if (typeof id !== 'string' || id === '') throw new Error('Workspace id is required');
-        const catalog = await listWorkspaces(workspaceRoot);
-        if (catalog.valid.filter(entry => entry.kit && entry.kit.id === id).length !== 1) throw new Error('Workspace is unavailable');
+        // fetchWorkspace checks the fresh catalog itself; HEAD skips it, so check here.
+        if (request.method === 'HEAD') await authorizedWorkspace(id);
         response.setHeader('Content-Type', 'application/json; charset=utf-8');
         response.end(request.method === 'HEAD' ? undefined : JSON.stringify(await fetchWorkspace(workspaceRoot, id)));
       } else if (path === '/api/workspace-files') {
-        const id = url.searchParams.get('id');
-        if (typeof id !== 'string' || id === '') throw new Error('Workspace id is required');
-        const match = (await listWorkspaces(workspaceRoot)).valid.filter(entry => entry.kit && entry.kit.id === id);
-        if (match.length !== 1) throw new Error('Workspace is unavailable');
+        const directory = await authorizedWorkspace(url.searchParams.get('id'));
         response.setHeader('Content-Type', 'application/json; charset=utf-8');
-        response.end(request.method === 'HEAD' ? undefined : JSON.stringify(await listPackageFiles(match[0].directory, url.searchParams.has('cursor') ? Number(url.searchParams.get('cursor')) : 0, { exclude: workspaceExclude })));
+        response.end(request.method === 'HEAD' ? undefined : JSON.stringify(await listPackageFiles(directory, url.searchParams.has('cursor') ? Number(url.searchParams.get('cursor')) : 0, { exclude: workspaceExclude })));
       } else if (path === '/api/workspace-file') {
-        const id = url.searchParams.get('id');
-        if (typeof id !== 'string' || id === '') throw new Error('Workspace id is required');
-        const match = (await listWorkspaces(workspaceRoot)).valid.filter(entry => entry.kit && entry.kit.id === id);
-        if (match.length !== 1) throw new Error('Workspace is unavailable');
-        const file = await readPackageFile(match[0].directory, url.searchParams.get('file'), { exclude: workspaceExclude });
+        const directory = await authorizedWorkspace(url.searchParams.get('id'));
+        const file = await readPackageFile(directory, url.searchParams.get('file'), { exclude: workspaceExclude });
         response.setHeader('Content-Type', file.type);
         response.setHeader('X-Package-File-Kind', file.kind);
         response.setHeader('X-Frame-Options', 'SAMEORIGIN');
