@@ -369,6 +369,55 @@ launchctl bootout gui/$(id -u)/local.spec-sentinel.host
 rm ~/Library/LaunchAgents/local.spec-sentinel.host.plist
 ```
 
+### Operator-only systemd installation (Linux)
+
+The Linux equivalent is a systemd user service. Like the launchd plist, it is an
+operator decision for the target machine and is not installed by this repository.
+First run `~/.agents/sync.sh`, which installs the extension's npm dependencies, and
+start the host once in the foreground to confirm the `ready` line.
+
+The heredoc expands `$(command -v node)`, `$HOME` and `$PATH` when the file is
+written, because systemd does not read the login shell's environment. `PATH` must
+reach `git`, and `gh` when GitHub merge evidence is wanted. If Node comes from mise,
+`command -v node` can resolve to a versioned install that a Node upgrade removes.
+In that case, use the mise shim path (`~/.local/share/mise/shims/node`). Omit
+`--public-host` when the dashboard is not served over Tailscale. Add
+`Environment=ADJACENT_STORAGE_ROOT=...` when storage is not at the default root.
+
+```bash
+TSNAME=$(tailscale status --json | jq -r '.Self.DNSName' | sed 's/\.$//')
+mkdir -p ~/.config/systemd/user
+cat > ~/.config/systemd/user/spec-sentinel.service <<EOF
+[Unit]
+Description=Spec Sentinel host
+After=network-online.target
+
+[Service]
+ExecStart=$(command -v node) $HOME/.agents/pi/extensions/spec-runtime/sentinel-host.mjs --root $HOME/Documents --port 4319 --public-host $TSNAME
+Environment=PATH=$PATH
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+EOF
+```
+
+Load, inspect, and remove it with:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now spec-sentinel
+loginctl enable-linger "$USER"     # keep running without a login session
+systemctl --user status spec-sentinel
+journalctl --user -u spec-sentinel -f
+systemctl --user disable --now spec-sentinel
+rm ~/.config/systemd/user/spec-sentinel.service
+```
+
+Each machine runs its own host with its own agent directory, so a Mac and a Linux
+host do not contend for the ownership claim. Each one observes only its own
+checkouts.
+
 ### Operator-only Tailscale Serve
 
 Serve publishes the loopback dashboard over the tailnet; the personal tailnet's
@@ -379,6 +428,11 @@ tailscale serve --bg --https=443 http://127.0.0.1:4319
 tailscale serve status
 tailscale serve reset
 ```
+
+On Linux, `tailscale serve` needs root unless the user is the Tailscale operator.
+Run `sudo tailscale set --operator=$USER` once, or prefix the commands with `sudo`.
+The dashboard is then at `https://<machine>.<tailnet>.ts.net/`; pass that name as
+`--public-host`.
 
 Never enable Funnel for this dashboard. A `--public-host` argument only matches
 the Serve hostname in Host/Origin checks; it performs no Serve or ACL change.
