@@ -27,7 +27,7 @@ function makeRecord(overrides = {}) {
 function makeClassification(overrides = {}) {
   return {
     state: 'live',
-    piIdentity: null,
+    piIdentity: PI_IDENTITY,
     sessionFile: null,
     attention: [],
     gone: false,
@@ -125,16 +125,53 @@ test('assignment projection keeps unavailable probes and unknown classifications
   assert.equal(listing.display, 'unknown');
 });
 
-test('assignment projection keeps ended and launch-failed records terminal even when live evidence is observed', () => {
-  const ended = project(makeRecord({ state: 'ended' }), makeClassification());
+test('assignment projection keeps ended and launch-failed records terminal when no positive process evidence exists', () => {
+  const ended = project(makeRecord({ state: 'ended' }), makeClassification({ state: 'ended', piIdentity: null }));
   assert.equal(ended.display, 'ended');
+  assert.equal(ended.recordedState, 'ended');
   assert.equal(ended.nextAction, 'History');
   assert.equal(ended.unrecorded, false);
 
-  const failed = project(makeRecord({ state: 'launch_failed' }), makeClassification());
+  const failed = project(makeRecord({ state: 'launch_failed' }), makeClassification({ state: 'launch_failed', piIdentity: null }));
   assert.equal(failed.display, 'launch-failed');
   assert.equal(failed.nextAction, 'History');
   assert.equal(failed.unrecorded, false);
+});
+
+test('assignment projection surfaces a terminal record contradicted by matching live evidence as unknown', () => {
+  for (const state of ['ended', 'launch_failed']) {
+    const classification = makeClassification({
+      state,
+      attention: [`assignment state ${state} is terminal but live evidence was observed; refusing to revive it`],
+    });
+    const row = project(makeRecord({ state }), classification);
+    assert.equal(row.recordedState, state);
+    assert.equal(row.display, 'unknown');
+    assert.equal(row.nextAction, 'Fix probe; no relaunch');
+    assert.equal(row.unrecorded, false);
+    assert.equal(row.coverage, 'partial');
+    assert.equal(row.hasControl, false);
+  }
+});
+
+test('assignment projection treats a retained live classification without matching identity as unknown', () => {
+  const retained = makeClassification({
+    piIdentity: null,
+    attention: ['recorded Pi process 43210 is confirmed dead'],
+  });
+  const row = project(makeRecord(), retained);
+  assert.equal(row.recordedState, 'live');
+  assert.equal(row.observedState, 'live');
+  assert.equal(row.display, 'unknown');
+  assert.equal(row.nextAction, 'Fix probe; no relaunch');
+  assert.equal(row.unrecorded, false);
+  assert.equal(row.coverage, 'partial');
+  assert.equal(row.quiet, false);
+
+  const launching = project(makeRecord({ state: 'launching' }), retained);
+  assert.equal(launching.display, 'unknown');
+  assert.equal(launching.nextAction, 'Fix probe; no relaunch');
+  assert.equal(launching.unrecorded, false);
 });
 
 test('assignment projection marks quiet only from successful finite activity metadata over 120 seconds', () => {
@@ -201,7 +238,7 @@ test('assignment projection adds workers-unconfirmed when the coordinator exited
     execution: 'running',
     coverage: { reasons: ['lease-revoked'] },
   }];
-  const row = project(makeRecord({ state: 'ended' }), makeClassification(), { runs });
+  const row = project(makeRecord({ state: 'ended' }), makeClassification({ state: 'ended', piIdentity: null }), { runs });
   assert.equal(row.display, 'ended');
   assert.equal(row.workersUnconfirmed, true);
   assert.equal(row.nextAction, 'Inspect recorded workers');

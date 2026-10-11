@@ -162,7 +162,17 @@ function displayFor(normalized, observed, nowMs) {
   const locate = `adjacent locate ${normalized.assignmentId ?? "unknown"}`;
 
   // Recorded terminal states never revive, whatever the observation claims.
+  // But positive matching process evidence contradicting a terminal record
+  // is an unresolved process/record mismatch: adj4 classify keeps the state
+  // terminal yet returns the exact saved Pi identity with an explicit
+  // terminal/live contradiction note, so the projection must surface unknown
+  // authority instead of ended history. classify yields a non-null identity
+  // only on exact saved pid/start liveness or an exact pane/pid recovery,
+  // so the identity itself is the positive-evidence signal.
   if (TERMINAL_RECORD_STATES.has(recorded)) {
+    if (observed.piIdentity !== null) {
+      return { display: "unknown", nextAction: UNKNOWN_ACTION, unrecorded: false };
+    }
     return {
       display: recorded === "ended" ? "ended" : "launch-failed",
       nextAction: "History",
@@ -189,7 +199,11 @@ function displayFor(normalized, observed, nowMs) {
       unrecorded: false,
     };
   }
-  if (observed.state === "live") {
+  // A `live` classification is authoritative only with positive matching
+  // identity evidence: adj4 retains `live` whenever gone is unproven, even
+  // without liveEvidence, so a retained reservation without an identity must
+  // not present a running agent.
+  if (observed.state === "live" && observed.piIdentity !== null) {
     if (effective === "live") {
       return { display: "live", nextAction: "Attach command", unrecorded: false };
     }
@@ -198,9 +212,11 @@ function displayFor(normalized, observed, nowMs) {
     }
     return { display: "unknown", nextAction: UNKNOWN_ACTION, unrecorded: false };
   }
-  // Record says live but the observation neither confirms it nor proves gone:
-  // report the gap, not a revived live state.
-  if (effective === "live") {
+  // Record says live but the observation neither confirms it with positive
+  // identity evidence nor proves gone: report the gap, not a revived live
+  // state. This also covers a retained `live` classification without an
+  // identity over any record.
+  if (effective === "live" || observed.state === "live") {
     return { display: "unknown", nextAction: UNKNOWN_ACTION, unrecorded: false };
   }
   if (effective === "launching") {
