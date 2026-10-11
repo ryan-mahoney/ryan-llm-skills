@@ -34,7 +34,7 @@ import {
   storageStatus,
   writeFileAtomic,
 } from "./store.mjs";
-import { attachArgs, probeSession, sessionPanePid, startSession } from "./tmux.mjs";
+import { attachArgs, probeSession, startSession } from "./tmux.mjs";
 
 const GIT_TIMEOUT_MS = 5000;
 const UUID_PATTERN =
@@ -1456,7 +1456,8 @@ export async function locateAssignment(root, id, options = {}) {
  * The UUID and TTY gate run before any root claim. `locateAssignment`
  * reconciles the record under the shared root claim and releases it, then the
  * live state, saved absolute socket and saved pane id are required, and the
- * recorded pane must still resolve to the exact saved pane id and its pane
+ * full UUID ownership must be confirmed by `probeSession`, the recorded
+ * pane must still resolve to the exact saved pane id and its pane
  * process must still be the exact reconciled Pi identity (transport failures
  * are unknown and never adopted; a dead, replaced or unknown pane process
  * refuses before the client starts). The returned argv comes from
@@ -1489,23 +1490,22 @@ export async function attachAssignment(root, id, { isTTY, stdio, adapters } = {}
     throw new Error(`assignment has no saved pane identity: ${id}`);
   }
   const tmuxOptions = options.tmuxRun === undefined ? {} : { run: options.tmuxRun };
-  const pane = await sessionPanePid(
-    { socketPath: reconciled.tmux_socket, sessionName: reconciled.tmux_session },
-    tmuxOptions,
-  );
-  if (pane === null) throw new Error(`assignment session is absent: ${id}`);
-  if (pane.paneId !== reconciled.pane_id) {
+  const terminal = await probeSession(reconciled, tmuxOptions);
+  if (terminal.status !== "present" || terminal.assignment_id !== id) {
+    throw new Error(`assignment terminal ownership is not confirmed: ${id} (${terminal.reason ?? terminal.status})`);
+  }
+  if (terminal.pane_id !== reconciled.pane_id) {
     throw new Error(
-      `assignment pane identity changed: ${id} (${pane.paneId} is not ${reconciled.pane_id})`,
+      `assignment pane identity changed: ${id} (${terminal.pane_id} is not ${reconciled.pane_id})`,
     );
   }
   // A matching pane id is not enough: the live pane process must still be the
   // exact reconciled Pi process (same pid and start time). A mismatch or an
   // unknown identity refuses here, before the attach client starts; no
   // process is ever signaled.
-  if (pane.panePid !== reconciled.pi_identity?.pid || !sameProcess(reconciled.pi_identity)) {
+  if (terminal.pid !== reconciled.pi_identity?.pid || !sameProcess(reconciled.pi_identity)) {
     throw new Error(
-      `assignment pane process changed: ${id} (pane ${pane.paneId} no longer runs the reconciled Pi process)`,
+      `assignment pane process changed: ${id} (pane ${terminal.pane_id} no longer runs the reconciled Pi process)`,
     );
   }
   const argv = attachArgs({

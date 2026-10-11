@@ -428,7 +428,7 @@ function humanEnvelope(envelope) {
     `execution_dir ${record.execution_dir}`,
     `socket ${record.tmux_socket}`,
     `session ${record.tmux_session}`,
-    `attach ${envelope.attach_command.join(' ')}`,
+    `attach ${envelope.attach_command.map((arg) => `'${arg.replaceAll("'", "'\\''")}'`).join(' ')}`,
   ];
   for (const entry of envelope.attention) lines.push(`attention ${entry}`);
   return lines.join('\n');

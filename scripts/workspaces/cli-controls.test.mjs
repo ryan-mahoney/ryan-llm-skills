@@ -288,10 +288,10 @@ async function cliLaunch(fixture, { target, id, instructions }) {
   return record;
 }
 
-async function createFixture(t) {
+async function createFixture(t, storageName = "storage") {
   const base = await realpath("/tmp").catch(() => tmpdir());
   const root = await realpath(await mkdtemp(join(base, "adj4-controls-")));
-  const storageRoot = join(root, "storage");
+  const storageRoot = join(root, storageName);
   const workspaceId = "controls-workspace";
   const workspaceDirectory = join(storageRoot, "projects", workspaceId);
   await mkdir(join(workspaceDirectory, "briefs"), { recursive: true });
@@ -330,6 +330,7 @@ async function createFixture(t) {
     ADJACENT_STORAGE_ROOT: storageRoot,
     PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
     HOME: home,
+    TERM: "xterm-256color",
     FAKE_PI_LOG: fakePiLog,
   };
   const state = { socketPaths: new Set(), children: [] };
@@ -394,7 +395,7 @@ test("CLI assignment controls: locate and assignments expose unique records whil
   const human = await runCli(["locate", id], fixture.env);
   assert.equal(human.code, 0, human.stderr);
   assert.match(human.stdout, new RegExp(id));
-  assert.match(human.stdout, /attach node /);
+  assert.match(human.stdout, /attach 'node' /);
 
   // Hand-crafted duplicate UUID record in the second workspace.
   const duplicateDirectory = join(fixture.otherDirectory, "assignments");
@@ -483,7 +484,9 @@ test("CLI assignment controls: non-TTY and non-live attach refuse while owned PT
 
   const attached = spawnPty([process.execPath, CLI_PATH, "attach", liveId], fixture.env);
   fixture.state.children.push(attached.child);
-  const clientName = await waitForClient(socketPath, live.tmux_session);
+  const clientName = await waitForClient(socketPath, live.tmux_session).catch((error) => {
+    throw new Error(`${error.message}: ${JSON.stringify(attached.output())}`);
+  });
   assert.ok(typeof clientName === "string" && clientName.length > 0);
 
   const located = await runCli(["locate", liveId, "--json"], fixture.env);
@@ -532,4 +535,58 @@ test("CLI assignment controls: attach releases the root claim before the attach 
   await waitForClientGone(socketPath, attached.tmux_session);
   killGroup(pty.child);
   await waitForClose(pty.child);
+});
+
+// Select alone with --test-name-pattern='CLI assignment controls: unconfirmed'.
+test("CLI assignment controls: unconfirmed full UUID ownership refuses attach to a still-live pane", async (t) => {
+  const fixture = await createFixture(t);
+  const id = randomUUID();
+  const record = await cliLaunch(fixture, { target: "app", id, instructions: "Ownership refusal." });
+  const sessionsBefore = await sessionNames(record.tmux_socket);
+
+  for (const tag of [randomUUID(), null]) {
+    const args = tag === null
+      ? ["set-option", "-u", "-t", `=${record.tmux_session}:`, "@adjacent_assignment_id"]
+      : ["set-option", "-t", `=${record.tmux_session}:`, "@adjacent_assignment_id", tag];
+    assert.equal((await tmuxExec(record.tmux_socket, args)).ok, true);
+    const located = await runCli(["locate", id, "--json"], fixture.env);
+    assert.equal(located.code, 0, located.stderr);
+    assert.equal(JSON.parse(located.stdout).record.state, "live");
+    assert.ok(sameProcess(record.pi_identity));
+
+    const refused = spawnPty([process.execPath, CLI_PATH, "attach", id], fixture.env);
+    fixture.state.children.push(refused.child);
+    await waitForPtyText(refused, "terminal ownership is not confirmed", "UUID ownership refusal");
+    assert.equal(await tmuxOutput(record.tmux_socket, ["list-clients", "-F", "#{client_name}"]), "");
+    killGroup(refused.child);
+    await waitForClose(refused.child);
+    assert.ok(sameProcess(record.pi_identity));
+    assert.deepEqual(await sessionNames(record.tmux_socket), sessionsBefore);
+    assert.equal(assignmentEntries(await logEntries(fixture.fakePiLog), id).length, 1);
+  }
+});
+
+// Select alone with --test-name-pattern='CLI assignment controls: human attach'.
+test("CLI assignment controls: human attach command round-trips shell-sensitive root arguments", async (t) => {
+  const fixture = await createFixture(t, "Adjacent Storage ' ; $HOME");
+  const id = randomUUID();
+  await cliLaunch(fixture, { target: "app", id, instructions: "Human argv." });
+  const json = await runCli(["locate", id, "--json"], fixture.env);
+  assert.equal(json.code, 0, json.stderr);
+  const expected = ["node", CLI_PATH, "attach", id, "--root", fixture.storageRoot];
+  assert.deepEqual(JSON.parse(json.stdout).attach_command, expected);
+
+  for (const args of [["locate", id], ["assignments"]]) {
+    const human = await runCli(args, fixture.env);
+    assert.equal(human.code, 0, human.stderr);
+    const command = human.stdout.split("\n").find((line) => line.startsWith("attach ")).slice(7);
+    // Parse using the operator's actual POSIX shell, without executing attach
+    // or substituting its output for the independently specified argv.
+    const parsed = await new Promise((resolvePromise, rejectPromise) => {
+      execFile("/bin/sh", ["-c", `set -- ${command}; printf '%s\\0' "$@"`], {
+        env: fixture.env, timeout: 10000, encoding: "utf8",
+      }, (error, stdout) => error ? rejectPromise(error) : resolvePromise(stdout.split("\0").slice(0, -1)));
+    });
+    assert.deepEqual(parsed, expected);
+  }
 });
