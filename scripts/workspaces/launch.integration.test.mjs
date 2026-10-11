@@ -862,7 +862,8 @@ test("repeat and retry: approval boundaries and snapshot stability", async (t) =
     "--provider", "openai", "--model", "gpt-5",
     "--thinking", "high", "--approve",
     `@${snapshotPath}`,
-    "Integration instructions.\n\n" +
+    "Perform the following request:\n\n" +
+      "Integration instructions.\n\n" +
       `Assignment ABCDEF12-3456-4789-ABCD-EF1234567890 workspace workspace-0 dir ${executionDirectory}. ` +
       "Publication authority: none (grants no merge/deploy).",
   ]);

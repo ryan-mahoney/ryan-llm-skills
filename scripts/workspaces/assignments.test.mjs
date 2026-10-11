@@ -137,6 +137,26 @@ test("assignment resolution preserves directory mismatch and registered worktree
   assert.ok(resolved.attention.includes("directory_mismatch"));
   assert.ok(resolved.attention.includes("remote_mismatch"));
 
+  // The approved record carries the same deduplicated target attention: the
+  // workspace-level and repository-level remote_mismatch merge to one entry.
+  await briefFixture(workspaceDirectory, "Linked brief bytes.\n");
+  const piPath = await fakePi(join(root, "bin"));
+  const assignmentId = randomUUID();
+  const assignment = await resolveAssignment({
+    assignment_id: assignmentId,
+    workspace_id: "linked-workspace",
+    storageRoot,
+    brief: "briefs/brief.md",
+    skill: "general",
+    instructions: "Do the linked work.",
+    target: "linked",
+    pi_path: piPath,
+  });
+  assert.deepEqual(
+    [...assignment.record.attention].sort(),
+    ["directory_mismatch", "remote_mismatch"],
+  );
+
   await assertNoWrites(workspaceDirectory, storageRoot);
 });
 
@@ -615,6 +635,80 @@ test("assignment resolution verifies installed Pi input assembly model-free", as
   assert.ok(initialMessage.includes("Apply the demo skill."));
   assert.ok(!initialMessage.split("\n").some((line) => line.trimStart().startsWith("/skill:")));
   t.diagnostic(`assembled initial message bytes: ${Buffer.byteLength(initialMessage, "utf8")}`);
+
+  await assertNoWrites(workspaceDirectory, storageRoot);
+});
+
+test("assignment resolution keeps option-like general instructions as one plain message", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  const workspaceDirectory = join(storageRoot, "projects", "option-workspace");
+  await mkdir(workspaceDirectory, { recursive: true });
+  const appPath = await makeRepo(join(root, "repos", "app"));
+  const home = join(root, "home");
+  await mkdir(home, { recursive: true });
+  const piPath = await fakePi(join(root, "bin"));
+  await briefFixture(workspaceDirectory, "Option-like brief bytes.\n");
+
+  await writeFile(join(workspaceDirectory, "kit.yaml"), kitYaml({
+    id: "option-workspace",
+    name: "Option Workspace",
+    repositories: [{ id: "app", path: appPath }],
+  }));
+
+  const workspacePhysical = (await fetchWorkspace(storageRoot, "option-workspace")).directory;
+  const appPhysical = await realpath(appPath);
+  const piBase = "/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/dist";
+  const { parseArgs } = await import(`${piBase}/cli/args.js`);
+  const { buildInitialMessage } = await import(`${piBase}/cli/initial-message.js`);
+
+  // Pi 1.1.0 parseArgs classifies an argv element by its first characters:
+  // '-...' is an invalid option, '--x' an extension flag and '@x' a file.
+  // The fixed plain-text prefix keeps each instruction a single message and
+  // the owned snapshot the only file argument.
+  for (const instructions of [
+    "- Review the request.",
+    "--review=launch the plan\nSecond line of the request.",
+    "@Mention the owner and continue.",
+  ]) {
+    const id = randomUUID();
+    const resolved = await resolveAssignment({
+      assignment_id: id,
+      workspace_id: "option-workspace",
+      storageRoot,
+      home,
+      brief: "briefs/brief.md",
+      skill: "general",
+      instructions,
+      target: "app",
+      pi_path: piPath,
+    });
+    const snapshotPath = join(workspacePhysical, "assignments", `${id}.brief.md`);
+    const expectedInstruction =
+      `Perform the following request:\n\n${instructions}\n\n` +
+      `Assignment ${id} workspace option-workspace dir ${appPhysical}. ` +
+      "Publication authority: none (grants no merge/deploy).";
+    assert.equal(resolved.piArgs[resolved.piArgs.length - 1], expectedInstruction);
+
+    const parsed = parseArgs(resolved.piArgs);
+    assert.deepEqual(parsed.fileArgs, [snapshotPath]);
+    assert.deepEqual(parsed.messages, [expectedInstruction]);
+    assert.deepEqual(parsed.diagnostics, []);
+    assert.equal(parsed.unknownFlags.size, 0);
+
+    const { initialMessage } = buildInitialMessage({
+      parsed,
+      fileText: resolved.briefBytes.toString("utf8"),
+      fileImages: [],
+      stdinContent: undefined,
+    });
+    assert.ok(initialMessage.includes(instructions));
+    assert.ok(initialMessage.includes(
+      `Assignment ${id} workspace option-workspace dir ${appPhysical}. ` +
+        "Publication authority: none (grants no merge/deploy).",
+    ));
+  }
+  t.diagnostic("option-like instruction variants stayed in the parsed message");
 
   await assertNoWrites(workspaceDirectory, storageRoot);
 });

@@ -301,6 +301,7 @@ function previewObject(preview) {
     execution_dir: record.execution_dir,
     repository_id: record.repository_id,
     spec_package: record.spec_package,
+    attention: record.attention ?? [],
     brief: record.brief,
     brief_sha256: record.brief_sha256,
     brief_snapshot: record.brief_snapshot,
@@ -335,6 +336,10 @@ async function printPreview(preview, options) {
   const lines = ['launch preview'];
   for (const [key, value] of Object.entries(view)) {
     if (key === 'piArgs' || key === 'publication_authority_note') continue;
+    if (key === 'attention') {
+      for (const entry of value) lines.push(`attention ${entry}`);
+      continue;
+    }
     if (key === 'publication_authority') {
       lines.push(`${key} ${value} (grants no merge/deploy)`);
       continue;

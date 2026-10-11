@@ -526,9 +526,12 @@ export async function resolveAssignment(input = {}) {
     `Publication authority: ${publicationAuthority} (grants no merge/deploy).`;
   // Pi's @file prefix suppresses skill expansion and only a leading `/skill:`
   // triggers it, so the skill is delivered as a plain absolute-path
-  // instruction for the model to read itself.
+  // instruction for the model to read itself. A general instruction starts
+  // with this fixed ordinary-text prefix so user text beginning with '-',
+  // '--' or '@' stays one message instead of an option, extension flag or
+  // file argument in the installed Pi parseArgs.
   const initialInstruction = skillPath === null
-    ? `${instructions}\n\n${assignmentBlock}`
+    ? `Perform the following request:\n\n${instructions}\n\n${assignmentBlock}`
     : `Read the skill at ${skillPath} and perform its instructions for this request.\n\n` +
       `${instructions}\n\n${assignmentBlock}`;
 
@@ -566,6 +569,9 @@ export async function resolveAssignment(input = {}) {
     execution_dir: target.execution_dir,
     repository_id: target.repository_id,
     spec_package: target.spec_package,
+    // Resolution diagnostics are part of the record but not of the canonical
+    // contract digest above.
+    attention: target.attention,
     workflow_id: workflowId,
     publication_authority: publicationAuthority,
     attempt_kind: attemptKind,

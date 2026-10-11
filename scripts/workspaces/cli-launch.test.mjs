@@ -83,6 +83,9 @@ function kitYaml({ id, name, repositories }) {
   for (const repository of repositories) {
     lines.push(`  - id: ${JSON.stringify(repository.id)}`);
     lines.push(`    path: ${JSON.stringify(repository.path)}`);
+    if (repository.remote !== undefined && repository.remote !== null) {
+      lines.push(`    remote: ${JSON.stringify(repository.remote)}`);
+    }
   }
   return `${lines.join("\n")}\n`;
 }
@@ -269,7 +272,7 @@ async function assertNoWrites(workspaceDirectory, storageRoot) {
   await assert.rejects(lstat(join(storageRoot, ".sentinel")), { code: "ENOENT" });
 }
 
-async function createFixture(t) {
+async function createFixture(t, { directoryName = "launch-workspace", remote = null, origin = null } = {}) {
   // Keep the root short: the default tmux socket <root>/.sentinel/adjacent.sock
   // must fit the ~103-char unix sun_path limit; macOS TMPDIR under
   // /private/var/folders is too long.
@@ -277,16 +280,17 @@ async function createFixture(t) {
   const root = await realpath(await mkdtemp(join(base, "adj4-launch-")));
   const storageRoot = join(root, "storage");
   const workspaceId = "launch-workspace";
-  const workspaceDirectory = join(storageRoot, "projects", workspaceId);
+  const workspaceDirectory = join(storageRoot, "projects", directoryName);
   await mkdir(join(workspaceDirectory, "briefs"), { recursive: true });
 
   const repo = join(root, "repos", "app");
   await mkdir(repo, { recursive: true });
   await git(repo, ["init", "--quiet"]);
+  if (origin !== null) await git(repo, ["remote", "add", "origin", origin]);
   await writeFile(join(workspaceDirectory, "kit.yaml"), kitYaml({
     id: workspaceId,
     name: "Launch Workspace",
-    repositories: [{ id: "app", path: repo }],
+    repositories: [{ id: "app", path: repo, ...(remote === null ? {} : { remote }) }],
   }));
   const briefBytes = Buffer.from("Reviewed brief bytes.\n", "utf8");
   await writeFile(join(workspaceDirectory, "briefs", "brief.md"), briefBytes);
@@ -386,6 +390,7 @@ test("CLI launch preview: non-TTY and stale digest refuse before writes; matchin
   assert.equal(previewFromFile.contract_digest, digestLine[1]);
   assert.equal(previewFromFile.publication_authority, "pr");
   assert.equal(previewFromFile.publication_authority_note, "grants no merge/deploy");
+  assert.deepEqual(previewFromFile.attention, []);
   await assertNoWrites(workspaceDirectory, storageRoot);
 
   // A preview with a HOME skill resolves the installed skill path read-only.
@@ -573,4 +578,39 @@ test("CLI launch preview: spawn failure reports reservation state and non-zero e
   );
   // Identical repeat starts nothing new: still no fake Pi spawn.
   assert.equal((await logEntries(fixture.fakePiLog)).length, 0);
+});
+
+// Select alone with --test-name-pattern='CLI launch preview: directory and origin mismatch'.
+test("CLI launch preview: directory and origin mismatch attention shown before approval", async (t) => {
+  const fixture = await createFixture(t, {
+    directoryName: "wrong-directory",
+    remote: "https://example.com/expected.git",
+    origin: "https://example.com/actual.git",
+  });
+  const { env, storageRoot, workspaceDirectory, workspaceId } = fixture;
+  const id = randomUUID();
+  const args = [
+    "launch", workspaceId,
+    "--brief", "briefs/brief.md",
+    "--instructions", "Do the mismatched work.",
+    "--id", id,
+    "--target", "app",
+  ];
+
+  // JSON preview (non-TTY refusal): attention is a predictable preview field
+  // printed before confirmation, and the refusal writes nothing.
+  const jsonPreview = await runCli([...args, "--json"], env);
+  parseRefusal(jsonPreview);
+  const view = JSON.parse(jsonPreview.stdout.trim());
+  assert.deepEqual(view.attention, ["directory_mismatch", "remote_mismatch"]);
+  await assertNoWrites(workspaceDirectory, storageRoot);
+
+  // Human preview prints one attention line per diagnostic entry before the
+  // confirmation gate refuses without --digest.
+  const humanPreview = await runCli(args, env);
+  parseRefusal(humanPreview);
+  const text = humanPreview.stdout.replaceAll("\r", "");
+  assert.match(text, /^attention directory_mismatch$/m);
+  assert.match(text, /^attention remote_mismatch$/m);
+  await assertNoWrites(workspaceDirectory, storageRoot);
 });
