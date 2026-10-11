@@ -46,6 +46,10 @@ fetched.
 2. else `ADJACENT_STORAGE_ROOT`, which must be an absolute path;
 3. else `~/Documents/adjacent-storage`.
 
+The default matches Adjacent's dev default (`../adjacent-storage` beside an
+Adjacent checkout at `~/Documents/adjacent`). Production Adjacent requires
+`ADJACENT_STORAGE_ROOT`, so set it to the same value for both.
+
 `status`, `list` and `show` never create the root, `projects/` or any workspace
 file. Setup creates only a missing root and `projects/` one component at a
 time; the parent of a missing root must already exist and is never created
@@ -62,13 +66,14 @@ operator window: one `kit.yaml.prev-<UTC>-<UUID>` copy of the original bytes is
 published first, then a `wx` `kit.yaml.lock` is acquired, then the original is
 re-read and byte-compared immediately before the atomic replacement. Keep the
 exclusion window: do not edit `kit.yaml` while an apply runs. A held or stale
-lock refuses without breaking it; a changed original, duplicate repository id,
-or invalid/non-Git absolute path refuses without touching the kit. Errors after
-the prior copy is published report the retained backup path in `path`.
+lock refuses without breaking it. An interrupted apply can leave `kit.yaml.lock`
+behind; once no apply is running, remove that file by hand and rerun. A changed
+original, duplicate repository id, or invalid/non-Git absolute path refuses
+without touching the kit. Errors after the prior copy is published report the
+retained backup path in `path`.
 
-Live-store writes stay behind D-2: confirm a backup and obtain explicit
-operator authority before pointing this CLI at a real storage root. The
-focused tests use disposable temp roots only.
+Back up the storage root before pointing this CLI at a real store for the
+first time; the tests use disposable temporary roots only.
 
 ## Exit codes
 
