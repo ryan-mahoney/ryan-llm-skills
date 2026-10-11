@@ -2129,3 +2129,158 @@ test('threads UI reconnect snapshots replace obsolete partial text and keep the 
   assert.doesNotMatch(transcript(), /stale text replaced by persisted history/);
   assert.equal(vm.runInContext('threadDraft', context), 'draft to keep');
 });
+
+// ---- Step 7 Agents view: read-only assignment supervision projection ----
+function agentAssignment(overrides = {}) {
+  return {
+    assignment_id: '11111111-1111-4111-8111-111111111111',
+    spec_package: '/repo/.specs/feature',
+    workflow_id: 'wf-1',
+    recordedState: 'live',
+    observedState: 'live',
+    display: 'live',
+    unrecorded: false,
+    quiet: false,
+    attachedCount: null,
+    hasControl: false,
+    workersUnconfirmed: false,
+    nextAction: 'Attach command',
+    safeAction: 'Attach command',
+    attention: [],
+    coverage: 'complete',
+    coverageReasons: [],
+    ...overrides,
+  };
+}
+
+function agentEnvelope({ assignments, runs = [], assignment_coverage = null, observed = '2026-10-06T12:00:00.000Z', generated_at = observed }) {
+  return {
+    generated_at,
+    errors: [],
+    observers: [{
+      observer_id: 'agent-observer', state: 'observing', published_at: observed,
+      snapshot: {
+        workspace: 'agent-workspace', runs, recently_completed: [],
+        coverage: { state: 'complete', reasons: [], observed_at: observed },
+        ...(assignment_coverage === null ? {} : { assignment_coverage }),
+        assignments,
+      },
+    }],
+  };
+}
+
+test('assignment dashboard projection distinguishes display states with safe actions and no write controls', async () => {
+  const observed = '2026-10-06T12:00:00.000Z';
+  const displays = [
+    ['live', 'Live'], ['live-unrecorded', 'Live (unrecorded)'], ['launching', 'Launching'],
+    ['launch-unconfirmed', 'Launch unconfirmed'], ['exited-unrecorded', 'Exited (unrecorded)'],
+    ['terminal-lost', 'Terminal lost'], ['unknown', 'Unknown'], ['ended', 'Ended'], ['launch-failed', 'Launch failed'],
+  ];
+  const assignments = displays.map(([display], index) => agentAssignment({
+    assignment_id: `1111111${index}-1111-4111-8111-11111111111${index}`,
+    display,
+    observedState: display,
+    coverage: display === 'unknown' ? 'partial' : 'complete',
+    nextAction: display === 'live' ? 'Attach command' : `adjacent locate 1111111${index}-1111-4111-8111-11111111111${index}`,
+  }));
+  const context = dashboardContext({ wallNow: () => Date.parse(observed), perfNow: () => 0,
+    fetch: async () => ({ ok: true, json: async () => agentEnvelope({ assignments }) }) });
+  await vm.runInContext('refresh()', context);
+  vm.runInContext("mode='agents';render()", context);
+  const list = context.document.getElementById('run-list').innerHTML;
+  for (const [, label] of displays) assert.ok(list.includes(label), `list shows ${label}`);
+  assert.match(list, /Recently ended/, 'ended rows are grouped separately');
+  assert.ok(list.includes(assignments[0].assignment_id), 'the full assignment id is shown');
+  assert.ok(!list.includes('mark-complete') && !list.includes('data-takeover') && !list.includes('data-resume'));
+  vm.runInContext("selectedAssignment=assignments.find(a=>a.display==='live').key;render()", context);
+  const detail = context.document.getElementById('observation-detail').innerHTML;
+  assert.match(detail, /Execution/);
+  assert.match(detail, /Lifecycle/);
+  assert.match(detail, /Declared evidence/);
+  assert.match(detail, /Attach command/);
+  assert.ok(!/<button/.test(detail), 'assignment detail contains no write controls');
+  assert.doesNotMatch(detail, /transcript/i, 'no transcript surface is rendered');
+});
+
+test('assignment dashboard projection shows declared evidence commit and scope and keeps unassessed evidence explicit', async () => {
+  const observed = '2026-10-06T12:00:00.000Z';
+  const commit = 'a'.repeat(40);
+  const recorded = { package: '/repo/.specs/feature', workflow_id: 'wf-1', execution: 'running',
+    coverage: { state: 'complete', reasons: [] },
+    evidence: { state: 'recorded', verdict: 'ready', commit, source: 'work-tour.json', scope: 'declared-artifact', observed_at: observed, reason: null } };
+  const context = dashboardContext({ wallNow: () => Date.parse(observed), perfNow: () => 0,
+    fetch: async () => ({ ok: true, json: async () => agentEnvelope({ assignments: [agentAssignment()], runs: [recorded] }) }) });
+  await vm.runInContext('refresh()', context);
+  vm.runInContext("mode='agents';collect();render()", context);
+  const detail = context.document.getElementById('observation-detail').innerHTML;
+  assert.ok(detail.includes(commit), 'the declared commit is shown explicitly');
+  assert.match(detail, /declared-artifact/);
+  assert.match(detail, /Declared artifact scope only/);
+  assert.doesNotMatch(detail, /current HEAD|deployment approval/i);
+
+  const notAssessed = { package: '/repo/.specs/feature', workflow_id: 'wf-1', execution: 'completed',
+    coverage: { state: 'complete', reasons: [] },
+    evidence: { state: 'not-assessed', verdict: null, commit: null, source: 'work-tour.json', scope: 'declared-artifact', observed_at: observed, reason: null } };
+  const other = dashboardContext({ wallNow: () => Date.parse(observed), perfNow: () => 0,
+    fetch: async () => ({ ok: true, json: async () => agentEnvelope({ assignments: [agentAssignment({ display: 'ended', recordedState: 'ended', observedState: 'ended' })], runs: [notAssessed] }) }) });
+  await vm.runInContext('refresh()', other);
+  vm.runInContext("mode='agents';collect();render()", other);
+  assert.match(other.document.getElementById('observation-detail').innerHTML, /No declared artifact was assessed/);
+});
+
+test('assignment dashboard projection keeps quiet and attached informational and workers-unconfirmed explicit', async () => {
+  const observed = '2026-10-06T12:00:00.000Z';
+  const run = { package: '/repo/.specs/feature', workflow_id: 'wf-1', execution: 'failed', workflow_state: 'running',
+    coverage: { state: 'partial', reasons: ['lease-missing'] }, evidence: null };
+  const context = dashboardContext({ wallNow: () => Date.parse(observed), perfNow: () => 0,
+    fetch: async () => ({ ok: true, json: async () => agentEnvelope({ assignments: [agentAssignment({
+      quiet: true, attachedCount: 2, workersUnconfirmed: true, attention: ['workers-unconfirmed', 'lease-missing'],
+    })], runs: [run] }) }) });
+  await vm.runInContext('refresh()', context);
+  vm.runInContext("mode='agents';collect();render()", context);
+  const detail = context.document.getElementById('observation-detail').innerHTML;
+  assert.match(detail, /quiet/i);
+  assert.match(detail, /informational/i);
+  assert.match(detail, /presence only/i);
+  assert.match(detail, /Workers unconfirmed/);
+  assert.match(detail, /workers-unconfirmed/);
+});
+
+test('remote dashboard serves only read-only assignment projections without tokens or write controls', async () => {
+  const observed = '2026-10-06T12:00:00.000Z';
+  const context = dashboardContext({ wallNow: () => Date.parse(observed), perfNow: () => 0,
+    fetch: async () => ({ ok: true, json: async () => agentEnvelope({ assignments: [agentAssignment()] }) }) });
+  await vm.runInContext('refresh()', context);
+  vm.runInContext("mode='agents';render()", context);
+  const list = context.document.getElementById('run-list').innerHTML;
+  assert.ok(list.includes(agentAssignment().assignment_id));
+  const detail = context.document.getElementById('observation-detail').innerHTML;
+  assert.ok(!/<button/.test(detail), 'no write controls on assignment detail');
+  assert.doesNotMatch(detail, /api\/package-completion|X-Sentinel-Token/);
+  assert.doesNotMatch(detail, /transcript/i);
+});
+
+test('server-relative freshness anchors assignment ages on the refresh generated_at', async () => {
+  const serverT = Date.parse('2026-10-06T12:00:00Z');
+  const observed = new Date(serverT - 10000).toISOString();
+  const context = dashboardContext({ wallNow: () => serverT + 120000, perfNow: () => 1000,
+    fetch: async () => ({ ok: true, json: async () => agentEnvelope({ assignments: [agentAssignment()], observed, generated_at: new Date(serverT).toISOString() }) }) });
+  await vm.runInContext('refresh()', context);
+  assert.equal(vm.runInContext('liveAnchor.at', context), serverT);
+  vm.runInContext("mode='agents';render()", context);
+  assert.ok(context.document.getElementById('run-list').innerHTML.includes('10s ago'), 'age uses the server anchor, not the client clock');
+});
+
+test('assignment dashboard projection drops a stale selection when the next snapshot no longer contains it', async () => {
+  const observed = '2026-10-06T12:00:00.000Z';
+  let body = agentEnvelope({ assignments: [agentAssignment()] });
+  const context = dashboardContext({ wallNow: () => Date.parse(observed), perfNow: () => 0,
+    fetch: async () => ({ ok: true, json: async () => body }) });
+  await vm.runInContext('refresh()', context);
+  vm.runInContext("mode='agents';render();selectedAssignment=assignments[0].key", context);
+  const stale = vm.runInContext('selectedAssignment', context);
+  body = agentEnvelope({ assignments: [agentAssignment({ assignment_id: '22222222-2222-4222-8222-222222222222' })] });
+  await vm.runInContext('refresh()', context);
+  assert.notEqual(vm.runInContext('selectedAssignment', context), stale, 'the stale key is refused');
+  assert.equal(vm.runInContext('assignments.some(a=>a.key===selectedAssignment)', context), true, 'selection resolves to a live row');
+});

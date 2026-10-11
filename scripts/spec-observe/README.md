@@ -41,6 +41,24 @@ and dashboard service.
 An old running record without its lease or checkout is labeled **Running
 unconfirmed**; it does not establish that a worker is currently executing.
 
+The **Agents** view lists the tmux assignments observed under the configured
+storage root. The list shows current rows first and groups ended or launch-failed
+rows under **Recently ended**. Each row shows the full assignment UUID, one
+display state — live, live (unrecorded), launching, launch unconfirmed, exited
+(unrecorded), terminal lost, unknown, ended or launch failed — and a safe textual
+next action (attach command, `adjacent locate <id>`, wait, do not relaunch,
+history, or inspect recorded workers). Quiet session activity is informational
+(no growth for 120 seconds); attached clients are presence only and never grant
+control. Selecting an agent shows separate Execution, Lifecycle and Declared
+evidence sections: Execution reports recorded versus observed state and coverage,
+Lifecycle reports the linked workflow run, quiet, attachment and unconfirmed
+workers, and Declared evidence reports a ready/blocked verdict at its declared
+commit with `declared-artifact` scope, or `not-assessed` when no artifact was
+read. Assignment coverage (`complete` or `partial`) explains missing probe reads.
+The view is read-only: it never invokes attach, takeover or resume, never writes
+records and never exposes transcripts. Older snapshots without `assignments`
+simply show no agent rows.
+
 Run cards and details show the assigned step’s position, name and total prepared
 steps from the canonical primary package’s bounded `spec-steps.json` read. The
 bar represents position in the sorted index (including sparse step numbers),
