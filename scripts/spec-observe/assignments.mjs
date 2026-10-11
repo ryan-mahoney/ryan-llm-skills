@@ -35,6 +35,10 @@ const PROBE_UNAVAILABLE_FRAGMENTS = ["observation is unknown", "process listing 
 // adj4 classify says this when the exact recorded Pi process is alive without
 // the exact recorded terminal: S-2 terminal-lost.
 const ALIVE_WITHOUT_TERMINAL = "alive without the exact recorded terminal";
+// adj4 classify says this when the flattened process listing contains the
+// assignment UUID: positive evidence that contradicts a persisted terminal
+// record even when the saved Pi identity is confirmed dead.
+const UUID_PROCESS_CANDIDATE = "process listing shows a candidate for the assignment UUID";
 const UNKNOWN_ACTION = "Fix probe; no relaunch";
 
 function asString(value) {
@@ -123,6 +127,14 @@ function observationStatus(observations, key) {
     : null;
 }
 
+// Positive full-UUID process evidence for a terminal record. Structured
+// producer status is authoritative when supplied; the classifier's own
+// attention phrase carries the same signal for classification-only input.
+function uuidProcessCandidate(observed, observations) {
+  if (observations !== null) return observationStatus(observations, "uuidProcesses") === "present";
+  return observed.attention.some(value => value.includes(UUID_PROCESS_CANDIDATE));
+}
+
 // A structured terminal is usable only when present, for this exact
 // assignment and, when the record saved a pane, for the exact recorded pane.
 // A positive classified Pi must also be the process in that pane.
@@ -182,6 +194,23 @@ function attachedCount(record, activity) {
   return null;
 }
 
+// The opt-in tmux probe reports the current session's client count with the
+// exact terminal identity. A present terminal count is current evidence for
+// the exact assignment and recorded pane, so it takes priority over retained
+// record and activity hints. A foreign terminal or a missing, malformed or
+// unsafe count leaves the structured count unknown.
+function structuredAttachedCount(normalized, observations) {
+  const terminal = observations?.terminal;
+  if (terminal === null || typeof terminal !== "object" || Array.isArray(terminal)) return null;
+  if (terminal.status !== "present") return null;
+  if (asString(terminal.assignment_id) !== normalized.assignmentId) return null;
+  const terminalPane = asString(terminal.pane_id);
+  if (normalized.paneId !== null && terminalPane !== normalized.paneId) return null;
+  const value = terminal.attached;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) return null;
+  return value;
+}
+
 // A run joins only on the same workflow id and the same canonical package; a
 // run that carries a full assignment id must also name this assignment.
 function linkedRuns(runs, normalized) {
@@ -212,16 +241,20 @@ function displayFor(normalized, observed, nowMs, observations) {
   const locate = `adjacent locate ${normalized.assignmentId ?? "unknown"}`;
 
   // Recorded terminal states never revive, whatever the observation claims.
-  // But positive matching process evidence contradicting a terminal record
-  // is an unresolved process/record mismatch: adj4 classify keeps the state
-  // terminal yet returns the exact saved Pi identity with an explicit
-  // terminal/live contradiction note, so the projection must surface unknown
-  // authority instead of ended history. classify yields a non-null identity
-  // only on exact saved pid/start liveness or an exact pane/pid recovery,
-  // so the identity itself is the positive-evidence signal.
+  // But positive process evidence contradicting a terminal record is an
+  // unresolved process/record mismatch: adj4 classify keeps the state terminal
+  // yet returns the exact saved Pi identity on exact saved pid/start liveness
+  // (or pane/pid recovery), or keeps a positive full-UUID candidate in the
+  // process listing. Either signal means the terminal record cannot be
+  // presented as ended history.
   if (TERMINAL_RECORD_STATES.has(recorded)) {
-    if (observed.piIdentity !== null) {
-      return { display: "unknown", nextAction: UNKNOWN_ACTION, unrecorded: false };
+    if (observed.piIdentity !== null || uuidProcessCandidate(observed, observations)) {
+      return {
+        display: "unknown",
+        nextAction: UNKNOWN_ACTION,
+        unrecorded: false,
+        recordProcessMismatch: true,
+      };
     }
     return {
       display: recorded === "ended" ? "ended" : "launch-failed",
@@ -332,12 +365,15 @@ function displayFor(normalized, observed, nowMs, observations) {
  *   observations?: object|null}} options same-workflow/canonical-package run
  *   rows, optional session stat metadata (`{ok: true, size, mtime}`), the
  *   projection clock and optional structured producer observations (preferred
- *   over attention prose when supplied)
+ *   over attention prose when supplied; a present terminal's `attached` count
+ *   takes priority over retained record and activity hints)
  * @returns {object} public row: full `assignment_id`, canonical `spec_package`,
  *   `workflow_id`, `recordedState`, `observedState`, `display`, `unrecorded`,
  *   `quiet`, `attachedCount`, `hasControl: false`, `workersUnconfirmed`,
  *   `nextAction`/`safeAction`, merged `attention`, string `coverage` and
- *   `coverageReasons`
+ *   `coverageReasons`. A terminal record with positive process evidence keeps
+ *   its persisted state but projects `unknown`/no-relaunch/partial and adds
+ *   the `record-process-mismatch` coverage reason.
  */
 export function projectAssignment(record, classification, { runs = [], activity = null, now, observations = null } = {}) {
   const normalized = normalizeRecord(record);
@@ -347,6 +383,7 @@ export function projectAssignment(record, classification, { runs = [], activity 
   const nowMs = normalizeTime(now) ?? Date.now();
 
   const decision = displayFor(normalized, observed, nowMs, structured);
+  const currentAttached = structuredAttachedCount(normalized, structured);
 
   const metadata = normalizeActivity(activity, normalized.assignmentId, observed.sessionFile);
   const processPresent = decision.display === "live"
@@ -372,6 +409,11 @@ export function projectAssignment(record, classification, { runs = [], activity 
   }
 
   const coverageReasons = [];
+  if (decision.recordProcessMismatch) {
+    coverageReasons.push("record-process-mismatch");
+    const mismatch = `assignment state ${normalized.recordedState} is terminal but process evidence was observed; refusing ended history`;
+    if (!attention.includes(mismatch)) attention.push(mismatch);
+  }
   if (!observed.known) coverageReasons.push("classification-unknown");
   const unavailable = structured === null
     ? probeUnavailable(observed)
@@ -393,7 +435,7 @@ export function projectAssignment(record, classification, { runs = [], activity 
     display: decision.display,
     unrecorded: decision.unrecorded,
     quiet,
-    attachedCount: attachedCount(record, activity),
+    attachedCount: currentAttached ?? attachedCount(record, activity),
     hasControl: false,
     workersUnconfirmed,
     nextAction,
@@ -589,8 +631,10 @@ async function selectedSessionActivity(classification, deadline) {
  * Enumeration uses the real adj4 bounded listAssignments under one shared
  * catalog budget; observation uses the real adj4 observeAssignment/classify
  * composition sequentially under one monotonic probe deadline started after
- * enumeration. No persistence, claims, locate, signals or host wiring.
- * Missing or unusable roots yield explicit unavailable coverage.
+ * enumeration. The composition requests the tmux owner's opt-in current
+ * client count with the exact terminal identity and projects it as
+ * informational `attachedCount`. No persistence, claims, locate, signals or
+ * host wiring. Missing or unusable roots yield explicit unavailable coverage.
  *
  * @param {{storageRoot: string, runs?: object[], now?: Function|number,
  *   limits?: {maxEntries?: number, maxRows?: number, maxFileBytes?: number,
@@ -695,6 +739,7 @@ export async function collectAssignments({
           budget,
           deadline,
           requireCompleteUuid: true,
+          includeAttached: true,
           now: observedAtMs,
           onObservations: value => { observations = value; },
           inspect,

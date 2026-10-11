@@ -330,6 +330,18 @@ function terminalUnknown(reason) {
   return { status: "unknown", reason };
 }
 
+// `#{session_attached}` on a live session is a nonnegative client count. A
+// missing field, a nondecimal token, a negative value or an unsafe integer is
+// unknown, never zero: a parse failure must not claim that no client is
+// attached.
+function parseAttachedCount(value) {
+  if (typeof value !== "string") return null;
+  const token = value.trim();
+  if (!/^\d+$/.test(token)) return null;
+  const count = Number(token);
+  return Number.isSafeInteger(count) && count >= 0 ? count : null;
+}
+
 // Injected final boundaries may throw; normalize to the same result shape as
 // runTmux so failure handling is uniform.
 async function probeCommand(run, socketPath, args) {
@@ -354,13 +366,22 @@ async function probeCommand(run, socketPath, args) {
  * through `display-message`, and when the record carries a saved `pane_id`
  * the observed pane must match it exactly.
  *
+ * The default read-only query returns the exact two-field pane identity. With
+ * `includeAttached: true` the same query also asks tmux for the session's
+ * current client count: the opt-in present result adds `attached`, a
+ * nonnegative safe integer, or null when the count is missing, malformed or
+ * unsafe. The count is presence information only: it never grants control,
+ * and an unparseable count stays unknown rather than becoming zero.
+ *
  * @param {{tmux_socket?: string, tmux_session?: string, assignment_id?: string,
  *   pane_id?: string|null}} record
- * @param {{run?: (socketPath: string, args: string[]) => Promise<object>}} [options]
- * @returns {Promise<{status: 'present', assignment_id: string, pane_id: string, pid: number}
- *   | {status: 'absent'} | {status: 'unknown', reason: string}>}
+ * @param {{run?: (socketPath: string, args: string[]) => Promise<object>,
+ *   includeAttached?: boolean}} [options]
+ * @returns {Promise<{status: 'present', assignment_id: string, pane_id: string,
+ *   pid: number, attached?: number|null} | {status: 'absent'}
+ *   | {status: 'unknown', reason: string}>}
  */
-export async function probeSession(record, { run = runTmux } = {}) {
+export async function probeSession(record, { run = runTmux, includeAttached = false } = {}) {
   const socketPath = record?.tmux_socket;
   const sessionName = record?.tmux_session;
   const assignmentId = record?.assignment_id;
@@ -404,11 +425,17 @@ export async function probeSession(record, { run = runTmux } = {}) {
     "-p",
     "-t",
     `=${sessionName}:`,
-    "#{pane_id} #{pane_pid}",
+    includeAttached ? "#{pane_id} #{pane_pid} #{session_attached}" : "#{pane_id} #{pane_pid}",
   ]);
   if (!pane.ok) return terminalUnknown("pane-identity-unavailable");
   const paneText = typeof pane.stdout === "string" ? pane.stdout.trim() : "";
-  const match = /^(%\d+)\s+(\d+)$/.exec(paneText);
+  // The default query keeps the exact two-field contract. The opt-in query
+  // appends the current client count, and a missing or malformed field leaves
+  // the count unknown while the exact UUID/pane/PID checks still decide
+  // identity, so injected two-field fixtures stay usable.
+  const match = includeAttached
+    ? /^(%\d+)\s+(\d+)(?:\s+(.*))?$/.exec(paneText)
+    : /^(%\d+)\s+(\d+)$/.exec(paneText);
   if (!match) return terminalUnknown("unexpected-pane-identity");
   const panePid = Number(match[2]);
   if (!Number.isSafeInteger(panePid) || panePid <= 0) {
@@ -417,5 +444,14 @@ export async function probeSession(record, { run = runTmux } = {}) {
   if (savedPaneId !== null && match[1] !== savedPaneId) {
     return terminalUnknown("pane-id-mismatch");
   }
-  return { status: "present", assignment_id: assignmentId, pane_id: match[1], pid: panePid };
+  if (!includeAttached) {
+    return { status: "present", assignment_id: assignmentId, pane_id: match[1], pid: panePid };
+  }
+  return {
+    status: "present",
+    assignment_id: assignmentId,
+    pane_id: match[1],
+    pid: panePid,
+    attached: parseAttachedCount(match[3]),
+  };
 }

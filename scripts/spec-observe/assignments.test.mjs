@@ -22,6 +22,7 @@ import { processIdentity } from './process-identity.mjs';
 const NOW = 1_800_000_000_000;
 const ASSIGNMENT_ID = '11111111-1111-4111-8111-111111111111';
 const OTHER_ID = '22222222-2222-4222-8222-222222222222';
+const THIRD_ID = '33333333-3333-4333-8333-333333333333';
 const SPEC_PACKAGE = '/repo/packages/alpha';
 const WORKFLOW_ID = 'workflow-alpha-1';
 const PI_IDENTITY = { pid: 43210, started_at: 'Thu Jan  1 00:00:00 1970' };
@@ -167,6 +168,26 @@ test('assignment projection surfaces a terminal record contradicted by matching 
   }
 });
 
+test('assignment projection treats a terminal record with a classifier UUID process candidate as unknown', () => {
+  for (const state of ['ended', 'launch_failed']) {
+    const classification = makeClassification({
+      state,
+      piIdentity: null,
+      attention: ['process listing shows a candidate for the assignment UUID; retaining the reservation'],
+    });
+    const row = project(makeRecord({ state }), classification);
+    assert.equal(row.recordedState, state);
+    assert.equal(row.observedState, state);
+    assert.equal(row.display, 'unknown');
+    assert.equal(row.nextAction, 'Fix probe; no relaunch');
+    assert.equal(row.unrecorded, false);
+    assert.equal(row.coverage, 'partial');
+    assert.ok(row.coverageReasons.includes('record-process-mismatch'));
+    assert.ok(row.attention.some(value => value.includes('process evidence was observed')));
+    assert.equal(row.hasControl, false);
+  }
+});
+
 test('assignment projection treats a retained live classification without matching identity as unknown', () => {
   const retained = makeClassification({
     piIdentity: null,
@@ -227,6 +248,27 @@ test('assignment projection exposes attached count as information that never gra
   });
   assert.equal(fromActivity.attachedCount, 2);
   assert.equal(fromActivity.hasControl, false);
+
+  // A present opt-in terminal count is current evidence for the exact
+  // assignment and beats retained hints; zero still grants no control.
+  const fromTerminal = project(makeRecord({ attached: 3 }), makeClassification(), {
+    observations: {
+      launcher: { status: 'alive' },
+      terminal: {
+        status: 'present',
+        assignment_id: ASSIGNMENT_ID,
+        pane_id: null,
+        pid: PI_IDENTITY.pid,
+        attached: 0,
+      },
+      pi: { status: 'alive' },
+      uuidProcesses: { status: 'absent' },
+      session: { status: 'missing' },
+    },
+  });
+  assert.equal(fromTerminal.display, 'live');
+  assert.equal(fromTerminal.attachedCount, 0);
+  assert.equal(fromTerminal.hasControl, false);
 });
 
 test('assignment projection links an exited coordinator run with lease conditions to workers-unconfirmed', () => {
@@ -958,6 +1000,115 @@ test('assignment collection: quiet marks only positive live rows with old readab
   assert.equal(row.display, 'live');
   assert.equal(row.quiet, true);
   assert.equal(row.coverage, 'complete');
+});
+
+// Focused: node --test --test-name-pattern='assignment collection: opt-in terminal attachment counts' scripts/spec-observe/assignments.test.mjs
+test('assignment collection: opt-in terminal attachment counts reach attachedCount while record bytes stay unchanged', async (t) => {
+  const { root, workspace } = await collectionFixture(t);
+  const record = await resolvedRecord(root, workspace);
+  const recordPath = await persistRecord(workspace, record, {
+    state: 'live',
+    pane_id: '%5',
+    launcher_identity: LAUNCHER_IDENTITY,
+    pi_identity: AGENT_IDENTITY,
+  });
+  const before = await fixtureSignature(recordPath);
+  const formats = [];
+  const tmuxRunWithAttached = field => async (_socketPath, args) => {
+    if (args[0] === 'has-session') return okRun('');
+    if (args[0] === 'list-clients') return okRun('');
+    if (args[0] === 'show-options') return okRun(`${ASSIGNMENT_ID}\n`);
+    if (args[0] === 'display-message') {
+      formats.push(args[4]);
+      const suffix = field === undefined ? '' : ` ${field}`;
+      return okRun(`%5 ${AGENT_IDENTITY.pid}${suffix}\n`);
+    }
+    return exitOne();
+  };
+  const cases = [
+    ['0', 0],
+    ['7', 7],
+    [undefined, null],
+    ['many', null],
+  ];
+  for (const [field, expected] of cases) {
+    const result = await assignmentsModule.collectAssignments({
+      storageRoot: root,
+      probes: {
+        inspect: liveInspect(AGENT_IDENTITY),
+        psRun: psPresent(ASSIGNMENT_ID),
+        tmuxRun: tmuxRunWithAttached(field),
+      },
+    });
+    const row = rowFor(result, ASSIGNMENT_ID);
+    assert.ok(row, `${field} must collect the stored assignment`);
+    assert.equal(row.display, 'live', `${field} must remain a live row`);
+    assert.equal(row.attachedCount, expected, `${field} attached count`);
+    assert.equal(row.hasControl, false);
+  }
+  assert.equal(formats.length, cases.length);
+  for (const format of formats) {
+    assert.equal(format, '#{pane_id} #{pane_pid} #{session_attached}');
+  }
+  assert.deepEqual(await fixtureSignature(recordPath), before);
+});
+
+// Focused: node --test --test-name-pattern='assignment collection: terminal records with a UUID process candidate' scripts/spec-observe/assignments.test.mjs
+test('assignment collection: terminal records with a UUID process candidate are unknown, never history', async (t) => {
+  const { root, workspace } = await collectionFixture(t);
+  const endedRecord = await resolvedRecord(root, workspace);
+  await persistRecord(workspace, endedRecord, {
+    state: 'ended',
+    launcher_identity: LAUNCHER_IDENTITY,
+    pi_identity: AGENT_IDENTITY,
+  });
+  const failedRecord = await resolvedRecord(root, workspace, { assignment_id: OTHER_ID });
+  await persistRecord(workspace, failedRecord, {
+    state: 'launch_failed',
+    launcher_identity: LAUNCHER_IDENTITY,
+    pi_identity: AGENT_IDENTITY,
+  });
+  const historyRecord = await resolvedRecord(root, workspace, { assignment_id: THIRD_ID });
+  await persistRecord(workspace, historyRecord, {
+    state: 'launch_failed',
+    launcher_identity: LAUNCHER_IDENTITY,
+    pi_identity: AGENT_IDENTITY,
+  });
+  const listing = [ASSIGNMENT_ID, OTHER_ID]
+    .map(assignmentId => `4242 node --session-id ${assignmentId}`)
+    .join('\n') + '\n';
+  const result = await assignmentsModule.collectAssignments({
+    storageRoot: root,
+    probes: {
+      inspect: deadInspect,
+      psRun: async () => ({ stdout: listing, complete: true }),
+      tmuxRun: tmuxRunAbsent(),
+    },
+  });
+  for (const [assignmentId, state] of [[ASSIGNMENT_ID, 'ended'], [OTHER_ID, 'launch_failed']]) {
+    const row = rowFor(result, assignmentId);
+    assert.ok(row, `terminal record ${assignmentId} must be collected`);
+    assert.equal(row.recordedState, state);
+    assert.equal(row.observedState, state, 'classify keeps the persisted terminal state');
+    assert.equal(row.display, 'unknown');
+    assert.equal(row.nextAction, 'Fix probe; no relaunch');
+    assert.equal(row.safeAction, 'Fix probe; no relaunch');
+    assert.equal(row.unrecorded, false);
+    assert.equal(row.coverage, 'partial');
+    assert.ok(row.coverageReasons.includes('record-process-mismatch'));
+    assert.ok(row.attention.some(value => value.includes('process evidence was observed')));
+    assert.ok(row.attention.some(value => value.includes('process listing shows a candidate for the assignment UUID')));
+    assert.equal(row.hasControl, false);
+  }
+  const history = rowFor(result, THIRD_ID);
+  assert.ok(history, 'the no-candidate terminal neighbor must be collected');
+  assert.equal(history.recordedState, 'launch_failed');
+  assert.equal(history.display, 'launch-failed');
+  assert.equal(history.nextAction, 'History');
+  assert.equal(history.unrecorded, false);
+  assert.equal(history.coverage, 'complete');
+  assert.ok(!history.coverageReasons.includes('record-process-mismatch'));
+  assert.equal(history.hasControl, false);
 });
 
 test('assignment collection: unreadable or ambiguous sessions keep live display but partial coverage', async (t) => {

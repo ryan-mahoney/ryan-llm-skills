@@ -510,13 +510,18 @@ async function discoverPiSession(record, budget = null, deadline = null) {
  * the pure classify result. Side-effect-free: no record writes, no tmux
  * mutation, no signals. `probes` substitutes only the final boundaries —
  * `inspect` (OS identity; defaults to the shared adj2 inspector), `psRun`
- * (flattened process listing), `tmuxRun` (tmux command transport) and `now`
- * (observation clock). The classify composition itself is never substituted.
+ * (flattened process listing), `tmuxRun` (tmux command transport), `now`
+ * (observation clock) and `includeAttached` (the tmux owner's documented
+ * opt-in client count, default off). The classify composition itself is
+ * never substituted.
  *
  * @param {object} record assignment record
  * @param {{inspect?: Function, psRun?: Function, tmuxRun?: Function,
  *   now?: number|string|Function, budget?: object, deadline?: number,
- *   onObservations?: Function, requireCompleteUuid?: boolean}} [probes]
+ *   onObservations?: Function, requireCompleteUuid?: boolean,
+ *   includeAttached?: boolean}} [probes] `includeAttached` forwards the tmux
+ *   owner's opt-in client count with the same exact terminal identity query;
+ *   the default query and result shape stay unchanged
  * @returns {Promise<{state: string, piIdentity: object|null,
  *   sessionFile: string|null, attention: string[], gone: boolean}>}
  */
@@ -545,10 +550,10 @@ export async function observeAssignment(record, probes = {}) {
 
   let terminal;
   try {
-    terminal = await probeSession(
-      record,
-      probes.tmuxRun === undefined ? {} : { run: probes.tmuxRun },
-    );
+    terminal = await probeSession(record, {
+      ...(probes.tmuxRun === undefined ? {} : { run: probes.tmuxRun }),
+      includeAttached: probes.includeAttached === true,
+    });
   } catch (error) {
     terminal = { status: "unknown", reason: (error && error.code) || "tmux-probe-failed" };
   }
