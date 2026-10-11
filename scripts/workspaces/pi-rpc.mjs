@@ -33,6 +33,96 @@ const defaultClock = {
   clearTimeout: (handle) => clearTimeout(handle),
 };
 
+// Idempotent bounded shutdown for one owned Pi child handle. Adapter-level
+// concerns (pending rejection, exit envelopes, closed flags) stay with the
+// caller; this helper owns only the process handle: close stdin, wait 4s for
+// exit, SIGKILL through the owned handle, wait 1s, return confirmed death or
+// an unconfirmed result. Never signals a recorded numeric PID.
+const ownedCloseResults = new WeakMap();
+
+export function closeOwnedPiChild(child, { clock = defaultClock } = {}) {
+  if (!child || typeof child !== "object" || typeof child.once !== "function") {
+    return Promise.reject(new TypeError("child must be an owned ChildProcess-like object"));
+  }
+  const existing = ownedCloseResults.get(child);
+  if (existing) return existing;
+  const closing = (async () => {
+    const exitState = () => {
+      const code = child.exitCode ?? null;
+      const signal = child.signalCode ?? null;
+      return code === null && signal === null ? null : { code, signal };
+    };
+    let exited = exitState();
+    let resolveExit = null;
+    const exitPromise = new Promise((resolvePromise) => {
+      resolveExit = resolvePromise;
+    });
+    const onExit = (code, signal) => {
+      exited = { code: code ?? null, signal: signal ?? null };
+      resolveExit();
+    };
+    const onClose = (code, signal) => {
+      if (exited === null) onExit(code, signal);
+    };
+    // Observation is installed before stdin is closed so a synchronous exit
+    // from an injected ChildProcess-like boundary cannot be missed.
+    child.once("exit", onExit);
+    child.once("close", onClose);
+    const cleanup = () => {
+      if (typeof child.removeListener === "function") {
+        child.removeListener("exit", onExit);
+        child.removeListener("close", onClose);
+      }
+    };
+    const waitForExit = async (ms) => {
+      const observed = exited ?? exitState();
+      if (observed !== null) {
+        exited = observed;
+        cleanup();
+        return true;
+      }
+      let timer = null;
+      const timedOut = await new Promise((resolvePromise) => {
+        timer = clock.setTimeout(() => resolvePromise(true), ms);
+        exitPromise.then(() => resolvePromise(false));
+      });
+      if (timer !== null) clock.clearTimeout(timer);
+      const settled = exited ?? exitState();
+      if (settled !== null) {
+        exited = settled;
+        cleanup();
+        return true;
+      }
+      return !timedOut;
+    };
+    if (child.stdin && !child.stdin.destroyed) {
+      try {
+        child.stdin.end();
+      } catch {
+        // stdin already closed
+      }
+    }
+    let dead = await waitForExit(CLOSE_GRACE_MS);
+    if (!dead) {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // already exited
+      }
+      dead = await waitForExit(CLOSE_KILL_WAIT_MS);
+    }
+    cleanup();
+    return Object.freeze({
+      confirmed_death: dead,
+      exit_code: exited?.code ?? null,
+      signal: exited?.signal ?? null,
+      pid: typeof child.pid === "number" ? child.pid : null,
+    });
+  })();
+  ownedCloseResults.set(child, closing);
+  return closing;
+}
+
 const typedError = (code, message, extra = {}) => Object.assign(new Error(message), { code, ...extra });
 const invalidThread = (message) => typedError("invalid-thread", message);
 const sessionMismatch = (message, extra = {}) => typedError("session-mismatch", message, extra);
@@ -148,13 +238,18 @@ async function assertProspectiveFile(file, thread) {
   assertHeaderIdentity(await readHeader(file), thread, "new session file");
 }
 
-export async function createPiRpc({ thread, context, spawn: spawnImpl = nodeSpawn, clock = defaultClock } = {}) {
+export async function createPiRpc({ thread, context, spawn: spawnImpl = nodeSpawn, clock = defaultClock, signal = null } = {}) {
   if (!thread || typeof thread !== "object" || Array.isArray(thread)) throw invalidThread("thread is required");
   if (!isUuid(thread.thread_id)) throw invalidThread("thread_id must be a UUID");
   if (!isUuid(thread.session_id)) throw invalidThread("session_id must be a UUID");
   if (typeof spawnImpl !== "function") throw invalidThread("spawn must be a function");
   if (!clock || typeof clock.setTimeout !== "function" || typeof clock.clearTimeout !== "function") {
     throw invalidThread("clock must provide setTimeout and clearTimeout");
+  }
+  if (signal !== null && signal !== undefined) {
+    if (typeof signal !== "object" || typeof signal.addEventListener !== "function") {
+      throw invalidThread("signal must be an AbortSignal-like object");
+    }
   }
   const execution_dir = await canonicalDirectory(thread.execution_dir, "execution_dir");
   const session_dir = await canonicalDirectory(thread.session_dir, "session_dir");
@@ -193,6 +288,9 @@ export async function createPiRpc({ thread, context, spawn: spawnImpl = nodeSpaw
   else args.push("--session-id", spawnThread.session_id);
   args.push(...extraArguments);
 
+  if (signal !== null && signal !== undefined && signal.aborted) {
+    throw typedError("service-closed", "pi adapter aborted before spawn", { uncertain: true });
+  }
   const child = spawnImpl(EXECUTABLE, args, { cwd: execution_dir, shell: false, stdio: ["pipe", "pipe", "pipe"] });
 
   const events = new EventEmitter();
@@ -434,6 +532,9 @@ export async function createPiRpc({ thread, context, spawn: spawnImpl = nodeSpaw
 
   function send(command, { timeoutMs = REQUEST_TIMEOUT_MS, phase = "request" } = {}) {
     if (adapterClosed) return Promise.reject(typedError("service-closed", "pi adapter is closed", { uncertain: true }));
+    if (signal !== null && signal !== undefined && signal.aborted) {
+      return Promise.reject(typedError("service-closed", "pi adapter aborted", { uncertain: true }));
+    }
     if (exited || transportBroken !== null || stdoutEnded || stdinBroken) {
       const reason = exited ? "child-exit" : stdinBroken ? "stdin-error" : stdoutEnded ? "stdout-eof" : transportBroken;
       return Promise.reject(typedError("transport-error", "pi transport is not usable", { uncertain: true, reason }));
@@ -527,19 +628,16 @@ export async function createPiRpc({ thread, context, spawn: spawnImpl = nodeSpaw
     return send(command);
   }
 
-  async function waitForExit(ms) {
-    if (exited) return true;
-    let timer = null;
-    const timedOut = await new Promise((resolvePromise) => {
-      timer = clock.setTimeout(() => resolvePromise(true), ms);
-      exitPromise.then(() => resolvePromise(false));
-    });
-    if (timer !== null) clock.clearTimeout(timer);
-    return !timedOut;
-  }
+  const onAbort = () => {
+    void close();
+  };
+  if (signal) signal.addEventListener("abort", onAbort, { once: true });
 
   function close() {
     if (closePromise) return closePromise;
+    if (signal && typeof signal.removeEventListener === "function") {
+      signal.removeEventListener("abort", onAbort);
+    }
     closePromise = (async () => {
       adapterClosed = true;
       rejectPending(typedError("service-closed", "pi adapter closed", { uncertain: true }));
@@ -551,21 +649,7 @@ export async function createPiRpc({ thread, context, spawn: spawnImpl = nodeSpaw
           // stdin already closed
         }
       }
-      let dead = await waitForExit(CLOSE_GRACE_MS);
-      if (!dead) {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // already exited
-        }
-        dead = await waitForExit(CLOSE_KILL_WAIT_MS);
-      }
-      return Object.freeze({
-        confirmed_death: dead,
-        exit_code: exited?.code ?? null,
-        signal: exited?.signal ?? null,
-        pid: typeof child.pid === "number" ? child.pid : null,
-      });
+      return closeOwnedPiChild(child, { clock });
     })();
     return closePromise;
   }
