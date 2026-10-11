@@ -15,8 +15,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
 import { connect as tcpConnect, createServer } from 'node:net';
 import { networkInterfaces, tmpdir } from 'node:os';
@@ -26,6 +26,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { inspectProcess, sameProcess } from '../../../scripts/spec-observe/process-identity.mjs';
 import { workspaceKey } from '../../../scripts/spec-observe/sentinel.mjs';
 import { createWorkspace, setupStorage } from '../../../scripts/workspaces/store.mjs';
+import { launchAssignment, resolveAssignment } from '../../../scripts/workspaces/assignments.mjs';
 import { createSentinelHost } from './sentinel-host.mjs';
 
 const HOST_FILE = fileURLToPath(new URL('./sentinel-host.mjs', import.meta.url));
@@ -134,7 +135,7 @@ function connectOnce(host, port, timeoutMs = 750) {
   });
 }
 
-function createFixture(t, name) {
+function createFixture(t, name, { envOverrides = {} } = {}) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), `sentinel-host-${name}-`)));
   const agentDir = join(base, 'agent');
   const home = join(base, 'home');
@@ -181,11 +182,13 @@ process.stdin.on('data', chunk => {
       PI_INTERCOM_SCOPE_ID: SCOPE,
       ADJACENT_STORAGE_ROOT: storageRoot,
       LC_ALL: 'C',
+      ...envOverrides,
       ...overrides,
     };
     if (process.env.TMPDIR) env.TMPDIR = process.env.TMPDIR;
     return env;
   };
+  const cleanups = [];
   const spawnOwned = (argv, env = environment()) => {
     const child = spawn(process.execPath, argv, { env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
     const io = { stdout: '', stderr: '' };
@@ -210,11 +213,132 @@ process.stdin.on('data', chunk => {
     }
     await Promise.all(tracked.map(entry => entry.exit));
     for (const server of servers) await new Promise(resolve => server.close(resolve));
+    for (const cleanup of cleanups) { try { await cleanup(); } catch { /* owned cleanup is best effort */ } }
     rmSync(base, { recursive: true, force: true });
   });
   return { base, agentDir, home, root, storageRoot, binDir, promptLog, servers, environment, spawnOwned,
+    onCleanup: callback => cleanups.push(callback),
     spawnHost: (extra, env) => spawnOwned([HOST_FILE, ...extra], env), baseArgs };
 }
+
+// Owned tmux assignment fixture for the host survival journey: real adj3
+// storage/workspace plus a real adj4 resolution and launch whose Pi argv is an
+// executable shell wrapper around the model-free fake-Pi fixture. The wrapper
+// records its full argv to an owned log; nothing here touches models, the
+// network or the operator root. The resolved input has no specPackage, so no
+// Git or model work is involved.
+async function seedHostAssignment(f) {
+  await setupStorage(f.storageRoot);
+  const workspace = await createWorkspace(f.storageRoot, { id: 'host-assignment', name: 'Host Assignment' });
+  mkdirSync(join(workspace.directory, 'briefs'), { recursive: true });
+  writeFileSync(join(workspace.directory, 'briefs', 'brief.md'), '# Host assignment brief\n');
+
+  const fakePi = fileURLToPath(new URL('../../../scripts/workspaces/fixtures/fake-pi.mjs', import.meta.url));
+  const fakePiLog = join(f.base, 'independent-pi.jsonl');
+  const wrapper = join(f.base, 'assignment-pi.sh');
+  writeFileSync(wrapper,
+    `#!/bin/sh\nFAKE_PI_LOG=${JSON.stringify(fakePiLog)} exec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakePi)} "$@"\n`,
+    { mode: 0o755 });
+
+  const assignmentId = randomUUID();
+  const socketPath = join(f.base, 'assignment.sock');
+  // Register owned socket teardown before the launch so a launch failure or a
+  // later journey failure still cleans up only this owned tmux server.
+  f.onCleanup(() => {
+    try { execFileSync('tmux', ['-S', socketPath, 'kill-server'], { stdio: 'ignore', timeout: 2000 }); } catch { /* no owned server */ }
+  });
+
+  const input = {
+    assignment_id: assignmentId,
+    workspace_id: 'host-assignment',
+    brief: 'briefs/brief.md',
+    instructions: 'Remain read-only while observed.',
+    storageRoot: f.storageRoot,
+    workflow_id: `workflow-${assignmentId}`,
+    pi_path: wrapper,
+    tmux_socket: socketPath,
+  };
+  const resolved = await resolveAssignment(input);
+  const record = await launchAssignment(input, { resolved, expectedDigest: resolved.contractDigest });
+  assert.equal(record.state, 'live',
+    `fixture launch did not reach live: ${JSON.stringify(record.attention ?? [])}`);
+  assert.ok(record.pi_identity && Number.isSafeInteger(record.pi_identity.pid)
+    && typeof record.pi_identity.started_at === 'string' && record.pi_identity.started_at !== '',
+  `fixture launch has no exact Pi identity: ${JSON.stringify(record.attention ?? [])}`);
+  const recordPath = join(workspace.directory, 'assignments', `${assignmentId}.json`);
+  const signature = () => {
+    const bytes = readFileSync(recordPath);
+    const info = statSync(recordPath);
+    return { sha256: createHash('sha256').update(bytes).digest('hex'), size: info.size, mtimeMs: info.mtimeMs };
+  };
+  return { assignmentId, record, recordPath, fakePiLog, socketPath, workspace, signature };
+}
+
+// EV-8: an ordinary host lifetime survives a crash and an ordinary restart while
+// the independently owned tmux agent keeps running. No authority is involved.
+test('assignment host survives crash and ordinary restart without agent authority', { timeout: 110000 }, async t => {
+  const f = createFixture(t, 'as');
+  const seeded = await seedHostAssignment(f);
+  const before = seeded.signature();
+  const piIdentity = describeProcess(seeded.record.pi_identity.pid);
+  assert.ok(piIdentity, 'the independently launched agent is observable before the host journey');
+  assert.equal(piIdentity.pid, seeded.record.pi_identity.pid);
+  assert.equal(piIdentity.started_at, seeded.record.pi_identity.started_at);
+
+  const host = f.spawnHost(f.baseArgs(['--port', '0']), f.environment({ ADJACENT_STORAGE_ROOT: f.storageRoot }));
+  const ready = await waitForReady(host);
+  assert.equal(ready.state, 'observing');
+  const first = JSON.parse(readFileSync(ready.snapshot_path, 'utf8'));
+  assert.equal(first.state, 'observing');
+  assert.equal(first.mode, 'observe');
+  assert.equal(first.snapshot.reader.isolated, true, 'the ordinary host reads through the isolated reader child');
+  assert.ok(first.snapshot.assignments.some(row => row.assignment_id === seeded.assignmentId
+    && row.display === 'live' && row.hasControl === false), JSON.stringify(first.snapshot.assignments));
+  assert.equal(jsonLines(host.io.stdout).filter(entry => entry.type === 'ready').length, 1,
+    'exactly one ready receipt per host lifetime');
+
+  const observed = await waitForSnapshot(f.agentDir, SCOPE, value =>
+    value.observer_id === first.observer_id
+    && (value.snapshot.assignments ?? []).some(row => row.assignment_id === seeded.assignmentId
+      && row.display === 'live' && row.hasControl === false),
+    'published assignment row from the ordinary host');
+  assert.ok(observed);
+  assert.equal(observed.value.mode, 'observe');
+  assert.equal(observed.value.snapshot.reader.isolated, true);
+
+  // Owned host helpers (isolated reader and dashboard children) are observed
+  // before the crash so the test proves their cleanup, not only agent survival.
+  const hostHelpers = directChildren(host.pid).map(describeProcess).filter(Boolean);
+  // Crash only the tracked host child; the independently owned agent is never signalled.
+  host.child.kill('SIGKILL');
+  const crashExit = await withDeadline(host.exit, SHUTDOWN_TIMEOUT_MS, 'crashed host exit');
+  assert.equal(crashExit.signal, 'SIGKILL');
+  await waitFor(() => hostHelpers.every(identity => sameProcess(identity) === false),
+    'owned host helper children exit after the crash', SHUTDOWN_TIMEOUT_MS, 100);
+  assert.equal(sameProcess(piIdentity), true, 'the independent agent survives the host crash');
+  assert.deepEqual(seeded.signature(), before, 'assignment record bytes and mtime are unchanged after the crash');
+
+  // Ordinary restart: same entrypoint, same agentDir and environment.
+  const successor = f.spawnHost(f.baseArgs(['--port', '0']), f.environment({ ADJACENT_STORAGE_ROOT: f.storageRoot }));
+  const successorReady = await waitForReady(successor);
+  assert.equal(successorReady.state, 'observing');
+  const successorSnapshot = JSON.parse(readFileSync(successorReady.snapshot_path, 'utf8'));
+  assert.equal(successorSnapshot.state, 'observing');
+  assert.equal(successorSnapshot.mode, 'observe');
+  assert.notEqual(successorSnapshot.observer_id, first.observer_id, 'a successor lifetime has a distinct UUID');
+  assert.ok(successorSnapshot.snapshot.assignments.some(row => row.assignment_id === seeded.assignmentId
+    && row.display === 'live' && row.hasControl === false), 'the restarted host publishes the same live row');
+  assert.equal(sameProcess(piIdentity), true, 'the independent agent survives the ordinary restart');
+  assert.deepEqual(seeded.signature(), before, 'assignment record bytes and mtime are unchanged after restart');
+  assert.equal(jsonLines(successor.io.stdout).filter(entry => entry.type === 'ready').length, 1,
+    'exactly one ready receipt for the successor host');
+
+  successor.child.kill('SIGTERM');
+  const successorExit = await withDeadline(successor.exit, SHUTDOWN_TIMEOUT_MS, 'successor graceful shutdown');
+  assert.equal(successorExit.code, 0);
+  assert.equal(sameProcess(piIdentity), true, 'graceful host shutdown leaves the independent agent alive');
+  assert.deepEqual(seeded.signature(), before, 'assignment record bytes and mtime are unchanged after graceful close');
+});
 
 async function waitForReady(host, timeoutMs = READY_TIMEOUT_MS) {
   return waitFor(() => {

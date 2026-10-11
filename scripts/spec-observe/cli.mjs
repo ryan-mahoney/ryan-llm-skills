@@ -5,6 +5,8 @@ import { discover, discoverManaged, discoverPackage, report } from './core.mjs';
 import { metrics, formatMetrics } from './metrics.mjs';
 import { collectWorkspace, renderWorkspace, readEnrollments } from './sentinel.mjs';
 import { createRepositoryDiscovery } from './discovery.mjs';
+import { resolveStorageRoot } from '../workspaces/store.mjs';
+import { publicHint } from '../../pi/extensions/spec-runtime/monitor.mjs';
 
 const args = process.argv.slice(2);
 const command = args.shift();
@@ -19,6 +21,7 @@ const usage = `Usage: node scripts/spec-observe/cli.mjs list|runs|report|metrics
   runs                 List managed run pointers without reading any transcripts
   --index-root PATH     Managed index (default ~/.pi/agent/spec-runtime; runs only)
   sentinel status [--all] [--root PATH | --package PATH] [--format text|json] [--agent-dir PATH]  Discover workspace repositories (default ~/Documents)
+  sentinel inspect FULL-UUID [--root PATH | --package PATH] [--format text|json] [--agent-dir PATH]  Inspect one exact assignment row
   --sessions-root PATH  Default: ~/.pi/agent/sessions
   --package PATH        Discover managed runtime records and linked parent/owner/editor sessions
   --cwd PATH            Filter root sessions by exact recorded working directory
@@ -30,7 +33,15 @@ Without --session, report selects the most recently started matching root sessio
 try {
   if (command === '--help' || command === 'help') { console.log(usage); process.exit(0); }
   if (!['list', 'runs', 'report', 'metrics', 'sentinel'].includes(command)) throw new Error(usage);
-  if (command === 'sentinel' && args.shift() !== 'status') throw new Error(usage);
+  const sentinelAction = command === 'sentinel' ? args.shift() : null;
+  if (command === 'sentinel' && !['status', 'inspect'].includes(sentinelAction)) throw new Error(usage);
+  let sentinelInspectId = null;
+  if (sentinelAction === 'inspect') {
+    sentinelInspectId = args[0] && !args[0].startsWith('--') ? args.shift() : null;
+    if (!sentinelInspectId) throw new Error(usage);
+    // A full UUID is required before any discovery or collection runs.
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sentinelInspectId)) throw new Error('sentinel inspect requires a full assignment UUID.');
+  }
   while (args.length) {
     const key = args.shift();
     if (key === '--all' && command === 'sentinel') { options[key] = true; continue; }
@@ -56,7 +67,9 @@ try {
     process.exit(0);
   }
   if (command === 'sentinel') {
-    if (Object.keys(options).some(key => !['--package', '--format', '--agent-dir', '--root', '--all'].includes(key))) throw new Error('sentinel status accepts only --root, --package, --format, --agent-dir and --all.');
+    const label = sentinelAction === 'inspect' ? 'sentinel inspect' : 'sentinel status';
+    if (sentinelAction === 'inspect' && options['--all']) throw new Error('sentinel inspect accepts only --root, --package, --format and --agent-dir.');
+    if (Object.keys(options).some(key => !['--package', '--format', '--agent-dir', '--root', '--all'].includes(key))) throw new Error(`${label} accepts only --root, --package, --format, --agent-dir and --all.`);
     if (options['--package'] && options['--root']) throw new Error('Choose --root or --package.');
     const format = options['--format'] ?? 'text';
     if (!['text', 'json'].includes(format)) throw new Error('format must be text or json');
@@ -72,7 +85,27 @@ try {
       discovery = await createRepositoryDiscovery({ agentDir, root: options['--root'] }).read();
       roots = [...new Set([...roots, ...discovery.roots])];
     }
-    const snapshot = await collectWorkspace({ roots, packages, enrollmentErrors, discovery, indexDir: path.join(agentDir, 'spec-runtime'), agentDir, scope, includeInactive: options['--all'] === true });
+    // The assignment reader uses the resolved adj3 storage root, the same
+    // default as the discussion service; no flag duplicates ADJACENT_STORAGE_ROOT.
+    const storageRoot = resolveStorageRoot(process.env, os.homedir());
+    const snapshot = await collectWorkspace({ roots, packages, enrollmentErrors, discovery, indexDir: path.join(agentDir, 'spec-runtime'), agentDir, scope, includeInactive: options['--all'] === true, storageRoot });
+    if (sentinelAction === 'inspect') {
+      const row = (snapshot.assignments ?? []).find(item => item.assignment_id === sentinelInspectId);
+      if (!row) throw new Error(`No observed assignment matches ${sentinelInspectId}.`);
+      if (format === 'json') {
+        await print(JSON.stringify({ assignment: row, assignment_coverage: snapshot.assignment_coverage }, null, 2));
+        process.exit(0);
+      }
+      const assignmentLines = [
+        `${publicHint(row.assignment_id)} · ${publicHint(row.display)} · recorded ${publicHint(row.recordedState) || 'unknown'} · observed ${publicHint(row.observedState) || 'unknown'}`,
+        `coverage: ${publicHint(row.coverage)}${row.coverageReasons?.length ? ` (${row.coverageReasons.map(publicHint).join(', ')})` : ''} · quiet ${row.quiet === true} · control none`,
+        `safe action: ${publicHint(row.safeAction ?? row.nextAction ?? 'no action')}`,
+        ...(row.attention ?? []).map(item => `attention: ${publicHint(item)}`),
+        `assignment coverage: ${publicHint(snapshot.assignment_coverage?.state ?? 'unknown')}${snapshot.assignment_coverage?.reasons?.length ? ` (${snapshot.assignment_coverage.reasons.map(publicHint).join(', ')})` : ''}`,
+      ];
+      await print(assignmentLines.join('\n'));
+      process.exit(0);
+    }
     if (format === 'json') {
       await print(JSON.stringify(enrollmentErrors.length ? { ...snapshot, enrollment_errors: enrollmentErrors } : snapshot, null, 2));
       process.exit(0);

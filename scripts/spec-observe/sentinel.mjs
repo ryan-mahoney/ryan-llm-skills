@@ -16,10 +16,12 @@ import { applicableMerge, validateMergeCache } from './merge-reconciliation.mjs'
 import { manualCompletion, COMPLETION_FILE } from './manual-completion.mjs';
 import { publicHint } from '../../pi/extensions/spec-runtime/monitor.mjs';
 import { discoverManaged } from './core.mjs';
+import { collectAssignments } from './assignments.mjs';
 
 export const SENTINEL_LIMITS = Object.freeze({
   roots: 20,
   assignments: 50,
+  workspaceAssignments: 100,
   packageChildren: 100,
   receiptFiles: 100,
   receiptDirectoryEntries: 5000,
@@ -194,6 +196,12 @@ async function readBounded(file, maxBytes, budget, { within = null } = {}) {
       return { outcome: 'invalid', reason: `source-not-regular: ${file}`, bytes: 0 };
     }
   } catch (error) {
+    // A dangling symlink is a present-but-unusable entry, not an absence:
+    // realpath follows the link, so an absent target reports ENOENT even
+    // though the link itself survives. Re-inspect without following.
+    if (codeOf(error) === 'ENOENT' && (await lstat(file).catch(() => null))?.isSymbolicLink()) {
+      return { outcome: 'invalid', reason: `source-not-regular: ${file}`, bytes: 0 };
+    }
     // A vanished file is a missing fact, not corrupt evidence.
     return { outcome: codeOf(error) === 'ENOENT' ? 'missing' : 'invalid', reason: `${codeOf(error)}: ${file}`, bytes: 0 };
   }
@@ -386,6 +394,21 @@ export function renderWorkspace(snapshot) {
       lines.push(renderDetail('    ', run.conditions.map(condition => `${condition.kind} [${condition.severity}/${condition.state}]`).join(' · ')));
     }
   }
+  const assignments = snapshot?.assignments ?? [];
+  const assignmentCoverage = snapshot?.assignment_coverage;
+  if (assignmentCoverage) {
+    const omittedAssignments = Number.isFinite(assignmentCoverage.omitted) ? ` · omitted ${assignmentCoverage.omitted}` : '';
+    const assignmentReasons = assignmentCoverage.reasons?.length ? ` (${assignmentCoverage.reasons.join(', ')})` : '';
+    lines.push(renderLine(`  Assignments: coverage ${assignmentCoverage.state}${omittedAssignments}${assignmentReasons}`));
+  }
+  for (const assignment of assignments) {
+    lines.push(renderLine(`  ${assignment.assignment_id} · ${assignment.display} · ${publicHint(assignment.nextAction || 'no action')}`));
+  }
+  if (assignments.length === 0) {
+    lines.push(assignmentCoverage?.state === 'unavailable'
+      ? '  Assignment source unavailable (no storage or unknown); assignment state is not known.'
+      : '  No observed assignments.');
+  }
   if (!runs.length) lines.push(['unavailable', 'stale'].includes(coverage.state)
     ? '  Workspace observation unavailable; running work is unknown.' : '  No observed runs.');
   if (snapshot.activity_filter?.window_ms) lines.push(`Activity window: last 24 hours · ${snapshot.activity_filter.hidden_packages} inactive package(s), ${snapshot.activity_filter.hidden_completed_packages ?? 0} completed package(s) hidden; status --all includes history.`);
@@ -420,7 +443,8 @@ async function packageRecentlyModified(directory, cutoff, scan) {
 }
 
 export async function collectWorkspace({ roots = [], packages = [], enrollmentErrors = [], discovery = null, indexDir = join(homedir(), '.pi/agent/spec-runtime'),
-  now = Date.now, agentDir, scope, includeInactive = false, reconcileMerge = null, skipManagedIndex = false } = {}) {
+  now = Date.now, agentDir, scope, includeInactive = false, reconcileMerge = null, skipManagedIndex = false,
+  storageRoot = null, assignmentProbes = null } = {}) {
   const tick = clock(now);
   const readTime = clockIso(tick);
   const budget = makeBudget();
@@ -464,7 +488,7 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
   const addPackage = canonical => {
     let fact = facts.get(canonical.packagePath);
     if (!fact) {
-      fact = { ...canonical, sources: new Map(), checkpoints: null, stepIndex: null, stepIndexNotes: [], checkpointNotes: [], checkouts: new Map() };
+      fact = { ...canonical, sources: new Map(), checkpoints: null, stepIndex: null, stepIndexNotes: [], checkpointNotes: [], checkouts: new Map(), tourEvidence: null };
       facts.set(canonical.packagePath, fact);
     }
     return fact;
@@ -626,6 +650,32 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
   }
 
   const packageRequested = enrolled.length > 0 || (Array.isArray(packages) && packages.length > 0);
+
+  // Assignment observation is additive: assignment source failures never
+  // change run coverage, identity, completion or activity. Without an explicit
+  // storageRoot the source stays explicitly unavailable; the operator root is
+  // never resolved or read implicitly here.
+  let assignments = [];
+  let assignmentCoverage;
+  if (typeof storageRoot !== 'string' || storageRoot === '') {
+    assignmentCoverage = makeCoverage('unavailable', ['assignment-storage-root-unavailable'], null, 0, readTime);
+  } else {
+    try {
+      const collected = await collectAssignments({
+        storageRoot,
+        runs,
+        now: tick,
+        limits: { maxRows: SENTINEL_LIMITS.workspaceAssignments },
+        probes: assignmentProbes ?? {},
+      });
+      assignments = collected.assignments;
+      assignmentCoverage = makeCoverage(collected.coverage.state, collected.coverage.reasons,
+        collected.coverage.omitted, collected.coverage.bytes_read, collected.coverage.observed_at);
+    } catch (error) {
+      assignmentCoverage = makeCoverage('unavailable', [`assignment-source-unavailable: ${codeOf(error)}`], null, 0, readTime);
+    }
+  }
+
   let state;
   if (!packageRequested && !facts.size && !reasons.length) {
     state = 'complete';
@@ -641,6 +691,7 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
   }
   const coverage = makeCoverage(state, reasons, unknownOmission ? null : knownOmitted, budget.bytes, readTime);
   return reduceConditions({ version: 1, workspace, coverage, activity_filter: activityFilter, runs,
+    assignments, assignment_coverage: assignmentCoverage,
     recently_completed: recentlyCompleted,
     completion_history: { window_ms: SENTINEL_LIMITS.recentCompletionMs, cutoff: new Date(completionCutoff).toISOString(),
       limit: SENTINEL_LIMITS.completedPackages, omitted: Math.max(0, completed.length - recentlyCompleted.length) },
@@ -848,6 +899,10 @@ async function observeRun(candidate, budget, note, readTime) {
   for (const item of [...incidents, ...actions]) source.push(item.source);
 
   const observed_at = activity.observed ?? validTime(receipt.started_at ?? null) ?? readTime;
+  // Declared work-tour evidence is presentation only: it never changes
+  // completion, lifecycle, lease or condition decisions in this collector.
+  const tour = await readTourEvidence(fact, runBudget, observed_at);
+  if (tour.digest) source.push({ file: tour.file, digest: tour.digest });
   // The recorded checkout is a claim, not an identity: validate its Git common
   // directory read-only against the package repository before asserting it.
   let checkout = null;
@@ -882,6 +937,7 @@ async function observeRun(candidate, budget, note, readTime) {
     spec_progress,
     timing: packageTiming(fact, steps, checkpoints, readTime),
     activity: activity.activity,
+    evidence: tour.evidence,
     incidents: incidents.map(({ source, ...item }) => item),
     actions: actions.map(({ source, ...item }) => item),
     source_paths: source.map(entry => entry.file),
@@ -913,6 +969,48 @@ function packageTiming(fact, index, checkpoints, observedAt) {
     && Date.parse(a.started_at) <= Date.parse(completion)) ? completion : null;
   return { basis: 'first-recorded-dispatch', started_at: starts[0] ?? null,
     finished_at: finished, observed_at: observedAt, attempts };
+}
+
+// Declared artifact evidence is bounded presentation only: a valid verdict
+// names the commit the author declared, never proof of the current checkout,
+// and a missing artifact stays not-assessed rather than failed.
+async function readTourEvidence(fact, budget, observedAt) {
+  if (fact.tourEvidence === null) {
+    const file = join(fact.packagePath, 'work-tour.json');
+    const result = await readJson(file, SENTINEL_LIMITS.smallJsonBytes, budget, {
+      prefix: 'work-tour', within: fact.packagePath,
+      allow: value => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+        if (value.version !== undefined && value.version !== 1 && value.version !== 2) return null;
+        if (value.verdict !== 'ready' && value.verdict !== 'blocked') return null;
+        if (typeof value.commit !== 'string' || !/^[a-f0-9]{40,64}$/.test(value.commit)) return null;
+        return { verdict: value.verdict, commit: value.commit };
+      },
+    });
+    if (result.outcome === 'ok') {
+      fact.tourEvidence = { state: 'recorded', verdict: result.record.verdict, commit: result.record.commit,
+        source: 'work-tour.json', scope: 'declared-artifact', reason: null, digest: result.digest };
+    } else if (result.outcome === 'missing') {
+      fact.tourEvidence = { state: 'not-assessed', verdict: null, commit: null,
+        source: 'work-tour.json', scope: 'declared-artifact', reason: null, digest: null };
+    } else {
+      fact.tourEvidence = { state: 'unavailable', verdict: null, commit: null,
+        source: 'work-tour.json', scope: 'declared-artifact', reason: result.reason ?? 'work-tour-invalid', digest: null };
+    }
+  }
+  return {
+    file: join(fact.packagePath, 'work-tour.json'),
+    digest: fact.tourEvidence.digest,
+    evidence: {
+      state: fact.tourEvidence.state,
+      verdict: fact.tourEvidence.verdict,
+      commit: fact.tourEvidence.commit,
+      source: fact.tourEvidence.source,
+      scope: fact.tourEvidence.scope,
+      observed_at: observedAt,
+      reason: fact.tourEvidence.reason,
+    },
+  };
 }
 
 async function readStepIndex(fact, budget) {

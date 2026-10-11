@@ -141,6 +141,7 @@ function observerFixture(t, { state = 'running', nativeRun = null, maxWatchers, 
     context: { hasUI: true, ui: captures.ui },
     agentDir: dir,
     indexDir: join(dir, 'spec-runtime'),
+    storageRoot: join(dir, 'storage'),
     nativeRun,
     maxWatchers,
     dashboard,
@@ -496,6 +497,7 @@ test('sentinel observer: coalesced invalidation, missed-event reconciliation and
     context,
     agentDir: dir,
     indexDir: join(dir, 'spec-runtime'),
+    storageRoot: join(dir, 'storage'),
     watchDirectory: (target, listener) => {
       const watcher = {
         dir: target, listener, closed: false, errorCallback: null,

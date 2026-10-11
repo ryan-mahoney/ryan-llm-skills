@@ -1,7 +1,9 @@
 // Step 2 focused tests: isolated tmux adapter.
 //
-// Each case gets a realpath(mkdtemp(tmpdir())) root, a unique socket path, a
-// real tmux 3.8 server, the repository's fake Pi fixture and a temporary cwd.
+// Session cases get a realpath(mkdtemp(tmpdir())) root, a unique socket path,
+// a real tmux 3.8 server, the repository's fake Pi fixture and a temporary
+// cwd; probe shape and parse cases inject only the documented final command
+// boundary.
 // Cleanup signals only test-owned fixture PIDs and kills only the owned
 // socket server; the default tmux server and tmux configuration are observed
 // read-only and asserted unchanged. No real storage root or .sentinel is
@@ -16,7 +18,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sameProcess } from "../spec-observe/process-identity.mjs";
-import { attachArgs, hasSession, sessionPanePid, startSession } from "./tmux.mjs";
+import { attachArgs, hasSession, probeSession, sessionPanePid, startSession } from "./tmux.mjs";
 
 const TEST_TIMEOUT_MS = 10000;
 const FIXTURE_PATH = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-pi.mjs");
@@ -487,4 +489,88 @@ test("tmux adapter: session probes distinguish confirmed absence from unreachabl
   const pane = await sessionPanePid({ socketPath, sessionName: presentName });
   assert.match(pane.paneId, /^%\d+$/);
   assert.ok(Number.isSafeInteger(pane.panePid) && pane.panePid > 0);
+});
+
+// Injected final boundary for the read-only probe queue: reachable server,
+// exact recorded UUID option and one configurable display-message reply.
+function stubProbeRun({ assignmentId, display, formats }) {
+  return async (_socketPath, args) => {
+    if (args[0] === "has-session") return { ok: true, code: 0, stdout: "", stderr: "" };
+    if (args[0] === "show-options") {
+      return { ok: true, code: 0, stdout: `${assignmentId}\n`, stderr: "" };
+    }
+    if (args[0] === "display-message") {
+      formats.push(args[4]);
+      return { ok: true, code: 0, stdout: display, stderr: "" };
+    }
+    return {
+      ok: false, code: 1, stdout: "", stderr: "unexpected command", message: "unexpected command",
+    };
+  };
+}
+
+test("tmux adapter: probeSession default probe keeps the exact two-field identity result", async () => {
+  const assignmentId = randomUUID();
+  const record = {
+    tmux_socket: join(tmpdir(), "adj4-probe-default.sock"),
+    tmux_session: sessionName(),
+    assignment_id: assignmentId,
+    pane_id: "%3",
+  };
+  const formats = [];
+  const present = await probeSession(record, {
+    run: stubProbeRun({ assignmentId, display: "%3 4242\n", formats }),
+  });
+  assert.deepEqual(present, {
+    status: "present",
+    assignment_id: assignmentId,
+    pane_id: "%3",
+    pid: 4242,
+  });
+  assert.deepEqual(formats, ["#{pane_id} #{pane_pid}"]);
+
+  // The default contract never consumes a third field, so an unexpected reply
+  // cannot silently become an attachment count.
+  const unexpected = await probeSession(record, {
+    run: stubProbeRun({ assignmentId, display: "%3 4242 1\n", formats: [] }),
+  });
+  assert.equal(unexpected.status, "unknown");
+});
+
+test("tmux adapter: probeSession opt-in attached count distinguishes zero, positive and unknown", async () => {
+  const assignmentId = randomUUID();
+  const record = {
+    tmux_socket: join(tmpdir(), "adj4-probe-attached.sock"),
+    tmux_session: sessionName(),
+    assignment_id: assignmentId,
+    pane_id: "%3",
+  };
+  const cases = [
+    ["%3 4242 0\n", 0],
+    ["%3 4242 5\n", 5],
+    ["%3 4242\n", null],
+    ["%3 4242 many\n", null],
+    ["%3 4242 -1\n", null],
+    ["%3 4242 9007199254740993\n", null],
+  ];
+  for (const [display, expected] of cases) {
+    const formats = [];
+    const present = await probeSession(record, {
+      run: stubProbeRun({ assignmentId, display, formats }),
+      includeAttached: true,
+    });
+    assert.equal(present.status, "present", display.trim());
+    assert.equal(present.assignment_id, assignmentId);
+    assert.equal(present.pane_id, "%3");
+    assert.equal(present.pid, 4242);
+    assert.equal(present.attached, expected, display.trim());
+    assert.deepEqual(formats, ["#{pane_id} #{pane_pid} #{session_attached}"]);
+  }
+
+  // The opt-in query keeps the exact saved-pane ownership check.
+  const mismatch = await probeSession(record, {
+    run: stubProbeRun({ assignmentId, display: "%4 4242 2\n", formats: [] }),
+    includeAttached: true,
+  });
+  assert.equal(mismatch.status, "unknown");
 });

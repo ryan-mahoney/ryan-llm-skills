@@ -1,12 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, symlinkSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, symlinkSync, statSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import childProcess, { execFileSync } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 
 import { SENTINEL_LIMITS, collectWorkspace, reduceConditions, renderWorkspace, enrollmentReasons } from './sentinel.mjs';
+import { createWorkspace, setupStorage } from '../workspaces/store.mjs';
+import { resolveAssignment } from '../workspaces/assignments.mjs';
 
 const FIXED = Date.parse('2026-10-06T12:00:00.000Z');
 const now = () => FIXED;
@@ -824,4 +827,312 @@ test('cold local merge cache stays tied to the fetched base ref',async t=>{
  const input={package:pkg,primary:repo,pr,commits:[],receipts:[['old','running',ago(60000)]],checkpoints:[]};writeFileSync(join(pkg,'sentinel-merge.json'),JSON.stringify({schema_version:1,package:pkg,binding:mergeBinding(input),url:pr.url,branch:'feature',base:'main',head,merge_commit:base,merged_at:ago(1000),state:'merged',reason:'local-pr-merge',evidence_source:'local-git',base_tip:base}));
  const options={packages:[pkg],indexDir:f.indexDir,now};assert.equal((await collectWorkspace(options)).recently_completed.length,1);
  git('update-ref','refs/remotes/origin/main',head);const rewound=await collectWorkspace(options);assert.equal(rewound.recently_completed.length,0);assert.equal(rewound.runs.length,1);assert.equal(rewound.runs[0].merge.reason,'merge-evidence-unavailable');
+});
+
+// Run independently: node --test --test-name-pattern='declared tour evidence' scripts/spec-observe/sentinel.test.mjs
+test('declared tour evidence records a ready verdict at the declared old commit with explicit scope', async t => {
+  const f = sandbox(t);
+  const repo = primary(f.dir, 'tour-recorded');
+  const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim();
+  const oldCommit = git('rev-parse', 'HEAD');
+  writeFileSync(join(repo, 'next'), 'next\n');
+  git('add', 'next');
+  git('commit', '-qm', 'Advance fixture');
+  assert.notEqual(git('rev-parse', 'HEAD'), oldCommit, 'the declared commit is older than current HEAD');
+  const packagePath = pack(repo);
+  writeFileSync(join(packagePath, 'work-tour.json'), JSON.stringify({ verdict: 'ready', commit: oldCommit }));
+  receipt(packagePath, { id: 'run-tour', assignment_id: 'assign-tour', state: 'running', started_at: ago(60000) });
+
+  const snapshot = await collectWorkspace({ roots: [repo], indexDir: f.indexDir, now });
+  const run = snapshot.runs.find(item => item.assignment_id === 'assign-tour');
+  assert.ok(run);
+  assert.deepEqual(run.evidence, {
+    state: 'recorded', verdict: 'ready', commit: oldCommit, source: 'work-tour.json',
+    scope: 'declared-artifact', observed_at: run.observed_at, reason: null,
+  });
+  assert.equal(run.execution, 'running');
+  assert.ok(run.source_paths.includes(join(packagePath, 'work-tour.json')), 'recorded evidence retains its source');
+  assert.equal(run.source_hashes.length, run.source_paths.length);
+  assert.deepEqual(snapshot.recently_completed, [], 'declared evidence alone is not completion');
+});
+
+test('declared tour evidence stays not-assessed when the package has no work-tour artifact', async t => {
+  const f = sandbox(t);
+  const repo = primary(f.dir, 'tour-missing');
+  const packagePath = pack(repo);
+  receipt(packagePath, { id: 'run-none', assignment_id: 'assign-none', state: 'running', started_at: ago(60000) });
+  const snapshot = await collectWorkspace({ roots: [repo], indexDir: f.indexDir, now });
+  const run = snapshot.runs.find(item => item.assignment_id === 'assign-none');
+  assert.deepEqual(run.evidence, { state: 'not-assessed', verdict: null, commit: null,
+    source: 'work-tour.json', scope: 'declared-artifact', observed_at: run.observed_at, reason: null });
+  assert.equal(run.coverage.state, 'complete', 'an absent declared artifact is not a coverage gap');
+});
+
+test('declared tour evidence stays not-assessed under manual completion and never implies acceptance', async t => {
+  const f = sandbox(t);
+  const repo = primary(f.dir, 'tour-manual');
+  const packagePath = pack(repo);
+  receipt(packagePath, { id: 'run-manual', assignment_id: 'assign-manual', state: 'running', started_at: ago(60000) });
+  writeFileSync(join(packagePath, 'sentinel-completion.json'), JSON.stringify({ schema_version: 2,
+    kind: 'manual_completion', package: packagePath, completed_at: ago(1000) }));
+  const input = { roots: [repo], indexDir: f.indexDir, now };
+
+  const hidden = await collectWorkspace(input);
+  assert.deepEqual(hidden.runs, []);
+  assert.equal(hidden.recently_completed.length, 1);
+  assert.equal(hidden.recently_completed[0].completion_basis, 'manual');
+  assert.equal(hidden.recently_completed[0].evidence.state, 'not-assessed');
+  assert.equal(hidden.recently_completed[0].evidence.verdict, null);
+
+  const visible = await collectWorkspace({ ...input, includeInactive: true });
+  const run = visible.runs.find(item => item.assignment_id === 'assign-manual');
+  assert.equal(run.execution, 'running');
+  assert.equal(run.evidence.state, 'not-assessed', 'manual completion never invents declared evidence');
+});
+
+test('declared tour evidence does not derive lifecycle from a terminal worker receipt', async t => {
+  const f = sandbox(t);
+  const repo = primary(f.dir, 'tour-terminal');
+  const packagePath = pack(repo);
+  receipt(packagePath, { id: 'run-done', assignment_id: 'assign-done', state: 'completed',
+    started_at: ago(60000), finished_at: ago(30000) });
+  const snapshot = await collectWorkspace({ roots: [repo], indexDir: f.indexDir, now });
+  const run = snapshot.runs.find(item => item.assignment_id === 'assign-done');
+  assert.equal(run.execution, 'completed');
+  assert.equal(run.evidence.state, 'not-assessed');
+  assert.equal(run.coverage.state, 'complete');
+  assert.deepEqual(snapshot.recently_completed, [], 'a worker receipt is not workflow completion');
+});
+
+test('declared tour evidence reports malformed and symlinked artifacts as unavailable', async t => {
+  const f = sandbox(t);
+  const repo = primary(f.dir, 'tour-invalid');
+  const packagePath = pack(repo);
+  receipt(packagePath, { id: 'run-bad', assignment_id: 'assign-bad', state: 'running', started_at: ago(60000) });
+  const file = join(packagePath, 'work-tour.json');
+  const input = { roots: [repo], indexDir: f.indexDir, now };
+
+  writeFileSync(file, JSON.stringify({ version: 1, verdict: 'ready' }));
+  const missingCommit = (await collectWorkspace(input)).runs.find(item => item.assignment_id === 'assign-bad');
+  assert.equal(missingCommit.evidence.state, 'unavailable');
+  assert.equal(missingCommit.evidence.reason, `work-tour-invalid: ${file}`);
+
+  writeFileSync(file, '{not json');
+  const broken = (await collectWorkspace(input)).runs.find(item => item.assignment_id === 'assign-bad');
+  assert.equal(broken.evidence.state, 'unavailable');
+  assert.match(broken.evidence.reason, /work-tour-invalid/);
+
+  rmSync(file);
+  writeFileSync(join(packagePath, 'tour-target.json'), JSON.stringify({ version: 2, verdict: 'blocked', commit: 'a'.repeat(40) }));
+  symlinkSync(join(packagePath, 'tour-target.json'), file);
+  const linked = (await collectWorkspace(input)).runs.find(item => item.assignment_id === 'assign-bad');
+  assert.equal(linked.evidence.state, 'unavailable');
+  assert.match(linked.evidence.reason, /source-not-regular/);
+
+  rmSync(file);
+  symlinkSync(join(packagePath, 'absent-tour-target.json'), file);
+  const dangling = (await collectWorkspace(input)).runs.find(item => item.assignment_id === 'assign-bad');
+  assert.equal(dangling.evidence.state, 'unavailable');
+  assert.match(dangling.evidence.reason, /source-not-regular/);
+});
+
+test('declared tour evidence reports an oversized artifact as unavailable without touching completion', async t => {
+  const f = sandbox(t);
+  const repo = primary(f.dir, 'tour-oversized');
+  const packagePath = pack(repo);
+  receipt(packagePath, { id: 'run-fat', assignment_id: 'assign-fat', state: 'running', started_at: ago(60000) });
+  const file = join(packagePath, 'work-tour.json');
+  writeFileSync(file, JSON.stringify({ version: 1, verdict: 'ready', commit: 'a'.repeat(40),
+    padding: 'x'.repeat(SENTINEL_LIMITS.smallJsonBytes) }));
+  const snapshot = await collectWorkspace({ roots: [repo], indexDir: f.indexDir, now });
+  const run = snapshot.runs.find(item => item.assignment_id === 'assign-fat');
+  assert.equal(run.evidence.state, 'unavailable');
+  assert.equal(run.evidence.reason, `work-tour-oversized: ${file}`);
+  assert.equal(snapshot.coverage.state, 'complete');
+  assert.deepEqual(snapshot.recently_completed, []);
+});
+
+test('declared tour evidence leaves ready-pr completion and recent lifecycle rules unchanged', async t => {
+  const f = sandbox(t);
+  const repo = primary(f.dir, 'tour-completion');
+  const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim();
+  const commit = git('rev-parse', 'HEAD');
+  writeFileSync(join(repo, 'next'), 'next\n');
+  git('add', 'next');
+  git('commit', '-qm', 'Advance fixture');
+  const packagePath = pack(repo);
+  writeFileSync(join(packagePath, 'work-tour.json'), JSON.stringify({ version: 2, verdict: 'ready', commit }));
+  writeFileSync(join(packagePath, 'pr-url.json'), JSON.stringify({ kind: 'pr_submission', package: packagePath,
+    url: 'https://github.com/o/r/pull/9', commit, submitted_at: ago(1000) }));
+  receipt(packagePath, { id: 'run-published', assignment_id: 'assign-published', state: 'completed', started_at: ago(60000) });
+
+  const snapshot = await collectWorkspace({ roots: [repo], indexDir: f.indexDir, now });
+  assert.deepEqual(snapshot.runs, [], 'ready publication still leaves monitoring');
+  assert.equal(snapshot.activity_filter.hidden_completed_packages, 1);
+  assert.equal(snapshot.recently_completed.length, 1);
+  assert.equal(snapshot.recently_completed[0].completion_basis, 'ready-pr');
+  assert.equal(snapshot.recently_completed[0].evidence.state, 'recorded');
+  assert.equal(snapshot.recently_completed[0].evidence.verdict, 'ready');
+  assert.equal(snapshot.recently_completed[0].evidence.commit, commit);
+  assert.equal(snapshot.recently_completed[0].evidence.scope, 'declared-artifact');
+  assert.equal(snapshot.recently_completed[0].execution, 'completed');
+});
+
+const ASSIGNMENT_READER_ID = '11111111-1111-4111-8111-111111111111';
+
+test('assignment reader: a persisted live assignment stays unknown under unavailable final probes', async t => {
+  const f = sandbox(t);
+  const repo = primary(f.dir, 'assignments-reader');
+  const packagePath = pack(repo);
+  receipt(packagePath, { id: 'run-reader', assignment_id: ASSIGNMENT_READER_ID, state: 'running', started_at: ago(60000) });
+
+  // Real adj3 storage plus a real adj4 resolved record persisted as a live
+  // assignment in the temporary root. Nothing is launched and no model runs.
+  const storageRoot = join(f.dir, 'storage');
+  await setupStorage(storageRoot);
+  const workspace = await createWorkspace(storageRoot, { id: 'ws-reader', name: 'Reader Workspace' });
+  mkdirSync(join(workspace.directory, 'briefs'), { recursive: true });
+  writeFileSync(join(workspace.directory, 'briefs', 'brief.md'), '# Reader brief\n');
+  const resolved = await resolveAssignment({
+    assignment_id: ASSIGNMENT_READER_ID,
+    workspace_id: 'ws-reader',
+    brief: 'briefs/brief.md',
+    instructions: 'Remain read-only while observed.',
+    storageRoot,
+    workflow_id: 'workflow-reader',
+    pi_path: process.execPath,
+  });
+  mkdirSync(join(workspace.directory, 'assignments'), { recursive: true });
+  writeFileSync(
+    join(workspace.directory, 'assignments', `${ASSIGNMENT_READER_ID}.json`),
+    JSON.stringify({ ...resolved.record, state: 'live', updated_at: new Date(FIXED).toISOString() }),
+  );
+
+  const snapshot = await collectWorkspace({
+    roots: [repo],
+    packages: [packagePath],
+    indexDir: f.indexDir,
+    now,
+    storageRoot,
+    assignmentProbes: {
+      inspect: pid => ({ state: 'unknown', pid, reason: 'synthetic-unavailable' }),
+      psRun: async () => ({ stdout: '', complete: false }),
+      tmuxRun: async () => {
+        const error = new Error('synthetic tmux unavailable');
+        error.code = 'ENOENT';
+        throw error;
+      },
+    },
+  });
+
+  assert.equal(SENTINEL_LIMITS.workspaceAssignments, 100);
+  assert.ok(Array.isArray(snapshot.assignments), 'collectWorkspace must expose additive assignment rows');
+  const row = snapshot.assignments.find(entry => entry.assignment_id === ASSIGNMENT_READER_ID);
+  assert.ok(row, 'the persisted live assignment must be exposed');
+  assert.equal(row.assignment_id, ASSIGNMENT_READER_ID);
+  assert.equal(row.display, 'unknown');
+  assert.equal(row.hasControl, false);
+  assert.equal(snapshot.assignment_coverage.state, 'partial');
+
+  const run = snapshot.runs.find(entry => entry.assignment_id === ASSIGNMENT_READER_ID);
+  assert.ok(run, 'the existing run row stays present');
+  assert.equal(run.execution, 'running');
+
+  const rendered = renderWorkspace(snapshot).join('\n');
+  assert.ok(rendered.includes(ASSIGNMENT_READER_ID), 'the full assignment id must render');
+  assert.match(rendered, /unknown/);
+  assert.match(rendered, /no relaunch/i);
+});
+
+test('missing assignment root stays explicit and changes no run facts', async t => {
+  const f = sandbox(t);
+  const repo = primary(f.dir, 'missing-assignment-root');
+  const packagePath = pack(repo);
+  receipt(packagePath, { id: 'run-root', assignment_id: 'assign-root', state: 'running', started_at: ago(60000) });
+  const omitted = await collectWorkspace({ roots: [repo], packages: [packagePath], indexDir: f.indexDir, now });
+  const missingRoot = join(f.dir, 'no-such-storage-root');
+  const missing = await collectWorkspace({ roots: [repo], packages: [packagePath], indexDir: f.indexDir, now, storageRoot: missingRoot });
+  assert.deepEqual(missing.runs, omitted.runs, 'run rows are unchanged by the missing assignment source');
+  assert.deepEqual(missing.coverage, omitted.coverage, 'run coverage is unchanged by the missing assignment source');
+  assert.deepEqual(missing.recently_completed, omitted.recently_completed);
+  assert.equal(omitted.assignments.length, 0);
+  assert.equal(omitted.assignment_coverage.state, 'unavailable');
+  assert.equal(missing.assignments.length, 0);
+  assert.equal(missing.assignment_coverage.state, 'unavailable');
+  assert.ok(missing.assignment_coverage.reasons.some(reason => reason.startsWith('storage-')),
+    JSON.stringify(missing.assignment_coverage.reasons));
+  assert.equal(existsSync(missingRoot), false, 'the missing storage root is never created');
+});
+
+test('assignment reader: CLI status and inspect expose one exact sanitized row', async t => {
+  const f = sandbox(t);
+  const repo = primary(f.dir, 'cli-assignment-reader');
+  const packagePath = pack(repo);
+  receipt(packagePath, { id: 'run-cli-reader', assignment_id: ASSIGNMENT_READER_ID, state: 'running', started_at: ago(60000) });
+  const storageRoot = join(f.dir, 'storage');
+  await setupStorage(storageRoot);
+  const workspace = await createWorkspace(storageRoot, { id: 'ws-cli-reader', name: 'CLI Reader Workspace' });
+  mkdirSync(join(workspace.directory, 'briefs'), { recursive: true });
+  writeFileSync(join(workspace.directory, 'briefs', 'brief.md'), '# CLI Reader brief\n');
+  const resolved = await resolveAssignment({
+    assignment_id: ASSIGNMENT_READER_ID,
+    workspace_id: 'ws-cli-reader',
+    brief: 'briefs/brief.md',
+    instructions: 'Remain read-only while observed.',
+    storageRoot,
+    workflow_id: 'workflow-cli-reader',
+    pi_path: process.execPath,
+  });
+  mkdirSync(join(workspace.directory, 'assignments'), { recursive: true });
+  writeFileSync(join(workspace.directory, 'assignments', `${ASSIGNMENT_READER_ID}.json`),
+    JSON.stringify({ ...resolved.record, state: 'live',
+      attention: ['injected\u0007control\nsecond line', 'plain attention'] }));
+  const agentDir = join(f.dir, 'agent');
+  mkdirSync(agentDir, { recursive: true });
+  const cli = fileURLToPath(new URL('./cli.mjs', import.meta.url));
+  const runCli = args => {
+    try {
+      return { status: 0, stdout: execFileSync(process.execPath, [cli, ...args], { encoding: 'utf8', timeout: 10000,
+        env: { PATH: process.env.PATH, HOME: f.dir, PI_CODING_AGENT_DIR: agentDir, PI_INTERCOM_SCOPE_ID: '', ADJACENT_STORAGE_ROOT: storageRoot, LC_ALL: 'C', TMPDIR: tmpdir() } }) };
+    } catch (error) {
+      return { status: error.status ?? 1, stdout: String(error.stdout ?? ''), stderr: String(error.stderr ?? '') };
+    }
+  };
+
+  const status = runCli(['sentinel', 'status', '--root', f.dir, '--format', 'json']);
+  assert.equal(status.status, 0, status.stderr);
+  const statusSnapshot = JSON.parse(status.stdout);
+  assert.ok(statusSnapshot.assignments.some(row => row.assignment_id === ASSIGNMENT_READER_ID));
+
+  const inspect = runCli(['sentinel', 'inspect', ASSIGNMENT_READER_ID, '--root', f.dir, '--format', 'json']);
+  assert.equal(inspect.status, 0, inspect.stderr);
+  const inspected = JSON.parse(inspect.stdout);
+  assert.equal(inspected.assignment.assignment_id, ASSIGNMENT_READER_ID);
+  assert.equal(inspected.assignment.hasControl, false);
+  assert.equal(inspected.assignment.display, 'unknown');
+
+  const direct = await collectWorkspace({ roots: [repo], packages: [packagePath], indexDir: f.indexDir, now: Date.now, storageRoot });
+  const directRow = direct.assignments.find(row => row.assignment_id === ASSIGNMENT_READER_ID);
+  assert.ok(directRow, 'direct real producers see the same assignment');
+  assert.equal(inspected.assignment.display, directRow.display);
+  assert.equal(inspected.assignment.recordedState, directRow.recordedState);
+  assert.equal(inspected.assignment.observedState, directRow.observedState);
+  assert.equal(inspected.assignment.hasControl, directRow.hasControl);
+  assert.equal(inspected.assignment.quiet, directRow.quiet);
+
+  const prefix = runCli(['sentinel', 'inspect', ASSIGNMENT_READER_ID.slice(0, 8), '--root', f.dir, '--format', 'json']);
+  assert.notEqual(prefix.status, 0, 'a short prefix is rejected');
+  assert.match(prefix.stderr, /full assignment UUID/);
+  const wrong = runCli(['sentinel', 'inspect', '99999999-9999-4999-8999-999999999999', '--root', f.dir, '--format', 'json']);
+  assert.notEqual(wrong.status, 0, 'an unknown full UUID is rejected');
+  assert.match(wrong.stderr, /No observed assignment matches/);
+
+  const text = runCli(['sentinel', 'inspect', ASSIGNMENT_READER_ID, '--root', f.dir]);
+  assert.equal(text.status, 0, text.stderr);
+  assert.equal(/[\u0000-\u0009\u000b-\u001f]/.test(text.stdout), false,
+    'no injected control characters survive the text render');
+  assert.ok(text.stdout.includes('injectedcontrol'),
+    'publicHint keeps the injected text on one collapsed safe line');
+  assert.equal(text.stdout.includes('second line'), false,
+    'the injected newline never becomes a rendered line');
 });

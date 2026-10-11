@@ -23,11 +23,15 @@ import {
 import { formatScalar, planKitEdit } from './kit.mjs';
 import {
   attachAssignment,
+  findAssignment,
   launchAssignment,
   listAssignments,
   locateAssignment,
   resolveAssignment,
 } from './assignments.mjs';
+import { canonicalPackage } from '../../pi/extensions/spec-runtime/runtime.mjs';
+import { readCheckpointRecord, readInboxGuard } from '../../pi/extensions/spec-runtime/sentinel.mjs';
+import { deliverOverseerMessage } from '../spec-observe/overseer-inbox.mjs';
 
 const CLI_PATH = fileURLToPath(import.meta.url);
 
@@ -48,6 +52,8 @@ Commands:
   locate ID --json                                           Reconcile and print one assignment envelope
   assignments [--workspace ID]                               List assignment envelopes
   attach ID                                                  Attach this terminal to a live assignment session
+  takeover ID [--run RUN]                                    Deliver a coordinator hold, then attach when a TTY is present
+  resume ID --hold ID [--run RUN]                            Deliver a release direction naming one retained hold
 
 Global options:
   --root PATH   Override ADJACENT_STORAGE_ROOT (default ~/Documents/adjacent-storage)
@@ -98,6 +104,8 @@ const COMMANDS = {
   locate: { positionals: 1, flags: {} },
   assignments: { positionals: 0, flags: { '--workspace': 'value' } },
   attach: { positionals: 1, flags: {} },
+  takeover: { positionals: 1, flags: { '--run': 'value' } },
+  resume: { positionals: 1, flags: { '--hold': 'value', '--run': 'value' } },
 };
 
 const GLOBAL_FLAGS = { '--root': 'value', '--json': 'boolean' };
@@ -178,6 +186,7 @@ function parseArgs(argv) {
       throw new UsageError('launch accepts either --instructions or --instructions-file, not both');
     }
   }
+  if (command === 'resume' && !('--hold' in options)) throw new UsageError('resume requires --hold');
   return { command, options, positionals };
 }
 
@@ -471,6 +480,194 @@ async function attachCommand(root, id) {
   process.exitCode = signal != null ? 1 : (exitCode ?? 1);
 }
 
+// Takeover/resume reuse the step-5 exclusive writer and the retained guard
+// projections. A hold is published before any attach; a resume direction never
+// releases, archives or edits anything and always waits for the coordinator's
+// hash-bound applied outcome.
+const TAKEOVER_SAFE_BOUNDARY = 'A delivered hold blocks automatic continuation only once the coordinator observes it; effects already in flight and the running process are not stopped by this command.';
+
+const shellWords = (args) => args.map((arg) => `'${arg.replaceAll("'", "'\\''")}'`).join(' ');
+
+function takeoverTty() {
+  return process.stdin.isTTY === true && process.stdout.isTTY === true;
+}
+
+function attachHintArgs(root, id) {
+  return ['node', CLI_PATH, 'attach', id, '--root', root];
+}
+
+function specPackageOrNull(record) {
+  return typeof record.spec_package === 'string' && record.spec_package !== '' ? record.spec_package : null;
+}
+
+// The recorded workflow id is authoritative: --run may fill a missing record
+// but never override a differing one.
+function resolveRun(record, requested) {
+  const recorded = typeof record.workflow_id === 'string' && record.workflow_id !== '' ? record.workflow_id : null;
+  if (requested !== undefined && recorded !== null && requested !== recorded) {
+    throw new Error(`--run ${requested} does not match the recorded workflow_id ${recorded}`);
+  }
+  const run = requested ?? recorded;
+  if (run === null) throw new Error('assignment has no recorded workflow_id; pass --run');
+  return run;
+}
+
+function retainedCheckpoint(packagePath, run, command) {
+  const checkpoint = readCheckpointRecord(packagePath, run);
+  if (checkpoint === null || checkpoint.package !== packagePath || checkpoint.workflow_id !== run) {
+    throw new Error(`${command} requires a retained checkpoint for run ${run} in ${packagePath}`);
+  }
+  return checkpoint;
+}
+
+async function takeoverCommand(root, id, options) {
+  const record = await findAssignment(root, id);
+  const declared = specPackageOrNull(record);
+  const tty = takeoverTty();
+  const attach_command = attachHintArgs(root, id);
+
+  if (declared === null) {
+    const result = {
+      assignment_id: id,
+      takeover: 'attach-only',
+      spec_package: null,
+      run: null,
+      hold: null,
+      attached: false,
+      attach_command,
+      note: 'no spec package: no automatic actor. Attach only; no inbox message was written.',
+    };
+    if (!tty) return result;
+    await printResult('takeover', result, options);
+    const { exitCode, signal } = await attachAssignment(root, id, { isTTY: true, stdio: 'inherit' });
+    process.exitCode = signal != null ? 1 : (exitCode ?? 1);
+    return undefined;
+  }
+
+  const packagePath = canonicalPackage(declared).packagePath;
+  const run = resolveRun(record, options['--run']);
+  retainedCheckpoint(packagePath, run, 'takeover');
+  const delivery = await deliverOverseerMessage(packagePath, {
+    run,
+    sender: 'operator',
+    audience: 'coordinator',
+    kind: 'hold',
+    body: `Operator takeover for assignment ${id}: hold delivered before any terminal attach.`,
+  });
+  const result = {
+    assignment_id: id,
+    takeover: 'delivered',
+    spec_package: packagePath,
+    run,
+    hold: { id: delivery.id, path: delivery.path, sha256: delivery.sha256, status: delivery.status },
+    attached: false,
+    attach_command,
+    safe_boundary: TAKEOVER_SAFE_BOUNDARY,
+    note: delivery.status === 'delivered'
+      ? 'hold delivered; release only through resume plus a coordinator applied outcome bound to both hashes'
+      : 'hold publication is unconfirmed; no attach was attempted and no second original was written',
+  };
+  if (delivery.status !== 'delivered') {
+    process.exitCode = 1;
+    return result;
+  }
+  if (!tty) return result;
+  // Print the delivery receipt before the attach client takes over stdio.
+  await printResult('takeover', result, options);
+  try {
+    const { exitCode, signal } = await attachAssignment(root, id, { isTTY: true, stdio: 'inherit' });
+    if (signal != null || exitCode !== 0) {
+      // A live assignment whose attach client exits nonzero (or is signaled)
+      // resolves rather than rejects, so the held-pending catch below is
+      // bypassed. Report the same retained-hold/held-pending receipt as a
+      // rejected attach call; the hold was already delivered exactly once
+      // before the attach and no second original is written here.
+      await printResult('takeover', {
+        ...result,
+        attached: false,
+        attach_error: signal != null
+          ? `attach terminated by signal ${signal}`
+          : `attach exited with code ${exitCode ?? 'unknown'}`,
+        note: 'attach failed after hold delivery; the message is retained and remains held pending',
+      }, options);
+    }
+    process.exitCode = signal != null ? 1 : (exitCode ?? 1);
+  } catch (error) {
+    await printResult('takeover', {
+      ...result,
+      attached: false,
+      attach_error: describe(error),
+      note: 'attach failed after hold delivery; the message is retained and remains held pending',
+    }, options);
+    process.exitCode = 0;
+  }
+  return undefined;
+}
+
+async function resumeCommand(root, id, options) {
+  const record = await findAssignment(root, id);
+  const declared = specPackageOrNull(record);
+  if (declared === null) throw new Error('resume requires an assignment with a spec package');
+  const packagePath = canonicalPackage(declared).packagePath;
+  const run = resolveRun(record, options['--run']);
+  const checkpoint = retainedCheckpoint(packagePath, run, 'resume');
+  const holdId = options['--hold'];
+  // Project the live mailboxes against the retained checkpoint's inbox
+  // history/outcomes: a conflicting copy (same hold id, different bytes) or a
+  // changed archived hold (live hash differs from the retained hash) must
+  // refuse instead of publishing a release direction for an arbitrary hash.
+  const retainedItems = Array.isArray(checkpoint.inbox?.items) ? checkpoint.inbox.items : [];
+  const priorDirectories = Array.isArray(checkpoint.inbox?.observed_directories)
+    ? checkpoint.inbox.observed_directories.filter((name) => name === 'inbox' || name === 'processed')
+    : [];
+  const guard = readInboxGuard(packagePath, {
+    priorItems: retainedItems, items: retainedItems, priorDirectories,
+  });
+  const reasons = guard.reasons ?? [];
+  if (reasons.includes(`conflict:${holdId}`)) {
+    throw new Error(`resume refuses conflicting hold ${holdId} for run ${run} in ${packagePath}: conflicting originals share one hold id with different bytes`);
+  }
+  if (reasons.includes(`missing-history:${holdId}`)) {
+    throw new Error(`resume refuses hold ${holdId} for run ${run} in ${packagePath}: the retained original is missing from the inbox and archive`);
+  }
+  const sources = (guard.sources ?? []).filter((source) => source?.id === holdId);
+  if (sources.length > 1) {
+    throw new Error(`resume refuses hold ${holdId} for run ${run} in ${packagePath}: multiple observed originals share one hold id`);
+  }
+  const hold = (guard.items ?? []).find((item) => item.id === holdId && item.kind === 'hold'
+    && item.run === run && (item.state === 'blocking' || item.state === 'held'));
+  // No observed source, a source for another run, a released hold, or a
+  // duplicate-observed copy all fail the unique-identity match below.
+  if (!hold || sources.length !== 1) throw new Error(`no retained kind:hold original ${holdId} for run ${run} in ${packagePath}`);
+  const [source] = sources;
+  if (source.state !== 'observed' || source.sha256 !== hold.sha256) {
+    throw new Error(`resume refuses hold ${holdId} for run ${run} in ${packagePath}: unavailable hold identity`);
+  }
+  const retainedHold = retainedItems.find((item) => item && item.id === holdId && typeof item.sha256 === 'string');
+  if (retainedHold && retainedHold.sha256 !== hold.sha256) {
+    throw new Error(`resume refuses hold ${holdId} for run ${run} in ${packagePath}: the retained checkpoint holds a different hash for this hold id`);
+  }
+  const delivery = await deliverOverseerMessage(packagePath, {
+    run,
+    sender: 'operator',
+    audience: 'coordinator',
+    kind: 'direction',
+    body: `Release requested for hold ${hold.id} (sha256 ${hold.sha256}). The hold is released only after the coordinator records an applied outcome bound to both hashes.`,
+  });
+  return {
+    assignment_id: id,
+    resume: 'requested',
+    spec_package: packagePath,
+    run,
+    hold: { id: hold.id, sha256: hold.sha256, directory: hold.directory, state: hold.state },
+    direction: { id: delivery.id, path: delivery.path, sha256: delivery.sha256, status: delivery.status },
+    released: false,
+    note: delivery.status === 'delivered'
+      ? 'release requested: waiting for the coordinator applied outcome; this command did not release the hold'
+      : 'direction publication is unconfirmed; the hold remains and no release occurred',
+  };
+}
+
 async function execute(command, root, options, positionals) {
   switch (command) {
     case 'status': return storageStatus(root);
@@ -502,6 +699,8 @@ async function execute(command, root, options, positionals) {
     case 'attach':
       await attachCommand(root, positionals[0]);
       return undefined;
+    case 'takeover': return takeoverCommand(root, positionals[0], options);
+    case 'resume': return resumeCommand(root, positionals[0], options);
     case 'add-repo':
     case 'set-role': return kitEdit(command, root, positionals[0], options);
     default: throw new UsageError(`Unknown command: ${command}`);
@@ -525,6 +724,20 @@ function human(command, result) {
     }
     case 'show': return `${result.id} (${result.name}) at ${result.directory}`;
     case 'create': return `created ${result.id} at ${result.directory}`;
+    case 'takeover': {
+      const lines = [`takeover ${result.assignment_id}`, `mode ${result.takeover}`,
+        `spec_package ${result.spec_package ?? 'none'}`, `run ${result.run ?? 'none'}`];
+      if (result.hold) lines.push(`hold ${result.hold.id} ${result.hold.status}`);
+      if (result.hold) lines.push(`hold_path ${result.hold.path}`);
+      if (result.safe_boundary) lines.push(`safe_boundary ${result.safe_boundary}`);
+      if (result.attach_error) lines.push(`attach_error ${result.attach_error}`);
+      lines.push(result.note);
+      lines.push(`attach ${shellWords(result.attach_command)}`);
+      return lines.join('\n');
+    }
+    case 'resume': return [`resume ${result.assignment_id}`, `run ${result.run}`,
+      `hold ${result.hold.id} ${result.hold.state}`,
+      `direction ${result.direction.id} ${result.direction.status}`, result.note].join('\n');
     default:
       if (result && typeof result === 'object' && 'backup' in result) {
         return `applied ${result.path}\nbackup ${result.backup}`;

@@ -27,9 +27,13 @@ import { processIdentity, sameProcess } from "../spec-observe/process-identity.m
 import { claimOwner } from "../spec-observe/owner-claim.mjs";
 import { observeAssignment } from "./reconcile.mjs";
 import {
+  catalogEntries,
   createFileExclusive,
   fetchWorkspace,
   listWorkspaces,
+  noteCatalogOmission,
+  noteCatalogUnavailable,
+  readCatalogFile,
   resolveWorkspacePath,
   storageStatus,
   writeFileAtomic,
@@ -892,8 +896,25 @@ async function validateAssignmentRecord(physicalRoot, workspace, path, record) {
 // Scan one physical catalog workspace's assignments directory. Missing means
 // no records; every other directory problem or malformed record refuses the
 // whole lookup instead of being skipped.
-async function readWorkspaceAssignments(physicalRoot, workspace) {
+async function readWorkspaceAssignments(physicalRoot, workspace, budget = null, candidates = null) {
   const directory = join(workspace.directory, "assignments");
+  if (budget !== null) {
+    let lookup;
+    try {
+      lookup = await lstatOrNull(directory);
+    } catch (error) {
+      noteCatalogOmission(
+        budget,
+        `assignments-directory-unavailable:${directory}:${error.code ?? error.message}`,
+      );
+      return;
+    }
+    if (lookup === null) return;
+    await readWorkspaceAssignmentsBounded(
+      physicalRoot, workspace, directory, lookup, budget, candidates,
+    );
+    return;
+  }
   const lookup = await lstatOrNull(directory);
   if (lookup === null) return [];
   if (lookup.isSymbolicLink() || !lookup.isDirectory()) {
@@ -937,14 +958,98 @@ async function readWorkspaceAssignments(physicalRoot, workspace) {
   return records;
 }
 
+// Shared bounded row candidates: at most maxRows entries are retained, every
+// seen id stays tracked so a duplicate removes the selected matching row even
+// when the first occurrence was dropped at the row limit, and dropping any
+// candidate marks the scan truncated.
+function offerAssignmentCandidate(state, budget, entry) {
+  const id = entry.record.assignment_id;
+  if (state.duplicates.has(id)) return;
+  if (state.seen.has(id)) {
+    state.duplicates.add(id);
+    state.candidates.delete(id);
+    noteCatalogUnavailable(budget, `assignment-duplicate:${id}`);
+    return;
+  }
+  state.seen.add(id);
+  if (state.candidates.size >= budget.maxRows) {
+    noteCatalogOmission(budget, "row-budget-exhausted");
+    return;
+  }
+  state.candidates.set(id, entry);
+}
+
+// Opt-in bounded variant: directory entries and file bytes charge the shared
+// budget, and unreadable, malformed or schema-invalid records are reported
+// through the budget instead of refusing the whole lookup. Valid records are
+// offered to the shared candidate state, which keeps at most `maxRows`
+// candidates while the scan continues (within the entry and byte budgets) to
+// detect duplicates, including ids whose first occurrence was dropped.
+async function readWorkspaceAssignmentsBounded(physicalRoot, workspace, directory, lookup, budget, candidates) {
+  if (lookup.isSymbolicLink() || !lookup.isDirectory()) {
+    noteCatalogOmission(budget, `assignments-directory-unavailable:${directory}`);
+    return;
+  }
+  let physical;
+  try {
+    physical = await fs.realpath(directory);
+  } catch (error) {
+    noteCatalogOmission(
+      budget,
+      `assignments-directory-unavailable:${directory}:${error.code ?? error.message}`,
+    );
+    return;
+  }
+  if (physical !== directory) {
+    noteCatalogOmission(budget, `assignments-directory-unavailable:${directory}`);
+    return;
+  }
+  try {
+    for await (const entry of catalogEntries(directory, budget)) {
+      if (!entry.name.endsWith(".json")) continue;
+      const path = join(directory, entry.name);
+      const read = await readCatalogFile(path, budget);
+      if (!read.ok) {
+        noteCatalogUnavailable(budget, `assignment-unavailable:${path}:${read.reason}`);
+        if (read.exhausted === true) break;
+        continue;
+      }
+      let parsed;
+      try {
+        parsed = JSON.parse(read.text);
+      } catch {
+        noteCatalogUnavailable(budget, `assignment-malformed:${path}`);
+        continue;
+      }
+      let record;
+      try {
+        record = await validateAssignmentRecord(physicalRoot, workspace, path, parsed);
+      } catch (error) {
+        noteCatalogUnavailable(
+          budget,
+          `assignment-invalid:${path}:${error instanceof Error ? error.message : String(error)}`,
+        );
+        continue;
+      }
+      offerAssignmentCandidate(candidates, budget, { record, path });
+    }
+  } catch (error) {
+    noteCatalogOmission(
+      budget,
+      `assignments-directory-unreadable:${directory}:${error.code ?? error.message}`,
+    );
+  }
+}
+
 // Read-only global scan: the root must pass storage status, the catalog may
 // not contain invalid potentially relevant state, and a duplicated assignment
 // UUID refuses before any workspace filter. Results are sorted by created_at
 // then assignment id.
-async function scanAssignmentRecords(root) {
+async function scanAssignmentRecords(root, budget = null) {
   if (typeof root !== "string" || root === "") {
     throw new TypeError("root must be a non-empty string");
   }
+  if (budget !== null) return scanAssignmentRecordsBounded(root, budget);
   const status = await storageStatus(root);
   if (status.status !== "ok") {
     const detail = status.errors.map((entry) => entry.message).join("; ") || status.status;
@@ -979,16 +1084,73 @@ async function scanAssignmentRecords(root) {
   return scanned;
 }
 
+// Opt-in bounded scan: retains valid rows up to maxRows, reports malformed,
+// invalid and duplicate records as unavailable through the budget, and leaves
+// the omission count unknown on truncation. Never writes.
+async function scanAssignmentRecordsBounded(root, budget) {
+  const status = await storageStatus(root);
+  if (status.status !== "ok") {
+    noteCatalogOmission(budget, `storage-${status.status}`);
+    return [];
+  }
+  const physicalRoot = status.root;
+  const catalog = await listWorkspaces(physicalRoot, { budget });
+  for (const problem of catalog.errors) {
+    noteCatalogUnavailable(budget, `catalog-unreadable:${problem.path}`);
+  }
+  for (const entry of catalog.invalid) {
+    noteCatalogUnavailable(
+      budget,
+      `workspace-unavailable:${entry.directory}:${entry.errors.join("; ")}`,
+    );
+  }
+  if (catalog.errors.length > 0 || catalog.invalid.length > 0) {
+    noteCatalogOmission(budget, "catalog-incomplete");
+  }
+  const state = { candidates: new Map(), seen: new Set(), duplicates: new Set() };
+  for (const workspace of catalog.valid) {
+    if (budget.entries >= budget.maxEntries) {
+      noteCatalogOmission(budget, "entry-budget-exhausted");
+      break;
+    }
+    if (budget.bytes >= budget.maxTotalBytes) {
+      noteCatalogOmission(budget, "byte-budget-exhausted");
+      break;
+    }
+    await readWorkspaceAssignments(physicalRoot, workspace, budget, state);
+  }
+  const scanned = [...state.candidates.values()];
+  scanned.sort((left, right) =>
+    left.record.created_at.localeCompare(right.record.created_at)
+    || left.record.assignment_id.localeCompare(right.record.assignment_id));
+  budget.rows = scanned.length;
+  return scanned;
+}
+
 /**
  * List persisted assignments in one existing storage root without creating or
  * modifying anything. Invalid or duplicated records refuse the lookup rather
  * than being skipped.
  * @param {string} root
  * @param {string|null} [workspaceId]
+ * @param {{budget?: object}} [options] optional shared budget from
+ *   `createCatalogReadBudget`; with a budget malformed, invalid and duplicate
+ *   records are reported as unavailable through the budget instead of
+ *   refusing the lookup
  * @returns {Promise<object[]>} records sorted by created_at then id
  */
-export async function listAssignments(root, workspaceId = null) {
-  const scanned = await scanAssignmentRecords(root);
+export async function listAssignments(root, workspaceId = null, options = {}) {
+  if (options === null || typeof options !== "object" || Array.isArray(options)) {
+    throw new TypeError("listAssignments options must be an object");
+  }
+  for (const key of Object.keys(options)) {
+    if (key !== "budget") throw new Error(`listAssignments does not accept option ${key}`);
+  }
+  const budget = options.budget ?? null;
+  if (budget !== null && (typeof budget !== "object" || Array.isArray(budget))) {
+    throw new TypeError("listAssignments budget must be a catalog read budget");
+  }
+  const scanned = await scanAssignmentRecords(root, budget);
   let selected = scanned;
   if (workspaceId !== null && workspaceId !== undefined) {
     if (typeof workspaceId !== "string" || workspaceId === "") {

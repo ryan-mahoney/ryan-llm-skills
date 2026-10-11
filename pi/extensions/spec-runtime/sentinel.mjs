@@ -9,6 +9,7 @@
 import { mkdirSync, renameSync, readdirSync, writeFileSync, readFileSync, statSync, existsSync, lstatSync, realpathSync, openSync, closeSync, fsyncSync, unlinkSync, linkSync, fstatSync, readSync, opendirSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { join, resolve, dirname, sep, relative, isAbsolute, basename } from 'node:path';
+import { homedir } from 'node:os';
 
 import { canonicalPackage } from './runtime.mjs';
 import { watchSpecTree } from './spec-watcher.mjs';
@@ -16,6 +17,7 @@ import { publicHint } from './monitor.mjs';
 import { createOwnedLeaf } from './scout.mjs';
 import { collectFacts } from '../../../scripts/jev/core.mjs';
 import { collectWorkspace, reduceConditions, renderWorkspace, enrollmentDirectory, readEnrollments, enrollmentReasons, SENTINEL_LIMITS } from '../../../scripts/spec-observe/sentinel.mjs';
+import { resolveStorageRoot } from '../../../scripts/workspaces/store.mjs';
 import { createMergeReconciler } from '../../../scripts/spec-observe/merge-reconciliation.mjs';
 import { createRepositoryDiscovery, saveDiscoveryRoot, discoveryRoot } from '../../../scripts/spec-observe/discovery.mjs';
 import { parseSentinelStart, SENTINEL_MODES } from './sentinel-options.mjs';
@@ -43,6 +45,7 @@ export function boundedSentinelLines(lines, maxLines = 8, maxChars = 180) {
 }
 
 export function createSentinelObserver({ pi, context, agentDir, scope = null, ownPackages = [], indexDir = join(agentDir, 'spec-runtime'),
+  storageRoot = resolveStorageRoot(process.env, homedir()),
   now = Date.now, watchDirectory = watchSpecTree, setTimer = setTimeout, clearTimer = clearTimeout, repeat = setInterval, cancelRepeat = clearInterval,
   nativeRun = null, maxWatchers = MAX_WATCHERS, enablePolicy = null, disablePolicy: disableAuthority = null,
   isolateReader = false, readerFactory = createSentinelReaderProcess, dashboard = null, startMode = null, stopMode = NOOP_STOP_MODE, modeStatus = () => null,
@@ -221,7 +224,7 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
         let snapshot, roots, discovery, enrollmentErrors;
         if (isolatedReader) {
           ({ snapshot, roots, discovery, enrollmentErrors } = await isolatedReader.read({
-            agentDir, scope, indexDir, packages: [...ownPackages], root: discoveryRootOverride, includeInactive, mergeLookup: !readOnly, reconcileMergeMetadata: !readOnly && ['shadow','recover'].includes(modeStatus()?.options?.mode),
+            agentDir, scope, indexDir, storageRoot, packages: [...ownPackages], root: discoveryRootOverride, includeInactive, mergeLookup: !readOnly, reconcileMergeMetadata: !readOnly && ['shadow','recover'].includes(modeStatus()?.options?.mode),
           }));
         } else {
           const enrolled = await readEnrollments({ agentDir, scope });
@@ -229,7 +232,7 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
           enrollmentErrors = enrolled.errors ?? [];
           roots = [...new Set([...(enrolled.roots ?? []), ...discovery.roots])];
           snapshot = await collectWorkspace({
-            roots, packages: [...ownPackages], enrollmentErrors, discovery, indexDir, agentDir, scope, now, includeInactive,
+            roots, packages: [...ownPackages], enrollmentErrors, discovery, indexDir, agentDir, scope, now, includeInactive, storageRoot,
             reconcileMerge: readOnly ? null : createMergeReconciler({ persist: ['shadow','recover'].includes(modeStatus()?.options?.mode), now }),
           });
         }
@@ -239,7 +242,10 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
           || (!snapshot.runs.length && !roots.length && (enrollmentErrors.length || discovery.reasons.length)))) {
           // Unreadable enrollment retains the last known facts as stale
           // instead of replacing them with an unobserved empty workspace.
-          latest = { ...latest, roots, coverage: { ...latest.coverage, state: 'stale', omitted: null,
+          latest = { ...latest, roots,
+            assignments: snapshot.assignments ?? latest.assignments ?? [],
+            assignment_coverage: snapshot.assignment_coverage ?? latest.assignment_coverage,
+            coverage: { ...latest.coverage, state: 'stale', omitted: null,
             reasons: [...new Set([...latest.coverage.reasons, ...snapshot.coverage.reasons, ...enrollmentReasons(enrollmentErrors), ...discovery.reasons])] } };
           note = 'Workspace read unavailable; status retains the last observed work as stale.';
           if (!closed && !hidden) await publishSnapshot();
@@ -261,11 +267,13 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
         if (readOnly) {
           const message = `Sentinel workspace unavailable: ${publicHint(error?.message ?? String(error))}`;
           return latest ? { ...latest, coverage: { ...latest.coverage, state: 'stale',
-            reasons: [...latest.coverage.reasons, message] } } : null;
+            reasons: [...latest.coverage.reasons, message] },
+            assignment_coverage: latest.assignment_coverage ? { ...latest.assignment_coverage, state: 'stale' } : latest.assignment_coverage } : null;
         }
         // Last known facts are kept; the failure becomes an explicit note.
         note = `Sentinel workspace unavailable: ${publicHint(error?.message ?? String(error))}`;
-        if (latest) latest = { ...latest, coverage: { ...latest.coverage, state: 'stale' } };
+        if (latest) latest = { ...latest, coverage: { ...latest.coverage, state: 'stale' },
+          assignment_coverage: latest.assignment_coverage ? { ...latest.assignment_coverage, state: 'stale' } : latest.assignment_coverage };
         if (!closed && !hidden) await publishSnapshot();
         if (!closed && active && !hidden) render();
         return latest;
@@ -426,6 +434,22 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
         const id = rest.join(' ');
         if (!id) throw new Error(USAGE);
         const snapshot = await run(true);
+        // Exact full-id assignment rows are matched first, without short-id,
+        // workflow or package inference; only projected sanitized facts show.
+        const assignment = snapshot?.assignments?.find(item => item.assignment_id === id);
+        if (assignment) {
+          const lines = [
+            `${publicHint(assignment.assignment_id)} · ${publicHint(assignment.display)}`,
+            `recorded: ${publicHint(assignment.recordedState) || 'unknown'} · observed: ${publicHint(assignment.observedState) || 'unknown'}`,
+            `coverage: ${publicHint(assignment.coverage)}${assignment.coverageReasons?.length ? ` (${assignment.coverageReasons.map(publicHint).join(', ')})` : ''}`,
+            `quiet: ${assignment.quiet === true} · attached: ${Number.isFinite(assignment.attachedCount) ? assignment.attachedCount : 'unknown'} · control: none`,
+            `safe action: ${publicHint(assignment.safeAction || assignment.nextAction || 'no action')}`,
+            ...(assignment.attention ?? []).map(item => `attention: ${publicHint(item)}`),
+            `assignment coverage: ${publicHint(snapshot.assignment_coverage?.state ?? 'unknown')}`,
+          ];
+          notify(ctx, lines.join('\n'), 'info');
+          return;
+        }
         const matched = snapshot?.runs?.find(item => item.assignment_id === id || item.workflow_id === id || item.package === id
           || item.package?.split('/').pop() === id
           || item.conditions?.some(condition => condition.id === id || condition.kind === id));
@@ -855,7 +879,7 @@ const MAX_WORKERS = 32;
 const ARTIFACT_BYTES = 64 * 1024;
 const ARTIFACT_TOTAL_BYTES = 1024 * 1024;
 const INBOX_MAX_FILES = 200;
-const INBOX_FILE_BYTES = 32 * 1024;
+export const INBOX_FILE_BYTES = 64 * 1024;
 const INBOX_TOTAL_BYTES = 1024 * 1024;
 // Enumeration is bounded by examined entries, not only selected candidates
 // (mirroring the observer's directoryEntryFactor): a mailbox larger than the
