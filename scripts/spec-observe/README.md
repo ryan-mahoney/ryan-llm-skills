@@ -85,11 +85,28 @@ Snapshots carry `recently_completed` separately from monitored `runs`, so histor
 does not create recovery conditions or consume the 50-assignment display limit.
 History has its own 50-package cap and `completion_history` window/omission metadata;
 older packages are checked after current run details, within the shared read budget.
+One scan reads at most 16 MiB in total. Before any package is read, each package also
+gets a 96 KiB floor (reserved up to half the total) for its current receipt, step index and
+completion records, so earlier receipt-heavy packages cannot starve those lifecycle reads;
+a package's unused floor returns to the shared pool when it finishes.
 Recorded timestamps determine the window even when package files have older mtimes.
 The dashboard uses authoritative observer snapshots, without accumulating browser
 history. Older snapshots remain readable and explicitly show unavailable completion
 history. Updated observers supply the collection on their next snapshot; an already
 running Pi session needs to load the updated observer code first.
+
+### Epics
+
+Sentinel reads `.specs/_epics/<slug>/epic.json` in every observed primary checkout
+(64 KiB per record, 50 epics per `.specs/`, shared read budget) and derives each
+member's status from the package facts it already collects, regardless of the
+24-hour activity filter and the seven-day completion window. Folders under
+`.specs/` whose names start with `_` are not packages. The snapshot carries
+`epics[]` with members, summary counts, `waiting_on`, `next` and per-epic coverage;
+rows for member packages carry `epic`. An invalid record or unreadable `_epics`
+directory is a coverage reason and never hides its member packages; an absent
+`_epics` directory is normal. Sentinel never writes an epic record. Schema and
+status rules: [docs/spec-epics.md](../../docs/spec-epics.md).
 
 Active observers check scoped canonical `pr_submission` records against authoritative
 GitHub PR metadata. Missing stored branch/base fields are filled from that response;

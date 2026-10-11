@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "2"
+  version: "3"
 ---
 
 # Epic End To End
@@ -18,12 +18,12 @@ whether to continue after a completed package.
 
 ## Standing defaults
 
-Invoking this skill with `PACKAGES` requests the full epic loop by default:
+Invoking this skill with `EPIC` or `PACKAGES` requests the full epic loop by default:
 resume existing planned work → implement → review → publish → merge → reassess
 remaining packages. The operator need not repeat these instructions:
 
 - Resolve dependency order and prerequisite status against current code and merged
-  PRs, using the supplied order to break ties among eligible packages.
+  PRs, using the record's array order to break ties among eligible packages.
 - Preserve completed work and resume each package at its first unfinished
   obligation. Refresh missing or stale preparation through `spec-write`.
 - Complete each package's reviews and evidence, publish its PR, and merge it under
@@ -52,15 +52,18 @@ EDITOR_AGENT: deepseek-flash:max from deepseek
 REVIEW_AGENT: gpt-6.1-sol:medium from openai-codex
 SCOUT_AGENT: gpt-6-luna:low from openai-codex
 FINAL_REVIEWER: gpt-6.1-sol:xhigh from openai-codex
-PACKAGES:
-- /absolute/repository/.specs/first-feature
-- /absolute/repository/.specs/second-feature
-- /absolute/repository/.specs/third-feature
+EPIC: adj
+PACKAGES:   # optional when the record exists
+- /absolute/repository/.specs/adj1-first-feature
+- /absolute/repository/.specs/adj2-second-feature
 ```
 
-Accept package directories or their `spec.md` paths. `PACKAGES` is the membership
-boundary; a leftover singular `PACKAGE` placeholder does not replace that list.
-Optional `EPIC` names the canonical directory for the epic's coordination record.
+`EPIC: <slug>` (preferred) names an existing record under
+`<anchor primary repo>/.specs/_epics/<slug>/`; its `packages` are the membership
+boundary. `PACKAGES` remains accepted and takes package directories or their
+`spec.md` paths; a leftover singular `PACKAGE` placeholder does not replace that
+list. See [One epic record](#one-epic-record-existing-package-ledgers) for how the
+two combine.
 Honor explicit branch/base, worktree, publication/readiness and model overrides.
 Apply the standing defaults unless the invocation explicitly narrows them. A stated
 endpoint of “through PR publication” is publication-only; omitted workflow prose
@@ -86,9 +89,10 @@ new user overrides through the owning workflow. Never silently substitute a mode
 2. Deduplicate canonical package paths while retaining the user's order. Read only
    enough artifacts to identify dependencies, readiness, ownership and next action;
    do not replay architecture, inspect every step card, or run broad baselines.
-3. Build the dependency order from explicit contracts/prerequisites in those
-   artifacts. A lower number or shared prefix is not a dependency. The supplied
-   order breaks ties among eligible packages. If the user explicitly requires an
+3. Build the dependency order from the record's `requires`. Read the packages'
+   artifacts for explicit contracts/prerequisites only to write the record
+   initially. A lower number or shared prefix is not a dependency. Array order in
+   the record breaks ties among eligible packages. If the user explicitly requires an
    order that conflicts with a prerequisite, surface that conflict rather than
    silently choosing one. Detect cycles before dispatching affected packages.
 4. For each edge record the producer, the contract required, where it must exist
@@ -112,27 +116,43 @@ missing prerequisite without expanding the epic.
 
 ## One epic record, existing package ledgers
 
-Keep a compact `run.md` under the explicit canonical `EPIC` directory. Without
-EPIC, use `<anchor primary repo>/.specs/_epics/<key>/run.md`, where
-the anchor is the lexicographically smallest canonical primary repository path
-among members and `key` is the first 16 hex characters of SHA-256 over the sorted unique canonical package
-paths joined with `\n` (no trailing newline). Store the full membership and digest;
-refuse a collision or conflicting membership. Reordering the same list retains
-this identity; update tie order explicitly on resume. Different roots require
-explicit path reconciliation rather than guessing by basename.
+The record is `<anchor primary repo>/.specs/_epics/<slug>/`, where the anchor is the
+repository holding the record (ordinarily the plan's). It contains `epic.json`,
+whose schema, derived member status and naming rules are defined in
+[Spec epics](../../docs/spec-epics.md), and this skill's `run.md`. Apply the
+primary-checkout rules of [Workspace Handoff](../spec-end-to-end/references/workspace-handoff.md)
+to both.
 
-This record owns only cross-package coordination:
+- `EPIC` without `PACKAGES`: read the existing record; stop if it is missing or invalid.
+- `PACKAGES` without a record: write `epic.json` first. The slug is the explicit
+  `EPIC` value, else the members' shared name prefix; with neither, refuse to guess
+  and ask. Take `requires` from the packages' own dependency statements. Members in
+  other repositories carry their `repository`.
+- Both: the record's membership must equal the list. Otherwise stop with the exact
+  difference; never merge the two lists silently.
 
-- Original request, exact models, authority, canonical membership and tie order.
-- Dependency edges, satisfaction evidence and explicit external blockers.
-- Per package: pending/running/blocked/complete, canonical path, checkout,
-  branch, explicit PR base and pinned predecessor SHA, existing workflow ID,
-  requested outcome, final commit, PR URL/readiness, merge state/commit/time and
-  evidence/tour references. Keep reviewed PR HEAD separate from the merge commit.
+Update `epic.json` atomically (temp file plus rename) and only as follows: set
+`state` to `active` on first dispatch and to `complete` when every member has its
+requested outcome; set `abandoned` only on explicit user direction; add or change
+a member `note` when a member is superseded or folded, with the user's direction.
+Never rewrite membership, order or `requires`, and never copy derived status into
+the record. Membership or dependency changes are operator edits.
+
+`run.md` owns only cross-package coordination that the record and package files
+cannot derive:
+
+- Original request, exact models, authority and the effective tie order if it
+  differs from the record.
+- Satisfaction evidence for each `requires` edge and explicit external blockers.
+- Per package: pending/running/blocked/complete, checkout, branch, explicit PR base
+  and pinned predecessor SHA, existing workflow ID, requested outcome, final commit,
+  merge commit and time, and evidence/tour references. Keep reviewed PR HEAD
+  separate from the merge commit. PR URL and merge state are derivable by sentinel
+  but remain here as handoff inputs.
 - Current package, pending handoff and next eligible action; consequential
   decisions and holds that affect the epic.
 
-Update atomically at material handoffs, before dispatch and before returning for
+Update `run.md` atomically at material handoffs, before dispatch and before returning for
 a real blocker. Reuse the package's own managed ledger and receipts for step
 progress, worker IDs, reviews and retry budgets; do not copy them into this record
 or create an epic-shaped spec_dispatch assignment. Do not add a daemon, scheduler,
@@ -247,7 +267,10 @@ sentinel workflow registration bound to that package. Remain the top-level
 coordinator unless the user explicitly requested another coordinator. Do not spawn
 one coordinator per package or reconstruct dispatch/review internals here.
 
-Consume the returned completion/evidence/publication records. Within authorized
+Consume the returned completion/evidence/publication records. Require the package's
+final `spec_sentinel_checkpoint` at `state: complete` (see spec-end-to-end's Completion);
+without it the sentinel still shows the package as current, and this epic's derived member
+status stays `in-progress`. Within authorized
 publication, early drafts and subsequent pushes follow `spec-pr`; final ready
 status requires the existing package evidence, review/fix and enabled final review
 contracts. CI results stay operator-owned under
@@ -285,7 +308,7 @@ A draft satisfies completion only when draft is the requested final outcome.
 Live deployment or import prerequisites remain separately pending when outside
 that requested outcome; do not relabel them as observed or quietly drop them.
 
-Report `complete`, `blocked` or `paused`, the epic record path, and a concise table
+Report `complete`, `blocked` or `paused`, the epic record path (`.specs/_epics/<slug>/`), and a concise table
 of packages, outcome, branch/base and PR URL. For incomplete runs, name the exact
 missing dependency/decision, affected packages and next action. Routine successful
 handoffs get short progress updates; never end the epic at the first package's PR.

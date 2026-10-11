@@ -10,6 +10,7 @@ import { assertModelSelector } from './model-selector.mjs';
 import { createCommunication } from './communication.mjs';
 import { createMonitor, publicHint } from './monitor.mjs';
 import { createSentinelObserver, createVerificationRecorder, readVerificationIncidents, recordCheckpoint as recordSentinelCheckpoint, readInboxGuard, readCheckpointRecord, observeInput, reconcileRuntimeReturn, checkpointPath, createSentinelAuthority, createDiagnosisController, activatePolicy, activateRuntimePolicy, disablePolicy, handleBeforeSettle, finishIntent, considerCancellation } from './sentinel.mjs';
+import { completeWorkflowsAfterPublication } from './final-checkpoint.mjs';
 import { createScout, SCOUT_MODEL } from './scout.mjs';
 import { registerRepositorySearch } from './search.mjs';
 import { createSentinelControl } from './sentinel-control.mjs';
@@ -192,8 +193,17 @@ export default function (pi: any) {
   const monitor = createMonitor();
   pi.registerTool({ name: 'spec_checkpoint', label: 'Record workflow decision', description: 'Record the current stage, next action and material decisions in the managed workflow ledger. Runtime records worker/check/review-arrival facts automatically; do not transcribe those. Complete is a coordinator assessment backed by artifact references, never inferred from worker exit. Known skill stage names are normalized (spec-run to implementation, spec-pr to publication). Complete implementation/publication requires finished workers and complete handoffs; use publication-draft for a draft checkpoint, never ready publication. Preserve human holds and unresolved obligations.',
     parameters: Type.Object({ package: Type.String(), stage: Type.String(), status: Type.Union(['pending', 'running', 'complete', 'blocked'].map(v => Type.Literal(v))), next: Type.String(), decisions: Type.Array(Type.String()), artifacts: Type.Array(Type.String({ description: 'Existing package-relative, .specs repo-relative, or canonical absolute artifact paths; future session/evidence paths are not evidence' })) }),
-    async execute(_id: string, args: any) {
-      try { const { packagePath } = canonicalPackage(args.package); await refreshProgress(packagePath); const receipt = recordCheckpoint(packagePath, args); progress.attach(packagePath); await refreshProgress(packagePath); return result(receipt); }
+    async execute(_id: string, args: any, _signal: AbortSignal, _update: any, ctx: any) {
+      try {
+        const { packagePath } = canonicalPackage(args.package); await refreshProgress(packagePath); const receipt = recordCheckpoint(packagePath, args); progress.attach(packagePath); await refreshProgress(packagePath);
+        // Complete publication closes the package's sentinel workflows whose workers all have terminal receipts; a skip never fails this call.
+        if (receipt.stage !== 'publication' || receipt.status !== 'complete') return result(receipt);
+        const sentinel = await serializeWorkflow(async () => completeWorkflowsAfterPublication({ package: packagePath, known: [...knownWorkflows.values()],
+          coordinator_session: coordinatorIdentity(ctx), input_revision: inputGuard.input_revision, checkoutFor: (pkg: string, id: string) => boundCheckout(pkg, id, dispatchBindings) }))
+          .catch(() => []);
+        return result(sentinel.length ? { ...receipt, sentinel: sentinel.map((entry: any) => /^worker-(active|unknown)/.test(entry.reason ?? '')
+          ? { ...entry, next: 'Reconcile that worker, then record the final complete spec_sentinel_checkpoint yourself.' } : entry) } : receipt);
+      }
       catch (error: any) { return result({ error: error.message }, true); }
     } });
   // Session-local sentinel observation: read-only, and only for packages this

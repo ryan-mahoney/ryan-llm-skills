@@ -7,7 +7,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "3"
+  version: "4"
 ---
 
 # Global spec sentinel
@@ -38,6 +38,13 @@ snapshot file. Remote dashboard reads remain local-only for completion. The Pi
 lifecycle above is unchanged. Operator defaults, ownership and installation
 steps: [scripts README](../../scripts/spec-observe/README.md#observe-only-host-operator)
 and [runtime README](../../pi/extensions/spec-runtime/README.md#observe-only-host-entry).
+
+## Epics
+
+Sentinel reads `.specs/_epics/*/epic.json` in each observed repository and never writes
+it. The dashboard shows an epic badge on member packages, an "Epic members" section in package
+detail and an Epics view; `sentinel status --format text` prints one line per epic. Member status
+is derived from package files; see [Spec epics](../../docs/spec-epics.md).
 
 ## Native commands and authority
 

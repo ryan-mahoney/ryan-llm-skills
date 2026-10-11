@@ -41,6 +41,16 @@ and merge belong to the operator/organization.
 Each stage is separately resumable; missing branch audit files do not trigger it.
 See [the evidence audit guide](reviews.md) for artifact paths and proof requirements.
 
+## Epics
+
+An epic is an ordered set of spec packages that deliver one plan. Its record is
+`.specs/_epics/<slug>/epic.json` in the primary checkout. It lists the members, their
+`requires` dependencies and the plan; member status (proposed, prepared, in progress,
+published, merged) is derived from each package's files and is never stored in the
+record. Most packages stand alone and need no record. Packages that belong to one run
+through `epic-end-to-end`, which reads the record and sequences `spec-end-to-end` per
+member. See [Spec epics](spec-epics.md) for the schema and naming convention.
+
 ## Test Scheduling
 
 Implementation steps execute the prepared focused acceptance checks after coherent edits.
