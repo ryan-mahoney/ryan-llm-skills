@@ -19,6 +19,7 @@ test('default Documents discovery finds grouped and nested repositories without 
   const outer = f.repo(join(f.root, 'work', 'outer'));
   const inner = f.repo(join(outer, 'packages', 'inner'));
   f.repo(join(outer, 'node_modules', 'ignored'));
+  f.repo(join(outer, 'vendors', 'ignored'));
   const outside = f.repo(join(f.home, 'outside'));
   symlinkSync(outside, join(f.root, 'alias'));
   const result = await createRepositoryDiscovery({ agentDir: f.agentDir, home: f.home }).read();

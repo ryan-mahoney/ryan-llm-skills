@@ -6,7 +6,7 @@ import { join, resolve, isAbsolute, relative } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 export const DISCOVERY_LIMITS = Object.freeze({ depth: 8, directories: 2000, entries: 20000, milliseconds: 2000, cacheMs: 300000 });
-const skipped = new Set(['node_modules', 'vendor', 'deps', '_build', 'build', 'dist', 'target', 'coverage', '__pycache__']);
+const skipped = new Set(['node_modules', 'vendor', 'vendors', 'deps', '_build', 'build', 'dist', 'target', 'coverage', '__pycache__']);
 export const discoveryConfigPath = agentDir => join(agentDir, 'spec-sentinel', 'discovery.json');
 export function discoveryRoot(path, home = homedir()) {
   const expanded = path === '~' ? home : path?.startsWith('~/') ? join(home, path.slice(2)) : path;
