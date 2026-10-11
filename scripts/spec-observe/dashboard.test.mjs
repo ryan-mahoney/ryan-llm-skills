@@ -2392,3 +2392,108 @@ test('assignment dashboard projection shows loading before the first observation
     'a failed first refresh stays unavailable instead of flipping back to loading');
   assert.match(context.document.getElementById('observation-detail').innerHTML, /Workspace state unavailable/);
 });
+
+// Run independently: node --test --test-name-pattern='epic badge' scripts/spec-observe/dashboard.test.mjs
+const epicNow = new Date().toISOString();
+const epicRun = (name, extra = {}) => ({ repository: '/repo/.git', package: `/repo/.specs/${name}`, assignment_id: name,
+  is_current_assignment: true, execution: 'running', coverage: { state: 'complete' }, ...extra });
+const epicMember = (name, status, extra = {}) => ({ name, package: name, repository: '/repo', status, attention: false,
+  step: null, waiting_on: [], note: null, ...extra });
+const epicRecord = (members, extra = {}) => ({ epic: 'adj', title: 'Adjacent <functionality>', state: 'active', note: null,
+  repository: '/repo', record: '/repo/.specs/_epics/adj/epic.json', plan: '/repo/.specs/_epics/adj/plan.md', members,
+  summary: { total: members.length, merged: members.filter(m => m.status === 'merged').length, complete: 0, attention: members.filter(m => m.attention).length },
+  next: null, coverage: { state: 'complete', reasons: [] }, ...extra });
+const epicPayload = (snapshot) => ({ observers: [{ observer_id: 'live', state: 'observing', published_at: epicNow,
+  snapshot: { workspace: 'w', coverage: { state: 'complete', observed_at: epicNow }, runs: [], ...snapshot } }] });
+const tableRows = html => (html.match(/<tbody>[\s\S]*<\/tbody>/)?.[0].match(/<tr[\s\S]*?<\/tr>/g) ?? []);
+
+test('epic badge, fact and members table render from the same observer snapshot', () => {
+  const context = dashboardContext();
+  const members = [
+    epicMember('adj1-base', 'merged'),
+    epicMember('adj2-core', 'in-progress', { attention: true, step: { position: 2, total: 5 }, note: 'Blocked on <review>' }),
+    epicMember('adj3-ui', 'prepared', { waiting_on: ['adj2-core'] }),
+    epicMember('adj4-docs', 'missing'),
+  ];
+  const ref = { epic: 'adj', repository: '/repo', position: 3, total: 4 };
+  context.input = epicPayload({ epics: [epicRecord(members)],
+    runs: [epicRun('adj3-ui', { epic: ref }), epicRun('adj2-core', { assignment_id: 'core', epic: { ...ref, position: 2 } })] });
+  vm.runInContext("payload=normalize(input);selected=null;render();selected=records.find(r=>r.package.endsWith('adj3-ui')).key;renderList();renderDetail()", context);
+  const list = context.document.getElementById('run-list').innerHTML;
+  assert.match(list, /<span class="pill muted" title="Adjacent &lt;functionality&gt;">adj · 1\/4<\/span>/);
+  const detail = context.document.getElementById('observation-detail').innerHTML;
+  assert.match(detail, /<div class="fact-label">Epic<\/div><span>Adjacent &lt;functionality&gt;<\/span><p class="small muted">1 of 4 landed · next none<\/p>/);
+  const rows = tableRows(detail);
+  assert.equal(rows.length, 4);
+  assert.match(rows[0], /adj1-base[\s\S]*pill good">merged</);
+  assert.match(rows[1], /adj2-core[\s\S]*pill warn">in progress · attention<[\s\S]*2 of 5[\s\S]*Blocked on &lt;review&gt;/);
+  assert.match(rows[2], /adj3-ui[\s\S]*pill muted">prepared<[\s\S]*adj2-core/);
+  assert.match(rows[3], /adj4-docs[\s\S]*pill warn">missing</);
+  assert.deepEqual(rows.map(r => r.includes('aria-current="true"')), [false, false, true, false]);
+  assert.match(rows[2], /<strong>[\s\S]*This package/);
+  const coreKey = vm.runInContext("esc(records.find(r=>r.package.endsWith('adj2-core')).key)", context);
+  assert.deepEqual(rows.map(r => r.includes('<button')), [false, true, false, false]);
+  assert.ok(rows[1].includes(`<button data-select-key="${coreKey}">adj2-core</button>`));
+  assert.match(detail, /Status is derived from each package's files\. It is lifecycle, not acceptance\./);
+  // Selecting a member re-renders the detail around that package.
+  vm.runInContext("selectRecord(records.find(r=>r.package.endsWith('adj2-core')).key)", context);
+  const next = tableRows(context.document.getElementById('observation-detail').innerHTML);
+  assert.deepEqual(next.map(r => r.includes('aria-current="true"')), [false, true, false, false]);
+  // A run whose epic is absent from its own snapshot does not invent counts.
+  context.input = epicPayload({ epics: [], runs: [epicRun('adj3-ui', { epic: ref })] });
+  vm.runInContext("payload=normalize(input);selected=null;render()", context);
+  assert.match(context.document.getElementById('observation-detail').innerHTML, /Epic record unavailable in this snapshot/);
+  assert.doesNotMatch(context.document.getElementById('observation-detail').innerHTML, /landed/);
+  assert.match(context.document.getElementById('run-list').innerHTML, />adj<\/span>/);
+});
+
+// Run independently: node --test --test-name-pattern='epics view' scripts/spec-observe/dashboard.test.mjs
+test('epics view lists epics and shows explicit empty/unavailable states', () => {
+  const context = dashboardContext();
+  const show = snapshot => { context.input = snapshot; vm.runInContext("payload=normalize(input);mode='epics';selectedEpic=null;render()", context); };
+  const list = () => context.document.getElementById('run-list').innerHTML;
+  const detail = () => context.document.getElementById('observation-detail').innerHTML;
+  show({ observers: [] });
+  assert.match(list(), /No observer snapshots/);
+  show(epicPayload({}));
+  assert.match(list(), /Epic data unavailable in these snapshots/);
+  assert.match(list(), /The observer needs a snapshot with epic data\. Package views still work\./);
+  show(epicPayload({ epics: [] }));
+  assert.match(list(), /No epics recorded/);
+  assert.match(list(), /Record an epic at \.specs\/_epics\/&lt;slug&gt;\/epic\.json\. See docs\/spec-epics\.md\./);
+  show(epicPayload({ epics: [epicRecord([epicMember('adj1-base', 'merged'), epicMember('adj2-core', 'in-progress', { attention: true })], { note: 'Pilot <note>', plan: null })] }));
+  assert.match(list(), /Adjacent &lt;functionality&gt;[\s\S]*pill muted">adj<[\s\S]*1\/2 landed[\s\S]*pill warn">1 attention</);
+  assert.match(detail(), /Select an epic/);
+  vm.runInContext("selectEpic(collectEpics().all[0].key)", context);
+  assert.match(detail(), /<h2>Adjacent &lt;functionality&gt;<\/h2>/);
+  assert.match(detail(), /\/repo\/\.specs\/_epics\/adj\/epic\.json/);
+  assert.match(detail(), /No plan recorded/);
+  assert.match(detail(), /Pilot &lt;note&gt;/);
+  const rows = tableRows(detail());
+  assert.equal(rows.length, 2);
+  assert.match(rows[1], /adj2-core[\s\S]*pill warn">in progress · attention</);
+  assert.ok(rows.every(r => !r.includes('aria-current') && !r.includes('<button')));
+  context.document.getElementById('repo-search').value = 'ADJ2';
+  vm.runInContext('render()', context);
+  assert.match(list(), /pill muted">adj</);
+  context.document.getElementById('repo-search').value = 'nothing-here';
+  vm.runInContext('render()', context);
+  assert.match(list(), /No matching epics/);
+});
+
+// Run independently: node --test --test-name-pattern='normalize rejects malformed epics' scripts/spec-observe/dashboard.test.mjs
+test('normalize rejects malformed epics and run epic fields', () => {
+  const context = dashboardContext();
+  const check = (snapshot, message) => { context.input = JSON.parse(JSON.stringify(snapshot)); assert.throws(() => vm.runInContext('normalize(input)', context), { message }); };
+  const good = epicPayload({ epics: [epicRecord([epicMember('a', 'merged')])], runs: [epicRun('a', { epic: { epic: 'adj' } })] });
+  context.input = good;
+  assert.doesNotThrow(() => vm.runInContext('normalize(input)', context));
+  assert.doesNotThrow(() => vm.runInContext('normalize({runs:[{}]})', context));
+  const withEpics = epics => epicPayload({ epics });
+  check(withEpics(Array.from({ length: 51 }, () => epicRecord([]))), 'Invalid epics.');
+  check(withEpics([epicRecord(Array.from({ length: 101 }, (_, i) => epicMember(`m${i}`, 'merged')))]), 'Invalid epics.');
+  check(withEpics([epicRecord([epicMember('a', 7)])]), 'Invalid epics.');
+  check(withEpics('adj'), 'Invalid epics.');
+  check(epicPayload({ runs: [epicRun('a', { epic: 'adj' })] }), 'Invalid run epic.');
+  check(epicPayload({ recently_completed: [{ completed_at: epicNow, completion_basis: 'merged-pr', epic: { epic: 3 } }] }), 'Invalid run epic.');
+});

@@ -91,6 +91,19 @@ history. Older snapshots remain readable and explicitly show unavailable complet
 history. Updated observers supply the collection on their next snapshot; an already
 running Pi session needs to load the updated observer code first.
 
+### Epics
+
+Sentinel reads `.specs/_epics/<slug>/epic.json` in every observed primary checkout
+(64 KiB per record, 50 epics per `.specs/`, shared read budget) and derives each
+member's status from the package facts it already collects, regardless of the
+24-hour activity filter and the seven-day completion window. Folders under
+`.specs/` whose names start with `_` are not packages. The snapshot carries
+`epics[]` with members, summary counts, `waiting_on`, `next` and per-epic coverage;
+rows for member packages carry `epic`. An invalid record or unreadable `_epics`
+directory is a coverage reason and never hides its member packages; an absent
+`_epics` directory is normal. Sentinel never writes an epic record. Schema and
+status rules: [docs/spec-epics.md](../../docs/spec-epics.md).
+
 Active observers check scoped canonical `pr_submission` records against authoritative
 GitHub PR metadata. Missing stored branch/base fields are filled from that response;
 when present they must match. The associated local branch tip must equal the merged

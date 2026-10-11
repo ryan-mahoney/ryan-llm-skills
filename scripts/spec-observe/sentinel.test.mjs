@@ -1142,3 +1142,45 @@ test('assignment reader: CLI status and inspect expose one exact sanitized row',
   assert.equal(text.stdout.includes('second line'), false,
     'the injected newline never becomes a rendered line');
 });
+
+// Run independently: node --test --test-name-pattern='epic membership' scripts/spec-observe/sentinel.test.mjs
+test('epic membership derives member status from package facts and skips underscore folders', async t => {
+  const { mergeBinding } = await import('./merge-reconciliation.mjs');
+  const f = sandbox(t), repo = primary(f.dir, 'epic-primary');
+  mkdirSync(join(repo, '.specs', '_plans'), { recursive: true });
+  writeFileSync(join(repo, '.specs', '_plans', 'demo.md'), '# plan\n');
+  const merged = pack(repo, 'a-merged'), live = pack(repo, 'b-live'), ready = pack(repo, 'c-ready');
+  writeFileSync(join(merged, 'pr-url.json'), JSON.stringify({ kind: 'pr_submission', package: merged, url: 'https://github.com/o/r/pull/9' }));
+  receipt(merged, { id: 'done', state: 'completed', started_at: ago(60000) });
+  writeFileSync(join(live, 'spec-steps.json'), JSON.stringify({ steps: [{ step: 1, name: 'One' }, { step: 2, name: 'Two' }] }));
+  receipt(live, { id: 'run', assignment_id: 'assign-live', state: 'running', started_at: ago(60000), step: join(live, 'step-2-subspec.md') });
+  writeFileSync(join(ready, 'spec-steps.json'), JSON.stringify({ steps: [{ step: 1 }] }));
+  const epics = join(repo, '.specs', '_epics');
+  mkdirSync(join(epics, 'demo'), { recursive: true });
+  mkdirSync(join(epics, 'bad'), { recursive: true });
+  writeFileSync(join(epics, 'bad', 'epic.json'), JSON.stringify({ schema_version: 1, epic: 'other', title: 'Bad', state: 'active', packages: [] }));
+  writeFileSync(join(epics, 'demo', 'epic.json'), JSON.stringify({ schema_version: 1, epic: 'demo', title: 'Demo epic', plan: '../../_plans/demo.md', state: 'active',
+    packages: [{ package: 'a-merged' }, { package: 'b-live', requires: ['a-merged'] }, { package: 'c-ready', requires: ['a-merged'] },
+      { package: 'd-missing', requires: ['c-ready'] }] }));
+  const reconcileMerge = async input => input.package === merged
+    ? { schema_version: 1, package: merged, binding: mergeBinding(input), state: 'merged', head: 'a'.repeat(40), merge_commit: 'b'.repeat(40), merged_at: ago(1000) }
+    : { state: 'unknown' };
+
+  const snapshot = await collectWorkspace({ roots: [repo], indexDir: f.indexDir, now, reconcileMerge });
+  assert.equal(snapshot.epics.length, 1, 'the invalid record is skipped, not guessed');
+  const [epic] = snapshot.epics;
+  assert.deepEqual(epic.members.map(m => [m.name, m.status]), [['a-merged', 'merged'], ['b-live', 'in-progress'], ['c-ready', 'prepared'], ['d-missing', 'missing']]);
+  assert.deepEqual(epic.summary, { total: 4, merged: 1, complete: 0, published: 0, in_progress: 1, prepared: 1, proposed: 0, missing: 1, unobserved: 0, unknown: 0, attention: 0 });
+  assert.equal(epic.next, 'c-ready');
+  assert.deepEqual(epic.members[3].waiting_on, ['c-ready']);
+  assert.deepEqual(epic.members[1].step, { position: 2, total: 2 });
+    assert.equal(epic.plan, join(repo, '.specs', '_plans', 'demo.md'));
+  assert.deepEqual(snapshot.runs.map(run => run.epic), [{ epic: 'demo', repository: repo, position: 2, total: 4 }]);
+  assert.deepEqual(snapshot.recently_completed.map(run => run.epic?.position), [1]);
+  assert.deepEqual(snapshot.coverage.reasons, [`epic-invalid: ${join(epics, 'bad', 'epic.json')} (epic does not match directory name)`]);
+  assert.equal(snapshot.coverage.state, 'partial');
+  const text = renderWorkspace(snapshot).join('\n');
+  assert.match(text, /Epic demo · Demo epic · 1\/4 landed · next c-ready · state active/);
+  assert.match(text, /\n  d-missing · missing · waiting on c-ready/);
+  assert.match(text, /\n  b-live · in-progress · step 2\/2/);
+});

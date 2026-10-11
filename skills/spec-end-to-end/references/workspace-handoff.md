@@ -21,6 +21,14 @@ invocations and resumed work. Never copy, move, or symlink the spec folder into 
 A tracked or previously copied worktree `.specs/` folder is not authoritative: leave it alone
 and use the primary repository's version. Do not merge its differences back automatically.
 
+`.specs/` children whose names start with `_` (`_epics`, `_plans`, `_images`, ...) are not
+feature packages. Epic records live at `.specs/_epics/<slug>/epic.json` in the primary checkout
+under the same rules as packages; see [Spec epics](../../../docs/spec-epics.md).
+
+Never rename a package directory after its first dispatch: receipts and publication records
+store absolute paths. Never encode status in a folder name. Name new packages by the
+[convention](../../../docs/spec-epics.md#naming).
+
 Resolve both roots before locating or creating a package. Run this helper from the code checkout:
 
 ```bash

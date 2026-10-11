@@ -17,6 +17,7 @@ import { manualCompletion, COMPLETION_FILE } from './manual-completion.mjs';
 import { publicHint } from '../../pi/extensions/spec-runtime/monitor.mjs';
 import { discoverManaged } from './core.mjs';
 import { collectAssignments } from './assignments.mjs';
+import { readEpicRecords, collectEpics } from './epics.mjs';
 
 export const SENTINEL_LIMITS = Object.freeze({
   roots: 20,
@@ -411,6 +412,11 @@ export function renderWorkspace(snapshot) {
   }
   if (!runs.length) lines.push(['unavailable', 'stale'].includes(coverage.state)
     ? '  Workspace observation unavailable; running work is unknown.' : '  No observed runs.');
+  for (const epic of snapshot.epics ?? []) {
+    lines.push(renderLine(`Epic ${epic.epic} · ${epic.title} · ${epic.summary.merged + epic.summary.complete}/${epic.summary.total} landed · next ${epic.next ?? 'none'} · state ${epic.state}`));
+    for (const member of epic.members) lines.push(renderDetail('  ', `${member.name} · ${member.status}${member.attention ? ' · attention' : ''}`
+      + `${member.step ? ` · step ${member.step.position}/${member.step.total}` : ''}${member.waiting_on.length ? ` · waiting on ${member.waiting_on.join(', ')}` : ''}`));
+  }
   if (snapshot.activity_filter?.window_ms) lines.push(`Activity window: last 24 hours · ${snapshot.activity_filter.hidden_packages} inactive package(s), ${snapshot.activity_filter.hidden_completed_packages ?? 0} completed package(s) hidden; status --all includes history.`);
   if (snapshot.discovery?.root) lines.push(renderLine(`Repository discovery: ${snapshot.discovery.root} (nested repositories included)`));
   if (coverage.reasons.length) lines.push(renderLine(`Coverage notes: ${coverage.reasons.join(', ')}`));
@@ -531,7 +537,8 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
   // Observe indexed/current packages first; discovery supplements that fast path.
   for (const root of enrolled.slice(0, SENTINEL_LIMITS.roots)) {
     const specs = join(root, '.specs');
-    const listed = await listDirectory(specs, SENTINEL_LIMITS.packageChildren, entry => entry.isDirectory());
+    // Names starting with `_` (_epics, _plans, ...) are not packages.
+    const listed = await listDirectory(specs, SENTINEL_LIMITS.packageChildren, entry => entry.isDirectory() && !entry.name.startsWith('_'));
     if (listed.entries === null) {
       // Missing .specs is reported, never guessed around.
       reasons.push(`root-unavailable: ${specs} (${listed.code})`);
@@ -555,6 +562,10 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
       }
     }
   }
+
+  // Epic records are read before package history so the shared budget cannot starve them.
+  const epicRecords = await readEpicRecords({ facts, roots: enrolled.slice(0, SENTINEL_LIMITS.roots), readJson, listDirectory, budget });
+  for (const reason of epicRecords.reasons) { reasons.push(reason); if (/^(epics-cap|epics-unavailable|read-budget)/.test(reason)) unknownOmission = true; }
 
   const activityFilter = {
     window_ms: includeInactive ? null : SENTINEL_LIMITS.recentActivityMs,
@@ -610,6 +621,7 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
       fact.merge = evidence ? { state: evidence.state, checked_at: evidence.checked_at, reason: evidence.reason, url: evidence.url, merged_at: evidence.merged_at, head: evidence.head, merge_commit: evidence.merge_commit } : { state: 'unknown', reason: 'merge-evidence-unavailable' };
       if (applicableMerge(evidence, mergeInput)) completion = { completed_at: evidence.merged_at, completion_basis: 'merged-pr', merge: fact.merge };
     }
+    fact.completion = completion || null;
     if (completion && Date.parse(completion.completed_at) <= Date.parse(readTime)) {
       if (Date.parse(completion.completed_at) >= completionCutoff) completed.push({ fact, completion });
       if (!includeInactive) {
@@ -651,6 +663,13 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
     const run = candidate ? await observeRun(candidate, budget, mark, readTime)
       : { repository: fact.common, package: fact.packagePath, source_paths: [...fact.sources.values()].map(source => source.file) };
     recentlyCompleted.push({ ...run, ...completion, workflow_state: 'complete', is_current_assignment: false });
+  }
+
+  // Epic membership is read for every observed primary, outside the activity and completion windows.
+  const epicState = await collectEpics({ ...epicRecords, facts, runs, recentlyCompleted, runConditions, readTime });
+  for (const row of [...runs, ...recentlyCompleted]) {
+    const epic = epicState.memberships.get(row.package);
+    if (epic) row.epic = epic;
   }
 
   const packageRequested = enrolled.length > 0 || (Array.isArray(packages) && packages.length > 0);
@@ -696,7 +715,7 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
   const coverage = makeCoverage(state, reasons, unknownOmission ? null : knownOmitted, budget.bytes, readTime);
   return reduceConditions({ version: 1, workspace, coverage, activity_filter: activityFilter, runs,
     assignments, assignment_coverage: assignmentCoverage,
-    recently_completed: recentlyCompleted,
+    recently_completed: recentlyCompleted, epics: epicState.epics,
     completion_history: { window_ms: SENTINEL_LIMITS.recentCompletionMs, cutoff: new Date(completionCutoff).toISOString(),
       limit: SENTINEL_LIMITS.completedPackages, omitted: Math.max(0, completed.length - recentlyCompleted.length) },
     spec_roots: [...new Set([...facts.values()].map(f => dirname(f.packagePath)))], ...(discovery ? { discovery } : {}) });

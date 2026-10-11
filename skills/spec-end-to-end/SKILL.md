@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "24"
+  version: "25"
 ---
 
 # Spec End To End
@@ -188,12 +188,19 @@ the next stage may proceed.
    acquire this context before resuming. Record user decisions once for reuse across specs.
 3. Resolve the goal, existing `.specs/<feature>/` package, and any implementation branch or
    worktree from the request and repository state.
-4. Inspect existing pipeline artifacts. Resume at the earliest incomplete, stale, invalid, or
+4. Resolve the package's epic: scan `<repositoryRoot>/.specs/_epics/*/epic.json` for a
+   member whose `package` equals the feature slug (and whose `repository`, if present, is this
+   primary checkout). Record `epic: <slug>` and the member position in the ledger. Report unmet
+   `requires` (members neither merged nor manually complete) as a fact in the intake handoff and
+   continue, unless the package's own prepared inputs make the dependency a prerequisite. The run
+   never edits the record. See [Spec epics](../../docs/spec-epics.md).
+5. Inspect existing pipeline artifacts. Resume at the earliest incomplete, stale, invalid, or
    explicitly requested stage; do not recreate current valid artifacts merely to replay the list.
-5. Keep one canonical feature slug and spec-package path in the primary repository through the
+6. Keep one canonical feature slug and spec-package path in the primary repository through the
    run. Apply [Workspace Handoff](references/workspace-handoff.md) before resolving paths. A
-   worktree changes the code execution root, never the location of `.specs/`.
-6. In the managed Pi runtime, use `runtime/progress.json` as the generated workflow ledger.
+   worktree changes the code execution root, never the location of `.specs/`. Name a new
+   package by the [naming convention](../../docs/spec-epics.md#naming).
+7. In the managed Pi runtime, use `runtime/progress.json` as the generated workflow ledger.
    Worker lifecycle, verification receipts, canonical handoffs and review/fix artifact arrivals
    are recorded automatically. Use `spec_checkpoint` for stage status, material decisions,
    authority/hold references and next action; reference canonical artifacts instead of repeating
@@ -409,6 +416,15 @@ required work must be finished and no run-owned worker or required command may s
 be active. Retained inactive sessions are fine. Do not sweep unrelated processes,
 add another code review, or rerun checks to establish this lifecycle state.
 
+Then tell the sentinel. In managed Pi, record one final `spec_sentinel_checkpoint` for the
+run's `workflow_id` with `state: complete`, every declared worker in a terminal state, and
+the publication receipt among its artifacts, and record `spec_checkpoint` with
+`stage: publication, status: complete`. Sentinel treats any package that has sentinel
+checkpoints as current until one of them says `complete` with no active worker; a last
+checkpoint left at `ready` or `waiting-worker` keeps a finished package on the active list
+until someone prompts the coordinator. A blocked ending records `state: blocked` the same
+way. Do this before the user-facing completion response, not in reply to a later question.
+
 During finalization, report the remaining action plainly, such as "Tour generated;
 publishing the PR." A tour-stage handoff is progress,
 not the user-facing completion response. Deliver the final tour link with the verified
@@ -418,6 +434,7 @@ PR outcome after the run is quiescent. Return a compact summary containing:
 outcome: published | blocked
 start: goal | proposal | spec | prepared
 feature: <slug>
+epic: <slug | none>
 checkout: <absolute repository or worktree path>
 spec-folder: <absolute feature path in the primary repository>
 stages: <completed stages>

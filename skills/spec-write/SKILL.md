@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "25"
+  version: "26"
 ---
 
 # Spec Write
@@ -61,7 +61,7 @@ Resolve the folder in this order:
 1. If `$ARGUMENTS` names an existing `.specs/<feature-slug>/` folder or a file inside it, use that folder.
 2. If the conversation names the folder created by `spec-architect-initial`, use it.
 3. If exactly one `.specs/*/proposal.md` matches the feature title, use it.
-4. If current architecture analysis exists but no folder does, derive a short kebab-case slug and create `.specs/<feature-slug>/`.
+4. If current architecture analysis exists but no folder does, derive a short kebab-case slug and create `.specs/<feature-slug>/`. Name new packages by the convention in [Spec epics](../../docs/spec-epics.md#naming): `<epic><NN>-<slug>` for epic members, `<NN>-<slug>` or a bare slug for standalone packages, two-digit ordinals, a letter suffix for splits. Refuse a duplicate ordinal.
 
 Stop on ambiguous matches rather than selecting the most recently modified folder.
 
