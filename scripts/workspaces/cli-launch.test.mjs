@@ -28,12 +28,24 @@ const CLI_PATH = join(dirname(fileURLToPath(import.meta.url)), "cli.mjs");
 const TEST_TIMEOUT_MS = 60000;
 
 const FAKE_PI_SOURCE = `#!/usr/bin/env node
-const { appendFileSync } = require('node:fs');
+const { appendFileSync, readFileSync } = require('node:fs');
+const { createHash } = require('node:crypto');
+let briefSha256 = null;
+for (const arg of process.argv.slice(2)) {
+  if (arg.startsWith('@')) {
+    try {
+      briefSha256 = createHash('sha256').update(readFileSync(arg.slice(1))).digest('hex');
+    } catch {
+      briefSha256 = null;
+    }
+  }
+}
 appendFileSync(process.env.FAKE_PI_LOG, JSON.stringify({
   argv: process.argv.slice(2),
   cwd: process.cwd(),
   pid: process.pid,
   at: new Date().toISOString(),
+  briefSha256,
 }) + '\\n');
 process.stdout.write('READY\\n');
 setInterval(() => {}, 1 << 30);
@@ -154,23 +166,24 @@ function launchedBlockComplete(text) {
 }
 
 // The Node-spawned /usr/bin/script form fails in this sandbox (tcgetattr on a
-// socket-backed stdio pipe), so the PTY is supplied through a real shell pipe:
-// `printf ...; exec sleep` keeps the feeder open while script allocates the
-// PTY and consumes the typed-ahead confirmation.
-function runCliTty(args, env, answer) {
-  const command = `(printf '%s\\n' ${shellQuote(answer)}; exec sleep 60) | exec /usr/bin/script -q /dev/null ${[process.execPath, CLI_PATH, ...args]
-    .map(shellQuote)
-    .join(" ")}`;
+// socket-backed stdio pipe), so the PTY is supplied through a real shell pipe.
+// Gated PTY confirmation: the feeder blocks until the test releases it, so
+// the owned PTY stays held at the confirmation prompt while the test edits
+// the source brief between preview and confirmation. onPrompt runs after the
+// prompt appears and before yes is delivered; releasing the gate sends yes
+// through the same shell-pipeline PTY that works in this sandbox.
+function runCliTtyGated(args, env, { onPrompt } = {}) {
   return new Promise((resolvePromise, rejectPromise) => {
+    const gatePath = join(tmpdir(), `adj4-tty-gate-${randomUUID()}`);
+    const command = `(while [ ! -e ${shellQuote(gatePath)} ]; do sleep 0.05; done; printf '%s\\n' ${shellQuote("yes")}; exec sleep 60) | exec /usr/bin/script -q /dev/null ${[process.execPath, CLI_PATH, ...args]
+      .map(shellQuote)
+      .join(" ")}`;
     const child = spawn("/bin/sh", ["-c", command], { env, detached: true, stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
-    let answered = false;
+    let prompted = false;
     let completed = false;
     let settled = false;
-    // script and the sleep holder inherit the capture pipes, so killing only
-    // the sh wrapper would leave close pending forever; kill the whole owned
-    // process group instead.
     const killGroup = () => {
       try {
         process.kill(-child.pid, "SIGKILL");
@@ -182,19 +195,41 @@ function runCliTty(args, env, answer) {
         }
       }
     };
+    const finishSettled = (fn) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      rm(gatePath, { force: true }).catch(() => {}).finally(fn);
+    };
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
       killGroup();
-      rejectPromise(new Error(`PTY CLI timed out; stdout=${stdout}; stderr=${stderr}`));
+      rm(gatePath, { force: true }).catch(() => {}).finally(() => {
+        rejectPromise(new Error(`PTY CLI timed out; stdout=${stdout}; stderr=${stderr}`));
+      });
     }, TEST_TIMEOUT_MS);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
       stdout += chunk;
-      if (!answered && stdout.includes("Type yes to launch:")) {
-        answered = true;
-        child.stdin.write(`${answer}\n`);
+      if (!prompted && stdout.includes("Type yes to launch:")) {
+        prompted = true;
+        (async () => {
+          try {
+            if (onPrompt) await onPrompt();
+          } catch (error) {
+            finishSettled(() => rejectPromise(error));
+            killGroup();
+            return;
+          }
+          try {
+            await writeFile(gatePath, "release\n");
+          } catch (error) {
+            finishSettled(() => rejectPromise(error));
+            killGroup();
+          }
+        })();
       }
       if (!completed && launchedBlockComplete(stdout)) {
         completed = true;
@@ -205,16 +240,15 @@ function runCliTty(args, env, answer) {
       stderr += chunk;
     });
     child.on("error", (error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      rejectPromise(error);
+      finishSettled(() => rejectPromise(error));
     });
     child.on("close", (code) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolvePromise({ code: completed ? 0 : (typeof code === "number" ? code : null), stdout, stderr });
+      rm(gatePath, { force: true }).catch(() => {}).finally(() => {
+        resolvePromise({ code: completed ? 0 : (typeof code === "number" ? code : null), stdout, stderr });
+      });
     });
     child.stdin.on("error", () => {});
   });
@@ -434,8 +468,17 @@ test("CLI launch preview: TTY confirmation binds displayed bytes and edited sour
     "--target", "app",
     "--yes",
   ];
+  const originalHash = createHash("sha256").update(briefBytes).digest("hex");
+  const briefPath = join(workspaceDirectory, "briefs", "brief.md");
 
-  const result = await runCliTty(args, env, "yes");
+  // Hold the owned PTY at the confirmation prompt, edit the source before
+  // sending yes, then verify the approved snapshot still binds the reviewed
+  // bytes. The gated feeder delivers yes only after onPrompt completes.
+  const result = await runCliTtyGated(args, env, {
+    onPrompt: async () => {
+      await writeFile(briefPath, "EDITED between preview and confirmation\n");
+    },
+  });
   assert.equal(result.code, 0, `PTY CLI failed: ${result.stderr}; stdout=${result.stdout}`);
   const output = result.stdout.replaceAll("\r", "");
   assert.match(output, /Type yes to launch:/);
@@ -451,14 +494,83 @@ test("CLI launch preview: TTY confirmation binds displayed bytes and edited sour
   );
   assert.equal(record.contract_digest, previewDigest[1]);
   assert.equal(record.publication_authority, "none");
-  assert.equal(record.brief_sha256, createHash("sha256").update(briefBytes).digest("hex"));
+  assert.equal(record.brief_sha256, originalHash);
   assert.deepEqual(await readFile(record.brief_snapshot), briefBytes);
 
-  // Editing the source after preview cannot change the approved snapshot.
-  await writeFile(join(workspaceDirectory, "briefs", "brief.md"), "EDITED after preview\n");
-  assert.deepEqual(await readFile(record.brief_snapshot), briefBytes);
-
+  // The source edit landed before confirmation yet the approved snapshot
+  // keeps the reviewed bytes; the fake Pi independently hashed the @file it
+  // was actually given.
+  assert.equal(await readFile(briefPath, "utf8"), "EDITED between preview and confirmation\n");
   const entry = await waitForLogEntry(fixture.fakePiLog, record.pi_identity.pid);
   assert.ok(entry.argv.includes(`@${record.brief_snapshot}`));
+  assert.equal(entry.briefSha256, originalHash);
+  const snapshotHash = createHash("sha256")
+    .update(await readFile(record.brief_snapshot))
+    .digest("hex");
+  assert.equal(snapshotHash, originalHash);
   fixture.state.socketPath = record.tmux_socket;
+});
+
+test("CLI launch preview: spawn failure reports reservation state and non-zero exit", async (t) => {
+  const fixture = await createFixture(t);
+  const { env, workspaceDirectory, workspaceId, briefBytes } = fixture;
+  const id = randomUUID();
+  // Unique overlong socket: passes resolution and digest approval but cannot
+  // start tmux (exceeds the platform Unix-socket limit).
+  const badSocket = join(fixture.root, `${"s".repeat(180)}.sock`);
+  assert.ok(badSocket.length > 103, `socket fixture must exceed sun_path: ${badSocket.length}`);
+  const baseArgs = [
+    "launch", workspaceId,
+    "--brief", "briefs/brief.md",
+    "--instructions", "Do the reviewed work.",
+    "--id", id,
+    "--target", "app",
+    "--tmux-socket", badSocket,
+  ];
+
+  // Preview resolves and refuses before writes so the digest is observable.
+  const previewed = await runCli([...baseArgs, "--json"], env);
+  parseRefusal(previewed);
+  const preview = JSON.parse(previewed.stdout.trim());
+  assert.equal(preview.tmux_socket, badSocket);
+  assert.match(preview.contract_digest, /^[0-9a-f]{64}$/);
+  await assertNoWrites(workspaceDirectory, fixture.storageRoot);
+
+  // Human failure: reports the retained reservation state and attention,
+  // never prints a confirmed launch, and exits non-zero.
+  const failed = await runCli([...baseArgs, "--digest", preview.contract_digest], env);
+  assert.equal(failed.code, 1, `expected spawn-failure exit 1: ${failed.stdout} ${failed.stderr}`);
+  const failedText = failed.stdout.replaceAll("\r", "");
+  assert.match(failedText, /launch incomplete /);
+  assert.match(failedText, new RegExp(`launch incomplete ${id}`));
+  assert.match(failedText, /state (launching|launch_unknown)/);
+  assert.match(failedText, /attention .*launch spawn failed/i);
+  assert.doesNotMatch(failedText, new RegExp(`^launched ${id}$`, "m"));
+
+  // The durable reservation is retained with the approved snapshot bytes and
+  // no fake Pi ever spawned.
+  const persisted = JSON.parse(
+    await readFile(join(workspaceDirectory, "assignments", `${id}.json`), "utf8"),
+  );
+  assert.ok(["launching", "launch_unknown"].includes(persisted.state), persisted.state);
+  assert.ok(
+    (persisted.attention ?? []).some((entry) => /launch spawn failed/i.test(entry)),
+    JSON.stringify(persisted.attention),
+  );
+  assert.equal(persisted.tmux_socket, badSocket);
+  assert.deepEqual(await readFile(persisted.brief_snapshot), briefBytes);
+  assert.equal((await logEntries(fixture.fakePiLog)).length, 0);
+
+  // JSON failure: retains the record state and also exits non-zero.
+  const failedJson = await runCli([...baseArgs, "--json", "--digest", preview.contract_digest], env);
+  assert.equal(failedJson.code, 1, `expected JSON spawn-failure exit 1: ${failedJson.stderr}`);
+  const failedLines = failedJson.stdout.trim().split("\n");
+  const failedResult = JSON.parse(failedLines[failedLines.length - 1]);
+  assert.equal(failedResult.record.assignment_id, id);
+  assert.ok(["launching", "launch_unknown"].includes(failedResult.record.state));
+  assert.ok(
+    (failedResult.record.attention ?? []).some((entry) => /launch spawn failed/i.test(entry)),
+  );
+  // Identical repeat starts nothing new: still no fake Pi spawn.
+  assert.equal((await logEntries(fixture.fakePiLog)).length, 0);
 });

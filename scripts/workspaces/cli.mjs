@@ -370,15 +370,33 @@ async function confirmLaunch(preview, options) {
 async function printLaunchResult(record, preview, options) {
   if (options['--json'] === true) {
     await print(JSON.stringify({ record, digest: preview.contractDigest, argv: preview.piArgs }));
+    if (record.state !== 'live') process.exitCode = 1;
     return;
   }
-  await print([
-    `launched ${record.assignment_id}`,
+  if (record.state === 'live') {
+    await print([
+      `launched ${record.assignment_id}`,
+      `digest ${preview.contractDigest}`,
+      `socket ${record.tmux_socket}`,
+      `session ${record.tmux_session}`,
+      `execution_dir ${record.execution_dir}`,
+    ].join('\n'));
+    return;
+  }
+  // A retained reservation is not a confirmed live launch: report the
+  // returned state and attention and exit non-success without deleting the
+  // durable reservation. Identical-ID repeats still return without a spawn.
+  const lines = [
+    `launch incomplete ${record.assignment_id}`,
+    `state ${record.state}`,
     `digest ${preview.contractDigest}`,
     `socket ${record.tmux_socket}`,
     `session ${record.tmux_session}`,
     `execution_dir ${record.execution_dir}`,
-  ].join('\n'));
+  ];
+  for (const entry of record.attention ?? []) lines.push(`attention ${entry}`);
+  await print(lines.join('\n'));
+  process.exitCode = 1;
 }
 
 async function launchCommand(root, workspaceId, options) {
