@@ -1,10 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   projectAssignment,
   QUIET_ACTIVITY_MS,
   LAUNCHING_ATTENTION_MS,
 } from './assignments.mjs';
+// Namespace access keeps a missing collectAssignments export a behavior
+// assertion instead of an import-time module failure.
+import * as assignmentsModule from './assignments.mjs';
+import { findAssignment, listAssignments, resolveAssignment } from '../workspaces/assignments.mjs';
+import { createCatalogReadBudget, createWorkspace, setupStorage } from '../workspaces/store.mjs';
+import { startSession } from '../workspaces/tmux.mjs';
+import { processIdentity } from './process-identity.mjs';
 
 const NOW = 1_800_000_000_000;
 const ASSIGNMENT_ID = '11111111-1111-4111-8111-111111111111';
@@ -291,4 +303,776 @@ test('assignment projection preserves the full assignment id and never mutates i
   assert.equal(row.quiet, true);
   assert.equal(JSON.stringify(record), before);
   assert.equal(record.state, 'live');
+});
+
+async function fixtureSignature(path) {
+  const [bytes, info] = await Promise.all([readFile(path), lstat(path)]);
+  return {
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+    size: info.size,
+    mtimeMs: info.mtimeMs,
+  };
+}
+
+// First step-3 counterexample: two concurrent read-only collections over one
+// real persisted live record with only the final inspect/psRun/tmuxRun
+// boundaries unavailable. Collection must degrade to unknown without relaunch
+// or control, and must leave every fixture byte and mtime untouched.
+test('assignment collection: concurrent collections with unavailable probes keep a live record unknown and write nothing', async (t) => {
+  const collectAssignments = assignmentsModule.collectAssignments;
+  assert.equal(typeof collectAssignments, 'function', 'assignments.mjs must export collectAssignments');
+
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'adj6-collection-')));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  await setupStorage(root);
+  const workspace = await createWorkspace(root, { id: 'ws-collection', name: 'Collection Workspace' });
+  await mkdir(join(workspace.directory, 'briefs'), { recursive: false });
+  await writeFile(join(workspace.directory, 'briefs', 'brief.md'), '# Collection brief\n');
+  const resolved = await resolveAssignment({
+    assignment_id: ASSIGNMENT_ID,
+    workspace_id: 'ws-collection',
+    brief: 'briefs/brief.md',
+    instructions: 'Remain read-only while observed.',
+    storageRoot: root,
+    workflow_id: WORKFLOW_ID,
+    pi_path: process.execPath,
+  });
+
+  const assignmentsDir = join(workspace.directory, 'assignments');
+  await mkdir(assignmentsDir, { recursive: false });
+  const recordPath = join(assignmentsDir, `${ASSIGNMENT_ID}.json`);
+  await writeFile(recordPath, JSON.stringify({
+    ...resolved.record,
+    state: 'live',
+    pane_id: '%1',
+    launcher_identity: { pid: process.pid, started_at: new Date(0).toISOString() },
+    pi_identity: PI_IDENTITY,
+    updated_at: new Date().toISOString(),
+  }));
+
+  const checkpointPath = join(workspace.directory, 'checkpoint.tmp');
+  const leasePath = join(workspace.directory, 'lease.tmp');
+  await writeFile(checkpointPath, 'checkpoint fixture bytes\n');
+  await writeFile(leasePath, 'lease fixture bytes\n');
+
+  const watched = {
+    record: recordPath,
+    kit: workspace.kit,
+    checkpoint: checkpointPath,
+    lease: leasePath,
+  };
+  const before = {};
+  for (const [label, path] of Object.entries(watched)) before[label] = await fixtureSignature(path);
+
+  const probes = {
+    inspect: pid => ({ state: 'unknown', pid, reason: 'synthetic-unavailable' }),
+    psRun: async () => ({ stdout: '', complete: false }),
+    tmuxRun: async () => {
+      const error = new Error('synthetic tmux unavailable');
+      error.code = 'ENOENT';
+      throw error;
+    },
+  };
+  const collect = () => collectAssignments({ storageRoot: root, runs: [], probes });
+  const [first, second] = await Promise.all([collect(), collect()]);
+
+  for (const result of [first, second]) {
+    assert.ok(Array.isArray(result.assignments), 'collectAssignments must return assignment rows');
+    const row = result.assignments.find((entry) => entry.assignment_id === ASSIGNMENT_ID);
+    assert.ok(row, 'the persisted live assignment must be collected');
+    assert.equal(row.display, 'unknown');
+    assert.equal(row.recordedState, 'live');
+    assert.equal(row.hasControl, false);
+    assert.match(row.nextAction, /no relaunch/i);
+    assert.match(row.safeAction, /no relaunch/i);
+  }
+
+  for (const [label, path] of Object.entries(watched)) {
+    assert.deepEqual(
+      await fixtureSignature(path),
+      before[label],
+      `${label} must stay byte- and mtime-identical`,
+    );
+  }
+  await assert.rejects(lstat(join(root, '.sentinel')), error => error.code === 'ENOENT');
+});
+
+// Shared collection fixtures. The projection tests above own their inputs;
+// every collection case below builds real adj3 storage through the real
+// resolveAssignment producer and only substitutes final OS boundaries.
+async function collectionFixture(t) {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'adj6-collection-')));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await setupStorage(root);
+  const workspace = await createWorkspace(root, { id: 'ws-collection', name: 'Collection Workspace' });
+  await mkdir(join(workspace.directory, 'briefs'), { recursive: false });
+  await writeFile(join(workspace.directory, 'briefs', 'brief.md'), '# Collection brief\n');
+  return { root, workspace };
+}
+
+async function resolvedRecord(root, workspace, overrides = {}) {
+  const { assignment_id: assignmentId = ASSIGNMENT_ID, ...resolveOverrides } = overrides;
+  const resolved = await resolveAssignment({
+    assignment_id: assignmentId,
+    workspace_id: workspace.id,
+    brief: 'briefs/brief.md',
+    instructions: 'Remain read-only while observed.',
+    storageRoot: root,
+    workflow_id: WORKFLOW_ID,
+    pi_path: process.execPath,
+    ...resolveOverrides,
+  });
+  return resolved.record;
+}
+
+async function persistRecord(workspace, record, overrides = {}) {
+  const assignmentsDir = join(workspace.directory, 'assignments');
+  await mkdir(assignmentsDir, { recursive: true });
+  const recordPath = join(assignmentsDir, `${record.assignment_id}.json`);
+  await writeFile(recordPath, JSON.stringify({ ...record, ...overrides }));
+  return recordPath;
+}
+
+const LAUNCHER_IDENTITY = { pid: 3001, started_at: 'Thu Jan  1 00:00:00 1970' };
+const AGENT_IDENTITY = { pid: 3002, started_at: 'Thu Jan  1 00:00:00 1970' };
+
+function okRun(stdout) {
+  return { ok: true, code: 0, spawnCode: null, signal: null, killed: false, stdout, stderr: '' };
+}
+
+function exitOne() {
+  return {
+    ok: false, code: 1, spawnCode: null, signal: null, killed: false,
+    stdout: '', stderr: 'no session', message: 'no session',
+  };
+}
+
+function tmuxRunAbsent() {
+  return async (_socketPath, args) => {
+    if (args[0] === 'list-clients') return okRun('');
+    return exitOne();
+  };
+}
+
+function tmuxRunPresent(assignmentId, paneId, panePid) {
+  return async (_socketPath, args) => {
+    if (args[0] === 'has-session') return okRun('');
+    if (args[0] === 'list-clients') return okRun('');
+    if (args[0] === 'show-options') return okRun(`${assignmentId}\n`);
+    if (args[0] === 'display-message') return okRun(`${paneId} ${panePid}\n`);
+    return exitOne();
+  };
+}
+
+const deadInspect = pid => ({ state: 'dead', pid });
+const psAbsent = async () => ({ stdout: '', complete: true });
+const psUnknown = async () => ({ stdout: '', complete: false });
+const psPresent = assignmentId => async () => ({
+  stdout: `4242 node --session-id ${assignmentId}\n`,
+  complete: true,
+});
+
+function rowFor(result, assignmentId) {
+  return result.assignments.find(entry => entry.assignment_id === assignmentId);
+}
+
+async function childIdentity(pid) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const identity = processIdentity(pid);
+    if (identity !== null) return identity;
+    await new Promise(resolvePromise => setTimeout(resolvePromise, 10));
+  }
+  throw new Error(`child ${pid} identity was never observable`);
+}
+
+function liveInspect(piIdentity) {
+  return pid => {
+    if (pid === LAUNCHER_IDENTITY.pid) {
+      return { state: 'alive', pid, started_at: LAUNCHER_IDENTITY.started_at };
+    }
+    if (pid === piIdentity.pid) return { state: 'alive', pid, started_at: piIdentity.started_at };
+    return { state: 'dead', pid };
+  };
+}
+
+test('assignment collection: complete absent UUID with dead launcher and Pi reaches exited-unrecorded read-only', async (t) => {
+  const { root, workspace } = await collectionFixture(t);
+  const record = await resolvedRecord(root, workspace);
+  const recordPath = await persistRecord(workspace, record, {
+    state: 'live',
+    launcher_identity: LAUNCHER_IDENTITY,
+    pi_identity: AGENT_IDENTITY,
+  });
+  const before = {
+    record: await fixtureSignature(recordPath),
+    kit: await fixtureSignature(workspace.kit),
+  };
+  const result = await assignmentsModule.collectAssignments({
+    storageRoot: root,
+    probes: { inspect: deadInspect, psRun: psAbsent, tmuxRun: tmuxRunAbsent() },
+  });
+  const row = rowFor(result, ASSIGNMENT_ID);
+  assert.ok(row, 'the stored assignment must be collected');
+  assert.equal(row.display, 'exited-unrecorded');
+  assert.equal(row.hasControl, false);
+  assert.deepEqual(await fixtureSignature(recordPath), before.record);
+  assert.deepEqual(await fixtureSignature(workspace.kit), before.kit);
+});
+
+test('assignment collection: incomplete or UUID-present final listings never produce exited-unrecorded', async (t) => {
+  const { root, workspace } = await collectionFixture(t);
+  const record = await resolvedRecord(root, workspace);
+  await persistRecord(workspace, record, {
+    state: 'live',
+    launcher_identity: LAUNCHER_IDENTITY,
+    pi_identity: AGENT_IDENTITY,
+  });
+  const incomplete = await assignmentsModule.collectAssignments({
+    storageRoot: root,
+    probes: { inspect: deadInspect, psRun: psUnknown, tmuxRun: tmuxRunAbsent() },
+  });
+  assert.equal(rowFor(incomplete, ASSIGNMENT_ID).display, 'unknown');
+  const orphan = await assignmentsModule.collectAssignments({
+    storageRoot: root,
+    probes: { inspect: deadInspect, psRun: psPresent(ASSIGNMENT_ID), tmuxRun: tmuxRunAbsent() },
+  });
+  assert.equal(rowFor(orphan, ASSIGNMENT_ID).display, 'unknown');
+  assert.notEqual(rowFor(orphan, ASSIGNMENT_ID).display, 'exited-unrecorded');
+});
+
+test('assignment collection: alive launcher with complete absence keeps launching while unknown launcher is unknown', async (t) => {
+  const { root, workspace } = await collectionFixture(t);
+  const record = await resolvedRecord(root, workspace);
+  const overrides = {
+    state: 'launching',
+    launcher_identity: LAUNCHER_IDENTITY,
+    pi_identity: AGENT_IDENTITY,
+  };
+  await persistRecord(workspace, record, overrides);
+  const alive = await assignmentsModule.collectAssignments({
+    storageRoot: root,
+    probes: {
+      inspect: pid => (pid === LAUNCHER_IDENTITY.pid
+        ? { state: 'alive', pid, started_at: LAUNCHER_IDENTITY.started_at }
+        : { state: 'dead', pid }),
+      psRun: psAbsent,
+      tmuxRun: tmuxRunAbsent(),
+    },
+  });
+  assert.equal(rowFor(alive, ASSIGNMENT_ID).display, 'launching');
+  assert.equal(rowFor(alive, ASSIGNMENT_ID).nextAction, 'Wait');
+
+  await persistRecord(workspace, record, overrides);
+  const unknownLauncher = await assignmentsModule.collectAssignments({
+    storageRoot: root,
+    probes: {
+      inspect: pid => (pid === LAUNCHER_IDENTITY.pid
+        ? { state: 'unknown', pid, reason: 'synthetic-unknown' }
+        : { state: 'dead', pid }),
+      psRun: psAbsent,
+      tmuxRun: tmuxRunAbsent(),
+    },
+  });
+  assert.equal(rowFor(unknownLauncher, ASSIGNMENT_ID).display, 'unknown');
+  assert.notEqual(rowFor(unknownLauncher, ASSIGNMENT_ID).display, 'exited-unrecorded');
+});
+
+test('assignment collection: unavailable Pi evidence under an alive launcher is unknown, never waiting', async (t) => {
+  const { root, workspace } = await collectionFixture(t);
+  const record = await resolvedRecord(root, workspace);
+  await persistRecord(workspace, record, {
+    state: 'launching',
+    launcher_identity: LAUNCHER_IDENTITY,
+    pi_identity: AGENT_IDENTITY,
+  });
+  const result = await assignmentsModule.collectAssignments({
+    storageRoot: root,
+    probes: {
+      inspect: pid => (pid === LAUNCHER_IDENTITY.pid
+        ? { state: 'alive', pid, started_at: LAUNCHER_IDENTITY.started_at }
+        : { state: 'unknown', pid, reason: 'synthetic-unknown' }),
+      psRun: psAbsent,
+      tmuxRun: tmuxRunAbsent(),
+    },
+  });
+  const row = rowFor(result, ASSIGNMENT_ID);
+  assert.equal(row.display, 'unknown');
+  assert.equal(row.nextAction, 'Fix probe; no relaunch');
+  assert.equal(row.coverage, 'partial');
+});
+
+test('assignment collection: reused PID with complete absence reaches exited-unrecorded', async (t) => {
+  const { root, workspace } = await collectionFixture(t);
+  const record = await resolvedRecord(root, workspace);
+  await persistRecord(workspace, record, {
+    state: 'live',
+    launcher_identity: LAUNCHER_IDENTITY,
+    pi_identity: AGENT_IDENTITY,
+  });
+  const result = await assignmentsModule.collectAssignments({
+    storageRoot: root,
+    probes: {
+      inspect: pid => (pid === AGENT_IDENTITY.pid
+        ? { state: 'alive', pid, started_at: 'Thu Jan  1 00:00:01 1970' }
+        : { state: 'dead', pid }),
+      psRun: psAbsent,
+      tmuxRun: tmuxRunAbsent(),
+    },
+  });
+  assert.equal(rowFor(result, ASSIGNMENT_ID).display, 'exited-unrecorded');
+});
+
+test('assignment collection: malformed, symlink and oversize records stay unavailable beside a valid neighbor', async (t) => {
+  const { root, workspace } = await collectionFixture(t);
+  const record = await resolvedRecord(root, workspace);
+  const recordPath = await persistRecord(workspace, record, { state: 'live' });
+  const assignmentsDir = join(workspace.directory, 'assignments');
+  await writeFile(join(assignmentsDir, 'malformed.json'), '{not json');
+  await symlink(recordPath, join(assignmentsDir, 'linked.json'));
+  await writeFile(join(assignmentsDir, 'oversize.json'), Buffer.alloc(65537, 0x61));
+  const result = await assignmentsModule.collectAssignments({ storageRoot: root });
+  assert.ok(rowFor(result, ASSIGNMENT_ID), 'the valid neighbor must be retained');
+  assert.equal(result.coverage.state, 'partial');
+  const reasons = result.coverage.reasons.join('\n');
+  assert.match(reasons, /assignment-malformed:.*malformed\.json/);
+  assert.match(reasons, /assignment-unavailable:.*linked\.json:symlink/);
+  assert.match(reasons, /assignment-unavailable:.*oversize\.json:oversize-file/);
+});
+
+test('assignment collection: workspace directory mismatch collected from the physical directory', async (t) => {
+  const { root, workspace } = await collectionFixture(t);
+  const renamed = join(root, 'projects', 'renamed-collection');
+  await rename(workspace.directory, renamed);
+  const renamedWorkspace = { ...workspace, directory: renamed, kit: join(renamed, 'kit.yaml') };
+  const record = await resolvedRecord(root, renamedWorkspace);
+  await persistRecord(renamedWorkspace, record, { state: 'live' });
+  const result = await assignmentsModule.collectAssignments({ storageRoot: root });
+  assert.ok(rowFor(result, ASSIGNMENT_ID), 'a renamed workspace still collects its assignment');
+});
+
+test('assignment collection: strict listAssignments and findAssignment still refuse malformed and duplicate records', async (t) => {
+  const { root, workspace } = await collectionFixture(t);
+  await mkdir(join(workspace.directory, 'assignments'), { recursive: false });
+  await writeFile(join(workspace.directory, 'assignments', 'broken.json'), '{broken');
+  await assert.rejects(listAssignments(root));
+  await assert.rejects(findAssignment(root, ASSIGNMENT_ID));
+
+  const second = await createWorkspace(root, { id: 'ws-duplicate', name: 'Duplicate Workspace' });
+  await mkdir(join(second.directory, 'briefs'), { recursive: false });
+  await writeFile(join(second.directory, 'briefs', 'brief.md'), '# Duplicate brief\n');
+  const record = await resolvedRecord(root, workspace);
+  await persistRecord(workspace, record, { state: 'live' });
+  const secondRecord = await resolvedRecord(root, second);
+  await persistRecord(second, secondRecord, { state: 'live' });
+  await rm(join(workspace.directory, 'assignments', 'broken.json'));
+  await assert.rejects(listAssignments(root), /appears more than once/);
+});
+
+test('assignment collection: hard ceilings cannot be increased and only smaller limits are honored', async (t) => {
+  const { root } = await collectionFixture(t);
+  assert.throws(() => createCatalogReadBudget({ maxEntries: 401 }), /hard ceiling/);
+  assert.throws(() => createCatalogReadBudget({ maxRows: 0 }), /positive integer/);
+  await assert.rejects(
+    assignmentsModule.collectAssignments({ storageRoot: root, limits: { probeTimeoutMs: 2001 } }),
+    /probeTimeoutMs/,
+  );
+  const budget = createCatalogReadBudget({
+    maxEntries: 5,
+    maxRows: 7,
+    maxFileBytes: 9,
+    maxTotalBytes: 11,
+  });
+  assert.equal(budget.maxEntries, 5);
+  assert.equal(budget.maxRows, 7);
+  assert.equal(budget.maxFileBytes, 9);
+  assert.equal(budget.maxTotalBytes, 11);
+});
+
+test('assignment collection: default entry and row caps truncate with unknown omissions', async (t) => {
+  const { root, workspace } = await collectionFixture(t);
+  const record = await resolvedRecord(root, workspace);
+  await persistRecord(workspace, record, { state: 'live' });
+  const assignmentsDir = join(workspace.directory, 'assignments');
+  for (let index = 0; index < 405; index += 1) {
+    await writeFile(join(assignmentsDir, `junk-${index}.txt`), 'x');
+  }
+  const entryCapped = await assignmentsModule.collectAssignments({ storageRoot: root });
+  assert.equal(entryCapped.coverage.omitted, null);
+  assert.ok(entryCapped.coverage.reasons.includes('entry-budget-exhausted'));
+
+  const second = await collectionFixture(t);
+  for (let index = 0; index < 101; index += 1) {
+    const assignmentId = `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
+    const rowRecord = await resolvedRecord(second.root, second.workspace, {
+      assignment_id: assignmentId,
+    });
+    await persistRecord(second.workspace, rowRecord, { state: 'live' });
+  }
+  const rowCapped = await assignmentsModule.collectAssignments({ storageRoot: second.root });
+  assert.ok(rowCapped.assignments.length <= 100);
+  assert.equal(rowCapped.coverage.omitted, null);
+  assert.ok(rowCapped.coverage.reasons.includes('row-budget-exhausted'));
+});
+
+test('assignment collection: file-byte cap refuses oversized records and byte accounting matches real file lengths', async (t) => {
+  const { root, workspace } = await collectionFixture(t);
+  const record = await resolvedRecord(root, workspace);
+  await persistRecord(workspace, record, { state: 'live' });
+  const assignmentsDir = join(workspace.directory, 'assignments');
+  await writeFile(join(assignmentsDir, 'oversize.json'), Buffer.alloc(65537, 0x61));
+  const result = await assignmentsModule.collectAssignments({ storageRoot: root });
+  assert.ok(result.coverage.reasons.some(reason => reason.includes('oversize.json:oversize-file')));
+  assert.equal(result.coverage.omitted, 0);
+
+  const second = await collectionFixture(t);
+  const sumRecord = await resolvedRecord(second.root, second.workspace);
+  const sumPath = await persistRecord(second.workspace, sumRecord, { state: 'live' });
+  const expectedBytes = (await lstat(sumPath)).size + (await lstat(second.workspace.kit)).size;
+  const summed = await assignmentsModule.collectAssignments({ storageRoot: second.root });
+  assert.equal(summed.coverage.bytes_read, expectedBytes);
+});
+
+test('assignment collection: small entry, total-byte and file-byte limits bound real fixtures', async (t) => {
+  const { root, workspace } = await collectionFixture(t);
+  const record = await resolvedRecord(root, workspace);
+  await persistRecord(workspace, record, { state: 'live' });
+  const secondRecord = await resolvedRecord(root, workspace, { assignment_id: OTHER_ID });
+  await persistRecord(workspace, secondRecord, { state: 'live' });
+  const assignmentsDir = join(workspace.directory, 'assignments');
+  for (let index = 0; index < 6; index += 1) {
+    await writeFile(join(assignmentsDir, `bounded-${index}.txt`), 'x');
+  }
+
+  // The real bounded listAssignments owns the entry cap and reports the
+  // unknown omission directly on the shared budget.
+  const entryBudget = createCatalogReadBudget({ maxEntries: 3 });
+  await listAssignments(root, null, { budget: entryBudget });
+  assert.ok(entryBudget.entries <= 3, `entries ${entryBudget.entries} must not exceed 3`);
+  assert.equal(entryBudget.omissions, 'unknown');
+
+  const entryCapped = await assignmentsModule.collectAssignments({
+    storageRoot: root,
+    limits: { maxEntries: 3 },
+  });
+  assert.equal(entryCapped.coverage.omitted, null);
+  assert.ok(entryCapped.coverage.reasons.includes('entry-budget-exhausted'));
+
+  const recordSize = (await lstat(join(assignmentsDir, `${ASSIGNMENT_ID}.json`))).size;
+  const kitSize = (await lstat(workspace.kit)).size;
+  const totalCap = kitSize + recordSize + 10;
+  const byteCapped = await assignmentsModule.collectAssignments({
+    storageRoot: root,
+    limits: { maxTotalBytes: totalCap },
+  });
+  assert.equal(byteCapped.coverage.omitted, null);
+  assert.ok(byteCapped.coverage.bytes_read <= totalCap);
+  assert.ok(byteCapped.coverage.bytes_read >= kitSize + recordSize);
+  assert.ok(byteCapped.coverage.reasons.includes('byte-budget-exhausted'));
+
+  const fileCapped = await assignmentsModule.collectAssignments({
+    storageRoot: root,
+    limits: { maxFileBytes: 10 },
+  });
+  assert.equal(fileCapped.coverage.state, 'partial');
+  assert.match(fileCapped.coverage.reasons.join('\n'), /oversize-file/);
+});
+
+test('assignment collection: duplicate full ids remove selected rows even beyond the row cap', async (t) => {
+  const { root, workspace } = await collectionFixture(t);
+  const firstRecord = await resolvedRecord(root, workspace);
+  await persistRecord(workspace, firstRecord, { state: 'live' });
+  const second = await createWorkspace(root, { id: 'ws-duplicate', name: 'Duplicate Workspace' });
+  await mkdir(join(second.directory, 'briefs'), { recursive: false });
+  await writeFile(join(second.directory, 'briefs', 'brief.md'), '# Duplicate brief\n');
+  const duplicateRecord = await resolvedRecord(root, second);
+  await persistRecord(second, duplicateRecord, { state: 'live' });
+  const otherRecord = await resolvedRecord(root, second, { assignment_id: OTHER_ID });
+  await persistRecord(second, otherRecord, { state: 'live' });
+  const result = await assignmentsModule.collectAssignments({
+    storageRoot: root,
+    limits: { maxRows: 1 },
+  });
+  assert.ok(!result.assignments.some(row => row.assignment_id === ASSIGNMENT_ID));
+  assert.ok(result.coverage.reasons.some(reason => reason.startsWith('assignment-duplicate:')));
+  assert.equal(result.coverage.omitted, null);
+});
+
+async function exited(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  await new Promise(resolvePromise => child.once('exit', () => resolvePromise()));
+}
+
+async function sessionFixture(t, mode = 'readable') {
+  const context = await collectionFixture(t);
+  const record = await resolvedRecord(context.root, context.workspace);
+  const sessionDir = join(context.workspace.directory, 'sessions', record.assignment_id);
+  await mkdir(sessionDir, { recursive: true });
+  const header = JSON.stringify({ type: 'session', id: record.assignment_id });
+  const old = new Date(Date.now() - 10 * 60 * 1000);
+  const baseName = `2026-10-11T00-00-00-000Z_${record.assignment_id}.jsonl`;
+  const writeSession = async (name, content) => {
+    const file = join(sessionDir, name);
+    await writeFile(file, content);
+    await utimes(file, old, old);
+    return file;
+  };
+  if (mode === 'readable') {
+    await writeSession(baseName, `${header}\n`);
+  } else if (mode === 'malformed') {
+    await writeSession(baseName, 'not a session header\n');
+  } else if (mode === 'symlink') {
+    const target = join(context.workspace.directory, 'outside-session.jsonl');
+    await writeFile(target, `${header}\n`);
+    await symlink(target, join(sessionDir, baseName));
+  } else if (mode === 'multiple') {
+    await writeSession(baseName, `${header}\n`);
+    await writeSession(`2026-10-11T00-00-01-000Z_${record.assignment_id}.jsonl`, `${header}\n`);
+  } else if (mode === 'oversized') {
+    await writeSession(baseName, `${header}\n${'t'.repeat(200 * 1024)}\n`);
+  }
+  return { ...context, record, sessionDir, baseName };
+}
+
+function sessionEvidence(piIdentity) {
+  return {
+    inspect: liveInspect(piIdentity),
+    psRun: psPresent(ASSIGNMENT_ID),
+    tmuxRun: tmuxRunPresent(ASSIGNMENT_ID, '%5', piIdentity.pid),
+  };
+}
+
+test('assignment collection: quiet marks only positive live rows with old readable session metadata', async (t) => {
+  const context = await sessionFixture(t, 'readable');
+  await persistRecord(context.workspace, context.record, {
+    state: 'live',
+    pane_id: '%5',
+    launcher_identity: LAUNCHER_IDENTITY,
+    pi_identity: AGENT_IDENTITY,
+  });
+  const result = await assignmentsModule.collectAssignments({
+    storageRoot: context.root,
+    probes: sessionEvidence(AGENT_IDENTITY),
+  });
+  const row = rowFor(result, ASSIGNMENT_ID);
+  assert.equal(row.display, 'live');
+  assert.equal(row.quiet, true);
+  assert.equal(row.coverage, 'complete');
+});
+
+test('assignment collection: unreadable or ambiguous sessions keep live display but partial coverage', async (t) => {
+  for (const mode of ['malformed', 'symlink', 'multiple']) {
+    const context = await sessionFixture(t, mode);
+    await persistRecord(context.workspace, context.record, {
+      state: 'live',
+      pane_id: '%5',
+      launcher_identity: LAUNCHER_IDENTITY,
+      pi_identity: AGENT_IDENTITY,
+    });
+    const result = await assignmentsModule.collectAssignments({
+      storageRoot: context.root,
+      probes: sessionEvidence(AGENT_IDENTITY),
+    });
+    const row = rowFor(result, ASSIGNMENT_ID);
+    assert.equal(row.display, 'live', `${mode} must keep positive liveness`);
+    assert.equal(row.coverage, 'partial', `${mode} must stay partial`);
+    assert.ok(
+      row.coverageReasons.includes('session-unavailable'),
+      `${mode} must report the session gap`,
+    );
+  }
+});
+
+test('assignment collection: oversized transcripts allow a bounded header prefix and never mirror content', async (t) => {
+  const context = await sessionFixture(t, 'oversized');
+  await persistRecord(context.workspace, context.record, {
+    state: 'live',
+    pane_id: '%5',
+    launcher_identity: LAUNCHER_IDENTITY,
+    pi_identity: AGENT_IDENTITY,
+  });
+  const transcriptSize = (await lstat(join(context.sessionDir, context.baseName))).size;
+  const result = await assignmentsModule.collectAssignments({
+    storageRoot: context.root,
+    probes: sessionEvidence(AGENT_IDENTITY),
+  });
+  const row = rowFor(result, ASSIGNMENT_ID);
+  assert.equal(row.display, 'live');
+  assert.equal(row.coverage, 'complete');
+  assert.ok(transcriptSize > 65536);
+  assert.ok(result.coverage.bytes_read < transcriptSize);
+  assert.ok(result.coverage.bytes_read <= (
+    (await lstat(context.workspace.kit)).size
+    + (await lstat(join(context.workspace.directory, 'assignments', `${ASSIGNMENT_ID}.json`))).size
+    + 65536
+  ));
+});
+
+test('assignment collection: one shared deadline bounds a pending injected transport without a second call', async (t) => {
+  const { root, workspace } = await collectionFixture(t);
+  const first = await resolvedRecord(root, workspace);
+  await persistRecord(workspace, first, { state: 'live' });
+  const second = await resolvedRecord(root, workspace, { assignment_id: OTHER_ID });
+  await persistRecord(workspace, second, { state: 'live' });
+  let calls = 0;
+  const started = Date.now();
+  const result = await assignmentsModule.collectAssignments({
+    storageRoot: root,
+    limits: { probeTimeoutMs: 30 },
+    probes: {
+      tmuxRun: () => {
+        calls += 1;
+        return new Promise(() => {});
+      },
+    },
+  });
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < 500, `collection returned in ${elapsed}ms`);
+  assert.equal(calls, 1);
+  assert.equal(result.assignments.length, 2);
+  for (const row of result.assignments) assert.equal(row.display, 'unknown');
+  assert.ok(result.coverage.reasons.includes('probe-deadline-exceeded'));
+});
+
+test('assignment collection: a late-resolving boundary cannot start later probes or scans', async (t) => {
+  const { root, workspace } = await collectionFixture(t);
+  const record = await resolvedRecord(root, workspace);
+  await persistRecord(workspace, record, { state: 'live' });
+  let release;
+  const gate = new Promise(resolvePromise => { release = resolvePromise; });
+  let psCalls = 0;
+  const result = await assignmentsModule.collectAssignments({
+    storageRoot: root,
+    limits: { probeTimeoutMs: 30 },
+    probes: {
+      tmuxRun: () => gate.then(() => ({
+        ok: false, code: 1, stdout: '', stderr: 'late', message: 'late',
+      })),
+      psRun: async () => {
+        psCalls += 1;
+        return { stdout: '', complete: true };
+      },
+    },
+  });
+  assert.equal(result.assignments[0].display, 'unknown');
+  await new Promise(resolvePromise => setTimeout(resolvePromise, 60));
+  release();
+  await new Promise(resolvePromise => setTimeout(resolvePromise, 80));
+  assert.equal(psCalls, 0, 'no later probe may start after the shared deadline');
+});
+
+test('assignment collection: real installed tmux composition for live, foreign tag, orphan, absence and unreachable states', async (t) => {
+  const collectAssignments = assignmentsModule.collectAssignments;
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'adj6-collection-')));
+  await setupStorage(root);
+  const workspace = await createWorkspace(root, { id: 'ws-collection', name: 'Collection Workspace' });
+  await mkdir(join(workspace.directory, 'briefs'), { recursive: false });
+  await writeFile(join(workspace.directory, 'briefs', 'brief.md'), '# Collection brief\n');
+  const socketPath = join(root, 'owned-tmux.sock');
+  const record = await resolvedRecord(root, workspace, { tmux_socket: socketPath });
+  const keeperId = '99999999-9999-4999-8999-999999999999';
+  const keeperSession = `adj-${keeperId.replace(/-/g, '').slice(0, 12)}`;
+  const children = [];
+  const spawnOwned = args => {
+    const child = spawn(process.execPath, args, { stdio: 'ignore' });
+    children.push(child);
+    return child;
+  };
+  const cleanup = async () => {
+    for (const child of children) {
+      try { child.kill('SIGKILL'); } catch { /* already exited */ }
+    }
+    await Promise.all(children.map(child => exited(child).catch(() => {})));
+    try {
+      execFileSync('tmux', ['-S', socketPath, 'kill-server'], { stdio: 'ignore' });
+    } catch { /* no owned server */ }
+    await rm(root, { recursive: true, force: true });
+  };
+  t.after(cleanup);
+
+  const launcher = spawnOwned([
+    '-e', 'setInterval(() => {}, 1000)', '--', '--session-id', record.assignment_id,
+  ]);
+  const launcherIdentity = await childIdentity(launcher.pid);
+
+  const owned = await startSession({
+    socketPath,
+    sessionName: record.tmux_session,
+    cwd: workspace.directory,
+    piPath: process.execPath,
+    piArgs: ['-e', 'setInterval(() => {}, 1000)', '--', '--session-id', record.assignment_id],
+    assignmentId: record.assignment_id,
+  });
+  await persistRecord(workspace, record, {
+    state: 'live',
+    pane_id: owned.paneId,
+    launcher_identity: launcherIdentity,
+    pi_identity: owned.piIdentity,
+  });
+
+  const live = await collectAssignments({ storageRoot: root });
+  assert.equal(rowFor(live, ASSIGNMENT_ID).display, 'live');
+  assert.notEqual(rowFor(live, ASSIGNMENT_ID).display, 'exited-unrecorded');
+
+  const foreignId = '11111111-1111-4111-8111-222222222222';
+  execFileSync('tmux', [
+    '-S', socketPath, 'set-option', '-t', `=${record.tmux_session}:`,
+    '@adjacent_assignment_id', foreignId,
+  ]);
+  const foreign = await collectAssignments({ storageRoot: root });
+  assert.equal(rowFor(foreign, ASSIGNMENT_ID).display, 'unknown');
+  execFileSync('tmux', [
+    '-S', socketPath, 'set-option', '-t', `=${record.tmux_session}:`,
+    '@adjacent_assignment_id', record.assignment_id,
+  ]);
+  const restored = await collectAssignments({ storageRoot: root });
+  assert.equal(rowFor(restored, ASSIGNMENT_ID).display, 'live');
+
+  // Keep the owned server reachable while the recorded session is missing,
+  // and observe an independent live process carrying the exact UUID argv.
+  await startSession({
+    socketPath,
+    sessionName: keeperSession,
+    cwd: workspace.directory,
+    piPath: process.execPath,
+    piArgs: ['-e', 'setInterval(() => {}, 1000)'],
+    assignmentId: keeperId,
+  });
+  execFileSync('tmux', ['-S', socketPath, 'kill-session', '-t', `=${record.tmux_session}`]);
+  const orphan = spawnOwned([
+    '-e', 'setInterval(() => {}, 1000)', '--', '--session-id', record.assignment_id,
+  ]);
+  const orphanIdentity = await childIdentity(orphan.pid);
+  await persistRecord(workspace, record, {
+    state: 'live',
+    pane_id: null,
+    launcher_identity: launcherIdentity,
+    pi_identity: orphanIdentity,
+  });
+  const terminalLost = await collectAssignments({ storageRoot: root });
+  const orphanRow = rowFor(terminalLost, ASSIGNMENT_ID);
+  assert.equal(orphanRow.display, 'terminal-lost');
+  assert.match(orphanRow.nextAction, /^Do not relaunch/);
+  assert.equal(orphanRow.hasControl, false);
+
+  // The default flattened ps cannot prove absence once the orphan and the
+  // launcher exit: no exited-unrecorded without a complete listing.
+  orphan.kill('SIGKILL');
+  launcher.kill('SIGKILL');
+  await exited(orphan);
+  await exited(launcher);
+  const defaultAfterExit = await collectAssignments({ storageRoot: root });
+  assert.equal(rowFor(defaultAfterExit, ASSIGNMENT_ID).display, 'unknown');
+  assert.notEqual(rowFor(defaultAfterExit, ASSIGNMENT_ID).display, 'exited-unrecorded');
+
+  const gone = await collectAssignments({
+    storageRoot: root,
+    probes: { psRun: psAbsent },
+  });
+  assert.equal(rowFor(gone, ASSIGNMENT_ID).display, 'exited-unrecorded');
+
+  execFileSync('tmux', ['-S', socketPath, 'kill-server'], { stdio: 'ignore' });
+  const unreachable = await collectAssignments({ storageRoot: root });
+  assert.equal(rowFor(unreachable, ASSIGNMENT_ID).display, 'unknown');
+  assert.notEqual(rowFor(unreachable, ASSIGNMENT_ID).display, 'ended');
 });

@@ -18,6 +18,7 @@ import { execFileSync } from "node:child_process";
 import { lstat, open, readdir } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { inspectProcess } from "../spec-observe/process-identity.mjs";
+import { catalogEntries, readCatalogFile } from "./store.mjs";
 import { probeSession } from "./tmux.mjs";
 
 const UUID_PATTERN =
@@ -116,6 +117,11 @@ function normalizeNow(now) {
   return null;
 }
 
+function deadlinePassed(deadline) {
+  return typeof deadline === "number" && Number.isFinite(deadline)
+    && performance.now() >= deadline;
+}
+
 /**
  * Pure reservation-preserving transition over observed launcher, terminal,
  * Pi, process-listing and session-file evidence.
@@ -132,7 +138,9 @@ function normalizeNow(now) {
  *
  * Gone requires a dead launcher, an absent terminal, a recorded Pi identity
  * that is dead or replaced by a reused PID, and — when no Pi identity was
- * recorded — a complete process listing that shows the UUID is absent.
+ * recorded — a complete process listing that shows the UUID is absent. With
+ * `observations.requireCompleteUuid`, even a dead recorded Pi additionally
+ * requires the complete listing's confirmed absence.
  * A matching live Pi without the exact terminal stays attention and holds
  * the reservation. Age beyond 60 seconds adds attention only.
  *
@@ -199,15 +207,19 @@ export function classify(record, observations = {}) {
   // process is gone. Without a recorded Pi identity, only a complete process
   // listing may establish UUID absence, and a malformed saved identity never
   // does.
+  const requireCompleteUuid = observations.requireCompleteUuid === true;
   const piAbsent = saved !== null
     ? pi.status === "dead" || (pi.status === "alive" && !piExact)
     : savedMissing && pi.status !== "alive" && uuidProcesses.status === "absent";
   // A positive process-listing candidate is contradictory evidence and
-  // always blocks gone, even with an otherwise dead saved identity.
+  // always blocks gone, even with an otherwise dead saved identity. Callers
+  // that require a complete process listing additionally demand confirmed
+  // UUID absence before gone, even for a dead recorded Pi.
   const gone = launcher.status === "dead"
     && terminal.status === "absent"
     && piAbsent
     && uuidProcesses.status !== "present"
+    && (!requireCompleteUuid || uuidProcesses.status === "absent")
     && !liveEvidence;
 
   let state;
@@ -255,6 +267,9 @@ export function classify(record, observations = {}) {
     if (terminal.status === "unknown") extra.push("terminal observation is unknown");
     if (savedMissing && uuidProcesses.status === "unknown") {
       extra.push("process listing is incomplete; assignment UUID absence cannot be confirmed");
+    }
+    if (requireCompleteUuid && uuidProcesses.status !== "absent") {
+      extra.push("complete process-listing absence is required; UUID absence cannot be confirmed");
     }
     if (uuidProcesses.status === "present") {
       extra.push("process listing shows a candidate for the assignment UUID; retaining the reservation");
@@ -365,35 +380,44 @@ function sessionFilenameMatches(name, assignmentId) {
 // Bounded read of the first JSONL line: the session header. Anything that
 // cannot be validated (malformed JSON, non-session type, missing line) is
 // unreadable, never "missing".
-async function readSessionHeader(path) {
-  let handle;
-  try {
-    handle = await open(path, "r");
-  } catch (error) {
-    return { state: "unreadable", reason: (error && error.code) || "open-failed" };
-  }
-  try {
-    const buffer = Buffer.alloc(SESSION_HEADER_MAX_BYTES);
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    const text = buffer.subarray(0, bytesRead).toString("utf8");
-    const newline = text.indexOf("\n");
-    const line = (newline === -1 ? text : text.slice(0, newline)).trim();
-    if (line === "") return { state: "unreadable", reason: "empty-header" };
-    let header;
+async function readSessionHeader(path, budget = null) {
+  let text;
+  if (budget === null) {
+    let handle;
     try {
-      header = JSON.parse(line);
-    } catch {
-      return { state: "unreadable", reason: "malformed-header" };
+      handle = await open(path, "r");
+    } catch (error) {
+      return { state: "unreadable", reason: (error && error.code) || "open-failed" };
     }
-    if (header === null || typeof header !== "object" || header.type !== "session") {
-      return { state: "unreadable", reason: "not-a-session-header" };
+    try {
+      const buffer = Buffer.alloc(SESSION_HEADER_MAX_BYTES);
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+      text = buffer.subarray(0, bytesRead).toString("utf8");
+    } catch (error) {
+      return { state: "unreadable", reason: (error && error.code) || "read-failed" };
+    } finally {
+      await handle.close();
     }
-    return { state: "parsed", header };
-  } catch (error) {
-    return { state: "unreadable", reason: (error && error.code) || "read-failed" };
-  } finally {
-    await handle.close();
+  } else {
+    // Bounded first-line mode: charge only the header prefix, never the
+    // transcript, through the shared catalog reader.
+    const read = await readCatalogFile(path, budget, { maxBytes: SESSION_HEADER_MAX_BYTES });
+    if (!read.ok) return { state: "unreadable", reason: read.reason };
+    text = read.text;
   }
+  const newline = text.indexOf("\n");
+  const line = (newline === -1 ? text : text.slice(0, newline)).trim();
+  if (line === "") return { state: "unreadable", reason: "empty-header" };
+  let header;
+  try {
+    header = JSON.parse(line);
+  } catch {
+    return { state: "unreadable", reason: "malformed-header" };
+  }
+  if (header === null || typeof header !== "object" || header.type !== "session") {
+    return { state: "unreadable", reason: "not-a-session-header" };
+  }
+  return { state: "parsed", header };
 }
 
 // Session discovery stays inside the single recorded owned session directory;
@@ -401,7 +425,8 @@ async function readSessionHeader(path) {
 // missing. Symlinked, non-regular, malformed or unreadable candidates refuse
 // selection (they could hide a second matching file), and multiple valid
 // matching headers are ambiguous.
-async function discoverPiSession(record) {
+async function discoverPiSession(record, budget = null, deadline = null) {
+  if (deadlinePassed(deadline)) return { status: "unreadable", reason: "probe-deadline" };
   const dir = record?.pi_session_dir;
   if (typeof dir !== "string" || dir === "" || !isAbsolute(dir)) {
     return { status: "missing", reason: "no-session-directory" };
@@ -419,13 +444,33 @@ async function discoverPiSession(record) {
   if (!info.isDirectory()) {
     return { status: "unreadable", reason: "session-directory-is-not-a-directory" };
   }
+  if (deadlinePassed(deadline)) return { status: "unreadable", reason: "probe-deadline" };
 
   let entries;
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch (error) {
-    return { status: "unreadable", reason: (error && error.code) || "readdir-failed" };
+  let truncated = false;
+  if (budget === null) {
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch (error) {
+      return { status: "unreadable", reason: (error && error.code) || "readdir-failed" };
+    }
+  } else {
+    entries = [];
+    try {
+      for await (const entry of catalogEntries(dir, budget)) {
+        entries.push(entry);
+      }
+    } catch (error) {
+      return { status: "unreadable", reason: (error && error.code) || "readdir-failed" };
+    }
+    // The iterator marks the shared omission when it stops at the entry cap
+    // without a further read; a capped scan cannot prove absence.
+    truncated = budget.omissions === "unknown" && budget.entries >= budget.maxEntries;
   }
+  // A truncated listing can never prove absence or uniqueness: unavailable
+  // remains unreadable, not missing.
+  if (truncated) return { status: "unreadable", reason: "session-scan-truncated" };
+  if (deadlinePassed(deadline)) return { status: "unreadable", reason: "probe-deadline" };
   const candidates = entries.filter((entry) => sessionFilenameMatches(entry.name, record.assignment_id));
   if (candidates.length === 0) return { status: "missing" };
 
@@ -440,7 +485,8 @@ async function discoverPiSession(record) {
       });
       continue;
     }
-    const parsed = await readSessionHeader(path);
+    if (deadlinePassed(deadline)) return { status: "unreadable", reason: "probe-deadline" };
+    const parsed = await readSessionHeader(path, budget);
     if (parsed.state !== "parsed") {
       problems.push({ path, reason: parsed.reason });
       continue;
@@ -469,7 +515,8 @@ async function discoverPiSession(record) {
  *
  * @param {object} record assignment record
  * @param {{inspect?: Function, psRun?: Function, tmuxRun?: Function,
- *   now?: number|string|Function}} [probes]
+ *   now?: number|string|Function, budget?: object, deadline?: number,
+ *   onObservations?: Function, requireCompleteUuid?: boolean}} [probes]
  * @returns {Promise<{state: string, piIdentity: object|null,
  *   sessionFile: string|null, attention: string[], gone: boolean}>}
  */
@@ -479,7 +526,20 @@ export async function observeAssignment(record, probes = {}) {
   }
   const inspect = typeof probes.inspect === "function" ? probes.inspect : inspectProcess;
   const psRun = typeof probes.psRun === "function" ? probes.psRun : defaultPsRun;
+  const budget = probes.budget ?? null;
+  const deadline = typeof probes.deadline === "number" && Number.isFinite(probes.deadline)
+    ? probes.deadline
+    : null;
   const now = typeof probes.now === "function" ? probes.now() : (probes.now ?? Date.now());
+  const finish = (launcher, terminal, pi, uuidProcesses, session) => classify(record, {
+    launcher,
+    terminal,
+    pi,
+    uuidProcesses,
+    session,
+    now,
+    requireCompleteUuid: probes.requireCompleteUuid === true,
+  });
 
   const launcher = observeIdentity(record.launcher_identity, inspect);
 
@@ -492,6 +552,12 @@ export async function observeAssignment(record, probes = {}) {
   } catch (error) {
     terminal = { status: "unknown", reason: (error && error.code) || "tmux-probe-failed" };
   }
+  // The shared monotonic deadline is checked between awaited stages so a
+  // late-resolving transport cannot start later probes, scans or reads.
+  if (deadlinePassed(deadline)) {
+    return finish(launcher, terminal, { status: "unknown" }, { status: "unknown" },
+      { status: "unreadable", reason: "probe-deadline" });
+  }
 
   // Crash before PID capture: with no saved identity, observe the exact
   // saved terminal pane PID through the shared inspector. classify admits
@@ -501,11 +567,23 @@ export async function observeAssignment(record, probes = {}) {
     && Number.isSafeInteger(terminal.pid) && terminal.pid > 0
     ? inspectPaneProcess(terminal.pid, inspect)
     : observeIdentity(record.pi_identity, inspect);
+  if (deadlinePassed(deadline)) {
+    return finish(launcher, terminal, pi, { status: "unknown" },
+      { status: "unreadable", reason: "probe-deadline" });
+  }
 
   const uuidProcesses = await observeUuidProcesses(record, psRun);
-  const session = await discoverPiSession(record);
+  if (deadlinePassed(deadline)) {
+    return finish(launcher, terminal, pi, uuidProcesses,
+      { status: "unreadable", reason: "probe-deadline" });
+  }
 
-  return classify(record, { launcher, terminal, pi, uuidProcesses, session, now });
+  const session = await discoverPiSession(record, budget, deadline);
+  const observations = { launcher, terminal, pi, uuidProcesses, session };
+  if (typeof probes.onObservations === "function" && !deadlinePassed(deadline)) {
+    await probes.onObservations({ ...observations });
+  }
+  return finish(launcher, terminal, pi, uuidProcesses, session);
 }
 
 // The same observational operation for adj6: an alias, never a parallel

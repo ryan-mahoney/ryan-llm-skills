@@ -347,7 +347,202 @@ export async function storageStatus(root) {
   return { root: absolute, status: "ok", errors: [] };
 }
 
-async function readWorkspaceEntry(projectsDir, directoryName) {
+// Bounded catalog read budget ----------------------------------------------
+//
+// Opt-in observation budget shared by the catalog and assignment readers.
+// Hard ceilings bound one scan; overrides may only lower them. The mutable
+// `entries`/`bytes` counters are charged by the readers, `reasons` records
+// unavailable or truncating boundaries, and `omissions` turns "unknown" as
+// soon as truncation prevents a complete count. No budget means the strict
+// all-or-error readers remain in force.
+
+const CATALOG_READ_HARD_LIMITS = Object.freeze({
+  maxEntries: 400,
+  maxRows: 100,
+  maxFileBytes: 65536,
+  maxTotalBytes: 4194304,
+});
+
+function catalogReason(budget, reason) {
+  if (!budget.reasons.includes(reason)) budget.reasons.push(reason);
+}
+
+/**
+ * Mark the scan truncated: any count or later source may be omitted.
+ */
+export function noteCatalogOmission(budget, reason) {
+  budget.omissions = "unknown";
+  catalogReason(budget, reason);
+}
+
+/**
+ * Record one unavailable source without changing the omission state.
+ */
+export function noteCatalogUnavailable(budget, reason) {
+  catalogReason(budget, reason);
+}
+
+/**
+ * Charge one consumed directory entry. Returns false at the hard entry limit
+ * and marks the scan truncated; the caller stops iterating that directory.
+ */
+export function chargeCatalogEntry(budget) {
+  if (budget.entries >= budget.maxEntries) {
+    noteCatalogOmission(budget, "entry-budget-exhausted");
+    return false;
+  }
+  budget.entries += 1;
+  return true;
+}
+
+/**
+ * Bounded directory-entry iterator. Entries are charged one at a time and the
+ * iterator stops BEFORE the next directory read once the shared entry cap is
+ * reached, so the dirent beyond the cap is never fetched. Hitting the cap
+ * marks the scan truncated conservatively: the exact remaining count is not
+ * known. The directory handle is always closed.
+ * @param {string} directory
+ * @param {{maxEntries: number, entries: number, omissions: string,
+ *   reasons: string[]}} budget
+ * @returns {AsyncGenerator<import("node:fs").Dirent>}
+ */
+export async function* catalogEntries(directory, budget) {
+  const handle = await fs.opendir(directory, { bufferSize: 1 });
+  try {
+    for (;;) {
+      if (budget.entries >= budget.maxEntries) {
+        noteCatalogOmission(budget, "entry-budget-exhausted");
+        return;
+      }
+      const entry = await handle.read();
+      if (entry === null) return;
+      if (!chargeCatalogEntry(budget)) {
+        noteCatalogOmission(budget, "entry-budget-exhausted");
+        return;
+      }
+      yield entry;
+    }
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Create the shared opt-in catalog read budget.
+ * @param {{maxEntries?: number, maxRows?: number, maxFileBytes?: number,
+ *   maxTotalBytes?: number}} [overrides] only smaller positive integers
+ * @returns {{maxEntries: number, maxRows: number, maxFileBytes: number,
+ *   maxTotalBytes: number, entries: number, bytes: number, rows: number,
+ *   reasons: string[], omissions: string}}
+ */
+export function createCatalogReadBudget(overrides = {}) {
+  if (overrides === null || typeof overrides !== "object" || Array.isArray(overrides)) {
+    throw new TypeError("catalog read budget overrides must be an object");
+  }
+  for (const key of Object.keys(overrides)) {
+    if (!Object.prototype.hasOwnProperty.call(CATALOG_READ_HARD_LIMITS, key)) {
+      throw new Error(`unknown catalog read budget limit: ${key}`);
+    }
+  }
+  const budget = {
+    ...CATALOG_READ_HARD_LIMITS,
+    entries: 0,
+    bytes: 0,
+    rows: 0,
+    reasons: [],
+    omissions: "none",
+  };
+  for (const [key, ceiling] of Object.entries(CATALOG_READ_HARD_LIMITS)) {
+    const value = overrides[key];
+    if (value === undefined) continue;
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw new Error(`catalog read budget ${key} must be a positive integer`);
+    }
+    if (value > ceiling) {
+      throw new Error(`catalog read budget ${key} must not exceed the hard ceiling ${ceiling}`);
+    }
+    budget[key] = value;
+  }
+  return budget;
+}
+
+/**
+ * Read one regular file with the shared byte budget: opens NOFOLLOW and
+ * NONBLOCK, verifies a regular file with fstat, refuses oversize files before
+ * reading, and charges the actual bytes read. Symlinks, non-regular files,
+ * oversize files and byte exhaustion return `{ok:false, reason}`; exhaustion
+ * also reports `exhausted: true` after marking the scan truncated. With
+ * `options.maxBytes`, reads only that bounded prefix (never oversize-refused)
+ * so callers can inspect a first line without reading the rest of a large
+ * file. Bytes already read are charged even when a later read throws, and EOF
+ * before the stat size is an unavailable source, never budget exhaustion.
+ */
+export async function readCatalogFile(path, budget, options = {}) {
+  const prefixBytes = options.maxBytes;
+  if (prefixBytes !== undefined
+    && (!Number.isSafeInteger(prefixBytes) || prefixBytes <= 0)) {
+    throw new TypeError("readCatalogFile maxBytes must be a positive integer");
+  }
+  const remaining = budget.maxTotalBytes - budget.bytes;
+  if (remaining <= 0) {
+    noteCatalogOmission(budget, "byte-budget-exhausted");
+    return { ok: false, reason: "byte-budget-exhausted", exhausted: true };
+  }
+  let handle;
+  try {
+    handle = await fs.open(
+      path,
+      fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | fsConstants.O_NOFOLLOW,
+    );
+  } catch (error) {
+    const code = error && error.code;
+    return { ok: false, reason: code === "ELOOP" ? "symlink" : `open-${code ?? "failed"}` };
+  }
+  let total = 0;
+  try {
+    let info;
+    try {
+      info = await handle.stat();
+    } catch (error) {
+      return { ok: false, reason: `stat-${(error && error.code) ?? "failed"}` };
+    }
+    if (!info.isFile()) return { ok: false, reason: "not-a-regular-file" };
+    if (prefixBytes === undefined && info.size > budget.maxFileBytes) {
+      return { ok: false, reason: "oversize-file" };
+    }
+    const wanted = prefixBytes === undefined
+      ? info.size
+      : Math.min(info.size, prefixBytes, budget.maxFileBytes);
+    if (wanted > remaining) {
+      noteCatalogOmission(budget, "byte-budget-exhausted");
+      return { ok: false, reason: "byte-budget-exhausted", exhausted: true };
+    }
+    const buffer = Buffer.alloc(wanted);
+    while (total < buffer.length) {
+      let bytesRead;
+      try {
+        ({ bytesRead } = await handle.read(buffer, total, buffer.length - total, total));
+      } catch (error) {
+        // Bytes already delivered are charged even though the read failed.
+        budget.bytes += total;
+        return { ok: false, reason: `read-${(error && error.code) ?? "failed"}`, bytes: total };
+      }
+      if (bytesRead === 0) break;
+      total += bytesRead;
+    }
+    budget.bytes += total;
+    if (prefixBytes === undefined && total < info.size) {
+      // EOF before the stat size is a changing or unavailable source, not
+      // budget exhaustion.
+      return { ok: false, reason: "unavailable", bytes: total };
+    }
+    return { ok: true, bytes: total, text: buffer.toString("utf8") };
+  } finally {
+    await handle.close();
+  }
+}
+
+async function readWorkspaceEntry(projectsDir, directoryName, budget = null) {
   const directory = join(projectsDir, directoryName);
   const directoryLookup = await storageLstat(directory);
   if (directoryLookup.permission) {
@@ -373,12 +568,23 @@ async function readWorkspaceEntry(projectsDir, directoryName) {
   }
 
   let text;
-  try {
-    text = await fs.readFile(kitPath, "utf8");
-  } catch (error) {
-    return {
-      invalid: { directory, errors: [error instanceof Error ? error.message : String(error)] },
-    };
+  if (budget === null) {
+    try {
+      text = await fs.readFile(kitPath, "utf8");
+    } catch (error) {
+      return {
+        invalid: { directory, errors: [error instanceof Error ? error.message : String(error)] },
+      };
+    }
+  } else {
+    const read = await readCatalogFile(kitPath, budget);
+    if (!read.ok) {
+      return {
+        invalid: { directory, errors: [`kit.yaml unavailable (${read.reason})`] },
+        exhausted: read.exhausted === true,
+      };
+    }
+    text = read.text;
   }
   const parsed = parseKit(text);
   if (!parsed.ok) return { invalid: { directory, errors: parsed.errors } };
@@ -408,12 +614,25 @@ async function readWorkspaceEntry(projectsDir, directoryName) {
  * Read-only workspace catalog: invalid manifests and duplicate ids are
  * retained with their source paths. Nothing is created and no git runs.
  * @param {string} root
+ * @param {{budget?: object}} [options] optional shared budget from
+ *   `createCatalogReadBudget`; when present the scan is bounded and
+ *   truncation is reported through the budget instead of throwing
  * @returns {Promise<{valid: object[], invalid: {directory: string, errors: string[]}[],
  *   errors: {path: string, message: string}[]}>}
  */
-export async function listWorkspaces(root) {
+export async function listWorkspaces(root, options = {}) {
   if (typeof root !== "string" || root === "") {
     throw new TypeError("root must be a non-empty string");
+  }
+  if (options === null || typeof options !== "object" || Array.isArray(options)) {
+    throw new TypeError("listWorkspaces options must be an object");
+  }
+  for (const key of Object.keys(options)) {
+    if (key !== "budget") throw new Error(`listWorkspaces does not accept option ${key}`);
+  }
+  const budget = options.budget ?? null;
+  if (budget !== null && (typeof budget !== "object" || Array.isArray(budget))) {
+    throw new TypeError("listWorkspaces budget must be a catalog read budget");
   }
   const rootPath = resolve(root);
   const valid = [];
@@ -429,31 +648,43 @@ export async function listWorkspaces(root) {
         message: status.status,
       });
     }
+    if (budget !== null) noteCatalogOmission(budget, `storage-${status.status}`);
     return { valid, invalid, errors };
   }
 
   const projectsDir = join(rootPath, "projects");
-  let handle;
-  try {
-    handle = await fs.opendir(projectsDir);
-  } catch (error) {
-    errors.push(storageError(projectsDir, error));
-    return { valid, invalid, errors };
-  }
-
   const directoryNames = [];
-  try {
-    for await (const entry of handle) {
-      if (!entry.name.startsWith(".")) directoryNames.push(entry.name);
+  if (budget === null) {
+    let handle;
+    try {
+      handle = await fs.opendir(projectsDir);
+    } catch (error) {
+      errors.push(storageError(projectsDir, error));
+      return { valid, invalid, errors };
     }
-  } catch (error) {
-    errors.push(storageError(projectsDir, error));
+    try {
+      for await (const entry of handle) {
+        if (!entry.name.startsWith(".")) directoryNames.push(entry.name);
+      }
+    } catch (error) {
+      errors.push(storageError(projectsDir, error));
+    }
+  } else {
+    try {
+      for await (const entry of catalogEntries(projectsDir, budget)) {
+        if (!entry.name.startsWith(".")) directoryNames.push(entry.name);
+      }
+    } catch (error) {
+      errors.push(storageError(projectsDir, error));
+      noteCatalogOmission(budget, "projects-unreadable");
+    }
   }
 
   for (const directoryName of directoryNames) {
-    const read = await readWorkspaceEntry(projectsDir, directoryName);
+    const read = await readWorkspaceEntry(projectsDir, directoryName, budget);
     if (read.valid) valid.push(read.valid);
     else invalid.push(read.invalid);
+    if (read.exhausted === true) break;
   }
 
   const claimants = new Map();

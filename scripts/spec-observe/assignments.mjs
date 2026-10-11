@@ -2,17 +2,25 @@
 //
 // `projectAssignment` maps one stored assignment record plus adj4's pure
 // `classify` result into the public observer row. It is a deterministic
-// function of its inputs: no I/O, no persistence, no signals and no producer
-// imports. Unknown evidence stays unknown; quiet is informational; attached
-// presence never grants control.
+// function of its inputs: no I/O, no persistence, no signals. Unknown evidence
+// stays unknown; quiet is informational; attached presence never grants
+// control. The collection path below composes the real producers; the
+// projection function itself stays pure.
 //
 // Display states follow the supervision state table in the package proposal:
 // live, live-unrecorded, launching, launch-unconfirmed, exited-unrecorded,
 // terminal-lost, unknown, ended and launch-failed.
 
+import { execFile, execFileSync } from "node:child_process";
+import { lstat, realpath } from "node:fs/promises";
+import { inspectProcess } from "./process-identity.mjs";
+import { listAssignments } from "../workspaces/assignments.mjs";
+import { observeAssignment } from "../workspaces/reconcile.mjs";
+import { createCatalogReadBudget } from "../workspaces/store.mjs";
+
 // Mirrors SENTINEL_LIMITS.quietActivityMs in sentinel.mjs and adj4's 60-second
-// launch-age attention. Local constants keep this module free of observer and
-// producer imports.
+// launch-age attention. The projection function stays import-free; the
+// collection path below owns the producer imports.
 export const QUIET_ACTIVITY_MS = 120000;
 export const LAUNCHING_ATTENTION_MS = 60000;
 
@@ -76,6 +84,7 @@ function normalizeRecord(record) {
     specPackage: canonicalPackage(source.spec_package),
     workflowId: asString(source.workflow_id),
     recordedState: asString(source.state),
+    paneId: asString(source.pane_id),
     createdAt: normalizeTime(source.created_at),
     attention: mergeAttention(source.attention, []),
   };
@@ -91,6 +100,45 @@ function normalizeClassification(classification) {
     attention: mergeAttention(classification?.attention, []),
     gone: classification?.gone === true,
   };
+}
+
+// Structured collector observations. When supplied they are preferred over
+// attention prose for terminal and gone decisions; legacy classification-only
+// behavior is preserved when absent.
+function normalizeObservations(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  return {
+    launcher: value.launcher ?? null,
+    terminal: value.terminal ?? null,
+    pi: value.pi ?? null,
+    uuidProcesses: value.uuidProcesses ?? null,
+    session: value.session ?? null,
+  };
+}
+
+function observationStatus(observations, key) {
+  const value = observations?.[key];
+  return value !== null && typeof value === "object" && typeof value.status === "string"
+    ? value.status
+    : null;
+}
+
+// A structured terminal is usable only when present, for this exact
+// assignment and, when the record saved a pane, for the exact recorded pane.
+function structuredTerminalUnusable(normalized, observations) {
+  const terminal = observations?.terminal;
+  if (terminal === null || typeof terminal !== "object") return true;
+  if (terminal.status === "unknown") return true;
+  if (terminal.status !== "present") return false;
+  if (asString(terminal.assignment_id) !== normalized.assignmentId) return true;
+  const terminalPane = asString(terminal.pane_id);
+  if (normalized.paneId !== null && terminalPane !== normalized.paneId) return true;
+  return false;
+}
+
+function structuredUnavailable(observations) {
+  return ["launcher", "terminal", "pi", "uuidProcesses"]
+    .some(key => observationStatus(observations, key) === "unknown");
 }
 
 function probeUnavailable(observed) {
@@ -156,7 +204,7 @@ function leaseReasons(run) {
       && (reason === kind || reason.startsWith(`${kind}:`))));
 }
 
-function displayFor(normalized, observed, nowMs) {
+function displayFor(normalized, observed, nowMs, observations) {
   const recorded = normalized.recordedState;
   const effective = recorded ?? "launch_unknown";
   const locate = `adjacent locate ${normalized.assignmentId ?? "unknown"}`;
@@ -179,20 +227,36 @@ function displayFor(normalized, observed, nowMs) {
       unrecorded: false,
     };
   }
-  // Unavailable probes are unknown, especially not ended.
-  if (!observed.known || probeUnavailable(observed)) {
+  // Structured observations are authoritative over attention prose: an
+  // unknown terminal or a terminal for another assignment or pane can never
+  // become terminal-lost or live.
+  if (observations !== null && structuredTerminalUnusable(normalized, observations)) {
+    return { display: "unknown", nextAction: UNKNOWN_ACTION, unrecorded: false };
+  }
+  // Unavailable probes are unknown, especially not ended. With structured
+  // observations availability comes from the producer statuses, not prose.
+  if (!observed.known || (observations === null && probeUnavailable(observed))) {
     return { display: "unknown", nextAction: UNKNOWN_ACTION, unrecorded: false };
   }
   // A confirmed gone differs from the stored record until an explicit locate.
+  // With structured observations, gone additionally requires the producer's
+  // completed absence; otherwise the record is unresolved, not ended.
   if (observed.gone) {
+    if (observations !== null && observationStatus(observations, "uuidProcesses") !== "absent") {
+      return { display: "unknown", nextAction: UNKNOWN_ACTION, unrecorded: false };
+    }
     if (effective === "live") {
       return { display: "exited-unrecorded", nextAction: locate, unrecorded: true };
     }
     return { display: "launch-failed", nextAction: locate, unrecorded: true };
   }
   // A matching Pi process alive without its terminal is terminal-lost and must
-  // never invite a relaunch.
-  if (aliveWithoutTerminal(observed)) {
+  // never invite a relaunch. With structured observations only an exact
+  // positive Pi plus an absent terminal qualifies; prose alone does not.
+  const terminalLost = observations === null
+    ? aliveWithoutTerminal(observed)
+    : observed.piIdentity !== null && observationStatus(observations, "terminal") === "absent";
+  if (terminalLost) {
     return {
       display: "terminal-lost",
       nextAction: "Do not relaunch. The agent is still running without a terminal.",
@@ -202,7 +266,8 @@ function displayFor(normalized, observed, nowMs) {
   // A `live` classification is authoritative only with positive matching
   // identity evidence: adj4 retains `live` whenever gone is unproven, even
   // without liveEvidence, so a retained reservation without an identity must
-  // not present a running agent.
+  // not present a running agent. A structured exact terminal plus Pi shows
+  // live without requiring negative UUID proof.
   if (observed.state === "live" && observed.piIdentity !== null) {
     if (effective === "live") {
       return { display: "live", nextAction: "Attach command", unrecorded: false };
@@ -218,6 +283,20 @@ function displayFor(normalized, observed, nowMs) {
   // identity over any record.
   if (effective === "live" || observed.state === "live") {
     return { display: "unknown", nextAction: UNKNOWN_ACTION, unrecorded: false };
+  }
+  // Structured: a launching record without positive Pi identity and with an
+  // unknown launcher, Pi or UUID probe cannot prove a running launch; never
+  // present waiting state. An alive launcher with a confirmed dead Pi, absent
+  // terminal and complete UUID absence keeps launching with gone false.
+  if (observations !== null
+    && (effective === "launching" || effective === "launch_unknown")
+    && observed.piIdentity === null) {
+    const launcherStatus = observationStatus(observations, "launcher");
+    const piStatus = observationStatus(observations, "pi");
+    const uuidStatus = observationStatus(observations, "uuidProcesses");
+    if (launcherStatus === "unknown" || piStatus === "unknown" || uuidStatus === "unknown") {
+      return { display: "unknown", nextAction: UNKNOWN_ACTION, unrecorded: false };
+    }
   }
   if (effective === "launching") {
     // Unknown age cannot establish the 60-second threshold, so a young launch
@@ -247,22 +326,25 @@ function displayFor(normalized, observed, nowMs) {
  * @param {{state?: string, piIdentity?: object|null, sessionFile?: string|null,
  *   attention?: string[], gone?: boolean}} classification adj4 `classify`
  *   result (or nothing when observation failed)
- * @param {{runs?: object[], activity?: object|null, now?: number|string|Date}} options
- *   same-workflow/canonical-package run rows, optional session stat metadata
- *   (`{ok: true, size, mtime}`) and the projection clock
+ * @param {{runs?: object[], activity?: object|null, now?: number|string|Date,
+ *   observations?: object|null}} options same-workflow/canonical-package run
+ *   rows, optional session stat metadata (`{ok: true, size, mtime}`), the
+ *   projection clock and optional structured producer observations (preferred
+ *   over attention prose when supplied)
  * @returns {object} public row: full `assignment_id`, canonical `spec_package`,
  *   `workflow_id`, `recordedState`, `observedState`, `display`, `unrecorded`,
  *   `quiet`, `attachedCount`, `hasControl: false`, `workersUnconfirmed`,
  *   `nextAction`/`safeAction`, merged `attention`, string `coverage` and
  *   `coverageReasons`
  */
-export function projectAssignment(record, classification, { runs = [], activity = null, now } = {}) {
+export function projectAssignment(record, classification, { runs = [], activity = null, now, observations = null } = {}) {
   const normalized = normalizeRecord(record);
   const observed = normalizeClassification(classification);
+  const structured = normalizeObservations(observations);
   const attention = mergeAttention(normalized.attention, observed.attention);
   const nowMs = normalizeTime(now) ?? Date.now();
 
-  const decision = displayFor(normalized, observed, nowMs);
+  const decision = displayFor(normalized, observed, nowMs, structured);
 
   const metadata = normalizeActivity(activity, normalized.assignmentId, observed.sessionFile);
   const processPresent = decision.display === "live"
@@ -289,7 +371,16 @@ export function projectAssignment(record, classification, { runs = [], activity 
 
   const coverageReasons = [];
   if (!observed.known) coverageReasons.push("classification-unknown");
-  if (observed.known && probeUnavailable(observed)) coverageReasons.push("probe-unavailable");
+  const unavailable = structured === null
+    ? probeUnavailable(observed)
+    : structuredUnavailable(structured);
+  if (observed.known && unavailable) coverageReasons.push("probe-unavailable");
+  const sessionUnavailable = structured !== null
+    ? ["unreadable", "ambiguous"].includes(observationStatus(structured, "session"))
+    : observed.attention.some(value =>
+      value.includes("session file candidate is unreadable")
+      || value.includes("multiple Pi session files match"));
+  if (sessionUnavailable) coverageReasons.push("session-unavailable");
 
   return {
     assignment_id: normalized.assignmentId,
@@ -306,7 +397,360 @@ export function projectAssignment(record, classification, { runs = [], activity 
     nextAction,
     safeAction: nextAction,
     attention,
-    coverage: decision.display === "unknown" ? "partial" : "complete",
+    coverage: decision.display === "unknown" || unavailable || sessionUnavailable
+      ? "partial"
+      : "complete",
     coverageReasons,
+  };
+}
+
+// Collection path -----------------------------------------------------------
+
+const COLLECTION_BUDGET_KEYS = ["maxEntries", "maxRows", "maxFileBytes", "maxTotalBytes"];
+const PROBE_TIMEOUT_DEFAULT_MS = 2000;
+const PROBE_TIMEOUT_CEILING_MS = 2000;
+const PS_MAX_BUFFER = 4 * 1024 * 1024;
+const PS_START_MAX_BUFFER = 4096;
+const TMUX_MAX_BUFFER = 1024 * 1024;
+
+function clockValue(now) {
+  if (typeof now === "function") {
+    const value = now();
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    return Date.now();
+  }
+  if (typeof now === "number" && Number.isFinite(now)) return now;
+  return Date.now();
+}
+
+function collectionBudget(limits) {
+  const overrides = {};
+  for (const key of COLLECTION_BUDGET_KEYS) {
+    if (limits[key] !== undefined) overrides[key] = limits[key];
+  }
+  return createCatalogReadBudget(overrides);
+}
+
+function collectionProbeTimeout(limits) {
+  const value = limits.probeTimeoutMs;
+  if (value === undefined) return PROBE_TIMEOUT_DEFAULT_MS;
+  if (!Number.isSafeInteger(value) || value <= 0 || value > PROBE_TIMEOUT_CEILING_MS) {
+    throw new Error(
+      `probeTimeoutMs must be a positive integer no greater than ${PROBE_TIMEOUT_CEILING_MS}`,
+    );
+  }
+  return value;
+}
+
+function remainingProbeMs(deadline) {
+  return deadline - performance.now();
+}
+
+function probeExpired(deadline) {
+  return remainingProbeMs(deadline) <= 0;
+}
+
+function tmuxUnavailable(message) {
+  return {
+    ok: false,
+    code: null,
+    spawnCode: null,
+    signal: null,
+    killed: false,
+    stdout: "",
+    stderr: "",
+    message,
+  };
+}
+
+// Real final transports bounded by the one shared deadline. The default
+// flattened listing never claims completeness, so UUID absence stays
+// unproven and collection never fabricates ended state from it.
+function defaultCollectionProbes(deadline) {
+  const inspect = pid => inspectProcess(pid, {
+    run: targetPid => execFileSync("ps", ["-o", "lstart=", "-p", String(targetPid)], {
+      env: { ...process.env, LC_ALL: "C" },
+      encoding: "utf8",
+      timeout: Math.max(1, Math.ceil(remainingProbeMs(deadline))),
+      maxBuffer: PS_START_MAX_BUFFER,
+      stdio: ["ignore", "pipe", "pipe"],
+    }),
+  });
+  const psRun = async () => ({
+    stdout: execFileSync("ps", ["-Awwo", "pid=,command="], {
+      env: { ...process.env, LC_ALL: "C" },
+      encoding: "utf8",
+      timeout: Math.max(1, Math.ceil(remainingProbeMs(deadline))),
+      maxBuffer: PS_MAX_BUFFER,
+      stdio: ["ignore", "pipe", "pipe"],
+    }),
+    complete: false,
+  });
+  const tmuxRun = (socketPath, args) => new Promise(resolvePromise => {
+    execFile(
+      "tmux",
+      ["-S", socketPath, ...args],
+      {
+        timeout: Math.max(1, Math.ceil(remainingProbeMs(deadline))),
+        killSignal: "SIGKILL",
+        maxBuffer: TMUX_MAX_BUFFER,
+        encoding: "utf8",
+        windowsHide: true,
+      },
+      (error, stdout, stderr) => {
+        if (error) {
+          resolvePromise({
+            ok: false,
+            code: typeof error.code === "number" ? error.code : null,
+            spawnCode: typeof error.code === "string" ? error.code : null,
+            signal: error.signal ?? null,
+            killed: error.killed === true,
+            stdout: stdout ?? "",
+            stderr: stderr ?? "",
+            message: error.message,
+          });
+          return;
+        }
+        resolvePromise({ ok: true, code: 0, stdout: stdout ?? "", stderr: stderr ?? "" });
+      },
+    );
+  });
+  return { inspect, psRun, tmuxRun };
+}
+
+// Every final boundary, default or injected, is wrapped so it is never
+// invoked once the shared deadline has expired.
+function deadlineBoundary(fn, fallback, deadline) {
+  return (...args) => {
+    if (probeExpired(deadline)) return fallback(...args);
+    return fn(...args);
+  };
+}
+
+// The deadline timer stays ref'd: a pending injected boundary with no other
+// handles must still let the race return. A rejection resolves the race with
+// the error so the caller can record it instead of aborting the collection.
+async function raceProbeDeadline(promise, deadline) {
+  const remaining = remainingProbeMs(deadline);
+  if (remaining <= 0) return { completed: false };
+  let timer;
+  try {
+    return await Promise.race([
+      promise.then(
+        value => ({ completed: true, value }),
+        error => ({ completed: false, error }),
+      ),
+      new Promise(resolvePromise => {
+        timer = setTimeout(() => resolvePromise({ completed: false }), Math.ceil(remaining));
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Optional selected-session stat only: regular physical metadata, never
+// transcript content and never attached-count control inference. The physical
+// path must equal the recorded path, and the stat races the shared deadline.
+async function selectedSessionActivity(classification, deadline) {
+  const file = classification?.sessionFile;
+  if (typeof file !== "string" || file === "") return null;
+  if (probeExpired(deadline)) return null;
+  const remaining = remainingProbeMs(deadline);
+  if (remaining <= 0) return null;
+  const work = (async () => {
+    try {
+      if ((await realpath(file)) !== file) return null;
+      const info = await lstat(file);
+      if (info.isSymbolicLink() || !info.isFile()) return null;
+      return { ok: true, size: info.size, mtime: info.mtimeMs, session_file: file };
+    } catch {
+      return null;
+    }
+  })();
+  let timer;
+  try {
+    return await Promise.race([
+      work,
+      new Promise(resolvePromise => {
+        timer = setTimeout(() => resolvePromise(null), Math.ceil(remaining));
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Collect bounded, read-only assignment observations for one storage root.
+ *
+ * Enumeration uses the real adj4 bounded listAssignments under one shared
+ * catalog budget; observation uses the real adj4 observeAssignment/classify
+ * composition sequentially under one monotonic probe deadline started after
+ * enumeration. No persistence, claims, locate, signals or host wiring.
+ * Missing or unusable roots yield explicit unavailable coverage.
+ *
+ * @param {{storageRoot: string, runs?: object[], now?: Function|number,
+ *   limits?: {maxEntries?: number, maxRows?: number, maxFileBytes?: number,
+ *     maxTotalBytes?: number, probeTimeoutMs?: number}, probes?: object}} input
+ * @returns {Promise<{assignments: object[], coverage: {state: string,
+ *   reasons: string[], omitted: number|null, bytes_read: number,
+ *   observed_at: string}}>}
+ */
+export async function collectAssignments({
+  storageRoot,
+  runs = [],
+  now = Date.now,
+  limits = {},
+  probes = {},
+} = {}) {
+  if (limits === null || typeof limits !== "object" || Array.isArray(limits)) {
+    throw new TypeError("collectAssignments limits must be an object");
+  }
+  if (probes === null || typeof probes !== "object" || Array.isArray(probes)) {
+    throw new TypeError("collectAssignments probes must be an object");
+  }
+  const observedAtMs = clockValue(now);
+  const observedAt = new Date(observedAtMs).toISOString();
+  if (typeof storageRoot !== "string" || storageRoot === "") {
+    return {
+      assignments: [],
+      coverage: {
+        state: "unavailable",
+        reasons: ["storage-root-unavailable"],
+        omitted: null,
+        bytes_read: 0,
+        observed_at: observedAt,
+      },
+    };
+  }
+  const timeoutMs = collectionProbeTimeout(limits);
+  const budget = collectionBudget(limits);
+
+  let records;
+  try {
+    records = await listAssignments(storageRoot, null, { budget });
+  } catch (error) {
+    const reasons = [...budget.reasons];
+    const reason = `collection-failed:${(error && error.code) || "unknown"}`;
+    if (!reasons.includes(reason)) reasons.push(reason);
+    return {
+      assignments: [],
+      coverage: {
+        state: "unavailable",
+        reasons,
+        omitted: budget.omissions === "unknown" ? null : 0,
+        bytes_read: budget.bytes,
+        observed_at: observedAt,
+      },
+    };
+  }
+  const storageFailure = budget.reasons.find(reason => reason.startsWith("storage-"));
+  if (storageFailure && records.length === 0) {
+    return {
+      assignments: [],
+      coverage: {
+        state: "unavailable",
+        reasons: [...budget.reasons],
+        omitted: null,
+        bytes_read: budget.bytes,
+        observed_at: observedAt,
+      },
+    };
+  }
+
+  // One monotonic deadline shared by every record, started after enumeration.
+  const deadline = performance.now() + timeoutMs;
+  const defaults = defaultCollectionProbes(deadline);
+  const inspect = deadlineBoundary(
+    typeof probes.inspect === "function" ? probes.inspect : defaults.inspect,
+    pid => ({ state: "unknown", pid, reason: "probe-deadline" }),
+    deadline,
+  );
+  const psRun = deadlineBoundary(
+    typeof probes.psRun === "function" ? probes.psRun : defaults.psRun,
+    () => ({ stdout: "", complete: false }),
+    deadline,
+  );
+  const tmuxRun = deadlineBoundary(
+    typeof probes.tmuxRun === "function" ? probes.tmuxRun : defaults.tmuxRun,
+    () => tmuxUnavailable("probe-deadline"),
+    deadline,
+  );
+
+  const probeReasons = [];
+  const noteProbe = reason => {
+    if (!probeReasons.includes(reason)) probeReasons.push(reason);
+  };
+  const rows = [];
+  for (const record of records) {
+    let classification = null;
+    let observations = null;
+    let timedOut = probeExpired(deadline);
+    if (!timedOut) {
+      const raced = await raceProbeDeadline(
+        observeAssignment(record, {
+          budget,
+          deadline,
+          requireCompleteUuid: true,
+          now: observedAtMs,
+          onObservations: value => { observations = value; },
+          inspect,
+          psRun,
+          tmuxRun,
+        }),
+        deadline,
+      );
+      if (raced.completed) classification = raced.value;
+      else if (raced.error) {
+        noteProbe(`observation-failed:${(raced.error && raced.error.code) || "unknown"}`);
+      } else {
+        timedOut = true;
+      }
+    }
+    if (timedOut) noteProbe("probe-deadline-exceeded");
+    const activity = classification === null
+      ? null
+      : await selectedSessionActivity(classification, deadline);
+    rows.push(projectAssignment(record, classification, {
+      runs,
+      activity,
+      now: observedAtMs,
+      observations,
+    }));
+  }
+
+  // An omitted unknown source may hide a duplicate record: no row may claim
+  // proven uniqueness, live state or ended history.
+  const omissionUnknown = budget.omissions === "unknown";
+  const assignments = rows.map(row => {
+    if (!omissionUnknown) return row;
+    return {
+      ...row,
+      display: "unknown",
+      unrecorded: false,
+      quiet: false,
+      hasControl: false,
+      workersUnconfirmed: false,
+      nextAction: UNKNOWN_ACTION,
+      safeAction: UNKNOWN_ACTION,
+      coverage: "partial",
+      coverageReasons: [...new Set([...(row.coverageReasons ?? []), "enumeration-omitted"])],
+      attention: [...new Set([...(row.attention ?? []), "enumeration-omitted"])],
+    };
+  });
+
+  const reasons = [...new Set([...budget.reasons, ...probeReasons])];
+  if (omissionUnknown && !reasons.includes("omitted-unknown")) reasons.push("omitted-unknown");
+  const rowPartial = assignments.some(row => row.coverage === "partial");
+  return {
+    assignments,
+    coverage: {
+      state: rowPartial || reasons.length > 0 ? "partial" : "complete",
+      reasons,
+      omitted: omissionUnknown ? null : 0,
+      bytes_read: budget.bytes,
+      observed_at: observedAt,
+    },
   };
 }
