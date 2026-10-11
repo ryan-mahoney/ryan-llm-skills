@@ -13,10 +13,10 @@ Each skill writes one kind of artifact, and later skills read the relevant earli
 | `document-screen-behavior` | `docs/screens/SCRN-###-*.md`, and each state capture under the capture root | What does one page do? |
 | `build-journey-map` | `docs/journey-registry.md` | Which user goals cross these repositories? |
 | `document-journey` | `docs/journeys/JRNY-###-<slug>.md` | What happens at each stage and repository boundary? |
-| `visualize-journey` | `.specs/ux-qa/visuals/JRNY-###/`, a portfolio index, and a journey canvas | What does the path look like, how do journeys connect, and where should we investigate? |
-| `view-journeys` | Nothing; serves `.specs/ux-qa/visuals/` over `http://127.0.0.1` | Where can I open the maps with working links? |
+| `visualize-journey` | `<captures_dir>/<repository id>/ux-qa/visuals/JRNY-###/`, a portfolio index, and a journey canvas | What does the path look like, how do journeys connect, and where should we investigate? |
+| `view-journeys` | Nothing; serves `<captures_dir>/<repository id>/ux-qa/visuals/` over `http://127.0.0.1` | Where can I open the maps with working links? |
 | `build-product-brief` | `docs/product-brief.md` | What can the product do today, and which screen, journey, or feature proves each claim? |
-| `journey-qa` | Nothing in the repository; run output, replays, reference trails, and decks stay under `.specs/ux-qa/` | Does one user scenario work end to end? |
+| `journey-qa` | Nothing in the repository; run output, replays, reference trails, and decks stay under `<captures_dir>/<repository id>/ux-qa/` | Does one user scenario work end to end? |
 
 ## Screen Documentation Order
 
@@ -69,13 +69,14 @@ docs/
 ```
 
 Captures do not sit in `docs/`. They stay under the capture root, which is
-`.specs/images/` in the primary checkout by default. A screen capture is
+`<captures_dir>/<repository id>/images/` in the workspace's adjacent storage by default
+(`captures_dir` comes from the spec-location resolver). A screen capture is
 `<root>/screens/SCRN-001/<state>.png`, and a journey capture is
 `<root>/journeys/JRNY-001/<name>.png`. `journey-qa` and `visualize-journey` write their
-generated files under `.specs/ux-qa/`. Both folders are ignored by Git. Neither folder is
-committed. The [capture root reference](../skills/uishot/references/capture-root.md) owns the
+generated files under `<captures_dir>/<repository id>/ux-qa/`. Both folders sit outside every
+checkout, so neither is committed. The [capture root reference](../skills/uishot/references/capture-root.md) owns the
 root, the layout, and the ID rule. A committed document cites a capture by its backticked capture
-ID. It does not embed an image link. It does not name a `.specs/` path.
+ID. It does not embed an image link. It does not name a workspace storage path.
 
 ## What passes between them
 
@@ -143,14 +144,14 @@ Then refresh the affected inventories, screen pages, and journeys against that v
 2. Run `document-journey <JRNY-###>` for a registered journey. It traces the stages, screens,
    promises, carried context, and losses across repositories, and writes the journey page.
 3. Run `visualize-journey <JRNY-###>` after the page exists. It produces a manifest and HTML map
-   under `.specs/ux-qa/visuals/JRNY-###/`, with screenshots, CTAs, evidence links, and prioritized
-   investigations. It also refreshes the portfolio index at `.specs/ux-qa/visuals/index.html` and
-   the journey canvas at `.specs/ux-qa/visuals/canvas.html`. This folder is not committed.
+   under `<captures_dir>/<repository id>/ux-qa/visuals/JRNY-###/`, with screenshots, CTAs, evidence links, and prioritized
+   investigations. It also refreshes the portfolio index at `ux-qa/visuals/index.html` and
+   the journey canvas at `ux-qa/visuals/canvas.html` in the same folder. This folder is not committed.
 4. Run `view-journeys` to open the results. It serves the collection locally and returns the canvas
    URL.
 5. Run `journey-qa` to check a journey against the running product. Use `explore` for one new run,
    `review` for a stored run, `replay` for a recorded trail, and `deck` for the HTML deck. Every
-   run file, replay, reference trail, and deck stays under `.specs/ux-qa/`. Read
+   run file, replay, reference trail, and deck stays under `<captures_dir>/<repository id>/ux-qa/`. Read
    `../skills/journey-qa/references/harness-contract.md` for every command and file schema.
 
 `document-journey` requires a registry row and does not invent journey IDs. `visualize-journey`
@@ -168,6 +169,6 @@ continuation label to open the step where the user leaves.
 
 The generated pages are self-contained HTML, but their evidence links reach into sibling
 repositories, so opening them with `file://` leaves most links broken. `view-journeys` serves the
-`.specs/ux-qa/visuals/` collection from the nearest directory that contains every linked file, shows
+`ux-qa/visuals/` collection from the nearest directory that contains every linked file, shows
 source files as text, and refuses dotfiles, `node_modules`, and paths outside that directory. It
 never creates or renders a journey.

@@ -39,7 +39,7 @@ adapter. This is a local integration patch, not an upstream Warden release.
 
 ```text
 /spec-end-to-end add CSV export for the filtered results, using a worktree
-/spec-end-to-end resume .specs/results-export/ through PR publication
+/spec-end-to-end resume transitops/results-export through PR publication
 /spec-upgrade all pending specs in this repository
 ```
 
@@ -49,11 +49,29 @@ the model assigned to each role. `spec-upgrade` refreshes older unimplemented sp
 before implementation. The [workflow guide](docs/spec-workflow.md) covers prerequisites,
 running stages individually, recovery, and harness setup.
 
+### Where spec files live
+
+Spec work requires workspace storage. Each spec package belongs to one workspace and lives in
+that workspace's adjacent storage at `<storage root>/projects/<workspace>/specs/<slug>/`, with its
+epics, plans, project context, and workflow captures beside it. A package names the kit
+repositories it targets; repositories hold code, branches, worktrees, and committed documentation,
+and no `.specs/` folder exists in any checkout. Each workspace names one execution host in
+`kit.yaml`, and spec work for it runs only there.
+
+`scripts/spec-location/` is the only resolver. Every spec skill starts with
+`node ~/.agents/scripts/spec-location/cli.mjs check <package>` and reads paths from the package's
+`locations.json`; none builds a path itself. When the resolver refuses, the skill stops and prints
+the remedy. See [spec location](skills/spec-end-to-end/references/spec-location.md) and the
+[resolver](scripts/spec-location/README.md). Two skills set up the preconditions:
+`adjacent-storage-setup` designates the storage root, and `workspace-kit` edits the kit
+(repositories, roles, design system, execution host). A repository with an older `.specs/` folder
+moves into its workspace with `spec-location migrate`.
+
 ### What the workflow upholds
 
 | Principle | In practice | Enforced by |
 |---|---|---|
-| Proof proportional to context | Users, data value, compatibility, release process, and permitted operations are recorded once in `.specs/project-context.md`. Evidence matches actual exposure: disposable data needs no migration machinery, while security and valuable data keep full protection. | [Project context contract](skills/spec-end-to-end/references/project-context.md), `spec-write` |
+| Proof proportional to context | Users, data value, compatibility, release process, and permitted operations are recorded once in the workspace's `project-context.md`. Evidence matches actual exposure: disposable data needs no migration machinery, while security and valuable data keep full protection. | [Project context contract](skills/spec-end-to-end/references/project-context.md), `spec-write` |
 | Escalate only consequential decisions | Agents settle ordinary engineering questions themselves. They stop only for choices that change scope, authority, or risk, and never ask people to review specs or code. | Every stage's `decision-required` outcome |
 | Prepared intent is immutable | `spec-write` produces ready cards and structurally valid inputs. Implementation may adapt to the repository but never edits the plan. Changed intent or proof goes back for re-preparation. | `spec-write`, `spec-run` |
 | Every claim can fail | Each acceptance criterion maps to a claim, its credible failure hypotheses, and a gate able to reject each one (AC → CL → FH → EV). | [Executable evidence contract](skills/spec-work-tour/references/executable-evidence.md), `spec-branch-review` |
@@ -75,8 +93,8 @@ running stages individually, recovery, and harness setup.
 2. `spec-architect-critics` stress-tests the proposal and writes `critique.md` (optional).
 3. `spec-write` writes the spec, its evidence plan, and one execution card per step, then
    validates required inputs and ready cards.
-4. The top-level agent chooses a branch or worktree. All `.specs/` reads and writes stay in
-   the primary repository, even when a worktree has a tracked copy.
+4. The top-level agent chooses a branch or worktree for each target repository. Spec files
+   stay in the workspace and are never in a checkout or worktree.
 5. `spec-run` implements each step with its tests and evidence and commits it. After each
    step it starts a background review and fixes earlier findings before the next step.
 6. Finish the last step’s review/fix cycle, including the bounded final fix review of
@@ -92,8 +110,8 @@ running stages individually, recovery, and harness setup.
 
 ### Artifacts
 
-Everything lives in `.specs/<feature>/` in the primary repository. The folder is often
-git-ignored.
+Everything lives in the package folder, `specs/<slug>/` in the workspace's adjacent
+storage, outside every checkout.
 
 | Artifact | Written by | Contents |
 |---|---|---|
@@ -112,7 +130,8 @@ git-ignored.
 In Pi, the top-level agent runs `spec-end-to-end` and `spec-run`. The installed
 `spec_dispatch` tool starts a step owner with a retained disk session; the owner calls
 `spec_editor` for bounded edits and `spec_verify` for owner-run focused verification. The runtime
-owns process completion, cancellation, and an exclusive lock for managed writers.
+owns process completion and cancellation, and refuses a second dispatch while the package's
+recorded run still has a live coordinator.
 It uses the assigned models directly and sends a completion event to the orchestrator.
 See the [runtime setup and API](pi/extensions/spec-runtime/README.md) and
 [run observation guide](docs/spec-runtime-observation.md) for installation and recovery.
@@ -147,7 +166,7 @@ unchanged evidence records are preserved through fixes.
 #### Default Pi prompt
 
 After `spec-write`, paste this into Pi as a normal prompt. Replace `PACKAGE`
-with the absolute package path in the primary checkout. Choose a stronger owner or
+with the package folder (`package_dir`) or `workspace/slug` that the previous stage printed. Choose a stronger owner or
 remove the `STRONG_OWNER` line to use one owner model throughout. The model assignments
 below are an editable example; the routing policy is provider-independent.
 
@@ -160,7 +179,7 @@ STRONG_OWNER: gpt-5.6-sol:high from openai-codex
 EDITOR_AGENT: deepseek/deepseek-v4.1-flash:high from openrouter
 REVIEW_AGENT: gpt-6.1-sol:medium from openai-codex
 SCOUT_AGENT: gpt-6-luna:low from openai-codex
-PACKAGE: <absolute path to .specs/feature-package/>
+PACKAGE: <package folder or workspace/slug>
 ```
 
 The skill owns branch/worktree reuse, unfinished-work recovery, runtime pairing,
@@ -212,7 +231,7 @@ UI work starts from a design package: one self-contained HTML/Tailwind file per 
 plus a `design.json` index, produced by one model from context files and the workspace's
 design system, stored in workspace storage (`projects/<workspace>/designs/<slug>/`) rather
 than a repository, and browsed in Sentinel's workspace view. Epics and specs reference
-screens where they live by identity, path and digest; nothing is copied into `.specs/`.
+screens where they live by identity, path and digest; nothing is copied into a spec package.
 Contract: [design packages](docs/design-packages.md). Content rule:
 [prototype design](rules/prototype-design.md).
 
@@ -275,15 +294,17 @@ See the [product documentation guide](docs/product-documentation.md).
 | **document-screen-behavior** | `docs/screens/SCRN-###-*.md`: one screen's states, with captures cited by ID |
 | **build-journey-map** | `docs/journey-registry.md`: journeys with stable IDs and cross-repository seams |
 | **document-journey** | `docs/journeys/JRNY-###-<slug>.md`: stages, carried context, and evidence |
-| **visualize-journey**, **view-journeys** | `.specs/ux-qa/visuals/`: journey maps and a canvas, served locally |
+| **visualize-journey**, **view-journeys** | `ux-qa/visuals/` under the workspace's `captures/<repository id>/`: journey maps and a canvas, served locally |
 | **build-product-brief** | `docs/product-brief.md`: claims cited to screen, journey, or feature IDs |
-| **journey-qa** | `.specs/ux-qa/` run output from the application's `bin/ux-qa` harness |
+| **journey-qa** | `ux-qa/` run output under the workspace's `captures/<repository id>/`, from the application's `bin/ux-qa` harness |
 
 ### Standalone skills
 
 | Skill | Purpose |
 |---|---|
 | **agents-update** | Generate or update a repository's `AGENTS.md` |
+| **adjacent-storage-setup** | Designate this machine's workspace storage root, verify it, and optionally create the first workspace; run it when a spec skill refuses with `storage-unavailable` |
+| **workspace-kit** | Edit a workspace kit through the workspace CLI: repositories, roles, design system, execution host, and paths for another machine |
 | **repo-status** | Collect local Git facts across repositories and worktrees, with optional open PR observations |
 | **architect-inspect**, **identify-where**, **feature-list** | Describe architecture around a file, locate where a behavior lives, or inventory features |
 | **controller-refactor-plan** | Find dead handlers and misplaced responsibilities in a controller |

@@ -24,8 +24,8 @@ conversation and terminal experience inside an application.
 | Interactive Pi | Execute an agent assignment and provide its native terminal interface for direct interaction. |
 | tmux | Host persistent terminals that can be attached to and detached from without stopping Pi. |
 | Tailscale and SSH | Reach the host from other devices: SSH into tmux sessions, and proxy the Sentinel dashboard over the tailnet with device identity as the access boundary. |
-| Workspace storage | Retain research, briefs, notes, artifact references, and associations among threads, kits, and assignments. |
-| Repository and workflow records | Retain code, implementation specs, execution receipts, and acceptance evidence in their established locations. |
+| Workspace storage | Retain research, briefs, notes, artifact references, associations among threads, kits, and assignments, and the workspace's spec packages (specs, execution receipts, acceptance evidence), epics, plans, and project context. |
+| Repositories | Retain code, branches, worktrees, and committed documentation. Spec files are never in a checkout. |
 
 Sentinel should compose these capabilities through small adapters. The conversation
 backend, terminal host, and presentation layer should not require one another to
@@ -71,7 +71,7 @@ Preserve the part of Adjacent that gives work a home outside an individual
 repository. Research and planning can precede code, and a task can involve several
 repositories.
 
-- A **workspace** associates research, notes, briefs, specs or spec references,
+- A **workspace** associates research, notes, briefs, spec packages,
   conversations, assignments, and resulting artifacts.
 - A **kit** groups related repositories and describes their roles and shared
   context. It supplies context for work without making one repository the implicit
@@ -85,10 +85,14 @@ Settled in C-2 through C-5 (owned by adj3): workspace layout, storage-root write
 rules, identity, and repository references. Avoid duplicate authoritative copies
 of artifacts merely to display them in Sentinel.
 
-The existing implementation-spec contract remains in force: `.specs/` belongs in
-the primary repository checkout, including when code runs in a worktree. External
-research and briefs can feed or reference those specs. Moving implementation specs
-outside repositories would require a separate workflow decision.
+Implementation specs live in the workspace, not in a repository. A spec package is
+`<root>/projects/<workspace>/specs/<slug>/` and names the kit repositories it
+targets; code, branches, and worktrees stay in those repositories, and no `.specs/`
+exists inside any checkout. The `spec-location` module
+(`scripts/spec-location/`) is the only code that maps a workspace, kit, or package
+reference to a path, and a workspace names one execution host in `kit.yaml` where
+spec work runs. External research and briefs can feed or reference those specs. The
+resolver contract is in `scripts/spec-location/README.md`.
 
 ## Remote access from other devices
 
@@ -150,7 +154,7 @@ launches into one directory.
 Define the boundary between operator control and automatic intervention explicitly.
 Attaching a terminal is not itself permission to intervene or proof that the
 operator has taken control. A hold/takeover mechanism must coordinate those actions
-and respect existing user stops, execution leases, and workflow guards.
+and respect existing user stops, active-run checks, and workflow guards.
 
 Launching must also distinguish an existing live assignment from a retry. A missing
 terminal, quiet output, or stale receipt does not prove that workers have stopped.
@@ -183,7 +187,7 @@ the shared contract rather than an implementation plan.
 | Adjacent capability (module) | Disposition | Owner | Notes |
 | --- | --- | --- | --- |
 | Project catalog and kit manifests (`projects.ex`, `projects/kit.ex`) | Adapt | adj3 | Reimplement as a Node stdlib reader of the same directory format (C-2, C-3). |
-| Content resolution and file preview (`projects/content.ex`, `file_preview*.ex`) | Adapt | adj3 | Extend the existing package-file authorization to workspace roots; no second file server. |
+| Content resolution and file preview (`projects/content.ex`, `file_preview*.ex`) | Adapt | adj3 | Extend the existing package-file authorization to workspace roots; no second file server. Spec package files, now under `specs/<slug>/` in the workspace, are served through the same gate. |
 | Thread data layer, Thread process, command delivery and attribution (`threads.ex`, `threads/thread.ex`, `command.ex`, `record.ex`) | Replace | adj5 | Pi's own prompt/steer/follow_up queue plus the persisted session file replace the commands table; Adjacent's attribution rules are reference material only. |
 | Pi adapter (`pi.ex`, `pi_ex`) | Replace | adj5 | Node child process with LF-only JSONL framing (C-8); argument lists, per-process cwd/env, no shell strings. |
 | Session reader (`pi/session.ex`) | Adapt | adj5 | Extend the existing observer session reader; no second parser. Unreadable is never empty, a missing file is an empty session only for a thread with no messages yet, and a torn tail is tolerated. Restoring or importing a recorded session treats a missing file as a failure (see the create-on-open hazard below). |
@@ -207,8 +211,12 @@ A workspace is one directory `<root>/projects/<id>/` containing exactly one
 `repositories: []` is valid, so a workspace can exist before any repository.
 Cardinality is one workspace to one kit, and there is no second manifest that also
 lists repositories. New workspace-owned material lives in ordinary subdirectories
-of the workspace (`briefs/`, `notes/`, `threads/`, `assignments/`, `sessions/`).
-Existing `context/`, `sources/`, and `migration/` keep their meaning. Owner: adj3.
+of the workspace (`briefs/`, `notes/`, `threads/`, `assignments/`, `sessions/`,
+`specs/`, `epics/`, `plans/`, `captures/`) plus `project-context.md`. `specs/<slug>/`
+holds one spec package, `epics/<slug>/epic.json` an epic, `plans/` plan documents,
+and `captures/<repository-id>/` workflow screenshots and journey output.
+Existing `context/`, `sources/`, and `migration/` keep their meaning. A package's
+`runtime/` folder is machine-local and is not synced. Owner: adj3.
 
 ### C-3 Storage root, creation and write rules
 
@@ -244,9 +252,11 @@ association and is never replaced by searching for another checkout. When
 `remote` is present and differs from the checkout's `origin`, status is `ok` with
 a visible remote-mismatch attention. An optional free-text `role:` (for example
 `app`, `marketing`, `design-system`) is added per repository entry.
-Implementation specs stay in the repository's primary checkout `.specs/`; a
-workspace references them by repository id plus package-relative path and never
-copies them. Owner: adj3.
+The workspace owns its spec packages. A package is identified by
+`<workspace id>/<slug>`, and its `scope.json` names the kit repositories it
+targets by repository id; `locations.json` records the resolved absolute
+paths on the execution host. Repositories hold code, branches, worktrees, and
+committed documentation only. Owner: adj3.
 
 ### C-6 Controller placement
 
@@ -289,7 +299,7 @@ The assignment record `<root>/projects/<workspace>/assignments/<assignment-id>.j
 is created with exclusive create before any process starts. It carries the
 assignment id (a UUID, generated unless the caller supplies one), workspace id,
 brief, skill, instructions, optional provider/model/thinking, canonical absolute
-execution directory, optional repository id, spec package and workflow id,
+execution directory, optional repository id, spec package reference (`workspace/slug`) and workflow id,
 publication authority, attempt kind and `supersedes`, contract digest, derived
 tmux session (`adj-<first 12 hex of assignment id>`) and socket, Pi session directory and
 advertised file, Pi path/pid/start, brief sha256, optional project trust, launch
@@ -310,9 +320,9 @@ with a token and a full-assignment record. `launching`, `live`, and
 alone, only after both process and terminal absence are confirmed; an unreadable
 identity is unknown, never gone. Shortened tmux names require full-assignment
 matching and refuse collisions. At most one `launching`/`live` assignment may
-exist per canonical execution directory. The launcher does not take the
-`spec_dispatch` writer lease, so a coordinator launched in tmux must still
-acquire it for its own steps. A retry is a new id with
+exist per canonical execution directory. The launcher does not start a
+package run, so a coordinator launched in tmux still starts its own through
+`spec_dispatch`, which refuses while another coordinator for that package is alive. A retry is a new id with
 `attempt_kind: "launch-retry"` and `supersedes`, allowed only when the old tmux
 session is absent and the old Pi process is confirmed gone. Recovery must never
 terminate independent agents.
@@ -424,6 +434,10 @@ must never treat that success as restored history.
   the workspace root; Phoenix-only data (`.adjacent/` at the root and in each
   project) is not read or written by the new system and can be retired with the
   application once its three discussion threads are migrated by hand.
+- Operator decision, 2026-10-11: workspace storage is required for spec work.
+  Spec packages, epics, plans, captures, and project context are workspace-scoped
+  under C-2 and C-5, with one execution host per workspace; `.specs/` inside a
+  checkout is retired.
 - tmux 3.5+ is now installed (3.8 observed) and belongs to operator setup.
 - Remote write-action authority (whether **Mark complete** is reachable remotely
   and under which guards), deployment, and the application UI remain unresolved.

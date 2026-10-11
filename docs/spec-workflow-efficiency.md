@@ -6,7 +6,7 @@ Do not add a helper call when its answer is already available and applicable.
 
 | Work | Existing or new mechanism | When to use |
 |---|---|---|
-| Canonical package/worktree paths | `skills/spec-end-to-end/scripts/resolve-spec-path.mjs` | Resolve the package once; reuse the handoff. |
+| Canonical package/worktree paths | `scripts/spec-location/cli.mjs` (`locate`, `check`) | Locate the package once; reuse the handoff. |
 | Prior learning/review navigation | `skills/spec-run/scripts/build-history-index.mjs` | Build once initially and after changed learning/review/fix artifacts. |
 | Git state and explicit revision ranges | `scripts/spec-facts/cli.mjs git` | Replace repeated status/file-list/range collection. |
 | Large command output | Managed command excerpts; `scripts/spec-facts/cli.mjs log` elsewhere | Preserve raw logs; inspect missing ranges rather than rerun. |
