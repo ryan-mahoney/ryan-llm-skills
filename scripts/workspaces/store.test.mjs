@@ -9,6 +9,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmod,
   lstat,
@@ -1880,4 +1881,135 @@ test("kit replacement: backup failure refuses and replacement failure keeps the 
   assert.deepEqual(await readFile(second.backup), Buffer.from(baseline, "utf8"));
   assert.equal(await readFile(created.kit, "utf8"), baseline);
   assert.deepEqual((await readdir(created.directory)).sort(), ["kit.yaml", basename(second.backup)].sort());
+});
+
+test("idempotent material brief request publishes once with canonical markdown and request conflict", async (t) => {
+  const root = await createRoot();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await setupStorage(root);
+  await createWorkspace(root, { id: "writer" });
+  const workspace = join(root, "projects", "writer");
+  const requestId = "3f0e8f74-9e8f-4f6a-8a2c-6a1f5a2b7c01";
+  const digest = createHash("sha256").update(`writer\0brief\0${requestId}`, "utf8").digest("hex");
+  const expectedPath = `briefs/brief-${digest}.md`;
+  const expectedBytes = "# Title\n\nbody\n";
+
+  const [first, second] = await Promise.all([
+    addMaterial(root, "writer", { kind: "brief", title: "Title", content: "body\n", request_id: requestId }),
+    addMaterial(root, "writer", { kind: "brief", title: "Title", content: "body\n", request_id: requestId }),
+  ]);
+  assert.equal(first.path, expectedPath);
+  assert.equal(second.path, expectedPath);
+  assert.equal(await readFile(join(workspace, expectedPath), "utf8"), expectedBytes);
+  assert.deepEqual((await readdir(join(workspace, "briefs"))).sort(), [`brief-${digest}.md`]);
+
+  const repeated = await addMaterial(root, "writer", {
+    kind: "brief",
+    title: "Title",
+    content: "body\n",
+    request_id: requestId,
+  });
+  assert.equal(repeated.path, expectedPath);
+  await assert.rejects(
+    addMaterial(root, "writer", { kind: "brief", title: "Changed", content: "body\n", request_id: requestId }),
+    { code: "request-conflict" },
+  );
+  await assert.rejects(
+    addMaterial(root, "writer", { kind: "brief", title: "Title", content: "changed\n", request_id: requestId }),
+    { code: "request-conflict" },
+  );
+  assert.equal(await readFile(join(workspace, expectedPath), "utf8"), expectedBytes);
+
+  // Without a request_id the dated collision naming and raw content are retained.
+  const dated = await addMaterial(root, "writer", { kind: "brief", title: "Title", content: "body\n" });
+  assert.match(dated.path, /^briefs\/\d{4}-\d{2}-\d{2}-title\.md$/);
+  assert.equal(await readFile(join(workspace, dated.path), "utf8"), "body\n");
+});
+
+test("idempotent material refuses invalid request ids before publishing", async (t) => {
+  const root = await createRoot();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await setupStorage(root);
+  await createWorkspace(root, { id: "writer" });
+  const workspace = join(root, "projects", "writer");
+  for (const request_id of [
+    null,
+    "not-a-uuid",
+    "../../escape",
+    "a/b",
+    "12345678-1234-1234-1234-12345678901",
+    42,
+  ]) {
+    await assert.rejects(
+      addMaterial(root, "writer", { kind: "brief", title: "Title", content: "body\n", request_id }),
+    );
+  }
+  const files = await readdir(join(workspace, "briefs")).catch(() => []);
+  assert.deepEqual(files, []);
+});
+
+test("idempotent material refuses symlink and non-regular request destinations", async (t) => {
+  const root = await createRoot();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await setupStorage(root);
+  await createWorkspace(root, { id: "writer" });
+  const workspace = join(root, "projects", "writer");
+  const briefsDir = join(workspace, "briefs");
+  await mkdir(briefsDir, { recursive: true });
+  const requestId = "6f0e8f74-9e8f-4f6a-8a2c-6a1f5a2b7c02";
+  const digest = createHash("sha256").update(`writer\0brief\0${requestId}`, "utf8").digest("hex");
+  const destination = join(briefsDir, `brief-${digest}.md`);
+
+  const foreign = join(root, "foreign.md");
+  await writeFile(foreign, "foreign bytes\n");
+  await symlink(foreign, destination);
+  await assert.rejects(
+    addMaterial(root, "writer", { kind: "brief", title: "Title", content: "body\n", request_id: requestId }),
+    { code: "EEXIST" },
+  );
+  assert.equal(await readFile(foreign, "utf8"), "foreign bytes\n");
+  assert.equal((await lstat(destination)).isSymbolicLink(), true);
+
+  await rm(destination, { force: true });
+  await mkdir(destination, { recursive: true });
+  await assert.rejects(
+    addMaterial(root, "writer", { kind: "brief", title: "Title", content: "body\n", request_id: requestId }),
+    { code: "EEXIST" },
+  );
+});
+
+test("idempotent material hashes workspace kind and request identity separately", async (t) => {
+  const root = await createRoot();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await setupStorage(root);
+  await createWorkspace(root, { id: "alpha" });
+  await createWorkspace(root, { id: "beta" });
+  const requestId = "9f0e8f74-9e8f-4f6a-8a2c-6a1f5a2b7c03";
+  const digest = (workspaceId, kind) =>
+    createHash("sha256").update(`${workspaceId}\0${kind}\0${requestId}`, "utf8").digest("hex");
+
+  const brief = await addMaterial(root, "alpha", {
+    kind: "brief",
+    title: "Title",
+    content: "body\n",
+    request_id: requestId,
+  });
+  const note = await addMaterial(root, "alpha", {
+    kind: "note",
+    title: "Title",
+    content: "body\n",
+    request_id: requestId,
+  });
+  const betaBrief = await addMaterial(root, "beta", {
+    kind: "brief",
+    title: "Title",
+    content: "body\n",
+    request_id: requestId,
+  });
+
+  assert.equal(brief.path, `briefs/brief-${digest("alpha", "brief")}.md`);
+  assert.equal(note.path, `notes/brief-${digest("alpha", "note")}.md`);
+  assert.equal(betaBrief.path, `briefs/brief-${digest("beta", "brief")}.md`);
+  assert.notEqual(digest("alpha", "brief"), digest("alpha", "note"));
+  assert.notEqual(digest("alpha", "brief"), digest("beta", "brief"));
 });

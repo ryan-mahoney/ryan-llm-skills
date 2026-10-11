@@ -13,14 +13,15 @@ import { execFile, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, delimiter } from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { processIdentity } from "../spec-observe/process-identity.mjs";
 import { createDiscussionService, readThread, validateThread } from "./discussion.mjs";
-import { createWorkspace, setupStorage } from "./store.mjs";
+import { createWorkspace, setupStorage, addMaterial } from "./store.mjs";
+import { resolveAssignment } from "./assignments.mjs";
 
 const PI_FIXTURE = fileURLToPath(new URL("./fixtures/fake-pi-rpc.mjs", import.meta.url));
 
@@ -3429,6 +3430,280 @@ test("thread failure rejected prompt visible no auto retry", async (t) => {
       [aId, bId],
     );
     assert.equal((await readThread(storageRoot, "alpha", threadA.thread_id)).queue_paused, true);
+  } finally {
+    await service.close();
+    for (const child of harness.children) {
+      try {
+        child.disconnect?.();
+      } catch {
+        // Channel already closed.
+      }
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+    }
+  }
+});
+
+test("thread handoff save publishes one material and one handoff", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const workspaceDirectory = await setupWorkspace(storageRoot, "alpha");
+  const record = manualRecord({
+    workspaceId: "alpha",
+    directory: workspaceDirectory,
+    overrides: {
+      queue: [
+        {
+          id: randomUUID(),
+          text: "queued",
+          queued_at: "2026-01-01T00:00:00.000Z",
+          state: "queued",
+          attempt: 0,
+        },
+      ],
+      import: {
+        source: "adj7",
+        digest: "f".repeat(64),
+        imported_at: "2026-01-01T00:00:00.000Z",
+        adjacent: { authority: "none", provenance: { kept: true } },
+      },
+      custom: { kept: true },
+    },
+  });
+  await publishRecord(workspaceDirectory, record);
+  const harness = fixtureHarness();
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    spawn: harness.spawnImpl,
+  });
+  try {
+    const requestId = randomUUID();
+    const [first, second] = await Promise.all([
+      service.saveBrief({ workspace_id: "alpha", thread_id: record.thread_id, request_id: requestId, title: "Title", content: "body\n" }),
+      service.saveBrief({ workspace_id: "alpha", thread_id: record.thread_id, request_id: requestId, title: "Title", content: "body\n" }),
+    ]);
+    assert.equal(first.brief, second.brief);
+    assert.match(first.brief, /^briefs\/brief-[0-9a-f]{64}\.md$/);
+    assert.equal(await readFile(join(workspaceDirectory, first.brief), "utf8"), "# Title\n\nbody\n");
+    const after = await readThread(storageRoot, "alpha", record.thread_id);
+    assert.equal(after.handoffs.length, 1);
+    assert.equal(after.handoffs[0].request_id, requestId);
+    assert.equal(after.handoffs[0].brief, first.brief);
+    assert.deepEqual(after.custom, { kept: true });
+    assert.deepEqual(after.import.adjacent.provenance, { kept: true });
+    assert.equal(after.queue.length, 1);
+    assert.equal(after.queue[0].text, "queued");
+    assert.equal((await readdir(join(workspaceDirectory, "briefs"))).filter((name) => name.endsWith(".md")).length, 1);
+    assert.equal(harness.calls.filter((call) => call.command === "pi").length, 0);
+
+    await assert.rejects(
+      service.saveBrief({ workspace_id: "alpha", thread_id: record.thread_id, request_id: requestId, title: "Other", content: "changed\n" }),
+      { code: "request-conflict" },
+    );
+    assert.equal(await readFile(join(workspaceDirectory, first.brief), "utf8"), "# Title\n\nbody\n");
+    assert.equal((await readThread(storageRoot, "alpha", record.thread_id)).handoffs.length, 1);
+  } finally {
+    await service.close();
+    for (const child of harness.children) {
+      try {
+        child.disconnect?.();
+      } catch {
+        // Channel already closed.
+      }
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+    }
+  }
+});
+
+test("thread handoff save converges after a material before handoff crash", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  await setupWorkspace(storageRoot, "alpha");
+  const requestId = randomUUID();
+  const crashed = await addMaterial(storageRoot, "alpha", {
+    kind: "brief",
+    title: "Title",
+    content: "body\n",
+    request_id: requestId,
+  });
+  const harness = fixtureHarness();
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    spawn: harness.spawnImpl,
+  });
+  let threadId = null;
+  try {
+    const thread = await service.create({ workspace_id: "alpha", title: "Crash residue" });
+    threadId = thread.thread_id;
+    const recovered = await service.saveBrief({
+      workspace_id: "alpha",
+      thread_id: threadId,
+      request_id: requestId,
+      title: "Title",
+      content: "body\n",
+    });
+    assert.equal(recovered.brief, crashed.path);
+    assert.equal(recovered.duplicate, false);
+    assert.equal(recovered.thread.handoffs.length, 1);
+  } finally {
+    await service.close();
+    for (const child of harness.children) {
+      try {
+        child.disconnect?.();
+      } catch {
+        // Channel already closed.
+      }
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+    }
+  }
+
+  const restartHarness = fixtureHarness();
+  const restarted = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    spawn: restartHarness.spawnImpl,
+  });
+  try {
+    const repeat = await restarted.saveBrief({
+      workspace_id: "alpha",
+      thread_id: threadId,
+      request_id: requestId,
+      title: "Title",
+      content: "body\n",
+    });
+    assert.equal(repeat.brief, crashed.path);
+    assert.equal(repeat.duplicate, true);
+    assert.equal(repeat.thread.handoffs.length, 1);
+  } finally {
+    await restarted.close();
+    for (const child of restartHarness.children) {
+      try {
+        child.disconnect?.();
+      } catch {
+        // Channel already closed.
+      }
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+    }
+  }
+});
+
+test("thread handoff preview matches the canonical assignment resolution", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const workspaceDirectory = await setupWorkspace(storageRoot, "alpha");
+  const binDirectory = join(root, "bin");
+  await mkdir(binDirectory, { recursive: true });
+  const piPath = join(binDirectory, "pi");
+  await writeFile(piPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await chmod(piPath, 0o755);
+  const savedPath = process.env.PATH;
+  process.env.PATH = `${binDirectory}${delimiter}${savedPath}`;
+  t.after(() => {
+    process.env.PATH = savedPath;
+  });
+
+  const harness = fixtureHarness();
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    spawn: harness.spawnImpl,
+  });
+  try {
+    const thread = await service.create({ workspace_id: "alpha", title: "Preview" });
+    const requestId = randomUUID();
+    const saved = await service.saveBrief({
+      workspace_id: "alpha",
+      thread_id: thread.thread_id,
+      request_id: requestId,
+      title: "Title",
+      content: "body\n",
+    });
+    const assignmentId = randomUUID();
+    const instructions = "Deliver the preview.";
+    const preview = await service.previewAssignment({
+      workspace_id: "alpha",
+      thread_id: thread.thread_id,
+      request_id: requestId,
+      assignment_id: assignmentId,
+      instructions,
+    });
+    const oracle = await resolveAssignment({
+      storageRoot,
+      workspace_id: "alpha",
+      assignment_id: assignmentId,
+      brief: saved.brief,
+      instructions,
+      skill: "general",
+      target: thread.target,
+    });
+    assert.equal(preview.contractDigest, oracle.contractDigest);
+    assert.deepEqual(preview.piArgs, oracle.piArgs);
+    assert.deepEqual(preview.briefBytes, oracle.briefBytes);
+    assert.equal(preview.record.assignment_id, assignmentId);
+    assert.equal(preview.record.workspace_id, "alpha");
+    assert.equal(preview.record.brief, saved.brief);
+    assert.equal(preview.record.execution_dir, thread.execution_dir);
+    assert.equal(preview.record.brief_sha256, oracle.record.brief_sha256);
+    await assert.rejects(lstat(join(workspaceDirectory, "assignments")), { code: "ENOENT" });
+    await assert.rejects(lstat(join(storageRoot, ".sentinel")), { code: "ENOENT" });
+    assert.equal(harness.calls.filter((call) => call.command === "pi").length, 0);
+
+    await assert.rejects(
+      service.previewAssignment({
+        workspace_id: "alpha",
+        thread_id: thread.thread_id,
+        request_id: randomUUID(),
+        assignment_id: randomUUID(),
+        instructions,
+      }),
+      { code: "brief-not-found" },
+    );
+    for (const override of ["root", "brief", "target", "adapters"]) {
+      await assert.rejects(
+        service.previewAssignment({
+          workspace_id: "alpha",
+          thread_id: thread.thread_id,
+          request_id: requestId,
+          assignment_id: randomUUID(),
+          instructions,
+          [override]: "x",
+        }),
+        { code: "invalid-handoff" },
+      );
+    }
+    await service.close();
+    await assert.rejects(
+      service.saveBrief({
+        workspace_id: "alpha",
+        thread_id: thread.thread_id,
+        request_id: randomUUID(),
+        title: "Title",
+        content: "body\n",
+      }),
+      { code: "service-closed" },
+    );
+    await assert.rejects(
+      service.previewAssignment({
+        workspace_id: "alpha",
+        thread_id: thread.thread_id,
+        request_id: requestId,
+        assignment_id: randomUUID(),
+        instructions,
+      }),
+      { code: "service-closed" },
+    );
   } finally {
     await service.close();
     for (const child of harness.children) {

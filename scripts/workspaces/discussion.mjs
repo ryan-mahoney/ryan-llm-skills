@@ -15,9 +15,11 @@ import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { readSessionBranch } from "../spec-observe/core.mjs";
 import { inspectProcess, processIdentity } from "../spec-observe/process-identity.mjs";
-import { resolveTarget } from "./assignments.mjs";
+import { findAssignment, launchAssignment as launchAssignmentOwner, resolveAssignment, resolveTarget } from "./assignments.mjs";
+import { observeAssignment } from "./reconcile.mjs";
 import { closeOwnedPiChild, createPiRpc } from "./pi-rpc.mjs";
 import {
+  addMaterial,
   createFileExclusive,
   fetchWorkspace,
   listWorkspaces,
@@ -513,12 +515,15 @@ function parseDiscussionListing(text, threadId) {
 
 /**
  * Create the discussion service slice. root/agentDir are bound host
- * configuration; per-request overrides are not accepted. send/stop/discard/
- * handoff mutations and prompt delivery arrive in later steps.
- * @param {{root?: string, agentDir?: string|null, spawn?: Function, clock?: object}} options
+ * configuration; per-request overrides are not accepted. assignmentAdapters is
+ * trusted construction-time plumbing for the final adj4 tmux/observation
+ * boundaries only; public requests can never supply adapters, resolvers or
+ * paths.
+ * @param {{root?: string, agentDir?: string|null, spawn?: Function,
+ *   clock?: object, assignmentAdapters?: object|null}} options
  * @returns {object}
  */
-export function createDiscussionService({ root, agentDir = null, spawn = nodeSpawn, clock = defaultClock } = {}) {
+export function createDiscussionService({ root, agentDir = null, spawn = nodeSpawn, clock = defaultClock, assignmentAdapters = null } = {}) {
   const configuredRoot = root === undefined || root === null || root === "" ? resolveStorageRoot(process.env, homedir()) : root;
   if (typeof configuredRoot !== "string" || !isAbsolute(configuredRoot) || resolve(configuredRoot) !== configuredRoot) {
     throw new TypeError("root must be a lexical canonical absolute path");
@@ -530,6 +535,23 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
   }
   const spawnImpl = typeof spawn === "function" ? spawn : nodeSpawn;
   const clockImpl = clock && typeof clock.setTimeout === "function" && typeof clock.clearTimeout === "function" ? clock : defaultClock;
+  // Trusted final-boundary adapters are accepted only at construction; public
+  // requests can never supply adapters, resolvers or paths.
+  let trustedAdapters = null;
+  if (assignmentAdapters !== null && assignmentAdapters !== undefined) {
+    if (typeof assignmentAdapters !== "object" || Array.isArray(assignmentAdapters)) {
+      throw new TypeError("assignmentAdapters must be a plain object when provided");
+    }
+    if (assignmentAdapters.tmuxRun !== undefined && typeof assignmentAdapters.tmuxRun !== "function") {
+      throw new TypeError("assignmentAdapters.tmuxRun must be a function when provided");
+    }
+    const probes = assignmentAdapters.observationProbes;
+    if (probes !== undefined && (probes === null || typeof probes !== "object" || Array.isArray(probes))) {
+      throw new TypeError("assignmentAdapters.observationProbes must be a plain object when provided");
+    }
+    trustedAdapters = assignmentAdapters;
+  }
+  const launchAdapters = trustedAdapters;
 
   let closed = false;
   let closePromise = null;
@@ -2430,6 +2452,221 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
     return { thread: latest, stopped: false };
   }
 
+  /**
+   * Publish a canonical brief material once and link exactly one handoff row.
+   * The material is published before the thread record, so a crash between the
+   * two converges on retry and conflicting bytes refuse before any record
+   * change. No Pi process, target repository or assignment lifecycle is touched.
+   */
+  async function saveBrief(input = {}) {
+    if (closed) throw serviceClosed();
+    requirePlainObject(input, "saveBrief input");
+    for (const override of [
+      "root",
+      "storageRoot",
+      "agentDir",
+      "path",
+      "brief",
+      "target",
+      "execution_dir",
+      "session_dir",
+    ]) {
+      if (Object.prototype.hasOwnProperty.call(input, override)) {
+        throw typedError("invalid-brief", `saveBrief does not accept a ${override} override`);
+      }
+    }
+    const { workspace_id, thread_id, request_id: requestId, title, content } = input;
+    if (typeof workspace_id !== "string" || !WORKSPACE_ID_PATTERN.test(workspace_id)) {
+      throw invalidThread("workspace_id must be a workspace id");
+    }
+    if (!isUuid(thread_id)) throw invalidThread("thread_id must be a UUID");
+    if (!isUuid(requestId)) throw typedError("invalid-brief", "request_id must be a UUID");
+    if (typeof title !== "string" || title.trim() === "") {
+      throw typedError("invalid-brief", "brief title must be a non-empty string");
+    }
+    if (typeof content !== "string") throw typedError("invalid-brief", "brief content must be a string");
+
+    return withThreadLock(workspace_id, thread_id, async () => {
+      if (closed) throw serviceClosed();
+      const { record, directory } = await loadServiceRecord(workspace_id, thread_id);
+      const material = await addMaterial(configuredRoot, workspace_id, {
+        kind: "brief",
+        title,
+        content,
+        request_id: requestId,
+      });
+      const existing = record.handoffs.find((handoff) => handoff.request_id === requestId);
+      if (existing) {
+        if (existing.brief !== material.path) {
+          throw typedError("request-conflict", "brief request conflicts with the recorded handoff", {
+            request_id: requestId,
+          });
+        }
+        return { thread: record, brief: material.path, handoff: existing, duplicate: true };
+      }
+      const handoff = {
+        request_id: requestId,
+        brief: material.path,
+        saved_at: new Date().toISOString(),
+      };
+      const updated = await persistRecord(directory, {
+        ...record,
+        handoffs: [...record.handoffs, handoff],
+        updated_at: new Date().toISOString(),
+      });
+      return { thread: updated, brief: material.path, handoff, duplicate: false };
+    });
+  }
+
+  const HANDOFF_OVERRIDES = [
+    "root",
+    "storageRoot",
+    "agentDir",
+    "brief",
+    "path",
+    "target",
+    "execution_dir",
+    "pi_path",
+    "home",
+    "tmux_socket",
+    "tmux_session",
+    "pi_session_dir",
+    "coordination_database",
+    "adapters",
+    "resolved",
+  ];
+
+  // Shared preview/launch request validation: identities only, never authority
+  // paths, adapters or extra argv material.
+  function validateHandoffRequest(input, label) {
+    requirePlainObject(input, `${label} input`);
+    for (const override of HANDOFF_OVERRIDES) {
+      if (Object.prototype.hasOwnProperty.call(input, override)) {
+        throw typedError("invalid-handoff", `${label} does not accept a ${override} override`);
+      }
+    }
+    const { workspace_id, thread_id, request_id: requestId, assignment_id: assignmentId, instructions } = input;
+    if (typeof workspace_id !== "string" || !WORKSPACE_ID_PATTERN.test(workspace_id)) {
+      throw invalidThread("workspace_id must be a workspace id");
+    }
+    if (!isUuid(thread_id)) throw invalidThread("thread_id must be a UUID");
+    if (!isUuid(requestId)) throw typedError("invalid-handoff", "request_id must be a UUID");
+    if (!isUuid(assignmentId)) throw typedError("invalid-handoff", "assignment_id must be a UUID");
+    if (typeof instructions !== "string" || instructions === "") {
+      throw typedError("invalid-handoff", "instructions must be a non-empty string");
+    }
+    return { workspace_id, thread_id, requestId, assignmentId };
+  }
+
+  // Build the trusted adj4 input for a saved handoff. All authority fields
+  // (root, brief path, target) come from the service construction and the saved
+  // ThreadV1 record, never from the caller.
+  function handoffInput(record, handoff, input) {
+    return {
+      assignment_id: input.assignment_id,
+      workspace_id: record.workspace_id,
+      storageRoot: configuredRoot,
+      brief: handoff.brief,
+      instructions: input.instructions,
+      skill: input.skill ?? "general",
+      target: record.target,
+      specPackage: input.specPackage ?? null,
+      provider: input.provider ?? null,
+      model: input.model ?? null,
+      thinking: input.thinking ?? null,
+      project_trust: input.project_trust ?? null,
+      workflow_id: input.workflow_id ?? null,
+      publication_authority: input.publication_authority ?? "none",
+      attempt_kind: input.attempt_kind ?? "initial",
+      supersedes: input.supersedes ?? null,
+    };
+  }
+
+  /**
+   * Preview an assignment from a saved handoff without launching it or writing
+   * any assignment record. Returns the exact adj4 resolution object
+   * `{record, piArgs, briefBytes, contractDigest}`.
+   */
+  async function previewAssignment(input = {}) {
+    if (closed) throw serviceClosed();
+    const { workspace_id, thread_id, requestId } = validateHandoffRequest(input, "previewAssignment");
+    return withThreadLock(workspace_id, thread_id, async () => {
+      if (closed) throw serviceClosed();
+      const { record } = await loadServiceRecord(workspace_id, thread_id);
+      const handoff = record.handoffs.find((entry) => entry.request_id === requestId);
+      if (!handoff) throw typedError("brief-not-found", `saved brief not found: ${requestId}`);
+      const resolved = await resolveAssignment(handoffInput(record, handoff, input));
+      if (!resolved.record || resolved.record.execution_dir !== record.execution_dir) {
+        throw typedError("stale-preview", "preview target no longer matches the stored execution binding");
+      }
+      return resolved;
+    });
+  }
+
+  /**
+   * Launch an assignment from a saved handoff. The fresh resolution must equal
+   * the caller's expected digest and the stored execution binding before the
+   * canonical adj4 launch runs; the handoff is linked only after a unique
+   * assignment record verifies. Assignment work never becomes an owned child
+   * and service close never kills the launched tmux session.
+   */
+  async function launchAssignment(input = {}) {
+    if (closed) throw serviceClosed();
+    const { workspace_id, thread_id, requestId, assignmentId } = validateHandoffRequest(input, "launchAssignment");
+    if (typeof input.expectedDigest !== "string" || !/^[0-9a-f]{64}$/.test(input.expectedDigest)) {
+      throw typedError("invalid-handoff", "expectedDigest must be a 64-character lowercase hex digest");
+    }
+    return withThreadLock(workspace_id, thread_id, async () => {
+      if (closed) throw serviceClosed();
+      const { record, directory } = await loadServiceRecord(workspace_id, thread_id);
+      const handoff = record.handoffs.find((entry) => entry.request_id === requestId);
+      if (!handoff) throw typedError("brief-not-found", `saved brief not found: ${requestId}`);
+      if (handoff.assignment_id !== undefined && handoff.assignment_id !== assignmentId) {
+        throw typedError("request-conflict", "brief request is already linked to a different assignment", {
+          request_id: requestId,
+        });
+      }
+      const trustedInput = handoffInput(record, handoff, input);
+      const fresh = await resolveAssignment(trustedInput);
+      if (!fresh.record || fresh.record.execution_dir !== record.execution_dir) {
+        throw typedError("stale-preview", "launch target no longer matches the stored execution binding");
+      }
+      if (fresh.contractDigest !== input.expectedDigest) {
+        throw typedError("stale-preview", "approved contract digest no longer matches the resolved preview");
+      }
+      if (closed) throw serviceClosed();
+      const launched = await launchAssignmentOwner(trustedInput, {
+        expectedDigest: input.expectedDigest,
+        resolved: fresh,
+        adapters: launchAdapters ?? {},
+      });
+      const stored = await findAssignment(configuredRoot, assignmentId);
+      if (
+        stored.assignment_id !== assignmentId ||
+        stored.workspace_id !== record.workspace_id ||
+        stored.brief !== handoff.brief ||
+        stored.execution_dir !== record.execution_dir ||
+        stored.contract_digest !== fresh.contractDigest
+      ) {
+        throw typedError("stale-preview", "launched assignment record does not match the approved contract");
+      }
+      let linked = record;
+      let linkedHandoff = handoff;
+      if (handoff.assignment_id !== assignmentId) {
+        linkedHandoff = { ...handoff, assignment_id: assignmentId };
+        linked = await persistRecord(directory, {
+          ...record,
+          handoffs: record.handoffs.map((entry) =>
+            entry.request_id === requestId ? linkedHandoff : entry,
+          ),
+          updated_at: new Date().toISOString(),
+        });
+      }
+      const observation = await observeAssignment(stored, launchAdapters?.observationProbes ?? {});
+      return { thread: linked, handoff: linkedHandoff, assignment: stored, observation };
+    });
+  }
+
   function subscribe({ workspace_id, thread_id } = {}, listener) {
     if (closed) throw serviceClosed();
     if (typeof workspace_id !== "string" || !WORKSPACE_ID_PATTERN.test(workspace_id)) {
@@ -2522,5 +2759,5 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
     return closePromise;
   }
 
-  return { create, list, history, send, discard, subscribe, resume, stop, close };
+  return { create, list, history, send, saveBrief, previewAssignment, launchAssignment, discard, subscribe, resume, stop, close };
 }
