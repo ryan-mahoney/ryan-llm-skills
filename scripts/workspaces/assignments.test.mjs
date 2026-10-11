@@ -311,10 +311,10 @@ test("assignment resolution fixes digest for known brief bytes and tracks socket
   assert.equal(first.record.state, "preview");
   assert.equal(first.record.pi_session_file, null);
   assert.equal(first.record.launcher_identity, null);
-  assert.equal(first.record.tmux_socket, "adjacent");
   assert.equal(first.record.repository_id, "app");
 
   const storagePhysical = await realpath(storageRoot);
+  assert.equal(first.record.tmux_socket, join(storagePhysical, ".sentinel", "adjacent.sock"));
   const workspacePhysical = (await fetchWorkspace(storageRoot, "digest-workspace")).directory;
   const appPhysical = await realpath(appPath);
   assert.equal(first.record.execution_dir, appPhysical);
@@ -347,7 +347,7 @@ test("assignment resolution fixes digest for known brief bytes and tracks socket
     "initial",
     null,
     piPath,
-    "adjacent",
+    join(storagePhysical, ".sentinel", "adjacent.sock"),
     `adj-${id.replace(/-/g, "").slice(0, 12)}`,
     join(storagePhysical, ".sentinel", "coordination.sqlite"),
     join(workspacePhysical, "sessions", id),
@@ -357,8 +357,14 @@ test("assignment resolution fixes digest for known brief bytes and tracks socket
     createHash("sha256").update(JSON.stringify(expectedCanonical)).digest("hex"),
   );
 
-  const socketChanged = await resolveAssignment({ ...input, tmux_socket: "adjacent-test" });
+  const explicitSocket = join(storagePhysical, "sockets", "custom.sock");
+  const socketChanged = await resolveAssignment({ ...input, tmux_socket: explicitSocket });
   assert.notEqual(socketChanged.contractDigest, first.contractDigest);
+  assert.equal(socketChanged.record.tmux_socket, explicitSocket);
+  await assert.rejects(
+    resolveAssignment({ ...input, tmux_socket: "relative.sock" }),
+    /absolute/,
+  );
 
   const modelChanged = await resolveAssignment({
     ...input,

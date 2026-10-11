@@ -181,8 +181,8 @@ export async function sessionPanePid({ socketPath, sessionName } = {}, { run = r
   return { paneId: match[1], panePid };
 }
 
-async function resolveOwnedSession(socketPath, sessionName) {
-  const pane = await sessionPanePid({ socketPath, sessionName });
+async function resolveOwnedSession(socketPath, sessionName, run = runTmux) {
+  const pane = await sessionPanePid({ socketPath, sessionName }, { run });
   if (pane === null) throw new Error(`tmux session is absent: ${sessionName}`);
   const deadline = Date.now() + IDENTITY_READY_MS;
   for (;;) {
@@ -202,8 +202,8 @@ async function resolveOwnedSession(socketPath, sessionName) {
 // matches the live pane process. Without saved evidence, or on any pane or
 // process mismatch, adoption refuses fail-closed: an observable process in
 // the active pane is not a matching recorded Pi process.
-async function adoptExisting(socketPath, sessionName, assignmentId, expectedPane) {
-  const tag = await runTmux(socketPath, [
+async function adoptExisting(socketPath, sessionName, assignmentId, expectedPane, run = runTmux) {
+  const tag = await run(socketPath, [
     "show-options",
     "-v",
     "-t",
@@ -227,7 +227,7 @@ async function adoptExisting(socketPath, sessionName, assignmentId, expectedPane
       `tmux session pane identity is unavailable for adoption: ${sessionName} records assignment ${recorded}`,
     );
   }
-  const current = await resolveOwnedSession(socketPath, sessionName);
+  const current = await resolveOwnedSession(socketPath, sessionName, run);
   if (current.paneId !== expectedPane.paneId) {
     throw new Error(
       `tmux session pane identity mismatch: ${sessionName} active pane ${current.paneId} is not the recorded ${expectedPane.paneId}`,
@@ -264,6 +264,8 @@ async function adoptExisting(socketPath, sessionName, assignmentId, expectedPane
  * @param {{socketPath: string, sessionName: string, cwd: string,
  *   piPath: string, piArgs: string[], assignmentId: string,
  *   expectedPane?: {paneId: string, piIdentity: {pid: number, started_at: string}}}} input
+ * @param {{run?: (socketPath: string, args: string[]) => Promise<object>}} [options]
+ *   final tmux command boundary; defaults to the real adapter transport
  * @returns {Promise<{socketPath: string, sessionName: string, paneId: string,
  *   panePid: number, piIdentity: {pid: number, started_at: string}}>}
  */
@@ -275,7 +277,7 @@ export async function startSession({
   piArgs,
   assignmentId,
   expectedPane,
-} = {}) {
+} = {}, { run = runTmux } = {}) {
   assertAbsolutePath(socketPath, "socketPath");
   assertSessionName(sessionName);
   assertAbsolutePath(cwd, "cwd");
@@ -296,20 +298,20 @@ export async function startSession({
     "-e", `ADJACENT_ASSIGNMENT_ID=${assignmentId}`, "--", escapeTmuxArg(piPath), ...piArgs.map(escapeTmuxArg), ";",
     "set-option", "-t", `=${sessionName}:`, "@adjacent_assignment_id", assignmentId,
   ];
-  const created = await runTmux(socketPath, commands);
+  const created = await run(socketPath, commands);
   if (!created.ok) {
     // A duplicate-session race is the only expected failure to retry through
     // adoption; other failures refuse with the original create error.
     let exists = false;
     try {
-      exists = await hasSession({ socketPath, sessionName });
+      exists = await hasSession({ socketPath, sessionName }, { run });
     } catch {
       exists = false;
     }
-    if (exists) return adoptExisting(socketPath, sessionName, assignmentId, expectedPane);
+    if (exists) return adoptExisting(socketPath, sessionName, assignmentId, expectedPane, run);
     throw tmuxFailure("start-session", created);
   }
-  return resolveOwnedSession(socketPath, sessionName);
+  return resolveOwnedSession(socketPath, sessionName, run);
 }
 
 /**

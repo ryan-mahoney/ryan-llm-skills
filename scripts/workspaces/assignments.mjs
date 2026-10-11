@@ -7,18 +7,33 @@
 // reads the reviewed brief bytes once, derives the fixed-order canonical
 // digest and the Pi argument array, and returns the preview record.
 //
-// Both functions are read-only: they create, modify and delete nothing. The
-// caller owns snapshot publication (assignments/<id>.brief.md), session
-// directory creation and record persistence.
+// resolveTarget/resolveAssignment are read-only. `acquireRootClaim` owns the
+// root-scoped logical lease and creates only `<physical-root>/.sentinel` and
+// its coordination database on the authorized launch path; `listAssignments`/
+// `findAssignment` are strictly read-only record lookups. The caller owns
+// snapshot publication (assignments/<id>.brief.md), session directory
+// creation and record persistence.
 
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
-import { delimiter, isAbsolute, join, resolve } from "node:path";
+import { basename, delimiter, isAbsolute, join, relative, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { canonicalPackage } from "../../pi/extensions/spec-runtime/runtime.mjs";
 import { resolveCheckout } from "../repo-search/identity.mjs";
-import { fetchWorkspace, resolveWorkspacePath } from "./store.mjs";
+import { processIdentity } from "../spec-observe/process-identity.mjs";
+import { claimOwner } from "../spec-observe/owner-claim.mjs";
+import { observeAssignment } from "./reconcile.mjs";
+import {
+  createFileExclusive,
+  fetchWorkspace,
+  listWorkspaces,
+  resolveWorkspacePath,
+  storageStatus,
+  writeFileAtomic,
+} from "./store.mjs";
+import { probeSession, startSession } from "./tmux.mjs";
 
 const GIT_TIMEOUT_MS = 5000;
 const UUID_PATTERN =
@@ -26,6 +41,56 @@ const UUID_PATTERN =
 const SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 const PUBLICATION_AUTHORITIES = new Set(["none", "draft-pr", "pr"]);
 const ATTEMPT_KINDS = new Set(["initial", "launch-retry"]);
+const ROOT_CLAIM_KEY = "adjacent-launch";
+const ROOT_CLAIM_TIMEOUT_MS = 5000;
+const ROOT_CLAIM_RETRY_MS = 50;
+// claimOwner accepts only 1-5000 ms; the remaining retry deadline bounds it.
+const OWNER_CLAIM_MAX_TIMEOUT_MS = 5000;
+// Persisted assignment states; a resolved preview is never persisted.
+const ASSIGNMENT_STATES = new Set([
+  "launching",
+  "live",
+  "launch_unknown",
+  "launch_failed",
+  "ended",
+]);
+const HEX64_PATTERN = /^[0-9a-f]{64}$/;
+const PANE_ID_PATTERN = /^%\d+$/;
+const SESSION_NAME_PATTERN = /^adj-[0-9a-f]{12}$/;
+const PROJECT_TRUST_VALUES = new Set(["always", "approve", "ask", "never", "no-approve"]);
+const EXCLUSION_STATES = new Set(["launching", "live", "launch_unknown"]);
+// Effective immutable record fields used for an idempotent same-id repeat.
+const IMMUTABLE_RECORD_FIELDS = [
+  "schema_version",
+  "assignment_id",
+  "workspace_id",
+  "workspace_directory",
+  "storage_root",
+  "brief",
+  "brief_sha256",
+  "skill",
+  "skill_path",
+  "instructions",
+  "provider",
+  "model",
+  "thinking",
+  "project_trust",
+  "execution_dir",
+  "repository_id",
+  "spec_package",
+  "workflow_id",
+  "publication_authority",
+  "attempt_kind",
+  "supersedes",
+  "contract_digest",
+  "tmux_socket",
+  "tmux_session",
+  "pi_path",
+  "coordination_database",
+  "pi_session_dir",
+];
+// Private approval receipts for internally generated resolveAssignment results.
+const resolvedReceipts = new WeakMap();
 // Supported thinking levels mirror installed Pi dist/cli/args.js VALID_THINKING_LEVELS
 // (pi 1.1.0: off, minimal, low, medium, high, xhigh, max). ResolveAssignment
 // validates explicitly so an invalid level fails visibly instead of Pi
@@ -391,7 +456,18 @@ export async function resolveAssignment(input = {}) {
   const briefSha256 = sha256Hex(briefBytes);
 
   const storageRootPhysical = await fs.realpath(resolve(storageRoot));
-  const tmuxSocket = optionalNonEmptyString(input.tmux_socket, "tmux_socket", "adjacent");
+  // The default dedicated socket lives in the derived coordination directory;
+  // an explicit socket passes through unchanged but must be absolute so it
+  // names one physical server instead of a cwd-dependent default-server path.
+  let tmuxSocket;
+  if (input.tmux_socket === undefined || input.tmux_socket === null) {
+    tmuxSocket = coordinationPaths(storageRootPhysical).socket;
+  } else {
+    tmuxSocket = requireNonEmptyString(input.tmux_socket, "tmux_socket");
+    if (!isAbsolute(tmuxSocket)) {
+      throw new Error("tmux_socket must be an absolute path");
+    }
+  }
   const tmuxSession = optionalNonEmptyString(
     input.tmux_session,
     "tmux_session",
@@ -403,7 +479,7 @@ export async function resolveAssignment(input = {}) {
       "coordination_database must not be supplied: derived from the physical storage root",
     );
   }
-  const coordinationDatabase = join(storageRootPhysical, ".sentinel", "coordination.sqlite");
+  const coordinationDatabase = coordinationPaths(storageRootPhysical).database;
   const piSessionDir = optionalNonEmptyString(
     input.pi_session_dir,
     "pi_session_dir",
@@ -504,5 +580,890 @@ export async function resolveAssignment(input = {}) {
     updated_at: timestamp,
   };
 
-  return { record, piArgs, briefBytes, contractDigest };
+  const result = { record, piArgs, briefBytes, contractDigest };
+  // Private approval receipt: launchAssignment accepts a supplied `resolved`
+  // only when it is this exact object with an unchanged record, argv, bytes
+  // and digest, and the caller input deep-equals the approved input.
+  resolvedReceipts.set(result, {
+    input: structuredClone(input),
+    record: structuredClone(record),
+    piArgs: [...piArgs],
+    briefBytes: Buffer.from(briefBytes),
+    contractDigest,
+  });
+  return result;
+}
+
+// Root coordination and read-only assignment catalog -----------------------
+
+function delay(ms) {
+  return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
+}
+
+// The only coordination domain for one physical root. Socket and database are
+// derived together so no caller can split exclusion with an override.
+function coordinationPaths(physicalRoot) {
+  const sentinel = join(physicalRoot, ".sentinel");
+  return {
+    sentinel,
+    database: join(sentinel, "coordination.sqlite"),
+    socket: join(sentinel, "adjacent.sock"),
+  };
+}
+
+// Create the owned coordination directory non-recursively with mode 0700.
+// The storage root itself is never created or replaced, and a symlink or
+// non-directory `.sentinel` is refused rather than followed.
+async function ensureSentinelDirectory(sentinelPath) {
+  const existing = await lstatOrNull(sentinelPath);
+  if (existing) {
+    if (existing.isSymbolicLink()) {
+      throw new Error(`coordination directory must not be a symlink: ${sentinelPath}`);
+    }
+    if (!existing.isDirectory()) {
+      throw new Error(`coordination directory is not a directory: ${sentinelPath}`);
+    }
+    if ((await fs.realpath(sentinelPath)) !== sentinelPath) {
+      throw new Error(`coordination directory path contains a symbolic link: ${sentinelPath}`);
+    }
+    return;
+  }
+  try {
+    await fs.mkdir(sentinelPath, { mode: 0o700 });
+  } catch (error) {
+    if (error && error.code === "EEXIST") {
+      const raced = await lstatOrNull(sentinelPath);
+      if (raced && !raced.isSymbolicLink() && raced.isDirectory()
+        && (await fs.realpath(sentinelPath)) === sentinelPath) return;
+    }
+    throw new Error(
+      `cannot create coordination directory ${sentinelPath}: ${error.code ?? error.message}`,
+    );
+  }
+  const created = await lstatOrNull(sentinelPath);
+  if (!created || created.isSymbolicLink() || !created.isDirectory()) {
+    throw new Error(`coordination directory was not created as a real directory: ${sentinelPath}`);
+  }
+}
+
+/**
+ * Acquire the single root-wide launcher lease for `root`.
+ *
+ * The database is always derived as
+ * `<physical-root>/.sentinel/coordination.sqlite` with key `adjacent-launch`;
+ * override arguments are refused so no caller can split the exclusion domain
+ * for one physical root. The existing root must pass the shared read-only
+ * storage status, and the owned `.sentinel` directory is created
+ * non-recursively with mode 0700 only when missing. Refusals from the shared
+ * adj2 `claimOwner` (any `OwnerClaimError`) are retried every 50 ms until the
+ * 5-second deadline, then the last error is thrown. There is no reentrant or
+ * same-process shortcut.
+ *
+ * @param {string} root
+ * @param {Record<string, unknown>} [overrides]
+ * @returns {Promise<{key: string, pid: number, started_at: string, token: string,
+ *   release: () => void}>}
+ */
+export async function acquireRootClaim(root, overrides = {}) {
+  if (overrides === null || typeof overrides !== "object" || Array.isArray(overrides)) {
+    throw new TypeError("root claim overrides must be an object");
+  }
+  const overrideKeys = Object.keys(overrides);
+  if (overrideKeys.length > 0) {
+    throw new Error(
+      `root claim does not accept overrides (${overrideKeys.join(", ")}); the coordination database is derived from the physical root`,
+    );
+  }
+  if (typeof root !== "string" || root === "") {
+    throw new TypeError("root must be a non-empty string");
+  }
+  const status = await storageStatus(root);
+  if (status.status !== "ok") {
+    const detail = status.errors.map((entry) => entry.message).join("; ") || status.status;
+    throw new Error(`storage root is not usable for the launch claim (${status.status}): ${detail}`);
+  }
+  const physicalRoot = status.root;
+  const paths = coordinationPaths(physicalRoot);
+  await ensureSentinelDirectory(paths.sentinel);
+
+  const deadline = Date.now() + ROOT_CLAIM_TIMEOUT_MS;
+  let lastError = null;
+  for (;;) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      throw lastError ?? new Error(`root claim deadline exceeded for ${physicalRoot}`);
+    }
+    try {
+      return claimOwner({
+        database: paths.database,
+        key: ROOT_CLAIM_KEY,
+        timeoutMs: Math.max(1, Math.min(OWNER_CLAIM_MAX_TIMEOUT_MS, remaining)),
+      });
+    } catch (error) {
+      if (!error || error.name !== "OwnerClaimError") throw error;
+      lastError = error;
+    }
+    if (Date.now() >= deadline) throw lastError;
+    await delay(ROOT_CLAIM_RETRY_MS);
+  }
+}
+
+function typedAssignmentError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function refuseAssignment(path, detail) {
+  throw new Error(`invalid assignment record ${path}: ${detail}`);
+}
+
+function isHex64(value) {
+  return typeof value === "string" && HEX64_PATTERN.test(value);
+}
+
+function isTimestamp(value) {
+  return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+
+function validateOptionalIdentity(record, field, path) {
+  const value = record[field];
+  if (value === undefined || value === null) return;
+  if (typeof value !== "object" || Array.isArray(value)
+    || !Number.isSafeInteger(value.pid) || value.pid <= 0
+    || typeof value.started_at !== "string" || value.started_at === "") {
+    refuseAssignment(path, `${field} is not a valid process identity`);
+  }
+}
+
+async function validateAssignmentRecord(physicalRoot, workspace, path, record) {
+  if (record === null || typeof record !== "object" || Array.isArray(record)) {
+    refuseAssignment(path, "record is not an object");
+  }
+  const id = record.assignment_id;
+  if (typeof id !== "string" || !UUID_PATTERN.test(id)) {
+    refuseAssignment(path, "assignment_id is not an RFC4122 UUID");
+  }
+  if (basename(path, ".json") !== id) {
+    refuseAssignment(path, "assignment_id does not match the filename");
+  }
+  if (record.schema_version !== 1) refuseAssignment(path, "schema_version is not 1");
+  if (record.workspace_id !== workspace.id) {
+    refuseAssignment(path, "workspace_id does not match the owning workspace");
+  }
+  if (record.storage_root !== physicalRoot) {
+    refuseAssignment(path, "storage_root does not match the physical storage root");
+  }
+  if (record.workspace_directory !== workspace.directory) {
+    refuseAssignment(path, "workspace_directory does not match the physical workspace directory");
+  }
+  if (typeof record.launch_token !== "string" || !UUID_PATTERN.test(record.launch_token)) {
+    refuseAssignment(path, "launch_token is not an RFC4122 UUID");
+  }
+  if (!ASSIGNMENT_STATES.has(record.state)) {
+    refuseAssignment(
+      path,
+      `state ${JSON.stringify(record.state)} is not a persisted assignment state`,
+    );
+  }
+  if (!isHex64(record.brief_sha256)) refuseAssignment(path, "brief_sha256 is not a 64-hex digest");
+  if (!isHex64(record.contract_digest)) {
+    refuseAssignment(path, "contract_digest is not a 64-hex digest");
+  }
+  if (!isTimestamp(record.created_at) || !isTimestamp(record.updated_at)) {
+    refuseAssignment(path, "created_at/updated_at are not valid timestamps");
+  }
+  if (typeof record.brief !== "string" || record.brief === "") {
+    refuseAssignment(path, "brief is not a non-empty string");
+  }
+  if (typeof record.skill !== "string" || record.skill === "") {
+    refuseAssignment(path, "skill is not a non-empty string");
+  }
+  if (record.skill === "general") {
+    if (record.skill_path !== null) {
+      refuseAssignment(path, "general skill must not carry a skill_path");
+    }
+  } else if (typeof record.skill_path !== "string" || !isAbsolute(record.skill_path)) {
+    refuseAssignment(path, "skill_path must be an absolute path for a named skill");
+  }
+  if (typeof record.instructions !== "string" || record.instructions === "") {
+    refuseAssignment(path, "instructions is not a non-empty string");
+  }
+  if (!PUBLICATION_AUTHORITIES.has(record.publication_authority)) {
+    refuseAssignment(path, "publication_authority is not a known authority");
+  }
+  if (!ATTEMPT_KINDS.has(record.attempt_kind)) {
+    refuseAssignment(path, "attempt_kind is not a known kind");
+  }
+  if (record.attempt_kind === "initial" && record.supersedes !== null) {
+    refuseAssignment(path, "an initial assignment must not supersede another");
+  }
+  if (record.attempt_kind === "launch-retry"
+    && (typeof record.supersedes !== "string" || !UUID_PATTERN.test(record.supersedes)
+      || record.supersedes === id)) {
+    refuseAssignment(path, "launch-retry must supersede a different UUID");
+  }
+  if (record.project_trust !== null && !PROJECT_TRUST_VALUES.has(record.project_trust)) {
+    refuseAssignment(path, "project_trust is not a known trust value");
+  }
+  if ((record.provider === null) !== (record.model === null)
+    || (record.provider !== null && (typeof record.provider !== "string" || record.provider === ""))
+    || (record.model !== null && (typeof record.model !== "string" || record.model === ""))) {
+    refuseAssignment(path, "provider/model must be supplied together as non-empty strings");
+  }
+  if (record.thinking !== null
+    && (record.model === null || !SUPPORTED_THINKING_LEVELS.has(record.thinking))) {
+    refuseAssignment(path, "thinking requires a model and a supported level");
+  }
+  if (record.repository_id !== null
+    && (typeof record.repository_id !== "string" || record.repository_id === "")) {
+    refuseAssignment(path, "repository_id is neither null nor a non-empty string");
+  }
+  if (record.spec_package !== null
+    && (typeof record.spec_package !== "string" || !isAbsolute(record.spec_package))) {
+    refuseAssignment(path, "spec_package is neither null nor an absolute path");
+  }
+  if (record.workflow_id !== null
+    && (typeof record.workflow_id !== "string" || record.workflow_id === "")) {
+    refuseAssignment(path, "workflow_id is neither null nor a non-empty string");
+  }
+  if (record.attention !== undefined
+    && (!Array.isArray(record.attention)
+      || record.attention.some((entry) => typeof entry !== "string"))) {
+    refuseAssignment(path, "attention is not an array of strings");
+  }
+  const paths = coordinationPaths(physicalRoot);
+  if (record.coordination_database !== paths.database) {
+    refuseAssignment(path, "coordination_database is not the root-derived database");
+  }
+  if (typeof record.tmux_socket !== "string" || !isAbsolute(record.tmux_socket)) {
+    refuseAssignment(path, "tmux_socket must be an absolute path");
+  }
+  if (typeof record.tmux_session !== "string"
+    || !SESSION_NAME_PATTERN.test(record.tmux_session)) {
+    refuseAssignment(path, "tmux_session is not an owned session name");
+  }
+  if (typeof record.pi_path !== "string" || !isAbsolute(record.pi_path)) {
+    refuseAssignment(path, "pi_path must be an absolute path");
+  }
+  if (record.brief_snapshot !== join(workspace.directory, "assignments", `${id}.brief.md`)) {
+    refuseAssignment(path, "brief_snapshot is not the owned snapshot path");
+  }
+  if (record.pi_session_dir !== join(workspace.directory, "sessions", id)) {
+    refuseAssignment(path, "pi_session_dir is not the owned session directory derivation");
+  }
+  if (typeof record.execution_dir !== "string" || !isAbsolute(record.execution_dir)) {
+    refuseAssignment(path, "execution_dir must be an absolute path");
+  }
+  const executionInfo = await lstatOrNull(record.execution_dir);
+  if (!executionInfo || executionInfo.isSymbolicLink() || !executionInfo.isDirectory()) {
+    refuseAssignment(path, "execution_dir is not an existing physical directory");
+  }
+  if ((await fs.realpath(record.execution_dir)) !== record.execution_dir) {
+    refuseAssignment(path, "execution_dir is not the canonical physical directory");
+  }
+  validateOptionalIdentity(record, "launcher_identity", path);
+  validateOptionalIdentity(record, "pi_identity", path);
+  if (record.pane_id !== undefined && record.pane_id !== null
+    && (typeof record.pane_id !== "string" || !PANE_ID_PATTERN.test(record.pane_id))) {
+    refuseAssignment(path, "pane_id is not an exact tmux pane id");
+  }
+  if (record.pi_session_file !== undefined && record.pi_session_file !== null) {
+    if (typeof record.pi_session_file !== "string" || !isAbsolute(record.pi_session_file)) {
+      refuseAssignment(path, "pi_session_file is neither null nor an absolute path");
+    }
+    const within = relative(join(workspace.directory, "sessions", id), record.pi_session_file);
+    if (within === "" || within.startsWith("..") || isAbsolute(within)) {
+      refuseAssignment(path, "pi_session_file is not inside the owned session directory");
+    }
+  }
+  return record;
+}
+
+// Scan one physical catalog workspace's assignments directory. Missing means
+// no records; every other directory problem or malformed record refuses the
+// whole lookup instead of being skipped.
+async function readWorkspaceAssignments(physicalRoot, workspace) {
+  const directory = join(workspace.directory, "assignments");
+  const lookup = await lstatOrNull(directory);
+  if (lookup === null) return [];
+  if (lookup.isSymbolicLink() || !lookup.isDirectory()) {
+    throw new Error(`assignments directory is not a real directory: ${directory}`);
+  }
+  if ((await fs.realpath(directory)) !== directory) {
+    throw new Error(`assignments directory path contains a symbolic link: ${directory}`);
+  }
+  let entries;
+  try {
+    entries = await fs.readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    throw new Error(
+      `assignments directory is unreadable: ${directory} (${error.code ?? error.message})`,
+    );
+  }
+  const records = [];
+  for (const entry of entries) {
+    if (!entry.name.endsWith(".json")) continue;
+    const path = join(directory, entry.name);
+    if (entry.isSymbolicLink() || !entry.isFile()) {
+      refuseAssignment(path, "record is not a regular file");
+    }
+    let text;
+    try {
+      text = await fs.readFile(path, "utf8");
+    } catch (error) {
+      refuseAssignment(path, `record is unreadable (${error.code ?? error.message})`);
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      refuseAssignment(path, "record is malformed JSON");
+    }
+    records.push({
+      record: await validateAssignmentRecord(physicalRoot, workspace, path, parsed),
+      path,
+    });
+  }
+  return records;
+}
+
+// Read-only global scan: the root must pass storage status, the catalog may
+// not contain invalid potentially relevant state, and a duplicated assignment
+// UUID refuses before any workspace filter. Results are sorted by created_at
+// then assignment id.
+async function scanAssignmentRecords(root) {
+  if (typeof root !== "string" || root === "") {
+    throw new TypeError("root must be a non-empty string");
+  }
+  const status = await storageStatus(root);
+  if (status.status !== "ok") {
+    const detail = status.errors.map((entry) => entry.message).join("; ") || status.status;
+    throw new Error(`storage root is not usable (${status.status}): ${detail}`);
+  }
+  const physicalRoot = status.root;
+  const catalog = await listWorkspaces(physicalRoot);
+  if (catalog.errors.length > 0 || catalog.invalid.length > 0) {
+    throw new Error(
+      "workspace catalog contains invalid potentially relevant state; refusing assignment lookup",
+    );
+  }
+  const scanned = [];
+  const byId = new Map();
+  for (const workspace of catalog.valid) {
+    const records = await readWorkspaceAssignments(physicalRoot, workspace);
+    for (const entry of records) {
+      const previous = byId.get(entry.record.assignment_id);
+      if (previous !== undefined) {
+        throw typedAssignmentError(
+          "ASSIGNMENT_AMBIGUOUS",
+          `assignment UUID ${entry.record.assignment_id} appears more than once (${previous.path} and ${entry.path})`,
+        );
+      }
+      byId.set(entry.record.assignment_id, entry);
+      scanned.push(entry);
+    }
+  }
+  scanned.sort((left, right) =>
+    left.record.created_at.localeCompare(right.record.created_at)
+    || left.record.assignment_id.localeCompare(right.record.assignment_id));
+  return scanned;
+}
+
+/**
+ * List persisted assignments in one existing storage root without creating or
+ * modifying anything. Invalid or duplicated records refuse the lookup rather
+ * than being skipped.
+ * @param {string} root
+ * @param {string|null} [workspaceId]
+ * @returns {Promise<object[]>} records sorted by created_at then id
+ */
+export async function listAssignments(root, workspaceId = null) {
+  const scanned = await scanAssignmentRecords(root);
+  let selected = scanned;
+  if (workspaceId !== null && workspaceId !== undefined) {
+    if (typeof workspaceId !== "string" || workspaceId === "") {
+      throw new TypeError("workspaceId must be a non-empty string");
+    }
+    selected = scanned.filter((entry) => entry.record.workspace_id === workspaceId);
+  }
+  return selected.map((entry) => entry.record);
+}
+
+/**
+ * Find exactly one persisted assignment by full UUID. A missing record throws
+ * with code `ASSIGNMENT_MISSING`; duplicates refuse with
+ * `ASSIGNMENT_AMBIGUOUS` from the global scan. Read-only.
+ * @param {string} root
+ * @param {string} id
+ * @returns {Promise<object>}
+ */
+export async function findAssignment(root, id) {
+  if (typeof id !== "string" || !UUID_PATTERN.test(id)) {
+    throw new Error("assignment id must be an RFC4122 UUID");
+  }
+  const scanned = await scanAssignmentRecords(root);
+  const matches = scanned.filter((entry) => entry.record.assignment_id === id);
+  if (matches.length === 0) {
+    throw typedAssignmentError("ASSIGNMENT_MISSING", `assignment is not present in ${root}: ${id}`);
+  }
+  if (matches.length > 1) {
+    throw typedAssignmentError("ASSIGNMENT_AMBIGUOUS", `assignment is ambiguous in ${root}: ${id}`);
+  }
+  return matches[0].record;
+}
+
+// Launch under root ownership ----------------------------------------------
+
+function approvalResult(result) {
+  return {
+    record: structuredClone(result.record),
+    piArgs: [...result.piArgs],
+    briefBytes: Buffer.from(result.briefBytes),
+    contractDigest: result.contractDigest,
+  };
+}
+
+// Accept only the exact internally generated resolution result, or resolve
+// once and require the caller's expected digest. Forged, cloned or tampered
+// results refuse before any write.
+async function approveLaunchInput(input, resolved, expectedDigest) {
+  if (resolved !== null && resolved !== undefined) {
+    const receipt = typeof resolved === "object" && resolved !== null
+      ? resolvedReceipts.get(resolved)
+      : undefined;
+    if (receipt === undefined) {
+      throw new Error("resolved must be the exact result of a prior resolveAssignment call");
+    }
+    if (!isDeepStrictEqual(input, receipt.input)) {
+      throw new Error("supplied input does not match the approved resolution input");
+    }
+    if (resolved.contractDigest !== receipt.contractDigest
+      || !isDeepStrictEqual(resolved.record, receipt.record)
+      || !isDeepStrictEqual(resolved.piArgs, receipt.piArgs)
+      || !Buffer.isBuffer(resolved.briefBytes)
+      || !resolved.briefBytes.equals(receipt.briefBytes)) {
+      throw new Error("approved resolution result was altered after generation");
+    }
+    if (typeof expectedDigest !== "string" || expectedDigest === "") {
+      throw new Error("expectedDigest is required even for an internally generated resolution");
+    }
+    if (expectedDigest !== receipt.contractDigest) {
+      throw new Error("expectedDigest does not match the approved resolution");
+    }
+    return approvalResult(receipt);
+  }
+  if (expectedDigest === null || expectedDigest === undefined || expectedDigest === "") {
+    throw new Error("expectedDigest is required when resolved is not supplied");
+  }
+  const generated = await resolveAssignment(input);
+  if (generated.contractDigest !== expectedDigest) {
+    throw new Error("expectedDigest does not match the resolved contract");
+  }
+  return approvalResult(generated);
+}
+
+function immutableFieldsEqual(existing, approved) {
+  return IMMUTABLE_RECORD_FIELDS.every(
+    (field) => isDeepStrictEqual(existing[field], approved[field]),
+  );
+}
+
+function sameIdentity(left, right) {
+  return left !== null && right !== null
+    && typeof left === "object" && typeof right === "object"
+    && left.pid === right.pid && left.started_at === right.started_at;
+}
+
+function observePersistedUpdate(record, observation) {
+  return {
+    ...record,
+    state: observation.state,
+    pi_identity: observation.piIdentity ?? record.pi_identity,
+    pi_session_file: observation.sessionFile ?? record.pi_session_file,
+    attention: mergeAttention(record.attention, observation.attention),
+    updated_at: new Date().toISOString(),
+  };
+}
+
+async function refuseObservedLock(lockPath, label) {
+  let info;
+  try {
+    info = await lstatOrNull(lockPath);
+  } catch (error) {
+    throw new Error(`cannot observe ${label} at ${lockPath}: ${error.code ?? error.message}`);
+  }
+  if (info) throw new Error(`observed ${label} at ${lockPath}; refusing launch`);
+}
+
+// Read-only lease preflight: observe the spec_dispatch git lock and a supplied
+// spec package's runtime package lock without taking, modifying or deleting
+// either. A non-git workspace is allowed, but an existing unusable .git fails
+// closed.
+async function assertNoObservedLeases(record) {
+  let checkout = null;
+  try {
+    checkout = await resolveCheckout(record.execution_dir, {
+      deadline: Date.now() + GIT_TIMEOUT_MS,
+    });
+  } catch {
+    checkout = null;
+  }
+  if (checkout !== null) {
+    await refuseObservedLock(join(checkout.gitDir, "spec-runtime.lock"), "spec_dispatch git lease");
+  } else {
+    const dotGit = await lstatOrNull(join(record.execution_dir, ".git"));
+    if (dotGit) {
+      throw new Error(
+        `execution directory has an unobservable .git at ${record.execution_dir}; refusing launch`,
+      );
+    }
+  }
+  if (record.spec_package !== null) {
+    await refuseObservedLock(
+      join(record.spec_package, "runtime", "package.lock"),
+      "spec runtime package lease",
+    );
+  }
+}
+
+// Create an owned directory non-recursively with mode 0700, never following a
+// symlink and never creating its parent.
+async function ensureOwnedDirectory(path, label) {
+  const existing = await lstatOrNull(path);
+  if (existing) {
+    if (existing.isSymbolicLink() || !existing.isDirectory()) {
+      throw new Error(`${label} is not a real directory: ${path}`);
+    }
+    if ((await fs.realpath(path)) !== path) {
+      throw new Error(`${label} path contains a symbolic link: ${path}`);
+    }
+    return;
+  }
+  try {
+    await fs.mkdir(path, { mode: 0o700 });
+  } catch (error) {
+    if (error && error.code === "EEXIST") {
+      const raced = await lstatOrNull(path);
+      if (raced && !raced.isSymbolicLink() && raced.isDirectory()
+        && (await fs.realpath(path)) === path) return;
+    }
+    throw new Error(`cannot create ${label} ${path}: ${error.code ?? error.message}`);
+  }
+  const created = await lstatOrNull(path);
+  if (!created || created.isSymbolicLink() || !created.isDirectory()) {
+    throw new Error(`${label} was not created as a real directory: ${path}`);
+  }
+}
+
+// Publish the durable launching reservation first, then the approved snapshot
+// and the owned session directory. A later publication failure retains the
+// reservation with a visible error and never spawns.
+async function publishLaunchReservation({ workspace, record, briefBytes, self }) {
+  const id = record.assignment_id;
+  const assignmentsDir = join(workspace.directory, "assignments");
+  const sessionsDir = join(workspace.directory, "sessions");
+  const recordPath = join(assignmentsDir, `${id}.json`);
+  const snapshotPath = join(assignmentsDir, `${id}.brief.md`);
+  const sessionDir = join(sessionsDir, id);
+
+  await ensureOwnedDirectory(assignmentsDir, "assignments directory");
+  for (const [candidate, label] of [
+    [recordPath, "assignment record"],
+    [snapshotPath, "brief snapshot"],
+    [sessionDir, "session directory"],
+  ]) {
+    const existing = await lstatOrNull(candidate);
+    if (existing) throw new Error(`${label} already exists: ${candidate}`);
+  }
+
+  const launching = {
+    ...record,
+    state: "launching",
+    launcher_identity: { pid: self.pid, started_at: self.started_at },
+    updated_at: new Date().toISOString(),
+  };
+  await createFileExclusive(recordPath, JSON.stringify(launching));
+  try {
+    await createFileExclusive(snapshotPath, briefBytes);
+    await ensureOwnedDirectory(sessionsDir, "sessions directory");
+    await fs.mkdir(sessionDir, { mode: 0o700 });
+    const created = await lstatOrNull(sessionDir);
+    if (!created || created.isSymbolicLink() || !created.isDirectory()) {
+      throw new Error(`session directory was not created as a real directory: ${sessionDir}`);
+    }
+  } catch (error) {
+    let retained = launching;
+    try {
+      retained = {
+        ...launching,
+        state: "launch_unknown",
+        updated_at: new Date().toISOString(),
+        attention: mergeAttention(launching.attention, [
+          `launch publication failed: ${error.message}`,
+        ]),
+      };
+      await writeFileAtomic(recordPath, JSON.stringify(retained));
+    } catch {
+      // The durable launching reservation is retained unchanged.
+    }
+    const failure = new Error(
+      `launch publication failed after the durable reservation: ${error.message}`,
+      { cause: error },
+    );
+    failure.record = retained;
+    throw failure;
+  }
+  return { record: launching };
+}
+
+/**
+ * Publish a durable launching reservation and start the approved Pi argv in
+ * its owned tmux session exactly once.
+ *
+ * Approval: a supplied `resolved` must be the exact internally generated
+ * resolveAssignment result (unchanged record/argv/bytes/digest) for a deeply
+ * equal input; otherwise the assignment is resolved once and must match
+ * `expectedDigest`. The root lease is held across scan, retry persistence and
+ * publication and released before tmux spawn; it is reacquired and the
+ * record's launch token and launcher identity re-checked before any late
+ * write. Unknown or failed spawn observations persist fail-closed.
+ *
+ * @param {object} input resolution input
+ * @param {{expectedDigest?: string|null, resolved?: object|null,
+ *   adapters?: {tmuxRun?: Function, observationProbes?: object}}} [options]
+ * @returns {Promise<object>} the persisted assignment record
+ */
+export async function launchAssignment(input = {}, options = {}) {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("input must be an object");
+  }
+  if (options === null || typeof options !== "object" || Array.isArray(options)) {
+    throw new TypeError("options must be an object");
+  }
+  const adapters = options.adapters ?? {};
+  const probes = adapters.observationProbes ?? {};
+  const tmuxOptions = adapters.tmuxRun === undefined ? {} : { run: adapters.tmuxRun };
+
+  const approved = await approveLaunchInput(
+    input,
+    options.resolved ?? null,
+    options.expectedDigest ?? null,
+  );
+  const record = approved.record;
+  const id = record.assignment_id;
+  const storageRoot = await fs.realpath(
+    resolve(requireNonEmptyString(input.storageRoot, "storageRoot")),
+  );
+  const self = processIdentity(process.pid);
+  if (self === null) throw new Error("cannot observe this process identity; refusing launch");
+
+  // Owned-path and canonical-target validation before any write.
+  const workspace = await fetchWorkspace(storageRoot, record.workspace_id);
+  if (record.storage_root !== storageRoot) {
+    throw new Error("approved storage_root does not match the physical root");
+  }
+  if (record.workspace_directory !== workspace.directory) {
+    throw new Error("approved workspace_directory does not match the owning workspace");
+  }
+  if (record.pi_session_dir !== join(workspace.directory, "sessions", id)) {
+    throw new Error("approved pi_session_dir is not the owned session directory");
+  }
+  if (record.brief_snapshot !== join(workspace.directory, "assignments", `${id}.brief.md`)) {
+    throw new Error("approved brief_snapshot is not the owned snapshot path");
+  }
+  const target = await resolveTarget({
+    workspace,
+    target: record.repository_id,
+    specPackage: record.spec_package,
+  });
+  if (target.execution_dir !== record.execution_dir) {
+    throw new Error("approved execution_dir is not the canonical target directory");
+  }
+
+  const claim = await acquireRootClaim(storageRoot);
+  let plan = null;
+  try {
+    const records = await listAssignments(storageRoot);
+    const existing = records.find((entry) => entry.assignment_id === id);
+    if (existing) {
+      if (existing.contract_digest === approved.contractDigest
+        && immutableFieldsEqual(existing, record)) {
+        return existing;
+      }
+      throw new Error(`assignment ${id} already exists with a different effective contract`);
+    }
+
+    let supersededId = null;
+    if (record.attempt_kind === "launch-retry") {
+      supersededId = record.supersedes;
+      const old = records.find((entry) => entry.assignment_id === supersededId);
+      if (!old) throw new Error(`launch-retry supersedes an unknown assignment: ${supersededId}`);
+      if (old.execution_dir !== record.execution_dir) {
+        throw new Error(
+          "launch-retry must supersede an assignment in the same execution directory",
+        );
+      }
+      const observation = await observeAssignment(old, probes);
+      if (observation.gone !== true) {
+        throw new Error(
+          `launch-retry requires confirmed gone superseded assignment ${supersededId}`,
+        );
+      }
+      await writeFileAtomic(
+        join(old.workspace_directory, "assignments", `${supersededId}.json`),
+        JSON.stringify(observePersistedUpdate(old, observation)),
+      );
+    }
+
+    for (const entry of records) {
+      if (entry.assignment_id === id || entry.assignment_id === supersededId) continue;
+      if (entry.execution_dir === record.execution_dir && EXCLUSION_STATES.has(entry.state)) {
+        throw new Error(
+          `another ${entry.state} assignment reserves ${record.execution_dir}: ${entry.assignment_id}`,
+        );
+      }
+    }
+
+    // Observed lease refusal runs under the held claim, after the
+    // identical-repeat return and exclusion checks, immediately before
+    // publication.
+    await assertNoObservedLeases(record);
+
+    plan = await publishLaunchReservation({
+      workspace,
+      record,
+      briefBytes: approved.briefBytes,
+      self,
+    });
+  } finally {
+    claim.release();
+  }
+
+  let spawned = null;
+  let spawnError = null;
+  try {
+    spawned = await startSession({
+      socketPath: plan.record.tmux_socket,
+      sessionName: plan.record.tmux_session,
+      cwd: plan.record.execution_dir,
+      piPath: plan.record.pi_path,
+      piArgs: approved.piArgs,
+      assignmentId: id,
+    }, tmuxOptions);
+  } catch (error) {
+    spawnError = error;
+  }
+
+  const claim2 = await acquireRootClaim(storageRoot);
+  try {
+    const records = await listAssignments(storageRoot);
+    const current = records.find((entry) => entry.assignment_id === id);
+    if (!current) {
+      throw new Error("assignment record disappeared after publication; refusing a late update");
+    }
+    if (current.launch_token !== plan.record.launch_token
+      || !sameIdentity(current.launcher_identity, plan.record.launcher_identity)) {
+      throw new Error("assignment ownership changed after publication; refusing a late update");
+    }
+    let updated;
+    if (spawnError === null) {
+      updated = {
+        ...current,
+        state: "live",
+        pane_id: spawned.paneId,
+        pi_identity: spawned.piIdentity,
+        updated_at: new Date().toISOString(),
+      };
+      const observation = await observeAssignment(updated, probes);
+      if (observation.sessionFile) updated.pi_session_file = observation.sessionFile;
+      if (observation.attention.length > 0) {
+        updated.attention = mergeAttention(updated.attention, observation.attention);
+      }
+    } else {
+      const observation = await observeAssignment(current, probes);
+      updated = {
+        ...current,
+        state: observation.state,
+        pi_identity: observation.piIdentity ?? current.pi_identity,
+        pi_session_file: observation.sessionFile ?? current.pi_session_file,
+        updated_at: new Date().toISOString(),
+        attention: mergeAttention(current.attention, [
+          ...observation.attention,
+          `launch spawn failed: ${spawnError.message}`,
+        ]),
+      };
+    }
+    await writeFileAtomic(
+      join(current.workspace_directory, "assignments", `${id}.json`),
+      JSON.stringify(updated),
+    );
+    return updated;
+  } finally {
+    claim2.release();
+  }
+}
+
+/**
+ * Reconcile one persisted assignment under the root lease and persist only
+ * owned observational fields: `state`, `pi_identity`, `pi_session_file`, a
+ * recovered `pane_id`, `attention` and `updated_at`. A missing saved pane is
+ * recovered from the real tmux probe only when the full UUID and the observed
+ * live Pi PID match the pane PID; mismatched saved evidence is never adopted.
+ *
+ * @param {string} root
+ * @param {string} id
+ * @param {{adapters?: {tmuxRun?: Function, observationProbes?: object}}} [options]
+ * @returns {Promise<object>} the persisted assignment record with attention
+ */
+export async function locateAssignment(root, id, options = {}) {
+  if (options === null || typeof options !== "object" || Array.isArray(options)) {
+    throw new TypeError("options must be an object");
+  }
+  if (typeof id !== "string" || !UUID_PATTERN.test(id)) {
+    throw new Error("assignment id must be an RFC4122 UUID");
+  }
+  const adapters = options.adapters ?? {};
+  const probes = adapters.observationProbes ?? {};
+  const tmuxOptions = adapters.tmuxRun === undefined ? {} : { run: adapters.tmuxRun };
+  const storageRoot = await fs.realpath(resolve(requireNonEmptyString(root, "root")));
+
+  const claim = await acquireRootClaim(storageRoot);
+  try {
+    const records = await listAssignments(storageRoot);
+    const record = records.find((entry) => entry.assignment_id === id);
+    if (!record) {
+      throw typedAssignmentError(
+        "ASSIGNMENT_MISSING",
+        `assignment is not present in ${storageRoot}: ${id}`,
+      );
+    }
+    const observation = await observeAssignment(record, probes);
+    let paneId = record.pane_id ?? null;
+    if (paneId === null) {
+      const terminal = await probeSession(record, tmuxOptions);
+      if (terminal.status === "present"
+        && terminal.assignment_id === record.assignment_id
+        && observation.piIdentity !== null
+        && observation.piIdentity.pid === terminal.pid) {
+        paneId = terminal.pane_id;
+      }
+    }
+    const updated = {
+      ...record,
+      state: observation.state,
+      pi_identity: observation.piIdentity ?? record.pi_identity,
+      pi_session_file: observation.sessionFile ?? record.pi_session_file,
+      pane_id: paneId,
+      attention: mergeAttention(record.attention, observation.attention),
+      updated_at: new Date().toISOString(),
+    };
+    await writeFileAtomic(
+      join(record.workspace_directory, "assignments", `${id}.json`),
+      JSON.stringify(updated),
+    );
+    return updated;
+  } finally {
+    claim.release();
+  }
 }
