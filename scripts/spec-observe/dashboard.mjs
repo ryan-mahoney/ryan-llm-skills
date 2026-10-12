@@ -16,6 +16,7 @@ import { listWorkspaceDesigns } from './designs.mjs';
 import { fetchWorkspace, listWorkspaces, resolveStorageRoot, storageStatus } from '../workspaces/store.mjs';
 import { createDiscussionRoutes } from '../workspaces/discussion-routes.mjs';
 import { applyManualCompletions, writeManualCompletion } from './manual-completion.mjs';
+import { observerExpired } from './observer-retention.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const MAX_FILE = 4 * 1024 * 1024, MAX_TOTAL = 12 * 1024 * 1024, MAX_FILES = 200;
@@ -74,6 +75,7 @@ export async function readDashboardState(agentDir) {
         || !['observing', 'off', 'closed'].includes(value.state)
         || !Number.isFinite(Date.parse(value.published_at))
         || (value.snapshot != null && !Array.isArray(value.snapshot.runs))) throw new Error('Unsupported snapshot format');
+      if (observerExpired(value)) continue;
       result.observers.push({ ...value, source });
     } catch (failure) { error(source, failure); }
     finally { await handle?.close(); }
