@@ -1,6 +1,6 @@
 ---
 name: spec-architect-critics
-description: "Critique a standalone spec-driven architecture proposal (a package's proposal.md) by selecting two real practitioners with relevant expertise and evaluating the proposal through their documented perspectives. Use for architecture critiques, proposal reviews, stress tests, expert perspectives, and gap-finding after spec-architect-initial."
+description: "Independently review an architecture proposal after spec-architect-initial. Catch evidence-backed omissions, correct mistaken assumptions, and simplify design and verification while preserving the requested outcome."
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -8,309 +8,109 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "9"
+  version: "10"
 ---
 
-# Spec Architect Critics — Expert-Perspective Design Review
+# Spec Architect Critics — Independent Architecture Review
 
-You are conducting an independent architecture and evidence critique. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md), then subject the proposed solution and its proof strategy to rigorous challenge from two relevant practitioner perspectives.
+Improve the proposal's chance of delivering the requested outcome with a small, predictable design and sufficient, affordable verification. Catch consequential omissions and mistaken assumptions before implementation. Removing unnecessary machinery and confirming a sound proposal are useful outcomes; there is no finding quota.
 
-This is not a rubber stamp. The value of this skill is in finding flaws, blind spots, over-engineering, under-engineering, and unstated assumptions _before_ code gets written. Default to rigorous challenge, but do not invent flaws just to make the review sound tough. If a proposal is strong, say so plainly and focus on the tradeoffs and open questions that still matter.
+Check material claims against project sources rather than accepting the proposal's assertions as evidence.
 
----
+## 1. Establish the outcome and context
 
-## Step 1 — Ingest the Proposal
+- Resolve an explicit package ref or folder first, otherwise the package named in the conversation. Run the shared [spec-location step](../spec-end-to-end/references/spec-location.md): `node ~/.agents/scripts/spec-location/cli.mjs check --authoring <ref or folder>`. On refusal, report its `message` and `remedy` and stop. Read `proposal.md` from `package_dir` in the returned `locations`. Stop on ambiguity; do not guess by modification time.
+- For a directly supplied architecture document or conversation plan, review that material without inventing a spec package.
+- Read the proposal fully, applicable `AGENTS.md`, sourced `context.md`, and relevant project context. Identify the requested outcome, acceptance obligations, explicit exclusions, existing owners, actual exposure, and consequential unknowns. Distinguish user/project requirements from assumptions introduced by the proposal.
+- Apply [Minimal Implementation](../../rules/minimal-implementation.md), the Critique And Branch Audit section of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md), and the [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). For evidence recommendations, apply the value rubric in [Unit Testing](../../rules/unit-testing.md) and scheduling policy in [Verification and Review](../../rules/verification-and-review.md). Follow [Engineering Writing](../../rules/engineering-writing.md) for the critique.
 
-### 1a. Locate the proposal
+Preserve the promised behavior, security, accessibility, and protection of valuable data. A smaller diff that misses the root cause or transfers complexity to callers is not a better design. De-risking can require adding missing behavior; do not silently narrow the outcome to save code.
 
-Look for the material to critique:
+## 2. Investigate before recommending
 
-- Resolve the package from an explicit package ref or folder first, otherwise the package named in the conversation. Run the shared [spec-location step](../spec-end-to-end/references/spec-location.md) (`node ~/.agents/scripts/spec-location/cli.mjs check --authoring <ref or folder>`); on refusal, print its `message` and `remedy` and stop. Read `proposal.md` from `package_dir` in the printed `locations`. Stop on ambiguity rather than guessing by modification time.
-- An architecture document the user has shared or uploaded
-- A plan described in the current conversation
-- Code or PRs the user wants reviewed at the architectural level
+Trace the affected flow and check the few project facts that could change the design: callers, enforcement boundaries, existing helpers, platform guarantees, and relevant tests. Reuse sourced discoveries from the proposal, independently checking consequential or doubtful claims. Keep searches bounded to the changed behavior and its real dependencies.
 
-Read it fully. Also read `AGENTS.md`, sourced `context.md`, and the current project context. Validate relevant codebase claims against real repository files.
+For a suspected defect, establish:
 
-Read the Critique And Branch Audit section of [Engineering Decisions](../spec-work-tour/references/standalone-engineering-decisions.md).
-Challenge material domain assumptions with concrete counterexamples, including relevant identity,
-absence, boundary, ownership, and failure-visibility semantics. Test whether the promised slice
-and its follow-up destinations are coherent. Record consequential questions and sourced answers
-in the existing critique; do not create another approval stage or require an objection quota.
+1. The supported input, state transition, caller, or interleaving that triggers it.
+2. The requirement or contract it violates and the concrete consequence.
+3. Why that condition is reachable in this project, including any mechanism that already prevents it.
 
-### 1b. Extract the core claims
+An external input rejected at its trust boundary does not justify checks at every internal layer. A future deployment topology or unsupported operating mode does not establish present exposure. Conversely, no previous incident is needed to identify a conflict with an explicit requirement or a demonstrated defect in a reachable code path.
 
-Every proposal makes implicit and explicit claims. Pull them out:
+Resolve factual unknowns with a targeted read or small isolated probe when authorized and useful. Inspect before building a harness. If a consequential fact remains unavailable, record `decision-required` with the missing fact, why it changes the design, and the smallest next investigation or user decision. Keep it separate from implementation recommendations; uncertainty does not authorize a fallback subsystem. Nonconsequential unknowns do not block planning.
 
-- **"This fits the existing architecture"** — Does it really?
-- **"This is the right pattern for this problem"** — Is it? Or is it the familiar pattern?
-- **"This dependency is necessary"** — Is it? Or is there a simpler path?
-- **"This will scale / perform / be maintainable"** — Based on what evidence?
-- **"These are the only tradeoffs"** — Are they? What's been left unsaid?
-- **"Every component is necessary"** — Would something already in the codebase, the stdlib, the platform, or a smaller design cover it?
-- **"This evidence would prove it works"** — Can the proposed gates falsify the claims and reject the named failure hypotheses, or is the plan circular, stale-prone, or ritual?
+## 3. Apply two complementary lenses
 
-Write these claims down explicitly. They become the targets for critique.
+Use **simplicity and change economy** plus the **most relevant domain-correctness lens** (for example, ownership and data integrity, API contracts, or UI state and accessibility). Apply both to the same project evidence, then produce one deduplicated set of findings.
 
----
+Named practitioners are optional when their documented work adds a useful insight or the user requests expert perspectives. Verify a relevant primary source before attributing a position, distinguish your application from their published claim, and cite it briefly. Otherwise use the lenses directly. Do not spend the review researching biographies, simulating personas, inventing quotations, or manufacturing disagreement.
 
-## Step 2 — Select Two Expert Perspectives
+Look for material improvements:
 
-Choose two real practitioners whose published work, talks, books, or known technical opinions make them specifically relevant to the problem domain of this proposal. These are not generic "smart people" — they are people whose expertise directly addresses the architectural decisions being made.
+- **Outcome and correctness:** Does the ordinary entrypoint deliver the promised behavior? Are domain rules and changed boundaries coherent? Does a proposed deferral leave a usable slice? Challenge consequential assumptions with applicable counterexamples.
+- **Necessity and ownership:** Can an existing owner, helper, standard library, platform guarantee, or installed dependency satisfy the requirement? Prefer the smallest coherent correction at the owning boundary. Remove duplicate enforcement, speculative extension points, unnecessary configuration, and abstractions without a present responsibility.
+- **Predictability and cost:** Does the proposal add modes, state transitions, dependencies, coordination, or recovery behavior whose cost exceeds the risk it addresses? Compare build, verification, operation, and maintenance burden. Suggest one simpler sufficient alternative, not a catalog of redesigns.
+- **Proof value:** Which plausible wrong implementation would each proposed check reject? Does existing evidence already cover it? Prefer focused checks at real boundaries, independent expected results, and reuse of fixtures. One check can cover several claims. Recommend another test or layer only for a named material gap; preserve unique protection when simplifying evidence.
 
-### Selection criteria
+Do not impose a checklist of scale, compatibility, rollout, recovery, or deployment concerns where the project has no such commitment. Check applicable evidence now; leave detailed CL/FH/EV construction to spec writing. Preserve merge/deploy/post-deploy distinctions and authorization limits. Broad suites remain with CI or the operator under the shared policy.
 
-- **Domain match.** If the proposal involves distributed systems, pick someone known for distributed systems work. If it's frontend state management, pick someone from that world. If it's database design, pick a data engineering expert. The expertise must be specific to the problem.
-- **Complementary angles.** The two experts should bring different lenses. One might be known for pragmatism and simplicity; the other for rigor and scalability. One might approach from an operational perspective; the other from a developer-experience perspective. The tension between their views is where the best critique lives.
-- **Real, attributable opinions.** Only select people whose technical positions are publicly documented — through books, conference talks, blog posts, or well-known open source work. You need to be able to ground the critique in things they've actually said and argued for, not in a caricature of what someone "like them" might think.
-- **Verified relevance.** Before using a named practitioner, verify at least one relevant published source for their perspective. If you cannot verify a relevant source, do not use that person as an authority for this critique.
+## 4. Ground and triage findings
 
-### Fallback when named experts are a poor fit
+Retain the risk tags consumed by `spec-write`. Tag each material risk or proposed guard once in its finding, with its basis:
 
-If no well-matched real practitioners can be verified for the proposal domain, use two clearly named critique lenses instead. For example: `operability-first`, `simplicity-first`, `data-integrity-first`, or `developer-experience-first`. Say why those lenses are the right substitutes for this review.
+- `observed` — cite an incident, failing run, repository defect with a concrete reachable counterexample, or sourced requirement/contract. State whether this is an observed failure or a preventive correction required by that contract; do not imply an incident occurred. A proposal or earlier critique cannot serve as its own authority.
+- `design-enforced` — cite the existing or proposed mechanism and its owning file/symbol or proposal section. Do not add a second guard for the same condition. If the mechanism is new or changing, retain focused proof of its promised behavior; the label is not proof that unfinished code works.
+- `hypothetical` — applicability or harm is unsupported by project facts. It does not become an invariant, acceptance criterion, test, gate, lock, or recovery path. Omit irrelevant hypotheticals. If a previously raised concern needs disposition, record briefly why it warrants no implementation and what concrete change would make it relevant.
 
-### How to present the selection
+Missing or uncited grounding cannot justify added defensive machinery. Rare but reachable high-consequence failures can matter; frequency alone neither proves nor dismisses risk. Do not classify an unresolved security, retained-data, or acceptance obligation as an accepted hypothetical. Real residual risk needs user or sourced-policy acceptance; unresolved consequential intent returns as `decision-required`.
 
-For each expert, write:
+For each actionable finding, record the trigger and consequence, project evidence, smallest sufficient correction, and focused verification impact. For additions, explain why existing mechanisms are insufficient and why the protection is worth its implementation and maintenance cost. For removals, show that the obligation is inapplicable or remains covered. Requirements justify outcomes, not every proposed mechanism.
 
-- **Name and relevant credential** — not a full bio, just why their perspective matters here. (e.g., "Martin Fowler — has written extensively on refactoring, enterprise patterns, and the tradeoffs of microservices vs. monoliths" or "Charity Majors — known for operability-first thinking, observability advocacy, and skepticism of complexity that teams can't debug in production")
-- **What lens they bring** — the specific angle they'll apply to this proposal. (e.g., "Will evaluate whether this decomposition creates more operational burden than the team can sustain" or "Will scrutinize the data modeling decisions against normalization principles and query patterns")
+Rank only findings that survive this check:
 
-### Examples of good pairings (illustrative, not prescriptive)
+- **Must Address:** a demonstrated conflict with an applicable requirement, concrete correctness/safety defect, or material proof gap that must be resolved before the affected implementation proceeds. Confidence of tone and expert agreement cannot establish this priority.
+- **Should Address:** a grounded improvement within scope with a clear net benefit. Nonblocking; state the tradeoff so spec writing can decide.
+- **Consider:** a relevant optional refinement worth retaining. Do not fill this category with generic advice or turn it into a required backlog.
 
-These show the _type_ of pairing — complementary expertise with productive tension:
+Zero findings is valid in every category. Record genuine decisions separately; do not promote unanswered questions to Must Address fixes. Stop when material claims have been checked, actionable findings are grounded, and consequential unknowns have a bounded next action. Do not expand the search merely to fill sections.
 
-- **Distributed systems proposal:** Someone focused on simplicity and avoiding premature distribution + someone focused on correctness and failure modes in distributed state
-- **Frontend architecture proposal:** Someone known for minimal-abstraction approaches + someone who's built large-scale frontend frameworks and thinks about long-term maintainability
-- **Data pipeline proposal:** Someone from the streaming/real-time world + someone from the batch/warehouse world
-- **API design proposal:** Someone focused on developer experience and ergonomics + someone focused on evolvability and backward compatibility
-- **DevOps/infrastructure proposal:** Someone focused on operational simplicity + someone focused on cost optimization and resource efficiency
+## 5. Write the handoff once
 
-Do not default to the same two people for every proposal. The experts must be chosen fresh based on what the proposal is actually about.
+Write a concise, standalone `critique.md` in the resolved `package_dir`. For a supplied document outside the pipeline, write `CRITIQUE-[name].md` beside that source; for conversation-only material without a supplied output location, return the critique in the response. Do not modify the proposal, create another approval stage, or generate extra review artifacts.
 
----
-
-## Step 3 — Conduct the Critique
-
-For each expert, work through the proposal systematically. The critique is not "what would they vaguely feel" — it's "what specific concerns would they raise, based on their known technical positions."
-
-### For each expert, evaluate:
-
-**What they would challenge:**
-
-- Which decisions in the proposal conflict with principles they've publicly advocated for?
-- Where would they see unnecessary complexity or dangerous simplicity?
-- What failure modes or operational concerns would they flag?
-- What unstated assumptions would they call out?
-
-**What they would approve:**
-
-- Which parts of the proposal align well with their thinking?
-- Where has the proposer made good tradeoff decisions?
-
-**What they would ask:**
-
-- What clarifying questions would they want answered before approving this design?
-- What load/scale/failure scenarios would they want explored?
-
-### Ground the critique
-
-Each critique point must be grounded in something real — a known principle, a published argument, a documented pattern or anti-pattern the expert has discussed. Don't fabricate positions. If you're unsure whether an expert has opined on a specific topic, frame it as "based on their general emphasis on X, they would likely question Y" rather than "they have said Y is wrong." If no relevant source can be verified, switch to a named critique lens instead of pretending certainty.
-
-### Tag every risk, invariant, and guard
-
-A risk, invariant, or guard (lock, lease, recovery mode, incident record, evidence gate, extra test) a critic proposes or endorses carries exactly one tag, stated inline:
-
-- `observed` — cite the evidence: an incident, bug report, failing run, record/log path, or commit. Only these justify a new invariant, evidence gate, test, lock, or recovery path.
-- `design-enforced` — name the mechanism in the proposed design or existing code (file/symbol) that already prevents it. No new guard is needed; the critique may ask that the mechanism be cited.
-- `hypothetical` — neither. A plausible mechanism, an expert's general principle, or "could happen under load" is hypothetical. Record it as a one-line accepted risk (see Accepted Risks below); never as an invariant, evidence gate, test, lock, or recovery path unless the operator explicitly promotes it.
-
-An untagged item, or an `observed` item without a citation, is `hypothetical`. A generated spec or an earlier critique cannot serve as its own evidence.
-
----
-
-## Step 4 — Synthesize Recommendations
-
-After both critiques, step out of the expert personas and synthesize. You are now the architect again, informed by two strong perspectives.
-
-Reject invented preservation, compatibility, scale, configuration, and rollout commitments.
-A concern must name actual exposure and concrete harm under the resolved context. Recommend
-removing inapplicable claims or replacing expensive gates with equivalent safer proof. Unknown
-consequential facts go to the coordinator as `decision-required`, not into a new architecture.
-
-### 4a. Agreement points
-
-Agreement is not evidence. Elevate a concern only when its concrete failure and applicability
-are established from project facts; two perspectives can share the same unsupported assumption.
-
-### 4b. Tension points
-
-Where the experts disagree, don't pick a winner arbitrarily. Explain the tension, what each side optimizes for, and recommend based on the specific context of this project and team. A startup with three engineers has different priorities than a platform team at a large company — even if both experts are "right" in the abstract.
-
-### 4c. Blind spots
-
-Identify anything neither expert would catch because it falls outside both their domains. Operational concerns that a pure-architecture expert might miss. Developer experience issues that a systems expert might not prioritize. Business constraints that purely technical thinkers might ignore.
-
-### 4d. Standing lenses
-
-Apply these lenses on every critique, regardless of which experts were selected:
-
-- **Over-engineering scan.** Walk the proposal's components — modules, abstractions, dependencies, layers, config surfaces — and flag any with no stated requirement behind it, any that duplicates existing code, stdlib, or platform behavior, and any built for a hypothetical future (see `~/.agents/rules/minimal-implementation.md`). "Remove X" is a first-class recommendation, ranked like any other. Check the Deliberate Omissions list for scope that crept back in elsewhere in the proposal.
-- **Hypothetical-guard scan.** For each lock, lease, recovery or repair mode, incident or audit record, evidence gate, and invariant already in the proposal (including Pre-mortem and Evidence Posture), apply the three tags above. Flag every guard whose only basis is a `hypothetical` risk as over-engineering, with "remove" or "downgrade to accepted risk" as the recommendation. Apply the same standard to your own recommendations.
-- **Evidence sufficiency.** Independently audit the Evidence Posture, claims, failure hypotheses, and proposed gates. Check risk calibration, every crossed boundary, negative paths, production reachability, independence, commit binding, applicable operational/recovery proof, phase placement, authority, and QA output. Name which unsafe implementation each gate rejects. A plan that relies on later human review or required manual QA is incomplete. Add only credible missing `FH-*` hypotheses (tagged `observed`) and the least invasive sufficient evidence. Remove
-redundant gates and distinguish application composition from a live deployment.
-
-### 4e. Priority ranking
-
-Rank the recommendations:
-
-- **Must address** — The proposal has a flaw that will cause real problems if shipped as-is. These need to be fixed in the design before implementation begins.
-- **Should address** — The proposal would be meaningfully better with this change, but it's not a showstopper. Can be addressed during implementation or in a fast follow-up.
-- **Consider** — A refinement that improves the design but is more about polish than correctness. Nice to have, not blocking.
-
----
-
-## Step 5 — Write the Critique Document
+Use these sections, omitting empty optional sections:
 
 ```markdown
-# Architecture Critique: [Feature/Proposal Name]
+# Architecture Critique: [Feature]
 
-> Reviewing: [source — filename, conversation description, or PR reference]
+> Reviewing: [source and revision when available]
 > Date: YYYY-MM-DD
 
-## Proposal Summary
-
-[2-3 sentences restating what was proposed, so the critique stands alone.]
-
-## Expert Perspectives
-
-### [Expert 1 Name] — [Their Lens in ~5 Words]
-
-**Relevant background:** [One sentence on why this person's expertise applies.]
-
-**Grounding source:** [Book, talk, article, or project that supports using this perspective.]
-
-**Would challenge:**
-
-- [Specific concern, grounded in their known positions. Not vague — cite the
-  principle or pattern they'd invoke.]
-- [...]
-
-**Would approve:**
-
-- [What parts of the proposal align with their thinking.]
-
-**Key question they'd ask:**
-
-> "[A pointed question that gets at the heart of their concern.]"
-
----
-
-### [Expert 2 Name] — [Their Lens in ~5 Words]
-
-**Relevant background:** [One sentence on why this person's expertise applies.]
-
-**Grounding source:** [Book, talk, article, or project that supports using this perspective.]
-
-**Would challenge:**
-
-- [Specific concern, grounded in their known positions.]
-- [...]
-
-**Would approve:**
-
-- [What parts of the proposal align with their thinking.]
-
-**Key question they'd ask:**
-
-> "[A pointed question that gets at the heart of their concern.]"
-
----
-
-## Synthesis
-
-### Where Both Experts Agree
-
-[Concerns raised by both — these are your highest-confidence findings.]
-
-### Where They Diverge
-
-[Explain the tension and what each side optimizes for. Recommend based
-on the actual project context, not in the abstract.]
-
-### Blind Spots
-
-[Anything the two expert lenses would miss — operational, business,
-team-capacity, or domain-specific concerns.]
-
-### Over-Engineering Scan
-
-[Components that fail the necessity check, each with the rung it should
-have stopped at (reuse, stdlib, platform, installed dependency) and the
-concrete removal or reuse recommendation.]
-
-### Accepted Risks
-
-[One line per `hypothetical` risk: the risk and why no guard is warranted.
-Empty is valid. A recommendation below that adds a guard, invariant, or gate
-is tagged `observed` with its citation.]
-
-### Evidence Sufficiency
-
-[Whether the posture and CL/FH/EV plan can independently falsify the material
-claims and establish deployment safety; the specific missing or circular gates.]
+## Assessment
+[Requested outcome, whether the proposal supports it, and the material corrections
+needed. State when no changes are needed. Briefly name the two lenses.]
 
 ## Recommendations
-
 ### Must Address
-
-1. **[Short title]** — [What to change and why. Be concrete — not "reconsider
-   the data model" but "the `orders` table should be partitioned by tenant_id
-   to avoid cross-tenant query leakage, per the multi-tenancy requirement."]
-
+[Findings, or None.]
 ### Should Address
-
-1. **[Short title]** — [What to change and why.]
-
+[Findings, or None.]
 ### Consider
+[Include only when useful.]
 
-1. **[Short title]** — [What to refine and why.]
+[Each finding appears once: trigger and consequence; grounding tag and project
+source; smallest sufficient correction; verification impact and material cost.
+Reference existing requirement/claim IDs where available.]
 
-## Revised Confidence
+## Decisions Required
+[Only consequential unresolved facts or intent: what is unknown, affected decision,
+and the smallest investigation or decision needed. Do not prescribe speculative code.]
 
-[After this critique, how confident are you in the original proposal?
-
-- Strong with minor adjustments
-- Viable but needs rework in specific areas
-- Fundamentally flawed — needs re-architecture
-  State which and briefly explain why.]
+## Retained Design and Dismissed Concerns
+[Only choices worth preserving or previously raised concerns whose sourced resolution
+will prevent rework. Include real accepted risks with their acceptance source;
+unfounded hypotheticals create no implementation or acceptance obligation.]
 ```
 
----
-
-## Step 6 — Output
-
-- Write the critique as a markdown document.
-- Write `critique.md` in `package_dir`. For non-pipeline material, write `CRITIQUE-[name].md` beside the supplied source.
-- Refer to sibling artifacts by filename or spec-folder-relative path, never by a machine-specific absolute path.
-- Write atomically with a level-1 heading on line 1.
-- Report `outcome: critiqued`, the path, Must/Should/Consider counts, and `next: spec-write`.
-
----
-
-## Principles
-
-1. **Critique, don't rubber-stamp.** Every design has tradeoffs; your job is to surface the real ones, not to confirm the proposer's choices. But do not manufacture weaknesses when the proposal is genuinely strong.
-
-2. **Specificity is respect.** Vague critique ("this might not scale") is useless and demoralizing. Specific critique ("this fan-out pattern creates N+1 queries against the notification service under the stated load of 10K concurrent users") is actionable and shows you actually engaged with the design.
-
-3. **Experts are lenses, not authorities.** You're using their perspectives as analytical tools, not arguing from authority. "Martin Fowler wouldn't like this" is a bad critique. "This violates the principle of keeping aggregate boundaries small, which Fowler argues prevents cascading updates in domain-driven systems — and that matters here because..." is a good one.
-
-4. **Context beats dogma.** An expert's general principle may not apply in a specific context. A prototype needs proof matched to its actual data, credentials, users, and effects; its label
-does not waive protection of valuable data or security. A solo developer's project doesn't need the same decomposition as a platform team's. Always weigh recommendations against the actual situation.
-
-5. **The goal is a better design, not a perfect one.** Perfection is the enemy of shipping. Recommendations should make the proposal concretely better, not chase theoretical ideals. If the proposal is 80% right, say so and focus energy on the 20% that matters.
-
-6. **Evidence over performance.** Do not fake citations, invented expert opinions, or exaggerated certainty. If a source, position, or critique cannot be grounded, say so and reduce the claim strength.
-
-7. **Guards need evidence, not imagination.** A failure that has not happened and that the design does not already prevent is an accepted risk, not a lock, gate, or recovery path. Weigh a guard's build and maintenance cost against the failure as actually observed.
+Use sibling filenames or package-relative references for package artifacts. Write files atomically with a level-1 heading on line 1. Report `outcome: critiqued`, output path (or inline), Must/Should/Consider counts, any consequential `decision-required` items, and `next: spec-write`. Completion of the critique does not resolve outstanding decisions; spec writing must reconcile them before committing to affected work.
