@@ -33,6 +33,8 @@ export const SENTINEL_LIMITS = Object.freeze({
   actionFiles: 64,
   directoryEntryFactor: 4,
   smallJsonBytes: 65536,
+  // Work tours carry the evidence manifest and reach about 170 KB in real packages.
+  tourBytes: 512 * 1024,
   activityBytes: 32768,
   totalBytes: 16 * 1024 * 1024,
   packageFloorBytes: 96 * 1024,
@@ -51,6 +53,7 @@ const CONDITION_GENERATION = 1;
 const MAX_REASONS = 50;
 // Small lifecycle records read ahead of the receipt walk; later readers reuse them.
 const LIFECYCLE_FILES = ['pr-url.json', 'work-tour.json', COMPLETION_FILE, 'sentinel-merge.json'];
+const lifecycleLimit = name => name === 'work-tour.json' ? SENTINEL_LIMITS.tourBytes : SENTINEL_LIMITS.smallJsonBytes;
 
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 const validTime = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : null;
@@ -221,19 +224,17 @@ async function readBounded(file, maxBytes, budget, { within = null, memo = null 
 }
 
 async function readBoundedOnce(file, maxBytes, budget, within) {
-  // The budget is checked before the read and enforced again on the actual
-  // bytes so coverage.bytes_read can never exceed the workspace total.
-  if (!budget.fits(maxBytes)) {
-    return { outcome: 'read-budget', reason: `read-budget: ${file}`, bytes: 0 };
-  }
+  let size;
   try {
     const real = await realpath(file);
     if (within && !insideDir(await realpath(within), real)) {
       return { outcome: 'invalid', reason: `source-outside: ${file}`, bytes: 0 };
     }
-    if (!(await lstat(file)).isFile()) {
+    const info = await lstat(file);
+    if (!info.isFile()) {
       return { outcome: 'invalid', reason: `source-not-regular: ${file}`, bytes: 0 };
     }
+    size = info.size;
   } catch (error) {
     // A dangling symlink is a present-but-unusable entry, not an absence:
     // realpath follows the link, so an absent target reports ENOENT even
@@ -243,6 +244,12 @@ async function readBoundedOnce(file, maxBytes, budget, within) {
     }
     // A vanished file is a missing fact, not corrupt evidence.
     return { outcome: codeOf(error) === 'ENOENT' ? 'missing' : 'invalid', reason: `${codeOf(error)}: ${file}`, bytes: 0 };
+  }
+  // The budget is checked against the file's size (capped at the limit) before
+  // the read and enforced again on the actual bytes, so coverage.bytes_read can
+  // never exceed the workspace total.
+  if (!budget.fits(Math.min(size, maxBytes + 1))) {
+    return { outcome: 'read-budget', reason: `read-budget: ${file}`, bytes: 0 };
   }
   let handle;
   try {
@@ -656,7 +663,7 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
       // the shared budget. Selected runs must not lose known step counts just
       // because their projection happens after all receipt collection.
       if (found) await readStepIndex(fact, budget);
-      for (const name of LIFECYCLE_FILES) await readBounded(join(fact.packagePath, name), SENTINEL_LIMITS.smallJsonBytes, budget,
+      for (const name of LIFECYCLE_FILES) await readBounded(join(fact.packagePath, name), lifecycleLimit(name), budget,
         { within: fact.packagePath, memo: fact.reads });
     });
     if (candidates.length) await readStepIndex(fact, budget);
@@ -856,7 +863,7 @@ async function packageCompletion(fact, candidates, budget, note) {
     completionBasis = 'workflow-checkpoint';
   } else {
     const read = async (name, allow) => {
-      const result = await readJson(join(fact.packagePath, name), SENTINEL_LIMITS.smallJsonBytes, budget,
+      const result = await readJson(join(fact.packagePath, name), lifecycleLimit(name), budget,
         { within: fact.packagePath, prefix: 'completion', allow, memo: fact.reads });
       if (result.outcome !== 'ok' && result.outcome !== 'missing') note(result.reason ?? `completion-unavailable: ${name}`);
       return result.outcome === 'ok' ? result.record : null;
@@ -1102,7 +1109,7 @@ function packageTiming(fact, index, checkpoints, observedAt) {
 async function readTourEvidence(fact, budget, observedAt) {
   if (fact.tourEvidence === null) {
     const file = join(fact.packagePath, 'work-tour.json');
-    const result = await readJson(file, SENTINEL_LIMITS.smallJsonBytes, budget, {
+    const result = await readJson(file, SENTINEL_LIMITS.tourBytes, budget, {
       prefix: 'work-tour', within: fact.packagePath,
       allow: value => {
         if (!value || typeof value !== 'object' || Array.isArray(value)) return null;

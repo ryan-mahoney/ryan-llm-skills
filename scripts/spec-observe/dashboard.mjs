@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// Local sentinel presentation with one explicit package-completion write action
-// and an optional local discussion service passed in by the caller. This module
+// Sentinel presentation with local package completion and operator discussion
+// actions on loopback or the configured public host. This module
 // never imports sessions or constructs workers itself; a supplied service is
-// only wired to the bounded local thread routes.
+// only wired to the bounded operator thread routes.
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
@@ -143,8 +143,8 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
     const host = request.headers.host;
     const { localPort } = request.socket;
     const lowerHost = typeof host === 'string' ? host.toLowerCase() : host;
-    const acceptedHost = [`127.0.0.1:${localPort}`, `localhost:${localPort}`].includes(host)
-      || (publicName != null && (lowerHost === publicName || lowerHost === `${publicName}:443`));
+    const publicRequest = publicName != null && (lowerHost === publicName || lowerHost === `${publicName}:443`);
+    const acceptedHost = [`127.0.0.1:${localPort}`, `localhost:${localPort}`].includes(host) || publicRequest;
     if (!acceptedHost) {
       response.writeHead(403); response.end('Local access only'); return;
     }
@@ -158,9 +158,12 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
     const url = new URL(request.url, `http://${host}`), path = url.pathname;
     const completionRequest = path === '/api/package-completion' && request.method === 'POST';
     try {
-      // Thread routes refuse before the generic method gate: remote classification
-      // wins over every thread path, including unknown routes and a missing service.
-      if (await discussionRoutes(request, response, url, { remote })) return;
+      // The configured public host is an operator endpoint behind Tailscale Serve.
+      // Forwarding headers alone never authorize an otherwise remote request.
+      if (await discussionRoutes(request, response, url, {
+        remote: remote && !publicRequest,
+        expectedOrigin: publicRequest ? `https://${publicName}` : `http://${host}`,
+      })) return;
       if (!['GET', 'HEAD'].includes(request.method) && !completionRequest) { response.writeHead(405, { Allow: 'GET, HEAD' }); response.end(); return; }
       if (completionRequest) {
         if (remote || request.headers.origin !== `http://${host}` || request.headers['x-sentinel-token'] !== actionToken
@@ -188,7 +191,7 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
         }
         response.setHeader('Content-Type', 'application/json; charset=utf-8');
         response.end(request.method === 'HEAD' ? undefined : JSON.stringify(remote
-          ? { ...cached.value, completion: 'local-only' }
+          ? { ...cached.value, completion: 'local-only', ...(publicRequest ? { thread_action_token: actionToken } : {}) }
           : { ...cached.value, action_token: actionToken }));
       } else if (path === '/api/package-files' || path === '/api/package-file' || path.startsWith('/package-view/')) {
         const state = await readDashboardState(agentDir);

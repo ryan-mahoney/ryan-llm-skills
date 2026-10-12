@@ -1,0 +1,10 @@
+import {readFile,writeFile} from 'node:fs/promises';
+const root=new URL('./dist/',import.meta.url);
+let html=await readFile(new URL('index.html',root),'utf8');
+const script=html.match(/<script type="module" crossorigin src="\/(assets\/[^"<>]+)"><\/script>/);
+const style=html.match(/<link rel="stylesheet" crossorigin href="\/(assets\/[^"<>]+)">/);
+if(!script||!style)throw new Error('Expected one bundled script and stylesheet.');
+const js=await readFile(new URL(script[1],root),'utf8');
+const css=await readFile(new URL(style[1],root),'utf8');
+html=html.replace(script[0],()=>`<script type="module">${js.replace(/<\/script/gi,'<\\/script')}</script>`).replace(style[0],()=>`<style>${css}</style>`);
+await writeFile(new URL('../dashboard.html',import.meta.url),html);
