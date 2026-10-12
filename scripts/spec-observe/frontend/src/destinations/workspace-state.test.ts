@@ -1,6 +1,33 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { materialContents, unavailableArtifacts, workspaceAnnouncements } from './workspace-state';
+import { catalogRead, materialContents, unavailableArtifacts, workspaceAnnouncements } from './workspace-state';
+
+test('structured catalog failures retain absent rows and expose partial readable results', () => {
+  const retained = { valid: [{ id: 'A', directory: '/projects/A' }, { id: 'B', directory: '/projects/B' }] };
+  const diagnostic = { path: '/storage/projects', message: 'EACCES' };
+  for (const status of ['unreadable', 'invalid_root', 'invalid_projects', 'missing_root']) {
+    const read = catalogRead({ storage: { status, errors: [diagnostic] }, valid: [], errors: [diagnostic] }, retained);
+    assert.equal(read.degraded, true, status);
+    assert.deepEqual(read.catalog.valid, retained.valid, status);
+  }
+  for (const failures of [{ errors: [diagnostic] }, { storage: { status: 'ok', errors: [diagnostic] } }]) {
+    const read = catalogRead({ storage: { status: 'ok', errors: [] }, valid: [{ id: 'B', directory: '/projects/B', name: 'updated' }, { id: 'C', directory: '/projects/C' }], ...failures }, retained);
+    assert.equal(read.degraded, true);
+    assert.deepEqual(read.catalog.valid, [{ id: 'B', directory: '/projects/B', name: 'updated' }, { id: 'C', directory: '/projects/C' }, { id: 'A', directory: '/projects/A' }]);
+  }
+});
+
+test('complete empty catalogs and missing_projects setup diagnostics establish absence', () => {
+  const retained = { valid: [{ id: 'A', directory: '/projects/A' }] };
+  for (const value of [
+    { storage: { status: 'ok', errors: [] }, valid: [], errors: [] },
+    { storage: { status: 'missing_projects', errors: [] }, valid: [], errors: [{ path: '/storage/projects', message: 'missing_projects' }] },
+  ]) {
+    assert.equal(catalogRead(value, retained).degraded, false);
+    assert.deepEqual(catalogRead(value, retained).catalog.valid, []);
+  }
+  assert.equal(catalogRead({ storage: { status: 'missing_projects' }, valid: [], errors: [{ message: 'EACCES' }] }, retained).degraded, true);
+});
 
 // Run: node --import tsx --test src/destinations/workspace-state.test.ts
 test('unavailable artifacts degrade coverage but legitimate external URLs do not', () => {

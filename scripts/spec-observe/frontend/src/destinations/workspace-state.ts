@@ -1,3 +1,24 @@
+import type { WireRecord } from '../model';
+import type { CatalogEntry } from '../scope';
+
+export type WorkspaceCatalog = { storage?: WireRecord; valid: CatalogEntry[]; invalid?: WireRecord[]; errors?: WireRecord[] };
+
+// A successful HTTP read can still describe an incomplete storage listing.
+// missing_projects has a producer-generated diagnostic, but is the setup empty state.
+export function catalogRead(value: WorkspaceCatalog, retained: WorkspaceCatalog | null) {
+  const status = value.storage?.status;
+  const degraded = (status !== 'ok' && status !== 'missing_projects')
+    || Boolean(value.storage?.errors?.length)
+    || Boolean(value.errors?.some(error => status !== 'missing_projects' || error.message !== 'missing_projects'));
+  return {
+    degraded,
+    catalog: degraded ? {
+      ...value,
+      valid: [...value.valid, ...(retained?.valid ?? []).filter(entry => !value.valid.some(current => current.id === entry.id))],
+    } : value,
+  };
+}
+
 const list = (value: unknown): any[] => Array.isArray(value) ? value : [];
 
 export const unavailableArtifacts = (workspace: any): any[] =>

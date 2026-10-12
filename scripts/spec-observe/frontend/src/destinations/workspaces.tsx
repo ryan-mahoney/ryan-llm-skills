@@ -38,7 +38,7 @@ const visibleEntries = (props: DestinationProps): CatalogEntry[] => {
   const query = (props.route.q ?? '').trim().toLowerCase();
   return props.catalog.filter(entry => !query || [entry.id, entry.name, entry.directory].some(value => text(value).toLowerCase().includes(query)));
 };
-const directoryEmpty = (props: DestinationProps): boolean => props.catalogLoaded && (storageMissing(props) || ((storageStatus(props) === 'ok' || storageStatus(props) === 'missing_projects') && props.catalog.length === 0 && props.catalogInvalid.length === 0));
+const directoryEmpty = (props: DestinationProps): boolean => !boundaryError(props) && props.catalogLoaded && (storageMissing(props) || ((storageStatus(props) === 'ok' || storageStatus(props) === 'missing_projects') && props.catalog.length === 0 && props.catalogInvalid.length === 0));
 const setupRequired = (props: DestinationProps): boolean => directoryEmpty(props);
 const staleCatalog = (props: DestinationProps): boolean => Boolean(props.catalogLoaded && props.catalogLoadedAt != null && stale(new Date(props.catalogLoadedAt).toISOString()) && !compatibleDetail(props));
 const catalogChecking = (props: DestinationProps): boolean => Boolean(props.catalogLoaded && props.catalog.length > 0 && props.catalogDelayed && !compatibleDetail(props) && !boundaryError(props) && !props.connectionFailed && !staleCatalog(props));

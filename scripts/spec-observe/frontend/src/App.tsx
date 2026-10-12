@@ -8,9 +8,10 @@ import { parseHash, subscribeRoute, navigate, routeHistoryMode, type Destination
 import { clearIncompatibleFields, firstUnmatchedTargetId, inWorkspaceScope, needsWorkspacePicker, requiresWorkspace, scopeLabel, withWorkspace, type CatalogEntry } from './scope';
 import { destinationEntries, type DestinationProps } from './destinations';
 import { WorkspacePicker } from './destinations/workspaces';
+import { catalogRead, type WorkspaceCatalog } from './destinations/workspace-state';
 
 type Filter = 'active' | 'attention' | 'completed';
-type Catalog = { storage?: WireRecord; valid: CatalogEntry[]; invalid?: WireRecord[]; errors?: WireRecord[] };
+type Catalog = WorkspaceCatalog;
 const liveBrowser = () => location.protocol !== 'file:';
 
 const registry = destinationEntries();
@@ -192,8 +193,10 @@ export default function App() {
     try {
       const value = await getJson<Catalog>('/api/workspaces');
       if (request !== catalogGeneration || !live()) return;
-      setCatalog(value);
-      setCatalogError('');
+      const read = catalogRead(value, catalog());
+      setCatalog(read.catalog);
+      setCatalogError(read.degraded ? 'Workspaces could not be read completely. Your selection is kept. Retry.' : '');
+      if (read.degraded) return;
       setCatalogLoadedAt(serverNow() ?? Date.now());
       const detailId = detailWorkspaceId();
       if (detailId && !value.valid.some(workspaceEntry => workspaceEntry.id === detailId)) {
@@ -280,11 +283,11 @@ export default function App() {
   }
   function storageDiagnostics() {
     const current = catalog(), storage = current?.storage;
-    if (!storage) return [];
+    if (!current) return [];
     const seen = new Set<string>();
-    return [...(storage.errors ?? []), ...(current?.errors ?? [])].map(errorEntry => typeof errorEntry === 'object' ? errorEntry : { message: errorEntry }).filter(errorEntry => {
+    return [...(storage?.errors ?? []), ...(current.errors ?? [])].map(errorEntry => typeof errorEntry === 'object' ? errorEntry : { message: errorEntry }).filter(errorEntry => {
       const key = JSON.stringify([errorEntry.path, errorEntry.message]);
-      if (errorEntry.message === storage.status || seen.has(key)) return false;
+      if (errorEntry.message === storage?.status || seen.has(key)) return false;
       seen.add(key);
       return true;
     });
