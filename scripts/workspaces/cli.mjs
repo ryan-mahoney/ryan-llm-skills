@@ -57,6 +57,8 @@ Commands:
   add-context ID --path REL [--apply]
   remove-context ID --path REL [--apply]
   set-design-system ID --repo RID --path REL [--path REL...] [--applies-to X] [--apply]
+  set-preview ID --repo RID --file REL [--apply]
+  clear-preview ID [--apply]
   set-execution-host ID --host NAME [--apply]
   rewrite-paths ID --from PREFIX --to PREFIX [--apply]       e.g. --from /Users/me --to '~'
   kit-backups ID                                             List kit.yaml backups, newest first
@@ -115,6 +117,8 @@ const COMMANDS = {
     required: ['--repo', '--path'],
     flags: { '--repo': 'value', '--path': 'multi', '--applies-to': 'value', '--apply': 'boolean' },
   },
+  'set-preview': { positionals: 1, required: ['--repo', '--file'], flags: { '--repo': 'value', '--file': 'value', '--apply': 'boolean' } },
+  'clear-preview': { positionals: 1, flags: { '--apply': 'boolean' } },
   'set-execution-host': { positionals: 1, required: ['--host'], flags: { '--host': 'value', '--apply': 'boolean' } },
   'rewrite-paths': {
     positionals: 1,
@@ -320,6 +324,8 @@ const KIT_OPERATIONS = {
     paths: o['--path'],
     ...(o['--applies-to'] !== undefined && { applies_to: o['--applies-to'] }),
   }),
+  'set-preview': (o) => ({ kind: 'set-preview', repository_id: o['--repo'], compose_file: o['--file'] }),
+  'clear-preview': () => ({ kind: 'clear-preview' }),
   'set-execution-host': (o) => ({ kind: 'set-execution-host', host: o['--host'] }),
   'rewrite-paths': (o) => ({ kind: 'rewrite-paths', from: o['--from'], to: o['--to'] }),
 };

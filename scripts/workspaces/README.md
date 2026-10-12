@@ -27,6 +27,8 @@ node scripts/workspaces/cli.mjs <command> [options]
 | `clear-role` | `clear-role ID --id RID [--apply]` — remove the `role` line |
 | `set-name` | `set-name ID --name NAME [--apply]` — display name only; the workspace id never changes |
 | `add-context` | `add-context ID --path REL [--apply]` (`remove-context` takes the same flags) |
+| `set-preview` | `set-preview ID --repo RID --file REL [--apply]` — selects the repository and Compose file for package dev servers |
+| `clear-preview` | `clear-preview ID [--apply]` — removes package dev server configuration |
 | `set-design-system` | `set-design-system ID --repo RID --path REL [--path REL...] [--applies-to X] [--apply]` — replaces the whole `design_system` block |
 | `set-execution-host` | `set-execution-host ID --host NAME [--apply]` |
 | `rewrite-paths` | `rewrite-paths ID --from PREFIX --to PREFIX [--apply]` — rewrite every repository path at a path boundary of `PREFIX`, for example `--from /Users/me --to '~'` |
@@ -174,6 +176,11 @@ Besides `version`, `id`, `name`, `repositories` and `context`, kit v1 accepts:
 - `design_system: {repository, paths, applies_to?}` — `repository` must be a
   repository id in the kit, `paths` is a non-empty list of relative paths inside
   that repository, `applies_to` is free text (for example `all`).
+- `preview: {repository, compose_file}` — optional package dev server configuration.
+  `repository` must name a kit repository; `compose_file` is a safe relative file
+  path within that checkout, with no absolute path, backslash or `..` segment.
+  Developers maintain the Compose services, environment and dependencies.
+  Workspaces without this field have no configured package dev server.
 - `execution_host` — the hostname that runs this workspace's live work.
 
 `show`, `list` and the dashboard return both when set. Other unknown keys are
@@ -207,7 +214,7 @@ older ones are deleted. `kit-backups` lists them; `restore-kit` previews the
 diff to one and applies it through the same backup and lock path, so a restore
 is itself undoable.
 
-`remove-repo` also removes a `design_system` block that names the removed
+`remove-repo` also removes a `preview` block naming that repository and a `design_system` block that names the removed
 repository (the preview shows it); replace it with `set-design-system`.
 `set-design-system` rewrites the whole block, dropping an existing `applies_to`
 unless given again.

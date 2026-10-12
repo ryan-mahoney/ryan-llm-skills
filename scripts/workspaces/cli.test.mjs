@@ -569,6 +569,9 @@ test('workspace CLI restart: kit edit commands preview without writing, apply wi
     [['set-name', 'team', '--name', 'Team Space'], 'name: "Team Space"'],
     [['add-context', 'team', '--path', 'context/notes.md'], '- "context/notes.md"'],
     [['set-design-system', 'team', '--repo', 'docs', '--path', 'ds/a.css', '--path', 'ds/b.css', '--applies-to', 'all'], '    - "ds/b.css"'],
+    [['set-preview', 'team', '--repo', 'docs', '--file', 'dev/compose.yaml'], 'compose_file: \"dev/compose.yaml\"'],
+    [['clear-preview', 'team'], 'context:'],
+    [['set-preview', 'team', '--repo', 'web', '--file', 'compose.yaml'], 'compose_file: \"compose.yaml\"'],
     [['set-execution-host', 'team', '--host', 'restory-box'], 'execution_host: "restory-box"'],
     [['rewrite-paths', 'team', '--from', home, '--to', '~'], 'path: "~/web"'],
     [['remove-context', 'team', '--path', 'context/notes.md'], 'context: []'],
@@ -593,6 +596,7 @@ test('workspace CLI restart: kit edit commands preview without writing, apply wi
   const shown = jsonResult(await run(['show', 'team', '--json']), 'show edited kit');
   assert.deepEqual(shown.repositories.map((repository) => repository.status), ['ok', 'ok'], '~ paths resolve with the local home');
   assert.equal(shown.kit.design_system.repository, 'docs');
+  assert.deepEqual(shown.kit.preview, { repository: 'web', compose_file: 'compose.yaml' });
 
   // remove-repo previews the records that reference the repository and never refuses.
   mkdirSync(join(workspace, 'threads'));
@@ -602,6 +606,7 @@ test('workspace CLI restart: kit edit commands preview without writing, apply wi
   const removed = ndjsonResults(await run(['remove-repo', 'team', '--id', 'web', '--apply', '--json']), 2, 'remove-repo apply');
   assert.deepEqual(removed[0].references.threads, ['thread-1']);
   assert.deepEqual(kitDocument(kitState(workspace).bytes, 'after remove').repositories.map((repository) => repository.id), ['docs']);
+  assert.equal(kitDocument(kitState(workspace).bytes, 'after preview repository removal').preview, undefined);
   assert.equal(existsSync(join(workspace, 'threads', 'thread-1.json')), true, 'the thread record stays');
 
   // The oldest backup restores through the same preview, backup and apply path.

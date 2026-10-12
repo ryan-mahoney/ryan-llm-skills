@@ -9,7 +9,8 @@
 // Result shape: { ok, kit, raw, errors }.
 // - `kit` normalized `{version, id, name, repositories:[{id, path, remote,
 //   role}], context}` or null, plus `design_system` ({repository, paths,
-//   applies_to?}) and `execution_host` (string) only when the kit sets them.
+//   applies_to?}), `preview` ({repository, compose_file}) and `execution_host`
+//   (string) only when the kit sets them.
 // - `raw` exact source plus line/span offsets for writers; see below.
 // - `errors` syntax errors (`line N: ...`) are reported before any schema
 //   validation; schema messages reuse Adjacent field paths and order
@@ -765,6 +766,23 @@ export function validateKit(document) {
     }
   }
 
+  if (hasOwn(document, "preview")) {
+    const preview = document.preview;
+    if (!isMapping(preview)) {
+      errors.push(`preview: expected a mapping, got ${inspectValue(preview)}`);
+    } else {
+      const repository = requiredString(preview, "repository", "preview.repository", errors);
+      if (repository !== null && !kit.repositories.some((entry) => entry.id === repository)) {
+        errors.push(`preview.repository: unknown repository id ${JSON.stringify(repository)}`);
+      }
+      const composeFile = requiredString(preview, "compose_file", "preview.compose_file", errors);
+      if (composeFile !== null && !isComposeRelative(composeFile)) {
+        errors.push(`preview.compose_file: expected a safe relative file path, got ${inspectValue(composeFile)}`);
+      }
+      kit.preview = { repository, compose_file: composeFile };
+    }
+  }
+
   const executionHost = optionalString(document, "execution_host", "execution_host", errors);
   if (executionHost !== null) {
     if (executionHost === "") errors.push("execution_host: must not be empty");
@@ -844,6 +862,7 @@ export function cloneKit(kit) {
     context: [...kit.context],
   };
   if (kit.design_system) clone.design_system = { ...kit.design_system, paths: [...kit.design_system.paths] };
+  if (kit.preview) clone.preview = { ...kit.preview };
   if (kit.execution_host) clone.execution_host = kit.execution_host;
   return clone;
 }
@@ -900,13 +919,14 @@ export function formatScalar(value) {
  *
  * Operations (`kind`, fields):
  * - add-repository { repository: { id, path, remote?, role? } }
- * - remove-repository { repository_id }  (also drops a design_system that
- *   names it, so the result stays valid)
+ * - remove-repository { repository_id }  (also drops design_system and preview
+ *   blocks that name it, so the result stays valid)
  * - set-path | set-remote | set-role { repository_id, path | remote | role }
  * - clear-role { repository_id }
  * - set-name { name }, set-execution-host { host }
  * - add-context | remove-context { entry }
  * - set-design-system { repository_id, paths, applies_to? }  (replaces the block)
+ * - set-preview { repository_id, compose_file }, clear-preview {}
  * - rewrite-paths { from, to }  (repository paths at a path boundary of `from`)
  *
  * Returns { before, after, expected, hunk }. `before` is the exact input;
@@ -945,6 +965,8 @@ export function planKitEdit(text, operation) {
     case "set-execution-host": return planSetExecutionHost(text, parsed, operation);
     case "add-context": return planAddContext(text, parsed, operation);
     case "remove-context": return planRemoveContext(text, parsed, operation);
+    case "set-preview": return planSetPreview(text, parsed, operation);
+    case "clear-preview": return planClearPreview(text, parsed);
     case "set-design-system": return planSetDesignSystem(text, parsed, operation);
     case "rewrite-paths": return planRewritePaths(text, parsed, operation);
     default: throw new Error(`unknown operation kind: ${String(operation.kind)}`);
@@ -1112,12 +1134,45 @@ function planRemoveRepository(text, parsed, operation) {
       replacement: "",
     });
   }
+  const preview = mappingEntry(parsed.raw.root, "preview");
+  if (preview && parsed.kit.preview?.repository === repositoryId) {
+    delete expected.preview;
+    edits.push({ ...lineSpan(lines, preview.keySpan.start, preview.span.end), replacement: "" });
+  }
   return finishPlan(text, applyEdits(text, edits), expected);
 }
 
 // design.json applies the same rule to design-system files: relative, no `..` segment.
 function isRepositoryRelative(path) {
   return typeof path === "string" && path !== "" && !isAbsolute(path) && !path.split(/[\\/]/).includes("..");
+}
+
+// Portable file paths; filesystem containment (including symlinks) is checked at launch.
+function isComposeRelative(path) {
+  return isRepositoryRelative(path) && path.trim() !== "" && path !== "."
+    && !/^[a-zA-Z]:/.test(path) && !path.includes("\\")
+    && !/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(path)
+    && !path.endsWith("/") && !path.endsWith("/.") && path.split("/").some((part) => part !== "" && part !== ".");
+}
+
+function planSetPreview(text, parsed, operation) {
+  const { repositoryId } = requireRepository(parsed, operation, "set-preview");
+  const composeFile = operation.compose_file;
+  if (!isComposeRelative(composeFile)) throw new Error("set-preview requires a safe relative file path with no '..' segment");
+  const expected = cloneKit(parsed.kit);
+  expected.preview = { repository: repositoryId, compose_file: composeFile };
+  return planRootEntry(text, parsed, "preview", ["preview:",
+    `  repository: ${formatScalar(repositoryId)}`, `  compose_file: ${formatScalar(composeFile)}`], expected);
+}
+
+function planClearPreview(text, parsed) {
+  const expected = cloneKit(parsed.kit);
+  delete expected.preview;
+  const entry = mappingEntry(parsed.raw.root, "preview");
+  if (!entry) return finishPlan(text, text, expected);
+  return finishPlan(text, applyEdits(text, [{
+    ...lineSpan(parsed.raw.lines, entry.keySpan.start, entry.span.end), replacement: "",
+  }]), expected);
 }
 
 function planSetName(text, parsed, operation) {

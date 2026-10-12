@@ -16,6 +16,8 @@ import { fileURLToPath } from 'node:url';
 import { authorizePackage, listPackageFiles, readPackageFile } from './package-files.mjs';
 import { listWorkspaceDesigns } from './designs.mjs';
 import { fetchWorkspace, listWorkspaces, resolveStorageRoot, storageStatus } from '../workspaces/store.mjs';
+import { createPreviewService } from '../dev-preview/service.mjs';
+import { createPackagePreviewRoutes } from './package-preview-routes.mjs';
 import { createDiscussionRoutes } from '../workspaces/discussion-routes.mjs';
 import { applyManualCompletions, writeManualCompletion } from './manual-completion.mjs';
 import { observerExpired } from './observer-retention.mjs';
@@ -124,7 +126,7 @@ function workspaceExclude(component) {
   return WORKSPACE_EXCLUDED.has(component) || component.startsWith('.env.');
 }
 
-export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi/agent'), publicHost, storageRoot, discussion, sessionControl } = {}) {
+export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi/agent'), publicHost, storageRoot, discussion, sessionControl, previewService } = {}) {
   let cached, read;
   const actionToken = randomBytes(32).toString('hex');
   const discussionRoutes = createDiscussionRoutes({ discussion, actionToken });
@@ -138,6 +140,11 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
     if (match.length !== 1) throw new Error('Workspace is unavailable');
     return match[0].directory;
   };
+  const previewRoutes = createPackagePreviewRoutes({
+    previewService: previewService ?? createPreviewService({ storageRoot: workspaceRoot }),
+    actionToken,
+    authorize: async requested => authorizePackage(await readDashboardState(agentDir), requested, authorizedWorkspace),
+  });
   return createServer(async (request, response) => {
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
@@ -165,6 +172,10 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
       // Forwarding headers alone never authorize an otherwise remote request.
       if (await sessionRoutes(request,response,url,{remote:remote&&!publicRequest,expectedOrigin:publicRequest?`https://${publicName}`:`http://${host}`})) {cached=null;return;}
       if (await discussionRoutes(request, response, url, {
+        remote: remote && !publicRequest,
+        expectedOrigin: publicRequest ? `https://${publicName}` : `http://${host}`,
+      })) return;
+      if (await previewRoutes(request, response, url, {
         remote: remote && !publicRequest,
         expectedOrigin: publicRequest ? `https://${publicName}` : `http://${host}`,
       })) return;
