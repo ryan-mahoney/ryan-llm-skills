@@ -904,7 +904,8 @@ test('declared tour evidence records a ready verdict at the declared old commit 
   git('commit', '-qm', 'Advance fixture');
   assert.notEqual(git('rev-parse', 'HEAD'), oldCommit, 'the declared commit is older than current HEAD');
   const packagePath = pack(repo);
-  writeFileSync(join(packagePath, 'work-tour.json'), JSON.stringify({ verdict: 'ready', commit: oldCommit }));
+  // Real tours carry an evidence manifest well past the small-JSON read limit.
+  writeFileSync(join(packagePath, 'work-tour.json'), JSON.stringify({ verdict: 'ready', commit: oldCommit, manifest: 'x'.repeat(SENTINEL_LIMITS.smallJsonBytes * 2) }));
   receipt(packagePath, { id: 'run-tour', assignment_id: 'assign-tour', state: 'running', started_at: ago(60000) });
 
   const snapshot = await collect({ roots: [repo], indexDir: f.indexDir, now });
@@ -1007,7 +1008,7 @@ test('declared tour evidence reports an oversized artifact as unavailable withou
   receipt(packagePath, { id: 'run-fat', assignment_id: 'assign-fat', state: 'running', started_at: ago(60000) });
   const file = join(packagePath, 'work-tour.json');
   writeFileSync(file, JSON.stringify({ version: 1, verdict: 'ready', commit: 'a'.repeat(40),
-    padding: 'x'.repeat(SENTINEL_LIMITS.smallJsonBytes) }));
+    padding: 'x'.repeat(SENTINEL_LIMITS.tourBytes) }));
   const snapshot = await collect({ roots: [repo], indexDir: f.indexDir, now });
   const run = snapshot.runs.find(item => item.assignment_id === 'assign-fat');
   assert.equal(run.evidence.state, 'unavailable');
