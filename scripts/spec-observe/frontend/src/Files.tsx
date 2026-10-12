@@ -5,7 +5,7 @@ import { esc, statusMarkdown } from './format';
 type FileEntry = { name: string; available: boolean; size?: number; reason?: string };
 type Listing = { files: FileEntry[]; next_cursor?: string | number | null; truncated?: boolean; errors?: { name: string; message: string }[] };
 type LoadedFile = { kind: string; text: string | null };
-type Props = { source: 'workspace' | 'package'; owner: string; live: boolean; initialFile?: string | null; pathPrefix?: string; recentCompletion?: boolean; onOpen?: () => void };
+type Props = { source: 'workspace' | 'package'; owner: string; live: boolean; initialFile?: string | null; pathPrefix?: string; recentCompletion?: boolean; onOpen?: (name: string) => void };
 
 const params = (values: Record<string, string | number | undefined>) => new URLSearchParams(Object.entries(values).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)]));
 const fileApi = (source: Props['source'], owner: string, name: string, download = false) => source === 'workspace'
@@ -58,7 +58,7 @@ export default function Files(props: Props) {
     finally { if (token === generation) setLoadingList(false); }
   };
   createEffect(on(() => [ownerKey(), props.live] as const, () => {
-    setListing(null); setCursor(undefined); setListError(''); setSelected(''); setLoaded(null); setFileError('');
+    setListing(null); setCursor(undefined); setListError(''); setSelected(props.initialFile ?? ''); setLoaded(null); setFileError('');
     untrack(() => { void fetchListing(); });
     onCleanup(() => { generation++; });
   }));
@@ -66,7 +66,7 @@ export default function Files(props: Props) {
     if (version > 0) untrack(() => { void fetchListing(undefined, true); });
   }));
   createEffect(on(() => [props.source, props.owner, props.initialFile] as const, ([, , requested]) => {
-    if (requested && requested !== untrack(selected)) { setSelected(requested); setLoaded(null); setFileError(''); }
+    if ((requested ?? '') !== untrack(selected)) { setSelected(requested ?? ''); setLoaded(null); setFileError(''); }
   }));
   createEffect(on(() => props.pathPrefix, (prefix, previous) => {
     if (prefix && prefix !== previous) { setSelected(''); setLoaded(null); setFileError(''); }
@@ -129,7 +129,7 @@ export default function Files(props: Props) {
     <Show when={listing()} keyed>{data => <div class="files-list">
       <Show when={visibleFiles(data.files).length > 0} fallback={<p class="small muted">{props.pathPrefix ? 'No loaded files in this selection.' : `No ${props.source} files found.`}</p>}>
         <For each={visibleFiles(data.files)}>{file => <p class="info-row">{file.available
-          ? <><button type="button" aria-pressed={selected() === file.name} onClick={() => { setSelected(file.name); props.onOpen?.(); }}>{file.name}</button> <span class="small muted">{file.size ?? 0} bytes</span></>
+          ? <><button type="button" aria-pressed={selected() === file.name} onClick={() => { setSelected(file.name); setLoaded(null); setFileError(''); props.onOpen?.(file.name); }}>{file.name}</button> <span class="small muted">{file.size ?? 0} bytes</span></>
           : <>{file.name} · {file.reason || 'Unavailable'}</>}</p>}</For>
       </Show>
       <For each={data.errors ?? []}>{error => <p class="warn">{error.name}: {error.message}</p>}</For>

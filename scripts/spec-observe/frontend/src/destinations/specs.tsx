@@ -78,6 +78,7 @@ export default function SpecsDestination(props: DestinationProps) {
               owner={owner}
               live={props.live}
               initialFile={props.route.path ?? null}
+              onOpen={props.onOpenFile}
               recentCompletion={record()?.recent_completion}
             />
           )}

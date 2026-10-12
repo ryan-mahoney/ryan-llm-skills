@@ -87,7 +87,7 @@ export default function App() {
     navigate(next, routeHistoryMode(route(), next));
   }
   function goDestination(dest: Destination) {
-    go({ ...clearIncompatibleFields(route()), dest });
+    go({ dest, ...(route().ws !== undefined ? { ws: route().ws } : {}) });
   }
   function selectId(id: string) {
     go({ ...clearIncompatibleFields(route()), id });

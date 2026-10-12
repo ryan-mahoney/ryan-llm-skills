@@ -20,6 +20,7 @@ export default function FilesDestination(props: DestinationProps) {
           owner={owner()}
           live={props.live}
           initialFile={directoryPath() ? null : (props.route.path ?? null)}
+          onOpen={props.onOpenFile}
           pathPrefix={directoryPath() ?? undefined}
           recentCompletion={recentCompletion()}
         />
