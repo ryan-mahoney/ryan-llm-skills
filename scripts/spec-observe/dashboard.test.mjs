@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, existsSync, readdirSync, lstatSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, rmSync, symlinkSync, existsSync, readdirSync, lstatSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readFileSync } from 'node:fs';
@@ -71,6 +71,25 @@ test('dashboard serves only its page and read-only same-origin state endpoint', 
   assert.equal(page.status, 200);
   assert.match(page.body, /<!doctype html>/i);
   assert.match(page.headers['Content-Security-Policy'], /frame-ancestors 'none'/);
+});
+
+test('state route serves fresh observers and omits expired ones', async t => {
+  const f = fixture(t), server = createDashboardServer({ agentDir: f.dir });
+  const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  const fixtures = [
+    ['fade.json', { ...envelope('fresh-observing') }, 2000],
+    ['beef.json', { ...envelope('fresh-closed'), state: 'closed' }, 1000],
+    ['cab.json', { ...envelope('expired-observing'), published_at: twoHoursAgo }, 3000],
+    ['dead.json', { ...envelope('expired-closed'), state: 'closed', published_at: twoHoursAgo }, 4000],
+  ];
+  for (const [name, value, mtime] of fixtures) {
+    const path = join(f.observers, name);
+    writeFileSync(path, JSON.stringify(value));
+    utimesSync(path, mtime, mtime);
+  }
+  const response = await request(server, '/api/state');
+  assert.equal(response.status, 200);
+  assert.deepEqual(JSON.parse(response.body).observers.map(observer => observer.observer_id), ['fresh-observing', 'fresh-closed']);
 });
 
 test('thread routes stay local-only through the dashboard seam', async t => {
