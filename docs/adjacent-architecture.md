@@ -362,8 +362,10 @@ block a start. Owner: adj5.
 
 Services bind loopback; `tailscale serve` publishes the dashboard; the tailnet
 ACL is the access boundary; no Pi RPC port is ever exposed; remote reach grants
-no intervention authority. Remote launch and attach are the same CLI commands
-over Tailscale SSH. Owners: adj2, adj4.
+no automatic intervention authority. The configured HTTPS dashboard endpoint
+allows operator thread reads, messages, brief editing and assignment dispatch
+through the same-origin token guards. Tailscale SSH remains available for CLI
+launch and terminal attachment. Owners: adj2, adj4.
 
 ### C-10 Durable contracts record
 

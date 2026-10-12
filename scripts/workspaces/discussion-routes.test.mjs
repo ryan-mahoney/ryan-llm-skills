@@ -319,7 +319,7 @@ test("thread routes answer 503 locally when no discussion service is composed", 
   assert.equal(response.status, 503, "a local request without discussion must be unavailable, not authorized");
 });
 
-test("remote-classified requests are refused for every thread route before the service runs", async (t) => {
+test("unconfigured remote requests are refused for every thread route before the service runs", async (t) => {
   const f = await fixtureStorage(t);
   const spy = serviceSpy();
   const server = createDashboardServer({
@@ -338,12 +338,9 @@ test("remote-classified requests are refused for every thread route before the s
     ...POST_PATHS.map((path) => ({ label: path, path, write: true })),
     { label: "unknown", path: "/api/thread/bogus" },
   ];
-  // Host/Origin acceptance must not be mistaken for locality: the configured
-  // public host is accepted upstream, while forwarded/tailscale indicators are
-  // the only remote signal for a loopback Host.
+  // A forwarding or identity header alone never grants operator access.
   const variants = [
-    { label: "configured public Host", options: { host: PUBLIC_HOST } },
-    { label: "configured public Host :443", options: { host: `${PUBLIC_HOST}:443` } },
+    { label: "unconfigured Host", options: { host: "other.example.ts.net" } },
     { label: "forwarded loopback Host", options: { headers: { "x-forwarded-for": "" } } },
     { label: "empty tailscale identity", options: { headers: { "tailscale-user-login": "" } } },
   ];
@@ -384,9 +381,8 @@ test("oversized remote POST /api/thread/send returns 403 before any body bytes a
     "content-type": "application/json",
     "content-length": String(MESSAGE_BODY_LIMIT + 1),
   };
-  // The public-host writes carry their accepted same-origin Origin, so only the
-  // remote classification can refuse them; forwarded writes keep the loopback
-  // Host and Origin absent.
+  // Even the configured public host must supply a valid action token before
+  // the route consumes a body; forwarding markers alone remain insufficient.
   const variants = [
     { label: "configured public Host", options: { host: PUBLIC_HOST, origin: `https://${PUBLIC_HOST}` } },
     { label: "configured public Host :443", options: { host: `${PUBLIC_HOST}:443`, origin: `https://${PUBLIC_HOST}` } },
@@ -404,16 +400,20 @@ test("oversized remote POST /api/thread/send returns 403 before any body bytes a
     assert.equal(response.status, 403, variant.label);
     assert.equal(response.uploaded, 0, `${variant.label}: no body bytes may be uploaded`);
   }
-  assert.deepEqual(spy.calls.map((call) => call.name), [], "send must not run for remote requests");
+  assert.deepEqual(spy.calls.map((call) => call.name), [], "send must not run for unauthorized requests");
 });
 
-test("local writes refuse before the service or the body when Origin, token or content type is wrong", async (t) => {
+for (const endpoint of ["local", "tailnet"]) {
+// Run alone: node --test --test-name-pattern="tailnet writes refuse" scripts/workspaces/discussion-routes.test.mjs
+test(`${endpoint} writes refuse before the service or the body when Origin, token or content type is wrong`, async (t) => {
   const f = await fixtureStorage(t);
   const spy = serviceSpy();
-  const server = createDashboardServer({ agentDir: f.dir, storageRoot: f.storageRoot, discussion: spy });
+  const server = createDashboardServer({ agentDir: f.dir, storageRoot: f.storageRoot, discussion: spy, publicHost: PUBLIC_HOST });
   const port = await listen(t, server);
-  const origin = `http://127.0.0.1:${port}`;
-  const token = await actionToken(port);
+  const host = endpoint === "tailnet" ? PUBLIC_HOST : `127.0.0.1:${port}`;
+  const origin = endpoint === "tailnet" ? `https://${PUBLIC_HOST}` : `http://${host}`;
+  const state = JSON.parse((await httpCall(port, "/api/state", { host })).body);
+  const token = state.thread_action_token ?? state.action_token;
   const wrongToken = "0".repeat(64);
 
   // Origin and content-type cases carry the real token so only the named guard
@@ -429,6 +429,7 @@ test("local writes refuse before the service or the body when Origin, token or c
   for (const refusal of refusals) {
     const response = await httpCall(port, "/api/thread/send", {
       method: "POST",
+      host,
       origin: refusal.origin,
       headersOnly: true,
       headers: {
@@ -442,14 +443,21 @@ test("local writes refuse before the service or the body when Origin, token or c
   }
   assert.deepEqual(spy.calls.map((call) => call.name), [], "no authorization refusal may reach the service");
 });
+}
 
-test("authorized local writes map one-to-one onto service methods with unchanged payloads", async (t) => {
+for (const endpoint of ["local", "tailnet"]) {
+// Run alone: node --test --test-name-pattern="authorized tailnet writes" scripts/workspaces/discussion-routes.test.mjs
+test(`authorized ${endpoint} writes map one-to-one onto service methods with unchanged payloads`, async (t) => {
   const f = await fixtureStorage(t);
   const spy = serviceSpy();
-  const server = createDashboardServer({ agentDir: f.dir, storageRoot: f.storageRoot, discussion: spy });
+  const server = createDashboardServer({ agentDir: f.dir, storageRoot: f.storageRoot, discussion: spy, publicHost: PUBLIC_HOST });
   const port = await listen(t, server);
-  const token = await actionToken(port);
-  const origin = `http://127.0.0.1:${port}`;
+  const host = endpoint === "tailnet" ? `${PUBLIC_HOST}:443` : `127.0.0.1:${port}`;
+  const origin = endpoint === "tailnet" ? `https://${PUBLIC_HOST}` : `http://${host}`;
+  const state = JSON.parse((await httpCall(port, "/api/state", { host, headers: { "x-forwarded-for": "100.64.0.1" } })).body);
+  const token = endpoint === "tailnet" ? state.thread_action_token : await actionToken(port);
+  assert.match(token, /^[a-f0-9]{64}$/);
+  if (endpoint === "tailnet") assert.equal(state.action_token, undefined, "completion remains local-only");
 
   const payloads = [
     ["/api/thread/create", { workspace_id: "fixture", title: "Created over HTTP", target: { kind: "workspace" } }],
@@ -466,6 +474,7 @@ test("authorized local writes map one-to-one onto service methods with unchanged
   for (const [path, payload] of payloads) {
     const response = await httpCall(port, path, {
       method: "POST",
+      host,
       origin,
       headers: { "x-sentinel-token": token, "content-type": "application/json" },
       body: JSON.stringify(payload),
@@ -477,6 +486,7 @@ test("authorized local writes map one-to-one onto service methods with unchanged
     assert.deepEqual(spy.calls[index].args, [payload], `payload for ${payloads[index][0]} must pass through unchanged`);
   });
 });
+}
 
 test("authorized local writes reject malformed and non-object JSON with 400", async (t) => {
   const f = await fixtureStorage(t);
@@ -594,7 +604,9 @@ test("unknown thread routes return 404 and unsupported methods return 405", asyn
   assert.deepEqual(spy.calls.map((call) => call.name), ["list"], "HEAD maps the read path exactly once");
 });
 
-test("the real discussion service serves create/list/history/save-brief over the dashboard seam", async (t) => {
+for (const endpoint of ["local", "tailnet"]) {
+// Run alone: node --test --test-name-pattern="real discussion service.*tailnet" scripts/workspaces/discussion-routes.test.mjs
+test(`the real discussion service serves create/list/history/save-brief over the ${endpoint} dashboard seam`, async (t) => {
   const f = await fixtureStorage(t);
   const spawnCalls = [];
   const service = createDiscussionService({
@@ -606,12 +618,16 @@ test("the real discussion service serves create/list/history/save-brief over the
     },
   });
   t.after(() => service.close());
-  const server = createDashboardServer({ agentDir: f.dir, storageRoot: f.storageRoot, discussion: service });
+  const server = createDashboardServer({ agentDir: f.dir, storageRoot: f.storageRoot, discussion: service, publicHost: PUBLIC_HOST });
   const port = await listen(t, server);
-  const token = await actionToken(port);
-  const origin = `http://127.0.0.1:${port}`;
+  const host = endpoint === "tailnet" ? PUBLIC_HOST : `127.0.0.1:${port}`;
+  const origin = endpoint === "tailnet" ? `https://${PUBLIC_HOST}` : `http://${host}`;
+  const state = JSON.parse((await httpCall(port, "/api/state", { host })).body);
+  const token = state.thread_action_token ?? state.action_token;
+  const read = path => httpCall(port, path, { host });
   const write = (path, payload) => httpCall(port, path, {
     method: "POST",
+    host,
     origin,
     headers: { "x-sentinel-token": token, "content-type": "application/json" },
     body: JSON.stringify(payload),
@@ -627,11 +643,11 @@ test("the real discussion service serves create/list/history/save-brief over the
   assert.match(created.thread_id, UUID_RE);
   assert.equal(created.workspace_id, "fixture");
 
-  const listedResponse = await httpCall(port, `/api/threads?${new URLSearchParams({ workspace_id: "fixture" })}`);
+  const listedResponse = await read(`/api/threads?${new URLSearchParams({ workspace_id: "fixture" })}`);
   assert.equal(listedResponse.status, 200);
   assert.ok(JSON.parse(listedResponse.body).threads.some((thread) => thread.thread_id === created.thread_id));
 
-  const historyResponse = await httpCall(port, `/api/thread/history?${new URLSearchParams({ workspace_id: "fixture", thread_id: created.thread_id })}`);
+  const historyResponse = await read(`/api/thread/history?${new URLSearchParams({ workspace_id: "fixture", thread_id: created.thread_id })}`);
   assert.equal(historyResponse.status, 200);
   assert.deepEqual(JSON.parse(historyResponse.body).entries, []);
 
@@ -688,15 +704,16 @@ test("the real discussion service serves create/list/history/save-brief over the
   assert.deepEqual(spawnCalls, [], "no final process launch is attempted");
 
   // Invalid IDs and paths stay static 400s; a well-formed but absent thread is 404.
-  const badUuid = await httpCall(port, `/api/thread/history?${new URLSearchParams({ workspace_id: "fixture", thread_id: "not-a-uuid" })}`);
+  const badUuid = await read(`/api/thread/history?${new URLSearchParams({ workspace_id: "fixture", thread_id: "not-a-uuid" })}`);
   assert.equal(badUuid.status, 400);
-  const badLimit = await httpCall(port, `/api/thread/history?${new URLSearchParams({ workspace_id: "fixture", thread_id: created.thread_id, limit: "abc" })}`);
+  const badLimit = await read(`/api/thread/history?${new URLSearchParams({ workspace_id: "fixture", thread_id: created.thread_id, limit: "abc" })}`);
   assert.equal(badLimit.status, 400);
   assert.equal((await write("/api/thread/create", { workspace_id: "../escape", title: "Bad workspace" })).status, 400);
   assert.equal((await write("/api/thread/create", { workspace_id: "fixture", title: "Bad path", target: { kind: "worktree", path: "relative/path" } })).status, 400);
-  const missing = await httpCall(port, `/api/thread/history?${new URLSearchParams({ workspace_id: "fixture", thread_id: randomUUID() })}`);
+  const missing = await read(`/api/thread/history?${new URLSearchParams({ workspace_id: "fixture", thread_id: randomUUID() })}`);
   assert.equal(missing.status, 404);
 });
+}
 
 test("the real discussion service serves a fresh SSE snapshot without replay", async (t) => {
   const f = await fixtureStorage(t);

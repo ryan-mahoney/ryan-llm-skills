@@ -222,9 +222,13 @@ network access stays disabled. Read-only; nothing writes a design record. Contra
 
 ### Thread briefs and assignment handoff
 
-Selecting a workspace shows its local discussion threads. Thread routes, brief
-editing and assignment launch are local-only: a remote or imported page renders no
-message, brief or launch control.
+Selecting a workspace shows its discussion threads. The loopback dashboard and the
+configured `--public-host` endpoint support thread reads, messages, brief editing
+and assignment launch. Publish that endpoint through Tailscale Serve: the tailnet
+ACL controls who can reach it. Forwarding or identity headers alone grant no access.
+Writes require the endpoint's exact same-origin URL, the dashboard's thread action
+token and JSON. Imported snapshots expose no message, brief or launch controls.
+Package completion remains local-only.
 
 **Create thread** starts a thread called "New thread" in the whole workspace or a
 chosen repository. The thread's Pi runs in that directory and receives no kit or
@@ -268,7 +272,7 @@ operator **Resume** or **Send**; it never sends provider prompts or deploys on
 its own. Its localhost dashboard keeps the existing local **Mark complete**
 write for the operator, while remote reads are local-only and cannot complete.
 Generic workspace-file routes neither list nor serve the private `threads`
-records; only the dedicated local-only thread routes read them.
+records; only the dedicated operator thread routes read them.
 
 ```bash
 # Ordinary foreground use; replace /absolute/Projects with a real directory.
@@ -312,9 +316,11 @@ is alive; confirm the recorded PID/start identity before acting. Snapshots older
 The dashboard keeps the existing local/remote boundary: loopback requests get
 the same-origin action token and normal completion, while requests classified
 remote (public `Host`/`Origin`, or forwarded headers such as `x-forwarded-for`)
-receive `completion:"local-only"`, no token, and a 403 on completion POST.
-`--public-host` only configures Host/Origin acceptance; it does not configure
-Tailscale Serve, TLS or any forwarder.
+receive `completion:"local-only"`, no completion token, and a 403 on completion POST.
+`--public-host` authorizes thread operations for that exact HTTPS endpoint and
+exposes a `thread_action_token` in state responses; it does not grant package
+completion or automatic recovery authority. It does not configure Tailscale Serve,
+TLS or any forwarder.
 
 An empty temporary root avoids inherited live-observe lookups. With a real
 root, host observation also performs the existing read-only local Git PR

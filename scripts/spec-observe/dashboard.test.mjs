@@ -652,6 +652,7 @@ test('remote dashboard accepts exact public host bare or :443 with HTTPS origin 
     const body = JSON.parse(accepted.body);
     assert.equal(body.completion, 'local-only', host);
     assert.equal(body.action_token, undefined, host);
+    assert.match(body.thread_action_token, /^[a-f0-9]{64}$/, host);
   }
   const viaOrigin = await request(server, '/api/state', { origin: 'https://DASHBOARD.EXAMPLE' });
   assert.equal(viaOrigin.status, 200);
@@ -1099,7 +1100,7 @@ test('workspace HTTP serves reads over a real listening port-0 server', async t 
 });
 
 // Run independently: node --test --test-name-pattern='private thread records' scripts/spec-observe/dashboard.test.mjs
-test('generic workspace reads exclude private thread records while dedicated local routes still serve them', async t => {
+test('generic workspace reads exclude private thread records while dedicated operator routes serve them', async t => {
   const f = fixture(t);
   const base = realpathSync(f.dir);
   const storageRoot = join(base, 'storage');
@@ -1171,10 +1172,11 @@ test('generic workspace reads exclude private thread records while dedicated loc
     assert.equal((await httpCall(notePath, variant)).body, '# Note\n', `ordinary note stays readable ${label}`);
   }
 
-  // The dedicated thread routes stay local-only on the same server and remain
-  // the one supported path to the durable record.
+  // Dedicated routes expose threads to the configured operator host; generic
+  // file routes still exclude private records.
   const remoteThreads = await httpCall(`/api/threads?${new URLSearchParams({ workspace_id: 'writer' })}`, { host: 'dashboard.example' });
-  assert.equal(remoteThreads.status, 403, 'a configured public host cannot read threads');
+  assert.equal(remoteThreads.status, 200, 'the configured public host reads threads');
+  assert.ok(JSON.parse(remoteThreads.body).threads.some(thread => thread.thread_id === created.thread_id));
   const forwardedThreads = await httpCall(`/api/threads?${new URLSearchParams({ workspace_id: 'writer' })}`, { headers: { 'x-forwarded-for': '' } });
   assert.equal(forwardedThreads.status, 403, 'a forwarded remote request cannot read threads');
   const localThreads = await httpCall(`/api/threads?${new URLSearchParams({ workspace_id: 'writer' })}`);
@@ -1642,7 +1644,7 @@ test('threads UI escapes hostile titles and content and renders safe markdown on
 });
 
 // ---- Threads UI (step 10): brief editor, assignment preview/launch and explicit result dispatch ----
-test('threads UI handoff controls stay hidden without the local dashboard', () => {
+test('threads UI handoff controls require a live operator dashboard', () => {
   const context = dashboardContext();
   setThreadContext(context);
   vm.runInContext(`threads=${JSON.stringify([threadRecord()])};imported=true;renderThreads()`, context);
@@ -1652,16 +1654,24 @@ test('threads UI handoff controls stay hidden without the local dashboard', () =
   assert.doesNotMatch(html, /id="thread-brief-save"/);
   assert.doesNotMatch(html, /id="thread-assignment-launch"/);
   assert.match(html, /available on the host/);
+  vm.runInContext("payload={completion:'local-only',thread_action_token:'tailnet-token'};renderThreads()", context);
+  assert.match(threadsBody(context), /id="thread-brief-save"/);
+  assert.match(threadsBody(context), /id="thread-brief-preview"/);
+  assert.equal(vm.runInContext('threadsActionable()', context), true);
+  const completion = vm.runInContext("completionControl({is_current_assignment:true})", context);
+  assert.match(buttonTag(completion, 'mark-complete'), /disabled/);
 });
 
 test('threads UI save brief keeps both fields, disables only save and reuses the retry request id', async () => {
   const posts = [];
+  const tokens = [];
   let release;
   let saveCalls = 0;
   const context = dashboardContext({ fetch: async (url, init = {}) => {
     const path = String(url).split('?')[0];
     if (path === '/api/thread/save-brief') {
       posts.push(JSON.parse(init.body));
+      tokens.push(init.headers['X-Sentinel-Token']);
       saveCalls += 1;
       if (saveCalls === 1) return new Promise(resolve => { release = resolve; });
       if (saveCalls === 2) return { ok: false, status: 503, json: async () => ({ error: 'Discussion service unavailable.' }) };
@@ -1671,6 +1681,7 @@ test('threads UI save brief keeps both fields, disables only save and reuses the
     return { ok: false, status: 404, json: async () => ({}) };
   } });
   setThreadContext(context);
+  vm.runInContext("payload={completion:'local-only',thread_action_token:'tailnet-token'}", context);
   vm.runInContext(`threads=${JSON.stringify([threadRecord()])};threadBriefTitle='Keep the brief';threadBriefContent='Keep the content';renderThreads()`, context);
   const pending = vm.runInContext('saveThreadBrief()', context);
   await flush();
@@ -1694,6 +1705,8 @@ test('threads UI save brief keeps both fields, disables only save and reuses the
   assert.equal(posts.length, 2);
   assert.equal(posts[1].request_id, posts[0].request_id, 'retry after the failure keeps the request id for dedupe');
   assert.equal(vm.runInContext('threadBriefRequestId', context), null, 'a refused retry does not publish a saved brief id');
+  assert.ok(tokens.length > 0);
+  assert.ok(tokens.every(token => token === 'tailnet-token'), 'brief saves use the tailnet thread token');
 });
 
 test('threads UI save-brief conflict keeps both fields and shows the conflict text', async () => {

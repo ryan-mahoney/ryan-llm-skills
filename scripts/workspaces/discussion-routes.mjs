@@ -1,12 +1,12 @@
-// Step 7: local JSON dispatch and one bounded SSE stream for /api/threads and
+// Operator JSON dispatch and one bounded SSE stream for /api/threads and
 // /api/thread/*.
 //
 // createDashboardServer composes one instance per server and calls it after
 // the dashboard's existing Host/Origin acceptance and after computing
-// `remote = isRemoteRequest(request)`. This module owns no storage, process or
-// session semantics: it converts local HTTP requests into service calls, maps
-// typed service codes to static status text, and never copies an exception
-// message, request override or filesystem path into a response.
+// the operator endpoint authorization and expected same-origin URL. This module
+// owns no storage, process or session semantics: it converts HTTP requests into
+// service calls, maps typed service codes to static status text, and never copies
+// an exception message, request override or filesystem path into a response.
 //
 // /api/thread/events is a read-only SSE projection: a fresh snapshot from
 // list/history, then the service's allowed attributed envelopes. Buffered
@@ -79,7 +79,7 @@ const STATUS_BY_CODE = new Map([
 
 const STATUS_TEXT = new Map([
   [400, "Discussion request is invalid."],
-  [403, "Discussion routes require the local dashboard."],
+  [403, "Discussion access requires an authorized dashboard endpoint."],
   [404, "Discussion resource was not found."],
   [405, "Method not allowed."],
   [409, "Discussion request conflicts with current state."],
@@ -159,7 +159,7 @@ function readBoundedBody(request, limit) {
 /**
  * Build the dashboard's thread route handler. `discussion` is the live service
  * or undefined; `actionToken` is the dashboard's per-server token.
- * @returns {(request: import('node:http').IncomingMessage, response: import('node:http').ServerResponse, url: URL, context: {remote?: boolean}) => Promise<boolean>}
+ * @returns {(request: import('node:http').IncomingMessage, response: import('node:http').ServerResponse, url: URL, context: {remote?: boolean, expectedOrigin?: string}) => Promise<boolean>}
  */
 export function createDiscussionRoutes({ discussion, actionToken } = {}) {
   let activeStreams = 0;
@@ -386,11 +386,11 @@ export function createDiscussionRoutes({ discussion, actionToken } = {}) {
     void start();
   }
 
-  return async function handleDiscussionRoute(request, response, url, { remote } = {}) {
+  return async function handleDiscussionRoute(request, response, url, { remote, expectedOrigin } = {}) {
     const path = url.pathname;
     if (path !== LIST_PATH && !path.startsWith(PREFIX)) return false;
-    // Locality comes from the dashboard's remote classification, not from the
-    // configured-public-host acceptance: remote wins over route/method/service.
+    // The dashboard authorizes loopback and its configured public host. Other
+    // remote requests are refused before route, method or service handling.
     if (remote === true) {
       sendStatus(response, 403);
       return true;
@@ -437,9 +437,9 @@ export function createDiscussionRoutes({ discussion, actionToken } = {}) {
         return true;
       }
       // Authorization is static and complete before any body byte is read or
-      // parsed: exact local Origin, the dashboard token and JSON only.
+      // parsed: the operator endpoint's Origin, the dashboard token and JSON only.
       if (
-        request.headers.origin !== `http://${request.headers.host}` ||
+        request.headers.origin?.toLowerCase() !== (expectedOrigin ?? `http://${request.headers.host}`).toLowerCase() ||
         typeof actionToken !== "string" ||
         request.headers["x-sentinel-token"] !== actionToken ||
         request.headers["content-type"] !== "application/json"

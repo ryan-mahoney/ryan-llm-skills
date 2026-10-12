@@ -625,14 +625,14 @@ async function scenarioDiscussionFactory(t) {
   const material = await requestOnce({ port, path: `/api/workspace-file?${new URLSearchParams({ id: workspaceId, file: 'kit.yaml' })}` });
   assert.equal(material.status, 200, material.text);
   assert.equal(material.text, readFileSync(workspace.kit, 'utf8'), 'workspace file browsing uses the explicit store too');
-  const state = await requestOnce({ port, path: '/api/state' });
+  const state = await requestOnce({ port, path: '/api/state', headers: { Host: 'dashboard.example' } });
   assert.equal(state.status, 200);
   assert.ok(state.body.observers.some(observer => observer.state === 'observing'), 'the dashboard serves the observing snapshot');
-  const token = state.body.action_token;
+  const token = state.body.thread_action_token;
   assert.match(token, /^[a-f0-9]{64}$/);
-  const origin = `http://127.0.0.1:${port}`;
+  const origin = 'https://dashboard.example';
   const write = (path, payload) => requestOnce({ port, method: 'POST', path,
-    headers: { Origin: origin, 'x-sentinel-token': token, 'Content-Type': 'application/json' },
+    headers: { Host: 'dashboard.example', Origin: origin, 'x-sentinel-token': token, 'Content-Type': 'application/json' },
     body: JSON.stringify(payload) });
 
   const createdResponse = await write('/api/thread/create', {
@@ -662,13 +662,15 @@ async function scenarioDiscussionFactory(t) {
   assert.equal(listed.status, 200);
   assert.ok(listed.body.threads.some(thread => thread.thread_id === created.thread_id), 'the created thread is listed');
 
-  const remoteThreads = await requestOnce({ port, path: '/api/threads',
+  const remoteThreads = await requestOnce({ port, path: `/api/threads?${new URLSearchParams({ workspace_id: workspaceId })}`,
     headers: { Host: 'dashboard.example', Origin: 'https://dashboard.example' } });
-  assert.equal(remoteThreads.status, 403, 'the public Host cannot read threads');
+  assert.equal(remoteThreads.status, 200, 'the configured public Host reads threads');
+  assert.ok(remoteThreads.body.threads.some(thread => thread.thread_id === created.thread_id));
   const remoteState = await requestOnce({ port, path: '/api/state',
     headers: { Host: 'dashboard.example', Origin: 'https://dashboard.example' } });
   assert.equal(remoteState.status, 200);
-  assert.equal(Object.hasOwn(remoteState.body, 'action_token'), false, 'the public Host reads no action token');
+  assert.equal(Object.hasOwn(remoteState.body, 'action_token'), false, 'the public Host reads no completion token');
+  assert.match(remoteState.body.thread_action_token, /^[a-f0-9]{64}$/);
 
   // A foreign process carrying a discussion marker is never signalled.
   const foreign = f.spawnOwned(['-e', "process.title = 'discussion:foreign'; setInterval(() => {}, 1000);"]);
