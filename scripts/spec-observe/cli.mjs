@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 import os from 'node:os';
 import path from 'node:path';
+import { realpath } from 'node:fs/promises';
 import { discover, discoverManaged, discoverPackage, report } from './core.mjs';
 import { metrics, formatMetrics } from './metrics.mjs';
 import { collectWorkspace, renderWorkspace, readEnrollments } from './sentinel.mjs';
 import { createRepositoryDiscovery } from './discovery.mjs';
+import { changedMembers, epicWaitState, epicWaves, parseEpic } from './epics.mjs';
+import { listEpics } from '../spec-location/index.mjs';
 import { resolveStorageRoot } from '../workspaces/store.mjs';
 import { publicHint } from '../../pi/extensions/spec-runtime/monitor.mjs';
 
@@ -14,7 +17,11 @@ const options = {};
 // Resolve after the write has been handed to the OS; process.exit can otherwise
 // truncate a snapshot larger than the pipe buffer.
 const print = text => new Promise(resolve => process.stdout.write(`${text}\n`, resolve));
-const usage = `Usage: node scripts/spec-observe/cli.mjs list|runs|report|metrics|sentinel [options]
+const usage = `Usage: node scripts/spec-observe/cli.mjs list|runs|report|metrics|sentinel|epic [options]
+  epic lint --workspace W --epic SLUG [--root PATH]  Validate one epic record; print its dependency waves (exit 1 when invalid)
+  epic wait --workspace W --epic SLUG [--minutes N] [--interval-seconds N] [--root PATH]
+                         Block until a member's status, attention or launched session changes, or N minutes
+                         pass (default 10, at most 60; checks every 60 seconds); print members and what changed
   metrics --package PATH  Calls, role/model response time, steps, test submissions and cost
   --format text|json     Metrics output (default json)
   --all-sessions         Metrics across all recorded coordinator sessions, including pauses
@@ -32,6 +39,59 @@ Output is compact metadata JSON. No transcript text, commands, or prompts are em
 Without --session, report selects the most recently started matching root session.`;
 try {
   if (command === '--help' || command === 'help') { console.log(usage); process.exit(0); }
+  if (command === 'epic') {
+    const [action, ...rest] = args;
+    const flags = {};
+    for (let i = 0; i < rest.length; i += 2) {
+      if (!['--workspace', '--epic', '--root', '--minutes', '--interval-seconds'].includes(rest[i]) || rest[i + 1] === undefined) throw new Error(usage);
+      flags[rest[i]] = rest[i + 1];
+    }
+    if (!['lint', 'wait'].includes(action) || !flags['--workspace'] || !flags['--epic']) throw new Error(usage);
+    const listed = await listEpics(flags['--workspace'], { root: flags['--root'] });
+    if (!listed.ok) throw new Error(`${listed.code}: ${listed.message}`);
+    const found = listed.epics.find(item => item.slug === flags['--epic']);
+    const parsed = !found ? { error: 'no epic record' } : found.error ? { error: `unreadable: ${found.error}` }
+      : parseEpic(found.epic, { slug: found.slug });
+    const result = parsed.error ? { ok: false, record: found?.record ?? null, error: parsed.error }
+      : { ok: true, record: found.record, waves: epicWaves(parsed.epic.packages).waves,
+        missing: found.members.filter(member => !member.exists).map(member => member.slug) };
+    if (action === 'lint' || !result.ok) {
+      await print(JSON.stringify(result, null, 2));
+      process.exit(result.ok ? 0 : 1);
+    }
+    const minutes = Number(flags['--minutes'] ?? 10);
+    const interval = Number(flags['--interval-seconds'] ?? 60);
+    if (!(minutes > 0 && minutes <= 60) || !(interval >= 5 && interval <= 600)) throw new Error('minutes must be in (0, 60]; interval-seconds in [5, 600].');
+    const agentDir = process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), '.pi/agent');
+    const storageRoot = flags['--root'] ?? resolveStorageRoot(process.env, os.homedir());
+    const packages = found.members.map(member => `${flags['--workspace']}/${member.slug}`);
+    const observe = async () => {
+      const snapshot = await collectWorkspace({ roots: [], packages, enrollmentErrors: [], indexDir: path.join(agentDir, 'spec-runtime'),
+        agentDir, scope: process.env.PI_INTERCOM_SCOPE_ID ?? null, includeInactive: true, storageRoot, packagesOnly: true });
+      const epic = snapshot.epics.find(item => item.epic === flags['--epic'] && item.workspace === flags['--workspace']);
+      if (!epic) throw new Error(`sentinel did not report epic ${flags['--epic']}: ${JSON.stringify(snapshot.coverage)}`);
+      // Members carry real paths; an assignment records the package path as resolved from the storage root.
+      const rows = await Promise.all((snapshot.assignments ?? []).map(async row =>
+        ({ ...row, spec_package: row.spec_package && await realpath(row.spec_package).catch(() => row.spec_package) })));
+      return { epic, state: epicWaitState(epic, rows) };
+    };
+    const first = await observe();
+    const deadline = Date.now() + minutes * 60000;
+    let current = first;
+    let changed = [];
+    while (!changed.length && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, Math.min(interval * 1000, Math.max(0, deadline - Date.now()))));
+      current = await observe();
+      changed = changedMembers(first.state, current.state);
+    }
+    const { epic } = current;
+    await print(JSON.stringify({ ok: true, changed, timed_out: !changed.length,
+      ready: epic.members.filter(member => ['proposed', 'prepared'].includes(member.status) && !member.waiting_on.length).map(member => member.name),
+      members: epic.members.map(({ name, status, attention, step, waiting_on, pr_url }) =>
+        ({ name, status, attention, step, waiting_on, pr_url, sessions: current.state[name].sessions })),
+      coverage: epic.coverage }, null, 2));
+    process.exit(0);
+  }
   if (!['list', 'runs', 'report', 'metrics', 'sentinel'].includes(command)) throw new Error(usage);
   const sentinelAction = command === 'sentinel' ? args.shift() : null;
   if (command === 'sentinel' && !['status', 'inspect'].includes(sentinelAction)) throw new Error(usage);

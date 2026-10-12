@@ -63,7 +63,7 @@ a skill nor a reader builds these paths itself.
 | `designs` | no | Design packages the epic implements, at most 20: `{ workspace, design, path? }` with the storage workspace id, the design slug and optionally the absolute design directory. See [Design packages](design-packages.md). |
 | `packages` | yes | Ordered members. Array order is the intended tie-break order when several members are eligible. At most 100. |
 | `packages[].package` | yes | Package slug in the same workspace (the directory name under `specs/`, no path separators). Unique within the epic. |
-| `packages[].requires` | no | Member names whose merge (or manual completion) this member needs. Array order and numbering are never dependencies; only `requires` is. |
+| `packages[].requires` | no | Member names whose merge (or manual completion) this member needs. Array order and numbering are never dependencies; only `requires` is. The edges must not form a cycle. |
 | `packages[].note` | no | One sentence for what derived status cannot express: superseded, folded into another PR, accepted deferral. |
 
 Records are small: readers refuse files over 64 KiB and more than 50 epics per
@@ -90,6 +90,11 @@ every gate.
 | `merged` | Completion basis `merged-pr`. |
 | `complete` | Completion basis `manual`. |
 | `unknown` | The package exists but its receipts or checkpoints could not be fully read (read budget, stale or invalid records) and no completion is recorded. Never inferred from partial evidence. |
+
+A member's wave is derived from `requires`: wave 1 requires nothing, and each later
+wave requires only members of earlier waves. Members of one wave can run at the same
+time. `node ~/.agents/scripts/spec-observe/cli.mjs epic lint --workspace W --epic S`
+validates a record and prints its waves; the record never stores them.
 
 A member's `waiting_on` lists the `requires` entries whose status is not `merged`
 or `complete`; it is empty for a member that has itself landed. The epic's `next` is the first member in array order whose status is
@@ -129,15 +134,15 @@ and `sentinel-merge.json` record the package reference (`workspace/slug`), so a 
 renamed after its first dispatch, and status suffixes such as `- DONE` are never
 added.
 
-- **Epic members:** `<epic><NN>-<slug>`, two-digit ordinal, for example
-  `data01-foundations`, `adj07-adjacent-import-pilot`. The epic slug is 2 to 5
-  letters. Existing members keep their current names; the record lists them as
-  they are.
+- **Epic members:** `<epic>-<NN>-<slug>`, two-digit ordinal, for example
+  `ai-01-service-explanations`, `bill-03-invoice-export`. The epic slug is 2 to 5
+  letters. Existing members keep their current names (`data01-foundations`,
+  `adj1-foundational-contracts`); the record lists them as they are.
 - **Standalone packages:** `<NN>-<slug>` with a workspace-wide two-digit sequence
   (one sequence across all repositories in the workspace), or a bare slug where the
   workspace already uses one. Refuse a duplicate ordinal. Slugs are unique within a
   workspace.
-- **Splits:** letter suffix on the ordinal, `07a-home-frame`. **Continuations:** a
+- **Splits:** letter suffix on the ordinal, `07a-home-frame`, `bill-03a-invoice-export`. **Continuations:** a
   new ordinal, not `-part-2`.
 
 The ordinal records creation order and grouping. It is not a dependency; use
@@ -145,13 +150,21 @@ The ordinal records creation order and grouping. It is not a dependency; use
 
 ## Who writes the record
 
+- **epic-plan.** Splits a body of work into members, sequences them for parallel
+  work, and writes the record with `state: planned`, the plan at
+  `plans/<epic>-epic.md`, and one proposed member package per entry with a
+  `context.md` for architecture. An edge added only so two members do not edit the
+  same surface at once carries a member `note` saying so.
 - **Planning.** When architecture decomposes one plan into two or more packages,
   the planning stage creates the workspace's `epics/<slug>/epic.json` with the members, their
   `requires`, and the plan path, and names the members by the convention above.
   When the plan implements design packages, it lists them under `designs` and cuts
   members on the screen inventory ([Design packages](design-packages.md)).
+  A package that is already a member of a record leaves the record unchanged.
 - **epic-end-to-end.** Reads membership, order and dependencies from the record,
-  writes `run.md` beside it, and updates `state`. Given a `PACKAGES` list and no
+  writes `run.md` beside it, and updates `state`. It runs a wave's ready members in
+  parallel, each in its own launched session, when they change separate surfaces and
+  verify against separate state; it alone merges them. Given a `PACKAGES` list and no
   record, it writes one first.
 - **spec-end-to-end.** Resolves the package's epic at intake by listing
   the workspace's epics (`spec-location epics`) for the package slug, records the epic in its ledger and

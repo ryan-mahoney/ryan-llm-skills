@@ -1,11 +1,11 @@
 ---
 name: epic-end-to-end
-description: "Implement an epic across an explicit list of planned spec packages in dependency order, resuming each through reviews, evidence, PR publication and authorized merge, then updating downstream plans from feedback. Use for running several related specs without routine handoffs; a single package uses spec-end-to-end."
+description: "Implement an epic across an explicit list of planned spec packages in dependency order, running independent packages in parallel sessions when that is safe and saves time, and resuming each through reviews, evidence, PR publication and authorized merge, then updating downstream plans from feedback. Use for running several related specs without routine handoffs; a single package uses spec-end-to-end."
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "3"
+  version: "4"
 ---
 
 # Epic End To End
@@ -24,6 +24,8 @@ remaining packages. The operator need not repeat these instructions:
 
 - Resolve dependency order and prerequisite status against current code and merged
   PRs, using the record's array order to break ties among eligible packages.
+- Run eligible packages at the same time when [the parallel test](#run-independent-packages-in-parallel)
+  holds, each in its own launched session; otherwise run them one at a time in this session.
 - Preserve completed work and resume each package at its first unfinished
   obligation. Refresh missing or stale preparation through `spec-write`.
 - Complete each package's reviews and evidence, publish its PR, and merge it under
@@ -53,6 +55,7 @@ REVIEW_AGENT: gpt-6.1-sol:medium from openai-codex
 SCOUT_AGENT: gpt-6-luna:low from openai-codex
 FINAL_REVIEWER: gpt-6.1-sol:xhigh from openai-codex
 WORKSPACE: transitops   # optional when run from a repository in exactly one kit
+MAX_PARALLEL: 3         # optional; at most this many launched packages at once; 1 runs serially
 EPIC: adj
 PACKAGES:   # optional when the record exists
 - transitops/adj1-first-feature
@@ -111,7 +114,8 @@ new user overrides through the owning workflow. Never silently substitute a mode
    using sourced facts; unresolved authority or consequential intent stays blocked.
 
 The ready queue contains packages with satisfied prerequisites, not simply the
-next list entry. Serial execution is the default. When the earliest package is
+next list entry. Several ready packages run at once only when the parallel test
+below holds; otherwise run them one at a time. When the earliest package is
 blocked, continue a listed independent package if its contracts permit it. Leave
 blocked packages and their acceptance obligations visible. If an unlisted producer
 is already available, consume its verified output; otherwise report its exact
@@ -146,7 +150,9 @@ cannot derive:
 - Original request, exact models, authority and the effective tie order if it
   differs from the record.
 - Satisfaction evidence for each `requires` edge and explicit external blockers.
-- Per package: pending/running/blocked/complete, and per target its checkout, branch, explicit PR base
+- Per batch: whether it ran in parallel, and the one-line reason when it did not.
+- Per package: pending/running/blocked/complete, the launched assignment ID when it runs in
+  its own session, and per target its checkout, branch, explicit PR base
   and pinned predecessor SHA, existing workflow ID, requested outcome, final commit,
   merge commit and time, and evidence/tour references. Keep reviewed PR HEAD
   separate from the merge commit. PR URL and merge state are derivable by sentinel
@@ -157,8 +163,9 @@ cannot derive:
 Update `run.md` atomically at material handoffs, before dispatch and before returning for
 a real blocker. Reuse the package's own managed ledger and receipts for step
 progress, worker IDs, reviews and retry budgets; do not copy them into this record
-or create an epic-shaped spec_dispatch assignment. Do not add a daemon, scheduler,
-new runtime tool or parallel writer merely to sequence existing workflows.
+or create an epic-shaped spec_dispatch assignment. Do not add a daemon, scheduler or
+new runtime tool merely to sequence existing workflows. Launched packages write only their
+own package files; this coordinator remains the only writer of `epic.json` and `run.md`.
 
 On resume reconcile this record against package receipts, Git and published heads.
 Do not redispatch a recorded running package until its owning workflow has resolved
@@ -260,6 +267,101 @@ request. A later feedback event can reopen an earlier assumption, but it cannot
 reset exhausted implementation/review budgets. At each handoff process one bounded
 feedback pass; return to it only for a material new fact, not an endless replan loop.
 
+## Run independent packages in parallel
+
+Each package runs in its own worktree (the runtime creates `<checkout>-<package>` per
+target), so packages never share a checkout. Parallel work still conflicts at merge
+time or through shared external state, and every extra session costs model capacity.
+Run a batch in parallel only when every member passes all of these:
+
+- **Ready.** Every `requires` member has landed: merged, or manually complete. In
+  publication-only mode, a package that would stack on an unmerged predecessor runs
+  serially in this session.
+- **Separate surfaces.** Compare what the batch members will change, using the plan's
+  ownership notes, each `proposal.md`, and the step cards' files when prepared. Members
+  that edit the same files, schema or migration sequence, generated artifacts, or public
+  contract run one after the other. Record why in `run.md` and suggest a `requires` edge
+  to the operator; never edit `requires` yourself.
+- **Isolated verification.** Worktrees do not isolate external state. Members whose
+  verification uses the same mutable database, fixed port, sandbox account or device run
+  one after the other unless the project context says concurrent use is safe.
+- **Time saved.** At least two members still need implementation. A member that needs
+  only publication, a merge or a short fix continues in this session.
+- **Capacity and host.** At most `MAX_PARALLEL` (default 3) launched packages run at
+  once. Launch only on the workspace's execution host
+  (`spec-location resolve --workspace W` succeeds without `--authoring`). When launched
+  sessions hit provider rate limits or host resource failures, stop launching, let the
+  running ones finish, and record the lower limit in `run.md`.
+
+When the test fails, run the batch serially as described in the next section. Record the
+decision for every batch in `run.md`, with its reason when the batch runs serially.
+
+### Launch each member
+
+1. Fetch the integration branch and pin the base SHA in `run.md`.
+2. Write the member's instructions to `launch-<member>.md` beside `run.md`: the package
+   reference, the exact model roles from this invocation, the base branch and pinned SHA,
+   the epic slug, and the requested outcome. That outcome is a published PR at the
+   requested readiness ("ready PR" or "draft PR"), never a merge: this coordinator merges.
+3. Choose an assignment ID (`uuidgen`, lowercase) and record it in `run.md` before launching.
+   Reuse the same `--id` for the preview and the launch; a new ID changes the digest.
+   Pass this session's own provider, model and thinking level so the package coordinator
+   matches it; when they are unknown, record that the Pi default applies.
+
+   ```bash
+   node ~/.agents/scripts/workspaces/cli.mjs launch <workspace> --id <uuid> \
+     --brief specs/<member>/context.md --spec-package <workspace>/<member> \
+     --target <first target id> --skill spec-end-to-end --authority pr \
+     --instructions-file <epic dir>/launch-<member>.md \
+     [--provider P --model M --thinking T] --json
+   ```
+
+   Without a terminal the command prints the preview and refuses. Check the preview's
+   package, target, skill and authority, then run the same command with
+   `--digest <contract_digest>`. Use `--authority draft-pr` when drafts are the requested
+   outcome. Launch authority never includes merge or deployment.
+
+### Observe launched members
+
+Launched sessions send no completion events to this session. Wait with
+
+```bash
+node ~/.agents/scripts/spec-observe/cli.mjs epic wait --workspace <workspace> --epic <slug> [--minutes N]
+```
+
+It blocks until a member's derived status, attention, or launched session state changes,
+or until N minutes (default 10, at most 60) pass, then prints every member, what changed,
+and `ready`. Handle the changes, update `run.md`, then wait again. Act on:
+
+- **`published`.** Start the merge handoff for that member. Merge one member at a time.
+- **`attention`.** Read the member's run (`sentinel inspect` or its receipts). Resolve an
+  ordinary technical question from the package's context and send the answer as a
+  direction with `spec-message`. Ask the user about a consequential decision, then relay
+  the answer the same way. `spec-message` delivers only during implementation or review;
+  a member that stops for a decision while still planning waits for the user, so report
+  its question with the `attach_command` that `workspaces locate <uuid> --json` prints.
+- **A session that ended without publication.** Reconcile with
+  `workspaces locate <uuid> --json` and the package receipts. Resume the package in this
+  session, or relaunch with `--attempt launch-retry --supersedes <old uuid>` only after
+  its recorded workers are confirmed ended. Never run two writers for one package.
+- **New `ready` members.** Apply the parallel test and launch while capacity allows.
+
+Never attach to, signal, or kill a launched session. Holds and pauses go through
+`spec-message` or `workspaces takeover`.
+
+### Merge while siblings run
+
+Merge each published member with the procedure above, one at a time. After each merge:
+
+- A running sibling whose surfaces or contracts the merged diff touches gets the facts
+  as a `spec-message` direction. Planning corrections go through that package's owner,
+  never by editing its inputs here.
+- A published sibling whose PR now conflicts, or whose repository requires an up-to-date
+  branch, returns to its owner for the `spec-pr` rebase. When its session has ended,
+  resume it in this session for publication only.
+- A clean rebase of an independent sibling keeps that sibling's evidence. Repository CI
+  owns the integrated check.
+
 ## Run each eligible package through its owning workflow
 
 Call `spec-end-to-end` with a concrete handoff containing `package_ref` and `package_dir`,
@@ -267,8 +369,9 @@ the targets' checkout/branch/base, pinned dependency inputs, exact model roles,
 existing authority, requested readiness and existing workflow/next obligation.
 In managed Pi use its prepared startup/checkpoint path; keep native workers and
 sentinel workflow registration bound to that package. Remain the top-level
-coordinator unless the user explicitly requested another coordinator. Do not spawn
-one coordinator per package or reconstruct dispatch/review internals here.
+coordinator unless the user explicitly requested another coordinator. Outside a
+parallel batch, do not spawn one coordinator per package, and never reconstruct
+dispatch/review internals here.
 
 Consume the returned completion/evidence/publication records. Require the package's
 final `spec_sentinel_checkpoint` at `state: complete` (see spec-end-to-end's Completion);
@@ -297,7 +400,8 @@ session and its existing worker event path. Closing Pi requires an explicit late
 resume. If the harness cannot wait/wake, record the pending worker handoff and
 state the limitation instead of promising unattended continuation.
 
-An explicit epic pause stops new dispatches and routes holds/cancellation through
+An explicit epic pause stops new dispatches and launches, sends a hold to every running
+launched member with `spec-message`, and routes holds/cancellation through
 the owning workflow; never kill a process by guessed PID. A package-scoped hold
 blocks its dependents, while unrelated work may continue unless the user says to
 pause the epic. Consume package inbox directions at the existing handoffs.

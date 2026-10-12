@@ -8,7 +8,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "14"
+  version: "15"
 ---
 
 # Spec Architect Initial — Solution Design Against Existing Architecture
@@ -51,7 +51,8 @@ This is the only skill that creates a package. Read [Spec Location](../spec-end-
 ## Step 1 — Intake: Qualify the Request Before Doing Any Work
 
 Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Architecture owns the initial evidence posture. Resolve the shared project context and write the
-feature's sourced `context.md` in `package_dir` before design; choose the smallest sustainable implementation and
+feature's sourced `context.md` in `package_dir` before design (when `epic-plan` already wrote one, keep its epic
+position, scope, contracts and supplied context, and add to it); choose the smallest sustainable implementation and
 proportionate evidence together. Distinguish actual deployment from isolated application wiring.
 
 Before detailed architecture work, make sure you understand what's actually being asked. When `package_dir` contains `requirements.md`, read it first. Restate the problem in your own words, covering:
@@ -414,7 +415,7 @@ the value of the feature.]
 Write the proposal to `proposal.md` in `package_dir`:
 
 - When the user supplies an existing package, use its folder; Step 0 created the folder for a new one. Names follow the convention in [Spec epics](../../docs/spec-epics.md#naming): `<epic><NN>-<slug>` for epic members, `<NN>-<slug>` or a bare slug for standalone packages, two-digit ordinals, a letter suffix for splits.
-- When one plan is decomposed into two or more packages, write the epic record at `locations.epic` per [Spec epics](../../docs/spec-epics.md): the members (package slugs in this workspace), each member's `requires` taken from the plan's dependency statements, and `plan` set to the plan's file name. Put the plan document at `locations.plan` when it is not already in the workspace; scope changes go through `spec-location scope --authoring`, not by editing files. Create each remaining member with its own Step 0 and `--epic`. Do not create a record for a single package. When the plan implements design packages (`~/.agents/docs/design-packages.md`), list them under `designs` as `{ workspace, design, path }` (take `path` from `locations.designs[].dir`), cut members on the screen inventory in each `design.json`, and name in every member's proposal the screens it implements: a screen claimed by no member is a plan gap to state, a screen claimed by two needs one owner.
+- When one plan is decomposed into two or more packages, write the epic record at `locations.epic` per [Spec epics](../../docs/spec-epics.md): the members (package slugs in this workspace), each member's `requires` taken from the plan's dependency statements, and `plan` set to the plan's file name. Put the plan document at `locations.plan` when it is not already in the workspace; scope changes go through `spec-location scope --authoring`, not by editing files. Create each remaining member with its own Step 0 and `--epic`. Do not create a record for a single package. A package that is already a member of an epic record leaves the record unchanged: when architecture shows the member should split, merge, or depend on another member, report that as a decision for the operator instead of editing membership or `requires`. When the plan implements design packages (`~/.agents/docs/design-packages.md`), list them under `designs` as `{ workspace, design, path }` (take `path` from `locations.designs[].dir`), cut members on the screen inventory in each `design.json`, and name in every member's proposal the screens it implements: a screen claimed by no member is a plan gap to state, a screen claimed by two needs one owner.
 - Keep every pipeline artifact for the feature in `package_dir`. Use package-relative paths between artifacts.
 - Write atomically. Keep required front matter first and the level-1 heading immediately after it.
 - Report `outcome: proposed | rejected | decision-required | blocked`. For a completed proposal,
