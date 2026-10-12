@@ -1,6 +1,6 @@
 # Adjacent storage operations
 
-Operator runbook for running workspace storage on two machines: the Linux execution host (`<host>`) and a Mac client. The host owns all live state (threads, sessions, assignments, `.sentinel/`, spec `runtime/`). Authored material moves between machines with `adjacent-sync` (Unison over SSH, run on demand). Design and rationale: `docs/adjacent-architecture.md`. CLI reference: `scripts/workspaces/README.md` and `scripts/spec-location/README.md`. Sync reference: `scripts/adjacent-sync/README.md`.
+Operator runbook for running workspace storage on two machines: the Linux execution host (`<host>`) and a Mac client. The host owns all live state (threads, sessions, assignments, `.sentinel/`, spec `runtime/`). Authored material moves between machines with `adjacent-sync` (Unison over SSH, run on demand). Design and rationale: `docs/adjacent-architecture.md`. CLI reference: `scripts/workspaces/README.md` and `scripts/spec-location/README.md`. Sync reference: `scripts/adjacent-sync/README.md`. To set up a new Linux host, start with `docs/linux-host-setup.md`.
 
 Each step is tagged with where it runs: **[Mac]**, **[Host]**, or **[Both]**. `W` is a workspace id. `WS` is the CLI shorthand used below:
 

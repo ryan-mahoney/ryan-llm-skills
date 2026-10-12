@@ -56,7 +56,8 @@ that workspace's adjacent storage at `<storage root>/projects/<workspace>/specs/
 epics, plans, project context, and workflow captures beside it. A package names the kit
 repositories it targets; repositories hold code, branches, worktrees, and committed documentation,
 and no `.specs/` folder exists in any checkout. Each workspace names one execution host in
-`kit.yaml`, and spec work for it runs only there.
+`kit.yaml`, and spec work for it runs only there. [Linux host setup](docs/linux-host-setup.md) prepares an execution host,
+and [storage operations](docs/adjacent-storage-operations.md) covers syncing, backups and migration.
 
 `scripts/spec-location/` is the only resolver. Every spec skill starts with
 `node ~/.agents/scripts/spec-location/cli.mjs check <package>` and reads paths from the package's
