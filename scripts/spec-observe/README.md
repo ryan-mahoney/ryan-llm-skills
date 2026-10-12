@@ -33,7 +33,12 @@ retries, late responses and read-only imports. It replaces the old tests that
 executed the handwritten renderer against a fake DOM; HTTP and file-boundary
 tests remain in `dashboard.test.mjs`. The browser journey waits through real
 five-second polls to detect editor replacement and reuses one isolated fixture
-for its sequential interactions.
+for its sequential interactions. Three independent desktop sibling checks cover the
+retained journeys: `autocomplete-check.py`, `browser-handoff-check.py` and
+`browser-session-check.py`. When `SENTINEL_EVIDENCE_DIR` names the package evidence
+directory, each writes its `ev-3-autocomplete.json`, `ev-4-handoff.json` or
+`ev-5-session.json` receipt and routes captures to `evidence/browser/`; otherwise
+both fall back to `/tmp`.
 
 In **Brief and assignment**, `/` suggests skills from the execution host's
 installed Pi catalog, including configured user and project sources. `@` suggests
@@ -73,11 +78,32 @@ a status-only read after off does not reopen it. Loading Pi alone starts nothing
 Mode changes reuse the same dashboard. A failed browser launch leaves its URL
 available to open manually, and a failed service launch does not stop observation.
 
-The dashboard uses the Adjacent workspace shell's dark split-pane layout. Search
-workspaces/packages, filter current packages, then select a package for activity, obligations,
-incidents, actions, coverage and paths. Freshness and observer heartbeat are shown
-separately. It reads existing JSON exports every five seconds, without new model
-calls. Its file endpoints serve a package only when a published snapshot names it and it sits directly under `specs/` of a valid workspace (the workspace file gate). No worker controls are exposed. Task activity and obligation
+The dashboard is a single persistent shell: a 196px rail links the seven destinations
+**Specs**, **Epics**, **Agents**, **Conversations**, **Files**, **Designs** and
+**Workspaces**, with the workspace scope control above them. Scope is either the
+portfolio (`All workspaces`) or one concrete workspace kit; run and epic records match a kit
+by its directory basename, while assignments match the kit id only, so a neighboring kit
+cannot cross-match. Conversations, Designs and workspace Files require a concrete
+workspace and otherwise render a searchable picker over the same catalog; package
+Files are a portfolio exception (`source=package` plus an opaque object id) and need
+no picker. Changing the scope clears incompatible object selections, and
+Back/Forward as well as query history are honored: deliberate fields (`dest`, `ws`,
+`id`, `tab`, `source`, `path`) push, while `q` and `filter` changes replace.
+
+`frontend/src/route.ts` is the single hash-route owner for `dest`, `ws`, `id`, `tab`,
+`source`, `path`, `filter` and `q`, encoded with `URLSearchParams`; an empty or
+unknown destination canonicalizes to the Specs landing route. Examples: `#/specs`,
+`#/workspaces`, `#/conversations?ws=fixture`, and the grammar example
+`#/files?ws=alpha&id=fixture%2Fbrowser&tab=activity&source=spec&path=docs%2Fcaf%C3%A9+notes.md&filter=open&q=`.
+The `id` value is a destination-specific opaque selection key; that example
+illustrates encoding only and does not mean the route id is a package reference.
+
+It reads existing JSON exports every five seconds, without new model
+calls. Its file endpoints serve a package only when a published snapshot names it and it sits directly under `specs/` of a valid workspace (the workspace file gate). The imported file mode works without a server and exposes no mutation;
+workspace surfaces need the live local dashboard. Local live session actions (copy the attach
+command, end a session after identity confirmation) are the only worker-adjacent controls;
+remote reads stay read-only under the same server action-token gating, and a scope
+change never grants mutation authority. Task activity and obligation
 text render Markdown emphasis, code, headings, lists and HTTP(S) links. Raw HTML
 is displayed as text; other link schemes cannot execute. Existing public-hint
 redaction and length limits still apply before display.
@@ -117,8 +143,11 @@ Lifecycle reports the linked workflow run, quiet, attachment and unconfirmed
 workers, and Declared evidence reports a ready/blocked verdict at its declared
 commit with `declared-artifact` scope, or `not-assessed` when no artifact was
 read. Assignment coverage (`complete` or `partial`) explains missing probe reads.
-The view is read-only: it never invokes attach, takeover or resume, never writes
-records and never exposes transcripts. Older snapshots without `assignments`
+The record view is read-only: it never invokes attach, takeover or resume and
+never writes records. The local live session controls only copy the attach command
+and end the session after the identity confirmation; the agent detail shows the
+bounded last response, not the transcript, and remote or imported snapshots expose
+no session controls. Older snapshots without `assignments`
 simply show no agent rows.
 
 Run cards and details show the assigned step’s position, name and total prepared
