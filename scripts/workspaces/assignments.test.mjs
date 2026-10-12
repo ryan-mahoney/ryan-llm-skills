@@ -108,6 +108,27 @@ async function briefFixture(workspaceDirectory, bytes) {
   await writeFile(join(briefDirectory, "brief.md"), bytes);
 }
 
+// Hand-written expected context block (no package, or an explicit package
+// line) so assertions never derive from the production builder.
+function expectedPrompt({
+  id, wsName, wsId, wsDir, execDir, repo = "app", briefFile = "brief.md", snapshot, pi,
+  request, authority = "none", meaning = "This launch grants no push or pull request.",
+  packageLine = "- Spec package: none.", extra = [],
+}) {
+  return [
+    "Assignment context",
+    `- Assignment: ${id}. Its record is ${wsDir}/assignments/${id}.json; read it again if you lose earlier context.`,
+    `- Workspace: ${wsName} (${wsId}) at ${wsDir}. Workspace storage holds the kit, briefs, spec packages and sessions; code changes belong in the working directory.`,
+    `- Working directory: ${execDir} (repository ${repo} checkout).`,
+    packageLine,
+    `- Brief: ${wsDir}/briefs/${briefFile}. ` + (pi
+      ? `The launch copy is attached above (${snapshot}); edit the source, not the copy.`
+      : `Read the launch copy at ${snapshot}; edit the source, not the copy.`),
+    `- Publication authority: ${authority}. ${meaning} Merge and deployment are allowed only when the request grants them.`,
+    ...extra,
+  ].join("\n") + `\n\nRequest\n${request}`;
+}
+
 // Resolve the installed Pi dist for tests that exercise its argv parser.
 // Mirrors scripts/workspaces/references.mjs: the managed install under
 // PI_MANAGED_INSTALL_ROOT or ~/.pi/agent/install/current-version, require
@@ -287,6 +308,69 @@ test("assignment resolution validates supplied spec package against the package 
     /migrate/,
   );
   await rm(join(primary, ".specs"), { recursive: true, force: true });
+
+  await assertNoWrites(workspaceDirectory, storageRoot);
+});
+
+test("assignment context names the spec package and its first command, or states none", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  const workspaceDirectory = join(storageRoot, "projects", "context-workspace");
+  await mkdir(workspaceDirectory, { recursive: true });
+  const appPath = await makeRepo(join(root, "repos", "app"));
+  const home = join(root, "home");
+  await mkdir(home, { recursive: true });
+  const piPath = await fakePi(join(root, "bin"));
+  await briefFixture(workspaceDirectory, "Context brief.\n");
+  await writeFile(join(workspaceDirectory, "kit.yaml"), kitYaml({
+    id: "context-workspace",
+    name: "Context Workspace",
+    executionHost: hostname().split(".")[0].toLowerCase(),
+    repositories: [{ id: "app", path: appPath }],
+  }));
+  const created = await newPackage({
+    workspace: "context-workspace",
+    slug: "feature",
+    targets: [{ id: "app" }],
+    root: storageRoot,
+  });
+  assert.equal(created.ok, true, JSON.stringify(created));
+  const packageDirectory = created.locations.package_dir;
+
+  const workspacePhysical = (await fetchWorkspace(storageRoot, "context-workspace")).directory;
+  const base = {
+    workspace_id: "context-workspace",
+    storageRoot,
+    home,
+    brief: "briefs/brief.md",
+    skill: "general",
+    instructions: "Do the work.",
+    target: "app",
+    pi_path: piPath,
+  };
+
+  const withPackage = await resolveAssignment({
+    ...base, assignment_id: randomUUID(), specPackage: packageDirectory, publication_authority: "draft-pr",
+  });
+  const prompt = withPackage.piArgs[withPackage.piArgs.length - 1];
+  assert.ok(prompt.startsWith("Assignment context\n"));
+  assert.ok(prompt.includes(
+    `- Spec package: context-workspace/feature at ${packageDirectory}. ` +
+      `First run \`node ${join(home, ".agents", "scripts", "spec-location", "cli.mjs")} check context-workspace/feature\``,
+  ));
+  assert.ok(prompt.includes("- Publication authority: draft-pr. You may push the branch and open a draft pull request."));
+  assert.ok(prompt.indexOf("Assignment context") < prompt.indexOf("Request\nPerform this request:"));
+  assert.equal(withPackage.inputPreview.instruction, prompt);
+
+  const supersededId = randomUUID();
+  const withoutPackage = await resolveAssignment({
+    ...base, assignment_id: randomUUID(), workflow_id: "wf-1", attempt_kind: "launch-retry", supersedes: supersededId,
+  });
+  const bare = withoutPackage.piArgs[withoutPackage.piArgs.length - 1];
+  assert.ok(bare.includes("- Spec package: none.\n"));
+  assert.ok(!bare.includes("grants no merge"));
+  assert.ok(bare.includes(`\n- Workflow: wf-1.\n- Retries assignment ${supersededId}.\n\nRequest\n`));
+  assert.ok(bare.includes(`- Brief: ${workspacePhysical}/briefs/brief.md.`));
 
   await assertNoWrites(workspaceDirectory, storageRoot);
 });
@@ -482,7 +566,10 @@ test("assignment resolution fixes digest for known brief bytes and tracks socket
   assert.notEqual(authorityChanged.contractDigest, first.contractDigest);
   assert.ok(
     authorityChanged.piArgs[authorityChanged.piArgs.length - 1]
-      .includes("Publication authority: pr (grants no merge/deploy)."),
+      .includes(
+        "- Publication authority: pr. You may push the branch and open a pull request ready for review. " +
+          "Merge and deployment are allowed only when the request grants them.",
+      ),
   );
 
   const trustChanged = await resolveAssignment({ ...input, project_trust: "never" });
@@ -549,14 +636,16 @@ test("assignment resolution delivers plain skill path and @snapshot without /ski
   assert.ok(resolved.piArgs.includes("--name") && resolved.piArgs.includes("skill-workspace:Skill Workspace"));
 
   const instruction = resolved.piArgs[resolved.piArgs.length - 1];
-  assert.ok(instruction.startsWith(
-    `Read the skill at ${skillPath} and perform its instructions for this request.\n\n`,
-  ));
-  assert.ok(instruction.includes("Apply the demo skill."));
-  assert.ok(instruction.includes(
-    `Assignment ${id} workspace skill-workspace dir ${appPhysical}. ` +
-      "Publication authority: none (grants no merge/deploy).",
-  ));
+  assert.equal(instruction, expectedPrompt({
+    id,
+    wsName: "Skill Workspace",
+    wsId: "skill-workspace",
+    wsDir: workspacePhysical,
+    execDir: appPhysical,
+    snapshot: join(workspacePhysical, "assignments", `${id}.brief.md`),
+    pi: true,
+    request: `Read the skill at ${skillPath} and perform its instructions for this request.\n\nApply the demo skill.`,
+  }));
   // The @file prefix must not be a skill-expansion command.
   assert.ok(!instruction.includes("/skill:"));
   assert.ok(!instruction.split("\n").some((line) => line.trimStart().startsWith("/skill")));
@@ -713,6 +802,7 @@ test("assignment resolution verifies installed Pi input assembly model-free", as
   });
   assert.ok(initialMessage.includes("Assembly brief bytes."));
   assert.ok(initialMessage.includes(`Read the skill at ${skillPath}`));
+  assert.ok(initialMessage.includes("Assignment context\n- Assignment: "));
   assert.ok(initialMessage.includes("Apply the demo skill."));
   assert.ok(!initialMessage.split("\n").some((line) => line.trimStart().startsWith("/skill:")));
   t.diagnostic(`assembled initial message bytes: ${Buffer.byteLength(initialMessage, "utf8")}`);
@@ -806,10 +896,16 @@ test("assignment resolution keeps option-like general instructions as one plain 
       pi_path: piPath,
     });
     const snapshotPath = join(workspacePhysical, "assignments", `${id}.brief.md`);
-    const expectedInstruction =
-      `Perform the following request:\n\n${instructions}\n\n` +
-      `Assignment ${id} workspace option-workspace dir ${appPhysical}. ` +
-      "Publication authority: none (grants no merge/deploy).";
+    const expectedInstruction = expectedPrompt({
+      id,
+      wsName: "Option Workspace",
+      wsId: "option-workspace",
+      wsDir: workspacePhysical,
+      execDir: appPhysical,
+      snapshot: snapshotPath,
+      pi: true,
+      request: `Perform this request:\n\n${instructions}`,
+    });
     assert.equal(resolved.piArgs[resolved.piArgs.length - 1], expectedInstruction);
 
     if (piAssembler !== null) {
@@ -826,10 +922,8 @@ test("assignment resolution keeps option-like general instructions as one plain 
         stdinContent: undefined,
       });
       assert.ok(initialMessage.includes(instructions));
-      assert.ok(initialMessage.includes(
-        `Assignment ${id} workspace option-workspace dir ${appPhysical}. ` +
-          "Publication authority: none (grants no merge/deploy).",
-      ));
+      assert.ok(initialMessage.includes(`- Working directory: ${appPhysical} (repository app checkout).`));
+      assert.ok(initialMessage.endsWith(`Request\nPerform this request:\n\n${instructions}`));
     }
   }
   t.diagnostic(
@@ -884,10 +978,16 @@ test("assignment resolution harness normalizes the enum and appends it to the ca
   const appPhysical = await realpath(appPath);
   const storagePhysical = await realpath(storageRoot);
   const snapshotPath = join(workspacePhysical, "assignments", `${base.assignment_id}.brief.md`);
-  const expectedInstruction =
-    "Perform the following request:\n\nResolve the harness.\n\n" +
-    `Assignment ${base.assignment_id} workspace harness-workspace dir ${appPhysical}. ` +
-    "Publication authority: none (grants no merge/deploy).";
+  const expectedInstruction = expectedPrompt({
+    id: base.assignment_id,
+    wsName: "Harness Workspace",
+    wsId: "harness-workspace",
+    wsDir: workspacePhysical,
+    execDir: appPhysical,
+    snapshot: snapshotPath,
+    pi: true,
+    request: "Perform this request:\n\nResolve the harness.",
+  });
   assert.deepEqual(absent.piArgs, [
     "--session-dir", join(workspacePhysical, "sessions", base.assignment_id),
     "--session-id", base.assignment_id,
@@ -1040,11 +1140,17 @@ test("assignment resolution harness resolves clauded and codexd wrappers with ha
 
   const workspacePhysical = (await fetchWorkspace(storageRoot, "wrapper-workspace")).directory;
   const appPhysical = await realpath(appPath);
-  const expectedPrompt = (id) =>
-    `Read the assignment brief at ${join(workspacePhysical, "assignments", `${id}.brief.md`)}.\n\n` +
-    "Perform the following request:\n\nRun the wrapper.\n\n" +
-    `Assignment ${id} workspace wrapper-workspace dir ${appPhysical}. ` +
-    "Publication authority: none (grants no merge/deploy).";
+  const wrapperPrompt = (id, request = "Perform this request:\n\nRun the wrapper.") =>
+    expectedPrompt({
+      id,
+      wsName: "Wrapper Workspace",
+      wsId: "wrapper-workspace",
+      wsDir: workspacePhysical,
+      execDir: appPhysical,
+      snapshot: join(workspacePhysical, "assignments", `${id}.brief.md`),
+      pi: false,
+      request,
+    });
   const makeInput = (extra = {}) => ({
     assignment_id: randomUUID(),
     workspace_id: "wrapper-workspace",
@@ -1069,10 +1175,10 @@ test("assignment resolution harness resolves clauded and codexd wrappers with ha
 
     assert.deepEqual(claudeResolved.piArgs, [
       "--session-id", claudeResolved.record.assignment_id,
-      expectedPrompt(claudeResolved.record.assignment_id),
+      wrapperPrompt(claudeResolved.record.assignment_id),
     ]);
     assert.deepEqual(codexResolved.piArgs, [
-      expectedPrompt(codexResolved.record.assignment_id),
+      wrapperPrompt(codexResolved.record.assignment_id),
     ]);
     assert.equal(
       claudeResolved.inputPreview.instruction,
@@ -1103,25 +1209,25 @@ test("assignment resolution harness resolves clauded and codexd wrappers with ha
       "--session-id", claudeModeled.record.assignment_id,
       "--model=opus",
       "--effort", "high",
-      expectedPrompt(claudeModeled.record.assignment_id),
+      wrapperPrompt(claudeModeled.record.assignment_id),
     ]);
     const claudeEffortOnly = await resolveAssignment(makeInput({ harness: "claude", thinking: "max" }));
     assert.deepEqual(claudeEffortOnly.piArgs, [
       "--session-id", claudeEffortOnly.record.assignment_id,
       "--effort", "max",
-      expectedPrompt(claudeEffortOnly.record.assignment_id),
+      wrapperPrompt(claudeEffortOnly.record.assignment_id),
     ]);
     const codexModeled = await resolveAssignment(makeInput({ harness: "codex", model: "gpt-5", thinking: "ultra" }));
     assert.deepEqual(codexModeled.piArgs, [
       "--model=gpt-5",
       "-c", 'model_reasoning_effort="ultra"',
-      expectedPrompt(codexModeled.record.assignment_id),
+      wrapperPrompt(codexModeled.record.assignment_id),
     ]);
     // A numeric-looking effort stays a quoted TOML string with no model.
     const codexNumeric = await resolveAssignment(makeInput({ harness: "codex", thinking: "42" }));
     assert.deepEqual(codexNumeric.piArgs, [
       "-c", 'model_reasoning_effort="42"',
-      expectedPrompt(codexNumeric.record.assignment_id),
+      wrapperPrompt(codexNumeric.record.assignment_id),
     ]);
 
     // A DEL U+007F inside a codex effort must surface in the TOML basic
@@ -1131,7 +1237,7 @@ test("assignment resolution harness resolves clauded and codexd wrappers with ha
     const codexDel = await resolveAssignment(makeInput({ harness: "codex", thinking: codexDelEffort }));
     assert.deepEqual(codexDel.piArgs, [
       "-c", 'model_reasoning_effort="del\\u007f\\"\\\\\\n"',
-      expectedPrompt(codexDel.record.assignment_id),
+      wrapperPrompt(codexDel.record.assignment_id),
     ]);
 
     // Claude accepts high/max without a provider and refuses off/minimal.
@@ -1152,9 +1258,9 @@ test("assignment resolution harness resolves clauded and codexd wrappers with ha
       const skilled = await resolveAssignment(makeInput({ harness, skill: "spec-end-to-end" }));
       assert.equal(skilled.record.skill_path, skillPath);
       const prompt = skilled.piArgs[skilled.piArgs.length - 1];
-      assert.ok(prompt.startsWith(
-        `Read the assignment brief at ${join(workspacePhysical, "assignments", `${skilled.record.assignment_id}.brief.md`)}.\n\n` +
-        `Read the skill at ${skillPath} and perform its instructions for this request.\n\n`,
+      assert.equal(prompt, wrapperPrompt(
+        skilled.record.assignment_id,
+        `Read the skill at ${skillPath} and perform its instructions for this request.\n\nRun the wrapper.`,
       ), harness);
       assert.ok(prompt.includes("Run the wrapper."), harness);
       assert.ok(!prompt.includes("/skill:"), harness);

@@ -864,10 +864,20 @@ test("repeat and retry: approval boundaries and snapshot stability", async (t) =
     "--provider", "openai", "--model", "gpt-5",
     "--thinking", "high", "--approve",
     `@${snapshotPath}`,
-    "Perform the following request:\n\n" +
-      "Integration instructions.\n\n" +
-      `Assignment ABCDEF12-3456-4789-ABCD-EF1234567890 workspace workspace-0 dir ${executionDirectory}. ` +
-      "Publication authority: none (grants no merge/deploy).",
+    [
+      "Assignment context",
+      `- Assignment: ${input.assignment_id}. Its record is ${workspaceDirectory}/assignments/${input.assignment_id}.json; read it again if you lose earlier context.`,
+      `- Workspace: workspace-0 (workspace-0) at ${workspaceDirectory}. Workspace storage holds the kit, briefs, spec packages and sessions; code changes belong in the working directory.`,
+      `- Working directory: ${executionDirectory} (repository app checkout).`,
+      "- Spec package: none.",
+      `- Brief: ${workspaceDirectory}/briefs/brief.md. The launch copy is attached above (${snapshotPath}); edit the source, not the copy.`,
+      "- Publication authority: none. This launch grants no push or pull request. Merge and deployment are allowed only when the request grants them.",
+      "",
+      "Request",
+      "Perform this request:",
+      "",
+      "Integration instructions.",
+    ].join("\n"),
   ]);
   assert.equal(entries[0].snapshotSha256, sha256Hex(approvedBytes));
   assert.deepEqual(await readFile(adjacentPath), adjacentBytes);
@@ -1369,7 +1379,7 @@ async function runHarnessLifecycle(t, { harness, wrapperName }) {
     assert.ok(!entry.argv.includes("--session-id"), harness);
   }
   assert.ok(
-    entry.argv[entry.argv.length - 1].includes(`Read the assignment brief at ${snapshotPath}`),
+    entry.argv[entry.argv.length - 1].includes(`Read the launch copy at ${snapshotPath}; edit the source, not the copy.`),
     harness,
   );
 
