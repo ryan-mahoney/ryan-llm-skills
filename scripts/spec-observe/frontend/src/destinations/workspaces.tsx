@@ -3,6 +3,7 @@ import { stale, time } from '../format';
 import type { CatalogEntry } from '../scope';
 import { ActionBar, EmptyState, MasterDetail, RegionalSkeleton, StateNotice, StatusText, type StatusTone } from '../primitives';
 import type { DestinationProps } from './index';
+import { materialContents, materialUnavailable, unavailableArtifacts, workspaceAnnouncements } from './workspace-state';
 
 const list = (value: unknown): any[] => (Array.isArray(value) ? value : []);
 const text = (value: unknown): string => (typeof value === 'string' ? value : '');
@@ -19,6 +20,8 @@ const statusLabel = (status: unknown): string => {
       return 'Unreadable';
     case 'outside_root':
       return 'Outside workspace';
+    case 'repository_unavailable':
+      return 'Repository unavailable';
     default:
       return text(status) || 'Unknown';
   }
@@ -56,8 +59,11 @@ const unavailableSummary = (props: DestinationProps): string => {
   };
   const repositories = list(props.workspace?.repositories).filter(entry => entry?.status !== 'ok');
   const context = list(props.workspace?.context).filter(entry => entry?.status !== 'ok');
-  const facts = [...summarize(repositories, repositories.length === 1 ? 'repository' : 'repositories'), ...summarize(context, context.length === 1 ? 'context reference' : 'context references')];
-  if (list(props.workspace?.attention).length) facts.push('attention flags');
+  const artifacts = unavailableArtifacts(props.workspace);
+  const facts = [...summarize(repositories, repositories.length === 1 ? 'repository' : 'repositories'), ...summarize(context, context.length === 1 ? 'context reference' : 'context references'), ...summarize(artifacts, artifacts.length === 1 ? 'artifact' : 'artifacts')];
+  if (materialUnavailable(props.workspace, 'briefs')) facts.push('briefs collection unreadable');
+  if (materialUnavailable(props.workspace, 'notes')) facts.push('notes collection unreadable');
+  if (list(props.workspace?.attention).some(flag => flag !== 'briefs_unreadable' && flag !== 'notes_unreadable')) facts.push('attention flags');
   return facts.join(' and ');
 };
 const emptyMainCopy = (props: DestinationProps): { title: string; text: string; refresh: boolean } => {
@@ -76,7 +82,7 @@ const selectedName = (props: DestinationProps): string => {
 const unavailableFacts = (props: DestinationProps): string[] => {
   if (!compatibleDetail(props)) return [];
   const rows = [...list(props.workspace?.repositories), ...list(props.workspace?.context)].filter(entry => entry?.status !== 'ok');
-  const names = rows.map(entry => text(entry.id) || text(entry.path)).filter(Boolean);
+  const names = [...rows, ...unavailableArtifacts(props.workspace)].map(entry => text(entry.id) || text(entry.path) || 'Unavailable record');
   if (list(props.workspace?.attention).length) names.push('attention flags');
   return names;
 };
@@ -297,14 +303,13 @@ function WorkspacePane(props: DestinationProps) {
   const briefs = () => list(data()?.briefs);
   const notes = () => list(data()?.notes);
   const artifacts = () => list(data()?.artifacts);
-  const attention = () => list(data()?.attention);
   const dirBase = () => String(data()?.directory ?? '').split('/').filter(Boolean).pop() ?? text(ws());
   const loadedAtIso = () => (props.workspaceLoadedAt != null ? new Date(props.workspaceLoadedAt).toISOString() : undefined);
   const availability = (): { label: string; tone: StatusTone } | null => {
     if (!compatible()) return null;
     if (directoryPartial(props)) return { label: 'Coverage incomplete', tone: 'warning' };
     const statuses = [...repositories(), ...context()].map(entry => entry?.status);
-    if (attention().length === 0 && statuses.every(status => status === 'ok')) return { label: 'Available', tone: 'success' };
+    if (unavailableFacts(props).length === 0) return { label: 'Available', tone: 'success' };
     const firstIssue = statuses.find(status => status !== 'ok');
     return { label: firstIssue ? statusLabel(firstIssue) : 'Attention', tone: 'warning' };
   };
@@ -524,11 +529,11 @@ function WorkspacePane(props: DestinationProps) {
                   <tbody>
                     <tr>
                       <td><button type="button" class="text-link" onClick={() => openPath('briefs/')}>Briefs</button></td>
-                      <td>{briefs().length} saved {briefs().length === 1 ? 'brief' : 'briefs'}</td>
+                      <td>{materialContents(data(), 'briefs')}</td>
                     </tr>
                     <tr>
                       <td><button type="button" class="text-link" onClick={() => openPath('notes/')}>Notes</button></td>
-                      <td>{notes().length} saved {notes().length === 1 ? 'note' : 'notes'}</td>
+                      <td>{materialContents(data(), 'notes')}</td>
                     </tr>
                     <tr>
                       <td><button type="button" class="text-link" onClick={() => props.onNavigate({ dest: 'designs', ws: ws() })}>Designs</button></td>
@@ -618,26 +623,15 @@ function WorkspacePane(props: DestinationProps) {
 
 export function WorkspacesDestination(props: DestinationProps) {
   const [announcement, setAnnouncement] = createSignal('');
-  const announcedChecking = new Set<string>();
-  let previousPane = '';
-  let previousDirectory = '';
+  const announce = workspaceAnnouncements();
   createEffect(() => {
     const pane = paneAnnouncement(props);
     const directory = directoryAnnouncement(props);
-    let next = '';
-    if (pane && pane !== previousPane) next = pane;
-    else if (directory && directory !== previousDirectory) next = directory;
-    previousPane = pane;
-    previousDirectory = directory;
-    if (!next) return;
     const state = detailState(props);
     const catalogBusy = catalogChecking(props);
-    if (state === 'checking' || (state === 'loading' && props.workspaceDelayed) || catalogBusy) {
-      const identity = catalogBusy ? 'catalog' : String(props.route.ws ?? '');
-      if (announcedChecking.has(identity)) return;
-      announcedChecking.add(identity);
-    }
-    setAnnouncement(next);
+    const checking = state === 'checking' || (state === 'loading' && props.workspaceDelayed) || catalogBusy;
+    const next = announce(pane, directory, checking ? (catalogBusy ? 'catalog' : String(props.route.ws ?? '')) : undefined);
+    if (next) setAnnouncement(next);
   });
   return (
     <div class="workspace-destination">
@@ -651,13 +645,10 @@ export function WorkspacesDestination(props: DestinationProps) {
 
 export function WorkspacePicker(props: DestinationProps) {
   const [announcement, setAnnouncement] = createSignal('');
-  let previous = '';
+  const announce = workspaceAnnouncements();
   createEffect(() => {
-    const next = directoryAnnouncement(props);
-    if (next && next !== previous) {
-      previous = next;
-      setAnnouncement(next);
-    }
+    const next = announce('', directoryAnnouncement(props), catalogChecking(props) ? 'catalog' : undefined);
+    if (next) setAnnouncement(next);
   });
   return (
     <div class="full-page workspace-picker">
