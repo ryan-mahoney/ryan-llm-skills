@@ -380,13 +380,14 @@ operator decision for the target machine and is not installed by this repository
 First run `~/.agents/sync.sh`, which installs the extension's npm dependencies, and
 start the host once in the foreground to confirm the `ready` line.
 
-The heredoc expands `$(command -v node)`, `$HOME` and `$PATH` when the file is
-written, because systemd does not read the login shell's environment. `PATH` must
-reach `git`, and `gh` when GitHub merge evidence is wanted. If Node comes from mise,
-`command -v node` can resolve to a versioned install that a Node upgrade removes.
-In that case, use the mise shim path (`~/.local/share/mise/shims/node`). Omit
-`--public-host` when the dashboard is not served over Tailscale. Add
-`Environment=ADJACENT_STORAGE_ROOT=...` when storage is not at the default root.
+The host needs Node 22.19 or newer (`node:sqlite`). Pin that Node's path in the unit,
+because systemd does not read the login shell's environment, and a distribution's
+`node` is often older (Ubuntu 24.04 ships 18). Pi's installer keeps a suitable Node at
+`~/.local/share/pi-node/current/bin/node`, a link that survives its updates. `PATH`
+must reach `git`, and `gh` when GitHub merge evidence is wanted. Omit `--public-host`
+when the dashboard is not served over Tailscale. The storage root comes from the
+saved configuration (`cli.mjs setup --save`). The full host setup is in
+`docs/linux-host-setup.md`.
 
 ```bash
 TSNAME=$(tailscale status --json | jq -r '.Self.DNSName' | sed 's/\.$//')
@@ -397,8 +398,8 @@ Description=Spec Sentinel host
 After=network-online.target
 
 [Service]
-ExecStart=$(command -v node) $HOME/.agents/pi/extensions/spec-runtime/sentinel-host.mjs --root $HOME/Documents --port 4319 --public-host $TSNAME
-Environment=PATH=$PATH
+ExecStart=$HOME/.local/share/pi-node/current/bin/node $HOME/.agents/pi/extensions/spec-runtime/sentinel-host.mjs --root $HOME/Documents --port 4319 --public-host $TSNAME
+Environment=PATH=$HOME/.local/share/pi-node/current/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
 Restart=on-failure
 
 [Install]
