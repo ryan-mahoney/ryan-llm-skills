@@ -4,6 +4,7 @@ import { open, opendir, lstat, realpath, mkdir, writeFile, rename } from 'node:f
 import { homedir } from 'node:os';
 import { join, resolve, isAbsolute, relative } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { resolveStorageRoot } from '../workspaces/store.mjs';
 
 export const DISCOVERY_LIMITS = Object.freeze({ depth: 8, directories: 2000, entries: 20000, milliseconds: 2000, cacheMs: 300000 });
 const skipped = new Set(['node_modules', 'vendor', 'vendors', 'deps', '_build', 'build', 'dist', 'target', 'coverage', '__pycache__']);
@@ -44,7 +45,7 @@ export async function saveDiscoveryRoot(agentDir, path, home = homedir()) {
   return root;
 }
 
-export async function discoverRepositories(root, { limits = DISCOVERY_LIMITS, now = Date.now } = {}) {
+export async function discoverRepositories(root, { limits = DISCOVERY_LIMITS, now = Date.now, exclude = [] } = {}) {
   const roots = [], reasons = [];
   const started = now();
   let directories = 0, entries = 0;
@@ -54,6 +55,9 @@ export async function discoverRepositories(root, { limits = DISCOVERY_LIMITS, no
     if (!(await lstat(root)).isDirectory()) throw new Error('Not a directory or is a symlink');
     root = await realpath(root);
   } catch (error) { note(`discovery-unavailable: ${root} (${error.code || error.message})`); return result(); }
+  // Workspace storage often sits under the discovery root; it holds no repositories
+  // and its research copies would exhaust the scan limits.
+  const excluded = new Set(await Promise.all(exclude.map(path => realpath(path).catch(() => resolve(path)))));
   const queue = [{ path: root, depth: 0 }];
   for (let index = 0; index < queue.length; index++) {
     if (directories >= limits.directories || entries >= limits.entries || now() - started >= limits.milliseconds) {
@@ -74,6 +78,7 @@ export async function discoverRepositories(root, { limits = DISCOVERY_LIMITS, no
         if (entry.name === '.git' && (entry.isDirectory() || entry.isFile())) git = true;
         if (entry.name === '.specs' && entry.isDirectory()) specs = true;
         if (!entry.isDirectory() || entry.name.startsWith('.') || skipped.has(entry.name)) continue;
+        if (excluded.has(join(current.path, entry.name))) continue;
         if (current.depth >= limits.depth) { note(`discovery-depth-cap: ${current.path}`); continue; }
         if (queue.length >= limits.directories) { note('discovery-cap: directory limit reached'); continue; }
         queue.push({ path: join(current.path, entry.name), depth: current.depth + 1 });
@@ -87,6 +92,10 @@ export async function discoverRepositories(root, { limits = DISCOVERY_LIMITS, no
   return result();
 }
 
+function storageExclusion(home) {
+  try { return [resolveStorageRoot(process.env, home)]; } catch { return []; }
+}
+
 export function createRepositoryDiscovery({ agentDir, root: override, home = homedir(), now = Date.now,
   scan = discoverRepositories, cacheMs = DISCOVERY_LIMITS.cacheMs } = {}) {
   let cached;
@@ -95,7 +104,7 @@ export function createRepositoryDiscovery({ agentDir, root: override, home = hom
     try { root = override ? discoveryRoot(override, home) : await configuredRoot(agentDir, home); }
     catch (error) { return { root: null, roots: [], reasons: [`discovery-config-unavailable: ${discoveryConfigPath(agentDir)} (${error.code || error.message})`] }; }
     if (!cached || cached.root !== root || now() - cached.at >= cacheMs || now() < cached.at)
-      cached = { root, at: now(), value: await scan(root) };
+      cached = { root, at: now(), value: await scan(root, { exclude: storageExclusion(home) }) };
     return cached.value;
   } };
 }

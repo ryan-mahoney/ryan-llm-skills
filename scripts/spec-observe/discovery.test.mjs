@@ -28,6 +28,15 @@ test('default Documents discovery finds grouped and nested repositories without 
   assert.deepEqual(result.reasons, []);
 });
 
+test('discovery skips the workspace storage root under the discovery root', async t => {
+  const f = fixture(t);
+  const repo = f.repo(join(f.root, 'app'));
+  const storage = join(f.root, 'adjacent-storage');
+  f.repo(join(storage, 'projects', 'demo', 'sources', 'copied-repo'));
+  const result = await discoverRepositories(f.root, { exclude: [storage] });
+  assert.deepEqual(result.roots, [repo]);
+});
+
 test('cached discovery refreshes new nested repositories and persists an alternate root', async t => {
   const f = fixture(t); let time = 0;
   const discovery = createRepositoryDiscovery({ agentDir: f.agentDir, home: f.home, now: () => time });
