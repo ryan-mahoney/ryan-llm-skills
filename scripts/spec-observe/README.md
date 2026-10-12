@@ -6,6 +6,35 @@ contents. Node.js is the only dependency.
 
 ## Sentinel dashboard
 
+The dashboard is a Solid application with TypeScript components under
+`frontend/src/`. It uses the existing Node HTTP routes and SSE thread stream.
+Polling updates observed data; message and brief editors keep their own drafts
+and mounted input elements.
+
+The committed `dashboard.html` is the generated, self-contained deployment asset.
+A host can pull the repository and serve it without installing frontend packages.
+After changing frontend source, rebuild it:
+
+```sh
+npm ci --prefix scripts/spec-observe/frontend
+npm run build --prefix scripts/spec-observe/frontend
+```
+
+The build checks TypeScript, bundles Solid and the styles, and writes
+`dashboard.html`. Commit source and generated HTML together. Runtime assets do
+not use a CDN. Snapshot import also works when the HTML is opened from disk.
+
+Focused model tests run with `npm test --prefix scripts/spec-observe/frontend`.
+The isolated browser journey runs with
+`uv run --script scripts/spec-observe/frontend/browser-check.py` after starting
+Chromium through the `uishot` skill. It uses temporary storage and simulated
+workers to exercise polling, SSE, cursor selection, files, designs, dispatch,
+retries, late responses and read-only imports. It replaces the old tests that
+executed the handwritten renderer against a fake DOM; HTTP and file-boundary
+tests remain in `dashboard.test.mjs`. The browser journey waits through real
+five-second polls to detect editor replacement and reuses one isolated fixture
+for its sequential interactions.
+
 In an interactive Pi session, starting `/spec-sentinel`, `observe`, `shadow`, or
 `recover` starts an owned localhost dashboard and opens it in the default browser.
 `/spec-sentinel status` prints its URL. `off` and session shutdown stop that service;
