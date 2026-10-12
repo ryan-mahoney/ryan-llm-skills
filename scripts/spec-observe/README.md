@@ -735,3 +735,8 @@ Focused verification: `node --test scripts/spec-observe/session-activity.test.mj
 scripts/spec-observe/session-routes.test.mjs`, the `session controls end only`
 case in `scripts/workspaces/launch.integration.test.mjs`, and
 `uv run --script scripts/spec-observe/frontend/browser-session-check.py`.
+## Package dev servers
+
+Configured workspaces expose Start dev server, Stop dev server, and a Tailscale link
+in live package details. See [Package dev server previews](../../docs/dev-server-previews.md)
+for host setup, the Compose contract, private runtime state, and cleanup behavior.

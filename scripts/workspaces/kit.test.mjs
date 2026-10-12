@@ -1070,3 +1070,36 @@ test("kit edits: design-system paths cannot climb out of the repository and the 
   assert.equal(planKitEdit(OPS_KIT, { kind: "set-execution-host", host: "Box.local" }).expected.execution_host, "box");
   assert.throws(() => planKitEdit(OPS_KIT, { kind: "set-execution-host", host: ".local" }), /DNS label/);
 });
+
+// Run: node --test --test-name-pattern='kit preview' scripts/workspaces/kit.test.mjs
+test("kit preview: validates repository references and portable file containment", () => {
+  const base = parseKit(OPS_KIT).kit;
+  assert.equal(base.preview, undefined);
+  assert.deepEqual(validateKit({ ...base, preview: { repository: "a", compose_file: "dev/compose.yaml" } }).kit.preview,
+    { repository: "a", compose_file: "dev/compose.yaml" });
+  assert.match(validateKit({ ...base, preview: { repository: "missing", compose_file: "compose.yaml" } }).errors.join(), /unknown repository/);
+  for (const file of ["", ".", "../compose.yaml", "dev/../compose.yaml", "/compose.yaml", "C:/compose.yaml", "C:\\compose.yaml", "dev\\compose.yaml", "dev/", "dev/.", "./.", " ", "a\u0000b"]) {
+    assert.equal(validateKit({ ...base, preview: { repository: "a", compose_file: file } }).ok, false, JSON.stringify(file));
+    assert.throws(() => planKitEdit(OPS_KIT, { kind: "set-preview", repository_id: "a", compose_file: file }), /safe relative/);
+  }
+  for (const preview of [null, [], "compose.yaml", { repository: "a" }]) {
+    assert.equal(validateKit({ ...base, preview }).ok, false);
+  }
+});
+
+// Run: node --test --test-name-pattern='kit preview.*survives' scripts/workspaces/kit.test.mjs
+test("kit preview: survives unrelated edits and is cleared with its repository", () => {
+  const configured = planKitEdit(OPS_KIT, { kind: "set-preview", repository_id: "a", compose_file: "dev/compose.yaml" });
+  assert.deepEqual(parseKit(configured.after).kit.preview, { repository: "a", compose_file: "dev/compose.yaml" });
+  const renamed = planKitEdit(configured.after, { kind: "set-name", name: "Renamed" });
+  assert.deepEqual(renamed.expected.preview, configured.expected.preview);
+  const removedOther = planKitEdit(configured.after, { kind: "remove-repository", repository_id: "b" });
+  assert.deepEqual(removedOther.expected.preview, configured.expected.preview);
+  const removed = planKitEdit(configured.after, { kind: "remove-repository", repository_id: "a" });
+  assert.equal(removed.expected.preview, undefined);
+  assert.equal(removed.after.includes("preview:"), false);
+  const cleared = planKitEdit(configured.after, { kind: "clear-preview" });
+  assert.equal(cleared.after, OPS_KIT);
+  assert.equal(planKitEdit(OPS_KIT, { kind: "clear-preview" }).after, OPS_KIT);
+  assert.throws(() => planKitEdit(OPS_KIT, { kind: "set-preview", repository_id: "missing", compose_file: "compose.yaml" }), /no repository/);
+});
