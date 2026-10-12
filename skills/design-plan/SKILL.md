@@ -1,18 +1,18 @@
 ---
 name: design-plan
-description: "Plan a design package from context files: read the research, choose subject-matter and designer lenses, enumerate every screen-state with the person and decision or action it serves, declare the viewport posture, and write brief.md and design.json under a workspace's designs/ folder. Use when the user says 'plan the design', 'design this from these notes', 'what screens do we need', or starts a prototype from research. Stops before producing screens; design-run builds them."
-argument-hint: "<workspace-id> <design-slug> <context-path>... [--posture desktop-only|responsive] [--design-system PATH]"
+description: "Plan a design package from the user's conversation: read any referenced material, choose subject-matter and designer lenses, enumerate every screen-state with the person and decision or action it serves, declare the viewport posture, and write brief.md and design.json under a workspace's designs/ folder. Use when the user says 'plan the design', 'design this from these notes', 'what screens do we need', or describes a prototype. Stops before producing screens; design-run builds them."
+argument-hint: "<workspace-id> <design-slug> [--posture desktop-only|responsive] [--design-system PATH]"
 disable-model-invocation: true
 license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "1"
+  version: "2"
 ---
 
 # Design Plan — Context In, Brief and Screen Index Out
 
-Turn research and context files into a design package plan: who the people are, what each
+Turn the user's conversation into a design package plan: who the people are, what each
 decides or does, which screens in which states are needed, through which expert and
 designer lenses the screens will be judged, and against which design system. Write the
 plan to disk as `brief.md` and `design.json`, then stop so the screen list can be vetted
@@ -25,9 +25,14 @@ Contract: [Design packages](../../docs/design-packages.md). Content rule for eve
 
 - `workspace-id` — an existing workspace (`node ~/.agents/scripts/workspaces/cli.mjs show <id>`).
 - `design-slug` — `^[a-z][a-z0-9-]{0,47}$`; becomes `designs/<slug>/`. Refuse a slug whose folder already holds a `design.json`; use `design-run` to continue an existing design.
-- `context-path...` — one or more files or folders: research, notes, briefs, feature lists, journey pages, screenshots, existing UI. Workspace-relative paths resolve against the workspace directory; absolute paths are read as given.
 - `--posture` — `desktop-only` or `responsive`. When absent, decide from the context and declare the decision as an assumption.
 - `--design-system PATH` — overrides the kit's `design_system` entry; it must lie inside a kit repository and is recorded as that repository id plus the relative path. Without either, report `outcome: blocked`, `reason: missing-design-system`.
+
+The design request and relevant conversation supply the context. There is no context-file
+argument. The prompt can reference any number of files, folders, screenshots, or existing
+surfaces, but none is required. Resolve references from the location stated in the prompt:
+the workspace directory, a named kit repository, or an absolute path. Use the current
+repository for repo-relative references when the conversation establishes that context.
 
 ## Non-interactive operation
 
@@ -51,8 +56,10 @@ and convert every gap into a declared assumption in `brief.md`.
 
 ## Step 2 — Read the context and qualify the request
 
-Read every context path completely. Then restate, in your own words, who the people are,
-what work they do, and what each is trying to decide or do on the surfaces in scope.
+Read the design request and relevant conversation, including the user's clarifications.
+Read any material the prompt references, including multiple files or folders when mentioned.
+Do not require a context file or ask the user to move their explanation into one.
+Restate who the people are, what work they do, and what each needs to decide or do.
 
 Apply the underspecification rubric. For each item decide: answered by the context,
 answerable from the repositories, or missing.
@@ -131,17 +138,26 @@ Write both files atomically (temporary file in the design directory, then rename
 <the inventory as a table: step, id, person, job, kind, state, shell_from, primary action>
 ## Assumptions
 <one line each, vetoable>
-## Context read
-<paths>
+## Supplied context
+<preserve the user's goals, requirements, constraints, decisions, and relevant chat clarifications>
+## Referenced material
+<paths of material read, if any; omit this section when none was referenced>
 ```
+
+Preserve the supplied context in `brief.md` so `design-run` can proceed without the original
+conversation. Keep user requirements distinct from assumptions. Do not create a separate
+context file or copy the chat transcript.
 
 ### `design.json`
 
 Per the index schema in [design-packages.md](../../docs/design-packages.md): `schema_version`
 1, `design` equal to the slug, `title`, `brief: "brief.md"`, `created_at`, `design_system`
-as `{repository, paths}` (repository-relative, copied from the kit), `viewport`, `context` (workspace-relative where possible), `screens` in
+as `{repository, paths}` (repository-relative, copied from the kit), `viewport`, `context` (paths of referenced material, workspace-relative where possible), `screens` in
 step order with `step` running 1..N, and any `deviations`. Omit `file`; the schema derives
 it.
+
+Omit `context` when no referenced material was read. It contains paths only, never chat prose
+or invented filenames. The conversation's context belongs in `brief.md`.
 
 Validate: `node ~/.agents/scripts/design/cli.mjs lint <design-dir>`. An invalid index is
 reported by the lint; fix it before reporting. Zero produced screens is the expected state.

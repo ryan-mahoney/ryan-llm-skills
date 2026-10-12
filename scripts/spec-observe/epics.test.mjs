@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 
 import { makeFixture, put } from '../spec-location/fixture.mjs';
-import { EPIC_LIMITS, buildEpics, deriveMemberStatus, parseEpic, readWorkspaceEpics } from './epics.mjs';
+import { EPIC_LIMITS, buildEpics, changedMembers, deriveMemberStatus, epicWaitState, epicWaves, parseEpic, readWorkspaceEpics } from './epics.mjs';
 
 const record = (extra = {}) => ({ schema_version: 1, epic: 'demo', title: 'Demo', state: 'active',
   packages: [{ package: 'a' }, { package: 'b', requires: ['a'] }], ...extra });
@@ -40,11 +40,20 @@ test('parseEpic rejects each invalid class with a short reason', () => {
   bad(record({ packages: [{ package: '../x' }] }), /package name/);
   bad(record({ packages: [{ package: 'a', requires: ['ghost'] }] }), /unknown package ghost/);
   bad(record({ packages: [{ package: 'a', requires: ['a'] }] }), /requires itself/);
+  bad(record({ packages: [{ package: 'a', requires: ['c'] }, { package: 'b', requires: ['a'] }, { package: 'c', requires: ['b'] }, { package: 'd' }] }),
+    /cycle among a, b, c$/);
   bad(record({ plan: '../../../outside.md' }), /plan escapes/);
   bad(record({ plan: '../../../../outside.md' }), /plan escapes/);
   bad(record({ plan: '/etc/passwd' }), /plan escapes/);
   bad(record({ packages: Array.from({ length: EPIC_LIMITS.members + 1 }, (_, i) => ({ package: `p${i}` })) }), /more than 100/);
   bad(null, /not an object/);
+});
+
+test('epicWaves places each member one wave after its latest requirement', () => {
+  const member = (name, requires = []) => ({ package: name, requires });
+  // d is listed before its requirement c; the wave comes from requires, not array order.
+  const { waves } = epicWaves([member('a'), member('d', ['c']), member('b'), member('c', ['a', 'b']), member('e', ['a'])]);
+  assert.deepEqual(waves, [['a', 'b'], ['c', 'e'], ['d']]);
 });
 
 test('deriveMemberStatus follows the contract table', () => {
@@ -137,4 +146,15 @@ test('epic plan resolves to the epic directory first, else the workspace plans f
     assert.equal(plans.local, join(fx.workspaceDir, 'epics', 'local', 'plan.md'));
     assert.equal(plans.shared, join(fx.workspaceDir, 'plans', 'shared.md'));
   } finally { fx.cleanup(); }
+});
+
+test('epic wait wakes on status, attention or launched-session changes, not step progress', () => {
+  const member = (name, extra = {}) => ({ name, package: `/s/specs/${name}`, status: 'in-progress', attention: false, step: { position: 1, total: 4 }, ...extra });
+  const session = (pkg, display) => ({ assignment_id: 'a1', spec_package: `/s/specs/${pkg}`, display });
+  const before = epicWaitState({ members: [member('a'), member('b'), member('c')] }, [session('c', 'live')]);
+  const after = epicWaitState({ members: [member('a', { step: { position: 2, total: 4 } }), member('b', { status: 'published' }), member('c')] },
+    [session('c', 'ended')]);
+  assert.deepEqual(changedMembers(before, after), ['b', 'c']);
+  assert.deepEqual(changedMembers(before, before), []);
+  assert.deepEqual(changedMembers(before, epicWaitState({ members: [member('a', { attention: true }), member('b'), member('c')] }, [session('c', 'live')])), ['a']);
 });

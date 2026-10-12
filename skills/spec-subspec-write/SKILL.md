@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "27"
+  version: "28"
 ---
 
 # Spec Subspec Write
@@ -27,8 +27,8 @@ The parent `spec-write` agent is the only writer of shared preparation artifacts
 ## Canonical Paths and Inputs
 
 Run the shared [spec-location step](../spec-end-to-end/references/spec-location.md) for the package
-(`node ~/.agents/scripts/spec-location/cli.mjs check <ref or folder>`) and require `<package_dir>/spec.md`
-from `locations.json`, plus the step number. Write only `<package_dir>/step-<NNN>-subspec.md`. If any input is missing or multiple spec folders match, return `blocked`; never guess by modification time.
+(`node ~/.agents/scripts/spec-location/cli.mjs check --authoring <ref or folder>`) and require `<package_dir>/spec.md`
+from the printed `locations`, plus the step number. Write only `<package_dir>/step-<NNN>-subspec.md`. If any input is missing or multiple spec folders match, return `blocked`; never guess by modification time.
 
 Write the complete Markdown body to a temporary file in the destination directory, then rename it over the final path. The file begins with a level-1 heading.
 

@@ -27,9 +27,28 @@ node ~/.agents/scripts/spec-location/cli.mjs resolve --cwd .
 Pass `--workspace <name>` when the repository belongs to several kits or no repository is involved. The refusal rules
 are the same.
 
+## Planning on another machine
+
+Planning stages (`spec-architect-initial`, `spec-architect-critics`, `spec-write`, `spec-subspec-write`, `spec-upgrade`,
+`spec-issue`) pass `--authoring` to `resolve`, `new`, `check`, and `scope`. They write only package documents, so they
+may run on a machine other than the workspace's execution host. Every other stage omits the flag and refuses with
+`wrong-host` there, because runs, leases, worktrees, and Sentinel observation exist only on the execution host.
+
+Off the execution host:
+
+- `check --authoring` prints locations computed for this machine and leaves `locations.json` unchanged; that file
+  holds the execution host's paths. Take paths from the printed `locations`, not from the file.
+- `new` and `scope` write this machine's paths into `locations.json`. After syncing workspace storage, run
+  `spec-location materialize <ref>` on the execution host; its `check` refuses with `path-missing` until then.
+- A package whose `locations.json` records a worktree refuses with `execution-started`: its execution has begun, and
+  further changes belong on the execution host.
+- `new` checks the slug only against this machine's copy of storage. Sync before creating a package and after
+  finishing.
+
 ## Read paths by field name
 
-Read `<package_dir>/locations.json` and take every path from it by field name:
+Take every path by field name from the `locations` that `check` prints. On the execution host it is the content of
+`<package_dir>/locations.json`; off the host with `--authoring` it is computed for this machine:
 
 | Need | Field |
 |---|---|
@@ -70,7 +89,7 @@ Targets, designs, the plan, and the epic of an existing package change only thro
 node ~/.agents/scripts/spec-location/cli.mjs scope <ref> [--add-target ID[:BRANCH]] [--add-design REF] [--plan NAME|--no-plan] [--epic SLUG|--no-epic]
 ```
 
-Re-read `locations.json` afterward. Only `spec-architect-initial` creates a package (`new`); no other skill does.
+Use the `locations` it prints afterward. Only `spec-architect-initial` creates a package (`new`); no other skill does.
 
 ## Epics
 

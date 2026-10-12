@@ -120,21 +120,28 @@ async function loadWorkspace(options) {
   }
   const { kit } = located;
   // migrate runs wherever the legacy .specs data is; the execution host then
-  // runs `materialize` to write its own locations.
+  // runs `materialize` to write its own locations. Authoring (architecture,
+  // spec writing) may run on any machine; see `open` for its limit.
+  const offHost = Boolean(kit.execution_host) && firstLabel(kit.execution_host) !== hostLabel(options);
+  if (options.authoring) return workspaceResult(located, repository, offHost);
   if (!options.anyHost && !kit.execution_host) {
     return refuse('execution-host-unset', `Workspace ${located.workspace} has no execution_host.`,
       `Run: node scripts/workspaces/cli.mjs set-execution-host ${located.workspace} --host <hostname> --apply`);
   }
-  if (!options.anyHost && firstLabel(kit.execution_host) !== hostLabel(options)) {
+  if (!options.anyHost && offHost) {
     return refuse('wrong-host', `Workspace ${located.workspace} executes on ${firstLabel(kit.execution_host)}; this machine is ${hostLabel(options)}.`,
       `Run spec work on ${kit.execution_host}, or change the host with set-execution-host.`);
   }
+  return workspaceResult(located, repository, offHost);
+}
+
+function workspaceResult(located, repository, offHost) {
   const base = located.workspaceDir;
   return {
     ok: true, storageRoot: located.storageRoot, storageSource: located.storageSource, workspace: located.workspace,
     workspaceDir: base, specsDir: join(base, 'specs'), projectContext: join(base, 'project-context.md'),
     epicsDir: join(base, 'epics'), plansDir: join(base, 'plans'), capturesDir: join(base, 'captures'),
-    kit, repository, executionHost: kit.execution_host,
+    kit: located.kit, repository, executionHost: located.kit.execution_host, offHost,
   };
 }
 
@@ -196,8 +203,13 @@ export async function resolveWorkspace(options = {}) {
   return ws;
 }
 
-// scope.json + kit -> locations.json content. Creates project-context.md and
-// captures/ so every recorded path exists.
+// Creates project-context.md and captures/ so every recorded path exists.
+async function ensureWorkspaceFiles(ws) {
+  await fs.mkdir(ws.capturesDir, { recursive: true });
+  if (!await exists(ws.projectContext)) await writeFileAtomic(ws.projectContext, '# Project context\n');
+}
+
+// scope.json + kit -> locations.json content for this machine.
 async function buildLocations(ws, scope, existing, options) {
   const packageDir = join(ws.specsDir, scope.slug);
   const targets = [];
@@ -212,8 +224,6 @@ async function buildLocations(ws, scope, existing, options) {
       worktree: prior && await isDir(prior) ? prior : null,
     });
   }
-  await fs.mkdir(ws.capturesDir, { recursive: true });
-  if (!await exists(ws.projectContext)) await writeFileAtomic(ws.projectContext, '# Project context\n');
   return {
     ok: true,
     locations: {
@@ -236,6 +246,7 @@ async function materializeIn(ws, slug, options) {
   const existing = await readJson(join(packageDir, 'locations.json')).catch(() => null);
   const built = await buildLocations(ws, scope, existing, options);
   if (!built.ok) return built;
+  await ensureWorkspaceFiles(ws);
   await writeJson(join(packageDir, 'locations.json'), built.locations);
   await stampIn(packageDir, built.locations);
   return { ok: true, locations: built.locations };
@@ -261,6 +272,7 @@ export async function newPackage(args) {
   };
   const built = await buildLocations(ws, scope, null, options);
   if (!built.ok) return built;
+  await ensureWorkspaceFiles(ws);
   await fs.mkdir(packageDir, { recursive: true });
   await writeJson(join(packageDir, 'scope.json'), scope);
   await writeJson(join(packageDir, 'locations.json'), built.locations);
@@ -301,11 +313,21 @@ export async function locatePackage(input, options = {}) {
 }
 
 // Locate + resolveWorkspace with the same storage root the package was found in.
+// Off the execution host, authoring stops once the runtime has recorded a
+// worktree: from then on runtime/, leases and worktrees exist only on the host.
 async function open(input, options) {
   const found = await locatePackage(input, options);
   if (!found.ok) return found;
   const ws = await resolveWorkspace({ ...options, workspace: found.workspace, cwd: undefined, root: found.storageRoot });
-  return ws.ok ? { ...found, ws } : ws;
+  if (!ws.ok) return ws;
+  if (ws.offHost) {
+    const recorded = await readJson(join(found.packageDir, 'locations.json')).catch(() => null);
+    if (recorded?.targets?.some(target => target.worktree)) {
+      return refuse('execution-started', `${found.ref} has a recorded worktree; its execution belongs to ${ws.executionHost}.`,
+        `Continue ${found.ref} on ${ws.executionHost}.`);
+    }
+  }
+  return { ...found, ws };
 }
 
 /** Read-only verification that this machine can work on the package. */
@@ -313,9 +335,21 @@ export async function checkPackage(input, options = {}) {
   const opened = await open(input, options);
   if (!opened.ok) return opened;
   const { packageDir, ref, ws } = opened;
-  const locations = await readJson(join(packageDir, 'locations.json')).catch(() => null);
-  const remedy = `Run: node scripts/spec-location/cli.mjs materialize ${ref}`;
-  if (!locations) return refuse('locations-missing', `${ref} has no readable locations.json.`, remedy);
+  let locations;
+  let remedy = `Run: node scripts/spec-location/cli.mjs materialize ${ref}`;
+  if (ws.offHost) {
+    // locations.json holds the execution host's paths; authoring here gets this
+    // machine's, computed and not saved.
+    const scope = await readJson(join(packageDir, 'scope.json')).catch(() => null);
+    if (!scope) return refuse('package-not-found', `${packageDir} has no readable scope.json.`, 'Create the package with: spec-location new');
+    const built = await buildLocations(ws, scope, null, options);
+    if (!built.ok) return built;
+    locations = built.locations;
+    remedy = `Sync workspace storage with ${ws.executionHost}, then rerun.`;
+  } else {
+    locations = await readJson(join(packageDir, 'locations.json')).catch(() => null);
+    if (!locations) return refuse('locations-missing', `${ref} has no readable locations.json.`, remedy);
+  }
   const recorded = [locations.storage_root, locations.workspace_dir, locations.package_dir, locations.project_context, locations.kit,
     locations.plan, locations.epic, locations.captures_dir, ...locations.designs.map(d => d.dir), ...locations.targets.map(t => t.worktree)];
   for (const path of recorded) {

@@ -137,6 +137,11 @@ slugs of the same workspace. The snapshot carries
 rows for member packages carry `epic`. An invalid record is a coverage reason and
 never hides its member packages; a workspace without epics is normal. Sentinel never writes an epic record. Schema and
 status rules: [docs/spec-epics.md](../../docs/spec-epics.md).
+`cli.mjs epic lint --workspace W --epic S [--root PATH]` validates one record, rejects
+`requires` cycles, and prints the dependency waves and missing members (exit 1 when invalid).
+`cli.mjs epic wait --workspace W --epic S [--minutes N]` blocks until a member's status, attention
+or launched session (`workspaces launch` assignment) changes, or N minutes pass, then prints every
+member, the changed names and the ready members. Step progress alone does not end the wait.
 
 Active observers check each target's entry in `pr-url.json`
 (`{package_ref, targets: {<repo id>: {url, branch, base, mode, ...}}}`) against authoritative

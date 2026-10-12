@@ -832,6 +832,7 @@ build_bundle() {
 spec_skills=(
   adjacent-storage-setup
   workspace-kit
+  epic-plan
   epic-end-to-end
   spec-end-to-end
   spec-message

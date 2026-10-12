@@ -7,7 +7,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "4"
+  version: "5"
 ---
 
 # Spec Issue
@@ -25,8 +25,8 @@ Resolve the Markdown source in this order:
 The source must be an existing readable file. Do not infer a source from modification time or hidden machine state. If no file resolves, stop and report the missing input.
 
 For a source inside a spec package, run the shared
-[spec-location step](../spec-end-to-end/references/spec-location.md) and use the file under
-`package_dir` from `locations.json`. Never publish a worktree copy in place of the package
+[spec-location step](../spec-end-to-end/references/spec-location.md) with `check --authoring` and use the file
+under `package_dir` from the printed `locations`. Never publish a worktree copy in place of the package
 file, even when that copy is tracked.
 
 Treat an integer in `$ARGUMENTS` as the issue number to update. Without an explicit issue number, create a new issue. Do not discover an issue number from filenames, folder names, branch names, footers, sidecars, or pipeline artifacts.

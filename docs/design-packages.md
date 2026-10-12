@@ -1,7 +1,7 @@
 # Design packages
 
 A design package is a folder of one self-contained HTML file per screen-state plus a
-machine-readable index. One model produces it step by step from context files and a
+machine-readable index. One model produces it step by step from the user's conversation and a
 design system. It lives in workspace storage, not in a repository, and Sentinel shows it
 through the workspace file viewer. Epics and specs reference its screens where they live;
 nothing is copied into `.specs/`.
@@ -27,6 +27,17 @@ The storage root resolves as the workspace CLI resolves it: `--root`, then
 (`node scripts/workspaces/cli.mjs show <id>`); its `kit.yaml` names the repositories the
 design is for and, under its `design_system` key, the design system to mirror.
 Design skills write only inside `designs/<slug>/`.
+
+## Planning input
+
+`design-plan` takes its context from the design request and relevant conversation. It has no
+context-file argument. The prompt can mention files, folders, screenshots, or existing UI,
+including multiple sources. The skill reads those references when provided. No file is required.
+
+The skill preserves the supplied goals, requirements, constraints, and decisions in `brief.md`.
+This lets `design-run` continue without the original chat. User requirements remain distinct from assumptions.
+The optional `design.json.context` field lists paths of referenced material only. It is omitted
+when no referenced material was read.
 
 The `agent-tooling` workspace uses the [design system](../design-system/README.md)
 imported into this repository. Its offline HTML/Tailwind catalog, original CSS token source,
@@ -94,7 +105,7 @@ design system's tokens in an inline `tailwind.config`.
 | `design_system` | no | `repository` (a kit repository id) and `paths` (repository-relative; entry document first, then tokens as config or CSS). Same shape as the kit's `design_system`, so the file moves between machines. `node scripts/design/cli.mjs system <dir>` resolves the absolute paths through the kit. The legacy form `{path, tokens}` with absolute paths is still read. |
 | `viewport.posture` | yes | `desktop-only` or `responsive`. Declared before any screen is built. |
 | `viewport.widths` | yes | One to four distinct integers, 320 to 3840. `responsive` needs at least two. Every width is captured. |
-| `context` | no | Paths of the inputs the plan was derived from, relative to the workspace. |
+| `context` | no | Paths of referenced material read, workspace-relative where possible. Chat context is preserved in `brief.md`. |
 | `screens` | yes | Ordered, 1 to 100. `step` runs 1..N in array order. |
 | `screens[].id` | yes | Slug, unique within the design. |
 | `screens[].title` | yes | What the screen is called. |

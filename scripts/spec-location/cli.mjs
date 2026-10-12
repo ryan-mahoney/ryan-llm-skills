@@ -10,19 +10,20 @@ import {
 
 const USAGE = `Usage: node scripts/spec-location/cli.mjs <command> [options]
 
-  resolve [--cwd D] [--workspace W]
-  new --workspace W --slug S --target ID[:BRANCH]... [--design REF]... [--plan NAME] [--epic SLUG]
+  resolve [--cwd D] [--workspace W] [--authoring]
+  new --workspace W --slug S --target ID[:BRANCH]... [--design REF]... [--plan NAME] [--epic SLUG] [--authoring]
   locate REF
-  check REF
+  check REF [--authoring]
   materialize REF
   stamp REF
-  scope REF [--add-target ID[:BRANCH]] [--add-design REF] [--plan NAME|--no-plan] [--epic SLUG|--no-epic]
+  scope REF [--add-target ID[:BRANCH]] [--add-design REF] [--plan NAME|--no-plan] [--epic SLUG|--no-epic] [--authoring]
   worktree REF TARGET_ID PATH
   packages --workspace W
   epics --workspace W
   migrate --workspace W [--apply] [--include-transcripts]
 
 REF is <workspace>/<slug>, a package directory, or a file inside one.
+--authoring permits planning stages on a machine other than the execution host, until a worktree is recorded.
 worktree records PATH (the root of an existing git worktree of the target's repository) in locations.json and refreshes the stamps.
 Global: --root PATH (storage root; otherwise ADJACENT_STORAGE_ROOT, saved root, default). Output is always JSON.`;
 
@@ -31,23 +32,24 @@ const OPTIONS = {
   slug: { type: 'string' }, target: { type: 'string', multiple: true }, design: { type: 'string', multiple: true },
   plan: { type: 'string' }, 'no-plan': { type: 'boolean' }, epic: { type: 'string' }, 'no-epic': { type: 'boolean' },
   'add-target': { type: 'string' }, 'add-design': { type: 'string' }, apply: { type: 'boolean' },
-  'include-transcripts': { type: 'boolean' },
+  'include-transcripts': { type: 'boolean' }, authoring: { type: 'boolean' },
 };
 
 const target = spec => ({ id: spec.split(':')[0], branch: spec.split(':')[1] });
 
 async function execute(command, positionals, v) {
   const options = { root: v.root };
+  const authoring = v.authoring === true;
   const ref = positionals[0];
   switch (command) {
-    case 'resolve': return resolveWorkspace({ ...options, cwd: v.cwd ?? (v.workspace ? undefined : process.cwd()), workspace: v.workspace });
+    case 'resolve': return resolveWorkspace({ ...options, authoring, cwd: v.cwd ?? (v.workspace ? undefined : process.cwd()), workspace: v.workspace });
     case 'new':
       return newPackage({
-        ...options, workspace: v.workspace, slug: v.slug, targets: (v.target ?? []).map(target),
+        ...options, authoring, workspace: v.workspace, slug: v.slug, targets: (v.target ?? []).map(target),
         designs: v.design ?? [], plan: v.plan ?? null, epic: v.epic ?? null,
       });
     case 'locate': return locatePackage(ref, options);
-    case 'check': return checkPackage(ref, options);
+    case 'check': return checkPackage(ref, { ...options, authoring });
     case 'materialize': return materialize(ref, options);
     case 'stamp': return stamp(ref, options);
     case 'scope': {
@@ -56,7 +58,7 @@ async function execute(command, positionals, v) {
       if (v['add-design']) change.addDesign = v['add-design'];
       if (v['no-plan']) change.setPlan = null; else if (v.plan !== undefined) change.setPlan = v.plan;
       if (v['no-epic']) change.setEpic = null; else if (v.epic !== undefined) change.setEpic = v.epic;
-      return updateScope(ref, change, options);
+      return updateScope(ref, change, { ...options, authoring });
     }
     case 'worktree': return recordWorktree(ref, positionals[1], positionals[2], { ...options, cwd: v.cwd });
     case 'packages': return listPackages(v.workspace, options);

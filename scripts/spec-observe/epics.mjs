@@ -62,8 +62,28 @@ export function parseEpic(record, { slug } = {}) {
       if (!names.has(required)) return fail(`${item.package} requires unknown package ${required}`);
     }
   }
+  const { cycle } = epicWaves(packages);
+  if (cycle) return fail(`requires form a cycle among ${cycle.join(', ')}`);
   return { epic: { epic: slug, title: record.title, state: record.state, plan: record.plan ?? null,
     created_at: record.created_at ?? null, note: record.note ?? null, designs, packages } };
+}
+
+// Groups members into dependency waves: wave 1 requires nothing and each later
+// wave requires only members of earlier waves, so members of one wave can run in
+// parallel. Names keep array order within a wave. Returns { waves } or, when
+// requires contain a cycle, { cycle } with the members that cannot be placed.
+export function epicWaves(packages) {
+  const waveOf = new Map();
+  let pending = packages;
+  while (pending.length) {
+    const placed = pending.filter(item => item.requires.every(name => waveOf.has(name)));
+    if (!placed.length) return { cycle: pending.map(item => item.package) };
+    for (const item of placed) waveOf.set(item.package, 1 + Math.max(0, ...item.requires.map(name => waveOf.get(name))));
+    pending = pending.filter(item => !waveOf.has(item.package));
+  }
+  const waves = [];
+  for (const item of packages) (waves[waveOf.get(item.package) - 1] ??= []).push(item.package);
+  return { waves };
 }
 
 // Reads one workspace's epic records through spec-location (which resolves each
@@ -148,6 +168,20 @@ export function buildEpics(entries) {
   });
   return { epics, memberships };
 }
+
+// The member facts an epic coordinator acts on while it waits for launched
+// packages: lifecycle status, attention, and each launched session's observed
+// state. Step progress is left out so ordinary progress does not wake it.
+export function epicWaitState(epic, assignments = []) {
+  return Object.fromEntries(epic.members.map(member => [member.name, {
+    status: member.status, attention: member.attention,
+    sessions: assignments.filter(row => row.spec_package === member.package)
+      .map(row => `${row.assignment_id}:${row.display}`).sort(),
+  }]));
+}
+
+export const changedMembers = (before, after) =>
+  Object.keys(after).filter(name => JSON.stringify(before[name]) !== JSON.stringify(after[name]));
 
 const kindOf = async path => {
   try { const info = await lstat(path); return info.isDirectory() ? 'dir' : info.isFile() ? 'file' : 'other'; }

@@ -205,7 +205,8 @@ as `Use STRONG_OWNER for steps 4 and 7.` Existing prepared specs need no new fie
 
 | Skill | Command | Purpose |
 |---|---|---|
-| **epic-end-to-end** | `/epic-end-to-end` with `PACKAGES:` | Run related specs in dependency order through publication and authorized merge, updating downstream plans from feedback |
+| **epic-plan** | `/epic-plan <workspace> <prefix>` | Split a body of work described in the conversation into spec packages, sequence them for parallel work, and write the epic record, plan, and one proposed package per member with a `context.md` for architecture |
+| **epic-end-to-end** | `/epic-end-to-end` with `EPIC:` or `PACKAGES:` | Run related specs in dependency order through publication and authorized merge, running independent packages in parallel sessions when that is safe and saves time, and updating downstream plans from feedback |
 | **spec-end-to-end** | `/spec-end-to-end [goal-or-feature] [modifiers]` | Run the complete workflow from goal or existing spec to a published PR |
 | **spec-upgrade** | `/spec-upgrade [spec-paths or all pending specs]` | Bring unimplemented specs up to the current context and evidence rules; stop after preparation |
 | **spec-message** | `/spec-message [feature] [message]` | Send a direction, information update, or hold to a running spec through its inbox |
@@ -229,7 +230,7 @@ as `Use STRONG_OWNER for steps 4 and 7.` Existing prepared specs need no new fie
 ### Design packages
 
 UI work starts from a design package: one self-contained HTML/Tailwind file per screen-state
-plus a `design.json` index, produced by one model from context files and the workspace's
+plus a `design.json` index, produced by one model from the conversation and the workspace's
 design system, stored in workspace storage (`projects/<workspace>/designs/<slug>/`) rather
 than a repository, and browsed in Sentinel's workspace view. Epics and specs reference
 screens where they live by identity, path and digest; nothing is copied into a spec package.
@@ -242,7 +243,7 @@ workspace's palettes, component styles, HTML examples, and JavaScript helpers. I
 
 | Skill | Command | Purpose |
 |---|---|---|
-| **design-plan** | `/design-plan <workspace> <slug> <context>... [--posture ...]` | Read the context, choose expert and designer lenses, inventory screen × state with the person and job each serves, declare the posture, write `brief.md` and `design.json` |
+| **design-plan** | `/design-plan <workspace> <slug> [--posture ...]` | Use the conversation and any material it references, choose expert and designer lenses, inventory screen × state with the person and job each serves, declare the posture, write `brief.md` and `design.json` |
 | **design-run** | `/design-run <workspace> <slug> [--step N]` | Produce each screen as its own file, lint, capture and inspect at every declared width, then review the set through the brief's lenses |
 
 `node scripts/design/cli.mjs` owns the mechanical part: index validation, screen lint

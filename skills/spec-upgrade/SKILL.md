@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "4"
+  version: "5"
 ---
 
 # Spec Upgrade
@@ -29,8 +29,8 @@ schemas, or extra implementation steps merely to adopt this guidance.
 Accept a package ref or folder, explicit list, or a request for all pending specs in a workspace.
 A clear conversational selection is sufficient. With several candidates and no selection, ask which
 to include; do not silently upgrade the entire backlog. Discover packages with
-`node ~/.agents/scripts/spec-location/cli.mjs resolve --workspace <ws>` (its `specsDir`) and read each
-package's `locations.json`. Keep each feature's package ref and identifiers where their meaning
+`node ~/.agents/scripts/spec-location/cli.mjs resolve --authoring --workspace <ws>` (its `specsDir`) and run
+`check --authoring` on each package, using the `locations` it prints. Keep each feature's package ref and identifiers where their meaning
 survives.
 
 Legacy `.specs/` packages are not upgraded in place. Preview their migration with
