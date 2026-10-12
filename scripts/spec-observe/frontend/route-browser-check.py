@@ -6,7 +6,7 @@
 
 After npm run build --prefix scripts/spec-observe/frontend:
 SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 120s uv run --script \
-  scripts/spec-observe/frontend/route-browser-check.py [--case rail|files|specs]
+  scripts/spec-observe/frontend/route-browser-check.py [--case rail|files|specs|context]
 Only the fixture substitutes workers; App, adapters and file APIs are real.
 """
 import argparse
@@ -23,14 +23,17 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 args = argparse.ArgumentParser()
-args.add_argument('--case', choices=['rail', 'files', 'specs'])
+args.add_argument('--case', choices=['rail', 'files', 'specs', 'context'])
 case = args.parse_args().case
 root = Path(__file__).resolve().parent
 evidence = Path(os.environ.get('SENTINEL_EVIDENCE_DIR', '/tmp/sentinel-route-evidence'))
 evidence.mkdir(parents=True, exist_ok=True)
 started = time.monotonic()
 report = {'status': 'failed', 'scenarios': [], 'pageErrors': []}
-fixture = subprocess.Popen(['node', str(root / 'browser-fixture.mjs')], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+fixture_env = dict(os.environ)
+if case == 'context':
+    fixture_env['SENTINEL_NONCANONICAL_CONTEXT'] = '1'
+fixture = subprocess.Popen(['node', str(root / 'browser-fixture.mjs')], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=fixture_env)
 try:
     if not select.select([fixture.stdout], [], [], 10)[0]:
         raise RuntimeError('Fixture readiness exceeded 10 seconds')
@@ -56,6 +59,19 @@ try:
             expect(page.locator('.file-viewer')).to_contain_text(text)
             expect(page.get_by_role('button', name=name, exact=True)).to_have_attribute('aria-pressed', 'true')
             assert params()['path'] == [name], page.url
+
+        if case == 'context':
+            open_route('workspaces', ws='fixture')
+            # The real contextRecord reports this absolute ./, ../ and // reference
+            # Available. Its Files link must use the reader's canonical relative path.
+            table = page.locator('section').filter(has=page.get_by_role('heading', name='Registered context', exact=True))
+            expect(table).to_contain_text('Available')
+            table.get_by_role('button').click()
+            viewer('context/project-context.md', 'Browser context note.')
+            assert params()['source'] == ['workspace']
+            page.reload()
+            viewer('context/project-context.md', 'Browser context note.')
+            report['scenarios'].append('Available noncanonical absolute context -> canonical workspace Files route, readable document and reload')
 
         if case in (None, 'rail'):
             open_route('specs', ws='fixture', tab='overview', filter='active')
@@ -144,5 +160,6 @@ finally:
         fixture.kill()
         fixture.wait()
     report['elapsedSeconds'] = round(time.monotonic() - started, 3)
-    (evidence / 'step-002-fix-browser.json').write_text(json.dumps(report, indent=2) + '\n')
+    filename = 'step-003-fix-browser.json' if case == 'context' else 'step-002-fix-browser.json'
+    (evidence / filename).write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))

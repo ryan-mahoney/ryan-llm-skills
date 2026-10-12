@@ -18,7 +18,10 @@ await mkdir(join(workspace.directory,'context'),{recursive:true});
 await mkdir(join(workspace.directory,'briefs'),{recursive:true});
 await writeFile(join(workspace.directory,'context','project-context.md'),'# Project context\nBrowser context note.\n');
 await writeFile(join(workspace.directory,'briefs','browser.md'),'# Browser brief\nA recorded brief.\n');
-await writeFile(join(workspace.directory,'kit.yaml'),`version: 1\nid: fixture\nname: Browser fixture\nrepositories:\n  - id: fixture-repo\n    path: ${checkout}\n    role: Browser verification\ncontext:\n  - context/project-context.md\n`);
+const contextPath=process.env.SENTINEL_NONCANONICAL_CONTEXT==='1'
+ ? `${workspace.directory}/../fixture//context/./unused/../project-context.md`
+ : 'context/project-context.md';
+await writeFile(join(workspace.directory,'kit.yaml'),`version: 1\nid: fixture\nname: Browser fixture\nrepositories:\n  - id: fixture-repo\n    path: ${checkout}\n    role: Browser verification\ncontext:\n  - ${contextPath}\n`);
 const pkg=join(workspace.directory,'specs','browser');await mkdir(pkg,{recursive:true});
 await writeFile(join(pkg,'work-tour.html'),'<html><body><h1>Isolated work tour</h1></body></html>');
 await writeFile(join(pkg,'linked.md'),'# Linked evidence\n');

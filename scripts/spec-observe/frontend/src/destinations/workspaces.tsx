@@ -161,8 +161,13 @@ function WorkspacePane(props: DestinationProps) {
     if (!path) return null;
     const directory = text(data()?.directory);
     if (path.startsWith('/')) {
-      if (!directory || !path.startsWith(`${directory}/`)) return null;
-      return path.slice(directory.length + 1);
+      // contextRecord resolves absolute references before containment checks.
+      // Match that lexical resolution, without changing the file reader's checks.
+      const segments = path.split('/').reduce<string[]>((parts, part) =>
+        part === '..' ? parts.slice(0, -1) : part && part !== '.' ? [...parts, part] : parts, []);
+      const normalized = `/${segments.join('/')}`;
+      if (!directory || !normalized.startsWith(`${directory}/`)) return null;
+      return normalized.slice(directory.length + 1);
     }
     return path;
   };
