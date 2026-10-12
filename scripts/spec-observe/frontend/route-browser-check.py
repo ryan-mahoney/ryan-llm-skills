@@ -6,7 +6,7 @@
 
 After npm run build --prefix scripts/spec-observe/frontend:
 SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 120s uv run --script \
-  scripts/spec-observe/frontend/route-browser-check.py [--case rail|files|specs|context|catalog]
+  scripts/spec-observe/frontend/route-browser-check.py [--case rail|files|specs|context|catalog|member|search]
 Only the fixture substitutes workers; App, adapters and file APIs are real.
 """
 import argparse
@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 args = argparse.ArgumentParser()
-args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog'])
+args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog', 'member', 'search'])
 case = args.parse_args().case
 root = Path(__file__).resolve().parent
 evidence = Path(os.environ.get('SENTINEL_EVIDENCE_DIR', '/tmp/sentinel-route-evidence'))
@@ -196,6 +196,55 @@ try:
             viewer('spec.md', 'Browser specification')
             report['scenarios'].append('embedded Specs reader selection/reload/history, including absent path')
 
+        if case == 'member':
+            # A searched epic's member must open a fresh Specs route that selects
+            # the current record and leaves no epic q/filter/tab behind.
+            open_route('epics', ws='fixture', q='Demo epic')
+            expect(page.locator('#find-record')).to_have_value('Demo epic')
+            expect(page.locator('article.detail h2')).to_have_text('Demo epic')
+            page.get_by_role('button', name='browser', exact=True).click()
+            expect(page.locator('h1')).to_have_text('Specs')
+            assert params()['ws'] == ['fixture'], page.url
+            assert params().get('id'), page.url
+            assert not {'q', 'filter', 'tab', 'path', 'source'} & params().keys(), page.url
+            assert 'recent-completion' not in params()['id'][0], 'epic member navigation selected completion history'
+            expect(page.locator('#find-record')).to_have_value('')
+            expect(page.locator('article.detail h2')).to_have_text('browser')
+            page.go_back()
+            expect(page.locator('h1')).to_have_text('Epics')
+            expect(page.locator('#find-record')).to_have_value('Demo epic')
+            expect(page.locator('article.detail h2')).to_have_text('Demo epic')
+            assert params()['q'] == ['Demo epic'], page.url
+            page.go_forward()
+            expect(page.locator('h1')).to_have_text('Specs')
+            expect(page.locator('article.detail h2')).to_have_text('browser')
+            assert params().get('id'), page.url
+            assert not {'q', 'filter', 'tab', 'path', 'source'} & params().keys(), page.url
+            report['scenarios'].append('searched epic member opens a fresh Specs route selecting the current record; Back/Forward keeps the epic search and spec detail synchronized')
+
+        if case == 'search':
+            # workflow_state is a rendered search field; selecting the matching row
+            # must retain its detail, and a native hash with an unsupported
+            # parameter must canonicalize without losing that selection.
+            open_route('specs', ws='fixture')
+            page.locator('#find-record').fill('waiting-worker')
+            row = page.locator('.observation-rows button.run-row')
+            expect(row).to_have_count(1)
+            row.click()
+            assert params()['q'] == ['waiting-worker'], page.url
+            selected_id = params().get('id')
+            assert selected_id, page.url
+            expect(row).to_have_attribute('aria-pressed', 'true')
+            expect(page.locator('article.detail h2')).to_have_text('browser')
+            expect(page.locator('article.detail')).to_contain_text('Building the dashboard')
+            page.evaluate("location.hash = location.hash + '&unknown=ignored'")
+            page.wait_for_function("() => !location.hash.includes('unknown')")
+            assert 'unknown' not in params(), page.url
+            assert params().get('id') == selected_id, page.url
+            expect(row).to_have_attribute('aria-pressed', 'true')
+            expect(page.locator('article.detail h2')).to_have_text('browser')
+            report['scenarios'].append('workflow_state search row keeps its selected Spec detail, and a native hash with an unsupported parameter canonicalizes without losing selection')
+
         assert not report['pageErrors'], report['pageErrors']
         context.close()
         browser.close()
@@ -211,6 +260,6 @@ finally:
         fixture.kill()
         fixture.wait()
     report['elapsedSeconds'] = round(time.monotonic() - started, 3)
-    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'step-003-fix-browser.json' if case == 'context' else 'step-002-fix-browser.json'
+    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'step-003-fix-browser.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'step-002-fix-browser.json'
     (evidence / filename).write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))

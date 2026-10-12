@@ -84,7 +84,17 @@ const emit = (hash: string): void => {
   for (const listener of [...listeners]) listener(route);
 };
 
-const onRouteEvent = (): void => emit(readHash());
+const onRouteEvent = (): void => {
+  const hash = formatHash(parseHash(readHash()));
+  if (typeof location !== 'undefined' && location.hash !== hash) {
+    try {
+      history.replaceState(null, '', hash);
+    } catch {
+      location.hash = hash;
+    }
+  }
+  emit(hash);
+};
 
 export function navigate(route: RouteState, mode: RouteMode = 'push'): void {
   if (typeof window === 'undefined' || typeof location === 'undefined') return;

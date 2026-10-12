@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { formatHash, parseHash, routeHistoryMode, type RouteState } from './route';
+import { formatHash, parseHash, routeHistoryMode, subscribeRoute, type RouteState } from './route';
 import {
   clearIncompatibleFields,
   firstUnmatchedTargetId,
@@ -60,6 +60,102 @@ test('history policy pushes deliberate field changes and replaces query, filter,
   assert.equal(routeHistoryMode(base, { ...base, filter: 'completed', q: 'other' }), 'replace');
   assert.equal(routeHistoryMode(base, { ...base }), 'replace');
   assert.equal(routeHistoryMode(base, { ...base, id: 'fallback' }, { fallback: true }), 'replace');
+});
+
+type FakeDom = {
+  location: { hash: string };
+  replaced: string[];
+  dispatch: (type: 'hashchange' | 'popstate') => void;
+  listenerTypes: () => string[];
+  restore: () => void;
+};
+
+function installFakeDom(hash: string): FakeDom {
+  const previous = ['window', 'location', 'history'].map(name => ({
+    name,
+    present: name in globalThis,
+    value: Reflect.get(globalThis, name),
+  }));
+  const handlers = new Map<string, Set<() => void>>();
+  const location = { hash };
+  const replaced: string[] = [];
+  Object.assign(globalThis, {
+    window: {
+      addEventListener: (type: string, handler: () => void) => {
+        const entries = handlers.get(type) ?? new Set<() => void>();
+        entries.add(handler);
+        handlers.set(type, entries);
+      },
+      removeEventListener: (type: string, handler: () => void) => {
+        handlers.get(type)?.delete(handler);
+      },
+    },
+    location,
+    history: {
+      replaceState: (_state: unknown, _title: string, url: string) => {
+        replaced.push(url);
+        location.hash = url;
+      },
+    },
+  });
+  return {
+    location,
+    replaced,
+    dispatch: type => {
+      const entries = handlers.get(type);
+      if (entries) for (const handler of entries) handler();
+    },
+    listenerTypes: () => [...handlers.entries()].filter(([, entries]) => entries.size > 0).map(([type]) => type).sort(),
+    restore: () => {
+      for (const entry of previous) {
+        if (entry.present) Object.assign(globalThis, { [entry.name]: entry.value });
+        else Reflect.deleteProperty(globalThis, entry.name);
+      }
+    },
+  };
+}
+
+test('native hash events replace unsupported parameters without re-emitting unchanged supported state', () => {
+  const dom = installFakeDom('#/files?ws=fixture&id=fixture%2Fbrowser&unknown=ignored');
+  const observed: RouteState[] = [];
+  const unsubscribe = subscribeRoute(value => observed.push(value));
+  try {
+    assert.deepEqual(observed, [{ dest: 'files', ws: 'fixture', id: 'fixture/browser' }]);
+    dom.dispatch('hashchange');
+    assert.deepEqual(dom.replaced, ['#/files?ws=fixture&id=fixture%2Fbrowser']);
+    assert.equal(dom.location.hash, '#/files?ws=fixture&id=fixture%2Fbrowser');
+    assert.equal(observed.length, 1, 'canonicalizing an unsupported parameter must not re-emit unchanged supported state');
+  } finally {
+    unsubscribe();
+    dom.restore();
+  }
+  assert.deepEqual(dom.listenerTypes(), []);
+});
+
+test('native hash and popstate inputs normalize unknown destinations and unsupported parameters to canonical routes', () => {
+  const dom = installFakeDom('#/specs?ws=fixture&id=first');
+  const observed: RouteState[] = [];
+  const unsubscribe = subscribeRoute(value => observed.push(value));
+  try {
+    dom.location.hash = '#/unknown?id=7&ws=fixture';
+    dom.dispatch('hashchange');
+    assert.deepEqual(dom.replaced, ['#/specs']);
+    assert.equal(dom.location.hash, '#/specs');
+    assert.deepEqual(observed.at(-1), { dest: 'specs' });
+
+    dom.location.hash = '#/epics?ws=fixture&id=second&unsupported=1';
+    dom.dispatch('popstate');
+    assert.deepEqual(dom.replaced, ['#/specs', '#/epics?ws=fixture&id=second']);
+    assert.deepEqual(observed.at(-1), { dest: 'epics', ws: 'fixture', id: 'second' });
+
+    dom.location.hash = '#/specs?ws=fixture&id=first';
+    dom.dispatch('popstate');
+    assert.deepEqual(dom.replaced, ['#/specs', '#/epics?ws=fixture&id=second']);
+    assert.deepEqual(observed.at(-1), { dest: 'specs', ws: 'fixture', id: 'first' });
+  } finally {
+    unsubscribe();
+    dom.restore();
+  }
 });
 
 const catalog: CatalogEntry[] = [
