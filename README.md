@@ -229,7 +229,7 @@ as `Use STRONG_OWNER for steps 4 and 7.` Existing prepared specs need no new fie
 ### Design packages
 
 UI work starts from a design package: one self-contained HTML/Tailwind file per screen-state
-plus a `design.json` index, produced by one model from context files and the workspace's
+plus a `design.json` index, produced by one model from the conversation and the workspace's
 design system, stored in workspace storage (`projects/<workspace>/designs/<slug>/`) rather
 than a repository, and browsed in Sentinel's workspace view. Epics and specs reference
 screens where they live by identity, path and digest; nothing is copied into a spec package.
@@ -242,7 +242,7 @@ workspace's palettes, component styles, HTML examples, and JavaScript helpers. I
 
 | Skill | Command | Purpose |
 |---|---|---|
-| **design-plan** | `/design-plan <workspace> <slug> <context>... [--posture ...]` | Read the context, choose expert and designer lenses, inventory screen × state with the person and job each serves, declare the posture, write `brief.md` and `design.json` |
+| **design-plan** | `/design-plan <workspace> <slug> [--posture ...]` | Use the conversation and any material it references, choose expert and designer lenses, inventory screen × state with the person and job each serves, declare the posture, write `brief.md` and `design.json` |
 | **design-run** | `/design-run <workspace> <slug> [--step N]` | Produce each screen as its own file, lint, capture and inspect at every declared width, then review the set through the brief's lenses |
 
 `node scripts/design/cli.mjs` owns the mechanical part: index validation, screen lint
