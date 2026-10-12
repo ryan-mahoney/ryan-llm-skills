@@ -133,7 +133,8 @@ and conflict handling are in `docs/adjacent-storage-operations.md` (sections b a
 $WS set-execution-host <workspace> --host <host> --apply
 ```
 
-Spec skills refuse with `wrong-host` on any other machine. The host must also write its
+Spec execution skills refuse with `wrong-host` on any other machine. Planning skills (architecture,
+spec writing) may run elsewhere; after syncing a package they created or changed, run `materialize` on the host. The host must also write its
 own absolute paths into every package it received through sync:
 
 ```bash

@@ -8,7 +8,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "8"
+  version: "9"
 ---
 
 # Spec Architect Critics — Expert-Perspective Design Review
@@ -25,7 +25,7 @@ This is not a rubber stamp. The value of this skill is in finding flaws, blind s
 
 Look for the material to critique:
 
-- Resolve the package from an explicit package ref or folder first, otherwise the package named in the conversation. Run the shared [spec-location step](../spec-end-to-end/references/spec-location.md) (`node ~/.agents/scripts/spec-location/cli.mjs check <ref or folder>`); on refusal, print its `message` and `remedy` and stop. Read `proposal.md` from `package_dir` in `locations.json`. Stop on ambiguity rather than guessing by modification time.
+- Resolve the package from an explicit package ref or folder first, otherwise the package named in the conversation. Run the shared [spec-location step](../spec-end-to-end/references/spec-location.md) (`node ~/.agents/scripts/spec-location/cli.mjs check --authoring <ref or folder>`); on refusal, print its `message` and `remedy` and stop. Read `proposal.md` from `package_dir` in the printed `locations`. Stop on ambiguity rather than guessing by modification time.
 - An architecture document the user has shared or uploaded
 - A plan described in the current conversation
 - Code or PRs the user wants reviewed at the architectural level

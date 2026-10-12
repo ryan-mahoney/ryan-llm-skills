@@ -9,7 +9,7 @@ license: MIT
 metadata:
   author: Ryan Mahoney
   homepage: ryan-mahoney.net
-  version: "27"
+  version: "28"
 ---
 
 # Spec Write
@@ -29,7 +29,7 @@ into assumed requirements. If no proposal, existing spec, or conversation analys
 
 ## Output Contract
 
-Always write the completed spec to the package folder (`package_dir` in `locations.json`; see
+Always write the completed spec to the package folder (`package_dir` in the printed `locations`; see
 [Spec Location](../spec-end-to-end/references/spec-location.md)):
 
 ```txt
@@ -51,7 +51,7 @@ This skill writes the local planning package only. It does **not** create, edit,
 ## Pre-Step - Load Pipeline Inputs
 
 Before writing the spec, run the first step of [Spec Location](../spec-end-to-end/references/spec-location.md)
-(`spec-location check` on the package) and read `locations.json`. The package is the folder of this feature.
+(`spec-location check --authoring` on the package) and use the `locations` it prints. The package is the folder of this feature.
 
 When upgrading a legacy package, the existing `spec.md` is a valid intent source even without a
 proposal. Preserve its accepted behavior while resolving context, necessity, phases and proof.
@@ -69,7 +69,7 @@ Stop on ambiguous matches rather than selecting the most recently modified packa
 
 Changing the package's targets, designs, plan, or epic goes only through `spec-location scope` (see the Spec Location
 reference); never edit `scope.json` or `locations.json`. When the spec needs another repository, add it with
-`scope --add-target` and read `locations.json` again.
+`scope --authoring --add-target` and use the `locations` it prints.
 
 The folder contains fixed-name artifacts:
 
@@ -390,7 +390,7 @@ The per-step flag is binary — emit exactly one per step. The footer's spec-wid
 
 ## Spec Footer
 
-End `spec.md` with a metadata footer block so downstream skills can locate the folder and route the work. The first line is the package folder and its reference (`package_dir` and `package_ref` from `locations.json`); the second is the spec-wide Visual design roll-up (`yes-visual-design` if any step is `Visual: yes`, else `no-visual-design`). Per-step complexity and per-step visual flags are not in the footer — they live on each step (see §9):
+End `spec.md` with a metadata footer block so downstream skills can locate the folder and route the work. The first line is the package folder and its reference (`package_dir` and `package_ref` from the printed `locations`); the second is the spec-wide Visual design roll-up (`yes-visual-design` if any step is `Visual: yes`, else `no-visual-design`). Per-step complexity and per-step visual flags are not in the footer — they live on each step (see §9):
 
 ```txt
 Spec folder: <package_dir> (<package_ref>)

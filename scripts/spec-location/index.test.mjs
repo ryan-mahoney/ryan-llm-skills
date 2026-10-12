@@ -146,7 +146,30 @@ test('checkPackage: refusal codes and success', () => withFixture(async fx => {
   assert.equal(code(await checkPackage('demo/p1', options)), 'locations-missing');
 }));
 
-test('materialize: keeps an existing worktree and drops one that no longer exists', () => withFixture(async fx => {
+test('authoring off the execution host: uses this machine\'s paths until a worktree is recorded', () => withFixture(async fx => {
+  const laptop = { ...fx.options, hostname: 'laptop', authoring: true };
+  assert.equal(code(await resolveWorkspace({ ...fx.options, hostname: 'laptop', workspace: 'demo' })), 'wrong-host');
+  assert.equal(code(await resolveWorkspace({ ...laptop, workspace: 'demo' })), 'ok');
+
+  assert.equal(code(await newPackage({ ...laptop, workspace: 'demo', slug: 'p1', targets: [{ id: 'alpha' }] })), 'ok');
+  // Simulate a sync from the host: locations.json now holds paths that do not exist here.
+  const file = join(fx.workspaceDir, 'specs', 'p1', 'locations.json');
+  const hostCopy = { ...json(file), package_dir: '/home/host/specs/p1', targets: [{ ...json(file).targets[0], primary: '/home/host/alpha' }] };
+  writeFileSync(file, JSON.stringify(hostCopy));
+  assert.equal(code(await checkPackage('demo/p1', { ...fx.options, hostname: 'laptop' })), 'wrong-host');
+  const checked = await checkPackage('demo/p1', laptop);
+  assert.equal(checked.locations.package_dir, join(fx.workspaceDir, 'specs', 'p1'));
+  assert.equal(checked.locations.targets[0].primary, fx.alpha);
+  assert.deepEqual(json(file), hostCopy);
+
+  hostCopy.targets[0].worktree = '/home/host/alpha-wt';
+  writeFileSync(file, JSON.stringify(hostCopy));
+  assert.equal(code(await checkPackage('demo/p1', laptop)), 'execution-started');
+  assert.equal(code(await updateScope('demo/p1', { addTarget: 'beta' }, laptop)), 'execution-started');
+  assert.equal(code(await checkPackage('demo/p1', { ...fx.options, authoring: true })), 'path-missing');
+}));
+
+test('materialize: keeps an existing worktree and drops one that no longer exists',() => withFixture(async fx => {
   await newPackage({ ...fx.options, workspace: 'demo', slug: 'p1', targets: [{ id: 'alpha' }, { id: 'beta' }] });
   const trees = { alpha: join(fx.tmp, 'alpha-wt'), beta: join(fx.tmp, 'beta-wt') };
   mkdirSync(trees.alpha);
