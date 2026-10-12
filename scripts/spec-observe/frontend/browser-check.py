@@ -6,7 +6,7 @@
 Usage: uv run --script scripts/spec-observe/frontend/browser-check.py
 Requires the uishot warm browser on localhost:9222; no provider or live-store writes.
 """
-import json, os, re, select, subprocess, time
+import json, os, re, select, subprocess, time, urllib.parse
 from pathlib import Path
 from playwright.sync_api import sync_playwright, expect
 
@@ -17,6 +17,7 @@ browser_evidence.mkdir(parents=True,exist_ok=True)
 uishot=Path.home()/'.agents/skills/uishot/scripts/uishot'
 summary={'status':'failed','scenarios':[],'captures':[],'page_errors':[]}
 fixture=None
+receipt={}
 url=os.environ.get('SENTINEL_FIXTURE_URL')
 if not url:
     fixture=subprocess.Popen(['node',str(root/'browser-fixture.mjs')],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
@@ -48,6 +49,13 @@ try:
                 query=response.url.split('?',1)[1] if '?' in response.url else ''
                 failed_responses.append({'path':path or '/','query':query,'status':response.status,'phase':phase})
         page.on('response',record_failed_response)
+        completion_posts=[]
+        def record_completion_request(request):
+            if request.method=='POST' and request.url.endswith('/api/package-completion'):
+                try: body=json.loads(request.post_data or '{}')
+                except Exception: body={}
+                completion_posts.append({'package':body.get('package'),'phase':phase})
+        page.on('request',record_completion_request)
         def control(action=None,value=None):
             suffix='' if action is None else f'?action={action}&value={str(value).lower()}'
             response=context.request.get(url+'/__fixture/control'+suffix)
@@ -155,6 +163,27 @@ try:
             }""")
         def feedback_additions():
             return page.evaluate('() => window.__sentinelFeedback || []')
+        def assert_shell_controls_min_44(label):
+            below=[]
+            for selector in ['.skip','.rail .brand','.rail .nav-item','.rail-footer a','.rail-footer button','.scope select','.page-head .ds-btn']:
+                for element in page.locator(selector).all():
+                    if not element.is_visible(): continue
+                    box=element.bounding_box()
+                    if box and box['width']<44 and box['height']<44: below.append({'selector':selector,'box':box})
+            assert not below,f'{label}: shell controls below 44px {below}'
+        def assert_keyboard_focus_visible(label):
+            observed=None
+            for _ in range(20):
+                page.keyboard.press('Tab')
+                observed=page.evaluate("""() => {
+                  const el=document.activeElement;
+                  if(!el || !el.matches('.app a, .app button, .app select, .app input')) return null;
+                  const style=getComputedStyle(el);
+                  return {tag:el.tagName,cls:String(el.className),focusVisible:el.matches(':focus-visible'),outlineStyle:style.outlineStyle,outlineWidth:parseFloat(style.outlineWidth)||0};
+                }""")
+                if observed: break
+            assert observed,f'{label}: keyboard focus never reached a shell control'
+            assert observed['focusVisible'] and observed['outlineStyle'] not in ('none','') and observed['outlineWidth']>=1,f'{label}: focus not visibly styled {observed}'
 
         # Step 4 controlled Workspaces states, all at 1280x860 with resets before/after each case.
         page.set_viewport_size({'width':1280,'height':860})
@@ -184,6 +213,7 @@ try:
         expect(page.locator('.records')).to_contain_text('No matching workspaces')
         expect(page.locator('.records')).to_contain_text('no-such-item')
         check_state('workspaces no-match')
+        capture_playwright('workspaces-no-match-1280.png',1280,860)
         capture_uishot('/workspaces?q=no-such-item','workspaces-no-match-1280.png',1280,860)
         page.get_by_role('button',name='Clear filters',exact=True).click()
         expect(page.locator('[data-workspace="fixture"]')).to_be_visible()
@@ -304,6 +334,7 @@ try:
         expect(page.locator('main')).to_contain_text('1 saved brief')
         expect(page.get_by_role('button',name='Open workspace',exact=True)).to_be_visible()
         check_state('workspaces partial')
+        capture_playwright('workspaces-partial-1280.png',1280,860)
         capture_uishot('/workspaces?ws=fixture','workspaces-partial-1280.png',1280,860,wait_for='.object-head')
         reset_workspace()
         passed('workspaces partial')
@@ -439,6 +470,92 @@ try:
         reset_workspace()
         passed('workspaces scope race')
 
+        # Route, history, focus, typed scope identity and shell accessibility.
+        phase='route-focus'
+        goto_workspaces('/specs')
+        for dest,label in [('specs','Specs'),('epics','Epics'),('agents','Agents'),('conversations','Conversations'),('files','Files'),('designs','Designs'),('workspaces','Workspaces')]:
+            page.locator(f'[data-area="{dest}"]').click()
+            expect(page.locator('h1')).to_have_text(label)
+            assert page.locator('h1').count()==1
+            expect(page.locator(f'[data-area="{dest}"]')).to_have_attribute('aria-current','page')
+            assert_shell_controls_min_44(f'rail {dest}')
+        assert_keyboard_focus_visible('rail keyboard focus')
+        passed('rail reaches every destination with one heading, current state, visible focus and 44px targets')
+
+        goto_workspaces('/specs?ws=fixture')
+        fixture_run=page.locator('[data-key]').filter(has_text='Building the dashboard').first
+        fixture_run.wait_for()
+        fixture_run.click()
+        scoped_object_hash=page.evaluate('location.hash')
+        assert 'id=' in scoped_object_hash,scoped_object_hash
+        page.locator('.skip').focus()
+        page.keyboard.press('Enter')
+        expect(page.locator('h1')).to_be_focused()
+        assert page.evaluate('location.hash')==scoped_object_hash,'skip changed the route hash'
+        passed('skip focuses the page heading from a scoped object route without hash mutation')
+
+        goto_workspaces('/specs?ws=fixture')
+        page.get_by_role('button',name='Completed',exact=True).click()
+        page.locator('[data-key]').filter(has_text='PR merged').first.click()
+        specs_object_url=page.url
+        page.locator('[data-area="epics"]').click()
+        expect(page.locator('main')).to_contain_text('Demo epic')
+        page.locator('.epic-table').get_by_role('button',name='browser',exact=True).click()
+        expect(page).to_have_url(re.compile(r'#/specs\?ws=fixture&id='))
+        page.go_back()
+        expect(page.locator('main')).to_contain_text('Demo epic')
+        page.go_back()
+        assert page.url==specs_object_url,(page.url,specs_object_url)
+        expect(page.get_by_role('button',name='Completed',exact=True)).to_have_attribute('aria-pressed','true')
+        expect(page.locator('[data-key]').filter(has_text='PR merged').first).to_have_attribute('aria-pressed','true')
+        passed('spec object -> epic member spec -> Back twice restores selection and package filter')
+        page.go_forward()
+        expect(page).to_have_url(re.compile(r'#/epics'))
+        expect(page.locator('main')).to_contain_text('Demo epic')
+        page.go_forward()
+        expect(page).to_have_url(re.compile(r'#/specs\?ws=fixture&id='))
+        expect(page.locator('.detail-pane')).to_contain_text('Keep editors stable')
+        page.go_back()
+        page.go_back()
+        assert page.url==specs_object_url,(page.url,specs_object_url)
+        expect(page.get_by_role('button',name='Completed',exact=True)).to_have_attribute('aria-pressed','true')
+        expect(page.locator('[data-key]').filter(has_text='PR merged').first).to_have_attribute('aria-pressed','true')
+        passed('Forward restores epic and member spec, then Back twice restores Completed selection and filter')
+
+        phase='scope-mismatch'
+        goto_workspaces('/specs?ws=alpha')
+        expect(page.locator('.records')).to_contain_text('alpha-kit')
+        assert 'physical-kit' not in page.locator('.records').inner_text()
+        goto_workspaces('/specs?ws=physical')
+        expect(page.locator('.records')).to_contain_text('physical-kit')
+        assert 'alpha-kit' not in page.locator('.records').inner_text()
+        goto_workspaces('/agents?ws=alpha')
+        expect(page.locator('.records')).to_contain_text('alpha-assignment')
+        assert 'physical-assignment' not in page.locator('.records').inner_text()
+        goto_workspaces('/agents?ws=physical')
+        expect(page.locator('.records')).to_contain_text('physical-assignment')
+        assert 'alpha-assignment' not in page.locator('.records').inner_text()
+        goto_workspaces('/epics?ws=alpha')
+        expect(page.locator('.records')).to_contain_text('Alpha kit epic')
+        assert 'Neighbor physical epic' not in page.locator('.records').inner_text()
+        goto_workspaces('/epics?ws=physical')
+        expect(page.locator('.records')).to_contain_text('Neighbor physical epic')
+        assert 'Alpha kit epic' not in page.locator('.records').inner_text()
+        goto_workspaces('/specs')
+        expect(page.locator('.records')).to_contain_text('alpha-kit')
+        expect(page.locator('.records')).to_contain_text('physical-kit')
+        passed('directory-mismatch scope keeps runs/epics by directory basename and assignments by kit id')
+
+        phase='scope-clear'
+        goto_workspaces('/files?ws=fixture&source=workspace&path=notes%2Fbrowser.md')
+        expect(page.locator('#file-content')).to_contain_text('A recorded note')
+        page.locator('.scope select').select_option('other')
+        expect(page).to_have_url(re.compile(r'#/files\?ws=other$'))
+        page.locator('.scope select').select_option('alpha')
+        expect(page).to_have_url(re.compile(r'#/files\?ws=alpha$'))
+        passed('scope change clears incompatible selection and picker selection pushes the kit id')
+        phase=None
+
         phase=None
         # Healthy Workspaces: catalog facts, detail, scope filtering, focus and exact-path links.
         page.goto(url+'/#/workspaces?ws=fixture',wait_until='domcontentloaded')
@@ -527,6 +644,13 @@ try:
         assert_controls_min_44('picker 1280')
         capture_playwright('workspace-picker-1280.png',1280,860)
         capture_uishot('/conversations','workspace-picker-1280.png',1280,860)
+        page.set_viewport_size({'width':1600,'height':900})
+        page.wait_for_timeout(150)
+        assert_horizontal_fits('picker 1600')
+        assert_controls_min_44('picker 1600')
+        capture_playwright('workspace-picker-1600.png',1600,900)
+        capture_uishot('/conversations','workspace-picker-1600.png',1600,900)
+        page.set_viewport_size({'width':1280,'height':860})
         workspace_reads=[]
         def track_workspace_request(request):
             if '/api/workspace' in request.url: workspace_reads.append(request.url)
@@ -541,9 +665,18 @@ try:
         page.remove_listener('request',track_workspace_request)
 
         page.goto(url,wait_until='domcontentloaded')
-        page.locator('[data-key]').first.wait_for()
-        page.locator('[data-key]').first.click()
+        ideal_run=page.locator('[data-key]').filter(has_text='Building the dashboard').first
+        ideal_run.wait_for()
+        ideal_run.click()
         expect(page.locator('main')).to_contain_text('Keep editors stable')
+        for width,height in ((1280,860),(1600,900)):
+            page.set_viewport_size({'width':width,'height':height})
+            page.wait_for_timeout(150)
+            assert_horizontal_fits(f'specs ideal {width}')
+            capture_playwright(f'specs-ideal-{width}.png',width,height)
+            capture_uishot('/specs?ws=fixture',f'specs-ideal-{width}.png',width,height,'.detail-body')
+        page.set_viewport_size({'width':1280,'height':860})
+        passed('specs ideal captures at both desktop viewports')
         expect(page.locator('main')).to_contain_text('Step durations')
         expect(page.get_by_role('button',name='Mark complete',exact=True)).to_be_disabled()
         expect(page.locator('#completion-help')).to_contain_text("host's local dashboard")
@@ -560,14 +693,14 @@ try:
         expect(page.locator('main')).to_contain_text('PR merged')
         end_posts_before=len(posts('endSession'))
         page.locator('[data-area="agents"]').click()
-        page.locator('[data-assignment-key]').first.click()
+        page.locator('[data-assignment-key]').filter(has_text='run-1').first.click()
         expect(page.locator('main')).to_contain_text('Execution')
         expect(page.locator('main')).to_contain_text('Lifecycle')
         expect(page.get_by_role('button',name='Refresh session',exact=True)).to_be_visible()
         expect(page.locator('dialog[open]')).to_have_count(0)
         assert len(posts('endSession'))==end_posts_before,'viewing an agent ended a session'
         page.locator('[data-area="epics"]').click()
-        page.locator('[data-epic]').first.click()
+        page.locator('[data-epic]').filter(has_text='Demo epic').first.click()
         expect(page.locator('main')).to_contain_text('Demo epic')
         expect(page.locator('main')).to_contain_text('Epic members')
         page.goto(url+'/#/files?ws=fixture&source=workspace&path=notes%2Fbrowser.md',wait_until='domcontentloaded')
@@ -669,7 +802,9 @@ try:
         expect(page.locator('#thread-create')).to_be_enabled()
         expect(page.locator('#threads-section')).to_contain_text('New thread')
         page.locator('#threads-section').scroll_into_view_if_needed()
-        page.screenshot(path=str(browser_evidence/'sentinel-solid-threads.png'))
+        threads_capture=str(browser_evidence/'sentinel-solid-threads.png')
+        page.screenshot(path=threads_capture)
+        if threads_capture not in summary['captures']: summary['captures'].append(threads_capture)
         page.locator('.scope select').select_option('other')
         expect(page.locator('#threads-section')).to_contain_text('No threads yet')
         assert page.locator('#thread-draft').count()==0
@@ -690,6 +825,37 @@ try:
         page.locator('#refresh-button').click()
         expect(page.locator('#connection-status')).to_contain_text('Monitor connected')
         page.get_by_role('button',name='Active',exact=True).click()
+        page.locator('[data-key]').filter(has_text='Building the dashboard').first.click()
+        selected_key=json.loads(page.locator('[data-key]').filter(has_text='Building the dashboard').first.get_attribute('data-key'))
+        assert selected_key[1]==receipt['package'],selected_key
+        expect(page.locator('.detail-pane')).to_contain_text('Keep editors stable')
+        expect(page.get_by_role('button',name='Mark complete',exact=True)).to_be_enabled()
+        phase=None
+        # Retained completion failure for the intentional mismatch pair: the API refuses
+        # these packages, so the dialog must stay open with a retryable error.
+        phase='mismatch-completion'
+        page.locator('[data-key]').filter(has_text='Neighbor physical run').first.click()
+        expect(page.locator('main')).to_contain_text('physical-kit')
+        page.get_by_role('button',name='Mark complete',exact=True).click()
+        expect(page.locator('#completion-dialog')).to_be_visible()
+        page.locator('#completion-dialog').get_by_role('button',name='Mark complete',exact=True).click()
+        expect(page.locator('#completion-dialog')).to_be_visible()
+        expect(page.locator('#completion-dialog')).to_contain_text('Dashboard data unavailable')
+        expect(page.locator('#completion-dialog').get_by_role('button',name='Mark complete',exact=True)).to_be_enabled()
+        expect(page.locator('#completion-dialog').get_by_role('button',name='Cancel',exact=True)).to_be_enabled()
+        page.locator('#completion-dialog').get_by_role('button',name='Cancel',exact=True).click()
+        expect(page.locator('#completion-dialog')).not_to_be_visible()
+        expect(page.locator('main')).to_contain_text('physical-kit')
+        assert 'Marked complete' not in page.locator('.detail-pane').inner_text()
+        expect(page.get_by_role('button',name='Mark complete',exact=True)).to_be_enabled()
+        passed('retained completion failure for mismatched fixture package')
+        phase=None
+        # Canonical fixture package completes normally after the refused mismatch attempt.
+        page.get_by_role('button',name='Active',exact=True).click()
+        page.locator('[data-key]').filter(has_text='Building the dashboard').first.click()
+        selected_key=json.loads(page.locator('[data-key]').filter(has_text='Building the dashboard').first.get_attribute('data-key'))
+        assert selected_key[1]==receipt['package'],selected_key
+        expect(page.locator('.detail-pane')).to_contain_text('Keep editors stable')
         expect(page.get_by_role('button',name='Mark complete',exact=True)).to_be_enabled()
         page.get_by_role('button',name='Mark complete',exact=True).click()
         expect(page.locator('#completion-dialog')).to_be_visible()
@@ -700,9 +866,8 @@ try:
         phase=None
         allowed_reads={('/api/state',503),('/api/workspaces',503),('/api/workspace',503)}
         def package_query(query):
-            for part in query.split('&'):
-                if part.startswith('package='): return part[len('package='):]
-            return None
+            values=urllib.parse.parse_qs(query).get('package')
+            return values[0] if values else None
         def failure_reason(entry):
             if entry['phase']=='state-errors' and (entry['path'],entry['status']) in allowed_reads:
                 return 'controlled state read failure'
@@ -710,8 +875,12 @@ try:
                 return 'intentional stale-preview launch refusal'
             if entry['phase']=='fail-send' and entry['path']=='/api/thread/send' and entry['status']==503:
                 return 'intentional service-closed send refusal'
-            if entry['phase']=='import-to-live' and package_query(entry['query'])=='%2Fimported%2Fexample' and ((entry['path']=='/api/package-files' and entry['status']==503) or (entry['path']=='/api/package-preview' and entry['status']==403)):
+            if entry['phase']=='import-to-live' and package_query(entry['query'])=='/imported/example' and ((entry['path']=='/api/package-files' and entry['status']==503) or (entry['path']=='/api/package-preview' and entry['status']==403)):
                 return 'safe unpublished-package refusal during import-to-live'
+            if entry['path'] in ('/api/package-files','/api/package-preview') and ((entry['path']=='/api/package-files' and entry['status']==503) or (entry['path']=='/api/package-preview' and entry['status']==403)) and package_query(entry['query']) in {receipt.get('mismatchPackage'),receipt.get('mismatchAlphaPackage')}:
+                return 'expected mismatch read refusal'
+            if entry['phase']=='mismatch-completion' and entry['path']=='/api/package-completion' and entry['status']==503 and any(post['phase']=='mismatch-completion' and post['package']==receipt.get('mismatchPackage') for post in completion_posts):
+                return 'retained completion refusal for mismatched fixture package'
             return None
         unexpected_responses=[entry for entry in failed_responses if failure_reason(entry) is None]
         assert not unexpected_responses,unexpected_responses
@@ -722,12 +891,45 @@ try:
         assert len(http_console)<=len(failed_responses),{'console':http_console,'responses':failed_responses}
         summary.setdefault('expected_http_errors',[])
         summary['expected_http_errors'].extend({'path':entry['path'],'status':entry['status'],'phase':entry['phase'],'reason':failure_reason(entry)} for entry in failed_responses if failure_reason(entry))
+        # File asset import: built dashboard over file:, untrusted token, read-only proof.
+        file_api_requests=[]
+        def track_file_api(request):
+            if '/api/' in request.url: file_api_requests.append(request.url)
+        page.on('request',track_file_api)
+        fixture_posts_before=len(control()['posts'])
+        errors_before=len(errors); console_before=len(console_errors); responses_before=len(failed_responses)
+        page.set_viewport_size({'width':1280,'height':860})
+        dashboard_asset=(root.parent/'dashboard.html').as_uri()
+        file_snapshot={'action_token':'untrusted-import-token','observers':[{'observer_id':'imported','state':'unknown','snapshot':{'runs':[{'workspace':'imported','package':'/imported/example','execution':'running','assignment_id':'file-import-run','is_current_assignment':True,'coverage':{'state':'complete','reasons':[]},'activity':'Imported activity'}]}}]}
+        page.goto(dashboard_asset+'#/specs',wait_until='domcontentloaded')
+        page.locator('#import-file').set_input_files({'name':'snapshot.json','mimeType':'application/json','buffer':json.dumps(file_snapshot).encode()})
+        expect(page.locator('#connection-status')).to_contain_text('Imported snapshot')
+        file_row=page.locator('[data-key]').filter(has_text='Imported activity').first
+        file_row.wait_for()
+        file_row.click()
+        expect(page.locator('main')).to_contain_text('Imported activity')
+        expect(page.get_by_role('button',name='Mark complete',exact=True)).to_be_disabled()
+        capture_playwright('file-import-1280.png',1280,860)
+        file_hash=page.evaluate('location.hash')
+        page.locator('.skip').focus()
+        page.keyboard.press('Enter')
+        expect(page.locator('h1')).to_be_focused()
+        assert page.evaluate('location.hash')==file_hash,'file-mode skip changed the route hash'
+        page.locator('[data-area="workspaces"]').click()
+        expect(page.locator('.records')).to_contain_text('A live dashboard is required')
+        page.locator('[data-area="conversations"]').click()
+        expect(page.locator('main')).to_contain_text('A live dashboard is required')
+        assert file_api_requests==[],file_api_requests
+        assert len(control()['posts'])==fixture_posts_before
+        assert len(errors)==errors_before and len(console_errors)==console_before and len(failed_responses)==responses_before
+        page.remove_listener('request',track_file_api)
+        passed('file asset import is read-only with live-required workspaces/picker and no API traffic')
         summary['status']='passed'
         summary['scenarios'].extend(['healthy workspaces directory, detail, scope search and focus','workspace route actions and exact-path files','workspace picker and imported live requirement','package filters/files/sandbox/relative Markdown','agent execution and lifecycle','epic membership','workspace files and design navigation','message and brief cursor through polling/SSE','in-flight brief edits','stale preview refusal and reviewed launch','discuss result without sending','send failure retry identity','late send across thread switch','stalled stop/resume and uncertain discard','older history','create request cleanup','workspace change','offline snapshot read-only even with supplied token','explicit local package completion'])
         summary['page_errors']=errors
         summary['console_errors']=console_errors
         summary['expected_http_errors']=summary.get('expected_http_errors',[])
-        print(json.dumps({'status':'passed','scenarios':summary['scenarios'],'page_errors':errors,'screenshot':str(browser_evidence/'sentinel-solid-threads.png'),'receipt':str(evidence_dir/'step-4-browser-check.json')}))
+        print(json.dumps({'status':'passed','scenarios':summary['scenarios'],'page_errors':errors,'screenshot':str(browser_evidence/'sentinel-solid-threads.png'),'receipt':str(evidence_dir/'ev-2-browser-check.json')}))
     except BaseException as exc:
         # Capture while the page and fixture are still owned so the next boundary
         # failure is observable without rerunning solely for logs.
@@ -761,10 +963,18 @@ except BaseException as exc:
     summary['error']=repr(exc)
     raise
 finally:
-    receipt=evidence_dir/'step-4-browser-check.json'
+    receipt=evidence_dir/'ev-2-browser-check.json'
     temporary=receipt.with_name(receipt.name+'.tmp')
     temporary.write_text(json.dumps(summary,indent=2)+'\n')
     os.replace(temporary,receipt)
+    tour=['# EV-2 QA tour','',f"- Status: {summary.get('status','failed')}",f'- Fixture: {url}',"- Viewports: 1280x860, 1600x900","- Command: SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 120s uv run --script scripts/spec-observe/frontend/browser-check.py",'','## Automated scenarios','']
+    tour+=[f'{index+1}. {name}' for index,name in enumerate(summary.get('scenarios',[]))]
+    tour+=['','## Captures','']+[f"- `{Path(path).name}`" for path in summary.get('captures',[])]
+    tour+=['','## Controlled HTTP failures','']+[f"- {entry.get('path')} → {entry.get('status')} ({entry.get('reason') or 'expected'})" for entry in summary.get('expected_http_errors',[])]
+    tour+=['','## Timing facts','']+[f'- {key}: {value}s' for key,value in (summary.get('timings') or {}).items()]
+    if summary.get('error'): tour+=['','## Failure','',f"```\n{summary['error']}\n```"]
+    tour+=['','## Proof boundary','','Isolated production composition and approved desktop/file modes; no phone layout or live operator storage.','']
+    (evidence_dir/'qa-tour.md').write_text('\n'.join(tour)+'\n')
     if fixture:
         fixture.terminate()
         try: fixture.wait(timeout=5)
