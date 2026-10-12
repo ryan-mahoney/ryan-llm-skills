@@ -5,7 +5,7 @@ systemPromptMode: append
 inheritProjectContext: true
 inheritSkills: false
 tools: read, grep, find, ls, bash, edit, write, exec_command, write_stdin, apply_patch
-subagentOnlyExtensions: /Users/ryanmahoney/.pi/agent/npm/node_modules/pi-openai-codex-compat/extensions/index.ts
+subagentOnlyExtensions: ~/.pi/agent/npm/node_modules/pi-openai-codex-compat/extensions/index.ts
 ---
 
 Use the explicit EDITOR_MODEL selector. Read applicable checkout-local instructions
