@@ -17,6 +17,17 @@ if [ -e "$HOME/.local/bin/adjacent-sync" ] && [ ! -L "$HOME/.local/bin/adjacent-
 fi
 ln -sfn "$AGENTS_DIR/scripts/adjacent-sync/cli.mjs" "$HOME/.local/bin/adjacent-sync"
 
+# Claude Code and Codex exec wrappers used by assignment launches. tmux and the
+# Sentinel service exec argv directly, so the bypass flags live in these scripts
+# instead of operator shell aliases.
+for wrapper in clauded codexd; do
+  if [ -e "$HOME/.local/bin/$wrapper" ] && [ ! -L "$HOME/.local/bin/$wrapper" ]; then
+    echo "Cannot install $wrapper over an existing file." >&2
+    exit 1
+  fi
+  ln -sfn "$AGENTS_DIR/scripts/agent-wrappers/$wrapper" "$HOME/.local/bin/$wrapper"
+done
+
 sync_dir_symlinks() {
   local source_dir="$1"
   local target_dir="$2"
