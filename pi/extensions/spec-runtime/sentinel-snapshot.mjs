@@ -4,6 +4,7 @@ import { mkdir, open, rename, unlink } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { workspaceKey } from '../../../scripts/spec-observe/sentinel.mjs';
+import { pruneExpiredObservers } from '../../../scripts/spec-observe/observer-retention.mjs';
 
 export function createSnapshotPublisher({ agentDir, scope, now = Date.now }) {
   const observerId = randomUUID();
@@ -29,6 +30,7 @@ export function createSnapshotPublisher({ agentDir, scope, now = Date.now }) {
           finally { await file.close(); }
           await rename(temporary, path);
         } finally { await unlink(temporary).catch(() => {}); }
+        await pruneExpiredObservers(directory, { at: now(), except: path });
       });
       queue = job;
       return job;
