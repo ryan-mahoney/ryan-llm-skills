@@ -1128,3 +1128,69 @@ test("store preservation: bytes, lease refusal, scan refusals and late ownership
   await waitForFixtureLog(logPath, socket, late.assignment_id);
   assert.equal((await fixtureEntries(logPath)).length, 1);
 });
+
+// node --test --test-name-pattern='failed spawn from a live host' scripts/workspaces/launch.integration.test.mjs
+test('launch reservation: failed spawn from a live host is unknown, not still launching', async t => {
+  const { root, storageRoot } = await makeStorageRoot(t);
+  const workspace = await makeWorkspace(storageRoot, 'failed-spawn');
+  await mkdir(join(workspace, 'briefs'));
+  await writeFile(join(workspace, 'briefs/brief.md'), 'Plan settings.');
+  const input = {assignment_id:randomUUID(),workspace_id:'failed-spawn',storageRoot,brief:'briefs/brief.md',instructions:'Plan settings.',pi_path:await fakePi(join(root,'bin'))};
+  const resolved = await resolveAssignment(input);
+  const record = await launchAssignment(input, {expectedDigest:resolved.contractDigest, resolved, adapters:{
+    tmuxRun:async()=>({ok:false,code:1,stdout:'',stderr:'invalid option: extended-keys-format'}),
+    observationProbes:{tmuxRun:async()=>({ok:false,code:1,stdout:'',stderr:'no server running'}),psRun:()=>({stdout:'',complete:false})},
+  }});
+  assert.equal(record.state, 'launch_unknown');
+  assert.match(record.attention[0], /launch spawn failed:.*extended-keys-format/);
+  assert.equal((await findAssignment(storageRoot,input.assignment_id)).state,'launch_unknown');
+  const competitor = {...input,assignment_id:randomUUID()};
+  const preview = await resolveAssignment(competitor);
+  await assert.rejects(launchAssignment(competitor, {expectedDigest:preview.contractDigest}), /reserves/);
+});
+
+// node --test --test-name-pattern='session controls end only' scripts/workspaces/launch.integration.test.mjs
+test('session controls end only the confirmed assignment and preserve saved evidence',async t=>{
+  const {createSessionControl}=await import('./session-control.mjs');
+  const {probeSession}=await import('./tmux.mjs');
+  const {storageRoot,home,piPath,logPath,socket}=await launchScenario(t,2);
+  const records=[];
+  for(let i=0;i<2;i++){
+    const input=launchInput({workspaceId:`workspace-${i}`,storageRoot,home,piPath});
+    const resolved=await resolveAssignment(input);
+    records.push(await launchAssignment(input,{resolved,expectedDigest:resolved.contractDigest}));
+  }
+  await waitForFixtureLog(logPath,socket,records[0].assignment_id);
+  const located=await locateAssignment(storageRoot,records[0].assignment_id);
+  assert.ok(located.pi_session_file);
+  const {appendFile}=await import('node:fs/promises');
+  const {collectAssignments}=await import('../spec-observe/assignments.mjs');
+  await appendFile(located.pi_session_file,JSON.stringify({type:'message',timestamp:new Date().toISOString(),message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'Architecture proposal complete.'}]}})+'\n');
+  let observed=await collectAssignments({storageRoot});
+  assert.equal(observed.assignments.find(a=>a.assignment_id===located.assignment_id).task_activity.state,'idle');
+  await appendFile(located.pi_session_file,JSON.stringify({type:'message',timestamp:new Date().toISOString(),message:{role:'user',content:[{type:'text',text:'Continue.'}]}})+'\n');
+  observed=await collectAssignments({storageRoot});
+  assert.equal(observed.assignments.find(a=>a.assignment_id===located.assignment_id).task_activity.state,'working');
+  const service=createSessionControl({storageRoot,publicHost:'host.example'});
+  const preview=await service.describe(records[0].assignment_id);
+  assert.equal(preview.can_end,true);
+  assert.match(preview.attach_command,/ssh/);assert.match(preview.attach_command,/host.example/);
+  assert.ok(preview.attach_command.includes(records[0].tmux_session));
+  await assert.rejects(service.end({assignment_id:records[0].assignment_id,expected_identity:'stale',confirm:true}),/changed/);
+  await assert.rejects(service.end({assignment_id:records[0].assignment_id,expected_identity:preview.identity}),/Confirm/);
+  assert.equal((await probeSession(records[0])).status,'present');
+  const {endSession}=await import('./tmux.mjs');
+  await assert.rejects(endSession(records[0],{run:async(socketPath,args)=>{
+    if(args[0]==='if-shell')await tmuxExec(socketPath,['set-option','-t',`=${records[0].tmux_session}:`,'@adjacent_assignment_id',records[1].assignment_id]);
+    return tmuxExec(socketPath,args);
+  }}),/identity changed/);
+  await tmuxExec(socket,['set-option','-t',`=${records[0].tmux_session}:`,'@adjacent_assignment_id',records[0].assignment_id]);
+  assert.equal((await probeSession(records[0])).status,'present','a changed tag at the command boundary never kills the session');
+  const snapshot=await readFile(records[0].brief_snapshot,'utf8');
+  const result=await service.end({assignment_id:records[0].assignment_id,expected_identity:preview.identity,confirm:true});
+  assert.equal(result.state,'ended');
+  assert.equal((await findAssignment(storageRoot,records[0].assignment_id)).state,'ended');
+  assert.equal((await probeSession(records[1])).status,'present','other assignment remains running');
+  assert.equal(await readFile(records[0].brief_snapshot,'utf8'),snapshot);
+  assert.equal((await service.end({assignment_id:records[0].assignment_id,expected_identity:preview.identity,confirm:true})).duplicate,true);
+});

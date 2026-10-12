@@ -214,7 +214,9 @@ test("tmux adapter: first launch bootstraps keys and runs fixture with exact arg
   // First server bootstrap enables extended keys with the CSI-u format and
   // records the full UUID.
   assert.equal(await tmuxOutput(socketPath, ["show-options", "-sv", "extended-keys"]), "on");
-  assert.equal(await tmuxOutput(socketPath, ["show-options", "-sv", "extended-keys-format"]), "csi-u");
+  const format = await tmuxOutput(socketPath, ["show-options", "-sqv", "extended-keys-format"]);
+  // tmux 3.4 has no format option; both versions must reach the real child.
+  assert.ok(format === "" || format === "csi-u", `unexpected extended key format: ${format}`);
   assert.equal(
     await tmuxOutput(socketPath, ["show-options", "-v", "-t", `=${name}:`, "@adjacent_assignment_id"]),
     assignmentId,

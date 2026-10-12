@@ -3,8 +3,9 @@
 // Node-standard-library only plus the shared adj2 PID/start-time observation.
 // Every tmux invocation targets an explicit `-S socketPath` server with
 // argument arrays (never a shell). Production code never signals or kills
-// agents, never mutates the default tmux server and never writes tmux
-// configuration.
+// agents during observation or launch, never mutates the default tmux server
+// and never writes tmux configuration. Only endSession closes a verified
+// assignment terminal after an explicit operator request.
 //
 // `startSession` bootstraps a fresh server in one command queue, runs the
 // direct Pi argv in the new pane and records the full assignment UUID as an
@@ -21,12 +22,13 @@
 // `extended-keys [on|off|always]` server option (the planner's separate
 // `extended-keys-always` command does not exist on the installed version)
 // plus the independent `extended-keys-format [csi-u|xterm]` server option;
-// the bootstrap sets both, and the retained observables are
-// `extended-keys on` and `extended-keys-format csi-u`.
+// the bootstrap sets the CSI-u format when supported. tmux 3.4 has no
+// format option: quiet set-option skips that optional setting so it cannot
+// abort the command queue before Pi is started.
 
 import { execFile } from "node:child_process";
 import { isAbsolute } from "node:path";
-import { processIdentity, sameProcess } from "../spec-observe/process-identity.mjs";
+import { inspectProcess, processIdentity, sameProcess } from "../spec-observe/process-identity.mjs";
 
 const TMUX_TIMEOUT_MS = 10000;
 const IDENTITY_READY_MS = 2000;
@@ -293,7 +295,7 @@ export async function startSession({
   const commands = [
     "start-server", ";",
     "set-option", "-s", "extended-keys", "on", ";",
-    "set-option", "-s", "extended-keys-format", "csi-u", ";",
+    "set-option", "-sq", "extended-keys-format", "csi-u", ";",
     "new-session", "-d", "-x", "200", "-y", "50", "-s", sessionName, "-c", escapeTmuxArg(cwd),
     "-e", `ADJACENT_ASSIGNMENT_ID=${assignmentId}`, "--", escapeTmuxArg(piPath), ...piArgs.map(escapeTmuxArg), ";",
     "set-option", "-t", `=${sessionName}:`, "@adjacent_assignment_id", assignmentId,
@@ -454,4 +456,29 @@ export async function probeSession(record, { run = runTmux, includeAttached = fa
     pid: panePid,
     attached: parseAttachedCount(match[3]),
   };
+}
+
+/** Close only the exact, freshly verified recorded terminal. Never kill a server. */
+export async function endSession(record,{run=runTmux}={}) {
+  const observed=await probeSession(record,{run});
+  if(observed.status!=='present'||observed.pid!==record.pi_identity?.pid
+    ||observed.pane_id!==record.pane_id||!sameProcess(record.pi_identity)) {
+    throw new Error('Session identity changed or is unavailable. Refresh before ending it.');
+  }
+  // Check the full UUID and pane again inside tmux's command queue. A session
+  // replaced between the read-only probe and this command must survive.
+  const condition=`#{&&:#{==:#{@adjacent_assignment_id},${record.assignment_id}},#{&&:#{==:#{pane_id},${record.pane_id}},#{==:#{pane_pid},${record.pi_identity.pid}}}}`;
+  const result=await run(record.tmux_socket,['if-shell','-F','-t',`=${record.tmux_session}:`,condition,
+    `kill-session -t =${record.tmux_session}`,'display-message -p identity-changed']);
+  if(!result.ok)throw tmuxFailure('end-session',result);
+  if(result.stdout.trim())throw new Error('Session identity changed. No session was ended.');
+  // A closed terminal alone is not proof that its process exited.
+  const until=Date.now()+2000;
+  while(Date.now()<until){
+    const fresh=inspectProcess(record.pi_identity.pid);
+    if(fresh.state==='dead'||(fresh.state==='alive'&&fresh.started_at!==record.pi_identity.started_at))return;
+    if(fresh.state==='unknown')throw new Error('Terminal closed, but process exit could not be verified. Refresh to inspect its state.');
+    await delay(25);
+  }
+  throw new Error('Terminal closed, but the agent process is still present. Refresh to inspect its state.');
 }

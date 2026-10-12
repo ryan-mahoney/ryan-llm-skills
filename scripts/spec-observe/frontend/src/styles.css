@@ -75,3 +75,5 @@ body{max-width:100%;overflow-x:clip}
 .assignment-input details{margin:8px 0;padding:8px;border:1px solid var(--border,#344155);border-radius:5px;min-width:0}
 .assignment-input summary{cursor:pointer;overflow-wrap:anywhere}
 .assignment-input pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto;font-size:12px}
+
+.session-controls p{margin:10px 0}.session-controls label{display:block;margin:12px 0 6px}.session-controls textarea{display:block;margin:0 0 10px;padding:12px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:6px;resize:vertical}.session-controls details{margin:12px 0}.session-controls kbd{padding:2px 5px;border:1px solid var(--line);border-radius:3px}.session-controls .danger{border-color:#a84f56;color:#ffc4c4}.session-controls .danger:hover{background:#542b31}

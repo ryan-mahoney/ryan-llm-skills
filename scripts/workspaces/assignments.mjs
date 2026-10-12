@@ -1536,13 +1536,15 @@ export async function launchAssignment(input = {}, options = {}) {
       const observation = await observeAssignment(current, probes);
       updated = {
         ...current,
-        state: observation.state,
+        // The spawn call has finished, even when the long-lived host remains
+        // alive. Preserve the reservation without claiming launch is ongoing.
+        state: observation.state === "launching" ? "launch_unknown" : observation.state,
         pi_identity: observation.piIdentity ?? current.pi_identity,
         pi_session_file: observation.sessionFile ?? current.pi_session_file,
         updated_at: new Date().toISOString(),
         attention: mergeAttention(current.attention, [
-          ...observation.attention,
           `launch spawn failed: ${spawnError.message}`,
+          ...observation.attention,
         ]),
       };
     }

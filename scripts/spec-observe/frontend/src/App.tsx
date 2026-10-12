@@ -38,7 +38,8 @@ export default function App(){
  let workspaceBusyId:string|null=null;
  const live=()=>liveBrowser()&&!imported();
  const records=createMemo(()=>collectRecords(payload()));
- const assignments=createMemo(()=>collectAssignments(payload()));
+ const [endedSessions,setEndedSessions]=createSignal<string[]>([]);
+ const assignments=createMemo(()=>collectAssignments(payload()).map(a=>!imported()&&endedSessions().includes(a.assignment_id)?{...a,display:'ended',recordedState:'ended',observedState:'ended',task_activity:undefined,quiet:false,nextAction:'History',safeAction:'History'}:a));
  const epics=createMemo(()=>collectEpics(payload()));
  const record=createMemo(()=>records().find(r=>r.key===selected()));
  const agent=createMemo(()=>assignments().find(a=>a.key===selectedAgent()));
@@ -124,7 +125,7 @@ export default function App(){
    </Switch></div><div id="observer-summary" class="sidebar-foot">{observers().length} observer · {freshObservers().length} fresh heartbeat · {imported()?'Imported file':'Refreshes every 5 seconds'}<Show when={observers().some(o=>o.snapshot?.coverage?.state&&o.snapshot.coverage.state!=='complete')}> · Workspace {observers().find(o=>o.snapshot?.coverage?.state&&o.snapshot.coverage.state!=='complete')?.snapshot?.coverage?.state}</Show></div></aside>
    <main id="run-detail" aria-label="Selected detail"><div id="observation-detail"><Switch>
     <Match when={mode()==='packages'}><Show when={record()} fallback={<Empty title="Select an observed package" text="Choose a package to inspect its current obligation, activity, coverage and source paths."/>}><PackageDetail record={record()} records={records()} live={live()&&!error()} completionToken={completionToken()} completionLocalOnly={payload()?.completion==='local-only'} onComplete={askCompletion} onOpenFile={setOpenFile} onSelect={chooseRecord}/><Show when={record()?.package} keyed>{owner=><Files source="package" owner={owner} live={live()} initialFile={openFile()} recentCompletion={record()?.recent_completion}/>}</Show></Show></Match>
-    <Match when={mode()==='agents'}><Show when={agent()} fallback={<Empty title="Select an observed agent" text="Choose an assignment to inspect its execution, lifecycle and declared evidence."/>}><AgentDetail assignment={agent()} records={records()}/></Show></Match>
+    <Match when={mode()==='agents'}><Show when={agent()} fallback={<Empty title="Select an observed agent" text="Choose an assignment to inspect its execution, lifecycle and declared evidence."/>}><AgentDetail assignment={agent()} records={records()} token={token()} live={live()} refresh={refresh} onEnded={id=>setEndedSessions(prev=>prev.includes(id)?prev:[...prev,id])}/></Show></Match>
     <Match when={mode()==='epics'}><Show when={epic()} fallback={<Empty title="Select an epic" text="Choose an epic to see its members and their derived status."/>}><EpicDetail epic={epic()} onSelectPackage={(workspace,name)=>{const r=records().find(r=>r.workspace===workspace&&base(r.package)===name);if(r){setMode('packages');chooseRecord(r.key);}}}/></Show></Match>
     <Match when={mode()==='workspaces'}><Show when={workspaceId()} keyed fallback={<Empty title={catalog()?.storage?.status&&catalog()?.storage?.status!=='ok'?'Workspace storage unavailable':'Select a workspace'} text="Choose a workspace to browse repositories, designs, files and discussions."/>}>{id=><WorkspaceDetail id={id} data={workspace()} error={workspaceError()} retry={()=>void loadWorkspace(id)} token={token()} live={live()} refreshKey={refreshKey()}/>}</Show></Match>
    </Switch></div></main>

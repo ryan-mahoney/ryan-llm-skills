@@ -3,6 +3,8 @@
 // actions on loopback or the configured public host. This module
 // never imports sessions or constructs workers itself; a supplied service is
 // only wired to the bounded operator thread routes.
+import {createSessionControl} from '../workspaces/session-control.mjs';
+import {createSessionRoutes} from './session-routes.mjs';
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
@@ -122,12 +124,13 @@ function workspaceExclude(component) {
   return WORKSPACE_EXCLUDED.has(component) || component.startsWith('.env.');
 }
 
-export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi/agent'), publicHost, storageRoot, discussion } = {}) {
+export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi/agent'), publicHost, storageRoot, discussion, sessionControl } = {}) {
   let cached, read;
   const actionToken = randomBytes(32).toString('hex');
   const discussionRoutes = createDiscussionRoutes({ discussion, actionToken });
   const publicName = normalizePublicHost(publicHost);
   const workspaceRoot = storageRoot ?? resolveStorageRoot(process.env, homedir());
+  const sessionRoutes=createSessionRoutes({service:sessionControl??createSessionControl({storageRoot:workspaceRoot,publicHost:publicName}),actionToken});
   // Fresh catalog per request: only an id with exactly one valid kit maps to a directory.
   const authorizedWorkspace = async id => {
     if (typeof id !== 'string' || id === '') throw new Error('Workspace id is required');
@@ -160,6 +163,7 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
     try {
       // The configured public host is an operator endpoint behind Tailscale Serve.
       // Forwarding headers alone never authorize an otherwise remote request.
+      if (await sessionRoutes(request,response,url,{remote:remote&&!publicRequest,expectedOrigin:publicRequest?`https://${publicName}`:`http://${host}`})) {cached=null;return;}
       if (await discussionRoutes(request, response, url, {
         remote: remote && !publicRequest,
         expectedOrigin: publicRequest ? `https://${publicName}` : `http://${host}`,
