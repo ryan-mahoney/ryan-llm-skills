@@ -1,8 +1,9 @@
 // Step 6 focused tests: takeover and resume CLI commands.
 //
 // The ordinary CLI runs as a subprocess over an isolated physical storage root
-// and a canonical `.specs` package inside the target fixture repository. Real
-// tmux and the fake Pi own the assignment lifetime; only the final attach
+// and a canonical `specs/` package that newPackage creates inside the fixture
+// workspace under that root (not a `.specs` directory in the target checkout).
+// Real tmux and the fake Pi own the assignment lifetime; only the final attach
 // client boundary is substituted through a PATH wrapper that delegates every
 // probe to the real tmux binary. No live root, host or store is touched.
 
@@ -183,7 +184,12 @@ function shellQuote(value) {
 // Native PTY through a real shell pipe; the sleep holder keeps the feeder open
 // for the whole attach session and dies with the group kill.
 function spawnPty(argumentVector, env) {
-  const command = `(exec sleep 60) | exec /usr/bin/script -q /dev/null ${argumentVector.map(shellQuote).join(" ")}`;
+  const assembled = argumentVector.map(shellQuote).join(" ");
+  // util-linux script takes the command through -c; BSD/macOS script takes it
+  // as trailing argv after the typescript file.
+  const command = process.platform === "linux"
+    ? `(exec sleep 60) | exec /usr/bin/script -q -e -c ${shellQuote(assembled)} /dev/null`
+    : `(exec sleep 60) | exec /usr/bin/script -q /dev/null ${assembled}`;
   const child = spawn("/bin/sh", ["-c", command], { env, detached: true, stdio: ["pipe", "pipe", "pipe"] });
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
@@ -320,12 +326,13 @@ exec "$FAKE_TMUX_REAL" "$@"
   return { env, log };
 }
 
-async function launchAssignment(fixture, { id, specPackage, workflow, target = "app" }) {
+async function launchAssignment(fixture, { id, specPackage, workflow, target = "app", harness = null }) {
   const args = ["launch", fixture.workspaceId, "--brief", "briefs/brief.md",
     "--instructions", "Supervision fixture.", "--id", id, "--json"];
   if (target !== null) args.push("--target", target);
   if (specPackage !== null && specPackage !== undefined) args.push("--spec-package", specPackage);
   if (workflow !== null && workflow !== undefined) args.push("--workflow", workflow);
+  if (harness !== null) args.push("--harness", harness);
   const previewRun = await runCli(args, fixture.env);
   assert.equal(previewRun.code, 1, `preview should refuse without digest: ${previewRun.stderr}`);
   const preview = JSON.parse(previewRun.stdout.trim().split("\n")[0]);
@@ -365,11 +372,18 @@ async function inboxFiles(packagePath) {
   return { inbox: await list("inbox"), processed: await list("processed") };
 }
 
-test("takeover CLI: delivers a coordinator hold before any attach and skips attach without a TTY", async (t) => {
+async function runTakeoverHoldCase(t, { legacy }) {
   const fixture = await createFixture(t);
   writeCheckpoint(fixture.packagePath);
   const id = randomUUID();
   await launchAssignment(fixture, { id, specPackage: fixture.packagePath, workflow: "wf-1" });
+  const recordFile = join(fixture.workspaceDirectory, "assignments", `${id}.json`);
+  if (legacy) {
+    const persisted = JSON.parse(await readFile(recordFile, "utf8"));
+    delete persisted.harness;
+    await writeFile(recordFile, JSON.stringify(persisted));
+  }
+  const recordBefore = await readFile(recordFile);
   const checkpointFile = join(fixture.packagePath, "runtime", "sentinel", "wf-1", "checkpoint.json");
   const before = { bytes: await readFile(checkpointFile), mtimeMs: (await lstat(checkpointFile)).mtimeMs };
 
@@ -394,6 +408,21 @@ test("takeover CLI: delivers a coordinator hold before any attach and skips atta
 
   const after = { bytes: await readFile(checkpointFile), mtimeMs: (await lstat(checkpointFile)).mtimeMs };
   assert.deepEqual(after, before, "the hold never rewrites the checkpoint");
+  assert.deepEqual(await readFile(recordFile), recordBefore, "takeover leaves the persisted record bytes unchanged");
+  const retained = JSON.parse(await readFile(recordFile, "utf8"));
+  if (legacy) {
+    assert.ok(!Object.hasOwn(retained, "harness"), "an absent retained harness is not normalized into the record");
+  } else {
+    assert.equal(retained.harness, "pi", "the explicit Pi record is retained");
+  }
+}
+
+test("takeover CLI: delivers a coordinator hold before any attach and skips attach without a TTY", async (t) => {
+  await runTakeoverHoldCase(t, { legacy: false });
+});
+
+test("takeover CLI: delivers a coordinator hold before any attach and skips attach without a TTY (legacy absent harness)", async (t) => {
+  await runTakeoverHoldCase(t, { legacy: true });
 });
 
 test("takeover CLI: delivers the hold before the mocked final tmux attach boundary under a TTY", async (t) => {
@@ -482,11 +511,104 @@ test("takeover CLI: a non-spec assignment writes no inbox original and prints th
   assert.deepEqual(await readFile(recordFile), recordBefore);
 });
 
-test("resume CLI: requests a release direction without releasing or rewriting the hold", async (t) => {
+// Selective run:
+//   node --test --test-name-pattern='supervision CLI: non-Pi spec' scripts/workspaces/supervision.integration.test.mjs
+//
+// Non-Pi records keep a real spec package and workflow but no checkpoint: the
+// CLI must not resolve the package, run or inbox, so takeover stays attach-only
+// and resume refuses before any package/checkpoint/inbox work.
+async function runNonPiSupervisionCase(t, harness) {
+  const fixture = await createFixture(t);
+  const id = randomUUID();
+  await launchAssignment(fixture, { id, specPackage: fixture.packagePath, workflow: "wf-1", harness });
+  const recordFile = join(fixture.workspaceDirectory, "assignments", `${id}.json`);
+  const persisted = JSON.parse(await readFile(recordFile, "utf8"));
+  assert.equal(persisted.harness, harness);
+  assert.equal(persisted.spec_package, fixture.packagePath);
+  assert.equal(persisted.workflow_id, "wf-1");
+  const inventoryBefore = await inboxFiles(fixture.packagePath);
+  assert.deepEqual(inventoryBefore, { inbox: [], processed: [] });
+  await assert.rejects(
+    lstat(join(fixture.packagePath, "runtime", "sentinel", "wf-1", "checkpoint.json")),
+    { code: "ENOENT" },
+    "the non-Pi fixture records no checkpoint",
+  );
+  const recordBefore = await readFile(recordFile);
+
+  const takeover = await runCli(["takeover", id, "--run", "wf-1", "--json"], fixture.env);
+  assert.equal(takeover.code, 0, takeover.stderr);
+  const receipt = JSON.parse(takeover.stdout.trim().split("\n").at(-1));
+  assert.equal(receipt.takeover, "attach-only");
+  assert.equal(receipt.spec_package, fixture.packagePath);
+  assert.match(receipt.note, /no Pi coordinator/);
+  assert.equal(receipt.hold, null);
+  assert.equal(receipt.attached, false);
+  assert.deepEqual(receipt.attach_command, ["node", CLI_PATH, "attach", id, "--root", fixture.storageRoot]);
+  assert.deepEqual(await inboxFiles(fixture.packagePath), inventoryBefore, "non-Pi takeover writes no inbox file");
+  assert.deepEqual(await readFile(recordFile), recordBefore, "non-Pi takeover leaves the record bytes unchanged");
+
+  // --run deliberately mismatches the recorded workflow: the refusal must be
+  // the non-Pi-coordinator error, not run resolution or a missing checkpoint.
+  const resume = await runCli(["resume", id, "--hold", randomUUID(), "--run", "wf-other", "--json"], fixture.env);
+  const refusal = parseRefusal(resume);
+  assert.match(refusal.error, /no Pi coordinator/);
+  assert.doesNotMatch(refusal.error, /does not match|checkpoint|spec package/);
+  assert.deepEqual(await inboxFiles(fixture.packagePath), inventoryBefore, "non-Pi resume writes nothing");
+  assert.deepEqual(await readFile(recordFile), recordBefore, "non-Pi resume leaves the record bytes unchanged");
+
+  const { env, log } = await addTmuxWrapper(fixture);
+  const pty = spawnPty([process.execPath, CLI_PATH, "takeover", id, "--run", "wf-1", "--json"], env);
+  fixture.state.children.push(pty.child);
+  await waitFor(async () => {
+    let attachLog = "";
+    try {
+      attachLog = await readFile(log, "utf8");
+    } catch {
+      return null;
+    }
+    return attachLog.trim() !== "" && pty.output().stdout.includes('"takeover":"attach-only"') ? true : null;
+  }, "mocked attach-session boundary and attach-only receipt").catch((error) => {
+    throw new Error(`${error.message}: ${JSON.stringify(pty.output())}`);
+  });
+  const stdout = pty.output().stdout;
+  const receiptLine = stdout.split("\n").find((line) => line.includes('"takeover":"attach-only"'));
+  assert.ok(receiptLine, `attach-only receipt not found in ${JSON.stringify(stdout)}`);
+  const ttyReceipt = JSON.parse(receiptLine.trim());
+  assert.equal(ttyReceipt.spec_package, fixture.packagePath, "the TTY receipt keeps the actual package metadata");
+  assert.match(ttyReceipt.note, /no Pi coordinator/);
+  const attachLine = (await readFile(log, "utf8")).trim();
+  assert.match(attachLine, /attach-session/);
+  assert.match(attachLine, /hold=0$/, "no hold existed when the attach client started");
+  killGroup(pty.child);
+  await waitForClose(pty.child);
+
+  assert.deepEqual(await inboxFiles(fixture.packagePath), inventoryBefore, "non-Pi TTY takeover writes no inbox file");
+  const reconciled = JSON.parse(await readFile(recordFile, "utf8"));
+  assert.equal(reconciled.harness, harness, "attach reconciliation keeps the non-Pi harness");
+  assert.equal(reconciled.spec_package, fixture.packagePath, "attach reconciliation keeps the package metadata");
+  assert.equal(reconciled.workflow_id, "wf-1", "attach reconciliation keeps the workflow");
+}
+
+test("supervision CLI: non-Pi spec claude takeover is attach-only and resume refuses before package work", async (t) => {
+  await runNonPiSupervisionCase(t, "claude");
+});
+
+test("supervision CLI: non-Pi spec codex takeover is attach-only and resume refuses before package work", async (t) => {
+  await runNonPiSupervisionCase(t, "codex");
+});
+
+async function runResumeReleaseCase(t, { legacy }) {
   const fixture = await createFixture(t);
   writeCheckpoint(fixture.packagePath);
   const id = randomUUID();
   await launchAssignment(fixture, { id, specPackage: fixture.packagePath, workflow: "wf-1" });
+  const recordFile = join(fixture.workspaceDirectory, "assignments", `${id}.json`);
+  if (legacy) {
+    const persisted = JSON.parse(await readFile(recordFile, "utf8"));
+    delete persisted.harness;
+    await writeFile(recordFile, JSON.stringify(persisted));
+  }
+  const recordBefore = await readFile(recordFile);
 
   const takeover = await runCli(["takeover", id, "--json"], fixture.env);
   assert.equal(takeover.code, 0, takeover.stderr);
@@ -511,10 +633,32 @@ test("resume CLI: requests a release direction without releasing or rewriting th
   const direction = guard.items.find((item) => item.kind === "direction" && item.run === "wf-1");
   assert.ok(direction, "the direction original is retained");
   assert.equal(direction.sha256, result.direction.sha256);
+  assert.equal(result.hold.id, taken.hold.id, "the resume receipt names the delivered hold id");
+  assert.equal(result.hold.sha256, taken.hold.sha256, "the resume receipt names the delivered hold hash");
+  const directionBody = await readFile(join(fixture.packagePath, direction.path), "utf8");
+  assert.ok(
+    directionBody.includes(`Release requested for hold ${taken.hold.id} (sha256 ${taken.hold.sha256}).`),
+    "the direction body names the delivered hold id and hash",
+  );
   assert.equal(createHash("sha256").update(holdBefore).digest("hex"), taken.hold.sha256);
   assert.deepEqual(await readFile(taken.hold.path), holdBefore, "resume never rewrites the hold original");
   assert.equal((await lstat(taken.hold.path)).mtimeMs, holdMtime, "resume never touches the hold mtime");
   assert.deepEqual(await readFile(checkpointFile), checkpointBytes, "resume never touches the checkpoint");
+  assert.deepEqual(await readFile(recordFile), recordBefore, "takeover and resume leave the record bytes unchanged");
+  const retained = JSON.parse(await readFile(recordFile, "utf8"));
+  if (legacy) {
+    assert.ok(!Object.hasOwn(retained, "harness"), "an absent retained harness is not normalized into the record");
+  } else {
+    assert.equal(retained.harness, "pi", "the explicit Pi record is retained");
+  }
+}
+
+test("resume CLI: requests a release direction without releasing or rewriting the hold", async (t) => {
+  await runResumeReleaseCase(t, { legacy: false });
+});
+
+test("resume CLI: requests a release direction without releasing or rewriting the hold (legacy absent harness)", async (t) => {
+  await runResumeReleaseCase(t, { legacy: true });
 });
 
 test("resume CLI: wrong run, unknown hold and missing checkpoint refuse without writing", async (t) => {

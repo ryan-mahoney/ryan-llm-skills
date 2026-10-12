@@ -585,8 +585,17 @@ function attachHintArgs(root, id) {
   return ['node', CLI_PATH, 'attach', id, '--root', root];
 }
 
-function specPackageOrNull(record) {
+// The recorded package path is kept even when the effective harness makes it
+// inert, so an attach-only receipt carries the real metadata instead of null.
+function recordedSpecPackageOrNull(record) {
   return typeof record.spec_package === 'string' && record.spec_package !== '' ? record.spec_package : null;
+}
+
+// Coordinator supervision is Pi-only. A missing retained harness means Pi;
+// non-Pi records keep their spec_package bytes but have no automatic actor.
+function specPackageOrNull(record) {
+  if ((record.harness ?? 'pi') !== 'pi') return null;
+  return recordedSpecPackageOrNull(record);
 }
 
 async function storagePackageDir(declared) {
@@ -617,6 +626,7 @@ function retainedCheckpoint(packagePath, run, command) {
 
 async function takeoverCommand(root, id, options) {
   const record = await findAssignment(root, id);
+  const nonPi = (record.harness ?? 'pi') !== 'pi';
   const declared = specPackageOrNull(record);
   const tty = takeoverTty();
   const attach_command = attachHintArgs(root, id);
@@ -625,12 +635,14 @@ async function takeoverCommand(root, id, options) {
     const result = {
       assignment_id: id,
       takeover: 'attach-only',
-      spec_package: null,
+      spec_package: recordedSpecPackageOrNull(record),
       run: null,
       hold: null,
       attached: false,
       attach_command,
-      note: 'no spec package: no automatic actor. Attach only; no inbox message was written.',
+      note: nonPi
+        ? `no Pi coordinator for harness ${record.harness}: attach only; no inbox message was written.`
+        : 'no spec package: no automatic actor. Attach only; no inbox message was written.',
     };
     if (!tty) return result;
     await printResult('takeover', result, options);
@@ -701,6 +713,10 @@ async function takeoverCommand(root, id, options) {
 
 async function resumeCommand(root, id, options) {
   const record = await findAssignment(root, id);
+  const harness = record.harness ?? 'pi';
+  if (harness !== 'pi') {
+    throw new Error(`resume requires a Pi coordinator: no Pi coordinator supervision exists for harness ${harness}`);
+  }
   const declared = specPackageOrNull(record);
   if (declared === null) throw new Error('resume requires an assignment with a spec package');
   const packagePath = await storagePackageDir(declared);

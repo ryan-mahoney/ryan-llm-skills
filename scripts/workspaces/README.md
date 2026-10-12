@@ -41,8 +41,8 @@ node scripts/workspaces/cli.mjs <command> [options]
 | `locate` | `locate ID [--json]` — reconcile one assignment and print its envelope |
 | `assignments` | `assignments [--workspace ID] [--json]` — list assignment envelopes |
 | `attach` | `attach ID` — attach this terminal to a live assignment's recorded session (requires a TTY) |
-| `takeover` | `takeover ID [--run RUN]` — deliver a coordinator hold for a spec assignment, then attach when a TTY is present |
-| `resume` | `resume ID --hold ID [--run RUN]` — deliver a release direction naming one retained hold; never releases it |
+| `takeover` | `takeover ID [--run RUN]` — deliver a coordinator hold for a Pi spec assignment, then attach when a TTY is present; non-Pi assignments attach only |
+| `resume` | `resume ID --hold ID [--run RUN]` — deliver a release direction naming one retained hold for a Pi assignment; never releases it |
 
 `launch` always prints the resolved contract and its `contract_digest` first. In a
 terminal, `--yes` then typing `yes` confirms; without a TTY, `--digest` must match
@@ -127,7 +127,11 @@ ssh -t user@host 'node ~/scripts/workspaces/cli.mjs attach <uuid> --root ~/Docum
 
 ## Takeover and resume
 
-`takeover ID [--run RUN]` reads the persisted assignment. It requires a
+`takeover ID [--run RUN]` reads the persisted assignment. Coordinator
+supervision is Pi-only, with a missing retained `harness` meaning Pi. A non-Pi
+record is attach-only even when it has a recorded `spec_package`: the receipt
+keeps that package metadata and carries a no-Pi-coordinator note, writes no
+inbox file and attaches only when a TTY is present. A Pi record requires a
 recorded `spec_package`; without one it attaches only (see the non-spec note
 below). A spec record must resolve a run: `--run` may fill a missing
 `workflow_id` but never overrides a differing recorded one, and the run must
@@ -143,7 +147,10 @@ to both the hold and direction hashes. If the attach fails after delivery, the
 receipt reports the error and the message stays held pending; no extra
 original is written.
 
-`resume ID --hold ID [--run RUN]` verifies through the real inbox guard that
+`resume ID --hold ID [--run RUN]` requires the effective Pi harness. A non-Pi
+assignment refuses with a no-Pi-coordinator error before resolving the
+package, checkpoint or inbox, so a `--run` value cannot reach that work. For a
+Pi record it verifies through the real inbox guard that
 the named original is a retained `kind: hold` for the same run, then publishes
 one `kind: direction` original naming the hold id and hash. It never attaches,
 archives, edits or releases anything; the result stays "release requested,
@@ -154,8 +161,11 @@ live hash differs from the retained checkpoint hash, and missing hold history
 refuse the same way: a release direction is published only for one uniquely
 observed, hash-matching hold original.
 
-A non-spec assignment has no automatic actor: `takeover` prints that note,
-writes no inbox file and attaches only when a TTY is present.
+A non-Pi assignment and a Pi assignment without a recorded `spec_package` have
+no automatic actor: `takeover` prints the matching no-Pi-coordinator or
+no-spec note, writes no inbox file and attaches only when a TTY is present.
+`resume` refuses a non-Pi assignment as having no Pi coordinator, and a Pi
+assignment without a `spec_package` as having no hold history to release.
 
 ## Storage root resolution
 
