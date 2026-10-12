@@ -17,6 +17,12 @@ if [ -e "$HOME/.local/bin/adjacent-sync" ] && [ ! -L "$HOME/.local/bin/adjacent-
 fi
 ln -sfn "$AGENTS_DIR/scripts/adjacent-sync/cli.mjs" "$HOME/.local/bin/adjacent-sync"
 
+if [ -e "$HOME/.local/bin/repo-local-config-transfer" ] && [ ! -L "$HOME/.local/bin/repo-local-config-transfer" ]; then
+  echo "Cannot install repo-local-config-transfer over an existing file." >&2
+  exit 1
+fi
+ln -sfn "$AGENTS_DIR/scripts/repo-local-config-transfer/cli.mjs" "$HOME/.local/bin/repo-local-config-transfer"
+
 sync_dir_symlinks() {
   local source_dir="$1"
   local target_dir="$2"
