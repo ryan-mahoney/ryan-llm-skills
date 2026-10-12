@@ -97,6 +97,7 @@ const IMMUTABLE_RECORD_FIELDS = [
   "pi_path",
   "coordination_database",
   "pi_session_dir",
+  "harness",
 ];
 // Private approval receipts for internally generated resolveAssignment results.
 const resolvedReceipts = new WeakMap();
@@ -113,6 +114,16 @@ const SUPPORTED_THINKING_LEVELS = new Set([
   "xhigh",
   "max",
 ]);
+// Fixed harness enum and wrapper names. `pi` keeps the existing Pi argv;
+// `claude`/`codex` resolve to the committed exec wrappers that add the
+// unrestricted flags. The service never accepts an executable path.
+const HARNESSES = new Map([
+  ["pi", "pi"],
+  ["claude", "clauded"],
+  ["codex", "codexd"],
+]);
+// Claude owns a closed effort enum; Codex accepts any non-empty string.
+const CLAUDE_EFFORT_LEVELS = new Set(["low", "medium", "high", "xhigh", "max"]);
 
 async function lstatOrNull(path) {
   try {
@@ -198,7 +209,7 @@ async function resolveExecutable(candidate) {
   return physical;
 }
 
-async function resolvePiExecutable(piPath) {
+async function resolveAgentExecutable(piPath, executableName) {
   if (piPath !== undefined && piPath !== null) {
     if (typeof piPath !== "string" || piPath === "") {
       throw new Error("pi_path must be a non-empty string");
@@ -211,10 +222,12 @@ async function resolvePiExecutable(piPath) {
   }
   for (const entry of (process.env.PATH ?? "").split(delimiter)) {
     if (entry === "") continue;
-    const physical = await resolveExecutable(join(entry, "pi"));
+    const physical = await resolveExecutable(join(entry, executableName));
     if (physical !== null) return physical;
   }
-  throw new Error("pi executable was not found on PATH");
+  throw new Error(
+    `${executableName} executable was not found on PATH; run ~/.agents/sync.sh to install it`,
+  );
 }
 
 /**
@@ -375,6 +388,18 @@ export async function resolveAssignment(input = {}, options = {}) {
   const instructions = requireNonEmptyString(input.instructions, "instructions");
   const storageRoot = requireNonEmptyString(input.storageRoot, "storageRoot");
 
+  // Fixed harness enum; absence/null normalize to Pi, anything else refuses
+  // here at the input boundary before any setting-specific validation.
+  const harnessInput = input.harness ?? null;
+  let harness;
+  if (harnessInput === null) {
+    harness = "pi";
+  } else if (typeof harnessInput === "string" && HARNESSES.has(harnessInput)) {
+    harness = harnessInput;
+  } else {
+    throw new Error(`invalid harness: ${String(harnessInput)}`);
+  }
+
   const publicationAuthority = input.publication_authority ?? "none";
   if (!PUBLICATION_AUTHORITIES.has(publicationAuthority)) {
     throw new Error(`invalid publication_authority: ${String(publicationAuthority)}`);
@@ -401,26 +426,37 @@ export async function resolveAssignment(input = {}, options = {}) {
   if (model !== null && (typeof model !== "string" || model === "")) {
     throw new Error("model must be a non-empty string");
   }
-  if ((provider === null) !== (model === null)) {
-    throw new Error("provider and model must be supplied together");
-  }
   const thinking = input.thinking ?? null;
-  if (thinking !== null) {
-    if (typeof thinking !== "string" || thinking === "") {
-      throw new Error("thinking must be a non-empty string");
-    }
-    if (model === null) throw new Error("thinking requires an explicit model");
-    if (!SUPPORTED_THINKING_LEVELS.has(thinking)) {
-      throw new Error(
-        `invalid thinking level: ${thinking} (valid: ${[...SUPPORTED_THINKING_LEVELS].join(", ")})`,
-      );
-    }
+  if (thinking !== null && (typeof thinking !== "string" || thinking === "")) {
+    throw new Error("thinking must be a non-empty string");
   }
-  if (model !== null && thinking !== null && model.includes(":")) {
-    const suffix = model.slice(model.lastIndexOf(":") + 1);
-    if (SUPPORTED_THINKING_LEVELS.has(suffix)) {
+  if (harness === "pi") {
+    if ((provider === null) !== (model === null)) {
+      throw new Error("provider and model must be supplied together");
+    }
+    if (thinking !== null) {
+      if (model === null) throw new Error("thinking requires an explicit model");
+      if (!SUPPORTED_THINKING_LEVELS.has(thinking)) {
+        throw new Error(
+          `invalid thinking level: ${thinking} (valid: ${[...SUPPORTED_THINKING_LEVELS].join(", ")})`,
+        );
+      }
+    }
+    if (model !== null && thinking !== null && model.includes(":")) {
+      const suffix = model.slice(model.lastIndexOf(":") + 1);
+      if (SUPPORTED_THINKING_LEVELS.has(suffix)) {
+        throw new Error(
+          `model-embedded thinking conflicts with explicit thinking: ${model} + ${thinking}`,
+        );
+      }
+    }
+  } else {
+    if (provider !== null) {
+      throw new Error(`provider must be null for harness ${harness}`);
+    }
+    if (thinking !== null && harness === "claude" && !CLAUDE_EFFORT_LEVELS.has(thinking)) {
       throw new Error(
-        `model-embedded thinking conflicts with explicit thinking: ${model} + ${thinking}`,
+        `invalid thinking level: ${thinking} (valid: ${[...CLAUDE_EFFORT_LEVELS].join(", ")})`,
       );
     }
   }
@@ -429,7 +465,10 @@ export async function resolveAssignment(input = {}, options = {}) {
   if (projectTrust !== null && typeof projectTrust !== "string") {
     throw new Error("project_trust must be a string");
   }
-  const trustFlags = projectTrustFlags(projectTrust);
+  if (harness !== "pi" && projectTrust !== null) {
+    throw new Error(`project_trust must be null for harness ${harness}`);
+  }
+  const trustFlags = harness === "pi" ? projectTrustFlags(projectTrust) : [];
 
   const workflowId = input.workflow_id ?? null;
   if (workflowId !== null && (typeof workflowId !== "string" || workflowId === "")) {
@@ -492,7 +531,7 @@ export async function resolveAssignment(input = {}, options = {}) {
   if (!SESSION_NAME_PATTERN.test(tmuxSession)) {
     throw new Error("tmux_session is not an owned session name");
   }
-  const piPath = await resolvePiExecutable(input.pi_path ?? null);
+  const piPath = await resolveAgentExecutable(input.pi_path ?? null, HARNESSES.get(harness));
   if (input.coordination_database !== undefined && input.coordination_database !== null) {
     throw new Error(
       "coordination_database must not be supplied: derived from the physical storage root",
@@ -534,6 +573,7 @@ export async function resolveAssignment(input = {}, options = {}) {
     tmuxSession,
     coordinationDatabase,
     piSessionDir,
+    harness,
   ];
   const contractDigest = sha256Hex(Buffer.from(JSON.stringify(canonical), "utf8"));
 
@@ -551,19 +591,42 @@ export async function resolveAssignment(input = {}, options = {}) {
     : `Read the skill at ${skillPath} and perform its instructions for this request.\n\n` +
       `${instructions}\n\n${assignmentBlock}`;
 
-  const piArgs = [
-    "--session-dir",
-    piSessionDir,
-    "--session-id",
-    assignmentId,
-    "--name",
-    `${workspaceId}:${workspace.name}`,
-    ...(provider === null ? [] : ["--provider", provider, "--model", model]),
-    ...(thinking === null ? [] : ["--thinking", thinking]),
-    ...trustFlags,
-    `@${snapshotPath}`,
-    initialInstruction,
-  ];
+  // Non-Pi harnesses receive one prompt that names the brief snapshot with a
+  // fixed ordinary-text prefix, so option-like user text stays one message.
+  const nonPiPrompt = `Read the assignment brief at ${snapshotPath}.\n\n${initialInstruction}`;
+  let piArgs;
+  if (harness === "pi") {
+    piArgs = [
+      "--session-dir",
+      piSessionDir,
+      "--session-id",
+      assignmentId,
+      "--name",
+      `${workspaceId}:${workspace.name}`,
+      ...(provider === null ? [] : ["--provider", provider, "--model", model]),
+      ...(thinking === null ? [] : ["--thinking", thinking]),
+      ...trustFlags,
+      `@${snapshotPath}`,
+      initialInstruction,
+    ];
+  } else {
+    const modelOptions = model === null ? [] : [`--model=${model}`];
+    piArgs = harness === "claude"
+      ? [
+          "--session-id",
+          assignmentId,
+          ...modelOptions,
+          ...(thinking === null ? [] : ["--effort", thinking]),
+          nonPiPrompt,
+        ]
+      : [
+          ...modelOptions,
+          ...(thinking === null
+            ? []
+            : ["-c", `model_reasoning_effort=${JSON.stringify(thinking)}`]),
+          nonPiPrompt,
+        ];
+  }
 
   const timestamp = new Date().toISOString();
   const record = {
@@ -599,6 +662,7 @@ export async function resolveAssignment(input = {}, options = {}) {
     pi_path: piPath,
     coordination_database: coordinationDatabase,
     pi_session_dir: piSessionDir,
+    harness,
     pi_session_file: null,
     ...(context.references.length ? { context_references: context.references.map(({ content, ...ref }) => ref) } : {}),
     launcher_identity: null,
@@ -609,7 +673,11 @@ export async function resolveAssignment(input = {}, options = {}) {
   };
 
   const result = { record, piArgs, briefBytes, contractDigest,
-    inputPreview: { brief: briefBytes.toString('utf8'), instruction: initialInstruction, references: context.references },
+    inputPreview: {
+      brief: briefBytes.toString('utf8'),
+      instruction: harness === "pi" ? initialInstruction : nonPiPrompt,
+      references: context.references,
+    },
   };
   // Private approval receipt: launchAssignment accepts a supplied `resolved`
   // only when it is this exact object with an unchanged record, argv, bytes
@@ -832,17 +900,45 @@ async function validateAssignmentRecord(physicalRoot, workspace, path, record) {
       || record.supersedes === id)) {
     refuseAssignment(path, "launch-retry must supersede a different UUID");
   }
-  if (record.project_trust !== null && !PROJECT_TRUST_VALUES.has(record.project_trust)) {
-    refuseAssignment(path, "project_trust is not a known trust value");
+  // Persisted harness: absence is interpreted locally as legacy Pi without
+  // mutating the returned record; explicit null or an unknown value refuses.
+  const persistedHarness = record.harness === undefined ? "pi" : record.harness;
+  if (typeof persistedHarness !== "string" || !HARNESSES.has(persistedHarness)) {
+    refuseAssignment(
+      path,
+      `harness ${JSON.stringify(record.harness)} is not a known harness`,
+    );
   }
-  if ((record.provider === null) !== (record.model === null)
-    || (record.provider !== null && (typeof record.provider !== "string" || record.provider === ""))
-    || (record.model !== null && (typeof record.model !== "string" || record.model === ""))) {
-    refuseAssignment(path, "provider/model must be supplied together as non-empty strings");
-  }
-  if (record.thinking !== null
-    && (record.model === null || !SUPPORTED_THINKING_LEVELS.has(record.thinking))) {
-    refuseAssignment(path, "thinking requires a model and a supported level");
+  if (persistedHarness === "pi") {
+    if (record.project_trust !== null && !PROJECT_TRUST_VALUES.has(record.project_trust)) {
+      refuseAssignment(path, "project_trust is not a known trust value");
+    }
+    if ((record.provider === null) !== (record.model === null)
+      || (record.provider !== null && (typeof record.provider !== "string" || record.provider === ""))
+      || (record.model !== null && (typeof record.model !== "string" || record.model === ""))) {
+      refuseAssignment(path, "provider/model must be supplied together as non-empty strings");
+    }
+    if (record.thinking !== null
+      && (record.model === null || !SUPPORTED_THINKING_LEVELS.has(record.thinking))) {
+      refuseAssignment(path, "thinking requires a model and a supported level");
+    }
+  } else {
+    if (record.provider !== null) {
+      refuseAssignment(path, "provider must be null for a non-Pi harness");
+    }
+    if (record.project_trust !== null) {
+      refuseAssignment(path, "project_trust must be null for a non-Pi harness");
+    }
+    if (record.model !== null && (typeof record.model !== "string" || record.model === "")) {
+      refuseAssignment(path, "model must be null or a non-empty string");
+    }
+    if (record.thinking !== null && (typeof record.thinking !== "string" || record.thinking === "")) {
+      refuseAssignment(path, "thinking must be null or a non-empty string");
+    }
+    if (persistedHarness === "claude"
+      && record.thinking !== null && !CLAUDE_EFFORT_LEVELS.has(record.thinking)) {
+      refuseAssignment(path, "thinking is not a supported Claude effort level");
+    }
   }
   if (record.repository_id !== null
     && (typeof record.repository_id !== "string" || record.repository_id === "")) {

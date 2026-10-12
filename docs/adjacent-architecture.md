@@ -48,22 +48,32 @@ backend does not own the lifecycle of every execution agent.
 
 ### Independent agents in tmux
 
-Starting an agent launches interactive Pi in a detached tmux terminal, with an
-explicit assignment and execution directory. The operator can attach to the same
-live instance, interact through Pi's normal interface, and detach while it keeps
-working. Finishing a model response should leave interactive Pi available for
-further conversation.
+Starting an assignment launches an interactive agent in a detached tmux terminal,
+with an explicit assignment and execution directory. The harness is fixed by the
+assignment contract: Pi, Claude Code through `clauded`, or Codex through `codexd`.
+The operator can attach to the same live instance, interact through the agent's
+normal interface, and detach while it keeps working. Finishing a model response
+should leave the interactive agent available for further conversation.
 
 Launch in interactive mode. Wrapping an RPC or print-mode process in tmux does not
-turn it into an interactive Pi session. Detaching preserves the live process;
-quitting Pi ends it. tmux survives terminal disconnection, not machine shutdown or
-process failure. Persisted Pi sessions support subsequent recovery, which is a
-different operation from attaching to a live terminal.
+turn it into an interactive session. Detaching preserves the live process; quitting
+the agent ends it. tmux survives terminal disconnection, not machine shutdown or
+process failure.
 
-Sentinel should retain a mapping among assignment, Pi session, tmux session/pane,
-workspace, execution directory, and workflow identity where applicable. Structured
-extension messages and durable receipts should drive supervision; terminal output
-scraping and simulated typing should not become the primary control protocol.
+Assignment identity is generic and tmux-owned: pane PID and start time, the
+persisted process identity, the assignment UUID tagged on the session, and the
+owned session directory. Pi is the only harness with JSONL session observation:
+a Pi session file is the durable transcript, and persisted Pi sessions support
+subsequent recovery, which is a different operation from attaching to a live
+terminal. Claude Code and Codex leave the Pi session directory empty, so they are
+located, kept live, and reaped purely through the generic process identity and
+confirmed terminal absence — never through a Pi session file.
+
+Sentinel should retain a mapping among assignment, harness, tmux session/pane,
+workspace, execution directory, and workflow identity where applicable (plus the
+Pi session for Pi only). Structured extension messages and durable receipts should
+drive supervision; terminal output scraping and simulated typing should not become
+the primary control protocol.
 
 ## Workspaces, kits, and artifacts
 
@@ -298,20 +308,26 @@ ownership claim), adj4 (launcher database), adj6 (supervision).
 The assignment record `<root>/projects/<workspace>/assignments/<assignment-id>.json`
 is created with exclusive create before any process starts. It carries the
 assignment id (a UUID, generated unless the caller supplies one), workspace id,
-brief, skill, instructions, optional provider/model/thinking, canonical absolute
+brief, skill, instructions, the normalized harness (`pi`, `claude`, or `codex`),
+optional per-harness provider/model/thinking, canonical absolute
 execution directory, optional repository id, spec package reference (`workspace/slug`) and workflow id,
 publication authority, attempt kind and `supersedes`, contract digest, derived
 tmux session (`adj-<first 12 hex of assignment id>`) and socket, Pi session directory and
-advertised file, Pi path/pid/start, brief sha256, optional project trust, launch
-error, ended-observed time, and state and timestamps. Locating a tmux session is
-a lookup by the derived name, never a scan.
+advertised file, resolved agent path/pid/start (the committed `clauded`/`codexd`
+wrapper for the other harnesses), brief sha256, optional project trust, launch
+error, ended-observed time, and state and timestamps. `provider` and
+`project_trust` are Pi-only settings and stay null for the other harnesses.
+Locating a tmux session is a lookup by the derived name, never a scan.
 
 States are `launching` to `live`, `launch_failed`, or `launch_unknown`, and
 `live` to `ended` only after confirmed process exit. An interrupted `launching`
-record stays `launch_unknown` until the derived tmux session and Pi process are
-checked. Repeat with the same id and same contract digest returns the existing
-record and current live status; the same id with a different contract is an
-error.
+record stays `launch_unknown` until the derived tmux session and recorded agent
+process are checked. State transitions depend on the generic pane/process
+identity and confirmed terminal absence; the advertised Pi session file is
+observed for Pi only and never gates the transition. A missing Pi session file
+is not a failure for Claude or Codex. Repeat with the same id and same contract
+digest returns the existing record and current live status; the same id with a
+different contract is an error.
 
 adj4 also owns a separate storage-root-wide execution-directory reservation,
 indexed by `sha256` of the canonical execution directory and acquired atomically
@@ -324,12 +340,14 @@ exist per canonical execution directory. The launcher does not start a
 package run, so a coordinator launched in tmux still starts its own through
 `spec_dispatch`, which refuses while another coordinator for that package is alive. A retry is a new id with
 `attempt_kind: "launch-retry"` and `supersedes`, allowed only when the old tmux
-session is absent and the old Pi process is confirmed gone. Recovery must never
+session is absent and the old agent process is confirmed gone. Recovery must never
 terminate independent agents.
 
 RPC's advertised `sessionFile` is recorded even before the file exists, and
-missing, unreadable, and created remain distinct states. Owners: adj4 (launcher),
-adj6 (reconciliation).
+missing, unreadable, and created remain distinct states. That Pi session
+observation applies to the Pi harness only: `claude` and `codex` records keep an
+empty Pi session directory and are reconciled by process identity and confirmed
+terminal absence alone. Owners: adj4 (launcher), adj6 (reconciliation).
 
 ### C-8 Discussion RPC scheduling and context isolation
 
