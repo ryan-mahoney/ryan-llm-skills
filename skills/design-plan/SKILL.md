@@ -18,6 +18,10 @@ designer lenses the screens will be judged, and against which design system. Wri
 plan to disk as `brief.md` and `design.json`, then stop so the screen list can be vetted
 before any screen is produced.
 
+`design-run` produces each planned screen as an HTML file plus a same-basename Markdown
+interaction guide. Preserve entry conditions, action outcomes and connections between
+screens in the brief so those guides can explain the user's process without inventing it.
+
 Contract: [Design packages](../../docs/design-packages.md). Content rule for every screen:
 [prototype-design.md](../../rules/prototype-design.md). This skill writes no HTML.
 

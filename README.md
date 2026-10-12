@@ -244,7 +244,8 @@ workspace's palettes, component styles, HTML examples, and JavaScript helpers. I
 | Skill | Command | Purpose |
 |---|---|---|
 | **design-plan** | `/design-plan <workspace> <slug> [--posture ...]` | Use the conversation and any material it references, choose expert and designer lenses, inventory screen × state with the person and job each serves, declare the posture, write `brief.md` and `design.json` |
-| **design-run** | `/design-run <workspace> <slug> [--step N]` | Produce each screen as its own file, lint, capture and inspect at every declared width, then review the set through the brief's lenses |
+| **design-run** | `/design-run <workspace> <slug> [--step N]` | Produce each screen with a matching Markdown interaction guide, lint, capture and inspect at every declared width, then review the set through the brief's lenses |
+| **design-prototype-explode** | `/design-prototype-explode <workspace> <slug> <prototype-path> [--context PATH]` | Extract each reachable screen/state from a compound prototype into separate HTML and granular interaction/context guides while preserving the source design |
 
 `node scripts/design/cli.mjs` owns the mechanical part: index validation, screen lint
 (no external resources, no self-referential copy), derived produced/captured status, the
