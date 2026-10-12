@@ -35,6 +35,7 @@ const alphaKitPackage=join(mismatchDirectory.directory,'specs','alpha-kit');awai
 await writeFile(join(alphaKitPackage,'spec.md'),'# Alpha kit specification\n');
 await writeFile(join(alphaKitPackage,'work-tour.html'),'<html><body><h1>Alpha kit tour</h1></body></html>');
 const physicalKitPackage=join(neighborDirectory.directory,'specs','physical-kit');await mkdir(physicalKitPackage,{recursive:true});
+const packageIdentity={package:pkg,mismatchPackage:physicalKitPackage,mismatchAlphaPackage:alphaKitPackage};
 await writeFile(join(physicalKitPackage,'spec.md'),'# Physical kit specification\n');
 await writeFile(join(physicalKitPackage,'work-tour.html'),'<html><body><h1>Physical kit tour</h1></body></html>');
 await mkdir(join(workspace.directory,'notes'),{recursive:true});
@@ -127,7 +128,7 @@ const server=createServer(async(req,res)=>{
   if(action==='detail-delay-id')boundary.detailDelayId=url.searchParams.get('value')??'';
   if(action==='state-clock-offset-ms')boundary.stateClockOffsetMs=numberValue(url.searchParams.get('value'),-120000,120000);
   if(action==='catalog-mode')await applyCatalogMode(url.searchParams.get('value')||'healthy');
-  res.setHeader('Content-Type','application/json');res.end(JSON.stringify({posts,threads,tick,boundary,boundaryLog:boundaryLog.slice(-60),active:[...activeBoundary.values()]}));return;
+  res.setHeader('Content-Type','application/json');res.end(JSON.stringify({...packageIdentity,posts,threads,tick,boundary,boundaryLog:boundaryLog.slice(-60),active:[...activeBoundary.values()]}));return;
  }
  // Emulate the trusted Serve endpoint so the browser exercises thread-only tokens.
  if(!localOperator){req.headers.host='dashboard.example';if(req.headers.origin)req.headers.origin='https://dashboard.example';}
@@ -163,6 +164,6 @@ const server=createServer(async(req,res)=>{
 });
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
 const timer=setInterval(()=>{tick++;void writeFile(observerFile,JSON.stringify(makeSnapshot()));void writeFile(mismatchObserverFile,JSON.stringify(makeMismatchSnapshot()));},1000);
-console.log(JSON.stringify({url:`http://127.0.0.1:${server.address().port}`,package:pkg,mismatchPackage:physicalKitPackage,mismatchAlphaPackage:alphaKitPackage,thread1,thread2}));
+console.log(JSON.stringify({url:`http://127.0.0.1:${server.address().port}`,...packageIdentity,thread1,thread2}));
 async function close(){clearInterval(timer);server.closeAllConnections();await new Promise(r=>server.close(r));await rm(root,{recursive:true,force:true});process.exit(0);}
 process.on('SIGTERM',()=>void close());process.on('SIGINT',()=>void close());

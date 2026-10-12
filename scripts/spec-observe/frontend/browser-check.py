@@ -61,6 +61,13 @@ try:
             response=context.request.get(url+'/__fixture/control'+suffix)
             assert response.ok
             return response.json()
+        # The control endpoint owns package identity for both fixture entry paths.
+        identity=control()
+        for key in ('package','mismatchPackage','mismatchAlphaPackage'):
+            assert isinstance(identity.get(key),str) and Path(identity[key]).is_absolute(), f'Missing fixture identity: {key}'
+            assert key not in receipt or receipt[key]==identity[key], f'Fixture identity changed: {key}'
+            receipt[key]=identity[key]
+        assert len({receipt[key] for key in ('package','mismatchPackage','mismatchAlphaPackage')})==3
         def posts(name): return [p for p in control()['posts'] if p['name']==name]
         def passed(name): summary.setdefault('scenarios',[]).append(name)
         def assert_horizontal_fits(label):
