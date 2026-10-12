@@ -14,16 +14,16 @@ Mode changes reuse the same dashboard. A failed browser launch leaves its URL
 available to open manually, and a failed service launch does not stop observation.
 
 The dashboard uses the Adjacent workspace shell's dark split-pane layout. Search
-repositories/packages, filter current packages, then select a package for activity, obligations,
+workspaces/packages, filter current packages, then select a package for activity, obligations,
 incidents, actions, coverage and paths. Freshness and observer heartbeat are shown
 separately. It reads existing JSON exports every five seconds, without new model
-calls. Its file endpoints read only canonical packages authorized by those exports. No worker controls are exposed. Task activity and obligation
+calls. Its file endpoints serve a package only when a published snapshot names it and it sits directly under `specs/` of a valid workspace (the workspace file gate). No worker controls are exposed. Task activity and obligation
 text render Markdown emphasis, code, headings, lists and HTTP(S) links. Raw HTML
 is displayed as text; other link schemes cannot execute. Existing public-hint
 redaction and length limits still apply before display.
 
 **Mark complete** in a current package's detail asks for confirmation, then saves
-`sentinel-completion.json` in the canonical package. The package moves to Recently
+`sentinel-completion.json` in the package folder, bound to its `ws/slug` reference. The package moves to Recently
 completed with an explicit **Marked complete** label. This records an operator's
 lifecycle decision; workers continue and step evidence, checkpoints, and PR status
 remain unchanged. Existing worker and checkpoint updates preserve the decision.
@@ -32,14 +32,16 @@ that override on the next observation.
 
 The action requires the live local dashboard and its same-origin action token.
 It applies the operator's decision even when the displayed state has changed,
-the worker lease or worktree is gone, or lifecycle records are incomplete.
+the coordinator process or worktree is gone, or lifecycle records are incomplete.
 Canonical package authorization and symlink protection remain required; imported
 snapshots are read-only. Saved completion appears immediately in the dashboard and
 on subsequent Sentinel observations, without rewriting observer export files.
 After installing this change, stop and restart Sentinel to load both the collector
 and dashboard service.
-An old running record without its lease or checkout is labeled **Running
-unconfirmed**; it does not establish that a worker is currently executing.
+A running record whose `coordinator_pid` is gone, or whose checkout is unavailable, is
+labeled **Running unconfirmed** (`coordinator-gone` condition); it does not establish that a
+worker is currently executing. The pid probe is host-local, so it assumes the observer runs on
+the execution host.
 
 The **Agents** view lists the tmux assignments observed under the configured
 storage root. The list shows current rows first and groups ended or launch-failed
@@ -97,19 +99,21 @@ running Pi session needs to load the updated observer code first.
 
 ### Epics
 
-Sentinel reads `.specs/_epics/<slug>/epic.json` in every observed primary checkout
-(64 KiB per record, 50 epics per `.specs/`, shared read budget) and derives each
+Sentinel reads each workspace's epics through spec-location (`projects/<workspace>/epics/<slug>/epic.json`,
+50 epics per workspace; records are read outside the byte budget) and derives each
 member's status from the package facts it already collects, regardless of the
-24-hour activity filter and the seven-day completion window. Folders under
-`.specs/` whose names start with `_` are not packages. The snapshot carries
+24-hour activity filter and the seven-day completion window. Members are package
+slugs of the same workspace. The snapshot carries
 `epics[]` with members, summary counts, `waiting_on`, `next` and per-epic coverage;
-rows for member packages carry `epic`. An invalid record or unreadable `_epics`
-directory is a coverage reason and never hides its member packages; an absent
-`_epics` directory is normal. Sentinel never writes an epic record. Schema and
+rows for member packages carry `epic`. An invalid record is a coverage reason and
+never hides its member packages; a workspace without epics is normal. Sentinel never writes an epic record. Schema and
 status rules: [docs/spec-epics.md](../../docs/spec-epics.md).
 
-Active observers check scoped canonical `pr_submission` records against authoritative
-GitHub PR metadata. Missing stored branch/base fields are filled from that response;
+Active observers check each target's entry in `pr-url.json`
+(`{package_ref, targets: {<repo id>: {url, branch, base, mode, ...}}}`) against authoritative
+GitHub PR metadata, in that target's primary checkout. A package has merged only when every
+target's PR has; `merge.targets[]` lists each target's state and the package completes at the
+latest `merged_at`. A package whose record omits a target stays unmerged (`missing-pr-record`). Missing stored branch/base fields are filled from that response;
 when present they must match. The associated local branch tip must equal the merged
 PR head, or the branch must be demonstrably absent. Loose and packed refs are read
 without Git subprocesses. This also handles squash merges, rebased learnings and
@@ -157,7 +161,7 @@ the confirmation. API failure reasons distinguish network, timeout, authenticati
 rate limiting, missing client and malformed response failures; raw stderr is never
 retained.
 Observe mode caches results in reader memory. Shadow/recover may atomically persist
-`sentinel-merge.json` in the canonical primary package, without changing receipts,
+`sentinel-merge.json` (`{package_ref, targets: {<repo id>: record}}`) in the package folder, without changing receipts,
 checkpoint acceptance or readiness artifacts. Cold status and the standalone
 viewer never run merge commands. Package metadata changes only through the
 explicit **Mark complete** action described above.
@@ -303,7 +307,7 @@ receipt's `snapshot_path` names the current file; shutdown writes `state:
 "closed"` with the same observer UUID. The reconcile heartbeat is referenced at
 15 s; `published_at`, `sequence` and `snapshot.coverage.observed_at` advance
 while the host lives. A stale `observing` file is never proof that its monitor
-is alive; confirm the recorded PID/start identity before acting.
+is alive; confirm the recorded PID/start identity before acting. Snapshots older than the 1 hour `OBSERVER_RETENTION_MS` window are pruned by the publisher and withheld by the dashboard, while live 15 s refreshes stay fresh.
 
 The dashboard keeps the existing local/remote boundary: loopback requests get
 the same-origin action token and normal completion, while requests classified
@@ -376,13 +380,14 @@ operator decision for the target machine and is not installed by this repository
 First run `~/.agents/sync.sh`, which installs the extension's npm dependencies, and
 start the host once in the foreground to confirm the `ready` line.
 
-The heredoc expands `$(command -v node)`, `$HOME` and `$PATH` when the file is
-written, because systemd does not read the login shell's environment. `PATH` must
-reach `git`, and `gh` when GitHub merge evidence is wanted. If Node comes from mise,
-`command -v node` can resolve to a versioned install that a Node upgrade removes.
-In that case, use the mise shim path (`~/.local/share/mise/shims/node`). Omit
-`--public-host` when the dashboard is not served over Tailscale. Add
-`Environment=ADJACENT_STORAGE_ROOT=...` when storage is not at the default root.
+The host needs Node 22.19 or newer (`node:sqlite`). Pin that Node's path in the unit,
+because systemd does not read the login shell's environment, and a distribution's
+`node` is often older (Ubuntu 24.04 ships 18). Pi's installer keeps a suitable Node at
+`~/.local/share/pi-node/current/bin/node`, a link that survives its updates. `PATH`
+must reach `git`, and `gh` when GitHub merge evidence is wanted. Omit `--public-host`
+when the dashboard is not served over Tailscale. The storage root comes from the
+saved configuration (`cli.mjs setup --save`). The full host setup is in
+`docs/linux-host-setup.md`.
 
 ```bash
 TSNAME=$(tailscale status --json | jq -r '.Self.DNSName' | sed 's/\.$//')
@@ -393,8 +398,8 @@ Description=Spec Sentinel host
 After=network-online.target
 
 [Service]
-ExecStart=$(command -v node) $HOME/.agents/pi/extensions/spec-runtime/sentinel-host.mjs --root $HOME/Documents --port 4319 --public-host $TSNAME
-Environment=PATH=$PATH
+ExecStart=$HOME/.local/share/pi-node/current/bin/node $HOME/.agents/pi/extensions/spec-runtime/sentinel-host.mjs --root $HOME/Documents --port 4319 --public-host $TSNAME
+Environment=PATH=$HOME/.local/share/pi-node/current/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
 Restart=on-failure
 
 [Install]
@@ -449,22 +454,27 @@ requires separate operator authority for its named target.
 ## Workspace sentinel status
 
 ```bash
-node ~/.agents/scripts/spec-observe/cli.mjs sentinel status [--root PATH | --package PATH] [--format text|json] [--agent-dir PATH]
+node ~/.agents/scripts/spec-observe/cli.mjs sentinel status [--root PATH | --package REF|PATH] [--format text|json] [--agent-dir PATH]
 ```
 
 Text output is the default. `--agent-dir` defaults to `PI_CODING_AGENT_DIR` or
-`~/.pi/agent`. Without `--package`, repositories are discovered recursively beneath
-`~/Documents` or the root saved with `/spec-sentinel root ~/Projects` in Pi. Nested
-repositories are included; no per-repository enrollment is required. `--root PATH`
-overrides discovery for one CLI call. Existing enrollments and managed run pointers
-supplement discovery; `--package` skips the directory scan.
+`~/.pi/agent`. Packages come from the storage root (`ADJACENT_STORAGE_ROOT` or the saved
+root): every `projects/<workspace>/specs/<slug>` is observed, with its targets read from
+`locations.json` (a missing or unreadable file is the coverage reason `locations-unavailable`).
+`--package` takes `ws/slug` or a package folder and limits the read to that package and its
+workspace's epics. Repository discovery runs only to find legacy locations: repositories are
+discovered recursively beneath `~/Documents` or the root saved with `/spec-sentinel root ~/Projects`
+in Pi, and enrolled with `/spec-sentinel add <repository>` (primary checkouts only). A repository
+with untracked `.specs/` entries yields one `legacy-location` attention row (snapshot `attention[]`)
+with the remedy `spec-location migrate --workspace <ws>`, or "add the repository to a kit" when it
+is in no kit. A `.specs/` folder is never read as a package. `--root PATH` overrides discovery for one CLI call.
 
 Pi caches discovery for five minutes and uses the managed run index and receipts for
-frequent updates. The index is read, not watched. Chokidar watches only canonical
-`.specs` trees recursively without following symlinks outside them. Directory scans skip hidden, dependency/build/cache and symlink
+frequent updates. The index is read, not watched. Chokidar watches only each workspace's
+`specs/` and `epics/` directories recursively without following symlinks outside them. Directory scans skip hidden, dependency/build/cache and symlink
 children and are bounded by depth, entries, directory count and cooperative elapsed
-budget. Incomplete coverage is reported. The reader validates canonical primary
-packages; observation never grants recovery authority or makes a model call. Existing
+budget. Incomplete coverage is reported. The reader locates packages through spec-location;
+observation never grants recovery authority or makes a model call. Existing
 `list|runs|report|metrics` commands are unchanged.
 
 The dashboard keeps workflow state separate from worker execution. The latest
@@ -476,11 +486,11 @@ completed attempts stay historical. For example, a ready workflow is labelled
 ## Workflow metrics
 
 ```bash
-node ~/.agents/scripts/spec-observe/cli.mjs metrics --package /absolute/repo/.specs/feature --format text
-node ~/.agents/scripts/spec-observe/cli.mjs metrics --package /absolute/repo/.specs/feature --all-sessions
+node ~/.agents/scripts/spec-observe/cli.mjs metrics --package <storage root>/projects/<workspace>/specs/<slug> --format text
+node ~/.agents/scripts/spec-observe/cli.mjs metrics --package <storage root>/projects/<workspace>/specs/<slug> --all-sessions
 ```
 
-In Pi, `/spec-metrics /absolute/repo/.specs/feature` displays the same summary without
+In Pi, `/spec-metrics <storage root>/projects/<workspace>/specs/<slug>` displays the same summary without
 a model turn. Restart or reload an idle observer session to load the new command;
 the CLI works immediately while an existing implementation continues. Do not restart
 the owning coordinator merely to observe: its shutdown cancels managed workers.
@@ -535,7 +545,7 @@ For a managed run, use its canonical package from that list. The runtime records
 editor session paths, so future observation does not need manually pasted nested paths:
 
 ```bash
-node ~/.agents/scripts/spec-observe/cli.mjs report --package /absolute/repo/.specs/feature
+node ~/.agents/scripts/spec-observe/cli.mjs report --package <storage root>/projects/<workspace>/specs/<slug>
 ```
 
 For older runs, discover root sessions from `~/.pi/agent/sessions`, then select a session
@@ -600,8 +610,8 @@ node --test scripts/spec-observe/core.test.mjs
 
 Metrics recognize native `subagent-spec-clerk-<uuid>-<number>` session names as
 clerk work. They report PR submission only from `pr-url.json` with schema version 1,
-kind `pr_submission`, `url`, actual `submitted_at`, canonical `package`, and the selected
-coordinator's exact `parent_session`. Legacy or differently bound receipts remain
+kind `pr_submission`, a `package_ref` matching the package, and a target entry with `url`, actual
+`submitted_at` and the selected coordinator's exact `parent_session`. Legacy or differently bound receipts remain
 unmeasured. Coordinator completion is reported separately from the existing fenced
 `outcome: published` summary with matching `spec-folder`, an HTTPS PR URL and
 `blocker: none` in a normal final text response. This records a claim, not independent

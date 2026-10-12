@@ -4,7 +4,7 @@ description: "Publish draft spec-driven checkpoints early, then establish final-
 mode: coding
 scope: document
 disable-model-invocation: true
-argument-hint: "[spec=<path/to/spec.md>] [mode=draft|ready]"
+argument-hint: "[package=<workspace/slug or folder>] [mode=draft|ready]"
 license: MIT
 metadata:
   author: Ryan Mahoney
@@ -21,7 +21,7 @@ waits for it. Deployment
 readiness, authorization and post-deployment observations remain separate. Apply
 [Verification and Review](../../rules/verification-and-review.md), including Jev checkpoints. Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). The PR explains the problem and resulting change to a teammate. The supporting artifacts retain the full verification record; neither opening the PR nor a future human review creates merge safety.
 
-This skill opens or updates PRs and never merges them. It may change repository and remote Git state only as required for rebase, commit, and push. It never publishes a red or stale evidence case as merge-ready.
+A package that targets several repositories gets one PR per target, each from that target's branch and worktree; the steps below run once per target unless stated otherwise. This skill opens or updates PRs and never merges them. It may change repository and remote Git state only as required for rebase, commit, and push. It never publishes a red or stale evidence case as merge-ready.
 
 ## Review Completion
 
@@ -54,7 +54,7 @@ round budget. A stale completion remains a blocker.
 
 ## Required Inputs
 
-Resolve an explicit `.specs/<feature>/` folder or contained `spec.md` first, then conversation/footer context. Stop on ambiguity. Confirm publication is within the user's authorized scope.
+Run the first step of [Spec Location](../spec-end-to-end/references/spec-location.md): `spec-location check` on an explicit `workspace/slug`, package folder or contained file first, then conversation/footer context. Stop on ambiguity. Read `locations.json`: each target's `worktree` and `branch` are where its code and PR come from. Confirm publication is within the user's authorized scope.
 
 Use `mode=draft` while implementation or required evidence is incomplete, including early
 checkpoint publication. Require the sourced context/spec, a coherent committed checkpoint,
@@ -80,33 +80,39 @@ and the actual diff without requiring final artifacts. Missing or legacy require
 inputs, unresolved merge blockers, invalid audit/completion, a tour other than `ready`,
 or stale commit bindings block ready status, not an honest authorized draft.
 
-Write these artifacts atomically under the spec folder:
+Write these artifacts atomically in `package_dir`, with one section per target in a multi-target package:
 
 - `pr-rebase-log.md` — base, SHAs, conflicts, resolutions, commands, and evidence invalidation/re-establishment.
-- `pr-message.md` — exact PR title and body submitted.
-- `pr-url.json` — the publication receipt sentinel reads:
+- `pr-message.md` — exact PR title and body submitted for each target.
+- `pr-url.json` — the publication receipt sentinel reads, one entry per target repository id:
 
   ```json
-  { "schema_version": 1, "kind": "pr_submission", "package": "/absolute/primary/.specs/<feature>",
-    "url": "https://...", "submitted_at": "<UTC ISO time>", "commit": "<full SHA>",
-    "draft": false, "tour": "work-tour.html", "parent_session": "<coordinator transcript path>" }
+  { "schema_version": 1, "kind": "pr_submission", "package_ref": "<workspace>/<slug>",
+    "targets": {
+      "<repo id>": { "url": "https://...", "number": 123, "branch": "<head branch>", "base": "<base branch>",
+        "mode": "ready", "submitted_at": "<UTC ISO time>", "commit": "<full SHA>",
+        "tour": "work-tour.html", "parent_session": "<coordinator transcript path>" }
+    } }
   ```
 
-  Use `"draft": true` and `"tour": null` for a draft. Sentinel ignores a record without
-  `kind`, `package` and `submitted_at`, so a legacy `{ url, submittedAt, commit, tour }` file
-  leaves the package visible as unfinished and blocks merge reconciliation; rewrite it in
-  this shape when updating an older package.
+  Use `"mode": "draft"` and `"tour": null` for a draft. Keep the other targets' entries when updating one.
+  Sentinel ignores a record without `kind`, `package_ref` and a target's `submitted_at`, so a legacy
+  `{ url, submittedAt, commit, tour }` file leaves the package visible as unfinished and blocks merge
+  reconciliation; rewrite it in this shape when updating an older package.
 
-`.specs/` is often gitignored. Read it directly and do not stage it unless the repository explicitly tracks it.
+The package is workspace storage outside every checkout: never stage it, copy it into a checkout, or add it to a PR.
 
 ## Order Of Operations
 
 ```text
+per target:
 draft: resolve authority/checkpoint -> safe push -> create/update draft
 ready: fetch/rebase -> resolve conflicts -> commit coherent work -> focused evidence
 -> safe push -> consume step review/fix completion -> render work tour
 -> verify HEAD/evidence bindings and mergeability -> update PR to ready -> read CI status once -> verify publication
 ```
+
+The work tour covers the combined diff of all targets and is rendered once, after every target is rebased and pushed.
 
 Push checkpoints and open/update the draft before final regression evidence is complete.
 After review fixes or other new commits, push again before ready status. Preserve the
@@ -209,7 +215,7 @@ Keep full SHAs, audit iterations, AC/CL/EV tables, command inventories, and phas
 the tour/evidence artifacts unless the repository explicitly requires them in the PR.
 
 Link the tour or other evidence only when accessible to the intended reader. Verify file links
-refer to committed content in the relevant revision. Do not cite `.specs/`, uncommitted files,
+refer to committed content in the relevant revision. Do not cite workspace storage paths, uncommitted files,
 temporary reports, or paths outside the repository. If no shared artifact location exists, retain the
 local tour and include only essential findings or instructions in the PR. Do not expand the
 whole evidence record into the body or invent a hosting service.
@@ -219,6 +225,10 @@ actual final diff, bounds every material claim, and contains no workflow narrati
 or invented rollout requirements. A short description does not excuse omitting a consequential
 defect or limitation.
 
+For a package with several targets, each PR body links the sibling PRs and says what the sibling carries. Create
+all PRs first, then update each body with the others' URLs. The package counts as published when every target
+has a PR, and as merged when every target is merged.
+
 Do not make future human review or required manual testing a substitute for the evidence gate.
 Do not copy secrets or sensitive evidence into the PR.
 
@@ -226,9 +236,9 @@ Use `gh pr view --json number,url,state,isDraft` to find an existing PR for the 
 For draft mode, create with `gh pr create --draft` when absent, otherwise update its body/title
 and retain or restore draft status with `gh pr ready --undo` as needed. For ready mode,
 change to ready only after the checks below. Write `pr-url.json` after the platform returns the URL. Retain existing publication
-fields and add `schema_version: 1`, `kind: pr_submission`, `url`, `submitted_at`
-(actual UTC submission time), `package` (canonical absolute spec folder), and
-`parent_session` (the coordinator's exact transcript path) when available. Do not guess
+fields and add `schema_version: 1`, `kind: pr_submission`, `package_ref`, and for the target
+`url`, `number`, `branch`, `base`, `mode`, `submitted_at`
+(actual UTC submission time), and `parent_session` (the coordinator's exact transcript path) when available. Do not guess
 session identity or reuse an older submission timestamp. This receipt records PR
 submission, not coordinator completion or acceptance; later publication queries do not
 change that timestamp.

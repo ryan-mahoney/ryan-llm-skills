@@ -8,9 +8,14 @@ import { authorizePackage, listPackageFiles, readPackageFile } from './package-f
 // Run independently: node --test scripts/spec-observe/package-files.test.mjs
 test('package viewer rejects unpublished paths, traversal, escaping links and oversized files',async t=>{
  const dir=await realpath(mkdtempSync(join(tmpdir(),'package-files-')));t.after(()=>rmSync(dir,{recursive:true,force:true}));
- const pkg=join(dir,'.specs','feature');mkdirSync(pkg,{recursive:true});mkdirSync(join(dir,'.git'));
- const state={observers:[{snapshot:{runs:[{package:pkg}]}}]};
- assert.equal(await authorizePackage(state,pkg),pkg);await assert.rejects(authorizePackage(state,dir));
+ const workspaceDir=join(dir,'projects','demo'),pkg=join(workspaceDir,'specs','feature');mkdirSync(pkg,{recursive:true});mkdirSync(join(workspaceDir,'notes'));
+ // The caller's workspace gate (dashboard authorizedWorkspace) maps a workspace id to its directory or refuses.
+ const gate=async id=>{if(id!=='demo')throw Error('Workspace is unavailable');return workspaceDir;};
+ const state={observers:[{snapshot:{runs:[{package:pkg,workspace:'demo'},{package:join(workspaceDir,'notes'),workspace:'demo'}]}}]};
+ assert.deepEqual(await authorizePackage(state,pkg,gate),{root:pkg,ref:'demo/feature'});
+ await assert.rejects(authorizePackage(state,dir,gate),/not published/);
+ await assert.rejects(authorizePackage(state,join(workspaceDir,'notes'),gate),/not canonical/,'a published folder outside specs/ is refused');
+ await assert.rejects(authorizePackage({observers:[{snapshot:{runs:[{package:pkg,workspace:'other'}]}}]},pkg,gate),/unavailable/,'a workspace the gate refuses');
  writeFileSync(join(dir,'secret'),'private');symlinkSync(join(dir,'secret'),join(pkg,'escape'));symlinkSync(dir,join(pkg,'linked'));
  writeFileSync(join(pkg,'work-tour.html'),'<h1>Tour</h1>');writeFileSync(join(pkg,'image.png'),Buffer.from([137,80,78,71]));writeFileSync(join(pkg,'binary.dat'),Buffer.from([0,255]));writeFileSync(join(pkg,'large.txt'),Buffer.alloc(8*1024*1024+1));
  const listing=await listPackageFiles(pkg);assert.equal(listing.files.find(f=>f.name==='escape').available,false);assert.equal(listing.files.find(f=>f.name==='large.txt').available,false);

@@ -1,6 +1,6 @@
 ---
 name: spec-architect-critics
-description: "Critique a standalone spec-driven architecture proposal in .specs/<feature>/proposal.md by selecting two real practitioners with relevant expertise and evaluating the proposal through their documented perspectives. Use for architecture critiques, proposal reviews, stress tests, expert perspectives, and gap-finding after spec-architect-initial."
+description: "Critique a standalone spec-driven architecture proposal (a package's proposal.md) by selecting two real practitioners with relevant expertise and evaluating the proposal through their documented perspectives. Use for architecture critiques, proposal reviews, stress tests, expert perspectives, and gap-finding after spec-architect-initial."
 mode: coding
 scope: document
 disable-model-invocation: true
@@ -25,7 +25,7 @@ This is not a rubber stamp. The value of this skill is in finding flaws, blind s
 
 Look for the material to critique:
 
-- Resolve `proposal.md` from an explicit `.specs/<feature>/` folder or file first. Otherwise use the feature folder named in the conversation; if exactly one `.specs/*/proposal.md` exists, use it. Stop on ambiguity rather than guessing by modification time.
+- Resolve the package from an explicit package ref or folder first, otherwise the package named in the conversation. Run the shared [spec-location step](../spec-end-to-end/references/spec-location.md) (`node ~/.agents/scripts/spec-location/cli.mjs check <ref or folder>`); on refusal, print its `message` and `remedy` and stop. Read `proposal.md` from `package_dir` in `locations.json`. Stop on ambiguity rather than guessing by modification time.
 - An architecture document the user has shared or uploaded
 - A plan described in the current conversation
 - Code or PRs the user wants reviewed at the architectural level
@@ -117,6 +117,16 @@ For each expert, work through the proposal systematically. The critique is not "
 
 Each critique point must be grounded in something real — a known principle, a published argument, a documented pattern or anti-pattern the expert has discussed. Don't fabricate positions. If you're unsure whether an expert has opined on a specific topic, frame it as "based on their general emphasis on X, they would likely question Y" rather than "they have said Y is wrong." If no relevant source can be verified, switch to a named critique lens instead of pretending certainty.
 
+### Tag every risk, invariant, and guard
+
+A risk, invariant, or guard (lock, lease, recovery mode, incident record, evidence gate, extra test) a critic proposes or endorses carries exactly one tag, stated inline:
+
+- `observed` — cite the evidence: an incident, bug report, failing run, record/log path, or commit. Only these justify a new invariant, evidence gate, test, lock, or recovery path.
+- `design-enforced` — name the mechanism in the proposed design or existing code (file/symbol) that already prevents it. No new guard is needed; the critique may ask that the mechanism be cited.
+- `hypothetical` — neither. A plausible mechanism, an expert's general principle, or "could happen under load" is hypothetical. Record it as a one-line accepted risk (see Accepted Risks below); never as an invariant, evidence gate, test, lock, or recovery path unless the operator explicitly promotes it.
+
+An untagged item, or an `observed` item without a citation, is `hypothetical`. A generated spec or an earlier critique cannot serve as its own evidence.
+
 ---
 
 ## Step 4 — Synthesize Recommendations
@@ -143,10 +153,11 @@ Identify anything neither expert would catch because it falls outside both their
 
 ### 4d. Standing lenses
 
-Apply these two lenses on every critique, regardless of which experts were selected:
+Apply these lenses on every critique, regardless of which experts were selected:
 
 - **Over-engineering scan.** Walk the proposal's components — modules, abstractions, dependencies, layers, config surfaces — and flag any with no stated requirement behind it, any that duplicates existing code, stdlib, or platform behavior, and any built for a hypothetical future (see `~/.agents/rules/minimal-implementation.md`). "Remove X" is a first-class recommendation, ranked like any other. Check the Deliberate Omissions list for scope that crept back in elsewhere in the proposal.
-- **Evidence sufficiency.** Independently audit the Evidence Posture, claims, failure hypotheses, and proposed gates. Check risk calibration, every crossed boundary, negative paths, production reachability, independence, commit binding, applicable operational/recovery proof, phase placement, authority, and QA output. Name which unsafe implementation each gate rejects. A plan that relies on later human review or required manual QA is incomplete. Add only credible missing `FH-*` hypotheses and the least invasive sufficient evidence. Remove
+- **Hypothetical-guard scan.** For each lock, lease, recovery or repair mode, incident or audit record, evidence gate, and invariant already in the proposal (including Pre-mortem and Evidence Posture), apply the three tags above. Flag every guard whose only basis is a `hypothetical` risk as over-engineering, with "remove" or "downgrade to accepted risk" as the recommendation. Apply the same standard to your own recommendations.
+- **Evidence sufficiency.** Independently audit the Evidence Posture, claims, failure hypotheses, and proposed gates. Check risk calibration, every crossed boundary, negative paths, production reachability, independence, commit binding, applicable operational/recovery proof, phase placement, authority, and QA output. Name which unsafe implementation each gate rejects. A plan that relies on later human review or required manual QA is incomplete. Add only credible missing `FH-*` hypotheses (tagged `observed`) and the least invasive sufficient evidence. Remove
 redundant gates and distinguish application composition from a live deployment.
 
 ### 4e. Priority ranking
@@ -238,6 +249,12 @@ team-capacity, or domain-specific concerns.]
 have stopped at (reuse, stdlib, platform, installed dependency) and the
 concrete removal or reuse recommendation.]
 
+### Accepted Risks
+
+[One line per `hypothetical` risk: the risk and why no guard is warranted.
+Empty is valid. A recommendation below that adds a guard, invariant, or gate
+is tagged `observed` with its citation.]
+
 ### Evidence Sufficiency
 
 [Whether the posture and CL/FH/EV plan can independently falsify the material
@@ -274,7 +291,7 @@ claims and establish deployment safety; the specific missing or circular gates.]
 ## Step 6 — Output
 
 - Write the critique as a markdown document.
-- Write `critique.md` in the resolved `.specs/<feature>/` folder. For non-pipeline material, write `CRITIQUE-[name].md` beside the supplied source.
+- Write `critique.md` in `package_dir`. For non-pipeline material, write `CRITIQUE-[name].md` beside the supplied source.
 - Refer to sibling artifacts by filename or spec-folder-relative path, never by a machine-specific absolute path.
 - Write atomically with a level-1 heading on line 1.
 - Report `outcome: critiqued`, the path, Must/Should/Consider counts, and `next: spec-write`.
@@ -295,3 +312,5 @@ does not waive protection of valuable data or security. A solo developer's proje
 5. **The goal is a better design, not a perfect one.** Perfection is the enemy of shipping. Recommendations should make the proposal concretely better, not chase theoretical ideals. If the proposal is 80% right, say so and focus energy on the 20% that matters.
 
 6. **Evidence over performance.** Do not fake citations, invented expert opinions, or exaggerated certainty. If a source, position, or critique cannot be grounded, say so and reduce the claim strength.
+
+7. **Guards need evidence, not imagination.** A failure that has not happened and that the design does not already prevent is an accepted risk, not a lock, gate, or recovery path. Weigh a guard's build and maintenance cost against the failure as actually observed.

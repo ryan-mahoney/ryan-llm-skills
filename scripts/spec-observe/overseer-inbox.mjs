@@ -1,4 +1,4 @@
-// Safe operator hold/direction publication into a canonical package mailbox.
+// Safe operator hold/direction publication into a storage package mailbox.
 //
 // The public write surface is exactly one exclusive original file. This module
 // never edits, archives, deletes or rewrites an existing original and never
@@ -8,7 +8,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 
-import { canonicalPackage } from '../../pi/extensions/spec-runtime/runtime.mjs';
+import { locatePackage } from '../spec-location/index.mjs';
 import { INBOX_FILE_BYTES, readCheckpointRecord, readInboxGuard } from '../../pi/extensions/spec-runtime/sentinel.mjs';
 import { createFileExclusive } from '../workspaces/store.mjs';
 
@@ -96,16 +96,16 @@ export async function deliverOverseerMessage(packagePath, input = {}) {
   if (Buffer.from(body, 'utf8').toString('utf8') !== body) fail('body must roundtrip as valid UTF-8');
   if (Buffer.byteLength(body, 'utf8') > INBOX_FILE_BYTES) fail(`body exceeds ${INBOX_FILE_BYTES} bytes`);
 
-  // Physical canonical primary .specs package only: a symlinked or aliased
+  // Physical storage package directory only: a symlinked or aliased
   // declaration never publishes.
-  const canonical = canonicalPackage(packagePath);
+  const located = await locatePackage(packagePath);
   const physical = await fs.realpath(packagePath).catch(() => null);
-  if (physical === null || physical !== canonical.packagePath || resolve(packagePath) !== canonical.packagePath) {
+  if (!located.ok || physical === null || physical !== located.packageDir || resolve(packagePath) !== located.packageDir) {
     fail('package must be the physical canonical package directory');
   }
 
-  const inboxPath = join(canonical.packagePath, 'inbox');
-  const processedPath = join(canonical.packagePath, 'processed');
+  const inboxPath = join(located.packageDir, 'inbox');
+  const processedPath = join(located.packageDir, 'processed');
   const [inboxInfo, processedInfo] = await Promise.all([
     fs.lstat(inboxPath).catch(() => null),
     fs.lstat(processedPath).catch(() => null),
@@ -118,8 +118,8 @@ export async function deliverOverseerMessage(packagePath, input = {}) {
 
   // Real retained checkpoint for this exact package and run. A retained
   // user-held checkpoint remains deliverable; complete work never is.
-  const checkpoint = readCheckpointRecord(canonical.packagePath, run);
-  if (checkpoint === null || checkpoint.package !== canonical.packagePath || checkpoint.workflow_id !== run) {
+  const checkpoint = readCheckpointRecord(located.packageDir, run);
+  if (checkpoint === null || checkpoint.package !== located.packageDir || checkpoint.workflow_id !== run) {
     fail('no retained checkpoint for this package and run');
   }
   const stage = checkpoint.obligation?.stage;
@@ -149,7 +149,7 @@ export async function deliverOverseerMessage(packagePath, input = {}) {
     let uncertain = false;
     for (const mailbox of MAILBOXES) {
       try {
-        await fs.lstat(join(canonical.packagePath, mailbox, `${candidate}.md`));
+        await fs.lstat(join(located.packageDir, mailbox, `${candidate}.md`));
         collision = true;
         break;
       } catch (error) {
@@ -181,7 +181,7 @@ export async function deliverOverseerMessage(packagePath, input = {}) {
   }
 
   // Exactly one verification for the retained identity; no retry or rewrite.
-  const verified = verifyPublished(canonical.packagePath, { id, sha256, run, sender, audience, kind });
+  const verified = verifyPublished(located.packageDir, { id, sha256, run, sender, audience, kind });
   if (verified) return { id, path: verified.path, sha256, status: 'delivered' };
   return { id, path, sha256, status: 'unconfirmed' };
 }

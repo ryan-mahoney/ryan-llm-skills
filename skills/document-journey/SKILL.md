@@ -112,7 +112,7 @@ File: `docs/journeys/JRNY-###-<slug>.md`, following the standard's directory lay
 6. Every `inferred` story carries its label and an open question.
 7. Each example names a test or gives the reason it has none; no example uses placeholder data.
 8. The page contradicts no upstream document; any contradiction found is reported as a finding against that document, not silently corrected.
-9. Every cited capture ID resolves to a file under the capture root, or the page states that the resolution check was not possible in this checkout; every stage with no capture says why.
+9. Every cited capture ID resolves to a file under the capture root, or the page states that the resolution check was not possible on this machine; every stage with no capture says why.
 10. Every §10 scenario carries all its required keys; its `Success check` names a check that exists in the harness's checks folder or records an open question saying it cannot be explored; and its `Goal` names no control.
 11. Run whatever documentation or link checks the repository provides.
 

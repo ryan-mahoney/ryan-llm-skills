@@ -10,9 +10,13 @@ const message = (role, end, data) => ({ type: 'message', timestamp: time(end), m
 const assistant = (end, start, content = [], extra = {}) => message('assistant', end, { provider: 'provider', model: 'model', timestamp: Date.parse(time(start)), content, ...extra });
 const call = (id, name, command) => ({ type: 'toolCall', id, name, arguments: { command } });
 const result = (id, end, extra = {}) => message('toolResult', end, { toolCallId: id, ...extra });
+// The package directory sits in a storage root (projects/demo/specs/feature) so spec-location accepts it.
 async function fixture(t) {
-  const dir = await mkdtemp(path.join(tmpdir(), 'spec-metrics-'));
-  t.after(() => rm(dir, { recursive: true, force: true })); return dir;
+  const base = await mkdtemp(path.join(tmpdir(), 'spec-metrics-'));
+  t.after(() => rm(base, { recursive: true, force: true }));
+  await mkdir(path.join(base, 'projects/demo/specs/feature'), { recursive: true });
+  await writeFile(path.join(base, 'projects/demo/kit.yaml'), 'id: demo\n');
+  return path.join(base, 'projects/demo/specs/feature');
 }
 async function log(file, rows) {
   await mkdir(path.dirname(file), { recursive: true });
@@ -162,7 +166,9 @@ test('native clerk names attribute Mercury calls and completion reports separate
     assistant(5, 3, [], { model: 'mercury-2.5' }), assistant(7, 6, [], { model: 'mercury-2.5' })]);
   await mkdir(path.join(dir, 'runtime/runs'), { recursive: true });
   await writeFile(path.join(dir, 'runtime/runs/run.json'), JSON.stringify({ id: 'run', parent_session: root, started_at: time(0), finished_at: time(15), state: 'completed' }));
-  const receipt = { schema_version: 1, kind: 'pr_submission', package: dir, parent_session: root, url: 'https://example.test/pr/3', submitted_at: time(16) };
+  const entry = { parent_session: root, url: 'https://example.test/pr/3', submitted_at: time(16) };
+  const receiptOf = target => ({ schema_version: 1, kind: 'pr_submission', package_ref: 'demo/feature', targets: { alpha: target } });
+  const receipt = receiptOf(entry);
   await writeFile(path.join(dir, 'pr-url.json'), JSON.stringify(receipt));
   const data = await metrics(dir, { now: Date.parse(time(40)) });
   assert.equal(data.mercury.clerk_model_calls, 2);
@@ -170,7 +176,7 @@ test('native clerk names attribute Mercury calls and completion reports separate
   assert.equal(data.process.post_completion_activity_seconds, 10);
   assert.match(formatMetrics(data), /completion reported by coordinator/);
   assert.deepEqual(data.process.milestones.map(m => m.kind), ['pr_submitted', 'coordinator_completion_reported']);
-  for (const stale of [{ ...receipt, parent_session: '/another/run.jsonl' }, { ...receipt, package: '/another/package' }, { ...receipt, submitted_at: time(-1) }, { ...receipt, submitted_at: time(50) }]) {
+  for (const stale of [receiptOf({ ...entry, parent_session: '/another/run.jsonl' }), { ...receipt, package_ref: 'demo/another' }, receiptOf({ ...entry, submitted_at: time(-1) }), receiptOf({ ...entry, submitted_at: time(50) })]) {
     await writeFile(path.join(dir, 'pr-url.json'), JSON.stringify(stale));
     assert.equal((await metrics(dir, { now: Date.parse(time(40)) })).process.milestones.length, 1);
   }

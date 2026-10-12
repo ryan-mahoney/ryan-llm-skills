@@ -23,6 +23,7 @@ import {
   createFileExclusive,
   fetchWorkspace,
   listWorkspaces,
+  resolveRepositoryPath,
   resolveStorageRoot,
   resolveWorkspacePath,
   writeFileAtomic,
@@ -337,7 +338,7 @@ async function intendedExecutionPath(workspace, directory, target) {
     const record = (Array.isArray(workspace.repositories) ? workspace.repositories : [])
       .find((entry) => entry && entry.id === target.repository_id);
     if (!record || typeof record.path !== "string" || record.path === "") return directory;
-    return canonicalIfPossible(isAbsolute(record.path) ? resolve(record.path) : resolve(directory, record.path));
+    return canonicalIfPossible(resolveRepositoryPath(directory, record.path));
   }
   return canonicalIfPossible(resolve(target.path));
 }
@@ -360,7 +361,7 @@ async function adj4TargetFor(workspace, target) {
   const matches = [];
   for (const entry of Array.isArray(workspace.repositories) ? workspace.repositories : []) {
     if (!entry || typeof entry.id !== "string" || typeof entry.path !== "string" || entry.path === "") continue;
-    const declared = isAbsolute(entry.path) ? resolve(entry.path) : resolve(workspace.directory, entry.path);
+    const declared = resolveRepositoryPath(workspace.directory, entry.path);
     let physical;
     try {
       physical = await realpath(declared);

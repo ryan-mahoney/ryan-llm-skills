@@ -1,10 +1,10 @@
 ---
 name: spec-branch-worktree
-description: "Create or reuse a named git branch and worktree for standalone spec-driven work, keep the matching .specs/<feature>/ package in the primary repository, prepare the local environment, and return the worktree to the invoking agent. Use for \"spec branch worktree\", \"new spec worktree\", \"worktree for\", \"start a worktree\", or \"create worktree\"."
+description: "Create or reuse a named git branch and worktree for standalone spec-driven work, keep the matching spec package in workspace storage, prepare the local environment, and return the worktree to the invoking agent. Use for \"spec branch worktree\", \"new spec worktree\", \"worktree for\", \"start a worktree\", or \"create worktree\"."
 mode: coding
 scope: document
 disable-model-invocation: true
-argument-hint: "[description, .specs feature path, or issue/ticket reference]"
+argument-hint: "[description, spec package ref or folder, or issue/ticket reference]"
 license: MIT
 metadata:
   author: Ryan Mahoney
@@ -14,18 +14,20 @@ metadata:
 
 # Spec Branch Worktree
 
-Create or reuse one branch worktree under `~/.worktrees/<repo-name>/<slug>`. The primary repository retains the canonical `.specs/<feature>/` package for every stage; the worktree holds the code checkout.
+Create or reuse one branch worktree under `~/.worktrees/<repo-name>/<slug>`. The spec package stays in workspace storage for every stage; the worktree holds the code checkout.
 
 ## Resolve Input
 
-Read [Workspace Handoff](../spec-end-to-end/references/workspace-handoff.md). Resolve the primary
-repository and code checkout separately before locating `.specs/`. Map explicit worktree spec
-paths to their primary-repository counterparts using the shared path resolver.
+Run the shared [spec-location step](../spec-end-to-end/references/spec-location.md) first:
+`node ~/.agents/scripts/spec-location/cli.mjs check <package ref or folder>`. On refusal, print the
+`message` and `remedy` and stop. On success, read paths from `<package_dir>/locations.json` by field
+name. The primary checkout is `targets[].primary`. The worktree path is `targets[].worktree` when it
+is already recorded and exists; otherwise use the `dest` derived below. Never build a path from a slug.
 
 Resolve the work description in this order:
 
 1. Explicit `$ARGUMENTS`.
-2. An explicit `.specs/<feature>/` folder or a file inside it; use its title and folder name and record the source feature slug.
+2. An explicit spec package ref or folder, or a file inside it; use its title and slug and record the package ref.
 3. The spec folder or work named in the conversation.
 
 If only a GitHub issue number is supplied, use `gh issue view <number> --json title --jq .title` only when the current repository has a GitHub remote. For other ticket identifiers, require descriptive context. If no description resolves, stop with:
@@ -35,7 +37,7 @@ outcome: blocked
 reason: missing-work-description
 ```
 
-If no explicit path is supplied and exactly one `.specs/*/spec.md` or `.specs/*/proposal.md` matches the conversation, use it. Stop on ambiguity rather than choosing by modification time.
+If no explicit package is supplied and exactly one package named in the conversation matches, use it. Stop on ambiguity rather than choosing by modification time.
 
 ## Derive Names
 
@@ -63,13 +65,24 @@ Require a git repository before mutating anything.
 
 ## Create Or Reuse
 
-- If `dest` is an existing worktree on branch `<slug>`, reuse it.
-- If `dest` exists but is not that worktree/branch, stop with `reason: worktree-path-conflict`; never force-remove it.
-- If branch `<slug>` exists elsewhere, stop with `reason: branch-already-checked-out`.
-- If the branch exists and is free, run `git worktree add "$dest" <slug>`.
-- Otherwise run `git worktree add --no-track -b <slug> "$dest" "$base_ref"`.
+Let `<branch>` be the target's `targets[].branch` from `locations.json`; when none is recorded, use `spec-<slug>`. Never use the bare slug as the branch name.
 
-Verify `git -C "$dest" rev-parse --abbrev-ref HEAD` equals `<slug>`, then remove upstream tracking with `git -C "$dest" branch --unset-upstream <slug> 2>/dev/null || true`.
+- If `targets[].worktree` is set and exists, reuse it and verify it is on `<branch>`.
+- If `dest` is an existing worktree on branch `<branch>`, reuse it.
+- If `dest` exists but is not that worktree/branch, stop with `reason: worktree-path-conflict`; never force-remove it.
+- If branch `<branch>` exists elsewhere, stop with `reason: branch-already-checked-out`.
+- If the branch exists and is free, run `git worktree add "$dest" <branch>`.
+- Otherwise run `git worktree add --no-track -b <branch> "$dest" "$base_ref"`.
+
+Verify `git -C "$dest" rev-parse --abbrev-ref HEAD` equals `<branch>`, then remove upstream tracking with `git -C "$dest" branch --unset-upstream <branch> 2>/dev/null || true`.
+
+Record the worktree for the target unless `targets[].worktree` already names this path:
+
+```bash
+node ~/.agents/scripts/spec-location/cli.mjs worktree <package ref> <target id> "$dest"
+```
+
+Re-read `locations.json` afterward. Do not write `locations.json` yourself.
 
 ## Prepare The Worktree
 
@@ -81,24 +94,23 @@ connection merely because `.env` exists. Use an existing safe local example when
 unknown targets and defer commands with external effects until resolved. Do not invent flags or
 new configuration mechanisms as a substitute for identifying the target.
 
-Keep the spec package in the primary repository. Do not copy, move, or symlink `.specs/` into
-`dest`. If Git checks out a tracked copy, or an older run left one there, leave it untouched and
-ignore it for all spec reads and writes. Return the canonical absolute spec-folder path along
-with the worktree path. All subsequent plans, updates, learnings, logs, reviews, and tours go to
-that canonical folder.
+Keep the spec package in workspace storage. Do not copy, move, or symlink spec artifacts into
+`dest`, and never create `.specs/` in a checkout. If Git checks out a tracked `.specs/` copy, or an
+older run left one there, leave it untouched and ignore it for all spec reads and writes. Return
+`package_dir` along with the worktree path. All subsequent plans, updates, learnings, logs, reviews,
+and tours go to `package_dir`.
 
 Read visual references from their canonical source locations. Confirm required files exist;
 worktree creation does not rebase reference paths, rewrite specs, or invalidate preparation.
 For a missing visual reference, stop with `reason: missing-visual-reference`. Any needed legacy
-reference packaging belongs to preparation in the primary repository under the shared handoff
-rules. Never regenerate a design during worktree setup.
+reference packaging belongs to preparation of the package under the shared handoff rules. Never regenerate a design during worktree setup.
 
 Check install/startup hooks for external effects and respect resolved authority. Install dependencies
 using the first matching repository signal: Bun lock/AGENTS guidance → `bun install --frozen-lockfile`; documented non-Bun setup → exact documented command; then pnpm, yarn, npm, Poetry, uv, pip, Bundler, Go, or Cargo lock/project files. A failed or unavailable install is non-fatal but must be reported explicitly.
 
 ## Return Control
 
-Return the prepared worktree path and canonical spec-folder path to the invoking top-level agent. The invoking agent decides how
+Return the prepared worktree path and `package_dir` to the invoking top-level agent. The invoking agent decides how
 to continue work there: for example, by setting tool working directories, continuing in the same
 session, or delegating later stages when authorized.
 
@@ -112,11 +124,11 @@ Return one compact, definitive summary:
 
 ```txt
 outcome: ready
-branch: <slug>
+branch: <targets[].branch from locations.json>
 worktree: <absolute path>
 base: <base ref>
 tracking: none
-spec-folder: <absolute primary-repository feature path | none>
+spec-folder: <package_dir from locations.json | none>
 visual-references: verified:<count> | none
 preparation: preserved | none
 environment: copied | absent

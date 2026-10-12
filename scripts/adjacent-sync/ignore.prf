@@ -7,5 +7,7 @@ ignore = Name *.tmp
 ignore = Name .workspace-publish-*
 ignore = Name .syncthing.*
 ignore = Name *.sqlite*
-ignore = Name runtime
+ignore = Regex projects/[^/]+/specs/[^/]+/runtime
+# Journey QA run output holds harness session files (database URLs).
+ignore = Regex projects/[^/]+/captures/[^/]+/ux-qa/runs
 ignore = Regex projects/[^/]+/(threads|sessions|assignments)

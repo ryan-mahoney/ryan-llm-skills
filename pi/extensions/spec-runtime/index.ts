@@ -5,7 +5,7 @@ import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { randomUUID, createHash } from 'node:crypto';
 import { join, resolve, realpathSync } from 'node:path';
 import { homedir } from 'node:os';
-import { Runtime, loadRun, summary, assertLease, runEditor, runCommand, runVerification, runAdvice, runCompletion, canonicalPackage, assertIdleWriter, event as runtimeEvent } from './runtime.mjs';
+import { Runtime, loadRun, summary, assertLease, runEditor, runCommand, runVerification, runAdvice, runCompletion, packageDirOf, assertIdleWriter, event as runtimeEvent } from './runtime.mjs';
 import { assertModelSelector } from './model-selector.mjs';
 import { createCommunication } from './communication.mjs';
 import { createMonitor, publicHint } from './monitor.mjs';
@@ -35,12 +35,13 @@ const coordinatorIdentity = (ctx: any): string => {
 };
 
 // Maps a workflow to its assigned checkout from a real dispatch receipt or an
-// already bound checkpoint; a model-supplied checkout is never trusted.
+// already bound checkpoint (packagePath is the located package folder); a
+// model-supplied checkout is never trusted.
 const boundCheckout = (packagePath: string, workflowId: string, dispatches: Map<string, any>): string | null => {
   const bound = dispatches.get(workflowId);
   if (bound?.checkout) return bound.checkout;
   try {
-    const record: any = readCheckpointRecord(canonicalPackage(packagePath).packagePath, workflowId);
+    const record: any = readCheckpointRecord(packagePath, workflowId);
     return record?.checkout ?? null;
   } catch { return null; }
 };
@@ -99,8 +100,8 @@ export default function (pi: any) {
     const allowed = role === 'owner' ? ['read', 'grep', 'find', 'ls', 'spec_editor', 'spec_answer', 'spec_verify', 'spec_scout', 'spec_search', 'spec_advice', 'spec_complete'] : ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', 'spec_question'];
     pi.on('session_shutdown', () => communication.close());
     pi.on('session_start', (_event: any, ctx: any) => {
-      // Apply the process guard only to an authenticated managed worker lease.
-      if (!['owner', 'editor'].includes(role) || !record.id || !record.token) return;
+      // Apply the process guard only to a managed worker with a run record.
+      if (!['owner', 'editor'].includes(role) || !record.id) return;
       assertLease(record);
       try { assertModelSelector(record[`${role}_model`], ctx.model); }
       catch (error: any) {
@@ -120,7 +121,7 @@ export default function (pi: any) {
       } catch (error: any) { return { block: true, reason: error.message }; }
     });
     if (role === 'owner') {
-      pi.registerTool({ name: 'spec_complete', label: 'Record step handoff', description: 'After edits, focused checks and any commit, record the step outcome and material judgments. Runtime writes canonical learning, supplies HEAD and verification receipts, and refreshes progress/history. Does not accept independent review or certify evidence. Supply exactly the prepared step-owned EV IDs; use spec_verify receipt_id for observed checks, applicability for earlier/dirty revisions. External evidence requires command, observedCommit, applicability and artifact. Use checkpoint for unresolved required merge evidence. introduced lists reusable implementation code in checkout-relative paths; use [] for evidence helpers or package artifacts. Evidence paths accept canonical absolute, .specs repo-relative, or existing package-relative paths. Empty decisions/gaps/findings/introduced arrays are allowed; do not add process narration.',
+      pi.registerTool({ name: 'spec_complete', label: 'Record step handoff', description: 'After edits, focused checks and any commit, record the step outcome and material judgments. Runtime writes canonical learning, supplies HEAD and verification receipts, and refreshes progress/history. Does not accept independent review or certify evidence. Supply exactly the prepared step-owned EV IDs; use spec_verify receipt_id for observed checks, applicability for earlier/dirty revisions. External evidence requires command, observedCommit, applicability and artifact. Use checkpoint for unresolved required merge evidence. introduced lists reusable implementation code in checkout-relative paths; use [] for evidence helpers or package artifacts. Evidence paths accept absolute, <repo id>:<path> (in that target worktree), or existing package-relative paths. Empty decisions/gaps/findings/introduced arrays are allowed; do not add process narration.',
         parameters: Type.Object({ outcome: Type.Union(['as-specified', 'adapted', 'checkpoint', 'no-artifact', 'decision-required', 'needs-spec-correction'].map(v => Type.Literal(v))),
           strategy: Type.Union([Type.Literal('test-first'), Type.Literal('implementation-first')], { description: 'Actual execution order, not the planned card label. Test-first requires an observed behavioral failure before implementation; a later compile/setup failure does not establish it.' }),
           fix_attempts: Type.Optional(Type.Number({ minimum: 0 })),
@@ -192,13 +193,13 @@ export default function (pi: any) {
   const progress = installProgressContext(pi);
   const monitor = createMonitor();
   pi.registerTool({ name: 'spec_checkpoint', label: 'Record workflow decision', description: 'Record the current stage, next action and material decisions in the managed workflow ledger. Runtime records worker/check/review-arrival facts automatically; do not transcribe those. Complete is a coordinator assessment backed by artifact references, never inferred from worker exit. Known skill stage names are normalized (spec-run to implementation, spec-pr to publication). Complete implementation/publication requires finished workers and complete handoffs; use publication-draft for a draft checkpoint, never ready publication. Preserve human holds and unresolved obligations.',
-    parameters: Type.Object({ package: Type.String(), stage: Type.String(), status: Type.Union(['pending', 'running', 'complete', 'blocked'].map(v => Type.Literal(v))), next: Type.String(), decisions: Type.Array(Type.String()), artifacts: Type.Array(Type.String({ description: 'Existing package-relative, .specs repo-relative, or canonical absolute artifact paths; future session/evidence paths are not evidence' })) }),
+    parameters: Type.Object({ package: Type.String(), stage: Type.String(), status: Type.Union(['pending', 'running', 'complete', 'blocked'].map(v => Type.Literal(v))), next: Type.String(), decisions: Type.Array(Type.String()), artifacts: Type.Array(Type.String({ description: 'Existing package-relative or absolute artifact paths; future session/evidence paths are not evidence' })) }),
     async execute(_id: string, args: any, _signal: AbortSignal, _update: any, ctx: any) {
       try {
-        const { packagePath } = canonicalPackage(args.package); await refreshProgress(packagePath); const receipt = recordCheckpoint(packagePath, args); progress.attach(packagePath); await refreshProgress(packagePath);
+        const packagePath = await packageDirOf(args.package); await refreshProgress(packagePath); const receipt = recordCheckpoint(packagePath, args); progress.attach(packagePath); await refreshProgress(packagePath);
         // Complete publication closes the package's sentinel workflows whose workers all have terminal receipts; a skip never fails this call.
         if (receipt.stage !== 'publication' || receipt.status !== 'complete') return result(receipt);
-        const sentinel = await serializeWorkflow(async () => completeWorkflowsAfterPublication({ package: packagePath, known: [...knownWorkflows.values()],
+        const sentinel = await serializeWorkflow(async () => await completeWorkflowsAfterPublication({ package: packagePath, known: [...knownWorkflows.values()],
           coordinator_session: coordinatorIdentity(ctx), input_revision: inputGuard.input_revision, checkoutFor: (pkg: string, id: string) => boundCheckout(pkg, id, dispatchBindings) }))
           .catch(() => []);
         return result(sentinel.length ? { ...receipt, sentinel: sentinel.map((entry: any) => /^worker-(active|unknown)/.test(entry.reason ?? '')
@@ -284,7 +285,7 @@ export default function (pi: any) {
   pi.registerTool({ name: 'spec_sentinel_checkpoint', label: 'Record sentinel workflow checkpoint',
     description: 'Coordinator-only: record the current workflow obligation and stop state against canonical sources. Supply the workflow_id registered for this coordinator, expected_revision from the previous receipt (0 for the first registration), the current state, obligation with prepared artifacts, declared workers and inbox outcomes, and reconciles_input_revision equal to the current native input revision. Identical stable obligation keys keep obligation_revision; changing source hashes alone does not. It never grants recovery authority.',
     parameters: Type.Object({
-      package: Type.String({ description: 'Absolute canonical .specs feature directory or its spec.md in the primary checkout' }),
+      package: Type.String({ description: 'The spec package (a `workspace/slug` ref or its folder)' }),
       workflow_id: Type.String({ minLength: 1, maxLength: 128, description: 'Registered workflow identity for this coordinator session' }),
       expected_revision: Type.Number({ minimum: 0, description: 'Revision from the previous checkpoint receipt; 0 for the first registration' }),
       state: Type.Union([Type.Literal('ready'), Type.Literal('waiting-worker'), Type.Literal('waiting-external'), Type.Literal('decision-required'), Type.Literal('blocked'), Type.Literal('user-held'), Type.Literal('complete'), Type.Literal('unknown')]),
@@ -310,8 +311,9 @@ export default function (pi: any) {
         if (args.reconciles_input_revision !== inputGuard.input_revision) {
           return result({ error: `reconciles_input_revision ${args.reconciles_input_revision} does not match the current native input revision ${inputGuard.input_revision}`, next: 'record the checkpoint against the current input revision; a stale value is refused' }, true);
         }
-        const checkout = boundCheckout(args.package, args.workflow_id, dispatchBindings);
-        const receipt = recordSentinelCheckpoint({ package: args.package, workflow_id: args.workflow_id,
+        const packagePath = await packageDirOf(args.package);
+        const checkout = boundCheckout(packagePath, args.workflow_id, dispatchBindings);
+        const receipt = recordSentinelCheckpoint({ package: packagePath, workflow_id: args.workflow_id,
           expected_revision: args.expected_revision, state: args.state, obligation: args.obligation,
           workers: args.workers ?? [], inbox: args.inbox ?? {},
           reconciles_input_revision: args.reconciles_input_revision, coordinator_session, checkout });
@@ -332,12 +334,12 @@ export default function (pi: any) {
     },
   });
   pi.registerCommand('spec-metrics', {
-    description: 'Read-only timing, model/tool calls, test submissions and cost: /spec-metrics /absolute/canonical/package',
+    description: 'Read-only timing, model/tool calls, test submissions and cost: /spec-metrics workspace/slug',
     handler: async (args: string, ctx: any) => {
       try {
         const packagePath = args.trim();
-        if (!packagePath) { ctx.ui.notify('Usage: /spec-metrics /absolute/repo/.specs/feature', 'info'); return; }
-        const value = await metrics(packagePath);
+        if (!packagePath) { ctx.ui.notify('Usage: /spec-metrics workspace/slug', 'info'); return; }
+        const value = await metrics(await packageDirOf(packagePath));
         ctx.ui.notify(formatMetrics(value), 'info');
       } catch (error: any) { ctx.ui.notify(`Metrics unavailable: ${error.message}`, 'error'); }
     },
@@ -456,12 +458,12 @@ export default function (pi: any) {
     }
   });
   pi.registerCommand('spec-monitor', {
-    description: 'Observe a canonical spec package without taking ownership: /spec-monitor /repo/.specs/feature; /spec-monitor off hides it.',
+    description: 'Observe a canonical spec package without taking ownership: /spec-monitor workspace/slug; /spec-monitor off hides it.',
     handler: async (args: string, ctx: any) => {
       const path = args.trim();
       if (path === 'off' || path === 'hide') { monitor.close(); return; }
-      try { monitor.attach(loadRun(path), ctx); }
-      catch { ctx.ui.notify('Cannot open that package runtime receipt. Use /spec-monitor /absolute/repo/.specs/feature', 'error'); }
+      try { monitor.attach(loadRun(await packageDirOf(path)), ctx); }
+      catch { ctx.ui.notify('Cannot open that package runtime receipt. Use /spec-monitor workspace/slug', 'error'); }
     },
   });
   const verificationRecorder = createVerificationRecorder();
@@ -559,7 +561,7 @@ export default function (pi: any) {
           } else if (result.state === 'shadow') {
             try { sessionCtx?.ui?.notify(`Sentinel shadow would-cancel diagnosed work for ${scope.workflow_id}; the worker stays alive.`, 'info'); } catch { /* UI failure contained. */ }
           } else if (result.state === 'unknown') {
-            try { sessionCtx?.ui?.notify(`Sentinel cancellation outcome unknown for ${scope.workflow_id}; the writer lease is retained.`, 'warning'); } catch { /* UI failure contained. */ }
+            try { sessionCtx?.ui?.notify(`Sentinel cancellation outcome unknown for ${scope.workflow_id}; the run stays active.`, 'warning'); } catch { /* UI failure contained. */ }
           }
         });
       }).catch(() => { /* Diagnosis/cancellation failure never affects the lifecycle. */ });
@@ -657,11 +659,11 @@ export default function (pi: any) {
     diagnosisController = null;
     await Promise.allSettled([...runtime.active.values()].map(({ record }: any) => runtime.cancel(record.package, record.id)));
   });
-  pi.registerTool({ name: 'spec_dispatch', label: 'Spec step runtime', description: 'Use startup to enter a prepared package in one call: first-step selection, recorded difficulty routing, checkout/lease setup and dispatch; existing progress returns a resume obligation without replay. Start launches an explicit prepared spec step with an owner and retained editor. Creates/reuses the checkout, holds its exclusive writer lease, and delivers a completion event. Repeated assignment IDs are idempotent. Status is for explicit recovery, never polling. Cancellation returns only after confirmed process-group termination.',
-    parameters: Type.Object({ action: Type.Union([Type.Literal('startup'), Type.Literal('start'), Type.Literal('status'), Type.Literal('cancel')]), package: Type.String({ description: 'Absolute canonical .specs feature directory or its spec.md in the primary checkout' }),
+  pi.registerTool({ name: 'spec_dispatch', label: 'Spec step runtime', description: 'Use startup to enter a prepared package in one call: first-step selection, recorded difficulty routing, worktree setup and dispatch; existing progress returns a resume obligation without replay. Start launches an explicit prepared spec step with an owner and retained editor. Creates/reuses the worktree of the target repository named by the step (spec-steps.json `repository`; required with several targets), refuses a package whose previous run still has a live coordinator, and delivers a completion event. Repeated assignment IDs are idempotent. Status is for explicit recovery, never polling. Cancellation returns only after confirmed process-group termination.',
+    parameters: Type.Object({ action: Type.Union([Type.Literal('startup'), Type.Literal('start'), Type.Literal('status'), Type.Literal('cancel')]), package: Type.String({ description: 'The spec package (a `workspace/slug` ref or its folder)' }),
       strong_owner_model: optional('Optional STRONG_OWNER; startup routes prepared hard steps here'), owner_override: optional('Explicit owner for the selected step; takes precedence over owner_model in start and startup, including tier routing'),
       step: optional('Absolute canonical prepared subspec path; required for start'), owner_model: optional('provider/model[:thinking]; required unless owner_override is supplied'), editor_model: optional('provider/model[:thinking]; required for start'), scout_model: optional('SCOUT_AGENT selector as provider/model[:thinking]; default openai-codex/gpt-6-luna:low'),
-      checkout: optional('Existing checkout or desired new worktree path'), branch: optional('Requested worktree branch'), base: optional('Start ref for a new branch, default HEAD'),
+      base: optional('Start ref for a new branch, default HEAD'),
       assignment_id: optional('Stable ID for this step attempt. Omit to use step path. Use a new ID only for an intentional subsequent attempt.'), run_id: optional('Existing run ID, otherwise latest'), workflow_id: optional('Registered workflow ID from a prior spec_sentinel_checkpoint; binds this real dispatch to its checkpoint'),
       attempt_kind: Type.Optional(Type.Union(['implementation', 'verification-continuation', 'implementation-repair', 'review-repair', 'launch-retry'].map(value => Type.Literal(value)), { description: 'Explicit reason for this assignment; observation only, grants no retry authority.' })),
       session_scope: Type.Optional(Type.Union([Type.Literal('package'), Type.Literal('step')], { description: 'Default package retains existing sessions. Opt-in step uses separate retained sessions per canonical step; retries within that step reuse them. Supply a concise dependency handoff when opting in.' })),
@@ -669,9 +671,9 @@ export default function (pi: any) {
     async execute(_id: string, args: any, _signal: AbortSignal, _update: any, ctx: any) {
       return serializeWorkflow(async () => {
       try {
-        const { packagePath } = canonicalPackage(args.package); progress.attach(packagePath);
-        if (args.action === 'status') { const record = loadRun(args.package, args.run_id); monitor.attach(record, ctx); return result(summary(record)); }
-        if (args.action === 'cancel') return result(await runtime.cancel(args.package, args.run_id));
+        const packagePath = await packageDirOf(args.package); progress.attach(packagePath);
+        if (args.action === 'status') { const record = loadRun(packagePath, args.run_id); monitor.attach(record, ctx); return result(summary(record)); }
+        if (args.action === 'cancel') return result(await runtime.cancel(packagePath, args.run_id));
         // A supplied workflow_id is a registered mapping key, validated before any
         // dispatch side effect. Dispatch never mints workflow ownership: a missing,
         // malformed, differently-owned or checkout-conflicting checkpoint is refused
@@ -679,15 +681,12 @@ export default function (pi: any) {
         const workflowId = typeof args.workflow_id === 'string' && args.workflow_id ? args.workflow_id : null;
         let registeredWorkflow: any = null;
         if (workflowId) {
-          registeredWorkflow = readCheckpointRecord(canonicalPackage(args.package).packagePath, workflowId);
+          registeredWorkflow = readCheckpointRecord(packagePath, workflowId);
           if (!registeredWorkflow) {
             return result({ error: `workflow ${workflowId} has no registered checkpoint; spec_dispatch never mints workflow ownership`, next: 'register the workflow with spec_sentinel_checkpoint first' }, true);
           }
           if (registeredWorkflow.coordinator_session !== coordinatorIdentity(ctx)) {
             return result({ error: `workflow ${workflowId} is owned by another coordinator session; refusing an unowned mapping`, next: 'do not overwrite workflow ownership' }, true);
-          }
-          if (registeredWorkflow.checkout && args.checkout && resolve(args.checkout) !== resolve(registeredWorkflow.checkout)) {
-            return result({ error: `workflow ${workflowId} is bound to checkout ${registeredWorkflow.checkout}; refusing a different requested checkout`, next: 'omit checkout to reuse the registered one or use a new workflow_id' }, true);
           }
           if ((registeredWorkflow.input_revision ?? 0) !== inputGuard.input_revision) {
             return result({ error: `workflow ${workflowId} has unreconciled native input: checkpoint revision ${registeredWorkflow.input_revision ?? 0} does not match the current native input revision ${inputGuard.input_revision}`, next: 'record a successful spec_sentinel_checkpoint for the current input revision before dispatch' }, true);
@@ -697,21 +696,20 @@ export default function (pi: any) {
           }
           // A genuinely active assignment under this workflow conflicts with a
           // new dispatch. Validated from durable state BEFORE launch so no
-          // lease, run record or process precedes a refusal; terminal
+          // run record or process precedes a refusal; terminal
           // assignments free the workflow for its next assignment while the
           // per-run notification mappings stay retained.
-          const conflict = activeAssignmentConflict(canonicalPackage(args.package).packagePath, registeredWorkflow, args);
+          const conflict = activeAssignmentConflict(packagePath, registeredWorkflow, args);
           if (conflict) {
             return result({ error: `workflow ${workflowId} still has active assignment ${conflict.id} (run state ${conflict.state}); refusing a concurrent dispatch`, next: 'await its completion or confirmed cancellation, or reconcile the assignment with spec_sentinel_checkpoint before dispatching the next one' }, true);
           }
         }
         const configFile = join(homedir(), '.pi/agent/spec-runtime.json');
         const config = existsSync(configFile) ? JSON.parse(readFileSync(configFile, 'utf8')) : {};
-        const input = { ...args, scout_model: args.scout_model ?? config.scout_model ?? SCOUT_MODEL, child_extensions: args.child_extensions ?? config.child_extensions ?? [],
-          ...(workflowId && !args.checkout && registeredWorkflow?.checkout ? { checkout: registeredWorkflow.checkout } : {}) };
-        const receipt = args.action === 'startup' ? await runtime.startup(input, ctx.sessionManager.getSessionFile()) : runtime.start(input, ctx.sessionManager.getSessionFile());
-        if (receipt.run_id) monitor.attach(loadRun(args.package, receipt.run_id), ctx);
-        if (receipt.run_id && !ownPackages.includes(args.package)) ownPackages.push(args.package);
+        const input = { ...args, package: packagePath, scout_model: args.scout_model ?? config.scout_model ?? SCOUT_MODEL, child_extensions: args.child_extensions ?? config.child_extensions ?? [] };
+        const receipt = args.action === 'startup' ? await runtime.startup(input, ctx.sessionManager.getSessionFile()) : await runtime.start(input, ctx.sessionManager.getSessionFile());
+        if (receipt.run_id) monitor.attach(loadRun(packagePath, receipt.run_id), ctx);
+        if (receipt.run_id && !ownPackages.includes(packagePath)) ownPackages.push(packagePath);
         // The actual receipt binds its run/checkout to the workflow validated above
         // and is retained so the terminal notification reconciles to
         // `reconcile:<assignment-id>`. Dispatch never mints workflow ownership.
@@ -719,9 +717,8 @@ export default function (pi: any) {
         // binding while every per-run mapping is retained for its own terminal
         // notification; only a genuinely active assignment was refused above.
         if (workflowId && receipt.run_id) {
-          rememberWorkflow({ package: args.package, workflow_id: workflowId });
+          rememberWorkflow({ package: packagePath, workflow_id: workflowId });
           const coordinator_session = coordinatorIdentity(ctx);
-          const packagePath = canonicalPackage(args.package).packagePath;
           const existing: any = readCheckpointRecord(packagePath, workflowId);
           if (!existing) {
             return result({ error: `workflow ${workflowId} has no registered checkpoint; spec_dispatch never mints workflow ownership`, next: 'register the workflow with spec_sentinel_checkpoint first' }, true);

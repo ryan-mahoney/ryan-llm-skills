@@ -6,14 +6,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMergeReconciler, applicableMerge, MERGE_RETRY_MS, MERGE_POLL_MS, mergeBinding, validateMergeCache } from './merge-reconciliation.mjs';
 // Run independently: node --test --test-name-pattern='merge reconciliation' scripts/spec-observe/merge-reconciliation.test.mjs
+// sentinel-merge.json holds one record per package target.
+const mergeFile=(input,record)=>JSON.stringify({schema_version:2,package_ref:input.ref,targets:{[input.target]:record}});
 const head='a'.repeat(40), merged='b'.repeat(40), learning='c'.repeat(40);
-function fixture(t){const pkg=realpathSync(mkdtempSync(join(tmpdir(),'merge-reconcile-')));t.after(()=>rmSync(pkg,{recursive:true,force:true}));return {package:pkg,primary:pkg,pr:{url:'https://github.com/o/r/pull/7',branch:'feature',base:'main'},commits:[learning],receipts:[['run','cancelled','2026-10-08T10:00:00Z']],checkpoints:[['waiting-worker','2026-10-08T10:05:00Z']]};}
+function fixture(t){const pkg=realpathSync(mkdtempSync(join(tmpdir(),'merge-reconcile-')));t.after(()=>rmSync(pkg,{recursive:true,force:true}));return {package:pkg,ref:'demo/feature',target:'alpha',primary:pkg,pr:{url:'https://github.com/o/r/pull/7',branch:'feature',base:'main'},commits:[learning],receipts:[['run','cancelled','2026-10-08T10:00:00Z']],checkpoints:[['waiting-worker','2026-10-08T10:05:00Z']]};}
 test('merge reconciliation binds current branch despite stale draft publication and reuses stable evidence',async t=>{
  const input=fixture(t);let api=0,tip=head;
  const command=async(program,args)=>{if(program==='gh'){api++;return JSON.stringify({url:input.pr.url,state:'MERGED',mergedAt:'2026-10-08T11:00:00Z',mergeCommit:{oid:merged},headRefOid:head,headRefName:'feature',baseRefName:'main'});}return args[0]==='rev-parse'?tip:'';};
  const reconcile=createMergeReconciler({persist:true,now:()=>Date.parse('2026-10-08T12:00:00Z'),command,readBranch:async()=>({state:'present',head:tip})});
  const record=await reconcile(input);assert.equal(record.state,'merged');assert.equal(applicableMerge(record,input),true);
- assert.equal((await reconcile(input)).state,'merged');assert.equal(api,1);assert.equal(JSON.parse(readFileSync(join(input.package,'sentinel-merge.json'))).merge_commit,merged);
+ assert.equal((await reconcile(input)).state,'merged');assert.equal(api,1);assert.equal(JSON.parse(readFileSync(join(input.package,'sentinel-merge.json'))).targets.alpha.merge_commit,merged);
  tip='d'.repeat(40);assert.equal((await reconcile(input)).state,'unknown');assert.equal(api,2,'new branch commits invalidate durable merge');
  assert.equal(applicableMerge(record,{...input,receipts:[['new','completed','2026-10-08T11:30:00Z']]}),false);
  assert.equal(applicableMerge(record,{...input,checkpoints:[['ready','2026-10-08T11:30:00Z']]}),false);
@@ -31,7 +33,7 @@ test('merge reconciliation persists observe cache on shadow transition without a
  await createMergeReconciler({persist:false,command,readBranch:async()=>({state:'present',head})})(input);
  assert.throws(()=>readFileSync(join(input.package,'sentinel-merge.json')));
  await createMergeReconciler({persist:true,command,readBranch:async()=>({state:'present',head})})(input);
- assert.equal(JSON.parse(readFileSync(join(input.package,'sentinel-merge.json'))).state,'merged');assert.equal(api,1);
+ assert.equal(JSON.parse(readFileSync(join(input.package,'sentinel-merge.json'))).targets.alpha.state,'merged');assert.equal(api,1);
 });
 
 // Run independently: node --test --test-name-pattern='lookup budget starts' scripts/spec-observe/merge-reconciliation.test.mjs
@@ -75,15 +77,15 @@ function gitFixture(t, number = 7) {
  git(['checkout','-q','main']);git(['merge','--no-ff','feature','-m',`Merge pull request #${number} from o/feature`],'2026-10-08T11:00:00Z');const merge=git(['rev-parse','HEAD']);
  git(['update-ref','refs/remotes/origin/main',merge]);git(['symbolic-ref','refs/remotes/origin/HEAD','refs/remotes/origin/main']);
  const pkg=join(root,'.specs','feature');mkdirSync(pkg,{recursive:true});
- const input={package:pkg,primary:root,pr:{url:`https://github.com/o/r/pull/${number}`,branch:null,base:null},commits:[],receipts:[['old','running','2026-10-08T10:00:00Z']],checkpoints:[['waiting-worker','2026-10-08T10:05:00Z']]};
+ const input={package:pkg,ref:'demo/feature',target:'alpha',primary:root,pr:{url:`https://github.com/o/r/pull/${number}`,branch:null,base:null},commits:[],receipts:[['old','running','2026-10-08T10:00:00Z']],checkpoints:[['waiting-worker','2026-10-08T10:05:00Z']]};
  let api=0;const command=async(program,args,cwd,timeout)=>{if(program==='gh'){api++;throw Object.assign(new Error('private token never retained'),{stderr:'error connecting to api.github.com secret-token'});}return execFileSync(program,args,{cwd,timeout,encoding:'utf8',maxBuffer:65536});};
  return {git,root,input,head,merge,base,command,get api(){return api;}};
 }
 
 // Run independently: node --test --test-name-pattern='fetched local PR merge' scripts/spec-observe/merge-reconciliation.test.mjs
 test('fetched local PR merge proves scoped lifecycle before API and preserves reopen guards',async t=>{
- const f=gitFixture(t),input=f.input;const unknown={schema_version:1,package:input.package,binding:mergeBinding(input),url:input.pr.url,branch:null,tip:null,checked_at:'2026-10-08T12:00:00Z',state:'unknown',reason:'merge-check-unavailable'};
- writeFileSync(join(input.package,'sentinel-merge.json'),JSON.stringify(unknown));
+ const f=gitFixture(t),input=f.input;const unknown={schema_version:1,package_ref:input.ref,target:input.target,binding:mergeBinding(input),url:input.pr.url,branch:null,tip:null,checked_at:'2026-10-08T12:00:00Z',state:'unknown',reason:'merge-check-unavailable'};
+ writeFileSync(join(input.package,'sentinel-merge.json'),mergeFile(input,unknown));
  const reconcile=createMergeReconciler({command:f.command,now:()=>Date.parse('2026-10-08T12:00:00Z')});const record=await reconcile(input);
  assert.equal(record.state,'merged');assert.equal(record.reason,'local-pr-merge');assert.equal(record.merge_commit,f.merge);assert.equal(record.head,f.head);assert.equal(record.branch,'feature');assert.equal(record.base,'main');assert.equal(f.api,0);
  assert.equal(await validateMergeCache(record,input),true);
@@ -109,7 +111,17 @@ test('cached local misses let later packages progress and expired unmerged evide
  reader=scan();let final;for(const p of packages)final=await reader(p.input??p);
  assert.equal(final.state,'merged','first three local misses must cool down so the fourth package gets a turn');
  const other=gitFixture(t,11),input=other.input;
- writeFileSync(join(input.package,'sentinel-merge.json'),JSON.stringify({schema_version:1,package:input.package,binding:mergeBinding(input),url:input.pr.url,branch:'feature',base:'main',tip:other.head,checked_at:new Date(clock).toISOString(),state:'unmerged',local_reason:'local-pr-merge-not-found'}));
+ writeFileSync(join(input.package,'sentinel-merge.json'),mergeFile(input,{schema_version:1,package_ref:input.ref,target:input.target,binding:mergeBinding(input),url:input.pr.url,branch:'feature',base:'main',tip:other.head,checked_at:new Date(clock).toISOString(),state:'unmerged',local_reason:'local-pr-merge-not-found'}));
  let calls=0;const authoritative=async(program,args,cwd,timeout)=>program==='git'?other.command(program,args,cwd,timeout):(calls++,JSON.stringify({url:input.pr.url,state:'MERGED',mergedAt:'2026-10-08T11:00:00Z',mergeCommit:{oid:other.merge},headRefOid:other.head,headRefName:'feature',baseRefName:'main'}));
  const r=createMergeReconciler({command:authoritative,now:()=>clock});assert.equal((await r(input)).state,'unmerged');assert.equal(calls,0);clock+=MERGE_POLL_MS+1;assert.equal((await r(input)).reason,'authoritative-pr');assert.equal(calls,1);
+});
+
+test('merge reconciliation keeps one record per target in the same sentinel-merge.json',async t=>{
+ const alpha=fixture(t),beta={...alpha,target:'beta',pr:{...alpha.pr,url:'https://github.com/o/beta/pull/8'}};let api=0;
+ const command=async(program,_args)=>{if(program==='gh'){api++;return JSON.stringify({url:api===1?alpha.pr.url:beta.pr.url,state:'MERGED',mergedAt:'2026-10-08T11:00:00Z',mergeCommit:{oid:merged},headRefOid:head,headRefName:'feature',baseRefName:'main'});}return '';};
+ const reconcile=createMergeReconciler({persist:true,now:()=>Date.parse('2026-10-08T12:00:00Z'),command,readBranch:async()=>({state:'present',head})});
+ assert.equal((await reconcile(alpha)).state,'merged');assert.equal((await reconcile(beta)).state,'merged');
+ const file=JSON.parse(readFileSync(join(alpha.package,'sentinel-merge.json')));
+ assert.deepEqual(Object.keys(file.targets).sort(),['alpha','beta']);assert.equal(file.targets.beta.url,beta.pr.url);assert.equal(file.package_ref,'demo/feature');
+ assert.equal(applicableMerge(file.targets.alpha,beta),false,'a target record never answers for another target');
 });

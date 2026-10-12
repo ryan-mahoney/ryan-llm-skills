@@ -1,10 +1,10 @@
 ---
 name: spec-branch
-description: Create or switch to a local branch from a .specs feature package, work description, or ticket reference without requiring GitHub. Use for "create a spec branch", "make a spec branch", "start a branch", or "branch from spec". Reads standalone spec artifacts for naming context but never moves or writes them.
+description: Create or switch to a local branch from a spec package, work description, or ticket reference without requiring GitHub. Use for "create a spec branch", "make a spec branch", "start a branch", or "branch from spec". Reads standalone spec artifacts for naming context but never moves or writes them.
 mode: coding
 scope: document
 disable-model-invocation: true
-argument-hint: "[description, .specs feature path, or issue/ticket reference]"
+argument-hint: "[description, spec package ref or folder, or issue/ticket reference]"
 license: MIT
 metadata:
   author: Ryan Mahoney
@@ -14,17 +14,17 @@ metadata:
 
 # Spec Branch
 
-Create or switch to one local branch for standalone spec work. A `.specs/<feature>/` folder may supply naming context but this branch-only skill does not create a worktree or move artifacts.
+Create or switch to one local branch for standalone spec work. A spec package may supply naming context but this branch-only skill does not create a worktree or move artifacts.
 
 ## Resolve The Topic
 
 Resolve in this order:
 
 1. Explicit `$ARGUMENTS`.
-2. An explicit `.specs/<feature>/`, `spec.md`, or `proposal.md` path.
+2. An explicit spec package ref (`ws/slug`), package folder, or `spec.md`/`proposal.md` path.
 3. The feature/work named in the conversation.
 
-Resolve `.specs/` in the primary repository using [Workspace Handoff](../spec-end-to-end/references/workspace-handoff.md), even when invoked from a linked worktree. When the canonical folder or file exists, use its slug and `spec.md` or `proposal.md` title as context. If no explicit path is supplied, use a matching folder named in the conversation; stop on ambiguous matches.
+When a package is named, run the shared [spec-location step](../spec-end-to-end/references/spec-location.md) first: `node ~/.agents/scripts/spec-location/cli.mjs check <ref or folder>`. On refusal, print the `message` and `remedy` and stop. On success, read the package title context from `<package_dir>/spec.md` (or `proposal.md`) using the `package_dir` field in `locations.json`. If no explicit package is supplied, use a matching package named in the conversation; stop on ambiguous matches.
 
 A number is a GitHub issue only when the current repository has a GitHub remote and `gh issue view <number> --json title --jq .title` succeeds. A non-GitHub ticket needs accompanying descriptive text.
 
@@ -51,7 +51,7 @@ Require `git rev-parse --git-dir` to succeed. Then:
 - New branch: `git switch -c <branch>`.
 - Remove upstream tracking: `git branch --unset-upstream <branch> 2>/dev/null || true`.
 
-Never move, rename, copy, stage, or commit `.specs` artifacts in this branch-only skill. Use `spec-branch-worktree` when the user wants a new worktree and spec-folder handoff.
+Never move, rename, copy, stage, or commit spec package artifacts in this branch-only skill. Use `spec-branch-worktree` when the user wants a new worktree and spec-folder handoff.
 
 ## Report
 

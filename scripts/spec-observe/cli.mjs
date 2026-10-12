@@ -20,10 +20,10 @@ const usage = `Usage: node scripts/spec-observe/cli.mjs list|runs|report|metrics
   --all-sessions         Metrics across all recorded coordinator sessions, including pauses
   runs                 List managed run pointers without reading any transcripts
   --index-root PATH     Managed index (default ~/.pi/agent/spec-runtime; runs only)
-  sentinel status [--all] [--root PATH | --package PATH] [--format text|json] [--agent-dir PATH]  Discover workspace repositories (default ~/Documents)
-  sentinel inspect FULL-UUID [--root PATH | --package PATH] [--format text|json] [--agent-dir PATH]  Inspect one exact assignment row
+  sentinel status [--all] [--root PATH | --package REF|PATH] [--format text|json] [--agent-dir PATH]  Discover workspace repositories (default ~/Documents)
+  sentinel inspect FULL-UUID [--root PATH | --package REF|PATH] [--format text|json] [--agent-dir PATH]  Inspect one exact assignment row
   --sessions-root PATH  Default: ~/.pi/agent/sessions
-  --package PATH        Discover managed runtime records and linked parent/owner/editor sessions
+  --package PATH        Discover managed runtime records and linked parent/owner/editor sessions (sentinel: ws/slug or the package folder)
   --cwd PATH            Filter root sessions by exact recorded working directory
   --limit N             Root sessions listed (default 10)
   --session ID|PATH     Report this discovered session and its descendants
@@ -88,7 +88,7 @@ try {
     // The assignment reader uses the resolved adj3 storage root, the same
     // default as the discussion service; no flag duplicates ADJACENT_STORAGE_ROOT.
     const storageRoot = resolveStorageRoot(process.env, os.homedir());
-    const snapshot = await collectWorkspace({ roots, packages, enrollmentErrors, discovery, indexDir: path.join(agentDir, 'spec-runtime'), agentDir, scope, includeInactive: options['--all'] === true, storageRoot });
+    const snapshot = await collectWorkspace({ roots, packages, enrollmentErrors, discovery, indexDir: path.join(agentDir, 'spec-runtime'), agentDir, scope, includeInactive: options['--all'] === true, storageRoot, packagesOnly: packages.length > 0 });
     if (sentinelAction === 'inspect') {
       const row = (snapshot.assignments ?? []).find(item => item.assignment_id === sentinelInspectId);
       if (!row) throw new Error(`No observed assignment matches ${sentinelInspectId}.`);

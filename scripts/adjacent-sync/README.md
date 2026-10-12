@@ -50,7 +50,8 @@ setup. Use `scripts/adjacent-sync/config.example.json` as the public reference f
 The tool refuses config and state inside Git checkouts or inside the client data folder.
 It also refuses a config file that other users can read. Keep its permissions at `600`.
 
-The public ignore profile is `scripts/adjacent-sync/ignore.prf`. It excludes `runtime/`,
+The public ignore profile is `scripts/adjacent-sync/ignore.prf`. It excludes spec-package
+`runtime/` folders, journey QA `ux-qa/runs/` output (harness sessions hold database URLs),
 `.sentinel/`, `.adjacent/`, `.DS_Store`, lock and temporary files, SQLite files,
 `.workspace-publish-*`, and `.syncthing.*`. It also excludes `threads/`, `sessions/`, and
 `assignments/` under `projects/<name>/`. Review the profile before syncing a workspace.

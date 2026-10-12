@@ -46,14 +46,15 @@ function extractFixture(t) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'spec-gym-extract-')));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const repo = join(root, 'source-repo');
-  const sourcePackage = join(repo, '.specs', 'example-feature');
-  const projectContext = join(repo, '.specs', 'project-context.md');
+  const workspaceDir = join(root, 'storage', 'projects', 'demo');
+  const sourcePackage = join(workspaceDir, 'specs', 'example-feature');
+  const projectContext = join(workspaceDir, 'project-context.md');
   const gym = join(root, 'gym');
   const skillsDir = join(gym, 'skills');
   const scenariosRoot = join(gym, 'scenarios');
 
   mkdirSync(repo, { recursive: true });
-  writeFixture(join(repo, '.gitignore'), '.specs/\n');
+  writeFixture(join(workspaceDir, 'kit.yaml'), `version: 1\nid: demo\nname: demo\nexecution_host: any\nrepositories:\n  - id: repo\n    path: ${repo}\n`);
   writeFixture(join(repo, 'src', 'app.mjs'), 'export const version = 1;\n');
   writeFixture(join(repo, 'src', 'paths.txt'), `package=${sourcePackage}\nhome=${repo}/notes.md\n`);
   writeFixture(join(repo, 'src', 'blob.bin'), Buffer.from([0, 1, 2, 255, 0, 65, 10]));
@@ -106,11 +107,11 @@ function extractFixture(t) {
   return { root, repo, sourcePackage, projectContext, gym, skillsDir, scenariosRoot, shaA, shaB };
 }
 
-test('extract architecture copies profile inputs from the pinned revision and leaves sources unchanged', { timeout: 10000 }, t => {
+test('extract architecture copies profile inputs from the pinned revision and leaves sources unchanged', { timeout: 10000 }, async t => {
   const f = extractFixture(t);
   const digestBefore = digestTree(f.sourcePackage);
   const statusBefore = git(f.repo, 'status', '--porcelain');
-  const result = extract({
+  const result = await extract({
     sourcePackage: f.sourcePackage, repo: f.repo, revision: f.shaA,
     skill: 'spec-architect-initial', id: 'arch-candidate',
     include: ['src/app.mjs', 'src/blob.bin', 'src/paths.txt'], scenariosRoot: f.scenariosRoot,
@@ -137,9 +138,9 @@ test('extract architecture copies profile inputs from the pinned revision and le
 });
 
 // Select alone: node --test --test-name-pattern='extract preserves pinned executable|extract refuses a pinned symlink' scripts/spec-gym/extract.integration.test.mjs
-test('extract preserves pinned executable modes through materialization', { timeout: 10000 }, t => {
+test('extract preserves pinned executable modes through materialization', { timeout: 10000 }, async t => {
   const f = extractFixture(t);
-  const result = extract({
+  const result = await extract({
     sourcePackage: f.sourcePackage, repo: f.repo, revision: f.shaA,
     skill: 'spec-architect-initial', id: 'executable-candidate',
     include: ['scripts/check.sh', 'src/app.mjs'], scenariosRoot: f.scenariosRoot,
@@ -150,12 +151,12 @@ test('extract preserves pinned executable modes through materialization', { time
     repoRoot: f.gym, root: join(f.root, 'runs'), skill: 'spec-architect-initial',
     scenarios: [result.folder], models: ['test/model'], timeoutMs: 10000,
   });
-  const materialized = materializeCell(run, run.cells[0], loadScenario(result.folder));
+  const materialized = await materializeCell(run, run.cells[0], loadScenario(result.folder));
   assert.match(git(materialized.repoDir, 'ls-files', '-s', 'scripts/check.sh'), /^100755 /);
   assert.equal(execFileSync('./scripts/check.sh', { cwd: materialized.repoDir, encoding: 'utf8' }), 'checked\n');
 });
 
-test('extract refuses a pinned symlink without publishing or changing an existing scenario', { timeout: 10000 }, t => {
+test('extract refuses a pinned symlink without publishing or changing an existing scenario', { timeout: 10000 }, async t => {
   const f = extractFixture(t);
   const base = {
     sourcePackage: f.sourcePackage, repo: f.repo, revision: f.shaA,
@@ -163,26 +164,26 @@ test('extract refuses a pinned symlink without publishing or changing an existin
   };
   const typeFolder = join(f.scenariosRoot, base.skill);
   const statusBefore = git(f.repo, 'status', '--porcelain');
-  assert.throws(() => extract({ ...base, include: ['src/link.mjs'] }), /regular repository file.*120000/);
+  await assert.rejects(() => extract({ ...base, include: ['src/link.mjs'] }), /regular repository file.*120000/);
   assert.deepEqual(readdirSync(typeFolder), []);
-  const first = extract({ ...base, include: ['src/app.mjs'] });
+  const first = await extract({ ...base, include: ['src/app.mjs'] });
   const before = digestTree(typeFolder);
-  assert.throws(() => extract({ ...base, update: true, include: ['src/link.mjs'] }), /regular repository file.*120000/);
+  await assert.rejects(() => extract({ ...base, update: true, include: ['src/link.mjs'] }), /regular repository file.*120000/);
   assert.equal(digestTree(typeFolder), before);
   assert.equal(existsSync(first.folder), true);
   assert.equal(git(f.repo, 'status', '--porcelain'), statusBefore);
 });
 
-test('extract step requires --step and copies the prepared set without post-stage artifacts', { timeout: 10000 }, t => {
+test('extract step requires --step and copies the prepared set without post-stage artifacts', { timeout: 10000 }, async t => {
   const f = extractFixture(t);
   const typeFolder = join(f.scenariosRoot, 'spec-step-run');
-  assert.throws(() => extract({
+  await assert.rejects(() => extract({
     sourcePackage: f.sourcePackage, repo: f.repo, revision: f.shaA,
     skill: 'spec-step-run', id: 'step-candidate', scenariosRoot: f.scenariosRoot,
   }), /--step/);
   assert.equal(existsSync(join(typeFolder, 'step-candidate')), false);
 
-  const result = extract({
+  const result = await extract({
     sourcePackage: f.sourcePackage, repo: f.repo, revision: f.shaA,
     skill: 'spec-step-run', id: 'step-candidate', step: 1, scenariosRoot: f.scenariosRoot,
   });
@@ -213,9 +214,9 @@ test('extract step requires --step and copies the prepared set without post-stag
   writeFileSync(scenarioPath, original);
 });
 
-test('extract records a missing include in the result and on the scenario', { timeout: 10000 }, t => {
+test('extract records a missing include in the result and on the scenario', { timeout: 10000 }, async t => {
   const f = extractFixture(t);
-  const result = extract({
+  const result = await extract({
     sourcePackage: f.sourcePackage, repo: f.repo, revision: f.shaA,
     skill: 'spec-architect-initial', id: 'missing-candidate',
     include: ['src/absent.mjs', 'src/app.mjs'], scenariosRoot: f.scenariosRoot,
@@ -230,10 +231,10 @@ test('extract records a missing include in the result and on the scenario', { ti
   assert.equal(validateScenario(result.folder).ok, true);
 });
 
-test('extract refuses a Git tree include without publishing anything', { timeout: 10000 }, t => {
+test('extract refuses a Git tree include without publishing anything', { timeout: 10000 }, async t => {
   const f = extractFixture(t);
   const typeFolder = join(f.scenariosRoot, 'spec-architect-initial');
-  assert.throws(() => extract({
+  await assert.rejects(() => extract({
     sourcePackage: f.sourcePackage, repo: f.repo, revision: f.shaA,
     skill: 'spec-architect-initial', id: 'tree-candidate', include: ['src'], scenariosRoot: f.scenariosRoot,
   }), error => error.message.includes('"src"') && /repository file/.test(error.message));
@@ -242,52 +243,52 @@ test('extract refuses a Git tree include without publishing anything', { timeout
   assert.deepEqual(existsSync(typeFolder) ? readdirSync(typeFolder).filter(name => name.startsWith('.tmp-') || name.startsWith('.old-')) : [], []);
 });
 
-test('extract refuses denylisted, escaping and malformed inputs before writing', { timeout: 10000 }, t => {
+test('extract refuses denylisted, escaping and malformed inputs before writing', { timeout: 10000 }, async t => {
   const f = extractFixture(t);
   const typeFolder = join(f.scenariosRoot, 'spec-architect-initial');
   const base = { sourcePackage: f.sourcePackage, repo: f.repo, revision: f.shaA, skill: 'spec-architect-initial', scenariosRoot: f.scenariosRoot };
   const denied = ['.env', '.env.local', 'nested/auth.json', 'certs/key.pem', 'id_rsa', 'node_modules/x.js', '.git/config', 'a/.env/x'];
   for (const include of denied) {
-    assert.throws(() => extract({ ...base, id: 'denied-candidate', include: [include] }), /denylisted/, include);
+    await assert.rejects(() => extract({ ...base, id: 'denied-candidate', include: [include] }), /denylisted/, include);
     assert.equal(existsSync(join(typeFolder, 'denied-candidate')), false, include);
   }
   const malformed = ['../x', '/abs/x', 'C:/x', 'a\\b', 'a//b', './x', '..'];
   for (const include of malformed) {
-    assert.throws(() => extract({ ...base, id: 'malformed-candidate', include: [include] }), /POSIX relative|empty, "." or ".."/, include);
+    await assert.rejects(() => extract({ ...base, id: 'malformed-candidate', include: [include] }), /POSIX relative|empty, "." or ".."/, include);
     assert.equal(existsSync(join(typeFolder, 'malformed-candidate')), false, include);
   }
   const badIds = ['UPPER', '-dash', 'a', 'x'.repeat(65), 'under_score', 'dot.id'];
   for (const id of badIds) {
-    assert.throws(() => extract({ ...base, id }), /must match/, id);
+    await assert.rejects(() => extract({ ...base, id }), /must match/, id);
     assert.equal(existsSync(join(typeFolder, id)), false, id);
   }
   const leftovers = existsSync(typeFolder) ? readdirSync(typeFolder).filter(name => name.startsWith('.tmp-') || name.startsWith('.old-')) : [];
   assert.deepEqual(leftovers, []);
 });
 
-test('extract refuses unsupported and prototype stage profiles fast', { timeout: 10000 }, t => {
+test('extract refuses unsupported and prototype stage profiles fast', { timeout: 10000 }, async t => {
   const f = extractFixture(t);
   const base = { sourcePackage: f.sourcePackage, repo: f.repo, revision: f.shaA, id: 'profile-candidate', scenariosRoot: f.scenariosRoot };
   for (const skill of ['spec-pr', 'constructor', 'toString', 'hasOwnProperty']) {
-    assert.throws(() => extract({ ...base, skill }), /unsupported stage profile/, skill);
+    await assert.rejects(() => extract({ ...base, skill }), /unsupported stage profile/, skill);
     assert.equal(existsSync(join(f.scenariosRoot, skill, 'profile-candidate')), false, skill);
   }
   assert.equal(existsSync(join(f.scenariosRoot, 'spec-pr')), false);
 });
 
-test('extract refuses an existing id without update and replaces it atomically with update', { timeout: 10000 }, t => {
+test('extract refuses an existing id without update and replaces it atomically with update', { timeout: 10000 }, async t => {
   const f = extractFixture(t);
   const base = { sourcePackage: f.sourcePackage, repo: f.repo, revision: f.shaA, skill: 'spec-architect-initial', scenariosRoot: f.scenariosRoot };
-  const first = extract({ ...base, id: 'candidate', include: ['src/app.mjs'] });
+  const first = await extract({ ...base, id: 'candidate', include: ['src/app.mjs'] });
   const digestBefore = digestTree(first.folder);
 
-  assert.throws(() => extract({ ...base, id: 'candidate', include: ['src/impl.mjs'] }), /already exists/);
+  await assert.rejects(() => extract({ ...base, id: 'candidate', include: ['src/impl.mjs'] }), /already exists/);
   assert.equal(digestTree(first.folder), digestBefore);
 
-  const other = extract({ ...base, id: 'other', include: ['src/blob.bin'] });
+  const other = await extract({ ...base, id: 'other', include: ['src/blob.bin'] });
   const otherDigest = digestTree(other.folder);
 
-  const updated = extract({ ...base, revision: f.shaB, id: 'candidate', include: ['src/impl.mjs'], update: true });
+  const updated = await extract({ ...base, revision: f.shaB, id: 'candidate', include: ['src/impl.mjs'], update: true });
   assert.equal(updated.folder, first.folder);
   assert.equal(existsSync(join(updated.folder, 'input', 'repository', 'src', 'impl.mjs')), true);
   assert.equal(existsSync(join(updated.folder, 'input', 'repository', 'src', 'app.mjs')), false);
@@ -301,9 +302,9 @@ test('extract refuses an existing id without update and replaces it atomically w
   assert.deepEqual(readdirSync(typeFolder).filter(name => name.startsWith('.tmp-') || name.startsWith('.old-')), []);
 });
 
-test('extract rewrites package and home literals in Markdown only', { timeout: 10000 }, t => {
+test('extract rewrites package and home literals in Markdown only', { timeout: 10000 }, async t => {
   const f = extractFixture(t);
-  const result = extract({
+  const result = await extract({
     sourcePackage: f.sourcePackage, repo: f.repo, revision: f.shaA,
     skill: 'spec-step-run', id: 'sanitize-candidate', step: 1,
     include: ['src/paths.txt'], scenariosRoot: f.scenariosRoot, home: f.repo,
@@ -326,7 +327,7 @@ test('extract rewrites package and home literals in Markdown only', { timeout: 1
   assert.deepEqual(readFileSync(join(result.folder, 'input', 'package', 'evidence-plan.json')), readFileSync(join(f.sourcePackage, 'evidence-plan.json')));
 });
 
-test('extract removes temp and keeps the index when the final rename is refused', { timeout: 10000 }, t => {
+test('extract removes temp and keeps the index when the final rename is refused', { timeout: 10000 }, async t => {
   if (process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0)) return t.skip('permission failures cannot be induced in this environment');
   const f = extractFixture(t);
   const typeFolder = join(f.scenariosRoot, 'spec-architect-initial');
@@ -348,7 +349,7 @@ test('extract removes temp and keeps the index when the final rename is refused'
   syncBuiltinESMExports();
   t.after(() => { renameMock.mock.restore(); syncBuiltinESMExports(); });
 
-  assert.throws(() => extract({
+  await assert.rejects(() => extract({
     sourcePackage: f.sourcePackage, repo: f.repo, revision: f.shaA,
     skill: 'spec-architect-initial', id: 'rename-candidate', include: ['src/app.mjs'], scenariosRoot: f.scenariosRoot,
   }), /EACCES|EPERM|permission denied/i);
@@ -358,11 +359,11 @@ test('extract removes temp and keeps the index when the final rename is refused'
   else assert.equal(readFileSync(indexPath, 'utf8'), indexBefore);
 });
 
-test('extract update restores the old folder and index when the index rename fails', { timeout: 10000 }, t => {
+test('extract update restores the old folder and index when the index rename fails', { timeout: 10000 }, async t => {
   if (process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0)) return t.skip('permission failures cannot be induced in this environment');
   const f = extractFixture(t);
   const base = { sourcePackage: f.sourcePackage, repo: f.repo, revision: f.shaA, skill: 'spec-architect-initial', scenariosRoot: f.scenariosRoot };
-  const first = extract({ ...base, id: 'candidate', include: ['src/app.mjs'] });
+  const first = await extract({ ...base, id: 'candidate', include: ['src/app.mjs'] });
   const typeFolder = join(f.scenariosRoot, 'spec-architect-initial');
   const indexPath = join(typeFolder, 'scenarios.md');
   const digestBefore = digestTree(first.folder);
@@ -383,13 +384,13 @@ test('extract update restores the old folder and index when the index rename fai
   syncBuiltinESMExports();
   t.after(() => { renameMock.mock.restore(); syncBuiltinESMExports(); });
 
-  assert.throws(() => extract({ ...base, revision: f.shaB, id: 'candidate', include: ['src/impl.mjs'], update: true }), /EACCES|EPERM|permission denied/i);
+  await assert.rejects(() => extract({ ...base, revision: f.shaB, id: 'candidate', include: ['src/impl.mjs'], update: true }), /EACCES|EPERM|permission denied/i);
   assert.equal(digestTree(first.folder), digestBefore);
   assert.equal(readFileSync(indexPath, 'utf8'), indexBefore);
   assert.deepEqual(readdirSync(typeFolder).filter(name => name.startsWith('.tmp-') || name.startsWith('.old-') || name.startsWith('scenarios.md.')), []);
 });
 
-test('extract CLI writes a draft scenario and validates it', { timeout: 15000 }, t => {
+test('extract CLI writes a draft scenario and validates it', { timeout: 15000 }, async t => {
   const f = extractFixture(t);
   const cli = fileURLToPath(new URL('./cli.mjs', import.meta.url));
   const env = { ...process.env, SPEC_GYM_REPO: f.gym };
@@ -418,32 +419,33 @@ test('extract CLI writes a draft scenario and validates it', { timeout: 15000 },
   assert.deepEqual(readdirSync(join(f.scenariosRoot, 'spec-architect-initial')).filter(name => name.startsWith('.tmp-')), []);
 });
 
-test('extract refuses destinations overlapping the source and symlinked package inputs', { timeout: 10000 }, t => {
+test('extract refuses destinations overlapping the source and symlinked package inputs', { timeout: 10000 }, async t => {
   const f = extractFixture(t);
   const base = { sourcePackage: f.sourcePackage, repo: f.repo, revision: f.shaA, skill: 'spec-architect-initial', id: 'overlap-candidate' };
   for (const scenariosRoot of [join(f.repo, 'scenarios'), join(f.sourcePackage, 'scenarios'), join(f.repo, '.specs')]) {
-    assert.throws(() => extract({ ...base, scenariosRoot }), /overlaps the source repository or package/, scenariosRoot);
+    await assert.rejects(() => extract({ ...base, scenariosRoot }), /overlaps the source repository or package/, scenariosRoot);
     assert.equal(existsSync(join(scenariosRoot, 'spec-architect-initial', 'overlap-candidate')), false, scenariosRoot);
   }
 
   const linkedRepo = join(f.root, 'linked-repo');
   symlinkSync(f.repo, linkedRepo);
-  assert.throws(() => extract({ ...base, scenariosRoot: join(linkedRepo, 'scenarios') }), /overlaps the source repository or package/);
+  await assert.rejects(() => extract({ ...base, scenariosRoot: join(linkedRepo, 'scenarios') }), /overlaps the source repository or package/);
   assert.equal(existsSync(join(linkedRepo, 'scenarios')), false);
 
   const linkedPackage = join(f.root, 'linked-package');
   symlinkSync(f.sourcePackage, linkedPackage);
-  assert.throws(() => extract({ ...base, scenariosRoot: join(linkedPackage, 'nested') }), /overlaps the source repository or package/);
+  await assert.rejects(() => extract({ ...base, scenariosRoot: join(linkedPackage, 'nested') }), /overlaps the source repository or package/);
   assert.equal(existsSync(join(linkedPackage, 'nested')), false);
 
-  const linkedSource = join(f.root, 'linked-source');
-  const symlinkPackage = join(linkedSource, '.specs', 'example-feature');
+  const linkedWorkspace = join(f.root, 'storage', 'projects', 'linked');
+  const symlinkPackage = join(linkedWorkspace, 'specs', 'example-feature');
   mkdirSync(symlinkPackage, { recursive: true });
+  writeFixture(join(linkedWorkspace, 'kit.yaml'), 'version: 1\nid: linked\nname: linked\nrepositories: []\n');
   writeFixture(join(symlinkPackage, 'requirements.md'), '# Requirements\n');
-  writeFixture(join(linkedSource, '.specs', 'project-context.md'), '# Context\n');
+  writeFixture(join(linkedWorkspace, 'project-context.md'), '# Context\n');
   symlinkSync(join(symlinkPackage, 'requirements.md'), join(symlinkPackage, 'context.md'));
   const typeFolder = join(f.scenariosRoot, 'spec-architect-initial');
-  assert.throws(() => extract({
+  await assert.rejects(() => extract({
     sourcePackage: symlinkPackage, repo: f.repo, revision: f.shaA,
     skill: 'spec-architect-initial', id: 'symlink-candidate', scenariosRoot: f.scenariosRoot,
   }), /regular file/);

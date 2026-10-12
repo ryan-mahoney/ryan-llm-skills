@@ -8,7 +8,7 @@ archives under `dist/skill-bundles/`. Generated artifacts are not committed.
 ## Bundles
 
 The build emits two installable bundles. `spec-skills` contains the architecture
-and spec authoring skills that share the standalone `.specs/<feature>/` filename
+and spec authoring skills that share the standalone spec package filename
 contract for preparation and execution.
 
 ### spec-skills
@@ -71,7 +71,7 @@ The generated `spec-skills` README also includes a stage-by-stage overview:
 2. Optionally run `spec-architect-critics` to challenge the architecture.
 3. Run `spec-write` once to write the spec, ground granular execution cards, and publish
    the complete prepared package.
-4. Let the top-level agent establish a code branch or worktree. Keep all `.specs` reads and writes in the primary repository; ignore any worktree copy.
+4. Let the top-level agent establish a code branch or worktree. Spec files stay in the workspace package folder (resolved by `spec-location`), never in a checkout or worktree.
 5. Execute the immutable prepared package with `spec-run`, which reviews each step in the
    background and fixes its findings before the next step. Structural readiness replaces
    preparation hashes; prepared focused checks expand only for actual failures or

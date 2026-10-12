@@ -1,15 +1,14 @@
 import { controlBus } from './sentinel-control-fixture.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync, realpathSync, statSync, renameSync, unlinkSync, symlinkSync, chmodSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { homedir, tmpdir } from 'node:os';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync, realpathSync, statSync, renameSync, unlinkSync, symlinkSync, chmodSync, openSync, closeSync, constants as fsConstants } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
+import { homedir, hostname, tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { createSentinelObserver, createVerificationRecorder, SENTINEL_COALESCE_MS, SENTINEL_RECONCILE_MS, SENTINEL_WIDGET_KEY, readCheckpointRecord, recordCheckpoint, createSentinelAuthority, activatePolicy, createDiagnosisController, readDiagnosisAttempt, disablePolicy, reserveIntent, finishIntent, considerCancellation, writeVerificationIncidents, buildDiagnosisPacket, readPolicyGuard, readInboxGuard, checkpointPath } from './sentinel.mjs';
-import { canonicalPackage } from './runtime.mjs';
 import { collectFacts } from '../../../scripts/jev/core.mjs';
 import { discoveryConfigPath, saveDiscoveryRoot } from '../../../scripts/spec-observe/discovery.mjs';
 import { enrollmentDirectory, workspaceKey } from '../../../scripts/spec-observe/sentinel.mjs';
@@ -38,7 +37,7 @@ try {
 } catch { /* No installed SDK: SDK-dependent cases skip. */ }
 const sdkSkip = sdk ? false : 'Install the pi coding-agent SDK (pi on PATH) to run the composition cases';
 
-const ENV_KEYS = ['SPEC_RUNTIME_ROLE', 'SPEC_RUNTIME_RECORD', 'PI_CODING_AGENT_DIR', 'PI_INTERCOM_SCOPE_ID'];
+const ENV_KEYS = ['SPEC_RUNTIME_ROLE', 'SPEC_RUNTIME_RECORD', 'PI_CODING_AGENT_DIR', 'PI_INTERCOM_SCOPE_ID', 'ADJACENT_STORAGE_ROOT'];
 
 // The owner's verification process exports SPEC_RUNTIME_ROLE; every case needs
 // a coordinator or explicit role, so the environment is snapshotted per test.
@@ -57,9 +56,22 @@ function isolatedEnv(t) {
   };
 }
 
+// Each primary gets its own workspace (kit id = directory name = repository id) in a
+// per-test storage root; `pack` creates the package with the real spec-location CLI.
+let STORAGE = null;
+const REPOS = new Map();
+const specLocation = fileURLToPath(new URL('../../../scripts/spec-location/cli.mjs', import.meta.url));
+// Package folder facts the cases used to get from runtime.mjs canonicalPackage.
+const canonicalPackage = path => { const packagePath = realpathSync(path); return { packagePath, primary: REPOS.get(packagePath), common: join(REPOS.get(packagePath), '.git') }; };
+
 function sandbox(t) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'sentinel-integration-')));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
+  STORAGE = join(dir, 'storage');
+  mkdirSync(join(STORAGE, 'projects'), { recursive: true });
+  const previous = process.env.ADJACENT_STORAGE_ROOT;
+  process.env.ADJACENT_STORAGE_ROOT = STORAGE;
+  t.after(() => { if (previous === undefined) delete process.env.ADJACENT_STORAGE_ROOT; else process.env.ADJACENT_STORAGE_ROOT = previous; });
   mkdirSync(join(dir, 'spec-sentinel'), { recursive: true });
   writeFileSync(discoveryConfigPath(dir), JSON.stringify({ version: 1, root: dir }));
   return dir;
@@ -72,6 +84,10 @@ function primary(base, name = 'repo') {
   git('init', '-q');
   git('config', 'user.name', 'Sentinel Integration');
   git('config', 'user.email', 'sentinel-integration@example.invalid');
+  const workspace = basename(name);
+  mkdirSync(join(STORAGE, 'projects', workspace), { recursive: true });
+  writeFileSync(join(STORAGE, 'projects', workspace, 'kit.yaml'),
+    `version: 1\nid: ${workspace}\nname: ${workspace}\nexecution_host: ${hostname().split('.')[0].toLowerCase()}\nrepositories:\n  - id: ${workspace}\n    path: ${repo}\n`);
   return { repo, git };
 }
 
@@ -82,8 +98,10 @@ function commit(repo) {
 }
 
 function pack(repo, name = 'feature') {
-  const packagePath = join(repo, '.specs', name);
-  mkdirSync(packagePath, { recursive: true });
+  const workspace = basename(repo);
+  const made = JSON.parse(execFileSync(process.execPath, [specLocation, 'new', '--workspace', workspace, '--slug', name, '--target', workspace, '--root', STORAGE], { encoding: 'utf8' }));
+  const packagePath = realpathSync(made.locations.package_dir);
+  REPOS.set(packagePath, repo);
   return packagePath;
 }
 
@@ -92,6 +110,18 @@ function receipt(packagePath, record) {
   mkdirSync(join(packagePath, 'runtime', 'runs'), { recursive: true });
   writeFileSync(file, JSON.stringify({ ...record, package: record.package ?? packagePath }));
   return file;
+}
+
+// Opening a FIFO for writing blocks the process until a reader opens it, and the
+// startup now reaches its history-index read after several asynchronous checks.
+// Retry a non-blocking open (ENXIO means no reader yet) so the gate opens only
+// once the pending read exists; closing the writer ends that read.
+async function releaseGate(fifo) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    try { closeSync(openSync(fifo, fsConstants.O_WRONLY | fsConstants.O_NONBLOCK)); return; }
+    catch (error) { if (error.code !== 'ENXIO') throw error; await new Promise(resolve => setTimeout(resolve, 50)); }
+  }
+  throw new Error('no reader reached the gate');
 }
 
 function capturedUI() {
@@ -330,11 +360,11 @@ async function loadExtension(t, { dir, role, recordFile, providerFactory = scrip
   return { session, sessionManager, loader, captured, requests, errors, modelRuntime, settingsManager };
 }
 
-function cli(args, cwd) {
-  return execFileSync(process.execPath, [cliPath, ...args], { cwd, encoding: 'utf8' });
+function cli(args, cwd, env = process.env) {
+  return execFileSync(process.execPath, [cliPath, ...args], { cwd, encoding: 'utf8', env });
 }
 
-test('sentinel discovery: native root command and CLI find nested repositories without enrollment', { skip: sdkSkip, timeout: 60000 }, async t => {
+test('sentinel discovery: native root command and CLI find repositories with legacy .specs without enrollment', { skip: sdkSkip, timeout: 60000 }, async t => {
   const dir = sandbox(t);
   const search = join(dir, 'Projects with spaces');
   const { repo } = primary(search, 'group/outer');
@@ -342,18 +372,25 @@ test('sentinel discovery: native root command and CLI find nested repositories w
   const inner = pack(primary(repo, 'packages/inner').repo);
   for (const [packagePath, id] of [[outer, 'outer'], [inner, 'inner']])
     receipt(packagePath, { id, assignment_id: id, state: 'running', started_at: new Date().toISOString() });
+  // Untracked .specs entries in each repository are what discovery looks for.
+  for (const checkout of [repo, join(repo, 'packages', 'inner')]) mkdirSync(join(checkout, '.specs', 'old'), { recursive: true });
   const { session, captured, requests } = await loadExtension(t, { dir });
   await session.prompt('/spec-sentinel root ' + search);
   await session.prompt('/spec-sentinel status');
-  assert.match(lastNote(captured).message, /outer/);
-  assert.match(lastNote(captured).message, /inner/);
+  assert.match(lastNote(captured).message, /outer\/feature/);
+  assert.match(lastNote(captured).message, /inner\/feature/);
+  assert.match(lastNote(captured).message, /spec-location migrate --workspace outer/);
+  // Discovery stops at a repository, so the nested one is found only from inside it (below).
   assert.equal(requests.length, 0);
   assert.equal(existsSync(enrollmentDirectory({ agentDir: dir })), false);
   const snapshot = JSON.parse(cli(['sentinel', 'status', '--agent-dir', dir, '--format', 'json'], dir));
   assert.deepEqual(snapshot.runs.map(run => run.assignment_id).sort(), ['inner', 'outer']);
+  assert.deepEqual(snapshot.attention.map(row => row.repository), [realpathSync(repo)]);
   assert.equal(snapshot.discovery.root, search);
+  // The root only scopes repository discovery; packages come from storage either way.
   const override = JSON.parse(cli(['sentinel', 'status', '--agent-dir', dir, '--root', join(repo, 'packages'), '--format', 'json'], dir));
-  assert.deepEqual(override.runs.map(run => run.assignment_id), ['inner']);
+  assert.deepEqual(override.runs.map(run => run.assignment_id).sort(), ['inner', 'outer']);
+  assert.deepEqual(override.attention.map(row => row.repository), [realpathSync(join(repo, 'packages', 'inner'))]);
   assert.equal(JSON.parse(readFileSync(discoveryConfigPath(dir))).root, search);
 });
 
@@ -402,7 +439,7 @@ test('sentinel status: actual index.ts serves enrolled workspace facts with zero
 
   assert.equal(requests.length, 0);
   assert.deepEqual([...readFileSync(file)], [...receiptBytes]);
-  assert.deepEqual(readdirSync(packagePath).sort(), ['runtime']);
+  assert.deepEqual(readdirSync(packagePath).sort(), ['locations.json', 'runtime', 'scope.json']);
   assert.equal(existsSync(join(packagePath, 'runtime', 'package.lock')), false);
   assert.deepEqual(readdirSync(join(packagePath, 'runtime')).sort(), ['runs']);
   assert.equal(readdirSync(join(packagePath, 'runtime', 'runs')).some(name => name.includes('-processes')), false);
@@ -424,7 +461,6 @@ test('sentinel enrollment: add writes one canonical record and rejects linked wo
 
   const worktree = join(dir, 'enroll-worktree');
   git('worktree', 'add', '-q', worktree);
-  pack(worktree);
   await session.prompt('/spec-sentinel add ' + worktree);
   assert.match(lastNote(captured).message, /linked worktrees are not enrolled/);
   assert.equal(count(), 1);
@@ -571,7 +607,7 @@ test('sentinel observer: coalesced invalidation, missed-event reconciliation and
   assert.ok(watchers.some(watcher => watcher !== failed && !watcher.closed && watcher.dir === failed.dir));
   assert.ok(!lastWidget(captures).content.some(line => line.includes('Watcher unavailable')));
 
-  assert.deepEqual(readdirSync(packagePath).sort(), ['runtime']);
+  assert.deepEqual(readdirSync(packagePath).sort(), ['locations.json', 'runtime', 'scope.json']);
   assert.deepEqual(readdirSync(join(packagePath, 'runtime')).sort(), ['runs']);
   assert.deepEqual(readdirSync(join(packagePath, 'runtime', 'runs')).sort(),
     ['run-observer-1-activity', 'run-observer-1.json', 'run-observer-2.json', 'run-observer-3.json']);
@@ -769,7 +805,10 @@ test('sentinel status: the CLI reports a disposable package and preserves runs d
   assert.deepEqual(many.runs.map(run => run.assignment_id).sort(),
     Array.from({ length: 50 }, (unused, index) => `assign-many-${index + 1}`).sort());
 
-  const emptyOut = cli(['sentinel', 'status', '--agent-dir', empty], dir);
+  const emptyStorage = join(dir, 'empty-storage');
+  mkdirSync(join(emptyStorage, 'projects'), { recursive: true });
+  const emptyEnv = { ...process.env, ADJACENT_STORAGE_ROOT: emptyStorage };
+  const emptyOut = cli(['sentinel', 'status', '--agent-dir', empty], dir, emptyEnv);
   assert.match(emptyOut, /No observed runs/);
   assert.match(emptyOut, /Repository discovery:/);
   assert.doesNotMatch(emptyOut, /Add one in Pi/);
@@ -779,7 +818,7 @@ test('sentinel status: the CLI reports a disposable package and preserves runs d
   const enrollments = enrollmentDirectory({ agentDir: empty });
   mkdirSync(enrollments, { recursive: true });
   writeFileSync(join(enrollments, 'broken.json'), '{not json');
-  const broken = cli(['sentinel', 'status', '--agent-dir', empty], dir);
+  const broken = cli(['sentinel', 'status', '--agent-dir', empty], dir, emptyEnv);
   assert.match(broken, /coverage unavailable/);
   assert.match(broken, /enrollment-invalid/);
   assert.doesNotMatch(broken, /No enrolled roots\. Add one/);
@@ -1211,7 +1250,7 @@ test('sentinel policy: disable and off revoke at command entry behind pending wo
 
   // Release the gate: the dispatch finishes, then the queued activation lands
   // and is fenced and re-revoked instead of re-arming the live capability.
-  writeFileSync(specFile, '');
+  await releaseGate(specFile);
   let gateTimer;
   const gateTimeout = new Promise((_, reject) => { gateTimer = setTimeout(() => reject(new Error('the queued enable did not complete after the gate released')), 5000); });
   await Promise.race([enablePrompt, gateTimeout]).finally(() => clearTimeout(gateTimer));
@@ -1582,7 +1621,7 @@ function cancellationFixture(t, { mode = 'recover', actions = ['continue', 'canc
     assignments: { 'assign-1': { assignment_id: 'assign-1', checkout, count: 3, fingerprint, tool_call_ids: [], state: 'open',
       generation: 1, incident_id: 'inc-1', linked_from: null, incident_fingerprint: fingerprint, observed_at: observedAt } } });
   const record = { id: 'run-1', assignment_id: 'assign-1', package: canonical.packagePath, workflow_id: 'wf-cancel', checkout,
-    lock: join(dir, 'cancel-lock'), token: 'tok', state: 'running' };
+    state: 'running' };
   // The cancel intent source_revision is the current packet hash, so the retained
   // diagnosis attempt must carry the packet rebuilt from the same live inputs.
   const guard = readPolicyGuard(authority, { workflow_id: 'wf-cancel', now: () => Date.now() });
@@ -1876,13 +1915,12 @@ function compositionFixture(t) {
   writeFileSync(join(dir, 'agents', 'spec-sentinel-diagnostician.md'),
     readFileSync(join(here, '..', '..', 'agents', 'spec-sentinel-diagnostician.md')));
   const { repo } = primary(dir, 'cancel-comp-repo');
-  writeFileSync(join(repo, '.gitignore'), '.specs/\n');
   writeFileSync(join(repo, 'README'), 'fixture\n');
-  execFileSync('git', ['-C', repo, 'add', 'README', '.gitignore'], { stdio: 'pipe' });
+  execFileSync('git', ['-C', repo, 'add', 'README'], { stdio: 'pipe' });
   execFileSync('git', ['-C', repo, 'commit', '-qm', 'Initial fixture'], { stdio: 'pipe' });
   const packagePath = pack(repo);
   for (const name of ['context.md', 'spec.md', 'spec-prepare.md']) writeFileSync(join(packagePath, name), 'prepared');
-  writeFileSync(join(repo, '.specs', 'project-context.md'), 'authority');
+  writeFileSync(join(STORAGE, 'projects', 'cancel-comp-repo', 'project-context.md'), 'authority');
   writeFileSync(join(packagePath, 'evidence-plan.json'), '{}');
   writeFileSync(join(packagePath, 'spec-steps.json'), JSON.stringify({ steps: [{ step: 1, difficulty: 'easy' }] }));
   const step = join(packagePath, 'step-001-subspec.md');
@@ -2064,7 +2102,7 @@ test('sentinel cancellation: confirmed cancellation of a diagnosed spinning disp
     assert.ok(intent, `no final cancellation receipt within 6s: ${compositionDiagnostic(f.fake, f.workflowId, f.runId, f.incidentId)}`);
     assert.equal(intent.state, 'applied');
     assert.equal(intent.reason_code, 'cancelled');
-    assert.equal(cancelled.lock && existsSync(cancelled.lock), false, 'the lease is released only after confirmed cancellation');
+    assert.equal(existsSync(join(f.fake.packagePath, 'runtime', 'runs', `${f.runId}-editor-slot`)), false, 'the writer slot is released only after confirmed cancellation');
     const checkpoint = JSON.parse(readFileSync(checkpointPath(f.fake.packagePath, f.workflowId), 'utf8'));
     assert.equal(checkpoint.obligation.key, `reconcile:${f.assignmentId}`, 'runtime completion reconciliation updated the checkpoint');
     assert.doesNotThrow(() => process.kill(unrelated, 0), 'an unrelated fixture child remains alive');
@@ -2140,17 +2178,17 @@ test('sentinel observer: caps terminal rendering and suppresses unchanged redraw
 });
 
 
-test('sentinel observer: failed repository identity retains known work as stale instead of an empty workspace', async t => {
+test('sentinel observer: an unreadable storage root retains known work as stale instead of an empty workspace', async t => {
   const f = observerFixture(t);
   await f.handler('observe');
   const before = JSON.parse(readFileSync(f.observer.snapshotPath, 'utf8'));
-  writeFileSync(join(dirname(dirname(f.packagePath)), '.git', 'HEAD'), 'unreadable repository identity');
+  renameSync(join(STORAGE, 'projects'), join(STORAGE, 'projects-away'));
   await f.observer.refresh();
   const after = JSON.parse(readFileSync(f.observer.snapshotPath, 'utf8'));
   assert.equal(after.snapshot.runs[0].assignment_id, 'assign-focus');
   assert.equal(after.snapshot.coverage.state, 'stale');
   assert.equal(after.snapshot.coverage.observed_at, before.snapshot.coverage.observed_at);
-  assert.ok(after.snapshot.coverage.reasons.some(reason => reason.includes('package-noncanonical')));
+  assert.ok(after.snapshot.coverage.reasons.some(reason => reason.includes('storage-unavailable')));
   assert.match(after.note, /unavailable/);
 });
 

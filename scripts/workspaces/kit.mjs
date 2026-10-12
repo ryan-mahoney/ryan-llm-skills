@@ -8,7 +8,8 @@
 //
 // Result shape: { ok, kit, raw, errors }.
 // - `kit` normalized `{version, id, name, repositories:[{id, path, remote,
-//   role}], context}` or null.
+//   role}], context}` or null, plus `design_system` ({repository, paths,
+//   applies_to?}) and `execution_host` (string) only when the kit sets them.
 // - `raw` exact source plus line/span offsets for writers; see below.
 // - `errors` syntax errors (`line N: ...`) are reported before any schema
 //   validation; schema messages reuse Adjacent field paths and order
@@ -53,6 +54,7 @@
 // MAX_PARSE_DEPTH (64) nesting levels; deeper input fails with a line-numbered
 // error instead of overflowing the stack.
 
+import { isAbsolute } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
@@ -735,6 +737,40 @@ export function validateKit(document) {
     }
   }
 
+  const designSystem = hasOwn(document, "design_system") ? document.design_system : null;
+  if (designSystem !== null && designSystem !== undefined) {
+    if (!isMapping(designSystem)) {
+      errors.push(`design_system: expected a mapping, got ${inspectValue(designSystem)}`);
+    } else {
+      const repository = requiredString(designSystem, "repository", "design_system.repository", errors);
+      if (repository !== null && !kit.repositories.some((entry) => entry.id === repository)) {
+        errors.push(`design_system.repository: unknown repository id ${JSON.stringify(repository)}`);
+      }
+      const appliesTo = optionalString(designSystem, "applies_to", "design_system.applies_to", errors);
+      const rawPaths = hasOwn(designSystem, "paths") ? designSystem.paths : null;
+      const paths = [];
+      if (!Array.isArray(rawPaths) || rawPaths.length === 0) {
+        errors.push(`design_system.paths: expected a non-empty list, got ${inspectValue(rawPaths)}`);
+      } else {
+        rawPaths.forEach((entry, index) => {
+          if (!isRepositoryRelative(entry)) {
+            errors.push(`design_system.paths[${index}]: expected a relative path, got ${inspectValue(entry)}`);
+          } else {
+            paths.push(entry);
+          }
+        });
+      }
+      kit.design_system = { repository, paths };
+      if (appliesTo !== null) kit.design_system.applies_to = appliesTo;
+    }
+  }
+
+  const executionHost = optionalString(document, "execution_host", "execution_host", errors);
+  if (executionHost !== null) {
+    if (executionHost === "") errors.push("execution_host: must not be empty");
+    else kit.execution_host = executionHost;
+  }
+
   if (errors.length > 0) return { ok: false, kit: null, errors };
   return { ok: true, kit, errors: [] };
 }
@@ -799,14 +835,17 @@ function repositoryMapping(root, repositoryId) {
   return null;
 }
 
-function cloneKit(kit) {
-  return {
+export function cloneKit(kit) {
+  const clone = {
     version: kit.version,
     id: kit.id,
     name: kit.name,
     repositories: kit.repositories.map((repository) => ({ ...repository })),
     context: [...kit.context],
   };
+  if (kit.design_system) clone.design_system = { ...kit.design_system, paths: [...kit.design_system.paths] };
+  if (kit.execution_host) clone.execution_host = kit.execution_host;
+  return clone;
 }
 
 /**
@@ -859,9 +898,16 @@ export function formatScalar(value) {
 /**
  * Plan an exact, line-preserving kit edit without touching the filesystem.
  *
- * Operations:
- * - { kind: "add-repository", repository: { id, path, remote?, role? } }
- * - { kind: "set-role", repository_id, role }
+ * Operations (`kind`, fields):
+ * - add-repository { repository: { id, path, remote?, role? } }
+ * - remove-repository { repository_id }  (also drops a design_system that
+ *   names it, so the result stays valid)
+ * - set-path | set-remote | set-role { repository_id, path | remote | role }
+ * - clear-role { repository_id }
+ * - set-name { name }, set-execution-host { host }
+ * - add-context | remove-context { entry }
+ * - set-design-system { repository_id, paths, applies_to? }  (replaces the block)
+ * - rewrite-paths { from, to }  (repository paths at a path boundary of `from`)
  *
  * Returns { before, after, expected, hunk }. `before` is the exact input;
  * `after` differs from it only in the affected lines; and `expected` is the
@@ -873,9 +919,9 @@ export function formatScalar(value) {
  * each text.
  *
  * Throws an Error for invalid kit text, unknown kinds, duplicate repository
- * ids, absent set-role ids, invalid required id/path values and control-bearing
- * scalars; throws a TypeError for wrong argument types. Path/Git/filesystem
- * validation belongs to later owners.
+ * ids, absent repository ids, invalid required id/path values and
+ * control-bearing scalars; throws a TypeError for wrong argument types.
+ * Path/Git/filesystem validation belongs to later owners.
  * @param {string} text
  * @param {Object} operation
  * @returns {{before: string, after: string, expected: Object, hunk: Object}}
@@ -888,9 +934,35 @@ export function planKitEdit(text, operation) {
   if (operation === null || typeof operation !== "object" || Array.isArray(operation)) {
     throw new TypeError("planKitEdit expects an operation object");
   }
-  if (operation.kind === "add-repository") return planAddRepository(text, parsed, operation);
-  if (operation.kind === "set-role") return planSetRole(text, parsed, operation);
-  throw new Error(`unknown operation kind: ${String(operation.kind)}`);
+  switch (operation.kind) {
+    case "add-repository": return planAddRepository(text, parsed, operation);
+    case "remove-repository": return planRemoveRepository(text, parsed, operation);
+    case "set-role": return planRepositoryField(text, parsed, operation, "role", operation.role);
+    case "set-path": return planRepositoryField(text, parsed, operation, "path", operation.path);
+    case "set-remote": return planRepositoryField(text, parsed, operation, "remote", operation.remote);
+    case "clear-role": return planRepositoryField(text, parsed, operation, "role", null);
+    case "set-name": return planSetName(text, parsed, operation);
+    case "set-execution-host": return planSetExecutionHost(text, parsed, operation);
+    case "add-context": return planAddContext(text, parsed, operation);
+    case "remove-context": return planRemoveContext(text, parsed, operation);
+    case "set-design-system": return planSetDesignSystem(text, parsed, operation);
+    case "rewrite-paths": return planRewritePaths(text, parsed, operation);
+    default: throw new Error(`unknown operation kind: ${String(operation.kind)}`);
+  }
+}
+
+/**
+ * Plan replacing a kit with another valid kit text (backup restore). The
+ * result has the same shape as `planKitEdit`.
+ * @param {string} before current kit text
+ * @param {string} after replacement kit text
+ */
+export function planKitReplacement(before, after) {
+  for (const [label, text] of [["current", before], ["replacement", after]]) {
+    const parsed = parseKit(text);
+    if (!parsed.ok) throw new Error(`${label} kit text is not valid: ${parsed.errors.join("; ")}`);
+  }
+  return finishPlan(before, after, parseKit(after).kit);
 }
 
 function verifyPlan(text, after, expected) {
@@ -904,70 +976,236 @@ function verifyPlan(text, after, expected) {
   return { before: text, after, expected };
 }
 
-function planSetRole(text, parsed, operation) {
+const splitLines = (text) => text.match(/[^\r\n]*(?:\r\n|\n)|[^\r\n]+/g) ?? [];
+
+// Hunk from the differing line range; a pure insertion carries the preceding
+// line as context so the preview always shows where it lands.
+function diffHunk(before, after) {
+  const old = splitLines(before);
+  const next = splitLines(after);
+  let head = 0;
+  while (head < old.length && head < next.length && old[head] === next[head]) head += 1;
+  let tail = 0;
+  while (
+    tail < old.length - head && tail < next.length - head
+    && old[old.length - 1 - tail] === next[next.length - 1 - tail]
+  ) tail += 1;
+  let start = head;
+  let beforeLines = old.slice(head, old.length - tail);
+  let afterLines = next.slice(head, next.length - tail);
+  if (beforeLines.length === 0 && head > 0) {
+    start = head - 1;
+    beforeLines = [old[start]];
+    afterLines = [old[start], ...afterLines];
+  }
+  return { start_line: start + 1, before_lines: beforeLines, after_lines: afterLines };
+}
+
+function finishPlan(text, after, expected) {
+  return { ...verifyPlan(text, after, expected), hunk: diffHunk(text, after) };
+}
+
+// Whole lines covered by [start, end), including the final line break.
+function lineSpan(lines, start, end) {
+  const first = lineAtOffset(lines, start);
+  const last = lineAtOffset(lines, Math.max(end - 1, start));
+  return { start: first.start, end: last.end + last.break.length };
+}
+
+function requireText(value, label) {
+  if (typeof value !== "string" || value === "") throw new Error(`${label} requires a non-empty string`);
+  return value;
+}
+
+function requireRepository(parsed, operation, label) {
   const repositoryId = operation.repository_id;
-  const role = operation.role;
   if (typeof repositoryId !== "string" || repositoryId === "") {
-    throw new Error("set-role requires a non-empty repository_id");
+    throw new Error(`${label} requires a non-empty repository_id`);
   }
-  if (typeof role !== "string") {
-    throw new TypeError("set-role requires a string role");
-  }
-  const repositories = parsed.kit.repositories;
-  const index = repositories.findIndex((repository) => repository.id === repositoryId);
-  if (index === -1) {
-    throw new Error(`no repository with id ${JSON.stringify(repositoryId)}`);
-  }
+  const index = parsed.kit.repositories.findIndex((repository) => repository.id === repositoryId);
+  if (index === -1) throw new Error(`no repository with id ${JSON.stringify(repositoryId)}`);
   const mapping = repositoryMapping(parsed.raw.root, repositoryId);
   if (!mapping) {
     throw new Error(`repository ${JSON.stringify(repositoryId)} is missing from the parsed AST`);
   }
-  const expected = cloneKit(parsed.kit);
-  expected.repositories[index].role = role;
+  return { index, mapping, repositoryId };
+}
+
+// Replace a top-level entry with `blockLines`, or append it after the last one.
+function planRootEntry(text, parsed, key, blockLines, expected) {
   const { lines, newline } = parsed.raw;
-  const roleEntry = mappingEntry(mapping, "role");
-  if (roleEntry) {
-    const start = roleEntry.value.start;
-    const end = roleEntry.value.end;
-    const replacement = `${start === end ? " " : ""}${formatScalar(role)}`;
-    const after = applyEdits(text, [{ start, end, replacement }]);
-    const line = lineAtOffset(lines, start);
-    const lineText = text.slice(line.start, line.end);
-    const localStart = start - line.start;
-    const localEnd = end - line.start;
-    const afterText = lineText.slice(0, localStart) + replacement + lineText.slice(localEnd);
-    return {
-      ...verifyPlan(text, after, expected),
-      hunk: {
-        start_line: line.number,
-        before_lines: [lineText + line.break],
-        after_lines: [afterText + line.break],
-      },
-    };
+  const entry = mappingEntry(parsed.raw.root, key);
+  let after;
+  if (entry) {
+    after = applyEdits(text, [{
+      start: entry.keySpan.start,
+      end: entry.span.end,
+      replacement: blockLines.join(newline),
+    }]);
+  } else {
+    const anchor = lineAtOffset(lines, parsed.raw.root.end - 1);
+    const inserted = insertionAfter(anchor, blockLines, newline);
+    after = applyEdits(text, [
+      { start: inserted.offset, end: inserted.offset, replacement: inserted.replacement },
+    ]);
+  }
+  return finishPlan(text, after, expected);
+}
+
+// Set (string) or remove (null) one scalar field of a repository mapping.
+function planRepositoryField(text, parsed, operation, field, value) {
+  const { index, mapping } = requireRepository(parsed, operation, operation.kind);
+  if (field === "path") requireText(value, "set-path path");
+  else if (value !== null && typeof value !== "string") {
+    throw new TypeError(`${operation.kind} requires a string ${field}`);
+  }
+  const expected = cloneKit(parsed.kit);
+  expected.repositories[index][field] = value;
+  const { lines, newline } = parsed.raw;
+  const entry = mappingEntry(mapping, field);
+  if (value === null) {
+    if (!entry) throw new Error(`repository ${JSON.stringify(operation.repository_id)} has no ${field}`);
+    const span = lineSpan(lines, entry.keySpan.start, entry.span.end);
+    return finishPlan(text, applyEdits(text, [{ ...span, replacement: "" }]), expected);
+  }
+  if (entry) {
+    const start = entry.value.start;
+    const end = entry.value.end;
+    const replacement = `${start === end ? " " : ""}${formatScalar(value)}`;
+    return finishPlan(text, applyEdits(text, [{ start, end, replacement }]), expected);
   }
   const firstEntry = mapping.entries[0];
   const firstLine = lineAtOffset(lines, firstEntry.keySpan.start);
   const indent = firstEntry.keySpan.start - firstLine.start;
   const anchor = lineAtOffset(lines, mapping.end - 1);
-  const inserted = insertionAfter(
-    anchor,
-    [`${" ".repeat(indent)}role: ${formatScalar(role)}`],
-    newline,
-  );
+  const inserted = insertionAfter(anchor, [`${" ".repeat(indent)}${field}: ${formatScalar(value)}`], newline);
   const after = applyEdits(text, [
     { start: inserted.offset, end: inserted.offset, replacement: inserted.replacement },
   ]);
-  const anchorText = text.slice(anchor.start, anchor.end);
-  return {
-    ...verifyPlan(text, after, expected),
-    hunk: {
-      start_line: anchor.number,
-      before_lines: [anchorText + anchor.break],
-      after_lines: inserted.separator
-        ? [anchorText + newline, ...inserted.afterLines]
-        : [anchorText + anchor.break, ...inserted.afterLines],
-    },
-  };
+  return finishPlan(text, after, expected);
+}
+
+function planRemoveRepository(text, parsed, operation) {
+  const { index, mapping, repositoryId } = requireRepository(parsed, operation, "remove-repository");
+  const expected = cloneKit(parsed.kit);
+  expected.repositories.splice(index, 1);
+  const { lines } = parsed.raw;
+  const repositories = mappingEntry(parsed.raw.root, "repositories");
+  const items = repositories.value.items;
+  const edits = [];
+  if (items.length === 1) {
+    edits.push({
+      start: repositories.keySpan.start,
+      end: repositories.span.end,
+      replacement: "repositories: []",
+    });
+  } else {
+    const item = items.find((candidate) => candidate.value === mapping);
+    edits.push({ ...lineSpan(lines, item.span.start, item.span.end), replacement: "" });
+  }
+  // A design system rooted in the removed repository would make the kit invalid.
+  const designSystem = mappingEntry(parsed.raw.root, "design_system");
+  if (designSystem && parsed.kit.design_system?.repository === repositoryId) {
+    delete expected.design_system;
+    edits.push({
+      ...lineSpan(lines, designSystem.keySpan.start, designSystem.span.end),
+      replacement: "",
+    });
+  }
+  return finishPlan(text, applyEdits(text, edits), expected);
+}
+
+// design.json applies the same rule to design-system files: relative, no `..` segment.
+function isRepositoryRelative(path) {
+  return typeof path === "string" && path !== "" && !isAbsolute(path) && !path.split(/[\\/]/).includes("..");
+}
+
+function planSetName(text, parsed, operation) {
+  const name = requireText(operation.name, "set-name name");
+  const expected = cloneKit(parsed.kit);
+  expected.name = name;
+  return planRootEntry(text, parsed, "name", [`name: ${formatScalar(name)}`], expected);
+}
+
+function planSetExecutionHost(text, parsed, operation) {
+  // spec-location compares the first DNS label, case-insensitively; store that label.
+  const host = requireText(operation.host, "set-execution-host host").split(".")[0].toLowerCase();
+  if (!/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(host)) {
+    throw new Error("set-execution-host host must start with a DNS label of letters, digits and hyphens");
+  }
+  const expected = cloneKit(parsed.kit);
+  expected.execution_host = host;
+  return planRootEntry(text, parsed, "execution_host", [`execution_host: ${formatScalar(host)}`], expected);
+}
+
+function planAddContext(text, parsed, operation) {
+  const entry = requireText(operation.entry, "add-context entry");
+  if (parsed.kit.context.includes(entry)) throw new Error(`context already contains ${JSON.stringify(entry)}`);
+  const expected = cloneKit(parsed.kit);
+  expected.context.push(entry);
+  const { lines, newline } = parsed.raw;
+  const list = mappingEntry(parsed.raw.root, "context")?.value;
+  if (list?.kind !== "list" || list.items.length === 0) {
+    return planRootEntry(text, parsed, "context", ["context:", `  - ${formatScalar(entry)}`], expected);
+  }
+  const firstLine = lineAtOffset(lines, list.items[0].span.start);
+  const dash = " ".repeat(list.items[0].span.start - firstLine.start);
+  const anchor = lineAtOffset(lines, list.items[list.items.length - 1].value.end - 1);
+  const inserted = insertionAfter(anchor, [`${dash}- ${formatScalar(entry)}`], newline);
+  const after = applyEdits(text, [
+    { start: inserted.offset, end: inserted.offset, replacement: inserted.replacement },
+  ]);
+  return finishPlan(text, after, expected);
+}
+
+function planRemoveContext(text, parsed, operation) {
+  const entry = requireText(operation.entry, "remove-context entry");
+  const index = parsed.kit.context.indexOf(entry);
+  if (index === -1) throw new Error(`context does not contain ${JSON.stringify(entry)}`);
+  const expected = cloneKit(parsed.kit);
+  expected.context.splice(index, 1);
+  const context = mappingEntry(parsed.raw.root, "context");
+  if (context.value.items.length === 1) {
+    return planRootEntry(text, parsed, "context", ["context: []"], expected);
+  }
+  const item = context.value.items[index];
+  const span = lineSpan(parsed.raw.lines, item.span.start, item.span.end);
+  return finishPlan(text, applyEdits(text, [{ ...span, replacement: "" }]), expected);
+}
+
+function planSetDesignSystem(text, parsed, operation) {
+  const { repositoryId } = requireRepository(parsed, operation, "set-design-system");
+  const paths = operation.paths;
+  if (!Array.isArray(paths) || paths.length === 0) {
+    throw new Error("set-design-system requires at least one path");
+  }
+  for (const path of paths) {
+    if (!isRepositoryRelative(path)) throw new Error(`set-design-system requires a relative path with no ".." segment: ${inspectValue(path)}`);
+  }
+  const designSystem = { repository: repositoryId, paths: [...paths] };
+  if (operation.applies_to !== undefined) designSystem.applies_to = requireText(operation.applies_to, "set-design-system applies_to");
+  const expected = cloneKit(parsed.kit);
+  expected.design_system = designSystem;
+  const block = ["design_system:", `  repository: ${formatScalar(repositoryId)}`];
+  if (designSystem.applies_to !== undefined) block.push(`  applies_to: ${formatScalar(designSystem.applies_to)}`);
+  block.push("  paths:", ...paths.map((path) => `    - ${formatScalar(path)}`));
+  return planRootEntry(text, parsed, "design_system", block, expected);
+}
+
+function planRewritePaths(text, parsed, operation) {
+  const from = requireText(operation.from, "rewrite-paths from");
+  const to = requireText(operation.to, "rewrite-paths to");
+  const boundary = from.endsWith("/") ? from : `${from}/`;
+  const expected = cloneKit(parsed.kit);
+  const edits = [];
+  expected.repositories.forEach((repository) => {
+    if (repository.path !== from && !repository.path.startsWith(boundary)) return;
+    repository.path = to + repository.path.slice(from.length);
+    const entry = mappingEntry(repositoryMapping(parsed.raw.root, repository.id), "path");
+    edits.push({ start: entry.value.start, end: entry.value.end, replacement: formatScalar(repository.path) });
+  });
+  if (edits.length === 0) throw new Error(`no repository path starts with ${JSON.stringify(from)}`);
+  return finishPlan(text, applyEdits(text, edits), expected);
 }
 
 function planAddRepository(text, parsed, operation) {

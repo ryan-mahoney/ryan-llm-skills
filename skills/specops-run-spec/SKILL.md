@@ -92,7 +92,7 @@ adaptations, and QA inputs. Confirm the tree is clean before the next step. If t
 scope includes publication, push meaningful checkpoints and open/update an honest draft
 PR to start CI without waiting for final local regression. This skill alone grants no
 publication authority; a SpecOps draft uses its own evidence paths, not a fabricated
-standalone `.specs/` package.
+standalone spec package.
 
 ## Converge Independent Evidence
 

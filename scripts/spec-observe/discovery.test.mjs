@@ -14,17 +14,27 @@ function fixture(t) {
   return { home, root, agentDir, repo };
 }
 
-test('default Documents discovery finds grouped and nested repositories without enrollment', async t => {
+test('default Documents discovery finds grouped repositories without walking into a repository', async t => {
   const f = fixture(t);
   const outer = f.repo(join(f.root, 'work', 'outer'));
   const inner = f.repo(join(outer, 'packages', 'inner'));
   f.repo(join(outer, 'node_modules', 'ignored'));
+  f.repo(join(outer, 'vendors', 'ignored'));
   const outside = f.repo(join(f.home, 'outside'));
   symlinkSync(outside, join(f.root, 'alias'));
   const result = await createRepositoryDiscovery({ agentDir: f.agentDir, home: f.home }).read();
   assert.equal(result.root, f.root);
-  assert.deepEqual(result.roots.sort(), [outer, inner].sort());
+  assert.deepEqual(result.roots.sort(), [outer]);
   assert.deepEqual(result.reasons, []);
+});
+
+test('discovery skips the workspace storage root under the discovery root', async t => {
+  const f = fixture(t);
+  const repo = f.repo(join(f.root, 'app'));
+  const storage = join(f.root, 'adjacent-storage');
+  f.repo(join(storage, 'projects', 'demo', 'sources', 'copied-repo'));
+  const result = await discoverRepositories(f.root, { exclude: [storage] });
+  assert.deepEqual(result.roots, [repo]);
 });
 
 test('cached discovery refreshes new nested repositories and persists an alternate root', async t => {

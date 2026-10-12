@@ -29,17 +29,18 @@ into assumed requirements. If no proposal, existing spec, or conversation analys
 
 ## Output Contract
 
-Always write the completed spec to the resolved standalone spec folder:
+Always write the completed spec to the package folder (`package_dir` in `locations.json`; see
+[Spec Location](../spec-end-to-end/references/spec-location.md)):
 
 ```txt
-.specs/<feature-slug>/spec.md
-.specs/<feature-slug>/spec-steps.json
-.specs/<feature-slug>/evidence-plan.json
-.specs/<feature-slug>/spec-prepare.md
-.specs/<feature-slug>/step-<NNN>-subspec.md
+<package_dir>/spec.md
+<package_dir>/spec-steps.json
+<package_dir>/evidence-plan.json
+<package_dir>/spec-prepare.md
+<package_dir>/step-<NNN>-subspec.md
 ```
 
-Write every artifact atomically: write the full content to a temporary file in the destination directory, then rename it over the final path. Every markdown artifact begins with a level-1 `#` heading on line 1. `.specs/` is standalone working state and may be gitignored; do not stage or commit it unless the repository explicitly tracks specs.
+Write every artifact atomically: write the full content to a temporary file in the destination directory, then rename it over the final path. Every markdown artifact begins with a level-1 `#` heading on line 1. The package lives in workspace storage, outside every checkout: never copy it into a repository or stage it.
 
 Also write optional `criteria.md` and `invariants.md` when applicable. Preserve existing
 formats: evidence-plan version 2, preparation version 3, step/card schemas, and the
@@ -49,7 +50,8 @@ This skill writes the local planning package only. It does **not** create, edit,
 
 ## Pre-Step - Load Pipeline Inputs
 
-Before writing the spec, locate the `.specs/<feature-slug>/` folder for this feature.
+Before writing the spec, run the first step of [Spec Location](../spec-end-to-end/references/spec-location.md)
+(`spec-location check` on the package) and read `locations.json`. The package is the folder of this feature.
 
 When upgrading a legacy package, the existing `spec.md` is a valid intent source even without a
 proposal. Preserve its accepted behavior while resolving context, necessity, phases and proof.
@@ -58,12 +60,16 @@ as user decisions or relabel old statuses as new evidence.
 
 Resolve the folder in this order:
 
-1. If `$ARGUMENTS` names an existing `.specs/<feature-slug>/` folder or a file inside it, use that folder.
-2. If the conversation names the folder created by `spec-architect-initial`, use it.
-3. If exactly one `.specs/*/proposal.md` matches the feature title, use it.
-4. If current architecture analysis exists but no folder does, derive a short kebab-case slug and create `.specs/<feature-slug>/`. Name new packages by the convention in [Spec epics](../../docs/spec-epics.md#naming): `<epic><NN>-<slug>` for epic members, `<NN>-<slug>` or a bare slug for standalone packages, two-digit ordinals, a letter suffix for splits. Refuse a duplicate ordinal.
+1. If `$ARGUMENTS` names a `workspace/slug` reference, a package folder, or a file inside one, use that package.
+2. If the conversation names the package created by `spec-architect-initial` (its `package_ref` or `package_dir`), use it.
+3. If a `workspace/slug` in the workspace of the current repository matches the feature title, use it.
+4. If current architecture analysis exists but no package does, stop with `blocked`: only `spec-architect-initial` creates a package (its Step 0 names the workspace, targets and slug). Never create a package folder here.
 
-Stop on ambiguous matches rather than selecting the most recently modified folder.
+Stop on ambiguous matches rather than selecting the most recently modified package.
+
+Changing the package's targets, designs, plan, or epic goes only through `spec-location scope` (see the Spec Location
+reference); never edit `scope.json` or `locations.json`. When the spec needs another repository, add it with
+`scope --add-target` and read `locations.json` again.
 
 The folder contains fixed-name artifacts:
 
@@ -74,17 +80,17 @@ The folder contains fixed-name artifacts:
 - **Visual reference** - optional. When the proposal or conversation identifies existing visual work such as an HTML prototype, image, or mockup, resolve its exact entry-file path before writing. Treat that artifact as existing design input, not work to recreate.
 - **`spec.md`** - the output of this skill. Overwrite it only after producing the complete updated spec body.
 
-When the visual reference is a screen of a design package (`<storage root>/projects/<workspace>/designs/<slug>/screens/NN-<id>.html`, see `~/.agents/docs/design-packages.md`), do not copy it. Record it by identity, absolute path and digest with `node ~/.agents/scripts/design/cli.mjs ref <design-dir> <step>`; the screen's `notes` and the `deviations` that name it in `design.json` are design decisions the spec must honor. Otherwise, when a visual reference is outside the resolved spec folder, copy the smallest self-contained reference artifact into `.specs/<feature-slug>/visual-references/` without modifying it. For an HTML prototype, preserve the entry file and any local assets it loads with their relative layout. Reuse a byte-identical destination; stop on a same-name content conflict rather than overwriting. References already inside the feature folder, including `prototype/`, stay in place.
+When the visual reference is a screen of a design package (a screen file in a directory listed in `locations.designs[].dir`, see `~/.agents/docs/design-packages.md`), do not copy it. Record it by identity, absolute path and digest with `node ~/.agents/scripts/design/cli.mjs ref <design-dir> <step>`; the screen's `notes` and the `deviations` that name it in `design.json` are design decisions the spec must honor. Otherwise, when a visual reference is outside the package, copy the smallest self-contained reference artifact into `visual-references/` in `package_dir` without modifying it. For an HTML prototype, preserve the entry file and any local assets it loads with their relative layout. Reuse a byte-identical destination; stop on a same-name content conflict rather than overwriting. References already inside the feature folder, including `prototype/`, stay in place.
 
 ### Phase specs
 
-A large proposal may be split into multiple specs, one per phase. All phase specs share the same spec folder unless the proposal explicitly creates separate folders.
+A large proposal may be split into multiple specs, one per phase. All phase specs share the same package unless the proposal explicitly creates separate packages.
 
 When writing a phase spec:
 
 - State which phase of the proposal this spec covers in the Problem Statement.
 - Reconcile only the critique recommendations that fall within this phase's scope. Recommendations belonging to other phases are not deferrals; note them as "covered by phase N" only if helpful.
-- End the spec with the footer block, keeping the phase marker on the folder line: `Spec folder: .specs/<feature-slug>/ (phase N)` followed by the `Visual design:` line (see Spec Footer).
+- End the spec with the footer block, keeping the phase marker on the folder line: `Spec folder: <package_dir> (<package_ref>, phase N)` followed by the `Visual design:` line (see Spec Footer).
 
 ## One Planning Owner And Safe Re-planning
 
@@ -97,7 +103,7 @@ ready cards and valid required inputs is not a completed output.
 
 Discard legacy `preparation.json` when re-preparing; it is no longer produced or used as readiness authority.
 For an existing unimplemented package, preserve overwritten planning files in a unique
-snapshot under canonical `.specs/.planning-backups/<feature>/` before editing,
+snapshot under `planning-backups/` in `package_dir` before editing,
 unless this run already has an intact backup. Exclude credentials and runtime artifacts.
 Use the existing spec as intent even without a proposal; retain accepted behavior while
 re-grounding and splitting compound steps. No data-format migration is required.
@@ -125,7 +131,7 @@ Reconciliation principles:
 
 - Be pragmatic, not exhaustive. A critique explores possibilities; the spec commits to decisions.
 - State your reasoning when deferring a critique recommendation.
-- Do not over-engineer to satisfy hypotheticals.
+- Do not over-engineer to satisfy hypotheticals. Carry the critique's `observed` / `design-enforced` / `hypothetical` tags into the spec; an untagged or uncited recommendation that adds a guard is `hypothetical`. See Risk Grounding below.
 - Resolve tensions using actual project context: team size, maturity, timeline, and current architecture.
 - Make the final spec read as one coherent plan, not an accumulated list of compromises.
 
@@ -175,13 +181,13 @@ When a visual reference exists, include a standalone line naming it. For a desig
 Design reference: <workspace>/<design> steps 1–3 (<absolute design directory>)
 ```
 
-For any other reference, give its direct repository-relative entry-file path:
+For any other reference, give its direct package-relative entry-file path:
 
 ```txt
-Visual reference: .specs/<feature-slug>/<prototype-or-visual-references>/<entry-file>
+Visual reference: <prototype-or-visual-references>/<entry-file>
 ```
 
-Name the file (for example, `.specs/account-settings/prototype/index.html`), not only its containing directory. State that implementation must inspect and reuse this artifact as the visual source of truth rather than recreate or redesign it. Omit the line only when no visual reference exists.
+Name the file (for example, `prototype/index.html`), not only its containing directory. State that implementation must inspect and reuse this artifact as the visual source of truth rather than recreate or redesign it. Omit the line only when no visual reference exists.
 
 Design for current requirements, not imagined future ones. For every module, abstraction, dependency, or layer the architecture introduces, stop at the first rung of the necessity ladder that holds (see `~/.agents/rules/minimal-implementation.md`): not needed at all → already in the codebase → stdlib → native platform → installed dependency → one line → only then, the minimum design that meets the acceptance criteria. Name what existing code each new module extends or reuses; introducing something new requires stating why nothing on a higher rung qualifies. Start simple: boring technology, explicit boundaries, and data flow that can be explained in under 5 minutes. Fail fast on invalid inputs; do not add defensive fallbacks unless explicitly required.
 
@@ -196,6 +202,14 @@ In Architecture, carry each material domain rule with its source, concrete examp
 enforcement owner, and AC/CL references. Preserve justified error/fallback behavior; do not apply
 fail-fast as a blanket replacement for a sourced contract. Use existing acceptance and evidence
 identifiers, not a parallel invariant schema.
+
+### Risk Grounding
+
+Every risk, invariant, or guard (lock, lease, recovery mode, incident record, evidence gate, extra test) in the proposal, critique, or this spec has exactly one tag. A generated proposal or critique cannot authorize itself, so an untagged item, or an `observed` item without a citation, is `hypothetical`.
+
+- `observed` — cites an incident, bug report, failing run, record/log path, commit, or sourced requirement. Only these become `invariants.md` entries, `criteria.md` guardrails, `FH-*` hypotheses, and `EV-*` gates.
+- `design-enforced` — cite the mechanism (spec step, or existing file/symbol) that prevents it. It gets no invariant and no gate of its own. Add a gate only when the mechanism is new code this spec builds, and then the gate tests that mechanism.
+- `hypothetical` — goes in the spec's **Accepted risks** list (see §7) as one line, with no invariant, criterion, gate, test, lock, or recovery path unless the operator explicitly promotes it. Remove proposal or critique content that builds a guard only for a hypothetical risk and note the removal in Notes.
 
 ### 5. Acceptance Criteria
 
@@ -214,14 +228,14 @@ Then define stable, numbered:
 
 - `CL-*` falsifiable claims mapping every applicable acceptance criterion and sourced material
   architecture/deployment obligation, each with `phase: merge | deploy | post-deploy`.
-- `FH-*` credible ways each claim could be false while superficial checks pass.
+- `FH-*` credible ways each claim could be false while superficial checks pass. Per Risk Grounding, a hypothesis is `observed` or names how a `design-enforced` mechanism built by this spec could fail; never `hypothetical`.
 - `EV-*` executable commands or deterministic inspections capable of rejecting those failures.
 
 For every EV item name:
 
 - The gate form: focused test, production-composition integration test, browser journey, accessibility scan, screenshot set, schema validation, migration dry-run, security check, benchmark, deploy rehearsal, rollback demonstration, or another risk-matched form. For a changed visual surface, the inspected screenshot set is the default gate; plan a browser journey or interaction assertion only for a credible failure a capture cannot reject.
 - The claims and failure hypotheses it covers, plus which unsafe implementation it can reject.
-- Where the artifact lands: committed test code in the repository, or a non-committed artifact under `.specs/<feature-slug>/evidence/`.
+- Where the artifact lands: committed test code in the repository, or a non-committed artifact under `evidence/` in the package (written as the package-relative `evidence/<file>`). Name a file in a target repository as `<repo id>:<path>`.
 - The exact command/procedure, actual target/environment, effects including setup/teardown,
   authority source, independence, phase, and whether it is required in that phase.
 - In existing plan prose, the test layer, distinct failure it detects, execution stage
@@ -244,7 +258,9 @@ implementation behavior as approved business intent. Do not add per-test schema 
 
 ### 7. Pre-mortem
 
-Assume this change failed in its intended environment under the resolved project context. Create a numbered list (`PM-1`, `PM-2`, …) of the most plausible causes, each with its concrete failure mechanism. Disposition every item on a `Disposition:` line: covered by an acceptance criterion (`AC-n`), handled by a named implementation step, proven absent by an evidence item (`EV-n`), or explicitly accepted as a risk with rationale. A credible concern with no disposition is a spec defect. Do not pad the list with far-fetched scenarios to look thorough — a short list of real risks, each dispositioned, beats a long performative one.
+Assume this change failed in its intended environment under the resolved project context. Create a numbered list (`PM-1`, `PM-2`, …) of the most plausible causes, each with its concrete failure mechanism. Disposition every item on a `Disposition:` line: covered by an acceptance criterion (`AC-n`), handled by a named implementation step, proven absent by an evidence item (`EV-n`), or explicitly accepted as a risk with rationale. A `hypothetical` concern is not a `PM-*` item; list it under **Accepted risks** below with no AC, step, or EV item. A credible concern with no disposition is a spec defect. Do not pad the list with far-fetched scenarios to look thorough — a short list of real risks, each dispositioned, beats a long performative one.
+
+**Accepted risks.** After the pre-mortem list, add an `Accepted risks` list in `spec.md`: one line per `hypothetical` risk (the risk and why no guard is built; use `None.` when empty). They are not claims, hypotheses, or gates and do not appear in `evidence-plan.json`.
 
 ### 8. Notes
 
@@ -299,7 +315,7 @@ For each step include:
 5. Coverage: which acceptance criteria this step satisfies, as a tag line (`Covers: AC-3, AC-7`). Every criterion must be covered by at least one step; a step covering no criterion must trace to a stated architectural need instead.
 6. Complexity: how hard *this step* is, as a tag line (`Complexity: easy`). One of `easy`, `medium`, `hard` — see the rubric below. The system uses per-step tags to route each step to an appropriately strong implementation model, so score every step, not just the spec.
 7. Visual design: whether *this step* implements user-facing visual design, as a tag line (`Visual: yes` or `Visual: no`). See the Visual design rubric in Implementation Profile. The system routes `Visual: yes` steps to design-capable handling and visual verification, so flag every step, not just the spec.
-8. Visual reference: when a visual reference exists and the step is `Visual: yes`, repeat the exact reference line in that step and require parity with it. For a design package the line is the one screen this step implements, as printed by `node ~/.agents/scripts/design/cli.mjs ref <design-dir> <step>`: `Design reference: <workspace>/<design> step N → <absolute screen path> sha256:<digest>`. The digest binds the step to the screen as prepared; an implementer that finds a different digest reports a departure for re-preparation and never builds to the newer file silently. For any other reference repeat `Visual reference: <repository-relative file path>`. Do not tell the implementer to create a replacement prototype or derive a new visual direction.
+8. Visual reference: when a visual reference exists and the step is `Visual: yes`, repeat the exact reference line in that step and require parity with it. For a design package the line is the one screen this step implements, as printed by `node ~/.agents/scripts/design/cli.mjs ref <design-dir> <step>`: `Design reference: <workspace>/<design> step N → <absolute screen path> sha256:<digest>`. The digest binds the step to the screen as prepared; an implementer that finds a different digest reports a departure for re-preparation and never builds to the newer file silently. For any other reference repeat `Visual reference: <package-relative file path>`. Do not tell the implementer to create a replacement prototype or derive a new visual direction.
 9. Evidence: when this step owns one or more Executable Evidence Plan gates, an `Evidence:` tag line (`Evidence: EV-2` or `Evidence: EV-2, EV-5`). Producing merge evidence is part of the step's work. For later gates it owns the procedure and
 handoff, not premature execution; record the runtime result as pending until authorized and run. Steps owning no evidence omit the line.
 
@@ -374,10 +390,10 @@ The per-step flag is binary — emit exactly one per step. The footer's spec-wid
 
 ## Spec Footer
 
-End `spec.md` with a metadata footer block so downstream skills can locate the folder and route the work. The first line is the repository-relative canonical folder; the second is the spec-wide Visual design roll-up (`yes-visual-design` if any step is `Visual: yes`, else `no-visual-design`). Per-step complexity and per-step visual flags are not in the footer — they live on each step (see §9):
+End `spec.md` with a metadata footer block so downstream skills can locate the folder and route the work. The first line is the package folder and its reference (`package_dir` and `package_ref` from `locations.json`); the second is the spec-wide Visual design roll-up (`yes-visual-design` if any step is `Visual: yes`, else `no-visual-design`). Per-step complexity and per-step visual flags are not in the footer — they live on each step (see §9):
 
 ```txt
-Spec folder: .specs/<feature-slug>/
+Spec folder: <package_dir> (<package_ref>)
 Visual design: no-visual-design
 ```
 
@@ -386,7 +402,7 @@ Visual design: no-visual-design
 For phase specs, keep the phase marker on the folder line:
 
 ```txt
-Spec folder: .specs/<feature-slug>/ (phase 2)
+Spec folder: <package_dir> (<package_ref>, phase 2)
 Visual design: yes-visual-design
 ```
 
@@ -395,7 +411,7 @@ Visual design: yes-visual-design
 Alongside `spec.md`, write a machine-readable index of the implementation steps to:
 
 ```txt
-.specs/<feature-slug>/spec-steps.json
+<package_dir>/spec-steps.json
 ```
 
 Keep the step index beside `spec.md`. This flat, filename-based layout is the complete standalone handoff contract.
@@ -406,10 +422,11 @@ The index is a JSON object with a `steps` array — one entry per Implementation
 
 ```json
 {
-  "spec": ".specs/<feature-slug>/spec.md",
+  "spec": "spec.md",
   "steps": [
     {
       "step": 1,
+      "repository": "warbler_ux",
       "name": "Define the FooConfig type",
       "description": "Add the FooConfig interface and its defaults to src/config.ts.",
       "difficulty": "easy",
@@ -422,7 +439,8 @@ The index is a JSON object with a `steps` array — one entry per Implementation
 
 Field contract:
 
-- `spec` — the repository-relative path to `spec.md`, matching the `Spec folder:` footer.
+- `spec` — the package-relative path to `spec.md` (`spec.md`).
+- `repository` — the `locations.targets[].id` whose worktree the step changes. Required on every step when the package has more than one target; omit it for a single-target package.
 - `step` — the step's number in `spec.md` (integer, 1-based, matching the Implementation Steps list). Downstream skills and the external task-runner address steps by this number.
 - `name` — a terse imperative title for the step (verb + object), roughly eight words or fewer. Not the full "What to do" prose.
 - `description` — one front-loaded, plain-language sentence summarizing what the step does.
@@ -435,7 +453,11 @@ Write `spec-steps.json` only after the spec body is final, so the index matches 
 
 ## Machine-Readable Evidence Plan
 
-Write `.specs/<feature-slug>/evidence-plan.json` as version 2 JSON using the schema and invariants in the shared executable-evidence contract. `spec.md` remains canonical prose; this file is its claim/gate index. Use the same identifiers, owner steps, commands, artifacts, and posture values in both. Write it after the other outputs, then run `node ~/.agents/skills/spec-work-tour/scripts/validate-evidence-plan.mjs <path>`; a validation failure blocks handoff.
+Write `evidence-plan.json` in `package_dir` as version 2 JSON using the schema and invariants in the shared executable-evidence contract. `spec.md` remains canonical prose; this file is its claim/gate index. Use the same identifiers, owner steps, commands, artifacts, and posture values in both. Write it after the other outputs, then run `node ~/.agents/skills/spec-work-tour/scripts/validate-evidence-plan.mjs <path>`; a validation failure blocks handoff.
+
+## Stamp Locations
+
+After writing or rewriting `context.md` or `spec.md`, run `node ~/.agents/scripts/spec-location/cli.mjs stamp <package ref>` so each file carries the generated Locations block. Never hand-edit the block between the `spec-location:begin` and `spec-location:end` markers; edit the rest of the document. Step subspecs are stamped in the preparation step.
 
 ## Complete Both Planning Phases
 
@@ -443,7 +465,7 @@ After drafting `spec.md`, `spec-steps.json`, and version 2 `evidence-plan.json`,
 execute [Ground Execution Cards And Publish The Package](references/prepare-package.md)
 in full in this same invocation. Reuse known facts and refine step boundaries as the
 cards expose complexity. Declare readiness only after every card is ready
-and the required inputs and complete package validate. Return `outcome: prepared`, canonical artifact paths,
+and the required inputs and complete package validate. Return `outcome: prepared`, `package_ref`, `package_dir`, artifact paths,
 step counts, material decisions, validation results, and `next: spec-run`.
 
 Never stop at `outcome: written` or hand off to a separate preparation skill. If a

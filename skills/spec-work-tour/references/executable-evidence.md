@@ -396,8 +396,9 @@ Use existing artifacts for this provenance; add no handoff report or verificatio
 ## Required Artifacts
 
 ```text
-.specs/project-context.md               # shared project context in the primary repository
-.specs/<feature>/
+<project_context>                       # one per workspace (locations.project_context)
+<package_dir>/                          # locations.package_dir
+├── scope.json / locations.json         # written only by spec-location
 ├── context.md                          # relevant sourced snapshot and decisions
 ├── proposal.md
 ├── critique.md                         # only when warranted
@@ -428,8 +429,8 @@ authorize publication: preparation, execution and PR stages must check their req
 ```json
 {
   "version": 2,
-  "spec": ".specs/feature/spec.md",
-  "context": {"path": ".specs/feature/context.md"},
+  "spec": "spec.md",
+  "context": {"path": "context.md"},
   "posture": {
     "risk": "medium",
     "rationale": "Changes saved state in an isolated test of the existing runtime.",
@@ -457,7 +458,7 @@ authorize publication: preparation, execution and PR stages must check their req
     "kind": "integration-test", "description": "Reject an unwired save route.",
     "claims": ["CL-1"], "rejects": ["FH-1"], "ownerStep": 1,
     "command": "bun test app/test/integration/feature.test.js",
-    "artifact": ".specs/feature/evidence/save-result.txt",
+    "artifact": "evidence/save-result.txt",
     "environment": "local test database with disposable fixtures",
     "effects": "Creates and removes isolated test records; no external calls.",
     "authorization": "isolated local execution",
@@ -471,6 +472,7 @@ same-phase gate; every failure has a rejecting gate. Links are reciprocal. Every
 step. For a later-phase gate, that step owns the procedure, handoff, and any safe isolated pre-deploy
 proof in its existing scope. It gains no authority for live operations. A gate can cover several claims; no one-test-per-identifier rule applies. Gate artifacts
 contain actual observations when run, not only the test source. Keep unexecuted later operations `pending`; phase names route verdicts, not permission.
+A gate `artifact` is package-relative (`evidence/save-result.txt`), `<repo id>:<path>` for a file in a target's worktree, or absolute; the `spec` and `context.path` fields are package-relative.
 
 ### Reused gate observations
 

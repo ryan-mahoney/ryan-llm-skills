@@ -1,13 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { decideFinalCheckpoint, completeWorkflowsAfterPublication } from './final-checkpoint.mjs';
 import { recordCheckpoint as recordSentinelCheckpoint, readCheckpointRecord } from './sentinel.mjs';
 import { recordCheckpoint } from './completion.mjs';
+import { makePackageFixture } from './package-fixture.mjs';
 import { collectWorkspace } from '../../../scripts/spec-observe/sentinel.mjs';
 
 const owner = (state, id = 'run-1') => ({ id, kind: 'owner', state });
@@ -42,40 +41,35 @@ test('final checkpoint decision: a human hold or unresolved direction is not clo
   assert.equal(decideFinalCheckpoint(checkpoint({ inbox }), receipts).reason, 'inbox-unresolved: hold-1');
 });
 
-function fixture(t) {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'final-checkpoint-')));
-  t.after(() => rmSync(base, { recursive: true, force: true }));
-  const repo = join(base, 'repo');
-  mkdirSync(repo, { recursive: true });
-  const git = (...args) => execFileSync('git', ['-C', repo, ...args], { stdio: 'pipe' });
-  git('init', '-q'); git('config', 'user.name', 'Final Checkpoint'); git('config', 'user.email', 'final@example.invalid');
-  writeFileSync(join(repo, 'README'), 'fixture\n'); git('add', 'README'); git('commit', '-qm', 'Initial fixture');
-  const pkg = join(repo, '.specs', 'feature');
+async function fixture(t) {
+  const base = await makePackageFixture({ prefix: 'final-checkpoint-' });
+  t.after(() => rmSync(base.dir, { recursive: true, force: true }));
+  const pkg = base.packagePath;
   mkdirSync(join(pkg, 'runtime', 'runs'), { recursive: true });
   writeFileSync(join(pkg, 'spec.md'), '# spec\n');
   writeFileSync(join(pkg, 'runtime', 'progress.json'), JSON.stringify({ runs: [] }));
-  return { base, repo, pkg };
+  return { base: base.dir, repo: base.repo, root: base.root, pkg, ref: base.ref, location: base.location };
 }
 
 const session = 'session-1';
 const register = (pkg, workers, inbox = { items: [] }) => recordSentinelCheckpoint({ package: pkg, workflow_id: 'wf-1', expected_revision: 0, state: 'ready',
   obligation: { key: 'implement:step-1', stage: 'implementation', summary: 'working', artifacts: [] }, workers, inbox,
   reconciles_input_revision: 3, coordinator_session: session, checkout: null });
-const finish = (pkg, known = [{ package: pkg, workflow_id: 'wf-1' }]) => completeWorkflowsAfterPublication({ package: pkg, known,
-  coordinator_session: session, input_revision: 3 });
+const finish = (pkg, known = [{ package: pkg, workflow_id: 'wf-1' }], location, input = pkg) => completeWorkflowsAfterPublication({ package: input, known,
+  coordinator_session: session, input_revision: 3, location });
 
 test('publication complete closes the workflow so the observer reports the package as recently completed', async t => {
-  const { base, repo, pkg } = fixture(t);
+  const { base, repo, root, pkg, ref, location } = await fixture(t);
   register(pkg, [owner('working')]);
   writeFileSync(join(pkg, 'runtime', 'runs', 'run-1.json'), JSON.stringify({ id: 'run-1', package: pkg, state: 'completed',
     started_at: new Date(Date.now() - 60000).toISOString() }));
-  writeFileSync(join(pkg, 'pr-url.json'), JSON.stringify({ kind: 'pr_submission', package: pkg, url: 'https://github.com/o/r/pull/9' }));
-  const input = { roots: [repo], indexDir: join(base, 'index'), now: () => Date.now() };
+  writeFileSync(join(pkg, 'pr-url.json'), JSON.stringify({ package_ref: ref, targets: { repo: { url: 'https://github.com/o/r/pull/9', number: 9 } } }));
+  const input = { packages: [pkg], storageRoot: root, indexDir: join(base, 'index'), now: () => Date.now() };
   assert.equal((await collectWorkspace(input)).recently_completed.length, 0, 'ready checkpoint is still current work');
 
   const stage = recordCheckpoint(pkg, { stage: 'spec-pr', status: 'complete', next: 'Done', decisions: [], artifacts: ['spec.md'] });
   assert.equal(stage.stage, 'publication');
-  const [outcome] = finish(pkg);
+  const [outcome] = await finish(pkg, undefined, location);
   assert.deepEqual(outcome, { workflow_id: 'wf-1', outcome: 'complete', revision: 2 });
 
   const stored = readCheckpointRecord(pkg, 'wf-1');
@@ -87,17 +81,34 @@ test('publication complete closes the workflow so the observer reports the packa
   assert.equal(snapshot.runs.some(run => run.package === pkg), false);
 });
 
-test('publication complete leaves a package with a running worker for the coordinator to finish', t => {
-  const { pkg } = fixture(t);
+test('publication complete leaves a package with a running worker for the coordinator to finish', async t => {
+  const { pkg, location } = await fixture(t);
   register(pkg, [owner('working')]);
   writeFileSync(join(pkg, 'runtime', 'runs', 'run-1.json'), JSON.stringify({ id: 'run-1', package: pkg, state: 'running' }));
-  assert.deepEqual(finish(pkg), [{ workflow_id: 'wf-1', outcome: 'skipped', reason: 'worker-active: run-1' }]);
+  assert.deepEqual(await finish(pkg, undefined, location), [{ workflow_id: 'wf-1', outcome: 'skipped', reason: 'worker-active: run-1' }]);
   assert.equal(readCheckpointRecord(pkg, 'wf-1').state, 'ready');
 });
 
-test('publication complete finds this coordinator\'s workflows on disk when none are registered in memory', t => {
-  const { pkg } = fixture(t);
+test('publication complete finds this coordinator\'s workflows on disk when none are registered in memory', async t => {
+  const { pkg, ref, location } = await fixture(t);
   register(pkg, []);
-  assert.equal(finish(pkg, [])[0].outcome, 'complete');
-  assert.deepEqual(completeWorkflowsAfterPublication({ package: pkg, known: [], coordinator_session: 'other', input_revision: 3 }), []);
+  // The package may be named by its workspace/slug ref; the workflow is found in the located folder.
+  assert.equal((await finish(pkg, [], location, ref))[0].outcome, 'complete');
+  assert.deepEqual(await completeWorkflowsAfterPublication({ package: pkg, known: [], coordinator_session: 'other', input_revision: 3, location }), []);
+});
+
+test('with two targets, publication complete waits until both targets have a pull request URL', async t => {
+  const base = await makePackageFixture({ prefix: 'final-checkpoint-', repos: ['repo', 'second'], targets: ['repo', 'second'] });
+  t.after(() => rmSync(base.dir, { recursive: true, force: true }));
+  const pkg = base.packagePath;
+  mkdirSync(join(pkg, 'runtime', 'runs'), { recursive: true });
+  register(pkg, []);
+  const pr = targets => writeFileSync(join(pkg, 'pr-url.json'), JSON.stringify({ package_ref: base.ref, targets }));
+  pr({ repo: { url: 'https://github.com/o/r/pull/9' } });
+  assert.deepEqual(await finish(pkg, undefined, base.location), [{ workflow_id: 'wf-1', outcome: 'skipped', reason: 'pr-missing: second' }]);
+  assert.equal(readCheckpointRecord(pkg, 'wf-1').state, 'ready');
+  pr({ repo: { url: 'https://github.com/o/r/pull/9' }, second: { url: 'https://github.com/o/s/pull/4' } });
+  const [outcome] = await finish(pkg, undefined, base.location);
+  assert.equal(outcome.outcome, 'complete');
+  assert.equal(readCheckpointRecord(pkg, 'wf-1').obligation.summary, 'Publication complete');
 });

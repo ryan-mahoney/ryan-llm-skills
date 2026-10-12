@@ -18,11 +18,9 @@ test('installed Pi loads completion/checkpoint tools and restores obligation hoo
     for (const [key, value] of Object.entries(previous)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
     rmSync(root, { recursive: true, force: true });
   });
-  const file = join(root, 'run.json');
   mkdirSync(join(root, 'runtime/runs'), { recursive: true });
-  const lock = join(root, 'lease'); mkdirSync(lock);
-  writeFileSync(join(lock, 'lease.json'), JSON.stringify({ id: 'fixture', token: 'fixture-token' }));
-  writeFileSync(file, JSON.stringify({ lock, token: 'fixture-token', owner_model: 'fixture/owner', editor_model: 'fixture/editor', id: 'fixture', completion_contract: 1, package: root, step: join(root, 'step-001-subspec.md'), state: 'running', checkout: root }));
+  const file = join(root, 'runtime/runs/fixture.json');
+  writeFileSync(file, JSON.stringify({ owner_model: 'fixture/owner', editor_model: 'fixture/editor', id: 'fixture', completion_contract: 1, package: root, step: join(root, 'step-001-subspec.md'), state: 'running', checkout: root }));
   for (const role of ['owner', 'editor', undefined]) {
     if (role) process.env.SPEC_RUNTIME_ROLE = role; else delete process.env.SPEC_RUNTIME_ROLE;
     process.env.SPEC_RUNTIME_RECORD = file;
@@ -44,7 +42,7 @@ test('installed Pi loads completion/checkpoint tools and restores obligation hoo
       assert.equal(persisted.filter(entry => entry.customType === 'spec-progress-input').length, 1);
     }
     if (role) {
-      // Exercise the actual worker guard with a valid lease and matching model.
+      // Exercise the actual worker guard with a running run record and matching model.
       await ext.handlers.get('session_start')[0]({}, { model: { provider: 'fixture', id: role } });
       const reply = await ext.handlers.get('context')[0]({ messages: [] }, {});
       assert.match(reply.messages[0].content, new RegExp(`role=${role}`));
@@ -56,10 +54,8 @@ test('real worker startup exits before provider work when Pi selects a different
   const root = mkdtempSync(join(tmpdir(), 'selector-sdk-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   mkdirSync(join(root, 'runtime/runs'), { recursive: true });
-  const lock = join(root, 'lease'); mkdirSync(lock);
-  writeFileSync(join(lock, 'lease.json'), JSON.stringify({ id: 'fixture', token: 'fixture-token' }));
-  const recordFile = join(root, 'run.json');
-  writeFileSync(recordFile, JSON.stringify({ id: 'fixture', token: 'fixture-token', lock, package: root,
+  const recordFile = join(root, 'runtime/runs/fixture.json');
+  writeFileSync(recordFile, JSON.stringify({ id: 'fixture', package: root,
     step: join(root, 'step-001-subspec.md'), checkout: root, state: 'running', completion_contract: 1,
     editor_model: 'fixture/team/requested-model:high' }));
   const script = join(root, 'mismatch.mjs');

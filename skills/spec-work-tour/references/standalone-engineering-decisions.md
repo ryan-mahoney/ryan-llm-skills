@@ -158,7 +158,7 @@ Narrowing accepted scope requires a sourced decision and re-preparation, not an 
 Local follow-ups are sufficient when external issue creation is not authorized. Do not create
 or comment on issues as a side effect of this contract. Preserve full briefs in internal records.
 In the tour, explain the consequential limitation and next action directly. Include them in the
-PR only when needed to assess the change; do not copy the entire brief or cite `.specs/` paths.
+PR only when needed to assess the change; do not copy the entire brief or cite workspace storage paths.
 Never claim a local brief is already tracked in an external system.
 
 ## Preparation: Put Proof At The Owning Boundary

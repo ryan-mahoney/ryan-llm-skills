@@ -28,10 +28,11 @@ found,” or “the evidence pipeline proves.” State the behavior, reason, or 
 directly. Internal handoffs and machine manifests may retain workflow provenance.
 
 Before referencing a file in human-facing material, confirm it is committed in the
-relevant revision and accessible to the reader. Do not cite `.specs/`, ignored or
-uncommitted files, temporary reports, or paths outside the repository. A local file's
-existence does not make it a shared source. Use a committed document, an accessible
-issue/PR/artifact link, or explain the needed fact inline. Do not commit internal
+relevant revision and accessible to the reader. Do not cite workspace storage paths
+(spec packages, `.specs/`), ignored or uncommitted files, temporary reports, or paths
+outside the repository. A local file's existence does not make it a shared source.
+Use a committed document, an accessible issue/PR/artifact link, or explain the needed
+fact inline. Do not commit internal
 workflow files just to create a citation. A portable tour must include its supporting
 material or link to shared sources; it must not depend on the author's filesystem.
 
@@ -55,7 +56,7 @@ the change. Do not fill sections merely because the workflow produced artifacts.
 Keep claim/gate IDs, full SHA inventories, audit iterations, and routine passing
 checks in their evidence records. Include a result when it answers a likely review
 question. Link supporting material only where the reader can access it; an ignored
-local `.specs/` path is not a shared reference. If important context is unavailable
+workspace storage path is not a shared reference. If important context is unavailable
 elsewhere, explain that context briefly in the body.
 
 For example, given a fix that retains the existing populated-bucket scoring rule:

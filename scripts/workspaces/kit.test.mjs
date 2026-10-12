@@ -97,7 +97,7 @@ test("parser subset: preserves unknown transitops-shaped mappings and lists", ()
     "    labels:",
     "      - web",
     "      - api",
-    "design_system:",
+    "tooling:",
     "  layout:",
     "    columns: 12",
     "    breakpoints:",
@@ -123,14 +123,14 @@ test("parser subset: preserves unknown transitops-shaped mappings and lists", ()
   assert.deepEqual(result.kit.context, ["docs", "design"]);
   const document = result.raw.root.value;
   assert.deepEqual(document.repositories[0].labels, ["web", "api"]);
-  assert.equal(document.design_system.layout.columns, 12);
-  assert.deepEqual(document.design_system.layout.breakpoints, ["sm", "md"]);
-  assert.equal(document.design_system.tokens.radius, 4);
+  assert.equal(document.tooling.layout.columns, 12);
+  assert.deepEqual(document.tooling.layout.breakpoints, ["sm", "md"]);
+  assert.equal(document.tooling.tokens.radius, 4);
 
   const spans = result.raw.spans;
-  const radius = spans["design_system.tokens.radius"];
+  const radius = spans["tooling.tokens.radius"];
   assert.equal(text.slice(radius.start, radius.end), "4");
-  const breakpoint = spans["design_system.layout.breakpoints[1]"];
+  const breakpoint = spans["tooling.layout.breakpoints[1]"];
   assert.equal(text.slice(breakpoint.start, breakpoint.end), "md");
   const entry = spans["repositories[0]"].entry;
   assert.equal(text.slice(entry.start, entry.start + 1), "-");
@@ -607,7 +607,7 @@ test("kit edit planner: replaces an existing role and keeps every other byte", (
     "      nested: value",
     "  - id: b",
     "    path: /srv/b",
-    "design_system:",
+    "tooling:",
     "  tokens:",
     "    radius: 4",
     "",
@@ -629,7 +629,7 @@ test("kit edit planner: replaces an existing role and keeps every other byte", (
       "      nested: value",
       "  - id: b",
       "    path: /srv/b",
-      "design_system:",
+      "tooling:",
       "  tokens:",
       "    radius: 4",
       "",
@@ -735,7 +735,7 @@ test("kit edit planner: appends a repository after the final occupied item", () 
     "repositories:",
     "  - id: a",
     "    path: /srv/a # keep",
-    "design_system:",
+    "tooling:",
     "  tokens:",
     "    radius: 4",
     "",
@@ -758,7 +758,7 @@ test("kit edit planner: appends a repository after the final occupied item", () 
       '    path: "/srv/b"',
       '    remote: "git@example.com:b.git"',
       '    role: "worker"',
-      "design_system:",
+      "tooling:",
       "  tokens:",
       "    radius: 4",
       "",
@@ -967,4 +967,106 @@ test("kit edit planner: formatScalar quotes strings and refuses unsafe character
   assert.throws(() => formatScalar("\udc00"), /lone surrogate U\+DC00/);
   assert.throws(() => formatScalar("\u2028"), /line separator U\+2028/);
   assert.throws(() => formatScalar("\u2029"), /line separator U\+2029/);
+});
+
+const OPS_KIT = [
+  "version: 1",
+  "id: ops",
+  "name: Ops",
+  "repositories:",
+  "  - id: a",
+  "    path: /Users/me/a",
+  "    remote: git@x:a.git",
+  "    role: app",
+  "  - id: b",
+  "    path: /Users/me/b",
+  "design_system:",
+  "  repository: a",
+  "  applies_to: all",
+  "  paths:",
+  "    - ds/README.md",
+  "context:",
+  "  - one.md",
+  "  - two.md",
+  "",
+].join("\n");
+
+test("kit edit planner: each operation changes only its lines and previews them", () => {
+  const cases = [
+    ["remove-repository", { kind: "remove-repository", repository_id: "b" }, ["  - id: b", "    path: /Users/me/b"], []],
+    ["set-path", { kind: "set-path", repository_id: "b", path: "~/b" }, ["    path: /Users/me/b"], ['    path: "~/b"']],
+    ["set-remote adds", { kind: "set-remote", repository_id: "b", remote: "git@x:b.git" }, ["    path: /Users/me/b"], ["    path: /Users/me/b", '    remote: "git@x:b.git"']],
+    ["set-remote replaces", { kind: "set-remote", repository_id: "a", remote: "git@x:c.git" }, ["    remote: git@x:a.git"], ['    remote: "git@x:c.git"']],
+    ["clear-role", { kind: "clear-role", repository_id: "a" }, ["    role: app"], []],
+    ["set-name", { kind: "set-name", name: "Operations" }, ["name: Ops"], ['name: "Operations"']],
+    ["set-execution-host", { kind: "set-execution-host", host: "restory-box" }, ["  - two.md"], ["  - two.md", 'execution_host: "restory-box"']],
+    ["add-context", { kind: "add-context", entry: "three.md" }, ["  - two.md"], ["  - two.md", '  - "three.md"']],
+    ["remove-context", { kind: "remove-context", entry: "one.md" }, ["  - one.md"], []],
+    [
+      "set-design-system",
+      { kind: "set-design-system", repository_id: "b", paths: ["x.css", "y.css"] },
+      ["  repository: a", "  applies_to: all", "  paths:", "    - ds/README.md"],
+      ['  repository: "b"', "  paths:", '    - "x.css"', '    - "y.css"'],
+    ],
+    [
+      "rewrite-paths",
+      { kind: "rewrite-paths", from: "/Users/me", to: "~" },
+      ["    path: /Users/me/a", "    remote: git@x:a.git", "    role: app", "  - id: b", "    path: /Users/me/b"],
+      ['    path: "~/a"', "    remote: git@x:a.git", "    role: app", "  - id: b", '    path: "~/b"'],
+    ],
+  ];
+  const lines = OPS_KIT.match(/[^\n]*\n/g);
+  for (const [label, operation, removed, added] of cases) {
+    const plan = planKitEdit(OPS_KIT, operation);
+    assert.deepEqual(plan.hunk.before_lines.map((line) => line.trimEnd()), removed, label);
+    assert.deepEqual(plan.hunk.after_lines.map((line) => line.trimEnd()), added, label);
+    const patched = [...lines];
+    patched.splice(plan.hunk.start_line - 1, plan.hunk.before_lines.length, ...plan.hunk.after_lines);
+    assert.equal(patched.join(""), plan.after, `${label}: hunk reproduces after`);
+  }
+  assert.equal(planKitEdit(OPS_KIT, { kind: "set-execution-host", host: "h" }).expected.execution_host, "h");
+});
+
+test("kit edit planner: removing a repository also drops a design system that names it", () => {
+  const plan = planKitEdit(OPS_KIT, { kind: "remove-repository", repository_id: "a" });
+  assert.equal(plan.expected.design_system, undefined);
+  assert.equal(plan.after.includes("design_system"), false);
+  const single = "version: 1\nid: s\nname: S\nrepositories:\n  - id: r\n    path: /p\ncontext:\n  - c\n";
+  assert.equal(
+    planKitEdit(single, { kind: "remove-repository", repository_id: "r" }).after,
+    "version: 1\nid: s\nname: S\nrepositories: []\ncontext:\n  - c\n",
+  );
+  assert.equal(
+    planKitEdit(single, { kind: "remove-context", entry: "c" }).after,
+    "version: 1\nid: s\nname: S\nrepositories:\n  - id: r\n    path: /p\ncontext: []\n",
+  );
+});
+
+test("kit edit planner: refuses edits that match nothing or break the schema", () => {
+  assert.throws(() => planKitEdit(OPS_KIT, { kind: "rewrite-paths", from: "/elsewhere", to: "~" }), /no repository path starts with/);
+  assert.throws(() => planKitEdit(OPS_KIT, { kind: "remove-context", entry: "absent.md" }), /does not contain/);
+  assert.throws(() => planKitEdit(OPS_KIT, { kind: "add-context", entry: "one.md" }), /already contains/);
+  assert.throws(() => planKitEdit(OPS_KIT, { kind: "clear-role", repository_id: "b" }), /has no role/);
+  assert.throws(() => planKitEdit(OPS_KIT, { kind: "set-design-system", repository_id: "zz", paths: ["p"] }), /no repository with id "zz"/);
+  assert.throws(() => planKitEdit(OPS_KIT, { kind: "set-design-system", repository_id: "a", paths: ["/abs"] }), /relative path/);
+});
+
+test("kit schema: design_system and execution_host validate and normalize", () => {
+  const parsed = parseKit(OPS_KIT + 'execution_host: restory-box\n');
+  assert.equal(parsed.ok, true, parsed.errors.join("; "));
+  assert.deepEqual(parsed.kit.design_system, { repository: "a", paths: ["ds/README.md"], applies_to: "all" });
+  assert.equal(parsed.kit.execution_host, "restory-box");
+  assert.match(
+    parseKit(OPS_KIT.replace("repository: a\n", "repository: nope\n")).errors.join(),
+    /design_system\.repository: unknown repository id "nope"/,
+  );
+  assert.match(parseKit(OPS_KIT.replace("    - ds/README.md\n", "")).errors.join(), /design_system\.paths/);
+});
+
+test("kit edits: design-system paths cannot climb out of the repository and the host is stored as its first label", () => {
+  assert.match(parseKit(OPS_KIT.replace("ds/README.md", "../ds/README.md")).errors.join(), /design_system\.paths\[0\]/);
+  assert.throws(() => planKitEdit(OPS_KIT, { kind: "set-design-system", repository_id: "a", paths: ["ds/../../x"] }), /no "\.\." segment/);
+  assert.throws(() => planKitEdit(OPS_KIT, { kind: "set-design-system", repository_id: "a", paths: ["/abs/x"] }), /relative/);
+  assert.equal(planKitEdit(OPS_KIT, { kind: "set-execution-host", host: "Box.local" }).expected.execution_host, "box");
+  assert.throws(() => planKitEdit(OPS_KIT, { kind: "set-execution-host", host: ".local" }), /DNS label/);
 });

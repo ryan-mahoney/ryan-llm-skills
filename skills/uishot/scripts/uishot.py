@@ -339,6 +339,48 @@ async ({ quietMs, budgetMs, imageBudgetMs, minWaitMs }) => {
 
 
 # ---------------------------------------------------------------------------
+# Capture root: the workspace storage folder for spec captures
+# ---------------------------------------------------------------------------
+def spec_capture_root():
+    """<captures_dir>/<repository id>/images for the checkout in the working directory.
+
+    spec-location owns the mapping; a refusal prints its message and remedy and exits non-zero.
+    """
+    candidates = [Path(__file__).resolve().parents[3], Path.home() / ".agents"]
+    cli = next(
+        (c / "scripts" / "spec-location" / "cli.mjs" for c in candidates
+         if (c / "scripts" / "spec-location" / "cli.mjs").is_file()),
+        None,
+    )
+    if cli is None:
+        fail(
+            "capture-root-unavailable",
+            EXIT_USAGE,
+            detail="scripts/spec-location/cli.mjs not found next to this skill or in ~/.agents",
+            next_action="pass --out-dir DIR for an ad-hoc capture",
+        )
+    try:
+        proc = subprocess.run(
+            ["node", str(cli), "resolve", "--cwd", str(Path.cwd())],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        fail("capture-root-unavailable", EXIT_USAGE, detail=str(exc), next_action="check that node is installed")
+    try:
+        result = json.loads(proc.stdout)
+    except ValueError:
+        result = {}
+    if proc.returncode != 0 or result.get("ok") is not True:
+        fail(
+            "capture-root-refused",
+            EXIT_USAGE,
+            detail=result.get("message") or proc.stderr.strip() or "spec-location resolve failed",
+            next_action=result.get("remedy"),
+        )
+    return Path(result["capturesDir"]) / result["repository"] / "images"
+
+
+# ---------------------------------------------------------------------------
 # Filename derivation
 # ---------------------------------------------------------------------------
 def slugify(text, limit=48):
@@ -393,6 +435,8 @@ def cmd_shot(args):
             next_action="pass --viewport WIDTHxHEIGHT, e.g. --viewport 1280x800",
         )
     width, height = viewport
+    if args.capture_root:
+        args.out_dir = str(spec_capture_root())
     started = time.time()
     console_errors = []
     page_errors = []
@@ -918,7 +962,13 @@ def build_parser():
         help="CSS selector to capture instead of the page; also gates the wait",
     )
     s.add_argument("--out", help="exact output path; default is auto-named in --out-dir")
-    s.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR), help="default .uishot")
+    where = s.add_mutually_exclusive_group()
+    where.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR), help="default .uishot")
+    where.add_argument(
+        "--capture-root",
+        action="store_true",
+        help="write to the workspace spec capture root, <captures_dir>/<repository>/images",
+    )
     s.add_argument("--full-page", action="store_true", help="capture beyond the fold")
     s.add_argument("--viewport", default="1280x800", help="WIDTHxHEIGHT, default 1280x800")
     s.add_argument("--scale", type=int, default=2, help="device pixel ratio, default 2")

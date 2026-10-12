@@ -24,9 +24,9 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { addArtifact, addMaterial, createFileExclusive, createWorkspace, fetchWorkspace, listWorkspaces, resolveStorageRoot, resolveWorkspacePath, setupStorage, storageStatus, writeFileAtomic } from "./store.mjs";
+import { addArtifact, addMaterial, applyKitEdit, createFileExclusive, createWorkspace, describeStorageRoot, fetchWorkspace, listKitBackups, listWorkspaces, readKitBackup, repositoryReferences, resolveRepositoryPath, resolveStorageRoot, resolveWorkspacePath, saveStorageRoot, setupStorage, storageConfigPath, storageStatus, writeFileAtomic } from "./store.mjs";
 import { parseKit, planKitEdit } from "./kit.mjs";
 
 const STORE_URL = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), "store.mjs")).href;
@@ -1609,7 +1609,7 @@ test("kit replacement preserves exact prior bytes and untouched spans", async (t
     "    remote: git@example.com:missing.git\r\n" +
     "    meta:\r\n" +
     "      retained: true\r\n" +
-    "design_system:\r\n" +
+    "tooling:\r\n" +
     "  tokens:\r\n" +
     "    radius: 4\r\n" +
     "context: []\r\n";
@@ -1729,7 +1729,7 @@ test("kit replacement: new and path-changed repositories must be physical Git to
   assert.equal(initializedB.code, 0, initializedB.stderr);
 
   const attempts = [
-    ["relative/repo", /absolute/],
+    ["relative/repo", /does not exist/], // workspace-relative paths are accepted; this one is absent
     [join(root, "missing-repo"), /does not exist/],
     [plain, /not a Git work tree/],
     [nested, /not a Git top level/],
@@ -2012,4 +2012,62 @@ test("idempotent material hashes workspace kind and request identity separately"
   assert.equal(betaBrief.path, `briefs/brief-${digest("beta", "brief")}.md`);
   assert.notEqual(digest("alpha", "brief"), digest("alpha", "note"));
   assert.notEqual(digest("alpha", "brief"), digest("beta", "brief"));
+});
+
+test("storage root: flag, env, config file and default resolve in that order with their source", async (t) => {
+  const home = await createRoot();
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const fromEnv = join(home, "from-env");
+  const fromConfig = join(home, "from-config");
+  const config = storageConfigPath({}, home);
+  assert.equal(config, join(home, ".config", "adjacent", "config.json"));
+  assert.equal(storageConfigPath({ XDG_CONFIG_HOME: join(home, "xdg") }, home), join(home, "xdg", "adjacent", "config.json"));
+
+  assert.deepEqual(describeStorageRoot({}, home), { root: join(home, "Documents", "adjacent-storage"), source: "default" });
+  assert.equal(await saveStorageRoot({}, home, fromConfig), config);
+  assert.deepEqual(describeStorageRoot({}, home), { root: fromConfig, source: "config", config });
+  assert.equal(resolveStorageRoot({}, home), fromConfig);
+  assert.deepEqual(describeStorageRoot({ ADJACENT_STORAGE_ROOT: fromEnv }, home), { root: fromEnv, source: "env" });
+  assert.deepEqual(describeStorageRoot({ ADJACENT_STORAGE_ROOT: fromEnv }, home, "flag-root"), { root: resolve("flag-root"), source: "flag" });
+
+  for (const bad of ["not json", '{"storage_root": "relative"}', '{"storage_root": 7}']) {
+    await writeFile(config, bad);
+    assert.throws(() => resolveStorageRoot({}, home), /config\.json/);
+  }
+  await assert.rejects(saveStorageRoot({}, home, "relative"), /absolute/);
+});
+
+test("repository paths: ~ expands with the local home, relative paths use the workspace", () => {
+  assert.equal(resolveRepositoryPath("/ws/a", "~/Documents/x", "/home/u"), "/home/u/Documents/x");
+  assert.equal(resolveRepositoryPath("/ws/a", "~", "/home/u"), "/home/u");
+  assert.equal(resolveRepositoryPath("/ws/a", "/abs/x", "/home/u"), "/abs/x");
+  assert.equal(resolveRepositoryPath("/ws/a", "../repo", "/home/u"), "/ws/repo");
+  assert.equal(resolveRepositoryPath("/ws/a", "~other/x", "/home/u"), "/ws/a/~other/x");
+});
+
+test("repository references: lists spec packages whose scope targets the repository", async (t) => {
+  const { root, created } = await replacementRoot(t, "refs");
+  for (const [slug, targets] of [["hits", [{ id: "web" }, { id: "docs" }]], ["misses", [{ id: "docs" }]]]) {
+    await mkdir(join(created.directory, "specs", slug), { recursive: true });
+    await writeFile(join(created.directory, "specs", slug, "scope.json"), JSON.stringify({ targets }));
+  }
+  await mkdir(join(created.directory, "specs", "no-scope"), { recursive: true });
+  const references = await repositoryReferences(root, "refs", "web");
+  assert.deepEqual(references.packages, ["hits"]);
+});
+
+test("kit replacement: keeps the newest 20 backups, lists them and reads one for restore", async (t) => {
+  const { root, created } = await replacementRoot(t, "pruned");
+  const stale = Array.from({ length: 22 }, (_, index) => `kit.yaml.prev-2026-01-${String(index + 1).padStart(2, "0")}T00:00:00.000Z-x`);
+  for (const name of stale) await writeFile(join(created.directory, name), `old ${name}`);
+  const baseline = replacementKit("pruned");
+  await writeFile(created.kit, baseline);
+  await applyKitEdit(root, "pruned", planKitEdit(baseline, { kind: "set-name", name: "Renamed" }));
+
+  const names = await listKitBackups(root, "pruned");
+  assert.equal(names.length, 20);
+  assert.equal(names.includes(stale[0]) || names.includes(stale[2]), false, "oldest backups are pruned");
+  assert.equal(names.includes(stale[21]), true);
+  assert.equal(await readKitBackup(root, "pruned", names[0]), baseline, "the new backup is the newest");
+  await assert.rejects(readKitBackup(root, "pruned", "../kit.yaml"), /no kit backup/);
 });

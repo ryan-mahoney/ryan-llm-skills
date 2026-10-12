@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, existsSync, readdirSync, lstatSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, rmSync, symlinkSync, existsSync, readdirSync, lstatSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readFileSync } from 'node:fs';
@@ -71,6 +71,25 @@ test('dashboard serves only its page and read-only same-origin state endpoint', 
   assert.equal(page.status, 200);
   assert.match(page.body, /<!doctype html>/i);
   assert.match(page.headers['Content-Security-Policy'], /frame-ancestors 'none'/);
+});
+
+test('state route serves fresh observers and omits expired ones', async t => {
+  const f = fixture(t), server = createDashboardServer({ agentDir: f.dir });
+  const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  const fixtures = [
+    ['fade.json', { ...envelope('fresh-observing') }, 2000],
+    ['beef.json', { ...envelope('fresh-closed'), state: 'closed' }, 1000],
+    ['cab.json', { ...envelope('expired-observing'), published_at: twoHoursAgo }, 3000],
+    ['dead.json', { ...envelope('expired-closed'), state: 'closed', published_at: twoHoursAgo }, 4000],
+  ];
+  for (const [name, value, mtime] of fixtures) {
+    const path = join(f.observers, name);
+    writeFileSync(path, JSON.stringify(value));
+    utimesSync(path, mtime, mtime);
+  }
+  const response = await request(server, '/api/state');
+  assert.equal(response.status, 200);
+  assert.deepEqual(JSON.parse(response.body).observers.map(observer => observer.observer_id), ['fresh-observing', 'fresh-closed']);
 });
 
 test('thread routes stay local-only through the dashboard seam', async t => {
@@ -352,12 +371,13 @@ test('partial workspace coverage: artifact relationships and operator copy stay 
   vm.runInContext("mode='workspaces'", context);
 
   vm.runInContext("catalog={storage:{root:'/store/w <root>',status:'missing_root',errors:[]},valid:[],invalid:[],errors:[]};workspace=null;selectedWorkspace=null;render()", context);
-  assert.match(detail().innerHTML, /<code class="mono">node scripts\/workspaces\/cli\.mjs setup<\/code> on the dashboard host/);
+  // The hint names the resolved root, shell-quoted and escaped, so the command initializes the right store.
+  assert.match(detail().innerHTML, /<code class="mono">node scripts\/workspaces\/cli\.mjs setup --root &#39;\/store\/w &lt;root&gt;&#39; --save<\/code> on the dashboard host/);
   assert.match(detail().innerHTML, /missing_root/);
   assert.match(detail().innerHTML, /\/store\/w &lt;root&gt;/);
-  vm.runInContext("catalog.storage.status='missing_projects';render()", context);
+  vm.runInContext("catalog.storage.status='missing_projects';catalog.storage.root='/srv/adjacent-storage';render()", context);
   assert.match(detail().innerHTML, /missing_projects/);
-  assert.match(detail().innerHTML, /setup/);
+  assert.match(detail().innerHTML, /setup --root \/srv\/adjacent-storage --save/);
 
   vm.runInContext("catalog={storage:{root:'/store',status:'ok',errors:[]},valid:[],invalid:[],errors:[]};render()", context);
   assert.match(list().innerHTML, /operator creates/i);
@@ -597,9 +617,10 @@ test('Attention includes current blocked obligations but excludes superseded inc
 
 // Run independently: node --test --test-name-pattern='isolates package HTML' scripts/spec-observe/dashboard.test.mjs
 test('dashboard isolates package HTML and serves only authorized package-relative resources',async t=>{
- const {realpathSync}=await import('node:fs');const f=fixture(t),repo=realpathSync(f.dir),pkg=join(repo,'.specs','feature');mkdirSync(pkg,{recursive:true});mkdirSync(join(repo,'.git'));mkdirSync(join(pkg,'assets'));
+ const {realpathSync}=await import('node:fs');const f=fixture(t),repo=realpathSync(f.dir),storageRoot=join(repo,'storage'),pkg=join(storageRoot,'projects','demo','specs','feature');
+ await setupStorage(storageRoot);mkdirSync(pkg,{recursive:true});writeFileSync(join(storageRoot,'projects','demo','kit.yaml'),'version: 1\nid: demo\nname: demo\nrepositories:\n  - id: alpha\n    path: /tmp/alpha\n');mkdirSync(join(pkg,'assets'));
  writeFileSync(join(pkg,'work-tour.html'),'<script src="assets/tour.js"></script>');writeFileSync(join(pkg,'assets','tour.js'),'document.body.textContent="Tour"');writeFileSync(join(pkg,'assets','tour.css'),'body{color:red}');
- const value=envelope('a');value.snapshot.runs=[{package:pkg}];writeFileSync(join(f.observers,'a.json'),JSON.stringify(value));const server=createDashboardServer({agentDir:f.dir});
+ const value=envelope('a');value.snapshot.runs=[{package:pkg,workspace:'demo'}];writeFileSync(join(f.observers,'a.json'),JSON.stringify(value));const server=createDashboardServer({agentDir:f.dir,storageRoot});
  const prefix='/package-view/'+Buffer.from(pkg).toString('base64url')+'/';const html=await request(server,prefix+'work-tour.html');
  assert.equal(html.status,200);assert.match(html.headers['Content-Security-Policy'],/sandbox allow-scripts;/);assert.doesNotMatch(html.headers['Content-Security-Policy'],/allow-same-origin/);assert.match(html.headers['Content-Security-Policy'],/connect-src 'none'/);
  assert.equal(html.headers['X-Frame-Options'],'SAMEORIGIN');assert.match((await request(server,prefix+'assets/tour.js')).headers['Content-Type'],/javascript/);assert.match((await request(server,prefix+'assets/tour.css')).headers['Content-Type'],/text\/css/);
@@ -2461,7 +2482,7 @@ test('epics view lists epics and shows explicit empty/unavailable states', () =>
   assert.match(list(), /The observer needs a snapshot with epic data\. Package views still work\./);
   show(epicPayload({ epics: [] }));
   assert.match(list(), /No epics recorded/);
-  assert.match(list(), /Record an epic at \.specs\/_epics\/&lt;slug&gt;\/epic\.json\. See docs\/spec-epics\.md\./);
+  assert.match(list(), /Record an epic at projects\/&lt;workspace&gt;\/epics\/&lt;slug&gt;\/epic\.json\. See docs\/spec-epics\.md\./);
   show(epicPayload({ epics: [epicRecord([epicMember('adj1-base', 'merged'), epicMember('adj2-core', 'in-progress', { attention: true })], { note: 'Pilot <note>', plan: null })] }));
   assert.match(list(), /Adjacent &lt;functionality&gt;[\s\S]*pill muted">adj<[\s\S]*1\/2 landed[\s\S]*pill warn">1 attention</);
   assert.match(detail(), /Select an epic/);

@@ -27,19 +27,19 @@ belong in the retrospective, including failures and resumptions.
 Honor an explicitly narrower session/attempt scope; use other attempts as context
 without folding their metrics into the selected execution.
 
-Resolve both the primary repository and implementation checkout using
-[Workspace Handoff](../spec-end-to-end/references/workspace-handoff.md). From the code
-checkout, the read-only helper returns `executionRoot`, `repositoryRoot`, `specRoot`,
-and `specPath`:
+Resolve the package with the shared [spec-location step](../spec-end-to-end/references/spec-location.md):
 
 ```bash
-node ~/.agents/skills/spec-end-to-end/scripts/resolve-spec-path.mjs .specs/FEATURE
+node ~/.agents/scripts/spec-location/cli.mjs check <ws/slug or package folder>
 ```
 
-Every `.specs/` read/write, including a report saved in the package, belongs to the primary checkout.
+On refusal, print the `message` and `remedy` and stop. On success, read `package_dir`,
+`targets[].primary`, and `targets[].worktree` from `locations.json`.
+
+Every package read/write, including a report saved in the package, belongs to `package_dir`.
 Code, Git history, and implementation revisions belong to the recorded execution
-checkout. If that worktree has been removed, inspect the recorded commits through
-the primary repository without checking out another branch; report unavailable
+checkout (`targets[].worktree`, or `targets[].primary` when no worktree is recorded). If that worktree has been removed, inspect the recorded commits through
+the primary checkout (`targets[].primary`) without checking out another branch; report unavailable
 objects or dirty work rather than recreating execution state.
 
 Build a compact scope record: canonical package, checkout/branch, base and result
@@ -58,7 +58,7 @@ handwritten ledger or root-level learnings; preserve their recorded meaning.
 For a whole-package retrospective, include recorded coordinator resumptions:
 
 ```bash
-node ~/.agents/scripts/spec-observe/cli.mjs metrics --package /absolute/primary/.specs/FEATURE --all-sessions --format text
+node ~/.agents/scripts/spec-observe/cli.mjs metrics --package <package_dir> --all-sessions --format text
 ```
 
 Use JSON output, `report`, or `--session ID|PATH` when a finding needs exact fields

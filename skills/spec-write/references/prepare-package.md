@@ -4,7 +4,7 @@ Perform these transformations in exactly this order. They are deliberately seque
 
 ### 1. Continue the same planning invocation
 
-The `spec-write` entrypoint has resolved the canonical paths and resolved required preparation inputs
+The `spec-write` entrypoint has run `spec-location check`, read `locations.json`, and resolved required preparation inputs
 before editing. Continue with that context and the repository evidence already read;
 do not restart discovery or delegate the whole preparation phase. Resolve remaining
 unknowns at their owning boundary. Keep the current draft spec and indexes consistent.
@@ -20,7 +20,7 @@ For every `Visual: yes` step, resolve its visual source before judging the step 
    `critique.md`.
 2. When none is named and exactly one plausible entry file exists under the resolved
    feature's `prototype/` or `visual-references/` folder, use it and correct `spec.md`
-   to name its repository-relative path. Never choose among multiple variants without
+   to name its package-relative path. Never choose among multiple variants without
    repository or proposal evidence selecting one.
 3. Confirm the entry file and its local assets exist. Inspect the source and, for HTML
    or application prototypes, render it with Playwright to identify the relevant page,
@@ -49,6 +49,7 @@ Correct only substantive defects:
 - Missing acceptance coverage or non-automatable criteria.
 - Executable Evidence Plan defects: missing or invalid posture; incomplete AC → CL → FH → EV traceability; an EV item owned by no step or by more than one step; a gate that cannot reject its failure hypothesis; a hypothesis with no credible failure mechanism, invented to attach an assertion to a criterion; human review/manual QA used as a safety gate; or evidence forms, independence, environments, and deployment proof that do not fit actual risk.
 - Pre-mortem defects: a missing pre-mortem, or a credible concern with no disposition (AC, step, EV item, or explicitly accepted risk).
+- Unearned guards: an invariant, criterion, `FH-*`, or `EV-*` gate whose only basis is a `hypothetical` risk (no citation to an incident, bug report, failing run, record/log path, commit, or sourced requirement), or a gate for a `design-enforced` risk whose mechanism is not new code this spec builds. Remove it, move the risk to the spec's `Accepted risks` list, and keep the claim/gate mapping valid.
 - Steps that are not deterministic, minimal, self-contained, forward-only, or dependency ordered.
 - Non-flat step numbering, mismatched `Covers:` tags, or incorrect complexity/visual flags.
 - Steps large enough that independent concerns can be implemented and verified separately without a compatibility shim.
@@ -60,7 +61,7 @@ primitives that will realize it. When no reference exists, name the exact produc
 precedent and relevant design posture instead. Correct vague descriptions such as
 "implement the prototype" or "polish the page" before reconciling the step index.
 Prefer a sentence like: `Implement the journal drawer's empty and save-pending states
-shown in .specs/journal/prototype/index.html under "Journal drawer", reusing the existing
+shown in prototype/index.html under "Journal drawer", reusing the existing
 Drawer and form primitives and wiring the real journal query and mutation.`
 
 Preserve intent and voice. Apply the entrypoint's step-granularity rules before writing cards. Split compound objectives rather than
@@ -86,7 +87,7 @@ A required merge gate whose producer contract/evidence is unavailable remains bl
 
 ### 3. Reconcile the step index
 
-`spec.md` is canonical. Rewrite `spec-steps.json` to contain exactly one entry per final implementation step, in ascending order, using the current strict step-index schema. Each entry's number, name, description, difficulty, visual-design flag, and evidence array must match the Markdown step. The top-level `spec` path must equal the repository-relative path in the `Spec folder:` footer.
+`spec.md` is canonical. Rewrite `spec-steps.json` to contain exactly one entry per final implementation step, in ascending order, using the current strict step-index schema. Each entry's number, name, description, difficulty, visual-design flag, and evidence array must match the Markdown step. The top-level `spec` path must be the package-relative `spec.md`. With several targets, every entry carries `repository`, the id of the target (`locations.targets[].id`) whose worktree the step changes.
 
 Reconcile `evidence-plan.json` against the corrected spec. Preserve stable identifiers where their meaning survives. Correct posture, context path, claim/hypothesis/gate mappings, phase, required flag, command,
 artifact, environment, effects, authority, independence and owner-step fields. Recalibrate in either
@@ -99,11 +100,11 @@ Run `node ~/.agents/skills/spec-work-tour/scripts/validate-evidence-plan.mjs <pa
 
 ### 4. Derive prose guardrails and invariants
 
-Walk Architecture, Notes, and Implementation Steps for normative statements that constrain ownership, placement, layering, negative boundaries, or licensed deviations from precedent. A reuse decision that names an existing symbol as the owner of a behavior is an ownership constraint. Do not restate acceptance criteria that tests already own and do not invent constraints.
+Walk Architecture, Notes, and Implementation Steps for normative statements that constrain ownership, placement, layering, negative boundaries, or licensed deviations from precedent. A reuse decision that names an existing symbol as the owner of a behavior is an ownership constraint. Do not restate acceptance criteria that tests already own and do not invent constraints. Only `observed` risks and sourced requirements produce entries; a `design-enforced` risk is cited by its mechanism in the existing entry or step, and a `hypothetical` one (see the spec's `Accepted risks`) never becomes a guardrail or invariant.
 
 When at least one implementation guardrail exists, atomically write `criteria.md` with:
 
-- The canonical spec source path.
+- The package-relative spec source path (`spec.md`).
 - One stable heading per property.
 - A `Statement:` field containing the implementation property in prose.
 - A `Source:` field quoting or precisely locating the normative spec sentence.
@@ -197,10 +198,10 @@ contract does not require delegation. Every card must contain strict `planning` 
 When a step carries an `Evidence:` tag in `spec.md`, add one line per owned EV item to `Targets`:
 
 ```txt
-Evidence: EV-<n> — <artifact form> → <committed path | .specs/<feature>/evidence/<file>>
+Evidence: EV-<n> — <artifact form> → <committed path | evidence/<file>>
 ```
 
-Committed evidence such as integration tests also appears as ordinary targets; non-committed artifacts (QA walkthrough, screenshots, dry-run logs, benchmark output) name their destination under `.specs/<feature>/evidence/`. Each card repeats the gate's phase, required flag, command, actual target/environment, effects,
+Committed evidence such as integration tests also appears as ordinary targets; non-committed artifacts (QA walkthrough, screenshots, dry-run logs, benchmark output) name their destination under `evidence/` in the package (package-relative). In a package with several targets, write a committed path as `<repo id>:<path>` and give each card's `Targets` files the same form. Each card repeats the gate's phase, required flag, command, actual target/environment, effects,
 authority source, rejected failure and proof boundary. Later-phase gates require a procedure and
 handoff. Identify safe isolated pre-deploy checks separately from operations awaiting release or
 authority; keep only unexecuted gates pending. Verify merge commands cannot accidentally target live
@@ -211,7 +212,7 @@ Write targets and the edit sequence as the best expected route, never as an exha
 For every `Visual: yes` card, include one of these exact lines in `Targets`:
 
 ```txt
-Visual reference: .specs/<feature>/<prototype-or-visual-references>/<entry-file>
+Visual reference: <prototype-or-visual-references>/<entry-file>
 Visual reference: none
 ```
 
@@ -265,7 +266,9 @@ Update only the authoritative `Complexity:` tag and its `spec-steps.json` `diffi
 
 ### 6. Validate the complete package
 
-After the last step, reread every final artifact. Confirm:
+After the last write to `context.md`, `spec.md`, or any `step-<NNN>-subspec.md`, run `node ~/.agents/scripts/spec-location/cli.mjs stamp <package ref>` so every file carries the generated Locations block. Never hand-edit that block between the `spec-location:begin` and `spec-location:end` markers.
+
+After the stamp, reread every final artifact. Confirm:
 
 - Step numbers are exactly the ascending `spec-steps.json` numbers.
 - There is exactly one canonical subspec per indexed step and no unexpected canonical step number.

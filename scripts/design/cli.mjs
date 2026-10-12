@@ -9,6 +9,8 @@ import { lstat, mkdir, open, readFile, rename, writeFile } from 'node:fs/promise
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseKit } from '../workspaces/kit.mjs';
+import { resolveRepositoryPath } from '../workspaces/store.mjs';
 import { DESIGN_LIMITS, lintScreen, parseDesign, screenStatus } from './schema.mjs';
 
 export const TAILWIND = Object.freeze({
@@ -99,6 +101,24 @@ async function writeAtomic(path, bytes) {
   await rename(temporary, path);
 }
 
+// Absolute design-system paths for a parsed design: {repository, paths} resolves
+// through the workspace kit's repository checkout; the legacy {path, tokens} form
+// already holds absolute paths.
+export async function resolveDesignSystem(dir) {
+  const { directory, design, error } = await readDesign(dir);
+  if (error) throw new Error(error);
+  const ds = design.design_system;
+  if (!ds) return { repository: null, paths: [] };
+  if (ds.repository === undefined) return { repository: null, paths: [ds.path, ds.tokens].filter(Boolean) };
+  const workspace = dirname(dirname(directory));
+  const parsed = parseKit(await readFile(join(workspace, 'kit.yaml'), 'utf8'));
+  if (!parsed.ok) throw new Error(`kit.yaml invalid: ${parsed.errors[0]}`);
+  const repository = parsed.kit.repositories.find(entry => entry.id === ds.repository);
+  if (!repository) throw new Error(`design_system repository ${ds.repository} is not in the workspace kit`);
+  const root = resolveRepositoryPath(workspace, repository.path);
+  return { repository: ds.repository, paths: ds.paths.map(path => join(root, path)) };
+}
+
 // A reference line for spec.md and step cards: identity, resolvable path, digest.
 export async function referenceLine(dir, step) {
   const { directory, design, error } = await readDesign(dir);
@@ -118,13 +138,14 @@ function usage() {
     '  lint <dir>            validate design.json and lint every produced screen (exit 1 on fail)',
     '  status <dir>          derived produced/captured status per screen as JSON',
     '  vendor <dir>          copy the pinned Tailwind runtime to <dir>/vendor/tailwind.js',
+    '  system <dir>          print the absolute design-system paths as JSON (resolved through the workspace kit)',
     '  ref <dir> <step>      print the Design reference line for one produced screen',
   ].join('\n');
 }
 
 export async function main(argv, { stdout = process.stdout, stderr = process.stderr } = {}) {
   const [command, dir, arg] = argv;
-  if (!command || !dir || !['lint', 'status', 'vendor', 'ref'].includes(command)) { stderr.write(usage() + '\n'); return 2; }
+  if (!command || !dir || !['lint', 'status', 'vendor', 'system', 'ref'].includes(command)) { stderr.write(usage() + '\n'); return 2; }
   if (!isAbsolute(dir) && !dir.startsWith('.')) { stderr.write('Design directory must be an absolute or ./relative path\n'); return 2; }
   try {
     if (command === 'lint') {
@@ -138,6 +159,7 @@ export async function main(argv, { stdout = process.stdout, stderr = process.std
       return result.error ? 1 : 0;
     }
     if (command === 'vendor') { stdout.write(JSON.stringify(await vendorTailwind(dir)) + '\n'); return 0; }
+    if (command === 'system') { stdout.write(JSON.stringify(await resolveDesignSystem(dir)) + '\n'); return 0; }
     if (command === 'ref') { if (!arg) { stderr.write(usage() + '\n'); return 2; } stdout.write((await referenceLine(dir, arg)).line + '\n'); return 0; }
   } catch (error) { stderr.write(`${error.message}\n`); return 1; }
   return 2;

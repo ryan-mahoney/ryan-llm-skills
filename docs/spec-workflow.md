@@ -1,6 +1,6 @@
 # End-to-End Spec Workflow
 
-Use `spec-end-to-end` to take a feature goal or existing `.specs/<feature>/` package through a
+Use `spec-end-to-end` to take a feature goal or existing spec package (`<workspace>/<slug>`) through a
 published pull request. The top-level agent owns the sequence and checks each stage's handoff.
 The individual skills remain the authority for their execution and evidence requirements.
 
@@ -44,7 +44,7 @@ See [the evidence audit guide](reviews.md) for artifact paths and proof requirem
 ## Epics
 
 An epic is an ordered set of spec packages that deliver one plan. Its record is
-`.specs/_epics/<slug>/epic.json` in the primary checkout. It lists the members, their
+`epics/<slug>/epic.json` in the workspace. It lists the members, their
 `requires` dependencies and the plan; member status (proposed, prepared, in progress,
 published, merged) is derived from each package's files and is never stored in the
 record. Most packages stand alone and need no record. Packages that belong to one run
@@ -72,8 +72,8 @@ The individual skills remain valid entry points. No separate context skill is re
 
 ```text
 /spec-architect-initial describe the feature
-/spec-architect-critics .specs/results-export/proposal.md
-/spec-write .specs/results-export/
+/spec-architect-critics transitops/results-export
+/spec-write transitops/results-export
 ```
 
 The critique is optional. `spec-architect-initial` establishes project context before architecture.
@@ -95,7 +95,7 @@ evidence records are ignored; re-plan for real gaps, not solely to migrate a for
 After preparation, start implementation with this request:
 
 ```text
-Use spec-end-to-end for .specs/results-export/. Planning and preparation are complete;
+Use spec-end-to-end for transitops/results-export. Planning and preparation are complete;
 resume from implementation through PR publication.
 ```
 
@@ -114,7 +114,7 @@ EDITOR_MODEL as its dedicated editor, REVIEW_AGENT for independent step reviews,
 and FINAL_REVIEWER for a fresh final red-flag review and quick improvements.
 Reuse the implementation owner/editor across steps.
 
-PACKAGE: /absolute/primary-repo/.specs/feature/
+PACKAGE: transitops/feature
 IMPLEMENT_AGENT: <provider/model:thinking>
 EDITOR_MODEL: openrouter/inception/mercury-2.5:high
 REVIEW_AGENT: <provider/model:thinking>
@@ -130,7 +130,7 @@ pair receives those commits and refreshes affected source before continuing.
 uses a fresh `spec-final-reviewer` session with `FINAL_REVIEWER` and bounded
 `spec-final-editor` subagents with `EDITOR_MODEL`; it does not use step-card dispatch.
 Omit `FINAL_REVIEWER` to keep the step-review-only workflow.
-`sync.sh` installs the profiles and extension. Restart Pi after syncing.
+`sync.sh` installs the profiles, the extension, and their locked dependencies. Restart Pi after syncing.
 See [runtime setup and API](../pi/extensions/spec-runtime/README.md) and
 [run observation](spec-runtime-observation.md) for persistent ledgers and session discovery.
 
@@ -171,8 +171,8 @@ remains a separately requested iterative evidence audit.
 
 ## Context, Scope, And Operational Authority
 
-The standalone workflow reads `.specs/project-context.md` in the primary repository and
-AGENTS-linked policy sources, then writes a `.specs/<feature>/context.md` snapshot there. On first use,
+The standalone workflow reads the workspace's `project-context.md` and
+AGENTS-linked policy sources, then writes a `context.md` snapshot in the package folder. On first use,
 it establishes only the consequential missing facts with the user and records decisions for reuse.
 See the [shared context contract and template](../skills/spec-end-to-end/references/project-context.md).
 A maturity label alone is insufficient: identify users, valuable/disposable data, compatibility,
@@ -266,8 +266,8 @@ Use `spec-upgrade` when you have specs written under an older workflow and want 
 before starting implementation. Select one, several, or all pending specs explicitly:
 
 ```text
-/spec-upgrade .specs/results-export/
-/spec-upgrade .specs/results-export/ .specs/saved-searches/
+/spec-upgrade transitops/results-export
+/spec-upgrade transitops/results-export transitops/saved-searches
 /spec-upgrade all pending specs in this repository
 ```
 
@@ -284,7 +284,7 @@ an optional transition skill; new specs use the ordinary sequence above.
 ## Resume And Completion
 
 ```text
-/spec-end-to-end resume .specs/results-export/ through PR publication
+/spec-end-to-end resume transitops/results-export through PR publication
 ```
 
 The agent resumes at the earliest incomplete, stale, or invalid stage. A current artifact is reused;
@@ -295,10 +295,11 @@ to the implemented commit. Do not recompute preparation fingerprints.
 Equivalent existing prose and evidence satisfy the engineering decision contract.
 Missing headings alone do not require a rewrite. Missing or contradicted behavior and proof return to the owning stage for correction.
 
-If code moves to a worktree, `.specs/<feature>/` stays in the primary repository. All spec reads
-and writes, including logs, captures, reviews, and tours, use that canonical folder. Never copy it
-into the worktree or use a tracked worktree copy. Run code, Git, builds, and tests in the worktree,
-passing the canonical output paths explicitly. The shared workspace handoff includes a path resolver.
+Spec files live in the workspace, at `specs/<slug>/` under the storage root, and never in a
+checkout. All spec reads and writes, including logs, captures, reviews, and tours, use that folder,
+whose paths come from its `locations.json`. A workspace names one execution host, and spec work for
+it runs only there. Run code, Git, builds, and tests in the worktree for each target repository. See
+[spec location](../skills/spec-end-to-end/references/spec-location.md).
 
 An implementation step may return a truthful checkpoint with unresolved findings when its skill
 permits that outcome. Final refinement must resolve blocking evidence before publication. A failed
@@ -338,7 +339,7 @@ pending work without replaying completed stages.
 Delegation follows user directives and the owning skill's policy. To request a stage coordinator:
 
 ```text
-Use spec-end-to-end for .specs/results-export/ through PR publication. Delegate
+Use spec-end-to-end for transitops/results-export through PR publication. Delegate
 spec-run to deepseek-flash and have it dispatch each prepared step sequentially
 to a dedicated deepseek-flash worker. Keep work in the selected checkout.
 ```

@@ -1,6 +1,7 @@
 # Observing Pi spec runs
 
-The managed runtime records each assignment in the canonical feature package:
+The managed runtime records each assignment in the spec package folder, `specs/<slug>/` in the
+workspace (`package_dir` in the package's `locations.json`):
 
 | Path below the package | Purpose |
 |---|---|
@@ -42,7 +43,7 @@ or use a separate Pi session for read-only observation.
 In a fresh Pi session, attach to an existing run with:
 
 ```text
-/spec-monitor /absolute/primary-repo/.specs/feature/
+/spec-monitor <package_dir>
 ```
 
 Use `/spec-monitor off` to hide it. The attachment follows that run only; normal
@@ -53,7 +54,7 @@ Find recent managed runs without knowing a package path:
 
 ```bash
 node ~/.agents/scripts/spec-observe/cli.mjs runs --limit 10
-node ~/.agents/scripts/spec-observe/cli.mjs report --package /absolute/repo/.specs/feature
+node ~/.agents/scripts/spec-observe/cli.mjs report --package <package_dir>
 ```
 
 The first command reads the compact index under `~/.pi/agent/spec-runtime/`.
@@ -103,7 +104,7 @@ or Sentinel custom message.
 For an aggregate report of the current coordinator session, run:
 
 ```text
-/spec-metrics /absolute/primary-repo/.specs/feature/
+/spec-metrics <package_dir>
 ```
 
 The [metrics CLI](../scripts/spec-observe/README.md#workflow-metrics) works without
@@ -130,7 +131,7 @@ Interpretation limits: one curated workload per run; the report makes no general
 model ranking and names no winner; `unknown` cost means the provider did not price
 the calls, not zero; a harness or provider failure (`blocked`, `invalid`,
 `timed-out`) is not a skill result. Live model comparison remains unproven until the
-authorized pilot runs (`.specs/super1-spec-gym/evidence/pilot.md`).
+authorized pilot runs (package `super1-spec-gym`, `evidence/pilot.md`).
 
 ## Install and resume
 
@@ -144,7 +145,8 @@ authorized pilot runs (`.specs/super1-spec-gym/evidence/pilot.md`).
    [default prompt](../README.md#default-pi-prompt), naming an existing implementation
    checkout when resuming it. Preserve its code and accepted commits.
 4. Read the runtime ledger or observer report to locate the current assignment and logs.
-   A retained lock after uncertain cancellation requires diagnosis before replacement.
+   A `run.json` that still records a running run after uncertain cancellation requires
+   diagnosis before replacement; dispatch refuses while its coordinator process is alive.
 
 The extension manages its own workers. It does not adopt or stop older `pi-subagents`
 processes. It launches one step assignment; `spec-run` continues to own difficulty
@@ -202,7 +204,7 @@ that assumption and return to the preparation stage.
 `/spec-metrics` now reports startup model/tool/read/shell counts, session-to-first-owner
 time, owner-to-editor time, editor-to-first-successful-checkout-edit time, and separate
 connection/timeout counts. JSON also contains dispatch-to-owner setup duration. First
-edit means a successful native `write`/`edit` outside `.specs`; shell writes are unknown.
+edit means a successful native `write`/`edit` outside the package folder; shell writes are unknown.
 The first user message is a request-time proxy and can overstate startup in a reused
 session. Missing timestamps stay unknown. These are observations, not quality verdicts.
 

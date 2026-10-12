@@ -16,6 +16,7 @@ import { listWorkspaceDesigns } from './designs.mjs';
 import { fetchWorkspace, listWorkspaces, resolveStorageRoot, storageStatus } from '../workspaces/store.mjs';
 import { createDiscussionRoutes } from '../workspaces/discussion-routes.mjs';
 import { applyManualCompletions, writeManualCompletion } from './manual-completion.mjs';
+import { observerExpired } from './observer-retention.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const MAX_FILE = 4 * 1024 * 1024, MAX_TOTAL = 12 * 1024 * 1024, MAX_FILES = 200;
@@ -74,6 +75,7 @@ export async function readDashboardState(agentDir) {
         || !['observing', 'off', 'closed'].includes(value.state)
         || !Number.isFinite(Date.parse(value.published_at))
         || (value.snapshot != null && !Array.isArray(value.snapshot.runs))) throw new Error('Unsupported snapshot format');
+      if (observerExpired(value)) continue;
       result.observers.push({ ...value, source });
     } catch (failure) { error(source, failure); }
     finally { await handle?.close(); }
@@ -174,8 +176,8 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
         let input;
         try { input = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { response.writeHead(400); response.end(); return; }
         const state = await readDashboardState(agentDir);
-        const root = await authorizePackage(state, input?.package);
-        const record = await writeManualCompletion(root);
+        const { root, ref } = await authorizePackage(state, input?.package, authorizedWorkspace);
+        const record = await writeManualCompletion(root, ref);
         cached = null;
         response.setHeader('Content-Type', 'application/json; charset=utf-8');
         response.end(JSON.stringify({ completed_at: record.completed_at }));
@@ -193,12 +195,12 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
         const view = path.startsWith('/package-view/') ? path.slice('/package-view/'.length).split('/') : null;
         const requestedPackage = view ? Buffer.from(view.shift(), 'base64url').toString('utf8') : url.searchParams.get('package');
         const requestedFile = view ? view.map(decodeURIComponent).join('/') : url.searchParams.get('file');
-        const root = await authorizePackage(state, requestedPackage);
+        const { root } = await authorizePackage(state, requestedPackage, authorizedWorkspace);
         if (path === '/api/package-files') {
           response.setHeader('Content-Type', 'application/json; charset=utf-8');
-          response.end(request.method === 'HEAD' ? undefined : JSON.stringify(await listPackageFiles(root, url.searchParams.has('cursor')?Number(url.searchParams.get('cursor')):0)));
+          response.end(request.method === 'HEAD' ? undefined : JSON.stringify(await listPackageFiles(root, url.searchParams.has('cursor')?Number(url.searchParams.get('cursor')):0, { exclude: workspaceExclude })));
         } else {
-          const file = await readPackageFile(root, requestedFile);
+          const file = await readPackageFile(root, requestedFile, { exclude: workspaceExclude });
           response.setHeader('Content-Type', view && /\.(?:js|mjs)$/i.test(requestedFile) ? 'text/javascript; charset=utf-8' : view && /\.css$/i.test(requestedFile) ? 'text/css; charset=utf-8' : file.type);
           response.setHeader('X-Package-File-Kind', file.kind);
           response.setHeader('X-Frame-Options', 'SAMEORIGIN');
@@ -242,7 +244,7 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  let port = 4319, agentDir, publicHost;
+  let port = 4319, agentDir, publicHost, storageRoot;
   const args = process.argv.slice(2);
   try {
     while (args.length) {
@@ -250,10 +252,11 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       if (option === '--port' && value != null && /^\d+$/.test(value)) port = Number(value);
       else if (option === '--agent-dir' && value) agentDir = resolve(value);
       else if (option === '--public-host' && value != null) publicHost = normalizePublicHost(value);
-      else throw new Error('Usage: node dashboard.mjs [--port 4319] [--agent-dir PATH] [--public-host NAME]');
+      else if (option === '--storage-root' && value) storageRoot = resolve(value);
+      else throw new Error('Usage: node dashboard.mjs [--port 4319] [--agent-dir PATH] [--public-host NAME] [--storage-root PATH]');
     }
     if (!Number.isSafeInteger(port) || port < 0 || port > 65535) throw new Error('Port must be 0–65535');
-    const server = createDashboardServer({ agentDir, publicHost });
+    const server = createDashboardServer({ agentDir, publicHost, storageRoot });
     server.on('error', error => {
       if (process.send) process.send({ type: 'error', error: error.code ?? error.message });
       else console.error(`Sentinel dashboard: ${error.code ?? error.message}`);

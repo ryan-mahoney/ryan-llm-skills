@@ -9,6 +9,8 @@ import { createSentinelReaderProcess } from './sentinel-reader-process.mjs';
 import { setupStorage, createWorkspace } from '../../../scripts/workspaces/store.mjs';
 import { resolveAssignment } from '../../../scripts/workspaces/assignments.mjs';
 import { collectWorkspace } from '../../../scripts/spec-observe/sentinel.mjs';
+import { newPackage } from '../../../scripts/spec-location/index.mjs';
+import { makeFixture } from '../../../scripts/spec-location/fixture.mjs';
 
 function fixture(t) {
   const directory = mkdtempSync(join(tmpdir(), 'sentinel-reader-'));
@@ -47,23 +49,23 @@ test('blocked reader cannot block host timers, expires and can restart without k
 });
 
 
-test('isolated reader finds indexed active work outside the discovery root', async t => {
-  const dir = realpathSync(fixture(t));
-  const root = join(dir, 'Documents'), repo = join(dir, '.agents');
-  mkdirSync(root); mkdirSync(repo);
-  execFileSync('git', ['init', '-q', repo]);
-  const packagePath = join(repo, '.specs', 'repo-search-index');
+test('isolated reader observes a storage package named by the managed index outside the discovery root', async t => {
+  const fx = makeFixture(); t.after(fx.cleanup);
+  const dir = fx.tmp, root = join(dir, 'Documents'), repo = fx.alpha;
+  mkdirSync(root);
+  const packagePath = (await newPackage({ workspace: 'demo', slug: 'repo-search-index', targets: [{ id: 'alpha' }], ...fx.options })).locations.package_dir;
   const runs = join(packagePath, 'runtime', 'runs');
   const indexDir = join(dir, 'index');
   mkdirSync(runs, { recursive: true }); mkdirSync(indexDir);
-  writeFileSync(join(runs, 'active.json'), JSON.stringify({ id: 'active', package: packagePath,
+  writeFileSync(join(runs, 'active.json'), JSON.stringify({ id: 'active', package: packagePath, package_ref: 'demo/repo-search-index',
     checkout: repo, state: 'running', started_at: new Date().toISOString() }));
   writeFileSync(join(indexDir, 'active.json'), JSON.stringify({ run_id: 'active', package: packagePath }));
   const reader = createSentinelReaderProcess();
   t.after(() => reader.stop());
-  const { snapshot } = await reader.read({ agentDir: dir, root, indexDir, storageRoot: join(dir, 'storage') });
+  const { snapshot } = await reader.read({ agentDir: dir, root, indexDir, storageRoot: fx.root });
   assert.equal(snapshot.coverage.state, 'complete');
   assert.equal(snapshot.runs[0].package, packagePath);
+  assert.equal(snapshot.runs[0].package_ref, 'demo/repo-search-index');
   assert.equal(snapshot.runs[0].execution, 'running');
   assert.equal(snapshot.runs[0].checkout, repo);
   assert.equal(snapshot.reader.isolated, true);

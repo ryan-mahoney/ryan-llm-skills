@@ -44,7 +44,7 @@ Required:
 }
 ```
 
-`source` and all other `href` or image paths are relative to the generated journey `index.html`. The default collection folder is `.specs/ux-qa/visuals/` in the primary checkout, so from `.specs/ux-qa/visuals/JRNY-###/index.html` a capture under the capture root is reached with a `../../../images/…` path. The collection folder and the capture root are git-ignored; see `../uishot/references/capture-root.md`.
+`source` and all other `href` or image paths are relative to the generated journey `index.html`. The default collection folder is `<visuals>` (`<capturesDir>/<repository>/ux-qa/visuals/`), so from `<visuals>/JRNY-###/index.html` a capture under the capture root (`<capturesDir>/<repository>/images/`) is reached with a `../../../images/…` path. Both folders live in workspace storage outside every checkout; see `../uishot/references/capture-root.md`.
 
 ## Entry and terminal
 

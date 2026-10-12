@@ -17,7 +17,7 @@ metadata:
 Apply [Verification and Review](../../rules/verification-and-review.md) for focused-check scheduling
 and batched Jev verification/review-triage checkpoints.
 
-> **`.specs/` is standalone working state and is often gitignored.** Read and write it directly; do not depend on git history to recover it. Diffing implementation code under review is unaffected.
+> **Spec packages live in workspace storage, outside any checkout.** Read and write them through the paths in `locations.json`; do not depend on git history to recover them. Diffing implementation code under review is unaffected.
 
 Read the shared [Executable Evidence Contract](../spec-work-tour/references/executable-evidence.md). Independently audit the whole branch for correctness, integration, prepared-guardrail, and evidence-closure defects, then write the
 findings to `reviews/branch-<iteration>-review.md`. This is the audit half of
@@ -109,8 +109,8 @@ branch audit is assumed.
   changes belong to the step in progress.
 - Write the review atomically in the Emit format with `kind: step`, `step: <label>`,
   `target: <since>..<head>`, `scope: step`, and `commit: <head>`; a zero-padded
-  numeric label writes `<spec-dir>/reviews/step-<NNN>-review.md`, while any other
-  label writes `<spec-dir>/reviews/<label>-review.md` (example: `step: final-1`
+  numeric label writes `<package_dir>/reviews/step-<NNN>-review.md`, while any other
+  label writes `<package_dir>/reviews/<label>-review.md` (example: `step: final-1`
   writes `reviews/final-1-review.md`). Give each finding a `commit` naming its
   introducing commit. Omit `iteration` and `evidence_verdict`; the exact Git range
   identifies reviewed commits without a duplicate inventory.
@@ -129,12 +129,15 @@ and incomplete affected merge claims, then return `decision-required` with the e
 
 ## Resolve Inputs
 
-- **Spec.** Resolve `spec=<path>` or an explicit `.specs/<feature>/` folder first;
-  otherwise use the folder named in the conversation or the `Spec folder:` footer.
-  If exactly one `.specs/*/spec.md` exists, use it. If more than one matches, stop.
-  Do not select by modification time. `<spec-dir>` is that `.specs/<feature>/` folder.
+- **Spec.** Resolve `spec=<ref or folder>` first; otherwise use the package named in the
+  conversation or the `Spec folder:` footer. Run the shared
+  [spec-location step](../spec-end-to-end/references/spec-location.md) with that reference
+  (`node ~/.agents/scripts/spec-location/cli.mjs check <ref or folder>`); on refusal, print its
+  `message` and `remedy` and stop. `<package_dir>` is the `package_dir` field in
+  `<package_dir>/locations.json`. If no package or more than one matches, stop.
+  Do not select by modification time.
 - **Iteration.** Use `iter=<n>` when given. Standalone default: one higher than the
-  highest existing `<spec-dir>/reviews/branch-<k>-review.md`, or `1` if none exist.
+  highest existing `<package_dir>/reviews/branch-<k>-review.md`, or `1` if none exist.
 - **Comparison base.** Resolve the point the branch is diffed against, in this order:
   - `base=<ref>` — use `merge-base(<ref>, HEAD)`. The base is treated like a branch to
     fork-point from, not a raw endpoint.
@@ -592,7 +595,7 @@ acceptance failure, security/data defect, or failed required gate into a pass.
 
 ## Emit The Review File
 
-Write `<spec-dir>/reviews/branch-<iteration>-review.md` atomically (temporary file
+Write `<package_dir>/reviews/branch-<iteration>-review.md` atomically (temporary file
 in the destination directory, then rename), creating `reviews/` if needed. Begin
 with a level-1 heading and one fenced YAML record. The record contains each
 finding's explanation once; do not add parallel prose findings, correctness
