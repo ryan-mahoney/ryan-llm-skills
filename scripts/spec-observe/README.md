@@ -311,6 +311,10 @@ generates the request UUID per save and reuses it when retrying an unchanged
 draft after a failure. A conflict or any error keeps both fields, shows the
 conflict text and returns focus to the save control. Saving publishes material
 automatically; it never launches an assignment.
+A visible status explains whether the brief is saved, awaiting launch, or started.
+After saving, focus and the primary action move to **Preview assignment**; after
+previewing they move to **Launch assignment**. Saving unchanged content again
+keeps the existing request and preview instead of creating another brief.
 
 **Preview assignment** calls `/api/thread/preview-assignment` with the saved
 brief and shows the resolved target, execution directory, brief, model and the
@@ -698,3 +702,36 @@ reported tool/command failures, and `test_commands_with_exit` counts structured 
 These are command-level observations: conditionals, setup failures and wrappers can
 prevent the actual suite from starting. Neither a returned reply nor a zero outer exit
 code establishes that tests passed. Raw logs remain the evidence for that judgment.
+
+### Assignment response status and terminal controls
+
+An open Pi process is shown as **Session open**, not proof that work is still
+running. A bounded read of its identity-validated session tail distinguishes
+**Working**, **Idle · response finished**, and **Response interrupted**. Idle
+requires a normal final assistant response with text and no pending tool call.
+A later user message or tool operation clears it. Incomplete, changing, oversized
+or unreadable output leaves response status unknown. Quiet time alone never
+proves completion. A finished response is not workflow acceptance or proof that
+implementation is complete. The last response is available in the agent detail.
+
+The agent detail also shows a copyable SSH attach command, a local command for
+operators already on the host, and **Ctrl+B, then D** detach instructions.
+**End session…** opens a confirmation explaining that the terminal and its agent
+will stop while saved files and the transcript remain. Cancellation sends no
+request. The confirmed action revalidates the unique assignment, reviewed
+process identity and exact tmux UUID/pane, then checks the identity again inside
+tmux before killing only that session. An unknown or replaced identity refuses
+the action; the default server and other assignment sessions are untouched.
+Process exit must be confirmed before the record becomes ended.
+
+`GET /api/assignment-session?assignment_id=…` resolves current terminal details.
+`POST /api/assignment-session/end` requires the operator endpoint's exact Origin,
+JSON, action token, assignment ID, reviewed identity and explicit confirmation.
+Both routes use the configured storage root, never browser-supplied paths.
+Loopback and the configured Tailscale Serve endpoint support these controls;
+imported snapshots do not. Termination retries are idempotent after verified exit.
+
+Focused verification: `node --test scripts/spec-observe/session-activity.test.mjs
+scripts/spec-observe/session-routes.test.mjs`, the `session controls end only`
+case in `scripts/workspaces/launch.integration.test.mjs`, and
+`uv run --script scripts/spec-observe/frontend/browser-session-check.py`.

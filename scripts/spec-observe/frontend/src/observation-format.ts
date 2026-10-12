@@ -1,5 +1,5 @@
 export const assignmentLabels: Record<string, string> = {
-  live: 'Live', 'live-unrecorded': 'Live (unrecorded)', launching: 'Launching',
+  live: 'Session open', 'live-unrecorded': 'Session open (unrecorded)', launching: 'Launching',
   'launch-unconfirmed': 'Launch unconfirmed', 'exited-unrecorded': 'Exited (unrecorded)',
   'terminal-lost': 'Terminal lost', unknown: 'Unknown', ended: 'Ended', 'launch-failed': 'Launch failed',
 };
@@ -8,7 +8,7 @@ export const assignmentTones: Record<string, string> = {
   'exited-unrecorded': 'muted', 'terminal-lost': 'warn', unknown: 'warn', ended: 'muted', 'launch-failed': 'muted',
 };
 export const assignmentEnded = (a: any) => a?.display === 'ended' || a?.display === 'launch-failed';
-export const assignmentLabel = (a: any) => assignmentLabels[a?.display] || 'Unknown';
+export const assignmentLabel = (a: any) => ['live','live-unrecorded'].includes(a?.display) ? (({idle:'Idle · response finished',working:'Working',interrupted:'Response interrupted'} as Record<string,string>)[a?.task_activity?.state] || assignmentLabels[a.display]) : assignmentLabels[a?.display] || 'Unknown';
 export const assignmentTone = (a: any) => assignmentTones[a?.display] || 'muted';
 export const completionLabel = (r: any) => r?.completion_basis === 'manual' ? 'Marked complete'
   : r?.completion_basis === 'merged-pr' ? 'PR merged' : r?.completion_basis === 'ready-pr' ? 'Ready PR published' : 'Workflow marked complete';

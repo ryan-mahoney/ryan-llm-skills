@@ -1333,3 +1333,24 @@ test('assignment collection: real installed tmux composition for live, foreign t
   assert.equal(rowFor(unreachable, ASSIGNMENT_ID).display, 'unknown');
   assert.notEqual(rowFor(unreachable, ASSIGNMENT_ID).display, 'ended');
 });
+
+// node --test --test-name-pattern="launch error before" scripts/spec-observe/assignments.test.mjs
+test('assignment projection shows the launch error before missing-identity diagnostics', () => {
+  const error = 'launch spawn failed: tmux start-session failed: invalid option: extended-keys-format';
+  const row = project(makeRecord({state:'launch_unknown', attention:['no Pi process identity was recorded', 'terminal observation is unknown', error]}), makeClassification({state:'launch_unknown',piIdentity:null}));
+  assert.equal(row.attention[0], error);
+  assert.ok(row.attention.includes('terminal observation is unknown'));
+  assert.notEqual(row.display, 'live');
+});
+
+// node --test --test-name-pattern="recovered assignment" scripts/spec-observe/assignments.test.mjs
+test('recovered assignment replaces stale startup warnings only with confirmed live evidence', () => {
+  const notes = ['no Pi process identity was recorded; only complete UUID absence may prove gone', 'terminal observation is unknown', 'launch spawn failed: unsupported terminal option', 'unrelated warning'];
+  const record = makeRecord({attention:notes});
+  const live = project(record, makeClassification());
+  assert.equal(live.display, 'live');
+  assert.deepEqual(live.attention, ['Earlier launch attempt failed; session is now open: unsupported terminal option', 'unrelated warning']);
+  assert.deepEqual(record.attention, notes, 'durable historical evidence is preserved');
+  const unknown = project(makeRecord({state:'launch_unknown',attention:notes}),makeClassification({state:'launch_unknown',piIdentity:null}));
+  assert.ok(unknown.attention.includes(notes[0]), 'uncertainty never hides missing identity');
+});

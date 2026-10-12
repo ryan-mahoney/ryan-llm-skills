@@ -1,3 +1,4 @@
+import {readSessionActivity} from './session-activity.mjs';
 // Pure projection for observed tmux assignments.
 //
 // `projectAssignment` maps one stored assignment record plus adj4's pure
@@ -12,7 +13,6 @@
 // terminal-lost, unknown, ended and launch-failed.
 
 import { execFile, execFileSync } from "node:child_process";
-import { lstat, realpath } from "node:fs/promises";
 import { inspectProcess } from "./process-identity.mjs";
 import { listAssignments } from "../workspaces/assignments.mjs";
 import { observeAssignment } from "../workspaces/reconcile.mjs";
@@ -181,7 +181,7 @@ function normalizeActivity(activity, assignmentId, sessionFile) {
   if (typeof size !== "number" || !Number.isFinite(size) || size < 0) return null;
   const mtime = normalizeTime(activity.mtime ?? activity.modified_at);
   if (mtime === null) return null;
-  return { size, mtime };
+  return { size, mtime, task_activity: activity.task_activity };
 }
 
 function attachedCount(record, activity) {
@@ -381,10 +381,29 @@ export function projectAssignment(record, classification, { runs = [], activity 
   const normalized = normalizeRecord(record);
   const observed = normalizeClassification(classification);
   const structured = normalizeObservations(observations);
-  const attention = mergeAttention(normalized.attention, observed.attention);
+  // The sidebar has room for two notes. Keep the actual launch error ahead
+  // of generic missing-identity diagnostics, including older persisted records.
+  let attention = mergeAttention(normalized.attention, observed.attention)
+    .sort((a, b) => Number(b.startsWith("launch spawn failed:")) - Number(a.startsWith("launch spawn failed:")));
   const nowMs = normalizeTime(now) ?? Date.now();
 
   const decision = displayFor(normalized, observed, nowMs, structured);
+  if (decision.display === "live" || decision.display === "live-unrecorded") {
+    // Exact live evidence supersedes these retained startup observations.
+    // Keep the durable record intact, and label the launch error as history.
+    const startupNotes = [
+      "no Pi process identity was recorded; only complete UUID absence may prove gone",
+      "terminal observation is unknown",
+      "process listing is incomplete; assignment UUID absence cannot be confirmed",
+      "complete process-listing absence is required; UUID absence cannot be confirmed",
+      "assignment age exceeds 60 seconds; retaining the reservation",
+      "launcher identity observation is unknown; retaining the reservation",
+    ];
+    attention = attention.filter(note => !startupNotes.includes(note))
+      .map(note => note.startsWith("launch spawn failed:")
+        ? note.replace("launch spawn failed:", "Earlier launch attempt failed; session is now open:") : note);
+  }
+
   const currentAttached = structuredAttachedCount(normalized, structured);
 
   const metadata = normalizeActivity(activity, normalized.assignmentId, observed.sessionFile);
@@ -437,6 +456,8 @@ export function projectAssignment(record, classification, { runs = [], activity 
     display: decision.display,
     unrecorded: decision.unrecorded,
     quiet,
+    task_activity: processPresent && metadata?.task_activity ? metadata.task_activity : {state:'unknown',reason:'Session response state is unavailable.'},
+    workspace_id: record.workspace_id ?? null,
     attachedCount: currentAttached ?? attachedCount(record, activity),
     hasControl: false,
     workersUnconfirmed,
@@ -595,25 +616,16 @@ async function raceProbeDeadline(promise, deadline) {
   }
 }
 
-// Optional selected-session stat only: regular physical metadata, never
-// transcript content and never attached-count control inference. The physical
-// path must equal the recorded path, and the stat races the shared deadline.
-async function selectedSessionActivity(classification, deadline) {
+// Read a bounded tail of the identity-validated session alongside its stat.
+// This observes response completion, never workflow acceptance or control authority.
+// The read shares the collection byte budget and deadline.
+async function selectedSessionActivity(classification, deadline, budget) {
   const file = classification?.sessionFile;
   if (typeof file !== "string" || file === "") return null;
   if (probeExpired(deadline)) return null;
   const remaining = remainingProbeMs(deadline);
   if (remaining <= 0) return null;
-  const work = (async () => {
-    try {
-      if ((await realpath(file)) !== file) return null;
-      const info = await lstat(file);
-      if (info.isSymbolicLink() || !info.isFile()) return null;
-      return { ok: true, size: info.size, mtime: info.mtimeMs, session_file: file };
-    } catch {
-      return null;
-    }
-  })();
+  const work = readSessionActivity(file,{budget,deadline});
   let timer;
   try {
     return await Promise.race([
@@ -760,7 +772,7 @@ export async function collectAssignments({
     if (timedOut) noteProbe("probe-deadline-exceeded");
     const activity = classification === null
       ? null
-      : await selectedSessionActivity(classification, deadline);
+      : await selectedSessionActivity(classification, deadline, budget);
     rows.push(projectAssignment(record, classification, {
       runs,
       activity,
