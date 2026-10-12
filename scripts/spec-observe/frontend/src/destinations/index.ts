@@ -35,6 +35,9 @@ export type DestinationProps = {
   catalogLoaded: boolean;
   catalogPending: boolean;
   workspacePending: boolean;
+  catalogDelayed: boolean;
+  workspaceDelayed: boolean;
+  connectionFailed: boolean;
   catalogLoadedAt: number | null;
   workspaceLoadedAt: number | null;
   onSelect: (id: string) => void;
@@ -48,6 +51,7 @@ export type DestinationProps = {
   canOpenPackageFiles: (record: WireRecord) => boolean;
   onRetryWorkspace: (id: string) => void;
   onRetryCatalog: () => void;
+  onRetryConnection: () => void;
   onChooseWorkspace: (id: string) => void;
 };
 

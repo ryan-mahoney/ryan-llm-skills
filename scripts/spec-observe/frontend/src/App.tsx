@@ -32,6 +32,8 @@ export default function App() {
   const [workspacePending, setWorkspacePending] = createSignal(false);
   const [catalogLoadedAt, setCatalogLoadedAt] = createSignal<number | null>(null);
   const [workspaceLoadedAt, setWorkspaceLoadedAt] = createSignal<number | null>(null);
+  const [catalogDelayed, setCatalogDelayed] = createSignal(false);
+  const [workspaceDelayed, setWorkspaceDelayed] = createSignal(false);
   const [refreshKey, setRefreshKey] = createSignal(0);
   const [completion, setCompletion] = createSignal<WireRecord | null>(null);
   const [completionBusy, setCompletionBusy] = createSignal(false);
@@ -40,6 +42,8 @@ export default function App() {
   let dialog!: HTMLDialogElement;
   let stateGeneration = 0, catalogGeneration = 0, workspaceGeneration = 0;
   let workspaceBusyId: string | null = null;
+  let catalogTimer: ReturnType<typeof setTimeout> | undefined;
+  let workspaceTimer: ReturnType<typeof setTimeout> | undefined;
 
   const live = () => liveBrowser() && !imported();
   const scopeWs = () => route().ws;
@@ -182,6 +186,8 @@ export default function App() {
   async function loadCatalog() {
     if (!live() || catalogPending()) return;
     setCatalogPending(true);
+    clearTimeout(catalogTimer);
+    catalogTimer = setTimeout(() => setCatalogDelayed(true), 300);
     const request = ++catalogGeneration;
     try {
       const value = await getJson<Catalog>('/api/workspaces');
@@ -191,6 +197,13 @@ export default function App() {
       setCatalogLoadedAt(serverNow() ?? Date.now());
       const detailId = detailWorkspaceId();
       if (detailId && !value.valid.some(workspaceEntry => workspaceEntry.id === detailId)) {
+        workspaceGeneration++;
+        workspaceBusyId = null;
+        clearTimeout(workspaceTimer);
+        workspaceTimer = undefined;
+        setWorkspacePending(false);
+        setWorkspaceDelayed(false);
+        setWorkspaceLoadedAt(null);
         setWorkspace(undefined);
         setWorkspaceError('Selected workspace is no longer in the catalog.');
       } else if (detailId) {
@@ -199,13 +212,20 @@ export default function App() {
     } catch {
       if (request === catalogGeneration) setCatalogError('Could not load workspaces.');
     } finally {
-      if (request === catalogGeneration) setCatalogPending(false);
+      if (request === catalogGeneration) {
+        clearTimeout(catalogTimer);
+        catalogTimer = undefined;
+        setCatalogPending(false);
+        setCatalogDelayed(false);
+      }
     }
   }
   async function loadWorkspace(id: string) {
     if (!live() || !id || workspaceBusyId === id) return;
     workspaceBusyId = id;
     setWorkspacePending(true);
+    clearTimeout(workspaceTimer);
+    workspaceTimer = setTimeout(() => setWorkspaceDelayed(true), 300);
     const request = ++workspaceGeneration;
     try {
       const value = await getJson<WireRecord>('/api/workspace?' + new URLSearchParams({ id }));
@@ -214,10 +234,15 @@ export default function App() {
       setWorkspaceError('');
       setWorkspaceLoadedAt(serverNow() ?? Date.now());
     } catch {
-      if (request === workspaceGeneration && detailWorkspaceId() === id) setWorkspaceError('Could not load workspace. Retry to reconnect.');
+      if (request === workspaceGeneration && detailWorkspaceId() === id) setWorkspaceError('Workspace details could not be loaded. Retry.');
     } finally {
       if (request === workspaceGeneration && workspaceBusyId === id) workspaceBusyId = null;
-      if (request === workspaceGeneration) setWorkspacePending(false);
+      if (request === workspaceGeneration) {
+        clearTimeout(workspaceTimer);
+        workspaceTimer = undefined;
+        setWorkspacePending(false);
+        setWorkspaceDelayed(false);
+      }
     }
   }
   async function importSnapshot(file: File | undefined) {
@@ -229,8 +254,14 @@ export default function App() {
       catalogGeneration++;
       workspaceGeneration++;
       workspaceBusyId = null;
+      clearTimeout(catalogTimer);
+      clearTimeout(workspaceTimer);
+      catalogTimer = undefined;
+      workspaceTimer = undefined;
       setCatalogPending(false);
       setWorkspacePending(false);
+      setCatalogDelayed(false);
+      setWorkspaceDelayed(false);
       setCatalogLoadedAt(null);
       setWorkspaceLoadedAt(null);
       setFetching(false);
@@ -260,10 +291,10 @@ export default function App() {
   }
   function notes() {
     const out: string[] = [];
-    if (error()) out.push(error());
+    if (error() && route().dest !== 'workspaces' && !pickerRequired()) out.push(error());
     if (payload()?.truncated) out.push('Snapshot read budget reached; some observations are unavailable.');
     for (const e of payload()?.errors ?? []) out.push(`${e.source ? str(e.source) + ': ' : ''}${str(e.message)}`);
-    if (!imported() && !error() && observers().length && !freshObservers().length) out.push('Observer heartbeat is stale; work may have continued since this snapshot.');
+    if (!imported() && !error() && observers().length && !freshObservers().length && route().dest !== 'workspaces' && !pickerRequired()) out.push('Observer heartbeat is stale; work may have continued since this snapshot.');
     for (const observer of observers()) for (const a of observer.snapshot?.attention ?? []) if (a.kind === 'legacy-location') out.push(`Untracked .specs in ${a.repository} (${a.count} entries). Remedy: ${a.remedy}.`);
     return out;
   }
@@ -297,7 +328,10 @@ export default function App() {
   createEffect(on(detailWorkspaceId, (id, previous) => {
     workspaceGeneration++;
     workspaceBusyId = null;
+    clearTimeout(workspaceTimer);
+    workspaceTimer = undefined;
     setWorkspacePending(false);
+    setWorkspaceDelayed(false);
     setWorkspaceLoadedAt(null);
     setWorkspace(undefined);
     setWorkspaceError('');
@@ -318,6 +352,10 @@ export default function App() {
       unsubscribe();
       clearInterval(poll);
       clearInterval(clock);
+      clearTimeout(catalogTimer);
+      clearTimeout(workspaceTimer);
+      catalogTimer = undefined;
+      workspaceTimer = undefined;
       stateGeneration++;
       catalogGeneration++;
       workspaceGeneration++;
@@ -343,6 +381,9 @@ export default function App() {
     get catalogLoaded() { return catalog() !== null; },
     get catalogPending() { return catalogPending(); },
     get workspacePending() { return workspacePending(); },
+    get catalogDelayed() { return catalogDelayed(); },
+    get workspaceDelayed() { return workspaceDelayed(); },
+    get connectionFailed() { return Boolean(error()); },
     get catalogLoadedAt() { return catalogLoadedAt(); },
     get workspaceLoadedAt() { return workspaceLoadedAt(); },
     get token() { return token(); },
@@ -362,6 +403,7 @@ export default function App() {
     canOpenPackageFiles,
     onRetryWorkspace: id => void loadWorkspace(id),
     onRetryCatalog: () => void loadCatalog(),
+    onRetryConnection: () => void refresh(),
     onChooseWorkspace: chooseWorkspace,
   };
 

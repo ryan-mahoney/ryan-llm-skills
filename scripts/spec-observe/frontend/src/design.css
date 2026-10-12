@@ -118,3 +118,11 @@
 .workspace-destination{display:contents}
 :where(.workspace-destination, .workspace-picker) .record{width:100%;border:0;border-bottom:1px solid var(--ds-line);border-radius:0;background:none;text-align:left;font:inherit}
 :where(.workspace-destination, .workspace-picker) .text-link{background:none;border:0;border-radius:0;padding:0;color:var(--ds-accent-text);min-height:44px}
+
+/* Production compatibility: table-shaped regional skeletons keep the screen-71
+   row geometry instead of the directory-sized stacked skeleton. */
+.skeletons-table{padding:0}
+.skeletons-table .skeleton-row{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr) minmax(0,1fr);gap:24px;align-items:center;border-bottom:1px solid var(--ds-line);padding:16px 0;min-height:66px}
+.skeletons-table .skeleton-cell{display:grid;gap:8px}
+.skeletons-table .skeleton-bar{height:10px;width:85%;background:var(--ds-chrome-hi);border-radius:2px}
+.skeletons-table .skeleton-bar--secondary{height:8px;width:60%}

@@ -24,9 +24,9 @@ export function MasterDetail(props: { listLabel: string; list: JSX.Element; chil
   );
 }
 
-export function StateNotice(props: { tone?: StatusTone; title?: string; action?: JSX.Element; children: JSX.Element }) {
+export function StateNotice(props: { tone?: StatusTone; title?: string; action?: JSX.Element; announce?: boolean; children: JSX.Element }) {
   return (
-    <div class={`ds-callout ${props.tone ?? 'neutral'}`} role="status">
+    <div class={`ds-callout ${props.tone ?? 'neutral'}`} role={props.announce === false ? undefined : 'status'}>
       <div>
         <Show when={props.title}>
           <strong>{props.title}</strong>
@@ -38,18 +38,27 @@ export function StateNotice(props: { tone?: StatusTone; title?: string; action?:
   );
 }
 
-export function RegionalSkeleton(props: { rows?: number; label?: string }) {
+export function RegionalSkeleton(props: { rows?: number; label?: string; announce?: boolean; variant?: 'table' }) {
   const rows = () => props.rows ?? 3;
+  const announcing = () => props.announce !== false;
   return (
-    <div class="skeletons" role="status" aria-label={props.label ?? 'Loading'} aria-busy="true">
+    <div class={props.variant === 'table' ? 'skeletons skeletons-table' : 'skeletons'} role={announcing() ? 'status' : undefined} aria-label={announcing() ? (props.label ?? 'Loading') : undefined} aria-busy="true" aria-hidden={announcing() ? undefined : 'true'}>
       <For each={Array.from({ length: rows() })}>
-        {() => (
-          <div class="skeleton" aria-hidden="true">
-            <span />
-            <span />
-            <span />
-          </div>
-        )}
+        {() =>
+          props.variant === 'table' ? (
+            <div class="skeleton-row" aria-hidden="true">
+              <div class="skeleton-cell"><span class="skeleton-bar" /><span class="skeleton-bar skeleton-bar--secondary" /></div>
+              <div class="skeleton-cell"><span class="skeleton-bar" /><span class="skeleton-bar skeleton-bar--secondary" /></div>
+              <div class="skeleton-cell"><span class="skeleton-bar" /><span class="skeleton-bar skeleton-bar--secondary" /></div>
+            </div>
+          ) : (
+            <div class="skeleton" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </div>
+          )
+        }
       </For>
     </div>
   );

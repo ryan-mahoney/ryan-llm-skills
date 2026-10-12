@@ -1,6 +1,6 @@
 // Isolated integration fixture: real dashboard HTTP/file routes, fake discussion workers.
 import {createServer} from 'node:http';
-import {mkdtemp,realpath,mkdir,writeFile,rm} from 'node:fs/promises';
+import {mkdtemp,realpath,mkdir,writeFile,rm,rename,access} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
@@ -21,7 +21,8 @@ await writeFile(join(workspace.directory,'briefs','browser.md'),'# Browser brief
 const contextPath=process.env.SENTINEL_NONCANONICAL_CONTEXT==='1'
  ? `${workspace.directory}/../fixture//context/./unused/../project-context.md`
  : 'context/project-context.md';
-await writeFile(join(workspace.directory,'kit.yaml'),`version: 1\nid: fixture\nname: Browser fixture\nrepositories:\n  - id: fixture-repo\n    path: ${checkout}\n    role: Browser verification\ncontext:\n  - ${contextPath}\n`);
+const healthyKit=`version: 1\nid: fixture\nname: Browser fixture\nrepositories:\n  - id: fixture-repo\n    path: ${checkout}\n    role: Browser verification\ncontext:\n  - ${contextPath}\n`;
+await writeFile(join(workspace.directory,'kit.yaml'),healthyKit);
 const pkg=join(workspace.directory,'specs','browser');await mkdir(pkg,{recursive:true});
 await writeFile(join(pkg,'work-tour.html'),'<html><body><h1>Isolated work tour</h1></body></html>');
 await writeFile(join(pkg,'linked.md'),'# Linked evidence\n');
@@ -46,6 +47,22 @@ let entries=[{id:'entry-1',timestamp:new Date().toISOString(),message:{role:'ass
 let localOperator=false;
 let tick=0,staleLaunch=true,failSend=false,delaySend=false,delayBrief=false;
 const posts=[];
+const boundary={catalogFail:false,detailFail:false,stateFail:false,catalogDelayMs:0,detailDelayMs:0,detailDelayId:'',stateClockOffsetMs:0,catalogMode:'healthy'};
+const boundaryLog=[];
+const activeBoundary=new Map();
+let boundaryAttempt=0;
+const startBoundary=(kind,id)=>{const attempt=++boundaryAttempt;activeBoundary.set(attempt,{kind,id});boundaryLog.push({kind,id,attempt,phase:'start',at:Date.now()});return attempt;};
+const finishBoundary=(attempt,phase)=>{const active=activeBoundary.get(attempt);if(!active)return;activeBoundary.delete(attempt);boundaryLog.push({...active,attempt,phase,at:Date.now()});};
+const numberValue=(value,min,max)=>{const parsed=Number(value);return Number.isFinite(parsed)?Math.min(max,Math.max(min,Math.trunc(parsed))):0;};
+const projectsDir=join(storage,'projects');
+const projectsBackup=join(root,'projects-backup');
+const invalidKitDir=join(projectsDir,'broken');
+const partialKit=`version: 1\nid: fixture\nname: Browser fixture\nrepositories:\n  - id: fixture-repo\n    path: ${checkout}\n    role: Browser verification\n  - id: fixture-missing\n    path: ${join(root,'checkout-missing')}\n    role: Missing checkout\ncontext:\n  - ${contextPath}\n  - ${join(root,'outside-context.md')}\n`;
+const exists=async path=>{try{await access(path);return true;}catch{return false;}};
+const resetBoundaryControls=()=>{boundary.catalogFail=false;boundary.detailFail=false;boundary.stateFail=false;boundary.catalogDelayMs=0;boundary.detailDelayMs=0;boundary.detailDelayId='';boundary.stateClockOffsetMs=0;boundary.catalogMode='healthy';if(activeBoundary.size===0){boundaryLog.length=0;boundaryAttempt=0;}};
+async function moveProjectsToBackup(){await rm(projectsBackup,{recursive:true,force:true});await rename(projectsDir,projectsBackup);}
+async function restoreHealthyWorkspace(){if(await exists(projectsBackup)){await rm(projectsDir,{recursive:true,force:true});await rename(projectsBackup,projectsDir);}await rm(invalidKitDir,{recursive:true,force:true});await writeFile(join(workspace.directory,'kit.yaml'),healthyKit);}
+async function applyCatalogMode(mode){if(mode==='empty'){await restoreHealthyWorkspace();await moveProjectsToBackup();await mkdir(projectsDir,{recursive:true});}else if(mode==='missing_projects'){await restoreHealthyWorkspace();await moveProjectsToBackup();}else if(mode==='partial'){await restoreHealthyWorkspace();await mkdir(invalidKitDir,{recursive:true});await writeFile(join(invalidKitDir,'kit.yaml'),'id: [broken\n');await writeFile(join(workspace.directory,'kit.yaml'),partialKit);}else{await restoreHealthyWorkspace();}boundary.catalogMode=mode;}
 const subscribers=new Set();
 const copied=value=>JSON.parse(JSON.stringify(value));
 const discussion={
@@ -88,10 +105,47 @@ const server=createServer(async(req,res)=>{
   if(action==='tick')tick++;
   if(action==='local')localOperator=url.searchParams.get('value')==='true';
   if(action==='delta')for(const item of subscribers)item.callback({type:'delta',event:{delta:'Streamed reply <script>unsafe()</script>'},workspace_id:'fixture',thread_id:item.thread_id,generation:1});
-  res.setHeader('Content-Type','application/json');res.end(JSON.stringify({posts,threads,tick}));return;
+  if(action==='workspace-reset'){await restoreHealthyWorkspace();resetBoundaryControls();}
+  if(action==='catalog-fail')boundary.catalogFail=url.searchParams.get('value')==='true';
+  if(action==='detail-fail')boundary.detailFail=url.searchParams.get('value')==='true';
+  if(action==='state-fail')boundary.stateFail=url.searchParams.get('value')==='true';
+  if(action==='catalog-delay-ms')boundary.catalogDelayMs=numberValue(url.searchParams.get('value'),0,5000);
+  if(action==='detail-delay-ms')boundary.detailDelayMs=numberValue(url.searchParams.get('value'),0,5000);
+  if(action==='detail-delay-id')boundary.detailDelayId=url.searchParams.get('value')??'';
+  if(action==='state-clock-offset-ms')boundary.stateClockOffsetMs=numberValue(url.searchParams.get('value'),-120000,120000);
+  if(action==='catalog-mode')await applyCatalogMode(url.searchParams.get('value')||'healthy');
+  res.setHeader('Content-Type','application/json');res.end(JSON.stringify({posts,threads,tick,boundary,boundaryLog:boundaryLog.slice(-60),active:[...activeBoundary.values()]}));return;
  }
  // Emulate the trusted Serve endpoint so the browser exercises thread-only tokens.
  if(!localOperator){req.headers.host='dashboard.example';if(req.headers.origin)req.headers.origin='https://dashboard.example';}
+ const readKind=url.pathname==='/api/workspaces'?'catalog':url.pathname==='/api/workspace'?'detail':url.pathname==='/api/state'?'state':null;
+ if(!readKind){dashboard.emit('request',req,res);return;}
+ const id=url.searchParams.get('id')??'';
+ const attempt={
+  fail:readKind==='catalog'?boundary.catalogFail:readKind==='detail'?boundary.detailFail:boundary.stateFail,
+  delayMs:readKind==='catalog'?boundary.catalogDelayMs:readKind==='detail'?boundary.detailDelayMs:0,
+  applies:readKind!=='detail'||!boundary.detailDelayId||boundary.detailDelayId===id,
+  offset:readKind==='state'?boundary.stateClockOffsetMs:0,
+ };
+ const boundaryAttemptNumber=startBoundary(readKind,id);
+ if(attempt.delayMs>0&&attempt.applies)await new Promise(resolve=>setTimeout(resolve,attempt.delayMs));
+ if(attempt.fail){finishBoundary(boundaryAttemptNumber,'fail');res.writeHead(503,{'Content-Type':'application/json'});res.end(JSON.stringify({error:`fixture-${readKind}-failure`}));return;}
+ res.on('close',()=>{if(!res.writableEnded)finishBoundary(boundaryAttemptNumber,'aborted');});
+ const originalEnd=res.end.bind(res);
+ res.end=(body,encoding,callback)=>{
+  if(readKind==='state'&&attempt.offset!==0&&(typeof body==='string'||Buffer.isBuffer(body))){
+   const text=Buffer.isBuffer(body)?body.toString('utf8'):body;
+   try{
+    const parsed=JSON.parse(text);
+    if(typeof parsed.generated_at==='string'&&Number.isFinite(Date.parse(parsed.generated_at))){
+     parsed.generated_at=new Date(Date.parse(parsed.generated_at)+attempt.offset).toISOString();
+     body=JSON.stringify(parsed);
+    }
+   }catch{}
+  }
+  finishBoundary(boundaryAttemptNumber,'complete');
+  return originalEnd(body,encoding,callback);
+ };
  dashboard.emit('request',req,res);
 });
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
