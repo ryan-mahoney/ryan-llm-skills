@@ -107,12 +107,12 @@ try:
     expect(page.locator('[data-thread-preview]')).to_be_enabled()
     page.locator('[data-thread-preview]').click()
     expect(page.locator('#thread-assignment-launch')).to_be_enabled()
-    first_digest=posts('previewAssignment')[-1]
+    first_digest=page.locator('#thread-preview .thread-facts > div').filter(has_text='Contract digest').locator('dd').inner_text()
     expect(page.locator('#thread-preview')).to_contain_text('Contract digest')
     page.locator('#thread-assignment-launch').click()
     expect(page.locator('#thread-assignment-launch')).to_be_disabled()
     expect(page.locator('#thread-preview')).to_contain_text('Re-preview required')
-    assert posts('launchAssignment')[-1]['input']['expectedDigest'] in ['a'*64,'b'*64]
+    assert posts('launchAssignment')[-1]['input']['expectedDigest']==first_digest
     control('stale-launch',False)
     page.locator('[data-thread-preview]').click()
     expect(page.locator('#thread-assignment-launch')).to_be_enabled()

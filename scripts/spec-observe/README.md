@@ -35,6 +35,37 @@ tests remain in `dashboard.test.mjs`. The browser journey waits through real
 five-second polls to detect editor replacement and reuses one isolated fixture
 for its sequential interactions.
 
+In **Brief and assignment**, `/` suggests skills from the execution host's
+installed Pi catalog, including configured user and project sources. `@` suggests
+text files from the thread's selected repository and shared workspace material;
+a whole-workspace thread searches its recorded repositories. Suggestions show
+skill descriptions or file headings and source names. Arrow keys select an item,
+Enter or Tab inserts it, and Escape closes the list. Enter accepts an open
+suggestion before it saves the brief. Paths and email addresses remain ordinary text.
+
+Selections are saved as canonical identities alongside the brief. Editing away a
+selection marker removes its identity. The server resolves identities against the
+target and captures selected skill instructions and file contents into the
+assignment's brief snapshot. **What Pi will receive** shows this snapshot,
+supporting-reference directories, source paths, and hashes before launch. The
+preview digest covers the captured contents; a source edit requires a fresh
+preview. Unsaved brief edits disable launch. Manually typed markers without a
+selection remain ordinary prompt text.
+
+Context supports up to 16 selections, 64 KiB per text file and 96 KiB total selected
+contents. Binary files, generated session records, and outside-source symlinks
+are excluded. Missing sources and unavailable Pi discovery remain visible;
+suggestion queries do not start agents, load extensions, or install packages.
+The browser implementation adapts Re-Story's composer reference contract and
+file ranking for Solid's native textarea.
+
+Focused reference checks run with
+`node --test scripts/workspaces/references.test.mjs`. The autocomplete browser
+journey runs with
+`uv run --script scripts/spec-observe/frontend/autocomplete-check.py` using the
+same isolated fixture. Its refresh wait protects cursor selection, and its delayed
+searches protect against stale replies after edits or thread navigation.
+
 In an interactive Pi session, starting `/spec-sentinel`, `observe`, `shadow`, or
 `recover` starts an owned localhost dashboard and opens it in the default browser.
 `/spec-sentinel status` prints its URL. `off` and session shutdown stop that service;

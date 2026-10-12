@@ -3845,12 +3845,17 @@ test("thread handoff launch links the durable assignment without owning tmux", {
   try {
     const thread = await service.create({ workspace_id: "alpha", title: "Handoff launch" });
     threadId = thread.thread_id;
+    await mkdir(join(workspaceDirectory, 'notes'), { recursive: true });
+    await writeFile(join(workspaceDirectory, 'notes', 'context.md'), '# Selected context\nUse this exact source.\n');
+    const suggestions = await service.suggestions({ workspace_id: 'alpha', thread_id: threadId, kind: 'file', query: 'context.md' });
+    const reference = { kind: 'file', id: suggestions.items[0].id };
     const saved = await service.saveBrief({
       workspace_id: "alpha",
       thread_id: threadId,
       request_id: requestId,
       title: "Title",
       content: "body\n",
+      references: [reference],
     });
     const preview = await service.previewAssignment({
       workspace_id: "alpha",
@@ -3875,10 +3880,11 @@ test("thread handoff launch links the durable assignment without owning tmux", {
     const stored = await findAssignment(storageRoot, assignmentId);
     assert.equal(stored.assignment_id, assignmentId);
     assert.equal(stored.state, "live");
-    assert.equal(
-      await readFile(join(workspaceDirectory, "assignments", `${assignmentId}.brief.md`), "utf8"),
-      "# Title\n\nbody\n",
-    );
+    const launchedSnapshot = await readFile(join(workspaceDirectory, "assignments", `${assignmentId}.brief.md`), "utf8");
+    assert.equal(launchedSnapshot, preview.briefBytes.toString('utf8'));
+    assert.match(launchedSnapshot, /^# Title\n\nbody\n/);
+    assert.match(launchedSnapshot, /# Selected context\nUse this exact source/);
+    assert.equal(stored.context_references[0].id, reference.id);
     assert.deepEqual(
       (await readdir(join(workspaceDirectory, "assignments"))).filter((name) => name.endsWith(".json")),
       [`${assignmentId}.json`],

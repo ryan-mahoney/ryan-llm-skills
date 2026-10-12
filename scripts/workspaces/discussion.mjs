@@ -18,6 +18,7 @@ import { inspectProcess, processIdentity } from "../spec-observe/process-identit
 import { findAssignment, launchAssignment as launchAssignmentOwner, resolveAssignment, resolveTarget } from "./assignments.mjs";
 import { observeAssignment } from "./reconcile.mjs";
 import { closeOwnedPiChild, createPiRpc } from "./pi-rpc.mjs";
+import { createReferenceCatalog, validateReferences } from "./references.mjs";
 import {
   addMaterial,
   createFileExclusive,
@@ -136,6 +137,7 @@ function validateHandoffs(handoffs) {
     if (!isUuid(handoff.request_id)) throw invalidThread("handoff request_id must be a UUID");
     if (typeof handoff.brief !== "string") throw invalidThread("handoff brief must be a string");
     if (!isIsoUtc(handoff.saved_at)) throw invalidThread("handoff saved_at must be an ISO UTC string");
+    if (handoff.references !== undefined) validateReferences(handoff.references);
     if (handoff.assignment_id !== undefined && (typeof handoff.assignment_id !== "string" || handoff.assignment_id === "")) {
       throw invalidThread("handoff assignment_id must be a non-empty string when present");
     }
@@ -439,7 +441,7 @@ function parseDiscussionListing(text, threadId) {
  *   clock?: object, assignmentAdapters?: object|null}} options
  * @returns {object}
  */
-export function createDiscussionService({ root, agentDir = null, spawn = nodeSpawn, clock = defaultClock, assignmentAdapters = null, suggestTitle = null } = {}) {
+export function createDiscussionService({ root, agentDir = null, spawn = nodeSpawn, clock = defaultClock, assignmentAdapters = null, suggestTitle = null, referenceCatalog = createReferenceCatalog({ agentDir: agentDir ?? undefined }) } = {}) {
   const configuredRoot = root === undefined || root === null || root === "" ? resolveStorageRoot(process.env, homedir()) : root;
   if (typeof configuredRoot !== "string" || !isAbsolute(configuredRoot) || resolve(configuredRoot) !== configuredRoot) {
     throw new TypeError("root must be a lexical canonical absolute path");
@@ -2426,6 +2428,7 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
       }
     }
     const { workspace_id, thread_id, request_id: requestId, title, content } = input;
+    const references = validateReferences(input.references);
     if (typeof workspace_id !== "string" || !WORKSPACE_ID_PATTERN.test(workspace_id)) {
       throw invalidThread("workspace_id must be a workspace id");
     }
@@ -2439,6 +2442,10 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
     return withThreadLock(workspace_id, thread_id, async () => {
       if (closed) throw serviceClosed();
       const { record, directory } = await loadServiceRecord(workspace_id, thread_id);
+      const previous = record.handoffs.find(entry => entry.request_id === requestId);
+      if (previous && JSON.stringify(previous.references ?? []) !== JSON.stringify(references)) {
+        throw typedError('request-conflict', 'Saved brief references conflict with this request.');
+      }
       const material = await addMaterial(configuredRoot, workspace_id, {
         kind: "brief",
         title,
@@ -2458,6 +2465,7 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
         request_id: requestId,
         brief: material.path,
         saved_at: new Date().toISOString(),
+        ...(references.length ? { references } : {}),
       };
       const updated = await persistRecord(directory, {
         ...record,
@@ -2520,6 +2528,7 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
       storageRoot: configuredRoot,
       brief: handoff.brief,
       instructions: input.instructions,
+      context_references: handoff.references ?? [],
       skill: input.skill ?? "general",
       target: await adj4TargetFor(workspace, record.target),
       specPackage: input.specPackage ?? null,
@@ -2547,7 +2556,7 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
       const { record, workspace } = await loadServiceRecord(workspace_id, thread_id);
       const handoff = record.handoffs.find((entry) => entry.request_id === requestId);
       if (!handoff) throw typedError("brief-not-found", `saved brief not found: ${requestId}`);
-      const resolved = await resolveAssignment(await handoffInput(record, handoff, input, workspace));
+      const resolved = await resolveAssignment(await handoffInput(record, handoff, input, workspace), { referenceCatalog });
       if (!resolved.record || resolved.record.execution_dir !== record.execution_dir) {
         throw typedError("stale-preview", "preview target no longer matches the stored execution binding");
       }
@@ -2579,7 +2588,7 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
         });
       }
       const trustedInput = await handoffInput(record, handoff, input, workspace);
-      const fresh = await resolveAssignment(trustedInput);
+      const fresh = await resolveAssignment(trustedInput, { referenceCatalog });
       if (!fresh.record || fresh.record.execution_dir !== record.execution_dir) {
         throw typedError("stale-preview", "launch target no longer matches the stored execution binding");
       }
@@ -2712,5 +2721,12 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
     return closePromise;
   }
 
-  return { create, list, history, send, saveBrief, previewAssignment, launchAssignment, discard, subscribe, resume, stop, close };
+  async function suggestions({ workspace_id, thread_id, kind, query = '' } = {}) {
+    if (closed) throw serviceClosed();
+    if (!isUuid(thread_id) || typeof workspace_id !== 'string' || !WORKSPACE_ID_PATTERN.test(workspace_id)) throw invalidThread('Suggestion target is invalid.');
+    const { record, workspace } = await loadServiceRecord(workspace_id, thread_id);
+    return referenceCatalog.suggest({ workspace, executionDir: record.execution_dir, kind, query });
+  }
+
+  return { create, list, history, send, saveBrief, suggestions, previewAssignment, launchAssignment, discard, subscribe, resume, stop, close };
 }

@@ -26,6 +26,7 @@ import { resolveCheckout } from "../repo-search/identity.mjs";
 import { processIdentity, sameProcess } from "../spec-observe/process-identity.mjs";
 import { claimOwner } from "../spec-observe/owner-claim.mjs";
 import { observeAssignment } from "./reconcile.mjs";
+import { createReferenceCatalog } from "./references.mjs";
 import {
   catalogEntries,
   createFileExclusive,
@@ -74,6 +75,7 @@ const IMMUTABLE_RECORD_FIELDS = [
   "storage_root",
   "brief",
   "brief_sha256",
+  "context_references",
   "skill",
   "skill_path",
   "instructions",
@@ -355,7 +357,7 @@ export async function resolveTarget({ workspace, target = null, specPackage = nu
  * @returns {Promise<{record: object, piArgs: string[], briefBytes: Buffer,
  *   contractDigest: string}>}
  */
-export async function resolveAssignment(input = {}) {
+export async function resolveAssignment(input = {}, options = {}) {
   if (input === null || typeof input !== "object" || Array.isArray(input)) {
     throw new TypeError("input must be an object");
   }
@@ -462,7 +464,11 @@ export async function resolveAssignment(input = {}) {
   // Read the reviewed brief bytes once; the hash and returned bytes bind this
   // exact read, so later source edits cannot change the approved contract.
   const briefPath = await resolveWorkspacePath(workspace.directory, brief);
-  const briefBytes = await fs.readFile(briefPath);
+  const sourceBriefBytes = await fs.readFile(briefPath);
+  const context = await (options.referenceCatalog ?? createReferenceCatalog({ home })).capture({
+    workspace, executionDir: target.execution_dir, references: input.context_references ?? [],
+  });
+  const briefBytes = context.text ? Buffer.concat([sourceBriefBytes, Buffer.from(context.text)]) : sourceBriefBytes;
   const briefSha256 = sha256Hex(briefBytes);
 
   const storageRootPhysical = await fs.realpath(resolve(storageRoot));
@@ -594,6 +600,7 @@ export async function resolveAssignment(input = {}) {
     coordination_database: coordinationDatabase,
     pi_session_dir: piSessionDir,
     pi_session_file: null,
+    ...(context.references.length ? { context_references: context.references.map(({ content, ...ref }) => ref) } : {}),
     launcher_identity: null,
     launch_token: randomUUID(),
     state: "preview",
@@ -601,7 +608,9 @@ export async function resolveAssignment(input = {}) {
     updated_at: timestamp,
   };
 
-  const result = { record, piArgs, briefBytes, contractDigest };
+  const result = { record, piArgs, briefBytes, contractDigest,
+    inputPreview: { brief: briefBytes.toString('utf8'), instruction: initialInstruction, references: context.references },
+  };
   // Private approval receipt: launchAssignment accepts a supplied `resolved`
   // only when it is this exact object with an unchanged record, argv, bytes
   // and digest, and the caller input deep-equals the approved input.

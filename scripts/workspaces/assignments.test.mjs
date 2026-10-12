@@ -16,6 +16,7 @@ import { delimiter, join } from "node:path";
 import { newPackage } from "../spec-location/index.mjs";
 import { resolveAssignment, resolveTarget } from "./assignments.mjs";
 import { fetchWorkspace } from "./store.mjs";
+import { createReferenceCatalog } from "./references.mjs";
 
 const GIT_TIMEOUT_MS = 10000;
 
@@ -652,6 +653,33 @@ test("assignment resolution verifies installed Pi input assembly model-free", as
   t.diagnostic(`assembled initial message bytes: ${Buffer.byteLength(initialMessage, "utf8")}`);
 
   await assertNoWrites(workspaceDirectory, storageRoot);
+
+  // New composer references are captured into the same @file boundary. Read
+  // the actual snapshot with Pi's file processor, then assemble its real input.
+  await mkdir(join(workspaceDirectory, 'notes'), { recursive: true });
+  await writeFile(join(workspaceDirectory, 'notes', 'selected.md'), '# Selected file\nExact selected source contents.\n');
+  const referenceCatalog = createReferenceCatalog({ agentDir: join(home, '.pi/agent'), skillLoader: () => ({
+    skills: [{name:'demo', description:'Demo workflow', filePath:skillPath, baseDir:join(home,'.agents/skills/demo'), sourceInfo:{scope:'user'}}], diagnostics:[],
+  }) });
+  const workspace = await fetchWorkspace(storageRoot, 'assembly-workspace');
+  const file = (await referenceCatalog.suggest({workspace, executionDir:appPath,kind:'file',query:'selected.md'})).items[0];
+  const skill = (await referenceCatalog.suggest({workspace,executionDir:appPath,kind:'skill',query:'demo'})).items[0];
+  const context = await resolveAssignment({assignment_id:id,workspace_id:'assembly-workspace',storageRoot,home,
+    brief:'briefs/brief.md',instructions:'Use the explicitly selected inputs.',target:'app',pi_path:piPath,
+    context_references:[skill,file].map(({kind,id})=>({kind,id})),
+  }, {referenceCatalog});
+  await mkdir(join(workspaceDirectory, 'assignments'));
+  await writeFile(context.record.brief_snapshot, context.briefBytes);
+  const { processFileArguments } = await import(`${piBase}/cli/file-processor.js`);
+  const contextArgs = parseArgs(context.piArgs);
+  const attachments = await processFileArguments(contextArgs.fileArgs, {autoResizeImages:false});
+  const composed = buildInitialMessage({parsed:contextArgs,fileText:attachments.text,fileImages:attachments.images});
+  assert.ok(composed.initialMessage.includes('Exact selected source contents.'));
+  assert.ok(composed.initialMessage.includes('# Demo skill'));
+  assert.ok(composed.initialMessage.includes(`Supporting references are relative to ${join(home,'.agents/skills/demo')}`));
+  assert.ok(composed.initialMessage.includes('Use the explicitly selected inputs.'));
+  assert.ok(composed.initialMessage.includes(context.inputPreview.brief));
+  t.diagnostic('Selected skill and file contents reached the installed Pi file processor and initial-message assembler.');
 });
 
 test("assignment resolution keeps option-like general instructions as one plain message", async (t) => {

@@ -59,6 +59,8 @@ const STATUS_BY_CODE = new Map([
   ["invalid-message", 400],
   ["invalid-brief", 400],
   ["invalid-handoff", 400],
+  ["invalid-reference", 400],
+  ["reference-unavailable", 409],
   ["invalid-cursor", 400],
   ["invalid-query", 400],
   ["thread-not-found", 404],
@@ -427,6 +429,13 @@ export function createDiscussionRoutes({ discussion, actionToken } = {}) {
         serveEvents(request, response, url);
         return true;
       }
+      if (path === '/api/thread/suggestions') {
+        if (request.method !== 'GET' && request.method !== 'HEAD') {
+          sendStatus(response, 405, { Allow: 'GET, HEAD' }); return true;
+        }
+        const result = await discussion.suggestions({ workspace_id: queryValue(url, 'workspace_id'), thread_id: queryValue(url, 'thread_id'), kind: queryValue(url, 'kind'), query: queryValue(url, 'query') ?? '' });
+        sendJson(response, request.method, 200, result); return true;
+      }
       const method = POST_ROUTES.get(path);
       if (method === undefined) {
         sendStatus(response, 404);
@@ -472,6 +481,12 @@ export function createDiscussionRoutes({ discussion, actionToken } = {}) {
       return true;
     } catch (error) {
       const status = STATUS_BY_CODE.get(error?.code) ?? error?.status ?? 503;
+      if (error?.code === 'invalid-reference' || error?.code === 'reference-unavailable') {
+        sendJson(response, request.method, status, { error: error.code === 'invalid-reference'
+          ? 'Selected context is invalid or too large. Select text files up to 64 KiB, with 96 KiB total context.'
+          : 'A selected skill or file is unavailable on the execution host. Check the target and select it again.' });
+        return true;
+      }
       sendStatus(response, STATUS_TEXT.has(status) ? status : 503);
       return true;
     }

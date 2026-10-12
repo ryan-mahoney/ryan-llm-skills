@@ -58,3 +58,20 @@ body{max-width:100%;overflow-x:clip}
 .thread-facts dd{margin:0}
 @media(max-width:650px){.threads-split,.thread-new{grid-template-columns:minmax(0,1fr)}.thread-list{max-height:280px;overflow:auto}.thread-facts{grid-template-columns:minmax(0,1fr);gap:2px 0}.thread-facts dd{margin-bottom:6px}}
 .epic-table th:last-child,.epic-table td:last-child{white-space:normal;text-align:left}.epic-table tr[aria-current=true] th{font-weight:650}.epic-table th button{min-height:32px;padding:0 8px;font-size:13px}
+
+/* Contextual brief composer: native editing stays stable across live updates. */
+.brief-composer{position:relative;min-width:0}
+.brief-suggestions{border:1px solid var(--border,#344155);border-radius:8px;padding:10px;background:var(--panel,#111827);margin-top:6px;max-height:310px;overflow:auto;box-shadow:0 8px 20px #0003}
+.brief-suggestion{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 10px;width:100%;text-align:left;border:0;border-radius:4px;margin-top:4px;padding:9px;background:transparent}
+.brief-suggestion>span:first-child{font-weight:600;overflow-wrap:anywhere}
+.brief-suggestion>span:nth-child(2){grid-column:1;overflow-wrap:anywhere}
+.brief-suggestion>span:last-child{grid-column:2;grid-row:1;align-self:center}
+.brief-suggestion[aria-selected=true],.brief-suggestion:hover{background:#2563eb30;outline:1px solid #60a5fa70}
+.brief-references{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.brief-reference{display:inline-flex;gap:5px;align-items:center;border:1px solid var(--border,#344155);border-radius:5px;padding:3px 7px;font-size:12px;max-width:100%;overflow-wrap:anywhere}
+.brief-reference button{padding:0 4px;border:0;background:transparent;font-size:18px}
+.brief-references p{flex-basis:100%;margin:0}
+.assignment-input{margin:14px 0}
+.assignment-input details{margin:8px 0;padding:8px;border:1px solid var(--border,#344155);border-radius:5px;min-width:0}
+.assignment-input summary{cursor:pointer;overflow-wrap:anywhere}
+.assignment-input pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto;font-size:12px}

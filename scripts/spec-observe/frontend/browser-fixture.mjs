@@ -5,6 +5,8 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {createDashboardServer} from '../dashboard.mjs';
+import {createReferenceCatalog} from '../../workspaces/references.mjs';
+import {resolveAssignment} from '../../workspaces/assignments.mjs';
 import {setupStorage,createWorkspace} from '../../workspaces/store.mjs';
 const root=await realpath(await mkdtemp(join(tmpdir(),'sentinel-solid-browser-')));
 const storage=join(root,'storage');await setupStorage(storage);
@@ -23,6 +25,11 @@ for(let i=1;i<=2;i++)await writeFile(join(designDir,`screens/0${i}-screen-${i}.h
 await writeFile(join(designDir,'design.json'),JSON.stringify({schema_version:1,design:'demo',title:'Design fixture',brief:'brief.md',viewport:{posture:'responsive',widths:[390,1280]},screens:[1,2].map(step=>({step,id:`screen-${step}`,file:`screens/0${step}-screen-${step}.html`,title:`Screen ${step}`,person:'Operator',job:'Review work',kind:'action',state:'ideal',primary_action:'Review work',captured:{}}))}));
 const observerDir=join(root,'agent','spec-sentinel','a'.repeat(64),'observers');await mkdir(observerDir,{recursive:true});
 const observerFile=join(observerDir,'a.json');
+const skillPath=join(root,'skills','fixture-skill','SKILL.md');await mkdir(join(root,'skills','fixture-skill'),{recursive:true});
+await writeFile(skillPath,'---\nname: fixture-skill\ndescription: Plan work from the chosen brief.\n---\n# Fixture skill\nApply the selected workflow and read references relative to this skill directory.\n');
+const piPath=join(root,'pi');await writeFile(piPath,'#!/bin/sh\nexit 0\n',{mode:0o755});
+const referenceCatalog=createReferenceCatalog({agentDir:join(root,'agent'),skillLoader:()=>({skills:[{name:'fixture-skill',description:'Plan work from the chosen brief.',filePath:skillPath,baseDir:join(root,'skills','fixture-skill'),sourceInfo:{scope:'user'}}],diagnostics:[]})});
+const savedBriefs=new Map();let delaySuggestions=false;
 const thread1='11111111-1111-4111-8111-111111111111',thread2='22222222-2222-4222-8222-222222222222';
 let threads=[{thread_id:thread1,workspace_id:'fixture',title:'Discussion one',state:'idle',queue:[],attention:null,queue_paused:false,history_only:false,generation:1,updated_at:new Date().toISOString()},{thread_id:thread2,workspace_id:'fixture',title:'Discussion two',state:'idle',queue:[],attention:null,queue_paused:false,history_only:false,generation:1}];
 let entries=[{id:'entry-1',timestamp:new Date().toISOString(),message:{role:'assistant',content:[{type:'text',text:'Ready to discuss. <script>unsafe()</script>'}]}}];
@@ -30,9 +37,9 @@ let localOperator=false;
 let tick=0,staleLaunch=true,failSend=false,delaySend=false,delayBrief=false;
 const posts=[];
 const subscribers=new Set();
-const digest=()=>String(tick%2?'a':'b').repeat(64);
 const copied=value=>JSON.parse(JSON.stringify(value));
 const discussion={
+ async suggestions(input){if(delaySuggestions)await new Promise(r=>setTimeout(r,650));return referenceCatalog.suggest({workspace,executionDir:workspace.directory,kind:input.kind,query:input.query});},
  async list({workspace_id}){return {threads:workspace_id==='fixture'?copied(threads):[],invalid:[]};},
  async history({before}){if(before)return {entries:[{id:'entry-old',message:{role:'user',content:'Older message'}}],truncated:false,incomplete_tail:false};return {entries:copied(entries),truncated:true,incomplete_tail:false};},
  async create(input){posts.push({name:'create',input});const t={...threads[0],thread_id:randomUUID(),title:'New thread',queue:[]};threads=[t,...threads];return copied(t);},
@@ -40,9 +47,9 @@ const discussion={
  async stop(input){posts.push({name:'stop',input});threads=threads.map(t=>t.thread_id===input.thread_id?{...t,queue_paused:true,owns_response:false}:t);return {};},
  async resume(input){posts.push({name:'resume',input});threads=threads.map(t=>t.thread_id===input.thread_id?{...t,queue_paused:false,attention:null}:t);return {};},
  async discard(input){posts.push({name:'discard',input});threads=threads.map(t=>t.thread_id===input.thread_id?{...t,queue:[]}:t);return {};},
- async saveBrief(input){posts.push({name:'saveBrief',input});if(delayBrief)await new Promise(r=>setTimeout(r,700));return {brief:'briefs/fixture.md',handoff:{request_id:input.request_id},duplicate:false};},
- async previewAssignment(input){posts.push({name:'previewAssignment',input});return {record:{assignment_id:input.assignment_id,repository_id:'repo',execution_dir:root,brief:'briefs/fixture.md',model:'Pi default'},contractDigest:digest()};},
- async launchAssignment(input){posts.push({name:'launchAssignment',input});if(staleLaunch)throw Object.assign(new Error('Stale fixture preview'),{code:'stale-preview'});return {assignment:{assignment_id:input.assignment_id,state:'live',tmux_session:'fixture'},observation:{state:'live'}};},
+ async saveBrief(input){posts.push({name:'saveBrief',input});if(delayBrief)await new Promise(r=>setTimeout(r,700));await mkdir(join(workspace.directory,'briefs'),{recursive:true});const path=`briefs/${input.request_id}.md`;await writeFile(join(workspace.directory,path),input.content);savedBriefs.set(input.request_id,{path,references:input.references || []});return {brief:path,handoff:{request_id:input.request_id},duplicate:false};},
+ async previewAssignment(input){posts.push({name:'previewAssignment',input});const saved=savedBriefs.get(input.request_id);return resolveAssignment({workspace_id:'fixture',assignment_id:input.assignment_id,storageRoot:storage,brief:saved.path,instructions:input.instructions,pi_path:piPath,context_references:saved.references},{referenceCatalog});},
+ async launchAssignment(input){posts.push({name:'launchAssignment',input});const saved=savedBriefs.get(input.request_id);const fresh=await resolveAssignment({workspace_id:'fixture',assignment_id:input.assignment_id,storageRoot:storage,brief:saved.path,instructions:input.instructions,pi_path:piPath,context_references:saved.references},{referenceCatalog});if(fresh.contractDigest!==input.expectedDigest)throw Object.assign(new Error('Changed source'),{code:'stale-preview'});if(staleLaunch)throw Object.assign(new Error('Stale fixture preview'),{code:'stale-preview'});return {assignment:{assignment_id:input.assignment_id,state:'live',tmux_session:'fixture'},observation:{state:'live'}};},
  subscribe({thread_id},callback){subscribers.add({thread_id,callback});const current=()=>threads.find(t=>t.thread_id===thread_id);const timer=setInterval(()=>callback({type:'state',event:copied(current()??{}),workspace_id:'fixture',thread_id,generation:1}),700);return ()=>{clearInterval(timer);for(const item of subscribers)if(item.callback===callback)subscribers.delete(item);};},
 };
 const makeSnapshot=()=>{const now=new Date().toISOString();const run={workspace:'fixture',package:pkg,package_ref:'fixture/browser',assignment_id:'run-1',workflow_id:'workflow-1',execution:'running',workflow_state:'waiting-worker',is_current_assignment:true,activity:'Building the dashboard',obligation:'Keep editors stable',observed_at:now,coverage:{state:'complete',reasons:[]},spec_progress:{current_position:(tick%3)+1,total_steps:3,current_name:'Migrate view'},timing:{started_at:now,attempts:[]},evidence:{state:'recorded',verdict:'ready',scope:'declared-artifact',source:'work-tour.html',commit:'abc123',observed_at:now},epic:{epic:'demo',workspace:'fixture'}};
@@ -53,6 +60,8 @@ const server=createServer(async(req,res)=>{
  const url=new URL(req.url,'http://fixture');
  if(url.pathname==='/__fixture/control'){
   const action=url.searchParams.get('action');
+  if(action==='delay-suggestions')delaySuggestions=url.searchParams.get('value')==='true';
+  if(action==='edit-context')await writeFile(join(workspace.directory,'notes','browser.md'),'# Updated browser note\nChanged source after preview.\n');
   if(action==='fail-send')failSend=url.searchParams.get('value')==='true';
   if(action==='delay-send')delaySend=url.searchParams.get('value')==='true';
   if(action==='delay-brief')delayBrief=url.searchParams.get('value')==='true';

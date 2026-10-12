@@ -1,11 +1,13 @@
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import { getJson, postJson, HttpError } from './api';
 import { str, time, statusMarkdown } from './format';
+import BriefComposer from './BriefComposer';
+import { identities, type BriefReference, type InputPreview } from './composerTypes';
 
 type Repo = { id: string; status?: string; worktrees?: Array<{ id?: string; path?: string; name?: string }> };
 type Thread = Record<string, any> & { thread_id: string; title?: string; queue?: any[] };
 type Entry = Record<string, any> & { id: string };
-type Preview = { requestId: string; assignmentId: string; record: Record<string, any> | null; digest: string };
+type Preview = { requestId: string; assignmentId: string; record: Record<string, any> | null; digest: string; input?: InputPreview };
 type Result = { assignment: Record<string, any> | null; observation: Record<string, any> | null };
 type Props = { workspaceId: string; repositories: Repo[]; token?: string; live: boolean; refreshKey?: number };
 const LIMIT = 100;
@@ -24,7 +26,7 @@ const derived = (t?: Thread) => {
 };
 const label = (s: string) => labels[s] || (s && s !== 'unknown' ? str(s) : 'Unknown');
 const tone = (s: string) => tones[s] || 'muted';
-const briefSig = (title: string, content: string) => `${title}\0${content}`;
+const briefSig = (title: string, content: string, refs: BriefReference[] = []) => JSON.stringify([title, content, identities(refs)]);
 
 export default function Threads(props: Props) {
   const [threads, setThreads] = createSignal<Thread[] | null>(null);
@@ -47,6 +49,8 @@ export default function Threads(props: Props) {
   const [createError, setCreateError] = createSignal('');
   const [briefTitle, setBriefTitle] = createSignal('');
   const [briefContent, setBriefContent] = createSignal('');
+  const [briefReferences, setBriefReferences] = createSignal<BriefReference[]>([]);
+  const [savedReferences, setSavedReferences] = createSignal<BriefReference[]>([]);
   const [savedTitle, setSavedTitle] = createSignal<string | null>(null);
   const [savedContent, setSavedContent] = createSignal<string | null>(null);
   const [briefRequestId, setBriefRequestId] = createSignal<string | null>(null);
@@ -69,14 +73,13 @@ export default function Threads(props: Props) {
   let draftEl: HTMLTextAreaElement | undefined;
   let transcriptEl: HTMLDivElement | undefined;
   let titleEl: HTMLInputElement | undefined;
-  let briefEl: HTMLTextAreaElement | undefined;
   const [announcer, setAnnouncer] = createSignal('');
   const active = () => props.live && Boolean(props.workspaceId);
   const actionable = () => active() && Boolean(props.token);
   const thread = () => threads()?.find(t => t.thread_id === selected());
-  const dirty = () => savedContent() !== null && (briefTitle() !== savedTitle() || briefContent() !== savedContent());
+  const dirty = () => savedContent() !== null && briefSig(briefTitle(), briefContent(), briefReferences()) !== briefSig(savedTitle() ?? '', savedContent() ?? '', savedReferences());
   const announce = (value: string) => setAnnouncer(value);
-  const resetHandoff = () => { setBriefTitle(''); setBriefContent(''); if (titleEl) titleEl.value = ''; if (briefEl) briefEl.value = ''; setSavedTitle(null); setSavedContent(null); setBriefRequestId(null); setBriefPending(null); setAssignmentId(''); setPreview(null); setPreviewStale(false); setResult(null); setHandoffError(''); };
+  const resetHandoff = () => { setBriefTitle(''); setBriefContent(''); setBriefReferences([]); setSavedReferences([]); if (titleEl) titleEl.value = ''; setSavedTitle(null); setSavedContent(null); setBriefRequestId(null); setBriefPending(null); setAssignmentId(''); setPreview(null); setPreviewStale(false); setResult(null); setHandoffError(''); };
   const resetSelection = () => { selectionGeneration++; historyGeneration++; closeSource(); setEntries([]); setOlder(false); setLoadingHistory(false); setIncompleteTail(false); setPartial(''); setToolNote(''); setNotice(''); setRequestError(''); setPending(''); stickBottom = true; };
   function closeSource() { source?.close(); source = undefined; setStream('unavailable'); }
   function params(extra: Record<string, string> = {}) { return new URLSearchParams({ workspace_id: props.workspaceId, ...extra }); }
@@ -207,13 +210,13 @@ export default function Threads(props: Props) {
   }
   async function saveBrief() {
     if (!actionable() || pending() || !briefTitle().trim()) return;
-    const title = briefTitle(), content = briefContent(), signature = briefSig(title, content);
+    const title = briefTitle(), content = briefContent(), references = briefReferences(), signature = briefSig(title, content, references);
     let identity = briefPending(); if (!identity || identity.signature !== signature) { identity = { id: uuid(), signature }; setBriefPending(identity); }
     const id = selected(), workspace = props.workspaceId, selection = selectionGeneration;
     try {
-      const data: any = await action('/api/thread/save-brief', { workspace_id: workspace, thread_id: id, request_id: identity.id, title: title.trim(), content }, 'brief');
+      const data: any = await action('/api/thread/save-brief', { workspace_id: workspace, thread_id: id, request_id: identity.id, title: title.trim(), content, references: identities(references) }, 'brief');
       if (id !== selected() || workspace !== props.workspaceId || selection !== selectionGeneration) return;
-      setBriefRequestId(identity.id); setBriefPending(null); setSavedTitle(title.trim()); setSavedContent(content); if (briefTitle() === title) setBriefTitle(title.trim()); setPreview(null); setPreviewStale(false); setResult(null); setAssignmentId(''); announce(data.duplicate ? 'Brief was already saved with this request.' : 'Brief saved. Preview the assignment before launching.'); void loadList();
+      setBriefRequestId(identity.id); setBriefPending(null); setSavedTitle(title.trim()); setSavedContent(content); setSavedReferences(references); if (briefTitle() === title) setBriefTitle(title.trim()); setPreview(null); setPreviewStale(false); setResult(null); setAssignmentId(''); announce(data.duplicate ? 'Brief was already saved with this request.' : 'Brief saved. Preview the assignment before launching.'); void loadList();
     } catch (e) { if (id === selected() && selection === selectionGeneration) setHandoffError(routeError(e)); }
   }
   async function previewAssignment() {
@@ -225,12 +228,12 @@ export default function Threads(props: Props) {
     try {
       const data: any = await action('/api/thread/preview-assignment', { workspace_id: workspace, thread_id: id, request_id: req, assignment_id: assignment, instructions }, 'preview');
       if (id !== selected() || workspace !== props.workspaceId || selection !== selectionGeneration) return;
-      setPreview({ requestId: req, assignmentId: assignment, record: data?.record && typeof data.record === 'object' ? data.record : null, digest: str(data?.contractDigest || '') }); setPreviewStale(false); setResult(null); announce(`Assignment preview ready. Digest ${str(data?.contractDigest).slice(0, 12)}.`);
+      setPreview({ requestId: req, assignmentId: assignment, record: data?.record && typeof data.record === 'object' ? data.record : null, digest: str(data?.contractDigest || ''), input: data?.inputPreview }); setPreviewStale(false); setResult(null); announce(`Assignment preview ready. Digest ${str(data?.contractDigest).slice(0, 12)}.`);
     } catch (e) { if (id === selected() && selection === selectionGeneration) setHandoffError(routeError(e)); }
   }
   async function launchAssignment() {
     const p = preview(), instructions = savedContent();
-    if (!actionable() || pending()) return;
+    if (!actionable() || pending() || dirty()) return;
     if (!p?.digest || previewStale() || instructions === null) { setHandoffError('Preview the assignment before launching.'); return; }
     const id = selected(), workspace = props.workspaceId, selection = selectionGeneration;
     try {
@@ -262,7 +265,6 @@ export default function Threads(props: Props) {
   });
   createEffect(() => { const value = draft(); if (draftEl && draftEl.value !== value) draftEl.value = value; });
   createEffect(() => { const value = briefTitle(); if (titleEl && titleEl.value !== value) titleEl.value = value; });
-  createEffect(() => { const value = briefContent(); if (briefEl && briefEl.value !== value) briefEl.value = value; });
   createEffect(() => {
     entries(); partial(); toolNote();
     if (stickBottom && transcriptEl) queueMicrotask(() => { if (stickBottom && transcriptEl) transcriptEl.scrollTop = transcriptEl.scrollHeight; });
@@ -310,12 +312,12 @@ export default function Threads(props: Props) {
                 <p class="small muted"><span class={`pill ${stream() === 'live' ? 'good' : stream() === 'reconnecting' ? 'warn' : 'muted'}`}>{stream() === 'live' ? 'Live' : stream() === 'connecting' ? 'Connecting live updates…' : stream() === 'reconnecting' ? 'Live updates reconnecting…' : stream() === 'stopped' ? 'Live updates stopped' : 'Live updates unavailable'}</span> · The local stream may stay silent for 15 seconds between keepalives.</p><Show when={notice()}><p class="small muted">{notice()}</p></Show>
                 <Show when={active()}><section class="thread-handoff" aria-labelledby="thread-handoff-heading"><div class="section-head"><h5 id="thread-handoff-heading">Brief and assignment</h5><span class="small muted">Explicit operator dispatch</span></div>
                   <div class="thread-field"><label for="thread-brief-title">Brief title</label><input id="thread-brief-title" type="text" maxlength="200" placeholder="Short assignment title." ref={titleEl} onInput={e => setBriefTitle(e.currentTarget.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void saveBrief(); } }} /></div>
-                  <div class="thread-field"><label for="thread-brief-content">Brief content</label><textarea id="thread-brief-content" rows="6" placeholder="Write the assignment brief: outcome, scope, constraints and verification." ref={briefEl} onInput={e => setBriefContent(e.currentTarget.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void saveBrief(); } }} /></div>
+                  <div class="thread-field"><label for="thread-brief-content">Brief content</label><BriefComposer id="thread-brief-content" value={briefContent()} references={briefReferences()} workspaceId={props.workspaceId} threadId={selected()} enabled={actionable()} onChange={setBriefContent} onReferencesChange={setBriefReferences} onSave={() => void saveBrief()} /></div>
                   <p class="small muted">Enter saves the brief · Shift+Enter adds a newline. Saving publishes the brief; it never launches anything.</p>
                   <Show when={briefRequestId()}><p class="small muted" role="status">Saved brief {briefRequestId()!.slice(0, 8)}{dirty() ? ' · the editor has unsaved changes; preview uses the saved brief.' : ''}</p></Show>
                   <div class="thread-actions"><button id="thread-brief-save" class="primary" data-thread-brief-save disabled={!actionable() || !!pending() || !briefTitle().trim()} onClick={() => void saveBrief()}>{pending() === 'brief' ? 'Saving brief…' : 'Save brief'}</button><button id="thread-brief-preview" data-thread-preview disabled={!actionable() || !!pending() || !briefRequestId() || dirty()} onClick={() => void previewAssignment()}>{pending() === 'preview' ? 'Previewing…' : 'Preview assignment'}</button></div>
                   <Show when={handoffError()}><div class="thread-state bad" role="alert"><p>{handoffError()}</p><button onClick={() => { setHandoffError(''); if (previewStale()) void previewAssignment(); else titleEl?.focus(); }}>Retry brief editor</button></div></Show>
-                  <Show when={preview()} keyed>{p => { const rec = p.record || {}; const facts: [string, string][] = [['Target', str(rec.repository_id || rec.target?.kind || '') || 'workspace'], ['Execution directory', str(rec.execution_dir || '')], ['Brief', str(rec.brief || '')], ['Model', str(rec.model || '') || 'Pi default'], ['Assignment', str(rec.assignment_id || p.assignmentId)], ['Contract digest', p.digest]]; return <div class="thread-preview" id="thread-preview"><div class="section-head"><h6>Assignment preview</h6><span class={`pill ${previewStale() ? 'warn' : 'good'}`}>{previewStale() ? 'Re-preview required' : 'Reviewed'}</span></div><dl class="thread-facts"><For each={facts}>{f => <div><dt>{f[0]}</dt><dd class="mono">{f[1]}</dd></div>}</For></dl><Show when={previewStale()}><p class="small warn" role="status">The resolved contract changed after this preview. Preview again before launching; the launch control stays disabled until then.</p></Show><div class="thread-actions"><button id="thread-assignment-launch" data-thread-launch disabled={!actionable() || !!pending() || previewStale()} onClick={() => void launchAssignment()}>{pending() === 'launch' ? 'Launching…' : 'Launch assignment'}</button></div><p class="small muted">Launching starts the assignment in its own tmux session. It never sends a thread message.</p></div>; }}</Show>
+                  <Show when={preview()} keyed>{p => { const rec = p.record || {}; const facts: [string, string][] = [['Target', str(rec.repository_id || rec.target?.kind || '') || 'workspace'], ['Execution directory', str(rec.execution_dir || '')], ['Brief', str(rec.brief || '')], ['Model', str(rec.model || '') || 'Pi default'], ['Assignment', str(rec.assignment_id || p.assignmentId)], ['Contract digest', p.digest]]; return <div class="thread-preview" id="thread-preview"><div class="section-head"><h6>Assignment preview</h6><span class={`pill ${previewStale() ? 'warn' : 'good'}`}>{previewStale() ? 'Re-preview required' : 'Reviewed'}</span></div><dl class="thread-facts"><For each={facts}>{f => <div><dt>{f[0]}</dt><dd class="mono">{f[1]}</dd></div>}</For></dl><Show when={p.input}><div class="assignment-input"><h6>What Pi will receive</h6><p class="small muted">The saved brief and selected contents below are captured together. Changed source contents require a new preview before launch.</p><For each={p.input?.references || []}>{ref => <details><summary>{ref.kind === 'skill' ? 'Skill' : 'File'}: {ref.label} · {ref.source}</summary><p class="small mono">{ref.path}</p><p class="small mono">SHA-256 {ref.sha256}</p><pre>{ref.content}</pre></details>}</For><details><summary>Complete brief and context</summary><pre>{p.input?.brief}</pre></details><details><summary>Assignment instructions</summary><pre>{p.input?.instruction}</pre></details></div></Show><Show when={previewStale()}><p class="small warn" role="status">The resolved contract changed after this preview. Preview again before launching; the launch control stays disabled until then.</p></Show><div class="thread-actions"><button id="thread-assignment-launch" data-thread-launch disabled={!actionable() || !!pending() || previewStale() || dirty()} onClick={() => void launchAssignment()}>{pending() === 'launch' ? 'Launching…' : 'Launch assignment'}</button></div><p class="small muted">Launching starts the assignment in its own tmux session. It never sends a thread message.</p></div>; }}</Show>
                   <Show when={result()} keyed>{r => { const a = r.assignment || {}, o = r.observation || {}, s = str(a.state || o.state || 'unknown'), attention = [...(Array.isArray(a.attention) ? a.attention : []), ...(Array.isArray(o.attention) ? o.attention : [])].filter(Boolean), id = str(a.assignment_id || ''), anchor = `thread-assignment-${id}`; return <div class="thread-result" id="thread-result"><div class="section-head"><h6>Assignment result</h6><span class={`pill ${s === 'live' ? 'good' : 'warn'}`}>{s === 'live' ? 'Live' : 'Not confirmed live'}</span></div><p class="small">Assignment <a id="thread-assignment-link" class="mono" href={`#${anchor}`}>{id}</a> is recorded read-only; this page never fetches it automatically.</p><div id={anchor}><p class="small muted">State: {s}{typeof a.tmux_session === 'string' ? ` · tmux session ${a.tmux_session}` : ''}</p><Show when={attention.length}><p class="small warn">Attention: {attention.join(', ')}</p></Show></div><div class="thread-actions"><button id="thread-discuss-result" data-thread-discuss onClick={discussResult}>Discuss result</button></div><p class="small muted">Discuss result only fills the composer. Review the text, then press Send; nothing is sent or launched automatically.</p></div>; }}</Show>
                 </section></Show>
               </Show>

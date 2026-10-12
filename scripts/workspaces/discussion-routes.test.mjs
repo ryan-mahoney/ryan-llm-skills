@@ -66,7 +66,7 @@ async function fixtureStorage(t) {
 function serviceSpy() {
   const calls = [];
   const spy = { calls };
-  for (const name of ["create", "list", "history", "send", "stop", "resume", "discard", "saveBrief", "previewAssignment", "launchAssignment", "subscribe"]) {
+  for (const name of ["create", "list", "history", "suggestions", "send", "stop", "resume", "discard", "saveBrief", "previewAssignment", "launchAssignment", "subscribe"]) {
     spy[name] = (...args) => {
       calls.push({ name, args });
       return name === "subscribe" ? () => {} : Promise.resolve([]);
@@ -335,6 +335,7 @@ test("unconfigured remote requests are refused for every thread route before the
     { label: "list", path: `/api/threads?${new URLSearchParams({ workspace_id: "fixture" })}` },
     { label: "history", path: `/api/thread/history?${threadQuery}` },
     { label: "events", path: `/api/thread/events?${threadQuery}` },
+    { label: "suggestions", path: `/api/thread/suggestions?${threadQuery}&kind=file&query=readme` },
     ...POST_PATHS.map((path) => ({ label: path, path, write: true })),
     { label: "unknown", path: "/api/thread/bogus" },
   ];
@@ -606,7 +607,7 @@ test("unknown thread routes return 404 and unsupported methods return 405", asyn
 
 for (const endpoint of ["local", "tailnet"]) {
 // Run alone: node --test --test-name-pattern="real discussion service.*tailnet" scripts/workspaces/discussion-routes.test.mjs
-test(`the real discussion service serves create/list/history/save-brief over the ${endpoint} dashboard seam`, async (t) => {
+test(`the real discussion service serves create/list/history/save-brief/suggestions over the ${endpoint} dashboard seam`, async (t) => {
   const f = await fixtureStorage(t);
   const spawnCalls = [];
   const service = createDiscussionService({
@@ -663,6 +664,12 @@ test(`the real discussion service serves create/list/history/save-brief over the
   const saved = JSON.parse(briefResponse.body);
   assert.equal(typeof saved.brief, "string");
   assert.equal(saved.handoff.request_id, briefRequestId, "the saved request_id survives the HTTP boundary");
+  const suggestionsResponse = await read(`/api/thread/suggestions?${new URLSearchParams({workspace_id:'fixture',thread_id:created.thread_id,kind:'file',query:saved.brief})}`);
+  assert.equal(suggestionsResponse.status, 200);
+  const suggestions = JSON.parse(suggestionsResponse.body);
+  assert.equal(suggestions.items[0].label, saved.brief);
+  assert.equal(suggestions.items[0].description, 'HTTP brief · workspace');
+  assert.match(suggestions.items[0].id, /^file:[0-9a-f]{64}$/);
 
   // Preview the saved handoff with fresh identity and instructions; the
   // resolved record must bind to the created thread without any launch.
