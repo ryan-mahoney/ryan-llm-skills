@@ -14,7 +14,7 @@ function fixture(t) {
   return { home, root, agentDir, repo };
 }
 
-test('default Documents discovery finds grouped and nested repositories without enrollment', async t => {
+test('default Documents discovery finds grouped repositories without walking into a repository', async t => {
   const f = fixture(t);
   const outer = f.repo(join(f.root, 'work', 'outer'));
   const inner = f.repo(join(outer, 'packages', 'inner'));
@@ -24,7 +24,7 @@ test('default Documents discovery finds grouped and nested repositories without 
   symlinkSync(outside, join(f.root, 'alias'));
   const result = await createRepositoryDiscovery({ agentDir: f.agentDir, home: f.home }).read();
   assert.equal(result.root, f.root);
-  assert.deepEqual(result.roots.sort(), [outer, inner].sort());
+  assert.deepEqual(result.roots.sort(), [outer]);
   assert.deepEqual(result.reasons, []);
 });
 

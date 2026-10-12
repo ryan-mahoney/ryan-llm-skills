@@ -72,6 +72,7 @@ export async function discoverRepositories(root, { limits = DISCOVERY_LIMITS, no
       if (rel === '..' || rel.startsWith('../') || isAbsolute(rel)) { note(`discovery-changed: ${current.path}`); continue; }
       handle = await opendir(current.path); directories++;
       let git = false, specs = false, entry;
+      const children = [];
       while ((entry = await handle.read())) {
         entries++;
         if (entries > limits.entries || now() - started >= limits.milliseconds) { note('discovery-cap: entry or time limit reached'); break; }
@@ -80,8 +81,13 @@ export async function discoverRepositories(root, { limits = DISCOVERY_LIMITS, no
         if (!entry.isDirectory() || entry.name.startsWith('.') || skipped.has(entry.name)) continue;
         if (excluded.has(join(current.path, entry.name))) continue;
         if (current.depth >= limits.depth) { note(`discovery-depth-cap: ${current.path}`); continue; }
-        if (queue.length >= limits.directories) { note('discovery-cap: directory limit reached'); continue; }
-        queue.push({ path: join(current.path, entry.name), depth: current.depth + 1 });
+        children.push({ path: join(current.path, entry.name), depth: current.depth + 1 });
+      }
+      // Discovery only finds repositories that still hold `.specs/`, so it never
+      // walks a repository's own source tree; grouping folders are still walked.
+      if (!git) for (const child of children) {
+        if (queue.length >= limits.directories) { note('discovery-cap: directory limit reached'); break; }
+        queue.push(child);
       }
       // A root marks a repository that still holds `.specs/` content, which the
       // sentinel reports as a legacy location; packages come from storage.

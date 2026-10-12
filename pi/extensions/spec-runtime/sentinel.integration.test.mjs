@@ -364,7 +364,7 @@ function cli(args, cwd, env = process.env) {
   return execFileSync(process.execPath, [cliPath, ...args], { cwd, encoding: 'utf8', env });
 }
 
-test('sentinel discovery: native root command and CLI find nested repositories with legacy .specs without enrollment', { skip: sdkSkip, timeout: 60000 }, async t => {
+test('sentinel discovery: native root command and CLI find repositories with legacy .specs without enrollment', { skip: sdkSkip, timeout: 60000 }, async t => {
   const dir = sandbox(t);
   const search = join(dir, 'Projects with spaces');
   const { repo } = primary(search, 'group/outer');
@@ -380,12 +380,12 @@ test('sentinel discovery: native root command and CLI find nested repositories w
   assert.match(lastNote(captured).message, /outer\/feature/);
   assert.match(lastNote(captured).message, /inner\/feature/);
   assert.match(lastNote(captured).message, /spec-location migrate --workspace outer/);
-  assert.match(lastNote(captured).message, /spec-location migrate --workspace inner/);
+  // Discovery stops at a repository, so the nested one is found only from inside it (below).
   assert.equal(requests.length, 0);
   assert.equal(existsSync(enrollmentDirectory({ agentDir: dir })), false);
   const snapshot = JSON.parse(cli(['sentinel', 'status', '--agent-dir', dir, '--format', 'json'], dir));
   assert.deepEqual(snapshot.runs.map(run => run.assignment_id).sort(), ['inner', 'outer']);
-  assert.deepEqual(snapshot.attention.map(row => row.repository).sort(), [realpathSync(repo), realpathSync(join(repo, 'packages', 'inner'))].sort());
+  assert.deepEqual(snapshot.attention.map(row => row.repository), [realpathSync(repo)]);
   assert.equal(snapshot.discovery.root, search);
   // The root only scopes repository discovery; packages come from storage either way.
   const override = JSON.parse(cli(['sentinel', 'status', '--agent-dir', dir, '--root', join(repo, 'packages'), '--format', 'json'], dir));
