@@ -66,7 +66,7 @@ Commands:
   add-brief ID --title TITLE [--from FILE]
   add-note ID --title TITLE [--from FILE]
   add-artifact ID (--repository RID --path REL | --url URL) [--title T] [--note N]
-  launch ID --brief REL (--instructions TEXT | --instructions-file PATH) [--id UUID] [--target RID]
+  launch ID --brief REL (--instructions TEXT | --instructions-file PATH) [--id UUID] [--target RID] [--harness pi|claude|codex]
   locate ID --json                                           Reconcile and print one assignment envelope
   assignments [--workspace ID]                               List assignment envelopes
   attach ID                                                  Attach this terminal to a live assignment session
@@ -75,6 +75,9 @@ Commands:
 
 PATH is absolute, ~/..., or relative to the workspace directory. Edits print a
 preview and write nothing unless --apply is given.
+
+launch --harness selects the agent: pi (default), claude, or codex. The non-Pi
+values resolve the committed clauded/codexd wrappers from PATH.
 
 Global options:
   --root PATH   Storage root. Otherwise ADJACENT_STORAGE_ROOT, then the root saved
@@ -146,6 +149,7 @@ const COMMANDS = {
       '--provider': 'value',
       '--model': 'value',
       '--thinking': 'value',
+      '--harness': 'value',
       '--trust': 'value',
       '--authority': 'value',
       '--workflow': 'value',
@@ -372,6 +376,7 @@ async function buildLaunchInput(root, workspaceId, options) {
     provider: options['--provider'],
     model: options['--model'],
     thinking: options['--thinking'],
+    ...(options['--harness'] === undefined ? {} : { harness: options['--harness'] }),
     project_trust: options['--trust'],
     tmux_socket: options['--tmux-socket'],
     tmux_session: options['--tmux-session'],
@@ -396,6 +401,7 @@ function previewObject(preview) {
     brief_snapshot: record.brief_snapshot,
     skill: record.skill,
     skill_path: record.skill_path,
+    harness: record.harness ?? 'pi',
     instructions: record.instructions,
     provider: record.provider,
     model: record.model,
@@ -509,7 +515,9 @@ async function launchCommand(root, workspaceId, options) {
 // is a round-trippable argv array naming this exact CLI and root.
 function assignmentEnvelope(root, record) {
   return {
-    record,
+    // Output-only projection: legacy records without a harness show their
+    // effective pi enum without mutating or rewriting persisted bytes.
+    record: { ...record, harness: record.harness ?? 'pi' },
     attach_command: ['node', CLI_PATH, 'attach', record.assignment_id, '--root', root],
     attention: record.attention ?? [],
   };
@@ -519,6 +527,7 @@ function humanEnvelope(envelope) {
   const { record } = envelope;
   const lines = [
     `${record.assignment_id} ${record.state} ${record.workspace_id}`,
+    `harness ${record.harness ?? 'pi'}`,
     `execution_dir ${record.execution_dir}`,
     `socket ${record.tmux_socket}`,
     `session ${record.tmux_session}`,

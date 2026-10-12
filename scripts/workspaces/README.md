@@ -37,7 +37,7 @@ node scripts/workspaces/cli.mjs <command> [options]
 | `add-brief` | `add-brief ID --title TITLE [--from FILE]` |
 | `add-note` | `add-note ID --title TITLE [--from FILE]` |
 | `add-artifact` | `add-artifact ID (--repository RID --path REL \| --url URL) [--title T] [--note N]` |
-| `launch` | `launch ID --brief REL (--instructions TEXT \| --instructions-file PATH) [--target RID] [--skill NAME] [--id UUID] [--yes \| --digest SHA]` — preview the resolved contract, then start Pi in a dedicated tmux session after confirmation |
+| `launch` | `launch ID --brief REL (--instructions TEXT \| --instructions-file PATH) [--target RID] [--skill NAME] [--id UUID] [--harness pi\|claude\|codex] [--yes \| --digest SHA]` — preview the resolved contract, then start the selected agent in a dedicated tmux session after confirmation |
 | `locate` | `locate ID [--json]` — reconcile one assignment and print its envelope |
 | `assignments` | `assignments [--workspace ID] [--json]` — list assignment envelopes |
 | `attach` | `attach ID` — attach this terminal to a live assignment's recorded session (requires a TTY) |
@@ -50,6 +50,18 @@ the previewed digest. `--brief` is relative to the workspace directory (for exam
 the `briefs/...` path `add-brief` prints). `--target` names a repository id from
 `kit.yaml`; by default the session uses the root's dedicated socket
 `<root>/.sentinel/adjacent.sock`.
+
+`--harness` selects `pi` (default), `claude`, or `codex`. Claude and Codex resolve
+the committed `clauded`/`codexd` wrappers from `PATH`; those wrappers add the
+unrestricted `--dangerously-skip-permissions` and
+`--dangerously-bypass-approvals-and-sandbox` flags, so the execution host is the
+sandbox and no approval dialogue is expected. `--provider` and `--trust` are
+Pi-only and are refused for the other harnesses. `--model` is any non-empty
+string for every harness; `--thinking` keeps Pi's levels, accepts only
+low/medium/high/xhigh/max for Claude, and any non-empty string for Codex (passed
+as the quoted TOML `model_reasoning_effort` value). Non-Pi launches carry no Pi
+session flags and leave the Pi session directory empty, so attach is the only
+observation path and transcripts are not supervised by Sentinel.
 
 `add-brief` and `add-note` read stdin completely when `--from` is absent; with
 `--from FILE` the file is the only source and stdin is never touched.

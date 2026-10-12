@@ -249,6 +249,13 @@ async function createFixture(t) {
   const piPath = join(binDir, "pi");
   await writeFile(piPath, FAKE_PI_SOURCE, { mode: 0o755 });
   await chmod(piPath, 0o755);
+  // Fixed wrapper names for the harness CLI cases: ordinary PATH resolution,
+  // no --pi-path and no real model process.
+  for (const name of ["clauded", "codexd"]) {
+    const wrapper = join(binDir, name);
+    await writeFile(wrapper, FAKE_PI_SOURCE, { mode: 0o755 });
+    await chmod(wrapper, 0o755);
+  }
 
   const fakePiLog = join(root, "fake-pi.jsonl");
   const env = {
@@ -680,4 +687,125 @@ test("takeover CLI: attach failure after a delivered hold keeps it held and a re
   await waitForClose(retry.child);
   assert.deepEqual(await inboxFiles(fixture.packagePath), inventory, "no duplicate original on retry");
   assert.deepEqual(await readFile(holdPath), holdBytes, "the delivered hold is preserved byte-for-byte");
+});
+
+test("launch CLI: harness previews", async (t) => {
+  const fixture = await createFixture(t);
+  const workspaceDirectory = fixture.workspaceDirectory;
+  const executionDirectory = await realpath(fixture.repoApp);
+
+  const previewArgs = (extra = [], id = randomUUID()) => [
+    "launch", fixture.workspaceId,
+    "--brief", "briefs/brief.md",
+    "--instructions", "Harness preview.",
+    "--id", id,
+    "--json",
+    ...extra,
+  ];
+  // The child CLI runs without --digest and without a TTY, so it prints the
+  // real parsed preview and then refuses before any write or spawn.
+  const previewOf = async (args) => {
+    const run = await runCli(args, fixture.env);
+    assert.equal(run.code, 1, `preview must refuse without a digest: ${run.stdout}${run.stderr}`);
+    assert.match(run.stderr, /requires --digest/);
+    return JSON.parse(run.stdout.trim().split("\n")[0]);
+  };
+
+  const prompt = (id) =>
+    `Read the assignment brief at ${join(workspaceDirectory, "assignments", `${id}.brief.md`)}.\n\n` +
+    "Perform the following request:\n\nHarness preview.\n\n" +
+    `Assignment ${id} workspace ${fixture.workspaceId} dir ${workspaceDirectory}. ` +
+    "Publication authority: none (grants no merge/deploy).";
+
+  // The absent and explicit-pi previews share one assignment id so the two
+  // resolved argv arrays are comparable; every other preview keeps a fresh id.
+  const piId = randomUUID();
+  const absent = await previewOf(previewArgs([], piId));
+  const explicitPi = await previewOf(previewArgs(["--harness", "pi"], piId));
+  assert.equal(absent.harness, "pi");
+  assert.equal(explicitPi.harness, "pi");
+  assert.deepEqual(absent.piArgs, explicitPi.piArgs);
+  assert.ok(absent.piArgs.includes("--session-dir"));
+  assert.ok(absent.piArgs.includes("--session-id"));
+  assert.ok(absent.piArgs.includes(`@${join(workspaceDirectory, "assignments", `${absent.assignment_id}.brief.md`)}`));
+
+  const claude = await previewOf(previewArgs(["--harness", "claude", "--model", "opus", "--thinking", "high"]));
+  assert.equal(claude.harness, "claude");
+  assert.equal(claude.provider, null);
+  assert.equal(claude.model, "opus");
+  assert.equal(claude.thinking, "high");
+  assert.deepEqual(claude.piArgs, [
+    "--session-id", claude.assignment_id,
+    "--model=opus",
+    "--effort", "high",
+    prompt(claude.assignment_id),
+  ]);
+
+  const codex = await previewOf(previewArgs(["--harness", "codex", "--thinking", "ultra"]));
+  assert.equal(codex.harness, "codex");
+  assert.equal(codex.model, null);
+  assert.deepEqual(codex.piArgs, [
+    "-c", 'model_reasoning_effort="ultra"',
+    prompt(codex.assignment_id),
+  ]);
+
+  // A withheld digest never writes assignments/sessions/.sentinel or starts
+  // the fake agent.
+  await assert.rejects(lstat(join(workspaceDirectory, "assignments")), { code: "ENOENT" });
+  await assert.rejects(lstat(join(workspaceDirectory, "sessions")), { code: "ENOENT" });
+  await assert.rejects(lstat(join(fixture.storageRoot, ".sentinel")), { code: "ENOENT" });
+  assert.deepEqual(await logEntries(fixture.fakePiLog), []);
+
+  // Invalid selections refuse before any useful preview output.
+  const invalid = await runCli(previewArgs(["--harness", "other"]), fixture.env);
+  assert.match(parseRefusal(invalid).error, /invalid harness/);
+  const claudeOff = await runCli(previewArgs(["--harness", "claude", "--thinking", "off"]), fixture.env);
+  assert.match(parseRefusal(claudeOff).error, /invalid thinking level/);
+
+  // Read-only assignments output: a new claude record shows its stored enum;
+  // a legacy absent-harness ended record shows the effective pi enum without
+  // changing its bytes.
+  const { resolveAssignment } = await import("./assignments.mjs");
+  const resolvePersisted = (extra) => resolveAssignment({
+    assignment_id: randomUUID(),
+    workspace_id: fixture.workspaceId,
+    storageRoot: fixture.storageRoot,
+    home: join(fixture.root, "home"),
+    brief: "briefs/brief.md",
+    skill: "general",
+    instructions: "Persisted harness record.",
+    target: "app",
+    publication_authority: "none",
+    attempt_kind: "initial",
+    pi_path: join(fixture.root, "bin", "pi"),
+    ...extra,
+  });
+  const newHarness = { ...(await resolvePersisted({ harness: "claude", model: "opus" })).record, state: "ended" };
+  const legacy = { ...(await resolvePersisted({})).record, state: "ended" };
+  delete legacy.harness;
+  const assignmentsDirectory = join(workspaceDirectory, "assignments");
+  await mkdir(assignmentsDirectory, { recursive: true });
+  const newFile = join(assignmentsDirectory, `${newHarness.assignment_id}.json`);
+  const legacyFile = join(assignmentsDirectory, `${legacy.assignment_id}.json`);
+  await writeFile(newFile, JSON.stringify(newHarness));
+  await writeFile(legacyFile, JSON.stringify(legacy));
+  const newBytes = await readFile(newFile);
+  const legacyBytes = await readFile(legacyFile);
+
+  const listJson = await runCli(["assignments", "--json"], fixture.env);
+  assert.equal(listJson.code, 0, listJson.stderr);
+  const envelopes = JSON.parse(listJson.stdout.trim());
+  const byId = new Map(envelopes.map((envelope) => [envelope.record.assignment_id, envelope.record]));
+  assert.equal(byId.get(newHarness.assignment_id).harness, "claude");
+  assert.equal(byId.get(legacy.assignment_id).harness, "pi");
+  assert.deepEqual(await readFile(newFile), newBytes);
+  assert.deepEqual(await readFile(legacyFile), legacyBytes);
+  assert.ok(!Object.hasOwn(JSON.parse(await readFile(legacyFile, "utf8")), "harness"));
+
+  const listText = await runCli(["assignments"], fixture.env);
+  assert.equal(listText.code, 0, listText.stderr);
+  const blocks = listText.stdout.trim().split(/\n\n+/);
+  const blockFor = (id) => blocks.find((block) => block.includes(id));
+  assert.match(blockFor(newHarness.assignment_id), /harness claude/);
+  assert.match(blockFor(legacy.assignment_id), /harness pi/);
 });
