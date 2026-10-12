@@ -25,7 +25,7 @@ export const SENTINEL_LIMITS = Object.freeze({
   roots: 20,
   assignments: 50,
   workspaceAssignments: 100,
-  packageChildren: 100,
+  packageChildren: 500,
   receiptFiles: 100,
   receiptDirectoryEntries: 5000,
   indexEntries: 1000,
