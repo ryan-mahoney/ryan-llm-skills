@@ -23,7 +23,7 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
@@ -35,6 +35,7 @@ import {
   locateAssignment,
   resolveAssignment,
 } from "./assignments.mjs";
+import { newPackage } from "../spec-location/index.mjs";
 import { writeFileAtomic } from "./store.mjs";
 
 const FIXTURE_PI = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "launch-fixture-pi.mjs");
@@ -323,6 +324,7 @@ async function workspaceWithRepo(storageRoot, id, repoPath) {
     "version: 1",
     `id: ${JSON.stringify(id)}`,
     `name: ${JSON.stringify(id)}`,
+    `execution_host: ${JSON.stringify(hostname().split(".")[0].toLowerCase())}`,
     "repositories:",
     '  - id: "app"',
     `    path: ${JSON.stringify(repoPath)}`,
@@ -1019,25 +1021,17 @@ test("store preservation: bytes, lease refusal, scan refusals and late ownership
   await listAssignments(storageRoot);
   await findAssignment(storageRoot, input.assignment_id);
 
-  // Git-dir lease refuses launch without taking or modifying it.
-  const leaseDir = join(repo, ".git", "spec-runtime.lock");
-  await mkdir(leaseDir, { recursive: true });
-  const leasePath = join(leaseDir, "lease.json");
-  await writeFile(leasePath, "{\"id\":\"fixture\"}\n");
-  const leaseBefore = await readFile(leasePath);
-  const leased = launchInput({ workspaceId: "workspace-0", storageRoot, home, piPath });
-  const leasedDigest = (await resolveAssignment(leased)).contractDigest;
-  await assert.rejects(launchAssignment(leased, { expectedDigest: leasedDigest }), /spec_dispatch git lease/);
-  assert.deepEqual(await readFile(leasePath), leaseBefore);
-  assert.equal(await exists(join(assignmentsA, `${leased.assignment_id}.json`)), false);
-  await rm(leaseDir, { recursive: true, force: true });
-
-  // A supplied valid spec package's runtime package lock likewise refuses.
-  const packageDirectory = join(repo, ".specs", "fixture");
-  await mkdir(join(packageDirectory, "runtime", "package.lock"), { recursive: true });
-  const packageLease = join(packageDirectory, "runtime", "package.lock", "lease.json");
-  await writeFile(packageLease, "{\"id\":\"package-fixture\"}\n");
-  const packageBytes = await readFile(packageLease);
+  // A spec package whose run has a live coordinator refuses launch without
+  // touching the run record.
+  const created = await newPackage({
+    workspace: "workspace-0", slug: "fixture", targets: [{ id: "app" }], root: storageRoot,
+  });
+  assert.equal(created.ok, true);
+  const packageDirectory = created.locations.package_dir;
+  await mkdir(join(packageDirectory, "runtime"), { recursive: true });
+  const runPath = join(packageDirectory, "runtime", "run.json");
+  await writeFile(runPath, JSON.stringify({ id: "run-fixture", state: "running", coordinator_pid: process.pid }));
+  const runBytes = await readFile(runPath);
   const packaged = launchInput({
     workspaceId: "workspace-0",
     storageRoot,
@@ -1046,13 +1040,10 @@ test("store preservation: bytes, lease refusal, scan refusals and late ownership
     specPackage: packageDirectory,
   });
   const packagedDigest = (await resolveAssignment(packaged)).contractDigest;
-  await assert.rejects(
-    launchAssignment(packaged, { expectedDigest: packagedDigest }),
-    /package lease/,
-  );
-  assert.deepEqual(await readFile(packageLease), packageBytes);
+  await assert.rejects(launchAssignment(packaged, { expectedDigest: packagedDigest }), /run-active/);
+  assert.deepEqual(await readFile(runPath), runBytes);
   assert.equal(await exists(join(assignmentsA, `${packaged.assignment_id}.json`)), false);
-  await rm(join(packageDirectory, "runtime", "package.lock"), { recursive: true, force: true });
+  await rm(runPath, { force: true });
 
   // Duplicate UUID across owning workspace dirs refuses the global scan.
   const duplicate = {

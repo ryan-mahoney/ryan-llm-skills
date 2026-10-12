@@ -131,13 +131,16 @@ await writeFile(path.join(dir, "blocked.html"), blockedHtml);
 // Internal files can exist and still be unsuitable references for readers.
 await mkdir(path.join(dir, ".specs"), { recursive: true });
 await writeFile(path.join(dir, ".specs", "private.txt"), "Internal provenance");
+await mkdir(path.join(dir, "storage/projects/demo/specs/feature"), { recursive: true });
+await writeFile(path.join(dir, "storage/projects/demo/specs/feature/spec.md"), "Internal package");
 const privateHtml = await check("internal references stay out of HTML", (m) => {
   m.gates[0].artifact = ".specs/private.txt";
   m.audit.artifact = path.join(dir, "audit.md");
   m.architecture.decisions = [{ decision: "Keep normalized values", reason: "Readers expect one format.", source: ".specs/private.txt" }];
-  m.qa.scenarios[0].artifacts = [path.join(dir, "route-result.txt"), ".specs/private.txt"];
+  m.qa.scenarios[0].artifacts = [path.join(dir, "route-result.txt"), ".specs/private.txt", "storage/projects/demo/specs/feature/spec.md"];
 });
 assert.ok(!privateHtml.includes(".specs/private.txt"));
+assert.ok(!privateHtml.includes("projects/demo/specs"));
 assert.ok(!privateHtml.includes(dir));
 assert.ok(privateHtml.includes("Supporting file not shared."));
 const externalDir = await mkdtemp(path.join(tmpdir(), "unshared-tour-evidence-"));

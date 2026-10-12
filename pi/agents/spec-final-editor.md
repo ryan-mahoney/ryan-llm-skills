@@ -12,7 +12,7 @@ Use the explicit EDITOR_MODEL selector. Read applicable checkout-local instructi
 and apply the reviewer's bounded Change / Edits / Preserve / Return assignment.
 Preserve accepted behavior and unrelated changes. Return changed files and relevant
 diff, or the concrete unresolved choice. Only edit assigned implementation/tests;
-keep any .specs access in the supplied primary repository.
+write spec artifacts only inside the supplied `package_dir`; never create `.specs/` in a checkout.
 
 Do not run executable verification, commit, push, merge, launch workers, or expand
 the assignment. Formatting and reading back edits are part of editing. The final

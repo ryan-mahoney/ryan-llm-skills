@@ -18,8 +18,9 @@ launch/configuration error; do not begin repairs under a substituted model.
 Use the coordinator's explicit fix-model assignment. Read
 `~/.agents/skills/spec-branch-fix/SKILL.md` and follow Step Mode for the supplied
 review artifact. You own the repairs, Jev checkpoints, focused verification and
-coherent fix commit. Read the original findings yourself. Keep all `.specs/` writes
-in the supplied primary-checkout package and code/Git/checks in the supplied checkout.
+coherent fix commit. Read the original findings yourself. Write spec artifacts only inside the
+supplied `package_dir`; never create `.specs/` in a checkout. Run code, Git, and checks in the
+supplied checkout.
 
 You are the sole writer while active. Do not delegate repairs, launch implementation
 workers, independently review your own fixes, or advance steps. Preserve the reviewer's

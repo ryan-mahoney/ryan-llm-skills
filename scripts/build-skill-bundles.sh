@@ -305,8 +305,15 @@ OpenCode nested workers, resume behavior, and completion criteria. The [evidence
 explains the required proof. These guides are included in this archive. PR merging remains a
 separate action after publication, as do deployment authorization and post-deployment observation.
 
-The agent reads `.specs/project-context.md` in the primary repository and AGENTS-linked policy
-sources before design, then writes a `.specs/<feature>/context.md` snapshot there. Only unresolved consequential decisions
+Spec work requires workspace storage. A spec package lives at
+`<storage root>/projects/<workspace>/specs/<slug>/`, outside every checkout, and the
+`spec-location` resolver (`node ~/.agents/scripts/spec-location/cli.mjs`) is the only code that
+maps a workspace or package reference to a path. Skills read paths from the package's
+`locations.json` and stop with the resolver's remedy when it refuses. In the sections below,
+`<package_dir>` is that package folder.
+
+The agent reads the workspace's `project-context.md` and AGENTS-linked policy
+sources before design, then writes a `context.md` snapshot in the package folder. Only unresolved consequential decisions
 need a check-in. Routine implementation remains autonomous; nobody is expected to review proposals
 or code. See the context contract in `skills/spec-end-to-end/references/project-context.md`.
 
@@ -325,7 +332,7 @@ These requirements use the existing stages and schemas.
 ### Transition Existing Pending Specs
 
 ```text
-/spec-upgrade .specs/feature-a/ .specs/feature-b/
+/spec-upgrade workspace/feature-a workspace/feature-b
 /spec-upgrade all pending specs in this repository
 ```
 
@@ -342,8 +349,8 @@ files and stops before implementation. Then use `spec-end-to-end` for a ready pa
 This inspects the current repository and writes the standalone proposal to:
 
 ```txt
-.specs/<feature>/context.md
-.specs/<feature>/proposal.md
+<package_dir>/context.md
+<package_dir>/proposal.md
 ```
 
 The proposal should say whether the change fits the current architecture, name the affected files, explain trade-offs, and recommend whether a critique pass is worth running.
@@ -357,7 +364,7 @@ The proposal should say whether the change fits the current architecture, name t
 Use this when the change is large, risky, cross-cutting, security-sensitive, introduces new dependencies, changes data, or when you simply want the architecture challenged before implementation. It writes:
 
 ```txt
-.specs/<feature>/critique.md
+<package_dir>/critique.md
 ```
 
 The critique is intentionally skeptical. Its job is to expose blind spots, not to rubber-stamp the proposal.
@@ -371,9 +378,9 @@ The critique is intentionally skeptical. Its job is to expose blind spots, not t
 This converts the proposal, and optional critique, into:
 
 ```txt
-.specs/<feature>/spec.md
-.specs/<feature>/spec-steps.json
-.specs/<feature>/evidence-plan.json
+<package_dir>/spec.md
+<package_dir>/spec-steps.json
+<package_dir>/evidence-plan.json
 ```
 
 The spec is the implementation contract. `evidence-plan.json` version 2 records the canonical context path, risk posture and phase-aware AC → claim → failure → gate graph. The writer never touches GitHub.
@@ -384,10 +391,10 @@ planning stage. It splits compound objectives into granular cards with explicit 
 Preparation code-grounds and corrects the spec, reconciles the step index, derives prose-only guardrails, plans every step sequentially, and validates required inputs and ready execution cards:
 
 ```txt
-.specs/<feature>/spec-prepare.md
-.specs/<feature>/criteria.md
-.specs/<feature>/invariants.md
-.specs/<feature>/step-<NNN>-subspec.md
+<package_dir>/spec-prepare.md
+<package_dir>/criteria.md
+<package_dir>/invariants.md
+<package_dir>/step-<NNN>-subspec.md
 ```
 
 `criteria.md` and `invariants.md` are prose guidance, never executable audit programs. Preparation produces no fingerprints or readiness manifest. Usable legacy hash fields are ignored.
@@ -395,10 +402,9 @@ Preparation code-grounds and corrects the spec, reconciles the step index, deriv
 ### 4. Establish The Implementation Workspace
 
 Let the top-level agent choose and create a normal feature branch or an isolated worktree using
-ordinary Git operations. Keep `.specs/<feature>/` in the primary repository for all reads and
-writes; never copy it into the worktree or use a tracked worktree copy. Pass the code checkout
-and canonical spec-folder paths separately to every stage. Follow the shared workspace handoff
-and its path resolver. Do not open a new editor or agent session for the handoff.
+ordinary Git operations. Spec files stay in the workspace package folder and are never in a
+checkout or worktree. Pass the code checkout and `<package_dir>` separately to every stage, and
+read paths from `locations.json`. Do not open a new editor or agent session for the handoff.
 
 ### 5. Execute The Prepared Spec
 
@@ -427,7 +433,7 @@ direct invocation defaults to ten bounded review/fix rounds.
 ```
 
 ```bash
-open "<primary-repository>/.specs/<feature>/work-tour.html"
+open "<package_dir>/work-tour.html"
 ```
 
 The HTML explains what changed, why, the verification results, test scenarios, and remaining
@@ -770,7 +776,7 @@ build_bundle() {
     local resource
     while IFS= read -r resource; do
       copy_file "$bundle_dir" "$resource" "$resource"
-    done < <(cd "$ROOT" && find pi/agents pi/extensions/spec-runtime scripts/spec-facts scripts/spec-observe scripts/verification scripts/spec-gym scenarios -name node_modules -prune -o -type f -print | sort)
+    done < <(cd "$ROOT" && find pi/agents pi/extensions/spec-runtime scripts/spec-facts scripts/spec-location scripts/spec-observe scripts/verification scripts/spec-gym scripts/workspaces scenarios scripts/repo-search/identity.mjs -name node_modules -prune -o -type f -print | sort)
     for resource in "$ROOT"/scripts/jev/*.mjs "$ROOT"/scripts/jev/README.md "$ROOT"/scripts/jev/package.json "$ROOT"/scripts/jev/package-lock.json; do
       resource="${resource#"$ROOT"/}"
       copy_file "$bundle_dir" "$resource" "$resource"
@@ -824,6 +830,8 @@ build_bundle() {
 }
 
 spec_skills=(
+  adjacent-storage-setup
+  workspace-kit
   epic-end-to-end
   spec-end-to-end
   spec-message

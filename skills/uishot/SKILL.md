@@ -119,6 +119,10 @@ same command.
 ## Useful flags
 
 - `--out PATH` — exact output path. Otherwise auto-named under `.uishot/`.
+- `--capture-root` — write to the workspace capture root,
+  `<capturesDir>/<repository>/images`, resolved through `spec-location`. It is
+  mutually exclusive with `--out-dir`. On refusal it prints the remedy and
+  exits 2; it does not fall back to the checkout.
 - `--quiet-ms N` — DOM silence required before capture (default 500). Lower it
   to ~200 for a faster loop on simple pages.
 - `--min-wait N` — always wait at least this long; blunt but effective on apps

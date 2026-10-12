@@ -271,19 +271,19 @@ test('assignment projection exposes attached count as information that never gra
   assert.equal(fromTerminal.hasControl, false);
 });
 
-test('assignment projection links an exited coordinator run with lease conditions to workers-unconfirmed', () => {
+test('assignment projection links an exited coordinator run with a coordinator-gone condition to workers-unconfirmed', () => {
   const runs = [{
     workflow_id: WORKFLOW_ID,
     spec_package: SPEC_PACKAGE,
     assignment_id: ASSIGNMENT_ID,
     execution: 'failed',
-    coverage: { reasons: ['lease-missing'] },
+    coverage: { reasons: ['coordinator-gone'] },
   }];
   const row = project(makeRecord(), makeClassification(), { runs });
   assert.equal(row.workersUnconfirmed, true);
   assert.equal(row.nextAction, 'Inspect recorded workers');
   assert.ok(row.attention.includes('workers-unconfirmed'));
-  assert.ok(row.attention.includes('lease-missing'));
+  assert.ok(row.attention.includes('coordinator-gone'));
 });
 
 test('assignment projection adds workers-unconfirmed when the coordinator exited while its run still shows running', () => {
@@ -291,7 +291,7 @@ test('assignment projection adds workers-unconfirmed when the coordinator exited
     workflow_id: WORKFLOW_ID,
     spec_package: SPEC_PACKAGE,
     execution: 'running',
-    coverage: { reasons: ['lease-revoked'] },
+    coverage: { reasons: ['coordinator-gone'] },
   }];
   const row = project(makeRecord({ state: 'ended' }), makeClassification({ state: 'ended', piIdentity: null }), { runs });
   assert.equal(row.display, 'ended');
@@ -299,10 +299,16 @@ test('assignment projection adds workers-unconfirmed when the coordinator exited
   assert.equal(row.nextAction, 'Inspect recorded workers');
 });
 
-test('assignment projection does not claim workers-unconfirmed without a joined lease condition', () => {
+test('assignment projection joins a run by package reference as well as directory', () => {
+  const run = { workflow_id: WORKFLOW_ID, package_ref: 'demo/feature', package: '/storage/projects/demo/specs/feature', execution: 'failed', coverage: { reasons: ['coordinator-gone'] } };
+  assert.equal(project(makeRecord({ spec_package: 'demo/feature' }), makeClassification(), { runs: [run] }).workersUnconfirmed, true);
+  assert.equal(project(makeRecord({ spec_package: 'demo/other' }), makeClassification(), { runs: [run] }).workersUnconfirmed, false);
+});
+
+test('assignment projection does not claim workers-unconfirmed without a joined coordinator-gone condition', () => {
   const makeRuns = run => [{ workflow_id: WORKFLOW_ID, spec_package: SPEC_PACKAGE, ...run }];
   const runningLease = project(makeRecord(), makeClassification(), {
-    runs: makeRuns({ execution: 'running', coverage: { reasons: ['lease-missing'] } }),
+    runs: makeRuns({ execution: 'running', coverage: { reasons: ['coordinator-gone'] } }),
   });
   assert.equal(runningLease.workersUnconfirmed, false);
 
@@ -312,17 +318,17 @@ test('assignment projection does not claim workers-unconfirmed without a joined 
   assert.equal(noLease.workersUnconfirmed, false);
 
   const otherWorkflow = project(makeRecord(), makeClassification(), {
-    runs: [{ workflow_id: 'workflow-other', spec_package: SPEC_PACKAGE, execution: 'failed', coverage: { reasons: ['lease-missing'] } }],
+    runs: [{ workflow_id: 'workflow-other', spec_package: SPEC_PACKAGE, execution: 'failed', coverage: { reasons: ['coordinator-gone'] } }],
   });
   assert.equal(otherWorkflow.workersUnconfirmed, false);
 
   const otherPackage = project(makeRecord(), makeClassification(), {
-    runs: [{ workflow_id: WORKFLOW_ID, spec_package: '/repo/packages/beta', execution: 'failed', coverage: { reasons: ['lease-missing'] } }],
+    runs: [{ workflow_id: WORKFLOW_ID, spec_package: '/repo/packages/beta', execution: 'failed', coverage: { reasons: ['coordinator-gone'] } }],
   });
   assert.equal(otherPackage.workersUnconfirmed, false);
 
   const otherAssignment = project(makeRecord(), makeClassification(), {
-    runs: makeRuns({ assignment_id: OTHER_ID, execution: 'failed', coverage: { reasons: ['lease-missing'] } }),
+    runs: makeRuns({ assignment_id: OTHER_ID, execution: 'failed', coverage: { reasons: ['coordinator-gone'] } }),
   });
   assert.equal(otherAssignment.workersUnconfirmed, false);
 });
@@ -336,7 +342,7 @@ test('assignment projection preserves the full assignment id and never mutates i
       workflow_id: WORKFLOW_ID,
       spec_package: SPEC_PACKAGE,
       execution: 'failed',
-      coverage: Object.freeze({ reasons: Object.freeze(['lease-missing']) }),
+      coverage: Object.freeze({ reasons: Object.freeze(['coordinator-gone']) }),
     }),
   ]);
   const before = JSON.stringify(record);

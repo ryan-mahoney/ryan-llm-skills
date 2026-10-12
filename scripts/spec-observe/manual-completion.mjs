@@ -7,9 +7,11 @@ import { boundedJson } from './merge-reconciliation.mjs';
 export const COMPLETION_FILE = 'sentinel-completion.json';
 export const readManualCompletion = root => boundedJson(join(root, COMPLETION_FILE), root);
 
-export function manualCompletion(record, root, revision, now = Date.now(), dispatches = []) {
+// `package` keeps the absolute directory on the writing machine, so the reference
+// identifies the package; records written before the reference existed match by path.
+export function manualCompletion(record, { ref, root }, revision, now = Date.now(), dispatches = []) {
   if (![1, 2].includes(record?.schema_version) || record.kind !== 'manual_completion'
-    || record.package !== root
+    || !(typeof ref === 'string' && record.package_ref === ref || record.package === root)
     || !Number.isFinite(Date.parse(record.completed_at)) || Date.parse(record.completed_at) > now) return null;
   // Retain old revision-bound records. New operator overrides survive checkpoint
   // and receipt updates; only a dispatch started after the decision reopens work.
@@ -18,13 +20,13 @@ export function manualCompletion(record, root, revision, now = Date.now(), dispa
   return { completed_at: record.completed_at, completion_basis: 'manual' };
 }
 
-export async function writeManualCompletion(root) {
+export async function writeManualCompletion(root, ref) {
   if (await realpath(root) !== root) throw Error('Invalid completion target');
   const path = join(root, COMPLETION_FILE);
   try {
     if (!(await lstat(path)).isFile()) throw Error('Completion path is not a regular file');
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  const record = { schema_version: 2, kind: 'manual_completion', package: root,
+  const record = { schema_version: 2, kind: 'manual_completion', package_ref: ref, package: root,
     completed_at: new Date().toISOString() };
   const temporary = join(root, `.sentinel-completion-${randomUUID()}.tmp`);
   try {
@@ -47,7 +49,7 @@ export async function applyManualCompletions(state) {
     if (!snapshot) continue;
     const completed = new Map();
     for (const run of snapshot.runs) {
-      const completion = manualCompletion(records.get(run.package), run.package, run.completion_revision, Date.now(),
+      const completion = manualCompletion(records.get(run.package), { ref: run.package_ref, root: run.package }, run.completion_revision, Date.now(),
         (run.timing?.attempts ?? []).map(attempt => attempt.started_at));
       if (completion && run.is_current_assignment === true) completed.set(run.package,
         { ...run, ...completion, workflow_state: 'complete', is_current_assignment: false });

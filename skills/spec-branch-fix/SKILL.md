@@ -17,7 +17,7 @@ metadata:
 Apply [Verification and Review](../../rules/verification-and-review.md) for focused-check scheduling
 and batched Jev verification/review-triage checkpoints.
 
-> **`.specs/` is standalone working state and is often gitignored.** Read and write it directly; do not depend on git history to recover it. Diffing implementation code is unaffected.
+> **Spec packages live in workspace storage, outside any checkout.** Read and write them through the paths in `locations.json`; do not depend on git history to recover them. Diffing implementation code is unaffected.
 
 Apply one iteration of the final branch review. `spec-branch-review` wrote
 `reviews/branch-<iteration>-review.md`; this skill reads it, decides what to act on,
@@ -63,19 +63,21 @@ report the exact gap without discarding independent repairs.
 
 ## Resolve Inputs
 
-- **Spec.** Resolve exactly as `spec-branch-review`: explicit `spec=<path>` or
-  `.specs/<feature>/` first, then conversation/footer context, then the sole
-  `.specs/*/spec.md` candidate. Stop on ambiguity. `<spec-dir>` is the resolved
-  `.specs/<feature>/` folder.
+- **Spec.** Resolve exactly as `spec-branch-review`: explicit `spec=<ref or folder>` first,
+  then conversation/footer context. Run the shared
+  [spec-location step](../spec-end-to-end/references/spec-location.md)
+  (`node ~/.agents/scripts/spec-location/cli.mjs check <ref or folder>`); on refusal, print its
+  `message` and `remedy` and stop. `<package_dir>` is the `package_dir` field in
+  `<package_dir>/locations.json`. Stop on ambiguity.
 - **Iteration.** Use `iter=<n>` when given. Standalone default: the highest existing
-  `<spec-dir>/reviews/branch-<k>-review.md` that has **no** matching
+  `<package_dir>/reviews/branch-<k>-review.md` that has **no** matching
   `branch-<k>-fix.md` yet.
-- **Review.** `<spec-dir>/reviews/branch-<iteration>-review.md`. If it is missing,
+- **Review.** `<package_dir>/reviews/branch-<iteration>-review.md`. If it is missing,
   there is nothing to do: report and stop. Do not invent findings.
 
 ### Step Mode
 
-`review=<spec-dir>/reviews/<name>-review.md` (a `kind: step` review such as
+`review=<package_dir>/reviews/<name>-review.md` (a `kind: step` review such as
 `step-003-review.md` or `final-1-review.md`) selects step mode. `spec-run` runs it
 between implementation steps and for the bounded final fix review, with no step worker
 active in the checkout. Everything below applies, with these differences:
@@ -198,10 +200,10 @@ re-raise, so the next review still surfaces it).
 Write to:
 
 ```txt
-<spec-dir>/reviews/branch-<iteration>-fix.md
+<package_dir>/reviews/branch-<iteration>-fix.md
 ```
 
-This lives in the `reviews/` subfolder of the spec folder, next to the
+This lives in the `reviews/` subfolder of `package_dir`, next to the
 review it consumes. Write it atomically (temp file in the destination directory,
 then rename) and begin it with a level-1 `#` heading on line 1. The file leads with
 a fenced `fix:` YAML block — the machine-readable record the loop driver parses —
@@ -215,7 +217,7 @@ with each decision explained once in its `note`. Every dismissed finding carries
 fix:
   kind: branch
   iteration: <iteration>
-  consumed: <spec-dir>/reviews/branch-<iteration>-review.md
+  consumed: <package_dir>/reviews/branch-<iteration>-review.md
   target: <merge-base-sha>..<head-sha>
   decisions:
     - id: F1
@@ -253,8 +255,8 @@ whether the branch is genuinely stalled.
 ## Commit
 
 Review and fix artifacts are durable standalone workflow state, so they are **always
-written** to the spec folder's `reviews/` subfolder. Do not stage or commit `.specs`
-unless the repository explicitly tracks it. After
+written** to `package_dir`'s `reviews/` subfolder. Spec package files are not repository
+files; never stage or commit them. After
 verification passes, stage the changed code/tests and commit:
 
 ```txt

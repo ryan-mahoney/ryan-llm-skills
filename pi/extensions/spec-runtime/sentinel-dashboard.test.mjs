@@ -107,7 +107,7 @@ test('off during startup prevents a late child from opening the browser', async 
   assert.deepEqual(f.opened, []);
 });
 
-test('dashboard passes exact port, agent-dir and optional public-host child arguments', async () => {
+test('dashboard passes exact port, agent-dir and optional public-host and storage-root child arguments', async () => {
   const plain = fixture();
   const first = plain.service.start();
   assert.deepEqual(plain.launches[0].args, ['--port', '0', '--agent-dir', '/fixture/agent']);
@@ -115,9 +115,9 @@ test('dashboard passes exact port, agent-dir and optional public-host child argu
   plain.children[0].emit('message', { type: 'ready', url: 'http://127.0.0.1:12345/' });
   await first;
   plain.service.stop();
-  const configured = fixture({ port: 4319, publicHost: 'dashboard.example' });
+  const configured = fixture({ port: 4319, publicHost: 'dashboard.example', storageRoot: '/fixture/storage' });
   const second = configured.service.start();
-  assert.deepEqual(configured.launches[0].args, ['--port', '4319', '--agent-dir', '/fixture/agent', '--public-host', 'dashboard.example']);
+  assert.deepEqual(configured.launches[0].args, ['--port', '4319', '--agent-dir', '/fixture/agent', '--public-host', 'dashboard.example', '--storage-root', '/fixture/storage']);
   configured.children[0].emit('message', { type: 'ready', url: 'http://127.0.0.1:4319/' });
   await second;
   configured.service.stop();

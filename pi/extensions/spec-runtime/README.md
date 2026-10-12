@@ -15,7 +15,7 @@ npm ci --prefix ~/.agents/pi/extensions/spec-runtime --ignore-scripts
 this dependency automatically (`scripts/install-deps.sh`); the manual command above
 is only needed for a standalone checkout. Restart or
 reload Pi to load it. Existing unmanaged subagents are outside its lifecycle control;
-finish or stop those workers before assigning their checkout to this runtime.
+finish or stop those workers before assigning their worktree to this runtime.
 
 ## Dispatch contract
 
@@ -24,32 +24,41 @@ Call `spec_dispatch` once:
 ```json
 {
   "action": "start",
-  "package": "/repo/.specs/feature",
-  "step": "/repo/.specs/feature/step-001-subspec.md",
-  "checkout": "/worktrees/feature",
+  "package": "transitops/feature",
+  "step": "<storage root>/projects/transitops/specs/feature/step-001-subspec.md",
   "owner_model": "deepseek/deepseek-flash:max",
   "editor_model": "openrouter/inception/mercury-2.5:high"
 }
 ```
 
-The package and step must be canonical primary-checkout paths. An explicit existing
-checkout is reused after repository identity validation. If the path is absent, the
-runtime creates a worktree. With no `checkout`, the default is a sibling named
-`<repository>-<feature>` on branch `spec-<feature>`. Optional `branch` and `base`
-control a new worktree; `base` defaults to `HEAD`. An explicit branch mismatch is
-an error. The runtime does not overwrite changes or change an existing checkout's
-branch. Repository setup happens only when the actual step needs it.
+`package` is a `workspace/slug` ref or the package folder (or a file inside it) in the
+adjacent storage root; spec-location (`scripts/spec-location`) maps it to paths, and a
+refusal (wrong host, missing locations, legacy location) is returned as an error with
+its code and remedy. The step must be a file of that package. A step runs in one
+target repository: the step's `repository` in `spec-steps.json` (required when the package has
+several targets, optional for one). A missing or unknown value is refused as
+`step-repository-missing` or `step-repository-unknown` before any worktree is created. The
+target's primary checkout, branch and git common directory come from `locations.json`. The
+worktree is that target's `worktree` when recorded; otherwise the runtime creates a sibling
+named `<repository>-<slug>` on the target branch (`base` defaults to `HEAD`) and records it with
+spec-location. Other targets' worktrees are created only when a step targets them. The run
+record gains `target` (the repository id), and `checkout` is that target's worktree. Owner and
+editor sessions run there; the prompt lists the other targets' recorded worktrees as read-only
+context, and retained sessions are keyed by target so they never cross repositories. A caller
+cannot supply a checkout. A worktree on another branch or in another repository is an
+error. The runtime does not overwrite changes. Repository setup happens only when the
+actual step needs it.
 
 `instructions` carries scoped direction, acceptance requirements and publication
 authority. `timeout_ms` defaults to two hours for the complete owner assignment.
 `assignment_id` identifies an attempt and defaults to the step path. Repeating the
 same attempt returns its receipt, including after later steps complete. Reusing an
-ID with a changed model, checkout, extension list, step, or instructions is an error. A
+ID with a changed model, worktree, extension list, step, or instructions is an error. A
 startup clarification redispatch therefore uses a new attempt ID on the same step with the
 answer in `instructions`. Retained sessions are reused because `instructions` is part of the
 launch contract but not the session key. Use a new
 assignment ID for an intentional correction/retry, or an owner transfer. A different
-step is a new assignment. Never use a new ID to bypass an active lease.
+step is a new assignment. Never use a new ID to bypass an active run.
 
 Optional `attempt_kind` records why an assignment exists: `implementation`,
 `verification-continuation`, `implementation-repair`, `review-repair`, or `launch-retry`.
@@ -66,14 +75,14 @@ and next action. Return control and await the completion message. `status` is an
 explicit recovery operation, not a polling loop:
 
 ```json
-{"action":"status","package":"/repo/.specs/feature","run_id":"<id>"}
+{"action":"status","package":"transitops/feature","run_id":"<id>"}
 ```
 
-Cancellation revokes the lease, signals every tracked process group, and waits for
+Cancellation revokes the run's writer role, signals every tracked process group, and waits for
 termination. It returns `cancelled` only after those groups have stopped:
 
 ```json
-{"action":"cancel","package":"/repo/.specs/feature","run_id":"<id>"}
+{"action":"cancel","package":"transitops/feature","run_id":"<id>"}
 ```
 
 `completed` means that the owner process produced a final response and its managed
@@ -162,13 +171,17 @@ and missing credentials produce a specific failure without speculative discovery
 
 ## Lifecycle and records
 
-Exclusive directories in the checkout's Git directory and the canonical package's
-runtime directory reserve both code and shared artifacts across coordinators.
-Owner, editor and shell process groups are registered before execution;
+There are no lock directories. Each run records `coordinator_pid` (the dispatching
+process) in `runtime/run.json`. Dispatch refuses `run-active` while the latest run is
+`running`, `cancelling` or `blocked` and that pid is alive. If the pid is dead the
+runtime marks that run `stale` and proceeds; it does not stop the old run's process
+groups. A run holds the writer role while its own record is `running` or `blocked` and
+no `runs/<id>-revoked.json` marker exists; tools check this before each call. Two
+coordinators dispatching in the same instant are not serialized. Owner, editor and shell process groups are registered before execution;
 a stdin gate prevents an unregistered child from starting useful work. Revocation
 blocks new tool calls and prevents unopened gates from proceeding. Managed shell
 timeouts terminate their process groups. Editor descendants still alive at handoff
-revoke the lease and block the next editor. The overall deadline cancels the run.
+revoke the run and block the next editor. The overall deadline cancels the run.
 Normal Pi session shutdown also cancels its managed runs.
 
 This is lifecycle enforcement for cooperative managed workers, not an OS security
@@ -184,25 +197,24 @@ A readiness URL already returning success is rejected without touching that serv
 Ordinary commands run with Bash `pipefail` (also exported to nested Bash shells) and
 retain raw logs; callers should omit output-tail pipelines. A leaked command group is
 terminated with bounded TERM/KILL handling and returned as an error. Confirmed cleanup
-preserves the owner lease so it can correct the command. Unconfirmed cleanup revokes
-the lease and emits a fatal lifecycle receipt; the coordinator is notified and cancels
+keeps the owner running so it can correct the command. Unconfirmed cleanup revokes
+the run and emits a fatal lifecycle receipt; the coordinator is notified and cancels
 its live managed groups before another writer can start. Existing editor-exit protection
 remains strict. Deliberately detached/escaped groups remain outside this cooperative model.
 Hard resets are rejected for managed step commands; return recovery decisions to the
 coordinator. Existing project external-action policies still apply.
 
 An abrupt coordinator crash cannot establish termination. A newly started coordinator
-will not kill a process merely from a persisted PID or automatically remove a stale
-lease. Recover the original coordinator when possible; otherwise inspect and stop the
-recorded workers before manually reconciling the reservation. The runtime never treats
-an unverified stale record as permission to write. Reload after normal shutdown can
-resume the retained sessions using a new attempt ID.
+will not kill a process merely from a persisted PID; it only marks the dead
+coordinator's run `stale`. Inspect and stop any recorded workers of a stale run
+yourself. Reload after normal shutdown can resume the retained sessions using a new
+attempt ID.
 
-Records stay in the canonical package:
+Records stay in the spec package (`<storage root>/projects/<workspace>/specs/<slug>/`); `runtime/` is machine-local and never synced:
 
 | Path under `runtime/` | Contents |
 | --- | --- |
-| `run.json` | Latest assignment's durable receipt |
+| `run.json` | Latest assignment's durable receipt (`package_ref`, `coordinator_pid`) |
 | `runs/<id>.json` | Historical assignment and exact paths |
 | `assignments/*.json` | Persistent attempt lookup and launch contract |
 | `events.jsonl` | Timestamped starts, editor results, deadlines, cancellation, completion |
@@ -210,7 +222,7 @@ Records stay in the canonical package:
 | `runs/<id>-processes/*.json` | Process group lifecycle registry |
 | `runs/<id>-*.jsonl`, `.stderr`, `-command-<uuid>.log` | Detailed diagnostics, read only for concrete failures; legacy runs may use `-commands.log` |
 
-`~/.pi/agent/spec-runtime/<id>.json` indexes each manifest and parent session for
+`~/.pi/agent/spec-runtime/<id>.json` indexes each manifest, `package_ref` and parent session for
 future discovery. Session/log content can contain repository and command details;
 keep runtime records local and out of published artifacts unless intentionally reviewed.
 
@@ -233,8 +245,8 @@ from resumed activity. Terminal run states stop the timer and label worker activ
 as historical; completion still does not certify acceptance.
 
 To observe an existing run from a separate newly loaded Pi session without stopping
-its coordinator, use `/spec-monitor /absolute/repo/.specs/feature`. This only observes
-that package's current run; it does not acquire its lease, own its workers, cancel
+its coordinator, use `/spec-monitor workspace/slug`. This only observes
+that package's current run; it does not claim the package, own its workers, cancel
 them on observer shutdown, or auto-follow later runs. `/spec-monitor off` hides it.
 Normal dispatch and restored dispatch receipts attach automatically. Runs started
 before this monitor was installed use a bounded 64 KiB tail of each role's newest
@@ -443,9 +455,9 @@ node --test pi/extensions/spec-runtime/intercom.integration.test.mjs
 ```
 
 The tests use real local subprocesses with fake model output, not model services.
-They cover idempotence, conflicting writers, retained locks on failed stop, surviving
+They cover idempotence, conflicting writers (live and dead coordinators), a retained run on failed stop, the single-target limit, surviving
 owner/editor descendants, cancellation recovery, shell timeouts, assignment deadlines,
-provider failures, canonical worktree paths, and lease revocation during launch.
+provider failures, worktree creation from the target, and revocation during launch.
 The communication tests cover the owner/editor question contract. The integration test
 uses the installed pinned pi-intercom broker/client in a temporary isolated directory;
 it exercises a real scoped question/reply roundtrip without models or live-session messages.
@@ -501,10 +513,14 @@ path. A passed command is not automatically a passed EV: the owner maps it to th
 and states the proof boundary. Earlier/dirty-tree evidence requires applicability, not a rerun.
 External evidence remains explicitly owner-reported with command, actual SHA and artifact.
 
+Artifact paths are absolute, package-relative (a bare relative path resolves against the step target's worktree), `<repo id>:<path>` (in that target's worktree), or the legacy
+`.specs/<slug>/<rest>` form, which maps to `<package folder>/<rest>`. `pr-url.json` is
+`{ package_ref, targets: { <repo id>: { url, number?, branch?, mode? } } }`; the final checkpoint summary
+uses the URL when the package has one target. With several targets, the final checkpoint stays open (`pr-missing: <ids>`) until every target has a URL in `pr-url.json`.
+
 Process `state: completed` means the worker exited. `handoff.status: recorded` means its structured
 record exists and matches the canonical learning. It does not accept implementation or independent
-review. Missing/changed handoffs yield `handoff_incomplete` without retaining a settled process
-lease. Continued editing/checking invalidates the submission; resubmit afterward. Old attempts are
+review. Missing/changed handoffs yield `handoff_incomplete`. Continued editing/checking invalidates the submission; resubmit afterward. Old attempts are
 `legacy_unchecked` and retain their existing manual reconciliation route. No automatic repair loop
 or new model dispatch is introduced.
 

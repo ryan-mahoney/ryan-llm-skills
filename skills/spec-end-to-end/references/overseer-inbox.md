@@ -7,10 +7,10 @@ needs a separate harness resume request.
 
 ## Location and ownership
 
-Before implementation, create `inbox/` and `processed/` in the canonical
-`.specs/<feature>/` folder in the primary repository. Report their absolute paths
+Before implementation, create `inbox/` and `processed/` in the package folder
+(`package_dir` in `locations.json`; see [Spec Location](spec-location.md)). Report their absolute paths
 and record a unique run ID in the existing stage ledger. Keep the ID on continuation;
-use a new ID for a new run. Never use a worktree copy.
+use a new ID for a new run. Never create them inside a checkout.
 
 The top-level coordinator alone consumes inbox files, archives originals, and
 writes intake receipts in the stage ledger. Stage coordinators route references;

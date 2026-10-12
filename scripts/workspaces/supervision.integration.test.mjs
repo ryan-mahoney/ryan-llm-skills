@@ -21,10 +21,11 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { newPackage } from "../spec-location/index.mjs";
 import { locateAssignment } from "./assignments.mjs";
 import { hasSession } from "./tmux.mjs";
 import { readInboxGuard, recordCheckpoint } from "../../pi/extensions/spec-runtime/sentinel.mjs";
@@ -74,7 +75,11 @@ async function makeRepo(directory) {
 }
 
 function kitYaml({ id, name, repositories }) {
-  const lines = ["version: 1", `id: ${JSON.stringify(id)}`, `name: ${JSON.stringify(name)}`, "repositories:"];
+  const executionHost = hostname().split(".")[0].toLowerCase();
+  const lines = [
+    "version: 1", `id: ${JSON.stringify(id)}`, `name: ${JSON.stringify(name)}`,
+    `execution_host: ${JSON.stringify(executionHost)}`, "repositories:",
+  ];
   for (const repository of repositories) {
     lines.push(`  - id: ${JSON.stringify(repository.id)}`);
     lines.push(`    path: ${JSON.stringify(repository.path)}`);
@@ -230,8 +235,10 @@ async function createFixture(t) {
   }));
   await writeFile(join(workspaceDirectory, "briefs", "brief.md"), "Supervision brief.\n");
 
-  // The canonical package must share the target checkout's primary repository.
-  const packagePath = join(repoApp, ".specs", "feature");
+  // The package lives in the workspace and targets the app repository.
+  const created = await newPackage({ workspace: workspaceId, slug: "feature", targets: [{ id: "app" }], root: storageRoot });
+  assert.equal(created.ok, true);
+  const packagePath = created.locations.package_dir;
   await mkdir(join(packagePath, "inbox"), { recursive: true });
   await mkdir(join(packagePath, "processed"), { recursive: true });
 

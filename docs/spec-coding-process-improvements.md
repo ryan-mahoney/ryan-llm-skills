@@ -18,8 +18,8 @@ cost and quality superiority have not been established by a controlled compariso
 
 Startup does not pre-read later-stage procedures, enumerate available models or run baseline
 broad checks. The coordinator loads review, assembly, tour and publication guidance when those
-stages become relevant. Shared context remains in the primary checkout's `.specs`; code and
-checks run in the selected checkout. Resume preserves completed work and starts with the first
+stages become relevant. Shared context remains in the workspace (`project-context.md` and the package's `context.md`); code and
+checks run in the selected target checkout. Resume preserves completed work and starts with the first
 unfinished obligation, including outstanding review or repair.
 
 See [end-to-end entry](../skills/spec-end-to-end/SKILL.md),
@@ -45,11 +45,13 @@ Commit is a separate editor assignment after that assessment. `spec_question` an
 carry a concrete decision over pi-intercom while the same editor retains its writer reservation.
 There is no replacement writer during the exchange.
 
-Package and checkout leases exclude other managed implementation writers. Detached process
-groups are registered before a stdin gate opens. Cancellation revokes the lease, terminates
+A live-run check excludes other managed implementation writers: dispatch refuses while the
+package's `run.json` records a running run whose coordinator process is alive, and a dead
+coordinator marks the run stale. Detached process
+groups are registered before a stdin gate opens. Cancellation ends the run, terminates
 registered groups with bounded TERM/KILL attempts and releases ownership only after termination
 is confirmed. A different coordinator cannot kill a stale PID from a historical record. Unknown
-cleanup retains ownership and requires recovery; leases are coordination controls for managed
+cleanup retains ownership and requires recovery; the run check is a coordination control for managed
 workers, not a sandbox against arbitrary external processes.
 
 `spec_verify.server` owns a foreground server from readiness through capture and cleanup.
@@ -165,7 +167,7 @@ source-memory ideas remain proposals, not shipped capabilities of this runtime.
 Managed Pi assignments now submit `spec_complete` instead of hand-authoring their learning.
 The tool preserves recorded command outcomes/revisions and asks the owner only for material
 judgments, reusable symbols and evidence applicability. Missing structured handoffs remain visible
-separately from worker exit; process leases still release after confirmed termination. Independent
+separately from worker exit; process ownership still releases after confirmed termination. Independent
 review/fix remains responsible for correctness.
 
 Runtime events and artifact arrivals refresh `runtime/progress.json` and the history index.
@@ -186,7 +188,8 @@ silently switching assignments. Fixer launches must explicitly select the review
 recorded effective owner, unless the user supplies a fix-model override.
 
 Checkpoint skill aliases use the same stage completion guards as canonical names. Artifact
-references accept canonical, package-relative and repository-relative `.specs` paths while
+references accept absolute, package-relative, `<repository id>:<path>` (a file in a target's worktree)
+and legacy `.specs/<slug>/<rest>` paths (mapped to the package folder for migrated packages) while
 preserving confinement and existence checks. Draft publication remains distinct from ready
 publication. New human input marks earlier stage decisions for reconciliation; it does not
 release a hold or imply approval. Expected future session files are not evidence.

@@ -17,7 +17,9 @@ import { manualCompletion, COMPLETION_FILE } from './manual-completion.mjs';
 import { publicHint } from '../../pi/extensions/spec-runtime/monitor.mjs';
 import { discoverManaged } from './core.mjs';
 import { collectAssignments } from './assignments.mjs';
-import { readEpicRecords, collectEpics } from './epics.mjs';
+import { readWorkspaceEpics, collectEpics } from './epics.mjs';
+import { legacySpecs, listPackages, locatePackage } from '../spec-location/index.mjs';
+import { listWorkspaces, resolveRepositoryPath } from '../workspaces/store.mjs';
 
 export const SENTINEL_LIMITS = Object.freeze({
   roots: 20,
@@ -41,9 +43,9 @@ export const SENTINEL_LIMITS = Object.freeze({
   activityEntries: 10000,
 });
 
-const RECEIPT_KEYS = ['id', 'assignment_id', 'package', 'step', 'checkout', 'parent_session', 'owner_session', 'editor_session',
-  'owner_model', 'editor_model', 'state', 'started_at', 'finished_at', 'dispatch_requested_at', 'lock'];
-const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
+const RECEIPT_KEYS = ['id', 'assignment_id', 'package', 'package_ref', 'step', 'checkout', 'parent_session', 'owner_session', 'editor_session',
+  'owner_model', 'editor_model', 'state', 'started_at', 'finished_at', 'dispatch_requested_at'];
+const TERMINAL = new Set(['completed', 'failed', 'cancelled', 'stale']);
 const ROLES = ['owner', 'editor'];
 const CONDITION_GENERATION = 1;
 const MAX_REASONS = 50;
@@ -64,6 +66,10 @@ const insideDir = (parent, child) => {
   const root = parent.endsWith(sep) ? parent : `${parent}${sep}`;
   return child.startsWith(root) && child !== parent;
 };
+// Liveness of a recorded coordinator pid. Only ESRCH is a confirmed absence; a
+// pid is host-local, so this assumes the observer runs on the execution host,
+// and a reused pid reads as alive.
+const pidGone = pid => { try { process.kill(pid, 0); return false; } catch (error) { return error.code === 'ESRCH'; } };
 
 const samePath = async (left, right) => {
   if (resolve(left) === right) return true;
@@ -74,7 +80,7 @@ const samePath = async (left, right) => {
 // not depend on spawning Git: a host spawn failure used to discard every repo.
 // No source, config commands or hooks are executed. Unsupported/unreadable layouts
 // remain unknown, and a worktree's .git file still resolves to its primary common
-// directory so copied .specs packages cannot masquerade as canonical packages.
+// directory, so a linked worktree is never taken for a primary checkout.
 async function gitCommonDir(checkout, budget) {
   try {
     const marker = join(checkout, '.git');
@@ -376,7 +382,7 @@ function runConditions(run, snapshotObservedAt) {
   else if (run.execution === 'failed') add('execution-failed', 'attention', 'open');
   else if (run.execution === 'blocked') add('execution-blocked', 'attention', 'open');
   else if (run.execution === 'cancelled') add('execution-cancelled', 'info', 'open');
-  for (const kind of ['lease-missing', 'lease-mismatch', 'lease-revoked']) if (reasons.includes(kind)) add(kind, 'attention', 'open');
+  if (reasons.includes('coordinator-gone')) add('coordinator-gone', 'attention', 'open');
   // Silence and slow starts stay informational: no spinning or stuck claim.
   const observed = Date.parse(run.observed_at);
   const snapshot = Date.parse(snapshotObservedAt);
@@ -413,7 +419,7 @@ export function renderWorkspace(snapshot) {
   const omitted = Number.isFinite(coverage.omitted) ? ` · omitted ${coverage.omitted}` : '';
   const lines = [`Spec sentinel · workspace ${String(snapshot?.workspace ?? '').slice(0, 12)} · coverage ${coverage.state}${omitted} · ${runs.length} run(s)`];
   for (const run of runs) {
-    lines.push(renderLine(`  ${basename(dirname(run.repository))}/${basename(run.package)} · ${run.assignment_id} · ${run.execution} · `
+    lines.push(renderLine(`  ${run.package_ref ?? basename(run.package)} · ${run.assignment_id} · ${run.execution} · `
       + `${run.checkout ? basename(run.checkout) : 'checkout unknown'} · ${run.obligation || 'obligation unknown'} · ${run.activity || 'activity unknown'}`));
     for (const worker of run.workflow_workers ?? [])
       lines.push(renderDetail('    ', `Recorded worker: ${worker.kind} ${worker.id} · ${worker.state} · checkpoint ${run.workflow_observed_at ?? 'unknown'}`));
@@ -444,6 +450,7 @@ export function renderWorkspace(snapshot) {
   }
   if (!runs.length) lines.push(['unavailable', 'stale'].includes(coverage.state)
     ? '  Workspace observation unavailable; running work is unknown.' : '  No observed runs.');
+  for (const item of snapshot.attention ?? []) lines.push(renderLine(`Attention ${item.kind} · ${item.repository} · ${item.count} untracked .specs entr${item.count === 1 ? 'y' : 'ies'} · ${item.remedy}`));
   for (const epic of snapshot.epics ?? []) {
     lines.push(renderLine(`Epic ${epic.epic} · ${epic.title} · ${epic.summary.merged + epic.summary.complete}/${epic.summary.total} landed · next ${epic.next ?? 'none'} · state ${epic.state}`));
     for (const member of epic.members) lines.push(renderDetail('  ', `${member.name} · ${member.status}${member.attention ? ' · attention' : ''}`
@@ -482,7 +489,7 @@ async function packageRecentlyModified(directory, cutoff, scan) {
 
 export async function collectWorkspace({ roots = [], packages = [], enrollmentErrors = [], discovery = null, indexDir = join(homedir(), '.pi/agent/spec-runtime'),
   now = Date.now, agentDir, scope, includeInactive = false, reconcileMerge = null, skipManagedIndex = false,
-  storageRoot = null, assignmentProbes = null } = {}) {
+  storageRoot = null, assignmentProbes = null, packagesOnly = false } = {}) {
   const tick = clock(now);
   const readTime = clockIso(tick);
   const budget = makeBudget();
@@ -496,46 +503,52 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
   }
   for (const reason of discovery?.reasons ?? []) { reasons.push(reason); unknownOmission = true; }
 
-  // Discovered candidates and optional explicit roots share canonical validation.
+  const note = reason => { if (reason && !reasons.includes(reason)) reasons.push(reason); };
+  const noteUnknown = reason => { if (reason && !reasons.includes(reason)) { reasons.push(reason); unknownOmission = true; } };
+
+  // Enrolled and discovered repositories are checked for legacy `.specs` content
+  // only; packages come from storage.
   const enrolled = sortPaths(Array.isArray(roots) ? roots.filter(value => typeof value === 'string') : []);
   if (enrolled.length > SENTINEL_LIMITS.roots) {
     reasons.push(`roots-cap: selected ${SENTINEL_LIMITS.roots} of ${enrolled.length}`);
     knownOmitted += enrolled.length - SENTINEL_LIMITS.roots;
   }
 
-  // Cache asynchronous Git metadata identity only for this read. Sibling packages
-  // and duplicate index entries share bounded reads without hiding changes later.
-  const identities = new Map();
-  const canonicalPackage = async path => {
-    const target = await realpath(path);
-    const packagePath = (await stat(target)).isFile() && basename(target) === 'spec.md' ? dirname(target) : target;
-    if (!(await stat(packagePath)).isDirectory()) throw new Error('package must be a feature directory or its spec.md');
-    const specs = dirname(packagePath);
-    if (basename(specs) !== '.specs') throw new Error('package must be a direct child of the primary checkout .specs directory');
-    const primary = await realpath(dirname(specs));
-    if (!identities.has(primary)) {
-      const found = await gitCommonDir(primary, budget);
-      identities.set(primary, found ? await realpath(found).catch(() => null) : null);
-    }
-    const common = identities.get(primary);
-    if (common !== join(primary, '.git')) throw new Error('package must belong to the primary checkout, not a linked worktree; Git identity may be unavailable');
-    return { packagePath, primary, common };
-  };
-
   const facts = new Map();
-  const addPackage = canonical => {
-    let fact = facts.get(canonical.packagePath);
-    if (!fact) {
-      fact = { ...canonical, sources: new Map(), checkpoints: null, stepIndex: null, stepIndexNotes: [], checkpointNotes: [], checkouts: new Map(), tourEvidence: null };
-      facts.set(canonical.packagePath, fact);
-    }
-    return fact;
+  // One fact per package directory, keyed by real path. `targets` come from the
+  // package's locations.json; a missing or unreadable file is a coverage reason,
+  // and the package is still observed from its runtime files.
+  const addPackage = async found => {
+    const packagePath = await realpath(found.packageDir);
+    if (facts.has(packagePath)) return;
+    const fact = { packagePath, ref: found.ref, workspace: found.workspace, targets: [], sources: new Map(), checkpoints: null, stepIndex: null,
+      stepIndexNotes: [], checkpointNotes: [], checkouts: new Map(), tourEvidence: null };
+    facts.set(packagePath, fact);
+    const result = await readJson(join(packagePath, 'locations.json'), SENTINEL_LIMITS.smallJsonBytes, budget, {
+      prefix: 'locations', within: packagePath,
+      allow: value => value && typeof value === 'object' && Array.isArray(value.targets)
+        ? value.targets.slice(0, 20).filter(target => target && typeof target.id === 'string' && typeof target.primary === 'string' && isAbsolute(target.primary))
+          .map(target => ({ id: target.id, primary: target.primary, common: typeof target.common === 'string' ? target.common : null,
+            worktree: typeof target.worktree === 'string' ? target.worktree : null })) : null,
+    });
+    if (result.outcome === 'ok') {
+      for (const target of result.record) fact.targets.push({ ...target, common: target.common ? await realpath(target.common).catch(() => null) : null });
+    } else if (result.outcome === 'read-budget') noteUnknown(result.reason);
+    else note(`locations-unavailable: ${found.ref}`);
+  };
+  // Resolve a package reference, directory or file inside one through spec-location.
+  const addRequested = async (value, describe) => {
+    try {
+      const absolute = isAbsolute(value);
+      if (!absolute && !storageRoot) throw new Error('a package reference needs a storage root');
+      const found = await locatePackage(absolute ? await realpath(value) : value, storageRoot ? { root: storageRoot } : {});
+      if (!found.ok) throw new Error(`${found.code}: ${found.message}`);
+      await addPackage(found);
+    } catch (error) { note(describe(messageOf(error))); }
   };
 
   for (const requested of Array.isArray(packages) ? packages : []) {
-    if (typeof requested !== 'string') continue;
-    try { addPackage(await canonicalPackage(requested)); }
-    catch (error) { reasons.push(`package-noncanonical: ${resolve(requested)} (${messageOf(error)})`); }
+    if (typeof requested === 'string') await addRequested(requested, why => `package-noncanonical: ${requested} (${why})`);
   }
 
   // Managed index pointers are discovery hints only: reading one never enrolls
@@ -557,47 +570,64 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
     reasons.push(`index-cap: ${indexDir}`);
     unknownOmission = true;
   }
-  for (const pointer of managed.runs) {
-    // A pointer only names a package to observe; it never becomes a run row.
-    // A noncanonical pointer is reported and dropped.
-    try { addPackage(await canonicalPackage(pointer.package)); }
-    catch (error) {
-      reasons.push(`index-entry-invalid: ${pointer.run_id} (${messageOf(error)})`);
+  // A pointer only names a package to observe; it never becomes a run row.
+  // A pointer outside storage is reported and dropped.
+  for (const pointer of managed.runs) await addRequested(pointer.package, why => `index-entry-invalid: ${pointer.run_id} (${why})`);
+
+  // Every workspace under the storage root: its packages and epic records.
+  const workspaces = [];
+  const epicEntries = [];
+  if (typeof storageRoot === 'string' && storageRoot !== '') {
+    const catalog = await listWorkspaces(storageRoot);
+    for (const failure of catalog.errors) noteUnknown(`storage-unavailable: ${failure.path} (${failure.message})`);
+    for (const invalid of catalog.invalid) noteUnknown(`workspace-invalid: ${invalid.directory}`);
+    // `packagesOnly` limits the read to the requested packages and their workspaces' epics.
+    const requestedWorkspaces = new Set([...facts.values()].map(fact => fact.workspace));
+    for (const entry of catalog.valid) {
+      const wsId = basename(entry.directory);
+      workspaces.push({ id: wsId, directory: entry.directory, kit: entry.kit });
+      if (packagesOnly && !requestedWorkspaces.has(wsId)) continue;
+      if (!packagesOnly) {
+        const listed = await listPackages(wsId, { root: storageRoot });
+        if (!listed.ok) { noteUnknown(`workspace-unavailable: ${wsId} (${listed.code})`); continue; }
+        if (listed.packages.length > SENTINEL_LIMITS.packageChildren) noteUnknown(`package-cap: ${join(entry.directory, 'specs')}`);
+        for (const found of listed.packages.slice(0, SENTINEL_LIMITS.packageChildren)) await addPackage({ ...found, workspace: wsId });
+      }
+      const epics = await readWorkspaceEpics(wsId, { root: storageRoot });
+      epicEntries.push(...epics.entries);
+      for (const reason of epics.reasons) { if (/^(epics-cap|epics-unavailable)/.test(reason)) noteUnknown(reason); else note(reason); }
     }
   }
 
-  // Observe indexed/current packages first; discovery supplements that fast path.
+  // A repository whose checkout still holds untracked `.specs/` entries has
+  // packages that storage does not. One attention row per repository names the
+  // workspace to migrate, or says the repository is in no kit. Linked worktrees
+  // are skipped: migration moves the primary checkout's entries.
+  // Ceiling: legacySpecs runs one `git ls-files` per such root on every read, at
+  // most SENTINEL_LIMITS.roots; cache by `.specs` mtime if that cost shows up.
+  const attention = [];
+  let kitMembership = null;
   for (const root of enrolled.slice(0, SENTINEL_LIMITS.roots)) {
-    const specs = join(root, '.specs');
-    // Names starting with `_` (_epics, _plans, ...) are not packages.
-    const listed = await listDirectory(specs, SENTINEL_LIMITS.packageChildren, entry => entry.isDirectory() && !entry.name.startsWith('_'));
-    if (listed.entries === null) {
-      // Missing .specs is reported, never guessed around.
-      reasons.push(`root-unavailable: ${specs} (${listed.code})`);
-      continue;
-    }
-    if (listed.code) {
-      // A failed enumeration with partial entries cannot prove completeness.
-      reasons.push(`root-unavailable: ${specs} (${listed.code})`);
-      unknownOmission = true;
-    }
-    if (listed.truncated) {
-      reasons.push(`package-cap: ${specs}`);
-      unknownOmission = true;
-    }
-    for (const entry of listed.entries) {
-      const child = join(specs, entry.name);
-      try { addPackage(await canonicalPackage(child)); }
-      catch (error) {
-        // A throw (including linked-worktree rejection) is a fact, never a package.
-        reasons.push(`package-noncanonical: ${child} (${messageOf(error)})`);
+    let entries;
+    try {
+      const common = await gitCommonDir(root, budget);
+      if (common === null || common !== join(await realpath(root), '.git')) continue;
+      entries = await legacySpecs(root);
+    } catch (error) { noteUnknown(`legacy-check-unavailable: ${root} (${codeOf(error)})`); continue; }
+    if (entries.length === 0) continue;
+    if (!kitMembership) {
+      kitMembership = new Map();
+      for (const workspaceEntry of workspaces) for (const repo of workspaceEntry.kit.repositories) {
+        const primary = resolveRepositoryPath(workspaceEntry.directory, repo.path);
+        const common = await gitCommonDir(primary, budget);
+        const key = common ? await realpath(common).catch(() => null) : null;
+        if (key) kitMembership.set(key, [...(kitMembership.get(key) ?? []), workspaceEntry.id]);
       }
     }
+    const members = [...new Set(kitMembership.get(join(await realpath(root), '.git')) ?? [])];
+    attention.push({ kind: 'legacy-location', repository: root, workspaces: members, entries: entries.slice(0, 10), count: entries.length,
+      remedy: members.length ? members.map(id => `spec-location migrate --workspace ${id}`).join(' or ') : 'add the repository to a kit' });
   }
-
-  // Epic records are read before package history so the shared budget cannot starve them.
-  const epicRecords = await readEpicRecords({ facts, roots: enrolled.slice(0, SENTINEL_LIMITS.roots), readJson, listDirectory, budget });
-  for (const reason of epicRecords.reasons) { reasons.push(reason); if (/^(epics-cap|epics-unavailable|read-budget)/.test(reason)) unknownOmission = true; }
 
   const activityFilter = {
     window_ms: includeInactive ? null : SENTINEL_LIMITS.recentActivityMs,
@@ -611,8 +641,6 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
   const inactive = [];
   const completionCutoff = Date.parse(readTime) - SENTINEL_LIMITS.recentCompletionMs;
   let staleReceipts = false;
-  const note = reason => { if (reason && !reasons.includes(reason)) reasons.push(reason); };
-  const noteUnknown = reason => { if (reason && !reasons.includes(reason)) { reasons.push(reason); unknownOmission = true; } };
   // Each package draws its floor first; lifecycle files are read before the
   // receipt walk and checkpoints so they land inside it.
   budget.reserve(facts.size);
@@ -651,20 +679,35 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
     if (!completion) {
       const saved = await readJson(join(fact.packagePath, COMPLETION_FILE), SENTINEL_LIMITS.smallJsonBytes, budget,
         { within: fact.packagePath, allow: value => value, memo: fact.reads });
-      completion = manualCompletion(saved.record, fact.packagePath, fact.completionRevision, Date.parse(readTime),
+      completion = manualCompletion(saved.record, { ref: fact.ref, root: fact.packagePath }, fact.completionRevision, Date.parse(readTime),
         candidates.map(c => c.receipt.started_at ?? c.receipt.dispatch_requested_at));
     }
-    const mergeInput = completion?.completion_basis === 'manual' ? null : await packageMergeInput(fact, candidates, budget);
-    if (mergeInput) {
-      let evidence;
-      if (reconcileMerge) { try { evidence = await reconcileMerge(mergeInput); } catch { evidence = { state: 'unknown', reason: 'merge-check-unavailable' }; } }
-      else {
-        const read = await readJson(join(fact.packagePath, 'sentinel-merge.json'), SENTINEL_LIMITS.smallJsonBytes, budget, { within: fact.packagePath, allow: value => value, memo: fact.reads });
-        evidence = read.record;
-        if (!await validateMergeCache(evidence, mergeInput)) evidence = null;
+    const mergeInputs = completion?.completion_basis === 'manual' ? null : await packageMergeInputs(fact, candidates, budget);
+    if (mergeInputs) {
+      // One record per target; the package has merged only when every target's PR has.
+      const cached = reconcileMerge ? null : (await readJson(join(fact.packagePath, 'sentinel-merge.json'), SENTINEL_LIMITS.smallJsonBytes, budget,
+        { within: fact.packagePath, allow: value => value, memo: fact.reads })).record;
+      const results = [];
+      for (const input of mergeInputs) {
+        let evidence;
+        if (reconcileMerge) { try { evidence = await reconcileMerge(input); } catch { evidence = { state: 'unknown', reason: 'merge-check-unavailable' }; } }
+        else {
+          evidence = cached?.targets && Object.hasOwn(cached.targets, input.target) ? cached.targets[input.target] : null;
+          if (!await validateMergeCache(evidence, input)) evidence = null;
+        }
+        results.push({ input, evidence });
       }
-      fact.merge = evidence ? { state: evidence.state, checked_at: evidence.checked_at, reason: evidence.reason, url: evidence.url, merged_at: evidence.merged_at, head: evidence.head, merge_commit: evidence.merge_commit } : { state: 'unknown', reason: 'merge-evidence-unavailable' };
-      if (applicableMerge(evidence, mergeInput)) completion = { completed_at: evidence.merged_at, completion_basis: 'merged-pr', merge: fact.merge };
+      const rows = results.map(({ input, evidence }) => evidence
+        ? { target: input.target, state: evidence.state, checked_at: evidence.checked_at, reason: evidence.reason, url: evidence.url,
+          merged_at: evidence.merged_at, head: evidence.head, merge_commit: evidence.merge_commit }
+        : { target: input.target, state: 'unknown', reason: 'merge-evidence-unavailable' });
+      // Top-level fields come from the first target that has not merged (else the first target).
+      const { target: _target, ...lead } = rows.find(row => row.state !== 'merged') ?? rows[0];
+      fact.merge = { ...lead, state: rows.every(row => row.state === 'merged') ? 'merged' : rows.some(row => row.state === 'unmerged') ? 'unmerged' : 'unknown', targets: rows };
+      if (results.every(({ input, evidence }) => applicableMerge(evidence, input))) {
+        const latest = results.map(({ evidence }) => evidence.merged_at).sort((x, y) => Date.parse(y) - Date.parse(x))[0];
+        completion = { completed_at: latest, completion_basis: 'merged-pr', merge: fact.merge };
+      }
     }
     fact.completion = completion || null;
     if (completion && Date.parse(completion.completed_at) <= Date.parse(readTime)) {
@@ -706,18 +749,16 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
   for (const { fact, completion } of completed.slice(0, SENTINEL_LIMITS.completedPackages)) {
     const candidate = fact.candidates.find(item => item.id === fact.currentAssignment);
     const run = candidate ? await observeRun(candidate, budget, mark, readTime)
-      : { repository: fact.common, package: fact.packagePath, source_paths: [...fact.sources.values()].map(source => source.file) };
+      : { workspace: fact.workspace, package_ref: fact.ref, package: fact.packagePath, source_paths: [...fact.sources.values()].map(source => source.file) };
     recentlyCompleted.push({ ...run, ...completion, workflow_state: 'complete', is_current_assignment: false });
   }
 
-  // Epic membership is read for every observed primary, outside the activity and completion windows.
-  const epicState = await collectEpics({ ...epicRecords, facts, runs, recentlyCompleted, runConditions, readTime });
+  // Epic membership is read for every observed workspace, outside the activity and completion windows.
+  const epicState = await collectEpics({ entries: epicEntries, facts, runs, recentlyCompleted, runConditions, readTime });
   for (const row of [...runs, ...recentlyCompleted]) {
     const epic = epicState.memberships.get(row.package);
     if (epic) row.epic = epic;
   }
-
-  const packageRequested = enrolled.length > 0 || (Array.isArray(packages) && packages.length > 0);
 
   // Assignment observation is additive: assignment source failures never
   // change run coverage, identity, completion or activity. Without an explicit
@@ -745,13 +786,12 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
   }
 
   let state;
-  if (!packageRequested && !facts.size && !reasons.length) {
+  if (!facts.size && !reasons.length) {
     state = 'complete';
-    if (!reasons.length) reasons.push(discovery ? 'no repositories with spec packages discovered' : 'no enrolled roots');
-  } else if (!facts.size && (packageRequested || knownOmitted || unknownOmission || reasons.length)) {
-    // Nothing could be canonicalized while something was asked for or omitted.
+    reasons.push(storageRoot ? 'no spec packages in storage' : 'no storage root');
+  } else if (!facts.size && (knownOmitted || unknownOmission || reasons.length)) {
+    // Nothing could be located while something was asked for or omitted.
     state = 'unavailable';
-    if (!reasons.length) reasons.push('no canonical package available');
   } else {
     // A replaced receipt makes the package set itself uncertain.
     state = (staleReceipts || runs.some(run => run.coverage.state === 'stale')) ? 'stale'
@@ -760,36 +800,44 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
   const coverage = makeCoverage(state, reasons, unknownOmission ? null : knownOmitted, budget.bytes, readTime);
   return reduceConditions({ version: 1, workspace, coverage, activity_filter: activityFilter, runs,
     assignments, assignment_coverage: assignmentCoverage,
-    recently_completed: recentlyCompleted, epics: epicState.epics,
+    recently_completed: recentlyCompleted, epics: epicState.epics, attention,
     completion_history: { window_ms: SENTINEL_LIMITS.recentCompletionMs, cutoff: new Date(completionCutoff).toISOString(),
       limit: SENTINEL_LIMITS.completedPackages, omitted: Math.max(0, completed.length - recentlyCompleted.length) },
-    spec_roots: [...new Set([...facts.values()].map(f => dirname(f.packagePath)))], ...(discovery ? { discovery } : {}) });
+    spec_roots: [...new Set([...facts.values()].map(f => dirname(f.packagePath)), ...epicEntries.map(e => dirname(e.dir)))], ...(discovery ? { discovery } : {}) });
 }
 
 
 // A scoped PR record permits lifecycle lookup even when planning and receipts
 // lag publication. Scoped remote or fetched Git merge proof can supersede older work records.
-async function packageMergeInput(fact, candidates, budget) {
+// One input per package target, each checked in that target's primary checkout.
+async function packageMergeInputs(fact, candidates, budget) {
   const skip = reason => { fact.merge = { state: 'unknown', reason }; return null; };
   if (fact.staleReceipts) return skip('stale-receipts');
   if (fact.receiptsIncomplete) return skip('incomplete-receipts');
   const checkpoints = await readCheckpoints(fact, budget);
   if (fact.checkpointNotes.some(reason => /^checkpoints?-/.test(reason))) return skip('checkpoint-unavailable');
   if (checkpoints.some(c => !validTime(c.observed_at))) return skip('checkpoint-time-unavailable');
+  if (!fact.targets.length) return skip('locations-unavailable');
   const prRead = await readJson(join(fact.packagePath, 'pr-url.json'), SENTINEL_LIMITS.smallJsonBytes, budget,
     { within: fact.packagePath, allow: value => value, memo: fact.reads });
   if (prRead.outcome !== 'ok') return skip(prRead.outcome === 'missing' ? 'missing-pr-record' : 'pr-record-unavailable');
   const pr = prRead.record;
-  if (pr?.package !== fact.packagePath || pr.kind !== 'pr_submission'
-    || !/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/[1-9][0-9]*$/.test(pr.url ?? '')) return skip('pr-record-invalid');
+  if (pr?.package_ref !== fact.ref || !pr.targets || typeof pr.targets !== 'object') return skip('pr-record-invalid');
   const validRef = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_./-]*$/.test(value) && !value.includes('..');
-  if (pr.branch != null && !validRef(pr.branch) || pr.base != null && !validRef(pr.base)) return skip('pr-ref-invalid');
+  const inputs = [];
+  for (const target of fact.targets) {
+    const entry = Object.hasOwn(pr.targets, target.id) ? pr.targets[target.id] : null;
+    if (!entry || typeof entry !== 'object') return skip('missing-pr-record');
+    if (!/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/[1-9][0-9]*$/.test(entry.url ?? '')) return skip('pr-record-invalid');
+    if (entry.branch != null && !validRef(entry.branch) || entry.base != null && !validRef(entry.base)) return skip('pr-ref-invalid');
+    inputs.push({ package: fact.packagePath, ref: fact.ref, target: target.id, primary: target.primary,
+      pr: { url: entry.url, branch: entry.branch ?? null, base: entry.base ?? null }, commits: [],
+      checkpoints: checkpoints.map(c => [c.state, c.observed_at]),
+      receipts: candidates.map(c => [c.id, c.receipt.state, c.receipt.started_at ?? c.receipt.dispatch_requested_at])
+        .sort((a, b) => a[0].localeCompare(b[0])) });
+  }
   if (candidates.some(c => !validTime(c.receipt.started_at ?? c.receipt.dispatch_requested_at))) return skip('dispatch-time-unavailable');
-  return { package: fact.packagePath, primary: fact.primary,
-    pr: { url: pr.url, branch: pr.branch ?? null, base: pr.base ?? null }, commits: [],
-    checkpoints: checkpoints.map(c => [c.state, c.observed_at]),
-    receipts: candidates.map(c => [c.id, c.receipt.state, c.receipt.started_at ?? c.receipt.dispatch_requested_at])
-      .sort((a, b) => a[0].localeCompare(b[0])) };
+  return inputs;
 }
 
 // A workflow completion checkpoint is decisive; a terminal worker receipt is
@@ -813,14 +861,17 @@ async function packageCompletion(fact, candidates, budget, note) {
       if (result.outcome !== 'ok' && result.outcome !== 'missing') note(result.reason ?? `completion-unavailable: ${name}`);
       return result.outcome === 'ok' ? result.record : null;
     };
-    const pr = await read('pr-url.json', value => value && typeof value === 'object'
-      ? { package: value.package, kind: value.kind, commit: value.commit, submitted_at: value.submitted_at, draft: value.draft, url: value.url } : null);
-    if (!pr || pr.package !== fact.packagePath || pr.kind !== 'pr_submission' || pr.draft === true
-      || !validTime(pr.submitted_at) || !/^https:\/\//.test(pr.url ?? '') || !/^[a-f0-9]{40,64}$/.test(pr.commit ?? '')) return false;
+    const pr = await read('pr-url.json', value => value && typeof value === 'object' && value.targets && typeof value.targets === 'object'
+      ? { package_ref: value.package_ref, targets: Object.fromEntries(Object.entries(value.targets).slice(0, 20).map(([id, entry]) => [id, entry && typeof entry === 'object'
+        ? { kind: entry.kind ?? value.kind, commit: entry.commit, submitted_at: entry.submitted_at, draft: entry.mode === 'draft' || entry.draft === true, url: entry.url } : null])) } : null);
+    const entries = fact.targets.map(target => pr && Object.hasOwn(pr.targets, target.id) ? pr.targets[target.id] : null);
+    if (!pr || pr.package_ref !== fact.ref || !entries.length || entries.some(entry => !entry || entry.kind !== 'pr_submission' || entry.draft === true
+      || !validTime(entry.submitted_at) || !/^https:\/\//.test(entry.url ?? '') || !/^[a-f0-9]{40,64}$/.test(entry.commit ?? ''))) return false;
     const tour = await read('work-tour.json', value => value && typeof value === 'object'
       ? { verdict: value.verdict, commit: value.commit } : null);
-    if (tour?.verdict !== 'ready' || tour.commit !== pr.commit) return false;
-    completedAt = Date.parse(pr.submitted_at);
+    // work-tour.json names one commit, so with several targets it is matched against any of them.
+    if (tour?.verdict !== 'ready' || !entries.some(entry => entry.commit === tour.commit)) return false;
+    completedAt = Math.max(...entries.map(entry => Date.parse(entry.submitted_at)));
     completionBasis = 'ready-pr';
   }
   if (fact.staleReceipts || candidates.some(({ receipt }) => {
@@ -852,14 +903,18 @@ async function collectPackage(fact, budget, report, reportUnknown, afterCurrent 
     if (result.outcome === 'oversized') { note(`receipt-oversized: ${file}`); return true; }
     if (result.outcome !== 'ok') { note(`receipt-invalid: ${file}`); return true; }
     const value = result.record;
-    if ((expectedId !== null && value.id !== expectedId)
-      || (typeof value.package === 'string' && !(await samePath(value.package, fact.packagePath)))) {
+    // A receipt names its package by reference; `package` is the directory on the
+    // writing machine, so it is compared only when the reference is absent.
+    const foreign = typeof value.package_ref === 'string' ? value.package_ref !== fact.ref
+      : typeof value.package === 'string' && !(await samePath(value.package, fact.packagePath));
+    if ((expectedId !== null && value.id !== expectedId) || foreign) {
       note(`receipt-mismatch: ${file}`);
       fact.staleReceipts = true;
       return true;
     }
     const receipt = {};
     for (const key of RECEIPT_KEYS) if (typeof value[key] === 'string') receipt[key] = value[key];
+    if (Number.isSafeInteger(value.coordinator_pid) && value.coordinator_pid > 0) receipt.coordinator_pid = value.coordinator_pid;
     if (['implementation', 'verification-continuation', 'implementation-repair', 'review-repair', 'launch-retry'].includes(value.attempt_kind)) receipt.attempt_kind = value.attempt_kind;
     if (['as-specified', 'adapted', 'checkpoint', 'no-artifact', 'decision-required', 'needs-spec-correction'].includes(value.handoff?.outcome)) receipt.handoff = { outcome: value.handoff.outcome };
     if (!found.has(value.id)) found.set(value.id, { fact, id: value.id, receipt, source: [{ file, digest: result.digest }], bytes: result.bytes });
@@ -924,12 +979,9 @@ async function observeRun(candidate, budget, note, readTime) {
   source.push(...activity.sources);
 
   const execution = receipt.state ?? 'unknown';
-  if (!TERMINAL.has(execution)) {
-    // Lease facts are read only for live runs; terminal runs never get one
-    // invented for them.
-    const lease = await readLease(fact, receipt, candidate.id, runBudget, mark);
-    source.push(...lease.sources);
-  }
+  // Liveness is the recorded state plus the coordinator process: a run still
+  // recorded as live whose coordinator is gone is flagged, never restarted.
+  if (!TERMINAL.has(execution) && receipt.coordinator_pid && pidGone(receipt.coordinator_pid)) mark('coordinator-gone');
 
   const checkpoints = await readCheckpoints(fact, runBudget);
   for (const reason of fact.checkpointNotes) mark(reason);
@@ -974,14 +1026,15 @@ async function observeRun(candidate, budget, note, readTime) {
   const tour = await readTourEvidence(fact, runBudget, observed_at);
   if (tour.digest) source.push({ file: tour.file, digest: tour.digest });
   // The recorded checkout is a claim, not an identity: validate its Git common
-  // directory read-only against the package repository before asserting it.
+  // directory read-only against the package's target repositories before asserting it.
   let checkout = null;
   if (typeof receipt.checkout === 'string') {
     const key = resolve(receipt.checkout);
     if (!fact.checkouts.has(key)) {
       const real = await realpath(key).catch(() => null);
       const commonDir = real ? await gitCommonDir(real, runBudget) : null;
-      fact.checkouts.set(key, real && commonDir && await realpath(commonDir).catch(() => null) === fact.common
+      const common = commonDir ? await realpath(commonDir).catch(() => null) : null;
+      fact.checkouts.set(key, real && common && fact.targets.some(target => target.common === common)
         ? { ok: true, path: real }
         : { ok: false, reason: real && commonDir ? `checkout-foreign: ${key}` : `checkout-unavailable: ${key}` });
     }
@@ -990,7 +1043,9 @@ async function observeRun(candidate, budget, note, readTime) {
     else mark(validated.reason, validated.reason.startsWith('checkout-foreign') ? 'stale' : undefined);
   }
   return {
-    repository: fact.common,
+    workspace: fact.workspace,
+    package_ref: fact.ref,
+    targets: fact.targets.map(({ id, primary }) => ({ id, primary })),
     package: fact.packagePath,
     checkout,
     workflow_id,
@@ -1173,39 +1228,6 @@ async function readActivity(fact, id, budget, mark) {
     if (last && (!observed || Date.parse(last) > Date.parse(observed))) observed = last;
   }
   return { activity: readable && segments.length ? segments.join(' · ') : null, observed, sources };
-}
-
-async function readLease(fact, receipt, id, budget, mark) {
-  if (typeof receipt.lock !== 'string') {
-    // No recorded reservation: unknown, not a defect.
-    return { sources: [] };
-  }
-  const lock = resolve(receipt.lock);
-  const realLock = await realpath(lock).catch(() => null);
-  if (!realLock) {
-    // The reservation location is recorded but gone: report what the recorded
-    // spelling establishes, without inventing where it might be.
-    mark(insideDir(fact.common, lock) ? 'lease-missing' : 'lease-outside-repository');
-    return { sources: [] };
-  }
-  if (!insideDir(fact.common, realLock)) {
-    mark('lease-outside-repository');
-    return { sources: [] };
-  }
-  const file = join(realLock, 'lease.json');
-  const result = await readJson(file, SENTINEL_LIMITS.smallJsonBytes, budget, {
-    prefix: 'lease', oversize: false, within: fact.common,
-    // Lease identity and revocation only. The token and any pid are never
-    // retained, hashed or rendered.
-    allow: value => value && typeof value === 'object'
-      ? { id: typeof value.id === 'string' ? value.id : null, revoked: value.revoked === true } : null,
-  });
-  if (result.outcome === 'read-budget') { mark(result.reason); return { sources: [] }; }
-  if (result.outcome !== 'ok') { mark('lease-missing'); return { sources: [] }; }
-  const sources = [{ file, digest: result.digest }];
-  if (result.record.id !== id) mark('lease-mismatch');
-  else if (result.record.revoked) mark('lease-revoked');
-  return { sources };
 }
 
 async function readCheckpoints(fact, budget) {

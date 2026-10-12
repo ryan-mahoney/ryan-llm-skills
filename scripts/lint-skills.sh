@@ -7,6 +7,11 @@
 #   - non-empty `description:`
 #   - `version:` present (under metadata)
 #   - standalone spec/design skills contain no Restory artifact-protocol terms
+#   - skills/**/SKILL.md, skills/**/references/*.md, pi/agents/*.md and augment/agents/*.md name no
+#     repo-local spec location: no literal `.specs` path, and no "primary checkout"/"primary repository"
+#     on a line that mentions specs. Spec files live in workspace storage; read paths from locations.json.
+#     A line is exempt when it contains "legacy" (describes data awaiting migration) or "never create/write"
+#     (a prohibition). The primary-checkout test is a one-line heuristic: wording split across lines escapes it.
 #
 # Advisory warnings (intent-dependent — never block):
 #   - missing `disable-model-invocation:`  (omitted on purpose by model-invocable skills)
@@ -22,25 +27,52 @@ cd "$repo_root"
 
 mode="${1:-staged}"
 
-# Collect the SKILL.md files to check.
+# Collect the SKILL.md files to check, and the wider set checked for repo-local spec locations.
 files=()
+location_files=()
+is_skill_md() { case "$1" in skills/*/SKILL.md) return 0 ;; esac; return 1; }
+is_location_file() {
+  case "$1" in
+    skills/*/SKILL.md | skills/*/references/*.md | pi/agents/*.md | augment/agents/*.md) return 0 ;;
+  esac
+  return 1
+}
 if [ "$mode" = "--all" ]; then
   while IFS= read -r f; do files+=("$f"); done < <(find skills -mindepth 2 -maxdepth 2 -name SKILL.md | sort)
+  while IFS= read -r f; do is_location_file "$f" && location_files+=("$f"); done \
+    < <(find skills pi/agents augment/agents -type f -name '*.md' | sort)
 else
   # Staged additions/modifications only — legacy skills are grandfathered until touched.
   while IFS= read -r f; do
-    case "$f" in
-      skills/*/SKILL.md) [ -f "$f" ] && files+=("$f") ;;
-    esac
+    [ -f "$f" ] || continue
+    is_skill_md "$f" && files+=("$f")
+    is_location_file "$f" && location_files+=("$f")
   done < <(git diff --cached --name-only --diff-filter=ACM)
 fi
 
-if [ "${#files[@]}" -eq 0 ]; then
+if [ "${#files[@]}" -eq 0 ] && [ "${#location_files[@]}" -eq 0 ]; then
   exit 0
 fi
 
 errors=0
 warnings=0
+
+# Fail on a repo-local spec location. Spec packages, project context, epics, plans and captures live in
+# workspace storage; a skill reads their paths from locations.json (see spec-location.md).
+check_spec_locations() {
+  local f="$1" hit
+  while IFS= read -r hit; do
+    echo "ERROR  $f:$hit  literal .specs path; read the location from locations.json"
+    errors=$((errors + 1))
+  done < <(grep -nE '(^|[^[:alnum:]])\.specs([^[:alnum:]]|$)' "$f" | grep -viE 'legacy|never (create|write)' || true)
+  while IFS= read -r hit; do
+    echo "ERROR  $f:$hit  'primary checkout/repository' wording about spec files; spec files are not in a checkout"
+    errors=$((errors + 1))
+  done < <(grep -niE 'primary (checkout|repository)' "$f" | grep -iE 'spec' | grep -viE 'legacy|never (create|write)' || true)
+}
+for f in "${location_files[@]}"; do
+  check_spec_locations "$f"
+done
 
 # Print the value of a top-level frontmatter key (first match, column 0).
 frontmatter_value() {
@@ -98,5 +130,5 @@ for f in "${files[@]}"; do
   fi
 done
 
-echo "lint-skills: checked ${#files[@]} file(s), $errors error(s), $warnings warning(s)"
+echo "lint-skills: checked ${#files[@]} skill file(s) and ${#location_files[@]} location file(s), $errors error(s), $warnings warning(s)"
 [ "$errors" -eq 0 ]

@@ -87,15 +87,16 @@ and still read the outcome.
 
 ## C-3 Run directory and `session.json`
 
-The run directory is
+The caller supplies the run directory with `--runs <dir>`. The journey-qa skill
+passes `<capturesDir>/<repository>/ux-qa/runs`, resolved by `spec-location`. The
+run directory is
 
 ```txt
-<primary>/.specs/ux-qa/runs/<YYYYMMDDTHHMMSSZ>-<JRNY-###>-<slug>/
+<runs>/<YYYYMMDDTHHMMSSZ>-<JRNY-###>-<slug>/
 ```
 
-where `<primary>` is `dirname "$(git rev-parse --path-format=absolute
---git-common-dir)"`. A run started from a worktree therefore writes its output
-under the primary checkout and nothing inside the worktree.
+Workspace captures sit outside every checkout, so a run started from a worktree
+writes to the same directory as one started from the primary checkout.
 
 `session.json` in that directory:
 

@@ -142,7 +142,7 @@ Write the durable content first: access model, job stories, objects, behavior ru
 7. The inventory row for this screen carries its `SCRN-###` and reads `documented`.
 8. Every threshold, limit, and ordering rule in the page matches the code.
 9. Every inferred story carries its label and an open question.
-10. Every cited capture ID resolves to a file under the capture root, or the page states that the resolution check was not possible in this checkout; each uncaptured state says why.
+10. Every cited capture ID resolves to a file under the capture root, or the page states that the resolution check was not possible on this machine; each uncaptured state says why.
 11. Run the linked tests and any documentation or link checks the repository provides.
 
 Report the file path, validation result, capture coverage, unresolved registry gaps, any conflict with the repository standard, and any contradiction you found against the permission model or the inventory.

@@ -38,7 +38,7 @@ need and take the other from its owner.
 A scenario is explorable only when both hold:
 
 1. its reference trail exists, in
-   `.specs/ux-qa/reference-trails/<JRNY-###>-<slug>.json`, and
+   `<capturesDir>/<repository>/ux-qa/reference-trails/<JRNY-###>-<slug>.json`, and
 2. `bin/ux-qa selfcheck <id>` passes on the current commit.
 
 ```bash
@@ -145,11 +145,11 @@ scenario.
 
 ```bash
 node "$SKILL_DIR/scripts/build-deck.mjs" \
-  --run "$RUN_DIR" --out .specs/ux-qa/decks/<JRNY-###>-<slug>.html
+  --run "$RUN_DIR" --out <decks>/<JRNY-###>-<slug>.html
 
 node "$SKILL_DIR/scripts/build-deck.mjs" --summary \
-  --brief docs/product-brief.md --runs .specs/ux-qa/runs \
-  --out .specs/ux-qa/decks/summary.html
+  --brief docs/product-brief.md --runs <capturesDir>/<repository>/ux-qa/runs \
+  --out <decks>/summary.html
 ```
 
 Inspect the result rather than trusting the command. Capture it with `uishot`
@@ -157,7 +157,7 @@ at `--viewport 1280x800` and look at the PNG through the `see` skill's eyes
 mode; record which mode you used (`host-vision`, `relayed-vision` or
 `source-only`) alongside the deck, and say so when you have no visual evidence.
 
-Decks are local files under `.specs/ux-qa/`, which is gitignored. Publishing a
+`<decks>` is `<capturesDir>/<repository>/ux-qa/decks/`, from `node ~/.agents/scripts/spec-location/cli.mjs resolve --cwd <app checkout>`. Decks are local files in workspace storage outside every checkout, so they are never committed. Publishing a
 deck anywhere is a separate explicit action the orchestrator takes, never a
 side effect of this mode.
 

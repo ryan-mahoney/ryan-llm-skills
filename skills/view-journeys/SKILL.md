@@ -11,10 +11,10 @@ Serve an existing `visualize-journey` collection locally and hand back its URL. 
 
 ## Step 1 — Find the collection
 
-Default: `.specs/ux-qa/visuals` in the primary checkout — the same folder `visualize-journey` Step 5 writes. From a worktree, resolve the primary checkout as in `../uishot/references/capture-root.md`. If the collection is not there, search:
+Default: `<visuals>`, the folder `visualize-journey` Step 5 writes. It is `<capturesDir>/<repository>/ux-qa/visuals`, resolved with `node ~/.agents/scripts/spec-location/cli.mjs resolve --cwd <app checkout>` as in `../uishot/references/capture-root.md`. If the collection is not there, search:
 
 ```bash
-find . -name canvas.html -path '*/ux-qa/visuals/*'
+find <capturesDir> -name canvas.html -path '*/ux-qa/visuals/*'
 ```
 
 If none is found, tell the user and suggest running `visualize-journey`. If more than one is found, ask which repository's collection they mean.
@@ -44,7 +44,7 @@ node ~/.agents/skills/visualize-journey/scripts/serve-journeys.mjs <collection-d
 
 It prints the served root and the canvas and list URLs, default `http://127.0.0.1:4173`. If that port is taken, add `--port <n>`.
 
-The server admits only `.specs/images/` and `.specs/ux-qa/visuals/` under `.specs`, so pass the visuals folder itself and never `.specs`.
+The server admits only the `images/` and `ux-qa/visuals/` folders of one repository's captures folder, so pass the visuals folder itself, never the captures folder or the repository folder.
 
 ## Step 4 — Hand back the URL
 

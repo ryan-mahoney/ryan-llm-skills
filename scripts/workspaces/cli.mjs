@@ -6,7 +6,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { isAbsolute, join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import {
@@ -14,13 +14,17 @@ import {
   addMaterial,
   applyKitEdit,
   createWorkspace,
+  describeStorageRoot,
   fetchWorkspace,
+  listKitBackups,
   listWorkspaces,
-  resolveStorageRoot,
+  readKitBackup,
+  repositoryReferences,
+  saveStorageRoot,
   setupStorage,
   storageStatus,
 } from './store.mjs';
-import { formatScalar, planKitEdit } from './kit.mjs';
+import { formatScalar, planKitEdit, planKitReplacement } from './kit.mjs';
 import {
   attachAssignment,
   findAssignment,
@@ -29,7 +33,7 @@ import {
   locateAssignment,
   resolveAssignment,
 } from './assignments.mjs';
-import { canonicalPackage } from '../../pi/extensions/spec-runtime/runtime.mjs';
+import { locatePackage } from '../spec-location/index.mjs';
 import { readCheckpointRecord, readInboxGuard } from '../../pi/extensions/spec-runtime/sentinel.mjs';
 import { deliverOverseerMessage } from '../spec-observe/overseer-inbox.mjs';
 
@@ -38,13 +42,25 @@ const CLI_PATH = fileURLToPath(import.meta.url);
 const USAGE = `Usage: node scripts/workspaces/cli.mjs <command> [options]
 
 Commands:
-  status                                                     Report the storage root boundary without writing
-  setup                                                      Create a missing root and projects/ directory
+  status                                                     Report the storage root, what chose it, and its boundary
+  setup [--save]                                             Create a missing root and projects/; --save persists the root
   list                                                       List workspace kits and invalid manifests
   show ID                                                    Read one workspace and its associations
   create ID [--name NAME]                                    Publish an empty kit.yaml
-  add-repo ID --id RID --path ABS [--role ROLE] [--remote URL] [--apply]
+  add-repo ID --id RID --path PATH [--role ROLE] [--remote URL] [--apply]
+  remove-repo ID --id RID [--apply]                          Preview lists records that reference RID
+  set-path ID --id RID --path PATH [--apply]
+  set-remote ID --id RID --remote URL [--apply]
   set-role ID --id RID --role ROLE [--apply]
+  clear-role ID --id RID [--apply]
+  set-name ID --name NAME [--apply]                          Display name only; the id never changes
+  add-context ID --path REL [--apply]
+  remove-context ID --path REL [--apply]
+  set-design-system ID --repo RID --path REL [--path REL...] [--applies-to X] [--apply]
+  set-execution-host ID --host NAME [--apply]
+  rewrite-paths ID --from PREFIX --to PREFIX [--apply]       e.g. --from /Users/me --to '~'
+  kit-backups ID                                             List kit.yaml backups, newest first
+  restore-kit ID BACKUP [--apply]                            Preview, then restore a listed backup
   add-brief ID --title TITLE [--from FILE]
   add-note ID --title TITLE [--from FILE]
   add-artifact ID (--repository RID --path REL | --url URL) [--title T] [--note N]
@@ -55,21 +71,58 @@ Commands:
   takeover ID [--run RUN]                                    Deliver a coordinator hold, then attach when a TTY is present
   resume ID --hold ID [--run RUN]                            Deliver a release direction naming one retained hold
 
+PATH is absolute, ~/..., or relative to the workspace directory. Edits print a
+preview and write nothing unless --apply is given.
+
 Global options:
-  --root PATH   Override ADJACENT_STORAGE_ROOT (default ~/Documents/adjacent-storage)
+  --root PATH   Storage root. Otherwise ADJACENT_STORAGE_ROOT, then the root saved
+                by setup --save, then ~/Documents/adjacent-storage
   --json        Print the structured result object instead of human text`;
 
 const COMMANDS = {
   status: { positionals: 0, flags: {} },
-  setup: { positionals: 0, flags: {} },
+  setup: { positionals: 0, flags: { '--save': 'boolean' } },
   list: { positionals: 0, flags: {} },
   show: { positionals: 1, flags: {} },
   create: { positionals: 1, flags: { '--name': 'value' } },
   'add-repo': {
     positionals: 1,
+    required: ['--id', '--path'],
     flags: { '--id': 'value', '--path': 'value', '--role': 'value', '--remote': 'value', '--apply': 'boolean' },
   },
-  'set-role': { positionals: 1, flags: { '--id': 'value', '--role': 'value', '--apply': 'boolean' } },
+  'remove-repo': { positionals: 1, required: ['--id'], flags: { '--id': 'value', '--apply': 'boolean' } },
+  'set-path': {
+    positionals: 1,
+    required: ['--id', '--path'],
+    flags: { '--id': 'value', '--path': 'value', '--apply': 'boolean' },
+  },
+  'set-remote': {
+    positionals: 1,
+    required: ['--id', '--remote'],
+    flags: { '--id': 'value', '--remote': 'value', '--apply': 'boolean' },
+  },
+  'set-role': {
+    positionals: 1,
+    required: ['--id', '--role'],
+    flags: { '--id': 'value', '--role': 'value', '--apply': 'boolean' },
+  },
+  'clear-role': { positionals: 1, required: ['--id'], flags: { '--id': 'value', '--apply': 'boolean' } },
+  'set-name': { positionals: 1, required: ['--name'], flags: { '--name': 'value', '--apply': 'boolean' } },
+  'add-context': { positionals: 1, required: ['--path'], flags: { '--path': 'value', '--apply': 'boolean' } },
+  'remove-context': { positionals: 1, required: ['--path'], flags: { '--path': 'value', '--apply': 'boolean' } },
+  'set-design-system': {
+    positionals: 1,
+    required: ['--repo', '--path'],
+    flags: { '--repo': 'value', '--path': 'multi', '--applies-to': 'value', '--apply': 'boolean' },
+  },
+  'set-execution-host': { positionals: 1, required: ['--host'], flags: { '--host': 'value', '--apply': 'boolean' } },
+  'rewrite-paths': {
+    positionals: 1,
+    required: ['--from', '--to'],
+    flags: { '--from': 'value', '--to': 'value', '--apply': 'boolean' },
+  },
+  'kit-backups': { positionals: 1, flags: {} },
+  'restore-kit': { positionals: 2, flags: { '--apply': 'boolean' } },
   'add-brief': { positionals: 1, flags: { '--title': 'value', '--from': 'value' } },
   'add-note': { positionals: 1, flags: { '--title': 'value', '--from': 'value' } },
   'add-artifact': {
@@ -125,7 +178,7 @@ function parseArgs(argv) {
     if (token.startsWith('-')) {
       const kind = flags[token];
       if (kind === undefined) throw new UsageError(`Unknown option: ${token}`);
-      if (token in options) throw new UsageError(`Duplicate option: ${token}`);
+      if (token in options && kind !== 'multi') throw new UsageError(`Duplicate option: ${token}`);
       if (kind === 'boolean') {
         options[token] = true;
         continue;
@@ -134,7 +187,8 @@ function parseArgs(argv) {
       if (value === undefined || value === '' || value.startsWith('--')) {
         throw new UsageError(`Missing value for ${token}`);
       }
-      options[token] = value;
+      if (kind === 'multi') (options[token] ??= []).push(value);
+      else options[token] = value;
       index += 1;
       continue;
     }
@@ -142,21 +196,11 @@ function parseArgs(argv) {
   }
   if (positionals.length !== spec.positionals) {
     throw new UsageError(positionals.length < spec.positionals
-      ? `${command} requires a workspace id`
+      ? `${command} requires ${spec.positionals === 2 ? 'a workspace id and a backup name' : 'a workspace id'}`
       : `${command} accepts no positional arguments`);
   }
-  if (command === 'add-repo') {
-    for (const required of ['--id', '--path']) {
-      if (!(required in options)) throw new UsageError(`add-repo requires ${required}`);
-    }
-    if (!isAbsolute(options['--path'])) {
-      throw new UsageError('add-repo requires --path to be an absolute path');
-    }
-  }
-  if (command === 'set-role') {
-    for (const required of ['--id', '--role']) {
-      if (!(required in options)) throw new UsageError(`set-role requires ${required}`);
-    }
+  for (const required of spec.required ?? []) {
+    if (!(required in options)) throw new UsageError(`${command} requires ${required}`);
   }
   if (command === 'add-brief' || command === 'add-note') {
     if (!('--title' in options)) throw new UsageError(`${command} requires --title`);
@@ -243,27 +287,56 @@ async function printPlan(header, plan, options) {
   for (const line of plan.hunk.before_lines) lines.push(`- ${stripBreak(line)}`);
   lines.push('--- after');
   for (const line of plan.hunk.after_lines) lines.push(`+ ${stripBreak(line)}`);
+  if (plan.references) {
+    const found = Object.entries(plan.references).filter(([, names]) => names.length > 0);
+    lines.push(found.length === 0 ? 'No threads, assignments, artifacts, designs or spec packages reference this repository.'
+      : 'Records that reference this repository stay in place:');
+    for (const [kind, names] of found) lines.push(`  ${kind}: ${names.join(', ')}`);
+  }
   await print(lines.join('\n'));
 }
 
+const KIT_OPERATIONS = {
+  'add-repo': (o) => ({
+    kind: 'add-repository',
+    repository: {
+      id: o['--id'],
+      path: o['--path'],
+      ...(o['--role'] !== undefined && { role: o['--role'] }),
+      ...(o['--remote'] !== undefined && { remote: o['--remote'] }),
+    },
+  }),
+  'remove-repo': (o) => ({ kind: 'remove-repository', repository_id: o['--id'] }),
+  'set-path': (o) => ({ kind: 'set-path', repository_id: o['--id'], path: o['--path'] }),
+  'set-remote': (o) => ({ kind: 'set-remote', repository_id: o['--id'], remote: o['--remote'] }),
+  'set-role': (o) => ({ kind: 'set-role', repository_id: o['--id'], role: o['--role'] }),
+  'clear-role': (o) => ({ kind: 'clear-role', repository_id: o['--id'] }),
+  'set-name': (o) => ({ kind: 'set-name', name: o['--name'] }),
+  'add-context': (o) => ({ kind: 'add-context', entry: o['--path'] }),
+  'remove-context': (o) => ({ kind: 'remove-context', entry: o['--path'] }),
+  'set-design-system': (o) => ({
+    kind: 'set-design-system',
+    repository_id: o['--repo'],
+    paths: o['--path'],
+    ...(o['--applies-to'] !== undefined && { applies_to: o['--applies-to'] }),
+  }),
+  'set-execution-host': (o) => ({ kind: 'set-execution-host', host: o['--host'] }),
+  'rewrite-paths': (o) => ({ kind: 'rewrite-paths', from: o['--from'], to: o['--to'] }),
+};
+
 // Dry-run prints the planned hunk and exits without writing; --apply hands the
 // same plan to the exclusive-writer store contract.
-async function kitEdit(command, root, id, options) {
+async function kitEdit(command, root, id, options, positionals) {
   const detail = await fetchWorkspace(root, id);
   const current = await readFile(join(detail.directory, 'kit.yaml'), 'utf8');
-  let plan;
-  let header;
-  if (command === 'add-repo') {
-    const repository = { id: options['--id'], path: options['--path'] };
-    if (options['--role'] !== undefined) repository.role = options['--role'];
-    if (options['--remote'] !== undefined) repository.remote = options['--remote'];
-    plan = planKitEdit(current, { kind: 'add-repository', repository });
-    header = `add-repo ${id} --id ${repository.id} --path ${repository.path}`;
-  } else {
-    plan = planKitEdit(current, { kind: 'set-role', repository_id: options['--id'], role: options['--role'] });
-    header = `set-role ${id} --id ${options['--id']} --role ${options['--role']}`;
-  }
-  await printPlan(header, plan, options);
+  const plan = command === 'restore-kit'
+    ? planKitReplacement(current, await readKitBackup(root, id, positionals[1]))
+    : planKitEdit(current, KIT_OPERATIONS[command](options));
+  if (command === 'remove-repo') plan.references = await repositoryReferences(root, id, options['--id']);
+  const shown = Object.entries(options)
+    .filter(([flag]) => !['--apply', '--json', '--root'].includes(flag))
+    .flatMap(([flag, value]) => [].concat(value).flatMap((entry) => [flag, entry]));
+  await printPlan([command, ...positionals, ...shown].join(' '), plan, options);
   if (options['--apply'] !== true) return undefined;
   return applyKitEdit(root, id, plan);
 }
@@ -310,6 +383,7 @@ function previewObject(preview) {
     execution_dir: record.execution_dir,
     repository_id: record.repository_id,
     spec_package: record.spec_package,
+    package_ref: record.package_ref ?? null,
     attention: record.attention ?? [],
     brief: record.brief,
     brief_sha256: record.brief_sha256,
@@ -500,6 +574,12 @@ function specPackageOrNull(record) {
   return typeof record.spec_package === 'string' && record.spec_package !== '' ? record.spec_package : null;
 }
 
+async function storagePackageDir(declared) {
+  const located = await locatePackage(declared);
+  if (!located.ok) throw new Error(`${located.message} ${located.remedy}`);
+  return located.packageDir;
+}
+
 // The recorded workflow id is authoritative: --run may fill a missing record
 // but never override a differing one.
 function resolveRun(record, requested) {
@@ -544,7 +624,7 @@ async function takeoverCommand(root, id, options) {
     return undefined;
   }
 
-  const packagePath = canonicalPackage(declared).packagePath;
+  const packagePath = await storagePackageDir(declared);
   const run = resolveRun(record, options['--run']);
   retainedCheckpoint(packagePath, run, 'takeover');
   const delivery = await deliverOverseerMessage(packagePath, {
@@ -608,7 +688,7 @@ async function resumeCommand(root, id, options) {
   const record = await findAssignment(root, id);
   const declared = specPackageOrNull(record);
   if (declared === null) throw new Error('resume requires an assignment with a spec package');
-  const packagePath = canonicalPackage(declared).packagePath;
+  const packagePath = await storagePackageDir(declared);
   const run = resolveRun(record, options['--run']);
   const checkpoint = retainedCheckpoint(packagePath, run, 'resume');
   const holdId = options['--hold'];
@@ -668,10 +748,14 @@ async function resumeCommand(root, id, options) {
   };
 }
 
-async function execute(command, root, options, positionals) {
+async function execute(command, root, options, positionals, resolved) {
   switch (command) {
-    case 'status': return storageStatus(root);
-    case 'setup': return setupStorage(root);
+    case 'status': return { ...(await storageStatus(root)), source: resolved.source, ...(resolved.config && { config: resolved.config }) };
+    case 'setup': {
+      const result = await setupStorage(root);
+      if (options['--save'] === true) result.saved = await saveStorageRoot(process.env, homedir(), root);
+      return result;
+    }
     case 'list': return listWorkspaces(root);
     case 'show': return fetchWorkspace(root, positionals[0]);
     case 'create': {
@@ -701,20 +785,24 @@ async function execute(command, root, options, positionals) {
       return undefined;
     case 'takeover': return takeoverCommand(root, positionals[0], options);
     case 'resume': return resumeCommand(root, positionals[0], options);
-    case 'add-repo':
-    case 'set-role': return kitEdit(command, root, positionals[0], options);
-    default: throw new UsageError(`Unknown command: ${command}`);
+    case 'kit-backups': return { backups: await listKitBackups(root, positionals[0]) };
+    default:
+      if (command in KIT_OPERATIONS || command === 'restore-kit') {
+        return kitEdit(command, root, positionals[0], options, positionals);
+      }
+      throw new UsageError(`Unknown command: ${command}`);
   }
 }
 
 function human(command, result) {
   switch (command) {
     case 'status': {
-      const lines = [`status ${result.status}`, result.root];
+      const lines = [`status ${result.status}`, result.root, `source ${result.source}${result.config ? ` (${result.config})` : ''}`];
       for (const entry of result.errors ?? []) lines.push(`${entry.path}: ${entry.message}`);
       return lines.join('\n');
     }
-    case 'setup': return `root ${result.root}\nprojects ${result.projects}`;
+    case 'setup': return `root ${result.root}\nprojects ${result.projects}${result.saved ? `\nsaved ${result.saved}` : ''}`;
+    case 'kit-backups': return result.backups.length === 0 ? 'no kit backups' : result.backups.join('\n');
     case 'list': {
       const lines = [`${result.valid.length} workspace(s)`];
       for (const entry of result.valid) lines.push(`${entry.id}\t${entry.directory}`);
@@ -778,20 +866,19 @@ async function main() {
     await fail(error, error instanceof UsageError ? usagePath(argv) : '');
     return;
   }
-  let root;
+  let resolved;
   try {
-    root = parsed.options['--root'] !== undefined
-      ? resolve(parsed.options['--root'])
-      : resolveStorageRoot(process.env, homedir());
+    resolved = describeStorageRoot(process.env, homedir(), parsed.options['--root']);
   } catch (error) {
     await fail(error, process.env.ADJACENT_STORAGE_ROOT ?? '');
     return;
   }
+  const { root } = resolved;
   const workspacePath = parsed.positionals[0] !== undefined
     ? join(root, 'projects', parsed.positionals[0])
     : root;
   try {
-    const result = await execute(parsed.command, root, parsed.options, parsed.positionals);
+    const result = await execute(parsed.command, root, parsed.options, parsed.positionals, resolved);
     await printResult(parsed.command, result, parsed.options);
   } catch (error) {
     await fail(error, error?.backup ?? errorPath(parsed, root, workspacePath));

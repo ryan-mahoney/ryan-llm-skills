@@ -10,7 +10,7 @@ metadata:
 
 # Spec Upgrade
 
-Bring one or more existing `.specs/<feature>/spec.md` packages up to the current standalone
+Bring one or more existing spec packages (`<ws>/<slug>`, with a `spec.md` under `package_dir`) up to the current standalone
 workflow without implementing them. Preserve requested outcomes; reassess generated architecture
 and proof obligations against actual users, data, compatibility, release process and authority.
 The result is a prepared package and a short account of the consequential changes. People need
@@ -26,11 +26,16 @@ schemas, or extra implementation steps merely to adopt this guidance.
 
 ## Select Existing Work
 
-Accept a spec path, feature folder, explicit list, or a request for all pending specs in this
-repository. A clear conversational selection is sufficient. With several candidates and no
-selection, ask which to include; do not silently upgrade the entire backlog. Discover `.specs/`
-directly even when gitignored. Keep each feature's canonical folder and identifiers where their
-meaning survives. Do not merge separate features into a new project plan.
+Accept a package ref or folder, explicit list, or a request for all pending specs in a workspace.
+A clear conversational selection is sufficient. With several candidates and no selection, ask which
+to include; do not silently upgrade the entire backlog. Discover packages with
+`node ~/.agents/scripts/spec-location/cli.mjs resolve --workspace <ws>` (its `specsDir`) and read each
+package's `locations.json`. Keep each feature's package ref and identifiers where their meaning
+survives.
+
+Legacy `.specs/` packages are not upgraded in place. Preview their migration with
+`node ~/.agents/scripts/spec-location/cli.mjs migrate --workspace <ws>`, apply it with `--apply` only
+when the operator asks, and then select the migrated packages by `ws/slug`. Stop if migration refuses. Do not merge separate features into a new project plan.
 
 Read each selected spec and available requirements, proposal, critique, context, step index,
 evidence plan, preparation, and progress artifacts. Check relevant repository code and recorded
@@ -76,9 +81,10 @@ For each selected, unimplemented package:
    merely because a harness is missing or a gate would fail. Resolving context is substantive work,
    not just adding fields or changing JSON version numbers.
 3. Before the first edit to a package's planning inputs, preserve the existing planning files that
-   will be overwritten in a filesystem snapshot outside the canonical package (for example,
-   `.specs/.upgrade-backups/<feature>/<unique-run>/`). Specs may be gitignored, so Git is not a
-   backup. Exclude runtime captures, credentials and unrelated files. Discard legacy `preparation.json`; preparation no longer produces or consumes a fingerprint manifest.
+   will be overwritten in a filesystem snapshot outside the package directory and outside any
+   checkout. Git is not a backup for spec packages. The snapshot goes to
+`${XDG_DATA_HOME:-~/.local/share}/spec-location/backups/<workspace>/<slug>/<UTC timestamp>/`,
+which is machine-local and outside git and sync. Exclude runtime captures, credentials and unrelated files. Discard legacy `preparation.json`; preparation no longer produces or consumes a fingerprint manifest.
 4. Write the sourced feature `context.md`. Reconcile any affected proposal/critique decisions with
    the resolved facts so obsolete instructions cannot be reintroduced by downstream readers.
    Preserve original feedback and note why it was superseded. Do not replay architecture or
@@ -116,7 +122,7 @@ must not be reported as entirely ready. State that ready means ready to implemen
 exact next invocation for each ready package, for example:
 
 ```text
-Use spec-end-to-end for .specs/example-feature/. Resume from the prepared package.
+Use spec-end-to-end for transitops/example-feature. Resume from the prepared package.
 ```
 
 Stop at this handoff. The user chooses when to start implementation.

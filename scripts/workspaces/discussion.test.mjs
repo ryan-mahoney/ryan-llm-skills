@@ -4153,6 +4153,38 @@ test("thread handoff worktree target launches into the registered repository", {
   assert.equal(tmux.destructiveCount(), 0);
 });
 
+test("worktree target binds to a repository declared with a ~/ path", { timeout: 30000 }, async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const primary = await makeRepo(join(root, "repos", "primary"));
+  const worktreePath = join(root, "repos", "linked");
+  await git(primary, ["worktree", "add", "--quiet", worktreePath]);
+  const linked = await realpath(worktreePath);
+  await setupWorkspace(storageRoot, "home-ws", [
+    { id: "app", path: primary },
+    { id: "app-linked", path: "~/repos/linked" },
+  ]);
+  const savedHome = process.env.HOME;
+  process.env.HOME = root;
+  t.after(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+  });
+  const service = createDiscussionService({ root: storageRoot, agentDir: join(root, "agent") });
+  try {
+    const thread = await service.create({
+      workspace_id: "home-ws",
+      title: "Home-relative worktree",
+      target: { kind: "worktree", path: linked },
+    });
+    assert.equal(thread.attention, null);
+    assert.equal(thread.execution_dir, linked);
+  } finally {
+    await service.close();
+  }
+});
+
 test("thread handoff refuses a Git worktree with no registered repository", { timeout: 30000 }, async (t) => {
   const root = await tempRoot(t);
   const storageRoot = join(root, "storage");

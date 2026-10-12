@@ -9,6 +9,14 @@ SYNC_AUGMENT="${SYNC_AUGMENT:-0}"
 # with no node_modules. Idempotent; already-installed packages are skipped.
 "$AGENTS_DIR/scripts/install-deps.sh"
 
+# Workspace sync tooling. Machine configuration and Unison state stay outside Git.
+mkdir -p "$HOME/.local/bin"
+if [ -e "$HOME/.local/bin/adjacent-sync" ] && [ ! -L "$HOME/.local/bin/adjacent-sync" ]; then
+  echo "Cannot install adjacent-sync over an existing file." >&2
+  exit 1
+fi
+ln -sfn "$AGENTS_DIR/scripts/adjacent-sync/cli.mjs" "$HOME/.local/bin/adjacent-sync"
+
 sync_dir_symlinks() {
   local source_dir="$1"
   local target_dir="$2"

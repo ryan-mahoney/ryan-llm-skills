@@ -4,7 +4,7 @@ Use the repo-owned `spec-runtime` extension for assigned Pi implementation pairs
 The coordinator starts an asynchronous owner with `spec_dispatch`; the owner invokes
 `spec_editor` synchronously. Native `pi --print --mode json` processes reuse explicit
 disk sessions. Do not use nested `pi-subagents` launches or resume IDs for implementation/editing.
-Use `spec_dispatch(action: start)` with `package` (absolute canonical folder), `step`
+Use `spec_dispatch(action: start)` with `package` (`package_dir`), `step`
 (absolute subspec), `owner_model` and `editor_model` (`provider/id[:thinking]`). Optional
 `checkout`, `branch`, `base`, `assignment_id` and `instructions` carry existing directives.
 `timeout_ms` bounds the whole assignment (default `7200000`, two hours).
@@ -13,7 +13,7 @@ When exposed by the loaded tool schema, set `attempt_kind` to the actual reason:
 `implementation-repair`, `review-repair`, or `launch-retry`. This is observation metadata,
 not permission to retry. Before an explicit provider change, supply its known required
 trusted provider extension in `child_extensions`; managed children disable discovery.
-An explicit checkout is reused; omitting it creates a sibling worktree. The owner calls
+An explicit checkout is reused; omitting it creates a worktree for the step's target, recorded in `locations.json`. The owner calls
 `spec_editor(assignment: <bounded instructions>)`. Read the
 [runtime API](../../../pi/extensions/spec-runtime/README.md) only for setup/recovery detail.
 Consult the extension's tool schema for arguments; do not generate a shell orchestration
@@ -38,10 +38,10 @@ experiment, never an automatic fallback or a reason to waive review.
 
 ## Bounded assignments
 
-Pass the canonical package and assigned card/step, checkout when already selected,
+Pass `package_dir` and the assigned card/step, checkout when already selected,
 run constraints, history-index path and intervening commits. The runtime can establish
-an isolated worktree when checkout is omitted. Keep all `.specs/` access in the primary
-repository. Use the prepared card as the execution plan.
+an isolated worktree when checkout is omitted. Read and write spec files only in `package_dir`,
+never in a checkout. Use the prepared card as the execution plan.
 
 Dispatch the first bounded edit once the prepared card and decisive source facts settle
 its approach. Later edit details can wait until that batch returns; exhaustive step-wide
@@ -169,7 +169,7 @@ do not ask the editor to reconstruct it. No routine progress narration is requir
 ## Completion, retention and cancellation
 
 The runtime sends the coordinator a native completion event. Wait for that event;
-do not poll status, tail transcripts, or infer completion from quiet output. Use `spec_dispatch(action: status, package: <canonical folder>, run_id: <known ID>)`
+do not poll status, tail transcripts, or infer completion from quiet output. Use `spec_dispatch(action: status, package: <package_dir>, run_id: <known ID>)`
 only to recover after interruption or diagnose an actual failure.
 
 Owner and editor disk sessions stay attached to their exact model assignments across
@@ -178,7 +178,7 @@ with its original revision. A changed model uses a distinct session. Context com
 must preserve requirements and unresolved work; it never authorizes a Git reset.
 
 The runtime holds an exclusive checkout lock through the owner and editor process
-group. `spec_dispatch(action: cancel)` takes the canonical package and known run ID.
+group. `spec_dispatch(action: cancel)` takes `package_dir` and the known run ID.
 Cancellation must establish actual process termination before any replacement
 writer or review fixer starts. Failed or unknown cancellation retains the lock: report
 the gap and diagnose it rather than starting another worker. A completed owner has no

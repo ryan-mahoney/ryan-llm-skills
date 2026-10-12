@@ -3,15 +3,17 @@ import { randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
+import { locatePackage } from '../spec-location/index.mjs';
 import { atomicWrite, loadScenario, PREPARED_PACKAGE_FILES, renderIndex } from './core.mjs';
 
 // Mirrors the core scenario id rule so extraction refuses before it writes anything.
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,63}$/;
+// The workspace project-context.md, one directory above the package's specs/ folder.
 const PROJECT_CONTEXT = '../project-context.md';
 const EXTRACT_TIMEOUT_MS = 1800000;
 
-// Stage-entry allowlists. Package files are read from the live package because
-// `.specs/` is ignored and has no Git history; repository inputs come only from
+// Stage-entry allowlists. Package files are read from the live storage package
+// because it has no Git history; repository inputs come only from
 // `git show <pinned-revision>:<path>`.
 export const STAGE_PROFILES = {
   'spec-architect-initial': {
@@ -118,7 +120,7 @@ function seedChecks(profile, step) {
   ];
 }
 
-export function extract({
+export async function extract({
   sourcePackage,
   repo,
   revision,
@@ -139,7 +141,9 @@ export function extract({
   if (typeof revision !== 'string' || !revision) throw new Error('revision is required');
   const includes = include.map(validateInclude);
 
-  const sourceDir = realpathSync(sourcePackage);
+  const located = await locatePackage(sourcePackage);
+  if (!located.ok) throw new Error(`source package ${JSON.stringify(sourcePackage)}: ${located.message} ${located.remedy}`);
+  const sourceDir = realpathSync(located.packageDir);
   if (!statSync(sourceDir).isDirectory()) throw new Error(`source package ${JSON.stringify(sourcePackage)} is not a directory`);
   const repoDir = realpathSync(repo);
   if (!statSync(repoDir).isDirectory()) throw new Error(`repo ${JSON.stringify(repo)} is not a directory`);
@@ -197,7 +201,7 @@ export function extract({
     const packageDest = join(tempFolder, 'input', 'package');
     mkdirSync(packageDest, { recursive: true });
     for (const name of profile.packageFiles) {
-      if (name === PROJECT_CONTEXT) writeCopiedFile(join(tempFolder, 'input', 'project-context.md'), name, readPackageSource(join(dirname(sourceDir), 'project-context.md')));
+      if (name === PROJECT_CONTEXT) writeCopiedFile(join(tempFolder, 'input', 'project-context.md'), name, readPackageSource(join(dirname(dirname(sourceDir)), 'project-context.md')));
       else writeCopiedFile(join(packageDest, name), name, readPackageSource(join(sourceDir, name)));
     }
     for (const name of profile.optionalPackageFiles) {
@@ -238,7 +242,7 @@ export function extract({
       status: 'draft',
       purpose: `Candidate ${skill} scenario extracted from ${feature}; curate expectations before ready.`,
       fixture: managed ? { feature, step } : { feature },
-      task: managed ? `spec=.specs/${feature}/spec.md step=${step}` : `Produce .specs/${feature}/context.md and .specs/${feature}/proposal.md.`,
+      task: managed ? `spec={package}/spec.md step=${step}` : 'Produce {package}/context.md and {package}/proposal.md.',
       ...(managed ? { roles: { editor_model: 'TODO/editor-model', todo: true } } : {}),
       timeout_ms: EXTRACT_TIMEOUT_MS,
       expectation_sources: [],

@@ -1,0 +1,13 @@
+# Host-owned state and machine-local files never cross machines.
+ignore = Name .sentinel
+ignore = Name .adjacent
+ignore = Name .DS_Store
+ignore = Name *.lock
+ignore = Name *.tmp
+ignore = Name .workspace-publish-*
+ignore = Name .syncthing.*
+ignore = Name *.sqlite*
+ignore = Regex projects/[^/]+/specs/[^/]+/runtime
+# Journey QA run output holds harness session files (database URLs).
+ignore = Regex projects/[^/]+/captures/[^/]+/ux-qa/runs
+ignore = Regex projects/[^/]+/(threads|sessions|assignments)

@@ -27,7 +27,9 @@ block completion. After a fix, rerun affected checks, not unrelated passing suit
 ## Artifact Package
 
 ```text
-.specs/<feature>/
+<storage root>/projects/<workspace>/specs/<slug>/
+├── scope.json                          # target repositories, designs, plan, epic (written by spec-location)
+├── locations.json                      # resolved absolute paths for the execution host
 ├── context.md                          # sourced project facts, decisions and authority
 ├── proposal.md
 ├── critique.md                         # optional challenge stage
@@ -52,8 +54,9 @@ block completion. After a fix, rerun affected checks, not unrelated passing suit
 └── work-tour.html                      # architecture/evidence/QA tour
 ```
 
-`.specs/` is usually gitignored. All reads and writes stay in the primary repository;
-pass its canonical path to workers and never copy the package into a worktree.
+The package lives in the workspace's adjacent storage, not in any checkout. All reads and writes
+use that folder; pass its `package_dir` to workers, and never create a package copy in a repository
+or worktree. `runtime/` is machine-local and not synced.
 New step learnings go in `learnings/`. Readers accept historical root-level learning
 files when no folder copy exists; existing evidence paths remain unchanged.
 

@@ -3,6 +3,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import path from 'node:path';
 import { discoverPackage, discover } from './core.mjs';
+import { locatePackage } from '../spec-location/index.mjs';
 
 const ms = value => typeof value === 'number' ? value : Date.parse(value);
 const seconds = value => Math.round(value / 10) / 100;
@@ -254,11 +255,14 @@ export async function metrics(packagePath, { session, allSessions = false, maxBy
   // pr-url.json remains a publication receipt, never proof the coordinator finished.
   try {
     const receipt = JSON.parse(await readFile(path.join(packagePath, 'pr-url.json'), 'utf8'));
-    if (receipt.schema_version === 1 && receipt.kind === 'pr_submission' && selectedParents.includes(receipt.parent_session)
-      && path.resolve(receipt.package ?? '') === path.resolve(packagePath) && /^https:\/\//.test(receipt.url ?? '')
-      && Number.isFinite(ms(receipt.submitted_at)) && start !== null && ms(receipt.submitted_at) >= start
-      && ms(receipt.submitted_at) <= now)
-      milestones.push({ kind: 'pr_submitted', timestamp: receipt.submitted_at, source: 'session_bound_pr_url_receipt' });
+    const located = await locatePackage(path.resolve(packagePath));
+    // One entry per target; the earliest qualifying submission marks the milestone.
+    const submitted = located.ok && receipt.package_ref === located.ref ? Object.values(receipt.targets ?? {})
+      .filter(entry => (receipt.schema_version ?? entry?.schema_version) === 1 && (receipt.kind ?? entry?.kind) === 'pr_submission' && selectedParents.includes(entry.parent_session)
+        && /^https:\/\//.test(entry.url ?? '') && Number.isFinite(ms(entry.submitted_at)) && start !== null && ms(entry.submitted_at) >= start
+        && ms(entry.submitted_at) <= now)
+      .sort((x, y) => ms(x.submitted_at) - ms(y.submitted_at))[0] : null;
+    if (submitted) milestones.push({ kind: 'pr_submitted', timestamp: submitted.submitted_at, source: 'session_bound_pr_url_receipt' });
   } catch (error) { if (error.code !== 'ENOENT') errors.push({ path: path.join(packagePath, 'pr-url.json'), code: error.code ?? 'INVALID_PUBLICATION_RECEIPT' }); }
   milestones.sort((a, b) => ms(a.timestamp) - ms(b.timestamp));
   const completion = milestones.find(m => m.kind === 'coordinator_completion_reported');

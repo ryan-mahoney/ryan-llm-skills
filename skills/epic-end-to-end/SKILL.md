@@ -52,16 +52,17 @@ EDITOR_AGENT: deepseek-flash:max from deepseek
 REVIEW_AGENT: gpt-6.1-sol:medium from openai-codex
 SCOUT_AGENT: gpt-6-luna:low from openai-codex
 FINAL_REVIEWER: gpt-6.1-sol:xhigh from openai-codex
+WORKSPACE: transitops   # optional when run from a repository in exactly one kit
 EPIC: adj
 PACKAGES:   # optional when the record exists
-- /absolute/repository/.specs/adj1-first-feature
-- /absolute/repository/.specs/adj2-second-feature
+- transitops/adj1-first-feature
+- transitops/adj2-second-feature
 ```
 
-`EPIC: <slug>` (preferred) names an existing record under
-`<anchor primary repo>/.specs/_epics/<slug>/`; its `packages` are the membership
-boundary. `PACKAGES` remains accepted and takes package directories or their
-`spec.md` paths; a leftover singular `PACKAGE` placeholder does not replace that
+`EPIC: <slug>` (preferred) names an existing record in the workspace's epics (see
+[Spec Location](../spec-end-to-end/references/spec-location.md#epics)); its `packages` are the
+membership boundary. `PACKAGES` takes `workspace/slug` references, package folders or
+files inside them, all in one workspace; a leftover singular `PACKAGE` placeholder does not replace that
 list. See [One epic record](#one-epic-record-existing-package-ledgers) for how the
 two combine.
 Honor explicit branch/base, worktree, publication/readiness and model overrides.
@@ -81,12 +82,14 @@ new user overrides through the owning workflow. Never silently substitute a mode
 
 ## Resolve the sequence once
 
-1. Apply [Workspace Handoff](../spec-end-to-end/references/workspace-handoff.md).
-   Resolve each package to its primary repository. Read applicable instructions,
-   shared project context and each package's context, spec, preparation outcome,
-   dependency notes and existing completion/publication receipts. Keep all `.specs`
-   reads/writes canonical; run code and checks in the selected checkout.
-2. Deduplicate canonical package paths while retaining the user's order. Read only
+1. Run the first step of [Spec Location](../spec-end-to-end/references/spec-location.md):
+   `resolve` for the workspace (when no `WORKSPACE` is given), `epics --workspace W` for the
+   record and its members, and `check` on each member's folder. Apply
+   [Workspace Handoff](../spec-end-to-end/references/workspace-handoff.md). Read applicable
+   instructions, the workspace project context and each package's context, spec, preparation
+   outcome, dependency notes and existing completion/publication receipts. Read and write
+   spec files only in the package folders; run code and checks in the selected target worktrees.
+2. Deduplicate package references while retaining the user's order. Read only
    enough artifacts to identify dependencies, readiness, ownership and next action;
    do not replay architecture, inspect every step card, or run broad baselines.
 3. Build the dependency order from the record's `requires`. Read the packages'
@@ -116,18 +119,17 @@ missing prerequisite without expanding the epic.
 
 ## One epic record, existing package ledgers
 
-The record is `<anchor primary repo>/.specs/_epics/<slug>/`, where the anchor is the
-repository holding the record (ordinarily the plan's). It contains `epic.json`,
-whose schema, derived member status and naming rules are defined in
-[Spec epics](../../docs/spec-epics.md), and this skill's `run.md`. Apply the
-primary-checkout rules of [Workspace Handoff](../spec-end-to-end/references/workspace-handoff.md)
-to both.
+The record is `epic.json` in the workspace's `epics/<slug>/` folder (the `record` path that
+`epics --workspace W` prints), alongside this skill's `run.md`. `epic.json`'s schema, derived member
+status and naming rules are defined in [Spec epics](../../docs/spec-epics.md); its members are
+package slugs of the one workspace. Both files live in workspace storage, never in a checkout.
 
 - `EPIC` without `PACKAGES`: read the existing record; stop if it is missing or invalid.
 - `PACKAGES` without a record: write `epic.json` first. The slug is the explicit
   `EPIC` value, else the members' shared name prefix; with neither, refuse to guess
-  and ask. Take `requires` from the packages' own dependency statements. Members in
-  other repositories carry their `repository`.
+  and ask. Take `requires` from the packages' own dependency statements. Attach each member
+  with `spec-location scope <member> --epic <slug>` and write the record at the `locations.epic`
+  it then reports.
 - Both: the record's membership must equal the list. Otherwise stop with the exact
   difference; never merge the two lists silently.
 
@@ -144,7 +146,7 @@ cannot derive:
 - Original request, exact models, authority and the effective tie order if it
   differs from the record.
 - Satisfaction evidence for each `requires` edge and explicit external blockers.
-- Per package: pending/running/blocked/complete, checkout, branch, explicit PR base
+- Per package: pending/running/blocked/complete, and per target its checkout, branch, explicit PR base
   and pinned predecessor SHA, existing workflow ID, requested outcome, final commit,
   merge commit and time, and evidence/tour references. Keep reviewed PR HEAD
   separate from the merge commit. PR URL and merge state are derivable by sentinel
@@ -160,15 +162,16 @@ new runtime tool or parallel writer merely to sequence existing workflows.
 
 On resume reconcile this record against package receipts, Git and published heads.
 Do not redispatch a recorded running package until its owning workflow has resolved
-the existing worker/lease. A stale running entry is uncertainty, not permission for
+the existing worker. A stale running entry is uncertainty, not permission for
 a replacement. Reuse completed packages whose requested outcome remains valid;
 route missing reviews/evidence/publication to their existing owner rather than
 reimplementing them. No fresh budget or identity resets on resume.
 
 ## Merge each package before its dependents
 
-In the merge-authorized mode, default to one PR per package into the recorded
-integration branch, ordinarily the repository default branch. `spec-end-to-end`
+In the merge-authorized mode, default to one PR per package target into the recorded
+integration branch, ordinarily the repository default branch. A package is merged
+when every target's PR is merged. `spec-end-to-end`
 ends at publication; this epic coordinator owns the additional merge handoff.
 Do not change the single-package workflow into an automatic merge workflow.
 
@@ -238,7 +241,7 @@ a downstream regression scenario; a helper was already implemented and should be
 reused. Reorder eligible work when verified dependencies change. Do not rewrite
 unaffected packages just because a predecessor merged.
 
-For material drift, invoke `spec-write` on the affected canonical package with a
+For material drift, invoke `spec-write` on the affected package with a
 bounded correction: source feedback, intended behavior to preserve, concrete stale
 assumptions and available producer evidence. Let it update the spec, affected cards,
 index, preparation and evidence plan consistently. Retain the prior planning
@@ -259,8 +262,8 @@ feedback pass; return to it only for a material new fact, not an endless replan 
 
 ## Run each eligible package through its owning workflow
 
-Call `spec-end-to-end` with a concrete handoff containing canonical package,
-execution checkout/branch/base, pinned dependency inputs, exact model roles,
+Call `spec-end-to-end` with a concrete handoff containing `package_ref` and `package_dir`,
+the targets' checkout/branch/base, pinned dependency inputs, exact model roles,
 existing authority, requested readiness and existing workflow/next obligation.
 In managed Pi use its prepared startup/checkpoint path; keep native workers and
 sentinel workflow registration bound to that package. Remain the top-level
@@ -308,7 +311,7 @@ A draft satisfies completion only when draft is the requested final outcome.
 Live deployment or import prerequisites remain separately pending when outside
 that requested outcome; do not relabel them as observed or quietly drop them.
 
-Report `complete`, `blocked` or `paused`, the epic record path (`.specs/_epics/<slug>/`), and a concise table
-of packages, outcome, branch/base and PR URL. For incomplete runs, name the exact
+Report `complete`, `blocked` or `paused`, the epic record path (from `locations.epic`), and a concise table
+of packages, outcome, branch/base and PR URL per target. For incomplete runs, name the exact
 missing dependency/decision, affected packages and next action. Routine successful
 handoffs get short progress updates; never end the epic at the first package's PR.

@@ -27,9 +27,17 @@ function makeTempParent(t) {
 }
 
 // Base environment for every child: the operator's real ADJACENT_STORAGE_ROOT
-// must never leak into a test. Callers opt back in through `env`.
+// and saved root config must never leak into a test. Callers opt back in
+// through `env`. Node's node:sqlite ExperimentalWarning is silenced so stderr
+// carries only the {error,path} refusal the tests parse.
+const NO_CONFIG_HOME = join(tmpdir(), 'workspace-cli-no-config');
 function childEnvironment(env) {
-  const merged = { ...process.env, ...env };
+  const merged = {
+    ...process.env,
+    XDG_CONFIG_HOME: NO_CONFIG_HOME,
+    NODE_OPTIONS: '--disable-warning=ExperimentalWarning',
+    ...env,
+  };
   if (!Object.prototype.hasOwnProperty.call(env, 'ADJACENT_STORAGE_ROOT')) {
     delete merged.ADJACENT_STORAGE_ROOT;
   }
@@ -506,6 +514,104 @@ test('workspace CLI restart: malformed input refuses without writes', async (t) 
   refusal(await runCli(['add-repo', 'alpha', '--id', 'docs', '--path', '--root', root]), 'missing option value');
   refusal(await runCli(['toString', '--root', root]), 'inherited command name');
   refusal(await runCli(['create', 'beta', '--name', 'line\nbreak', '--root', root]), 'create name with newline');
-  refusal(await runCli(['add-repo', 'alpha', '--id', 'docs', '--path', 'relative/repo', '--root', root]), 'relative add-repo preview');
+  // A relative path is workspace-relative: it previews, and apply refuses a checkout that is absent.
+  refusal(
+    await runCli(['add-repo', 'alpha', '--id', 'docs', '--path', 'relative/repo', '--apply', '--root', root]),
+    'relative add-repo apply to a missing checkout',
+  );
   assert.deepEqual(treeSnapshot(root), snapshot, 'refusals must not write to storage');
+});
+
+test('workspace CLI restart: setup --save persists the root and status names its source', async (t) => {
+  const parent = makeTempParent(t);
+  const root = join(parent, 'store');
+  const other = join(parent, 'other');
+  const xdg = join(parent, 'xdg');
+  const env = { XDG_CONFIG_HOME: xdg };
+
+  const setup = jsonResult(await runCli(['setup', '--save', '--json', '--root', root], { env }), 'setup --save');
+  const config = join(xdg, 'adjacent', 'config.json');
+  assert.equal(setup.saved, config);
+  assert.deepEqual(JSON.parse(readFileSync(config, 'utf8')), { storage_root: root });
+
+  const saved = jsonResult(await runCli(['status', '--json'], { env }), 'status from config');
+  assert.equal(saved.root, root);
+  assert.equal(saved.source, 'config');
+  assert.equal(saved.status, 'ok');
+  const fromEnv = jsonResult(await runCli(['status', '--json'], { env: { ...env, ADJACENT_STORAGE_ROOT: other } }), 'status from env');
+  assert.deepEqual([fromEnv.root, fromEnv.source], [other, 'env']);
+  const fromFlag = jsonResult(await runCli(['status', '--json', '--root', other], { env }), 'status from flag');
+  assert.equal(fromFlag.source, 'flag');
+  assert.equal(jsonResult(await runCli(['status', '--json']), 'status default').source, 'default');
+  assert.equal(existsSync(join(other, 'projects')), false);
+});
+
+test('workspace CLI restart: kit edit commands preview without writing, apply with a backup, and restore', async (t) => {
+  const parent = makeTempParent(t);
+  const home = join(parent, 'home');
+  const root = join(parent, 'store');
+  const env = { HOME: home };
+  mkdirSync(join(home, 'docs'), { recursive: true });
+  await gitInit(join(home, 'docs'));
+  mkdirSync(join(home, 'web'));
+  await gitInit(join(home, 'web'));
+  success(await runCli(['setup', '--root', root], { env }), 'setup');
+  success(await runCli(['create', 'team', '--root', root], { env }), 'create');
+  const workspace = join(root, 'projects', 'team');
+  const run = (args) => runCli([...args, '--root', root], { env });
+
+  // Each step: [args, text the applied kit.yaml must contain]. Preview first, then apply.
+  const steps = [
+    [['add-repo', 'team', '--id', 'docs', '--path', '~/docs'], 'path: "~/docs"'],
+    [['add-repo', 'team', '--id', 'web', '--path', join(home, 'web'), '--role', 'app'], 'role: "app"'],
+    [['set-remote', 'team', '--id', 'docs', '--remote', 'git@example.com:docs.git'], 'remote: "git@example.com:docs.git"'],
+    [['clear-role', 'team', '--id', 'web'], 'path: ' + JSON.stringify(join(home, 'web'))],
+    [['set-name', 'team', '--name', 'Team Space'], 'name: "Team Space"'],
+    [['add-context', 'team', '--path', 'context/notes.md'], '- "context/notes.md"'],
+    [['set-design-system', 'team', '--repo', 'docs', '--path', 'ds/a.css', '--path', 'ds/b.css', '--applies-to', 'all'], '    - "ds/b.css"'],
+    [['set-execution-host', 'team', '--host', 'restory-box'], 'execution_host: "restory-box"'],
+    [['rewrite-paths', 'team', '--from', home, '--to', '~'], 'path: "~/web"'],
+    [['remove-context', 'team', '--path', 'context/notes.md'], 'context: []'],
+  ];
+  for (const [args, expected] of steps) {
+    const before = kitState(workspace);
+    const backups = kitBackups(workspace).length;
+    const preview = success(await run(args), `${args[0]} preview`);
+    assert.ok(preview.stdout.includes('--- after'), `${args[0]} preview prints the hunk`);
+    assert.deepEqual(kitState(workspace).bytes, before.bytes, `${args[0]} preview must not write`);
+    assert.equal(kitBackups(workspace).length, backups, `${args[0]} preview must not back up`);
+    const applied = ndjsonResults(await run([...args, '--apply', '--json']), 2, `${args[0]} apply`);
+    assert.equal(applied[0].before, before.bytes.toString('utf8'), `${args[0]} applies the previewed plan`);
+    assert.ok(kitState(workspace).bytes.toString('utf8').includes(expected), `${args[0]} result contains ${expected}`);
+    assert.equal(kitBackups(workspace).length, backups + 1, `${args[0]} apply publishes one backup`);
+  }
+  const kit = kitDocument(kitState(workspace).bytes, 'edited kit');
+  assert.equal(kit.name, 'Team Space');
+  assert.equal(kit.execution_host, 'restory-box');
+  assert.deepEqual(kit.design_system, { repository: 'docs', paths: ['ds/a.css', 'ds/b.css'], applies_to: 'all' });
+  assert.deepEqual(kit.repositories.map((repository) => repository.path), ['~/docs', '~/web']);
+  const shown = jsonResult(await run(['show', 'team', '--json']), 'show edited kit');
+  assert.deepEqual(shown.repositories.map((repository) => repository.status), ['ok', 'ok'], '~ paths resolve with the local home');
+  assert.equal(shown.kit.design_system.repository, 'docs');
+
+  // remove-repo previews the records that reference the repository and never refuses.
+  mkdirSync(join(workspace, 'threads'));
+  writeFileSync(join(workspace, 'threads', 'thread-1.json'), JSON.stringify({ target: { kind: 'repository', repository_id: 'web' } }));
+  const removePreview = success(await run(['remove-repo', 'team', '--id', 'web']), 'remove-repo preview');
+  assert.match(removePreview.stdout, /threads: thread-1/);
+  const removed = ndjsonResults(await run(['remove-repo', 'team', '--id', 'web', '--apply', '--json']), 2, 'remove-repo apply');
+  assert.deepEqual(removed[0].references.threads, ['thread-1']);
+  assert.deepEqual(kitDocument(kitState(workspace).bytes, 'after remove').repositories.map((repository) => repository.id), ['docs']);
+  assert.equal(existsSync(join(workspace, 'threads', 'thread-1.json')), true, 'the thread record stays');
+
+  // The oldest backup restores through the same preview, backup and apply path.
+  const listed = jsonResult(await run(['kit-backups', 'team', '--json']), 'kit-backups').backups;
+  assert.equal(listed.length, kitBackups(workspace).length);
+  const oldest = listed[listed.length - 1];
+  const current = kitState(workspace).bytes;
+  success(await run(['restore-kit', 'team', oldest]), 'restore-kit preview');
+  assert.deepEqual(kitState(workspace).bytes, current, 'restore preview must not write');
+  success(await run(['restore-kit', 'team', oldest, '--apply']), 'restore-kit apply');
+  assert.equal(kitDocument(kitState(workspace).bytes, 'restored').repositories.length, 0);
+  refusal(await run(['restore-kit', 'team', '../kit.yaml', '--apply']), 'restore-kit rejects a name that is not a listed backup');
 });

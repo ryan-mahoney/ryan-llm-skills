@@ -8,6 +8,8 @@ import { tmpdir } from 'node:os';
 import { collectWorkspace } from './sentinel.mjs';
 import { createDashboardServer, readDashboardState } from './dashboard.mjs';
 import { COMPLETION_FILE } from './manual-completion.mjs';
+import { makeFixture } from '../spec-location/fixture.mjs';
+import { newPackage } from '../spec-location/index.mjs';
 
 function request(server, path, { method = 'GET', headers = {}, body = '' } = {}) {
   return new Promise(resolve => {
@@ -19,22 +21,19 @@ function request(server, path, { method = 'GET', headers = {}, body = '' } = {})
   });
 }
 async function fixture(t) {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'manual-completion-')));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const root = join(dir, 'repo'), agentDir = join(dir, 'agent'), pkg = join(root, '.specs', 'feature');
-  mkdirSync(pkg, { recursive: true });
-  execFileSync('git', ['init', '-q', root]);
-  execFileSync('git', ['-C', root, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-qm', 'Initial fixture']);
+  const fx = makeFixture(); t.after(fx.cleanup);
+  const dir = fx.tmp, root = fx.alpha, agentDir = join(dir, 'agent');
+  const pkg = (await newPackage({ workspace: 'demo', slug: 'feature', targets: [{ id: 'alpha' }], ...fx.options })).locations.package_dir;
   const runs = join(pkg, 'runtime', 'runs'); mkdirSync(runs, { recursive: true });
   const receipt = join(runs, 'old.json');
   writeFileSync(receipt, JSON.stringify({ id: 'old', assignment_id: 'old', package: pkg, state: 'running', started_at: '2026-01-01T10:00:00Z' }));
-  const collect = () => collectWorkspace({ packages: [pkg], skipManagedIndex: true });
+  const collect = () => collectWorkspace({ packages: [pkg], storageRoot: fx.root, skipManagedIndex: true });
   const snapshot = await collect(); assert.equal(snapshot.coverage.state, 'complete');
   const observers = join(agentDir, 'spec-sentinel', 'a'.repeat(64), 'observers'); mkdirSync(observers, { recursive: true });
   const published = join(observers, 'a.json');
   const publish = snapshot => writeFileSync(published, JSON.stringify({ schema_version: 1, observer_id: 'a', state: 'observing', published_at: new Date().toISOString(), snapshot }));
   publish(snapshot);
-  const server = createDashboardServer({ agentDir });
+  const server = createDashboardServer({ agentDir, storageRoot: fx.root });
   const { data } = await request(server, '/api/state');
   const revision = snapshot.runs[0].completion_revision;
   const post = (input = { package: pkg, revision }, headers = {}) => request(server, '/api/package-completion', {
@@ -48,7 +47,7 @@ test('manual completion overrides changed state, preserves worker evidence and a
   const f = await fixture(t), original = readFileSync(f.receipt, 'utf8');
   assert.equal((await f.post()).status, 200);
   const marker = JSON.parse(readFileSync(join(f.pkg, COMPLETION_FILE), 'utf8'));
-  assert.equal(marker.kind, 'manual_completion'); assert.equal(marker.schema_version, 2);
+  assert.equal(marker.kind, 'manual_completion'); assert.equal(marker.schema_version, 2); assert.equal(marker.package_ref, 'demo/feature');
   assert.equal(readFileSync(f.receipt, 'utf8'), original);
   const immediate = await readDashboardState(f.agentDir);
   assert.equal(immediate.observers[0].snapshot.runs.length, 0);
@@ -89,14 +88,13 @@ test('existing worker checkpoint updates preserve an operator completion decisio
   assert.equal(JSON.parse(readFileSync(join(checkpoint, 'checkpoint.json'))).state, 'ready');
 });
 
-test('manual completion permits cleaned up worktrees, missing leases and incomplete lifecycle records', async t => {
+test('manual completion permits cleaned up worktrees and incomplete lifecycle records', async t => {
   const f = await fixture(t);
   const receipt = JSON.parse(readFileSync(f.receipt));
-  writeFileSync(f.receipt, JSON.stringify({ ...receipt, checkout: join(f.dir, 'removed-worktree'), lock: join(f.root, '.git', 'missing.lock') }));
+  writeFileSync(f.receipt, JSON.stringify({ ...receipt, checkout: join(f.dir, 'removed-worktree') }));
   const partial = await f.collect();
   assert.equal(partial.coverage.state, 'partial');
   assert.ok(partial.runs[0].coverage.reasons.some(reason => reason.startsWith('checkout-unavailable:')));
-  assert.ok(partial.runs[0].coverage.reasons.includes('lease-missing'));
   const checkpoint = join(f.pkg, 'runtime', 'sentinel', 'workflow'); mkdirSync(checkpoint, { recursive: true });
   writeFileSync(join(checkpoint, 'checkpoint.json'), '{');
   const incomplete = await f.collect(); assert.equal(incomplete.runs[0].completion_revision, null);

@@ -1,6 +1,6 @@
 ---
 name: spec-sentinel
-description: "Global monitoring and optional shadow/recover supervision of spec runs across automatically discovered repositories and live Pi coordinators. Use for 'workspace status', 'sentinel status', 'discover repositories', or 'is any spec run stuck'. Observe is read-only; intervention requires an explicit runtime mode."
+description: "Global monitoring and optional shadow/recover supervision of spec runs across automatically discovered workspaces and live Pi coordinators. Use for 'workspace status', 'sentinel status', 'discover repositories', or 'is any spec run stuck'. Observe is read-only; intervention requires an explicit runtime mode."
 argument-hint: "[observe | shadow | recover] [--model provider/model:thinking] [--root PATH] | status | off"
 disable-model-invocation: false
 license: MIT
@@ -41,8 +41,8 @@ and [runtime README](../../pi/extensions/spec-runtime/README.md#observe-only-hos
 
 ## Epics
 
-Sentinel reads `.specs/_epics/*/epic.json` in each observed repository and never writes
-it. The dashboard shows an epic badge on member packages, an "Epic members" section in package
+Sentinel reads `<workspace>/epics/*/epic.json` and the packages under `<workspace>/specs/` for
+each workspace in storage, and never writes them. The dashboard shows an epic badge on member packages, an "Epic members" section in package
 detail and an Epics view; `sentinel status --format text` prints one line per epic. Member status
 is derived from package files; see [Spec epics](../../docs/spec-epics.md).
 

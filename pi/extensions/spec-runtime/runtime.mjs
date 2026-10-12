@@ -7,13 +7,14 @@ import { fileURLToPath } from 'node:url';
 import { activityRecorder } from './monitor.mjs';
 import { SCOUT_MODEL } from './scout.mjs';
 import { createLogSummary } from '../../../scripts/spec-facts/core.mjs';
+import { checkPackage, locatePackage, setWorktree, stamp } from '../../../scripts/spec-location/index.mjs';
 import { decide, collectFacts } from '../../../scripts/jev/core.mjs';
 import { preparedEntry } from './startup.mjs';
 import { splitModelSelector, configurationFailure, configurationAction } from './model-selector.mjs';
 import { submitCompletion, completionStatus, refreshProgress, revision, recordVerification, invalidateCompletion } from './completion.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const terminal = new Set(['completed', 'failed', 'cancelled']);
+const terminal = new Set(['completed', 'failed', 'cancelled', 'stale']);
 const timestamp = () => new Date().toISOString();
 const read = file => JSON.parse(readFileSync(file, 'utf8'));
 function atomic(file, value) {
@@ -41,31 +42,51 @@ function save(record) {
   atomic(join(record.package, 'runtime/runs', `${record.id}.json`), record);
   atomic(join(record.package, 'runtime/run.json'), record);
 }
+// A spec-location refusal as an Error that keeps the machine-readable code and remedy.
+export function refusalError({ code, message, remedy }) {
+  return Object.assign(new Error(`${code}: ${message}${remedy ? ` ${remedy}` : ''}`), { code, remedy });
+}
+// The real package folder for a `workspace/slug` ref, the folder, or a file inside it.
+export async function packageDirOf(ref, location = {}) {
+  const found = await locatePackage(ref, location);
+  if (!found.ok) throw refusalError(found);
+  return realpathSync(found.packageDir);
+}
+// loadRun takes an already located package folder (or a file inside it).
+const packageFolder = path => { const real = realpathSync(path); return statSync(real).isFile() ? dirname(real) : real; };
 export function loadRun(packagePath, id) {
   if (id && !/^[a-zA-Z0-9_-]+$/.test(id)) throw new Error('Invalid run_id');
-  return read(join(canonicalPackage(packagePath).packagePath, 'runtime', id ? `runs/${id}.json` : 'run.json'));
+  return read(join(packageFolder(packagePath), 'runtime', id ? `runs/${id}.json` : 'run.json'));
 }
 export function summary(record) {
   return { run_id: record.id, assignment_id: record.assignment_id, workflow_id: record.workflow_id ?? null,
-    attempt_kind: record.attempt_kind ?? null, session_scope: record.session_scope ?? 'package', state: record.state, package: record.package, step: record.step,
-    checkout: record.checkout, owner_session: record.owner_session, editor_session: record.editor_session,
+    attempt_kind: record.attempt_kind ?? null, session_scope: record.session_scope ?? 'package', state: record.state, package: record.package, package_ref: record.package_ref ?? null, step: record.step,
+    target: record.target ?? null, checkout: record.checkout, owner_session: record.owner_session, editor_session: record.editor_session,
     ledger: join(record.package, 'runtime/progress.json'), run_receipt: join(record.package, 'runtime/run.json'), events: join(record.package, 'runtime/events.jsonl'),
-    checks: ['canonical package', 'checkout repository and requested branch', 'exclusive writer lease at launch'],
+    checks: ['canonical package', 'checkout repository and target branch', 'no live coordinator already running this package'],
     owner_model: record.owner_model, editor_model: record.editor_model, routing_reason: record.routing_reason,
     environment: record.environment,
     handoff: record.handoff || completionStatus(record), progress: join(record.package, 'runtime/progress.json'),
     result: record.result, result_truncated: record.result_truncated, full_result_path: record.full_result_path, error: record.error,
     next: record.handoff?.status === 'handoff_incomplete' ? 'Repair the structured handoff only; preserve code and prior checks. Review/fix remains required.' : record.state === 'running' ? 'await completion event; do not poll' : record.state === 'blocked' ? 'resolve worker termination before another writer' : 'evaluate result; independent step review remains required' };
 }
+// A run holds the writer role while its own record is running (or blocked on a live
+// process group) and nothing has revoked it. Revocation is a marker file so a worker
+// process can revoke without rewriting the coordinator's run record.
+const runFileOf = record => join(record.package, 'runtime/runs', `${record.id}.json`);
+const revokedFile = record => join(record.package, 'runtime/runs', `${record.id}-revoked.json`);
+export const editorSlot = record => join(record.package, 'runtime/runs', `${record.id}-editor-slot`);
 export function assertLease(record) {
-  const lease = read(join(record.lock, 'lease.json'));
-  if (lease.id !== record.id || lease.token !== record.token || lease.revoked) throw new Error('Writer lease is absent, replaced, or revoked; stop this assignment.');
+  let current;
+  try { current = read(runFileOf(record)); } catch { /* absent */ }
+  if (!['running', 'blocked'].includes(current?.state) || existsSync(revokedFile(record))) throw new Error('Writer lease is absent, replaced, or revoked; stop this assignment.');
 }
-function revoke(record) {
-  const file = join(record.lock, 'lease.json');
-  const lease = read(file);
-  if (lease.id !== record.id || lease.token !== record.token) throw new Error('Lease identity mismatch');
-  atomic(file, { ...lease, revoked: true });
+export function revoke(record) {
+  atomic(revokedFile(record), { revoked_at: timestamp() });
+}
+function processAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
 }
 const processDir = record => join(record.package, 'runtime/runs', `${record.id}-processes`);
 export function trackGroup(record, pid, role) {
@@ -95,7 +116,7 @@ function signalGroup(pid, signal) {
   try { process.kill(-pid, signal); } catch (error) { if (error.code !== 'ESRCH') throw error; }
 }
 // Only call for a group created and tracked by this live invocation, never an
-// arbitrary PID recovered from disk. Failure leaves the writer lease reserved.
+// arbitrary PID recovered from disk. Failure leaves the run blocked and still active.
 export async function terminateGroup(record, pid) {
   if (settleGroup(record, pid)) return true;
   signalGroup(pid, 'SIGTERM');
@@ -123,51 +144,61 @@ export function spawnManaged(record, role, command, args, onRegistered = () => {
   }
   return child;
 }
-function release(record) {
-  const lease = read(join(record.lock, 'lease.json'));
-  if (lease.id !== record.id || lease.token !== record.token) throw new Error('Lease identity mismatch');
-  rmSync(record.lock, { recursive: true });
-  if (record.package_lock) {
-    const packageLease = read(join(record.package_lock, 'lease.json'));
-    if (packageLease.id !== record.id || packageLease.token !== record.token) throw new Error('Package lease identity mismatch');
-    rmSync(record.package_lock, { recursive: true });
-  }
+// The target a step changes: its spec-steps.json `repository`, or the package's only target.
+function stepTarget(locations, packagePath, step) {
+  const number = /^step-(\d+)-subspec\.md$/.exec(basename(step))?.[1];
+  let declared;
+  try { declared = read(join(packagePath, 'spec-steps.json')).steps.find(entry => entry.step === Number(number))?.repository; } catch { /* no step list */ }
+  const ids = locations.targets.map(entry => entry.id).join(', ');
+  if (declared === undefined && locations.targets.length === 1) return locations.targets[0];
+  if (declared === undefined) throw refusalError({ code: 'step-repository-missing', message: `${basename(step)} names no repository and ${locations.package_ref} has ${locations.targets.length} targets (${ids}).`,
+    remedy: 'Set `repository` on the step in spec-steps.json.' });
+  const target = locations.targets.find(entry => entry.id === declared);
+  if (!target) throw refusalError({ code: 'step-repository-unknown', message: `${basename(step)} names repository ${JSON.stringify(declared)}, which is not a target of ${locations.package_ref} (${ids}).`,
+    remedy: 'Set `repository` on the step in spec-steps.json to one of the package targets.' });
+  return target;
 }
 
-export function canonicalPackage(path) {
-  const target = realpathSync(path);
-  const packagePath = statSync(target).isFile() && basename(target) === 'spec.md' ? dirname(target) : target;
-  if (!statSync(packagePath).isDirectory()) throw new Error('package must be a feature directory or its spec.md');
-  const specs = dirname(packagePath);
-  if (basename(specs) !== '.specs') throw new Error('package must be a direct child of the primary checkout .specs directory');
-  const primary = realpathSync(dirname(specs));
-  const common = realpathSync(git(primary, 'rev-parse', '--path-format=absolute', '--git-common-dir'));
-  if (common !== join(primary, '.git')) throw new Error('package must belong to the primary checkout, not a linked worktree');
-  return { packagePath, primary, common };
-}
-export function resolveInput(input) {
+export async function resolveInput(input, location = {}) {
   if (input.attempt_kind !== undefined && !['implementation', 'verification-continuation', 'implementation-repair', 'review-repair', 'launch-retry'].includes(input.attempt_kind))
     throw new Error('Unknown attempt_kind');
   if (input.session_scope !== undefined && !['package', 'step'].includes(input.session_scope))
     throw new Error('session_scope must be package or step');
   input = { ...input, owner_model: input.owner_override || input.owner_model,
     routing_reason: input.owner_override ? 'explicit step override' : input.routing_reason };
-  const { packagePath, primary, common } = canonicalPackage(input.package);
+  const checked = await checkPackage(input.package, location);
+  if (!checked.ok) throw refusalError(checked);
+  const locations = checked.locations;
+  const packagePath = realpathSync(locations.package_dir);
   for (const key of ['owner_model', 'editor_model']) splitModelSelector(input[key]);
   const step = realpathSync(input.step);
-  if (!inside(packagePath, step)) throw new Error('step must be inside the canonical package');
-  const branch = input.branch || `spec-${basename(packagePath)}`;
-  const checkout = resolve(input.checkout || join(dirname(primary), `${basename(primary)}-${basename(packagePath)}`));
-  if (!existsSync(checkout)) {
+  if (!inside(packagePath, step)) throw new Error('step must be inside the package');
+  const target = stepTarget(locations, packagePath, step);
+  const primary = realpathSync(target.primary);
+  const common = realpathSync(target.common);
+  const worktree = target.worktree ?? resolve(join(dirname(primary), `${basename(primary)}-${basename(packagePath)}`));
+  if (!existsSync(worktree)) {
     let existing = false;
-    try { git(primary, 'show-ref', '--verify', `refs/heads/${branch}`); existing = true; } catch { /* new branch */ }
-    git(primary, 'worktree', 'add', ...(existing ? [checkout, branch] : ['-b', branch, checkout, input.base || 'HEAD']));
+    try { git(primary, 'show-ref', '--verify', `refs/heads/${target.branch}`); existing = true; } catch { /* new branch */ }
+    git(primary, 'worktree', 'add', ...(existing ? [worktree, target.branch] : ['-b', target.branch, worktree, input.base || 'HEAD']));
   }
-  const actual = realpathSync(checkout);
-  if (realpathSync(git(actual, 'rev-parse', '--path-format=absolute', '--git-common-dir')) !== common) throw new Error('checkout is not in the package repository');
-  if (input.branch && git(actual, 'branch', '--show-current') !== input.branch) throw new Error('checkout branch differs from the requested branch');
-  return { ...input, scout_model: input.scout_model || SCOUT_MODEL, package: packagePath, primary, step, checkout: actual, lock: join(git(actual, 'rev-parse', '--absolute-git-dir'), 'spec-runtime.lock') };
+  const actual = realpathSync(worktree);
+  if (realpathSync(git(actual, 'rev-parse', '--path-format=absolute', '--git-common-dir')) !== common) throw new Error('worktree is not in the target repository');
+  if (git(actual, 'branch', '--show-current') !== target.branch) throw new Error(`worktree is not on the target branch ${target.branch}`);
+  if (target.worktree !== actual) {
+    const recorded = await setWorktree(locations.package_ref, target.id, actual, location);
+    if (!recorded.ok) throw refusalError(recorded);
+    // Cards written after the package was created get their Locations block on first dispatch; stamp is idempotent.
+    const stamped = await stamp(locations.package_ref, location);
+    if (!stamped.ok) throw refusalError(stamped);
+  }
+  // Other targets' recorded worktrees are read-only context for the owner and editor.
+  const others = locations.targets.filter(entry => entry.id !== target.id && entry.worktree).map(({ id, worktree }) => ({ id, worktree }));
+  return { ...input, scout_model: input.scout_model || SCOUT_MODEL, package: packagePath, package_ref: locations.package_ref, target: target.id, primary, step, checkout: actual, other_targets: others };
 }
+
+// Prompt lines naming the step's target and, read-only, the package's other worktrees.
+const targetFacts = record => record.target ? `TARGET: ${record.target}\n${record.other_targets?.length ? `OTHER TARGETS (read-only context, never edit): ${record.other_targets.map(entry => `${entry.id}=${entry.worktree}`).join('; ')}\n` : ''}` : '';
 
 export function environmentFacts(checkout, primary) {
   const roots = [...new Set([checkout, primary])];
@@ -246,31 +277,36 @@ export function launch(record, role, prompt, options = {}) {
 }
 
 export class Runtime {
-  constructor({ launchProcess = launch, isAlive = groupAlive, kill = (pid, signal) => process.kill(-pid, signal), notify = () => {}, indexDir = join(homedir(), '.pi/agent/spec-runtime'), onWorkerEvent = () => {} } = {}) {
+  constructor({ launchProcess = launch, isAlive = groupAlive, kill = (pid, signal) => process.kill(-pid, signal), notify = () => {}, indexDir = join(homedir(), '.pi/agent/spec-runtime'), onWorkerEvent = () => {}, location = {} } = {}) {
+    // `location` carries spec-location options (root, env, home, hostname); tests inject them.
+    this.location = location;
     this.launchProcess = launchProcess; this.isAlive = isAlive; this.kill = kill; this.notify = notify; this.indexDir = indexDir; this.active = new Map(); this.cancellations = new Map();
     this.onWorkerEvent = onWorkerEvent;
   }
   async startup(input, parentSession) {
     const requestedAt = timestamp();
-    const { packagePath } = canonicalPackage(input.package);
-    const entry = await preparedEntry(packagePath, input);
+    const checked = await checkPackage(input.package, this.location);
+    if (!checked.ok) throw refusalError(checked);
+    const packagePath = realpathSync(checked.locations.package_dir);
+    const entry = await preparedEntry(packagePath, input, checked.locations);
     if (entry.state) return entry.run_id ? { ...summary(loadRun(packagePath, entry.run_id)), ...entry } : entry;
     return this.start({ ...input, ...entry, dispatch_requested_at: requestedAt }, parentSession);
   }
-  start(input, parentSession) {
+  async start(input, parentSession) {
     const requestedAt = input.dispatch_requested_at || timestamp();
     if (process.platform === 'win32') throw new Error('spec-runtime requires POSIX process groups');
     // A supplied workflow_id is carried, never inferred; reject a malformed one
-    // before any package/lease side effect.
+    // before any package or run side effect.
     if (input.workflow_id !== undefined
       && (typeof input.workflow_id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(input.workflow_id)))
       throw new Error('workflow_id must be 1-128 ASCII letters/digits/underscore/hyphen');
-    const config = resolveInput(input);
+    // Everything after this await is synchronous, so the check-then-write below cannot interleave in this process.
+    const config = await resolveInput(input, this.location);
     const key = input.assignment_id || config.step;
     const runtimeDir = join(config.package, 'runtime');
     mkdirSync(join(runtimeDir, 'runs'), { recursive: true });
     const assignmentFile = join(runtimeDir, 'assignments', `${createHash('sha256').update(key).digest('hex')}.json`);
-    const contractParts = [config.step, config.checkout, config.owner_model, config.editor_model, config.scout_model, config.child_extensions || [], config.instructions || ''];
+    const contractParts = [config.step, config.target, config.checkout, config.owner_model, config.editor_model, config.scout_model, config.child_extensions || [], config.instructions || ''];
     if (config.attempt_kind !== undefined || config.session_scope === 'step')
       contractParts.push({ attempt_kind: config.attempt_kind ?? null, session_scope: config.session_scope ?? 'package' });
     // A supplied workflow_id joins the launch contract so an existing assignment
@@ -282,43 +318,40 @@ export class Runtime {
       if (previous.contract !== contract) throw new Error('assignment_id already identifies a different launch contract; use a new explicit attempt ID for an intentional change.');
       return summary(loadRun(config.package, previous.run_id));
     }
-    const packageLock = join(runtimeDir, 'package.lock');
-    try { mkdirSync(packageLock); }
-    catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      throw new Error('Writer already reserved for this canonical package; await its completion or confirmed cancellation.');
-    }
-    try { mkdirSync(config.lock); }
-    catch (error) {
-      rmSync(packageLock, { recursive: true });
-      if (error.code !== 'EEXIST') throw error;
-      let lease;
-      try { lease = read(join(config.lock, 'lease.json')); } catch { /* acquisition may still be initializing */ }
-      throw new Error(`Writer already reserved (${lease?.id || 'initializing/unknown'}). Use its completion or confirmed cancellation; never delete the lock to retry.`);
+    // No lock folders: a live coordinator pid in run.json is the writer claim. A dead
+    // coordinator's run is marked stale. Two processes starting in the same instant can both pass.
+    const latest = join(runtimeDir, 'run.json');
+    if (existsSync(latest)) {
+      const prior = read(latest);
+      if (['running', 'cancelling', 'blocked'].includes(prior.state)) {
+        const pid = prior.coordinator_pid ?? prior.pid;
+        if (processAlive(pid)) throw refusalError({ code: 'run-active', message: `Run ${prior.id} is ${prior.state} and its coordinator (pid ${pid}) is alive.`,
+          remedy: 'Await its completion or confirmed cancellation; start a new run only after it ends.' });
+        prior.state = 'stale'; prior.finished_at = timestamp();
+        save(prior); event(prior, 'run_stale', { coordinator_pid: pid });
+      }
     }
     const id = randomUUID();
-    const sessionKey = [config.checkout, config.owner_model, config.editor_model, config.child_extensions || []];
+    const sessionKey = [config.target, config.checkout, config.owner_model, config.editor_model, config.child_extensions || []];
     if (config.session_scope === 'step') sessionKey.push(config.step);
     const pair = createHash('sha256').update(JSON.stringify(sessionKey)).digest('hex').slice(0, 16);
     const sessionDir = join(runtimeDir, 'sessions', pair);
     mkdirSync(sessionDir, { recursive: true });
-    const record = { schema_version: 1, completion_contract: 1, id, assignment_id: key, workflow_id: config.workflow_id ?? null, package: config.package, primary: config.primary,
+    const record = { schema_version: 1, completion_contract: 1, id, assignment_id: key, workflow_id: config.workflow_id ?? null, package: config.package, package_ref: config.package_ref, target: config.target, primary: config.primary, other_targets: config.other_targets,
       step: config.step, checkout: config.checkout, owner_model: config.owner_model, editor_model: config.editor_model, scout_model: config.scout_model,
       dispatch_requested_at: requestedAt, routing_reason: config.routing_reason,
       attempt_kind: config.attempt_kind ?? null, session_scope: config.session_scope ?? 'package',
       environment: environmentFacts(config.checkout, config.primary),
       child_extensions: config.child_extensions || [], owner_session: join(sessionDir, 'owner.jsonl'), editor_session: join(sessionDir, 'editor.jsonl'),
-      parent_session: parentSession, lock: config.lock, package_lock: packageLock, token: randomUUID(), state: 'running', started_at: timestamp(), timeout_ms: input.timeout_ms || 7200000 };
-    atomic(join(config.lock, 'lease.json'), { id, token: record.token, package: config.package, revoked: false });
-    atomic(join(packageLock, 'lease.json'), { id, token: record.token });
+      parent_session: parentSession, coordinator_pid: process.pid, state: 'running', started_at: timestamp(), timeout_ms: input.timeout_ms || 7200000 };
     save(record);
     atomic(assignmentFile, { assignment_id: key, run_id: record.id, contract });
     mkdirSync(this.indexDir, { recursive: true });
-    atomic(join(this.indexDir, `${id}.json`), { run_id: id, package: config.package, manifest: join(runtimeDir, 'runs', `${id}.json`), parent_session: parentSession });
-    const prompt = `Implement this prepared step as its architect/owner using spec_editor.\nPACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\nRead the card and required policy. Choose the implementation approach yourself, then send a short Change/Edits/Preserve/Return packet for a bounded transformation. Name affected symbols, the chosen approach and preservation constraints; let the editor choose local implementation details and batch related edits. The editor does not run tests, compile/lint checks or other executable verification. After it returns, use spec_verify for necessary focused checks and diagnose failures before assigning bounded corrections. Do not check every packet automatically; reuse valid evidence. Read/search missing source facts directly. The editor normally reads and edits in one assignment; reserve facts-only requests for a specific blocking fact unavailable through your tools. Request compact results with artifact paths, not source inventories. Do not delegate architecture, whole-step restoration, or an entire acceptance suite with open-ended repairs. Reuse retained context. Assess each returned diff/result before the next packet; commit is a separate assignment after acceptance of the completed changes and required evidence. Use spec_scout only for a bounded discovery gap worth delegating; direct reads remain the default. Do not discover models, run startup suites, poll, or start other agents outside that scout tool. The runtime retains both sessions. Before ending, call spec_complete with decisions, introduced symbols, gaps and step-owned evidence assessments. It writes the canonical learning from verification receipts; an evidence log is not a learning. Commit via the editor first when complete. Missing handoffs remain unfinished obligations. This owner assignment ends after this step; independent review belongs to the coordinator.\n${input.instructions || ''}`;
+    atomic(join(this.indexDir, `${id}.json`), { run_id: id, package: config.package, package_ref: config.package_ref, manifest: join(runtimeDir, 'runs', `${id}.json`), parent_session: parentSession });
+    const prompt = `Implement this prepared step as its architect/owner using spec_editor.\nPACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\n${targetFacts(record)}Read the card and required policy. Choose the implementation approach yourself, then send a short Change/Edits/Preserve/Return packet for a bounded transformation. Name affected symbols, the chosen approach and preservation constraints; let the editor choose local implementation details and batch related edits. The editor does not run tests, compile/lint checks or other executable verification. After it returns, use spec_verify for necessary focused checks and diagnose failures before assigning bounded corrections. Do not check every packet automatically; reuse valid evidence. Read/search missing source facts directly. The editor normally reads and edits in one assignment; reserve facts-only requests for a specific blocking fact unavailable through your tools. Request compact results with artifact paths, not source inventories. Do not delegate architecture, whole-step restoration, or an entire acceptance suite with open-ended repairs. Reuse retained context. Assess each returned diff/result before the next packet; commit is a separate assignment after acceptance of the completed changes and required evidence. Use spec_scout only for a bounded discovery gap worth delegating; direct reads remain the default. Do not discover models, run startup suites, poll, or start other agents outside that scout tool. The runtime retains both sessions. Before ending, call spec_complete with decisions, introduced symbols, gaps and step-owned evidence assessments. It writes the canonical learning from verification receipts; an evidence log is not a learning. Commit via the editor first when complete. Missing handoffs remain unfinished obligations. This owner assignment ends after this step; independent review belongs to the coordinator.\n${input.instructions || ''}`;
     let task;
     try { task = this.launchProcess(record, 'owner', `${prompt}\nEnvironment paths (observations, not setup approval): ${JSON.stringify(record.environment)}`, { onEvent: this.onWorkerEvent }); }
-    catch (error) { record.state = 'failed'; record.error = error.message; save(record); release(record); throw error; }
+    catch (error) { record.state = 'failed'; record.error = error.message; save(record); throw error; }
     record.pid = task.child.pid;
     save(record); refreshProgress(record.package).catch(error => { record.progress_error = error.message; }); event(record, 'run_started', { dispatch_requested_at: requestedAt, owner_session: record.owner_session, editor_session: record.editor_session, parent_session: parentSession, pid: record.pid });
     const timer = setTimeout(() => { event(record, 'deadline_reached'); this.cancel(record.package, id).then(value => this.notify(value)).catch(error => this.notify({ ...summary(record), error: error.message })); }, record.timeout_ms);
@@ -338,12 +371,11 @@ export class Runtime {
     if (record.state === 'cancelling' || terminal.has(record.state)) return;
     for (const group of activeGroups(record)) settleGroup(record, group.pid);
     if (activeGroups(record).length || (record.pid && this.isAlive(record.pid))) {
-      record.state = 'blocked'; record.error = 'A managed process group is still alive; writer lease retained.';
+      record.state = 'blocked'; record.error = 'A managed process group is still alive; the run stays active.';
     } else {
       record.state = result.error ? 'failed' : 'completed'; record.error = result.error; record.result = result.result;
       record.handoff = completionStatus(record, { checkHead: true });
       record.result_truncated = result.result_truncated; record.full_result_path = result.full_result_path; record.finished_at = timestamp();
-      release(record);
     }
     save(record); event(record, 'run_finished', { state: record.state, error: record.error });
     if (record.state !== 'blocked') { clearTimeout(this.active.get(record.id)?.timer); this.active.delete(record.id); }
@@ -363,7 +395,7 @@ export class Runtime {
     const record = active?.record || disk;
     if (terminal.has(record.state)) return summary(record);
     // A PID read from a previous coordinator cannot safely identify an OS process after PID reuse.
-    if (!active) throw new Error('This runtime does not own the live process handle. Lease retained; recover the original coordinator or confirm termination manually.');
+    if (!active) throw new Error('This runtime does not own the live process handle. The run stays active; recover the original coordinator or confirm termination manually.');
     revoke(record); record.state = 'cancelling'; save(record); event(record, 'cancel_requested');
     try {
       let groups = activeGroups(record).map(group => group.pid);
@@ -378,7 +410,7 @@ export class Runtime {
       groups = activeGroups(record).map(group => group.pid);
       for (const pid of groups) { try { this.kill(pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; } }
       if (!(await waitGroupsGone(record, groups, timeoutMs))) throw new Error('A newly registered process group has not stopped');
-      record.state = 'cancelled'; record.finished_at = timestamp(); release(record); save(record); event(record, 'run_finished', { state: 'cancelled' });
+      record.state = 'cancelled'; record.finished_at = timestamp(); save(record); event(record, 'run_finished', { state: 'cancelled' });
       clearTimeout(active.timer); this.active.delete(record.id);
       try { await refreshProgress(record.package); } catch (error) { record.progress_error = error.message; }
       return summary(record);
@@ -396,12 +428,12 @@ export async function runEditor(record, assignment, signal, launchProcess = laun
     const failure = read(configFile);
     if (failure.selector === record.editor_model) return { error: configurationAction(failure.selector, failure.cause), configuration_failure: failure, coordinator_action_required: true };
   }
-  const editorLock = join(record.lock, 'editor');
+  const editorLock = editorSlot(record);
   try { mkdirSync(editorLock); } catch { throw new Error('An editor assignment is already active; await its result.'); }
   let task;
   try {
     invalidateCompletion(record);
-    task = launchProcess(record, 'editor', `PACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\n${assignment}`);
+    task = launchProcess(record, 'editor', `PACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\n${targetFacts(record)}${assignment}`);
     event(record, 'editor_started', { pid: task.child.pid, editor_session: record.editor_session });
     let stopping;
     let reportUnconfirmed;
@@ -572,17 +604,17 @@ export async function runAdvice(record, task, input, { offline = false, signal, 
 }
 
 // The smallest synchronous idle-writer assertion owned by Runtime: a valid
-// lease, an unclaimed editor/verification slot, and no tracked non-owner managed
+// run, an unclaimed editor/verification slot, and no tracked non-owner managed
 // group. withIdleWriter still performs the atomic slot claim via mkdir.
 export function assertIdleWriter(record) {
   assertLease(record);
-  if (existsSync(join(record.lock, 'editor'))) throw new Error('An editor or verification command holds the writer slot.');
+  if (existsSync(editorSlot(record))) throw new Error('An editor or verification command holds the writer slot.');
   if (activeGroups(record).some(group => group.role !== 'owner')) throw new Error('Managed work remains active; resolve it before another writer.');
 }
 
 async function withIdleWriter(record, action) {
   assertIdleWriter(record);
-  const slot = join(record.lock, 'editor');
+  const slot = editorSlot(record);
   try { mkdirSync(slot); } catch { throw new Error('Wait for the active editor or verification command to finish before verifying.'); }
   try {
     return await action();

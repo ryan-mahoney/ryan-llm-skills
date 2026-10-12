@@ -14,13 +14,24 @@ node scripts/workspaces/cli.mjs <command> [options]
 
 | Command | Form |
 | --- | --- |
-| `status` | `status` — report the root boundary (`ok`, `missing_root`, `missing_projects`, `invalid_*`, `unreadable`) without creating anything |
-| `setup` | `setup` — create a missing root and `projects/` one component at a time; repeated runs are no-ops |
+| `status` | `status` — report the root, what chose it (`source`: `flag`, `env`, `config`, `default`) and its boundary (`ok`, `missing_root`, `missing_projects`, `invalid_*`, `unreadable`) without creating anything |
+| `setup` | `setup [--save]` — create a missing root and `projects/` one component at a time; repeated runs are no-ops. `--save` also writes the root to the config file |
 | `list` | `list` — read-only catalog of valid and invalid workspace manifests |
 | `show` | `show ID` — read-only workspace detail with repository, context, brief, note and artifact status |
 | `create` | `create ID [--name NAME]` — publish an empty `kit.yaml` exclusively; duplicate ids refuse |
-| `add-repo` | `add-repo ID --id RID --path ABS [--role ROLE] [--remote URL] [--apply]` |
+| `add-repo` | `add-repo ID --id RID --path PATH [--role ROLE] [--remote URL] [--apply]` |
+| `remove-repo` | `remove-repo ID --id RID [--apply]` — the preview lists threads, assignments, artifacts and designs that reference `RID`; they stay in place |
+| `set-path` | `set-path ID --id RID --path PATH [--apply]` |
+| `set-remote` | `set-remote ID --id RID --remote URL [--apply]` |
 | `set-role` | `set-role ID --id RID --role ROLE [--apply]` |
+| `clear-role` | `clear-role ID --id RID [--apply]` — remove the `role` line |
+| `set-name` | `set-name ID --name NAME [--apply]` — display name only; the workspace id never changes |
+| `add-context` | `add-context ID --path REL [--apply]` (`remove-context` takes the same flags) |
+| `set-design-system` | `set-design-system ID --repo RID --path REL [--path REL...] [--applies-to X] [--apply]` — replaces the whole `design_system` block |
+| `set-execution-host` | `set-execution-host ID --host NAME [--apply]` |
+| `rewrite-paths` | `rewrite-paths ID --from PREFIX --to PREFIX [--apply]` — rewrite every repository path at a path boundary of `PREFIX`, for example `--from /Users/me --to '~'` |
+| `kit-backups` | `kit-backups ID` — list `kit.yaml.prev-*` backups, newest first |
+| `restore-kit` | `restore-kit ID BACKUP [--apply]` — preview the diff to a listed backup, then apply it |
 | `add-brief` | `add-brief ID --title TITLE [--from FILE]` |
 | `add-note` | `add-note ID --title TITLE [--from FILE]` |
 | `add-artifact` | `add-artifact ID (--repository RID --path REL \| --url URL) [--title T] [--note N]` |
@@ -48,7 +59,7 @@ fetched.
 
 ## Options
 
-- `--root PATH` — override the storage root for this run.
+- `--root PATH` — storage root for this run (see Storage root resolution).
 - `--json` — print structured JSON to stdout instead of human text. With
   `--apply`, two NDJSON documents are printed: the exact plan first, then the
   `{path,backup}` result.
@@ -134,12 +145,21 @@ writes no inbox file and attaches only when a TTY is present.
 
 ## Storage root resolution
 
-1. `--root PATH`, when given;
+1. `--root PATH`, when given (CLI only);
 2. else `ADJACENT_STORAGE_ROOT`, which must be an absolute path;
-3. else `~/Documents/adjacent-storage`.
+3. else `storage_root` in `${XDG_CONFIG_HOME:-~/.config}/adjacent/config.json`;
+4. else `~/Documents/adjacent-storage`.
+
+`setup --root PATH --save` writes `{"storage_root": "/abs/path"}` to the config
+file (creating its directory) after the root and `projects/` exist. The Sentinel
+host, dashboard and Pi extension resolve through the same function, so a saved
+root needs no environment variable in a launchd or systemd unit; restart a
+running service after changing it. A malformed config file refuses with its
+path rather than falling back to the default. `status` prints the deciding
+source, plus the config path when it is `config`.
 
 The default matches Adjacent's dev default (`../adjacent-storage` beside an
-Adjacent checkout at `~/Documents/adjacent`). Production Adjacent requires
+Adjacent checkout at `~/Documents/adjacent`). Production Adjacent still requires
 `ADJACENT_STORAGE_ROOT`, so set it to the same value for both.
 
 `status`, `list` and `show` never create the root, `projects/` or any workspace
@@ -147,11 +167,29 @@ file. Setup creates only a missing root and `projects/` one component at a
 time; the parent of a missing root must already exist and is never created
 recursively.
 
+## Kit schema additions and paths
+
+Besides `version`, `id`, `name`, `repositories` and `context`, kit v1 accepts:
+
+- `design_system: {repository, paths, applies_to?}` — `repository` must be a
+  repository id in the kit, `paths` is a non-empty list of relative paths inside
+  that repository, `applies_to` is free text (for example `all`).
+- `execution_host` — the hostname that runs this workspace's live work.
+
+`show`, `list` and the dashboard return both when set. Other unknown keys are
+still ignored and preserved byte for byte.
+
+A repository `path` is absolute, `~` or `~/...` (expanded with the local home
+when read, stored as written), or relative to the workspace directory. Both
+machines can then share one kit that says `~/Documents/app`. Apply still
+requires the expanded path to exist and be a Git top level, except when an edit
+leaves the expanded path unchanged (`rewrite-paths`), so a kit can be rewritten
+on a machine that lacks some checkouts.
+
 ## Kit edits require `--apply`
 
-`add-repo` and `set-role` always print the planned hunk first. `add-repo`
-requires an absolute `--path` for previews as well as `--apply`; a relative path
-refuses before any plan is printed. Without `--apply` the plan is the only
+Every kit edit command (`add-repo` through `rewrite-paths`, and `restore-kit`)
+always prints the planned hunk first. Without `--apply` the plan is the only
 output and nothing is written. With `--apply` the same
 plan is re-read against the current `kit.yaml` and replaced under the exclusive
 operator window: one `kit.yaml.prev-<UTC>-<UUID>` copy of the original bytes is
@@ -160,9 +198,19 @@ re-read and byte-compared immediately before the atomic replacement. Keep the
 exclusion window: do not edit `kit.yaml` while an apply runs. A held or stale
 lock refuses without breaking it. An interrupted apply can leave `kit.yaml.lock`
 behind; once no apply is running, remove that file by hand and rerun. A changed
-original, duplicate repository id, or invalid/non-Git absolute path refuses
-without touching the kit. Errors after the prior copy is published report the
-retained backup path in `path`.
+original, duplicate repository id, or a new or moved path that is not a Git
+top level refuses without touching the kit. Errors after the prior copy is
+published report the retained backup path in `path`.
+
+After a successful apply the newest 20 `kit.yaml.prev-*` copies are kept and
+older ones are deleted. `kit-backups` lists them; `restore-kit` previews the
+diff to one and applies it through the same backup and lock path, so a restore
+is itself undoable.
+
+`remove-repo` also removes a `design_system` block that names the removed
+repository (the preview shows it); replace it with `set-design-system`.
+`set-design-system` rewrites the whole block, dropping an existing `applies_to`
+unless given again.
 
 Back up the storage root before pointing this CLI at a real store for the
 first time; the tests use disposable temporary roots only.

@@ -11,7 +11,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { join, resolve, dirname, sep, relative, isAbsolute, basename } from 'node:path';
 import { homedir } from 'node:os';
 
-import { canonicalPackage } from './runtime.mjs';
+import { resolveCheckout } from '../../../scripts/repo-search/identity.mjs';
 import { watchSpecTree } from './spec-watcher.mjs';
 import { publicHint } from './monitor.mjs';
 import { createOwnedLeaf } from './scout.mjs';
@@ -23,6 +23,13 @@ import { createRepositoryDiscovery, saveDiscoveryRoot, discoveryRoot } from '../
 import { parseSentinelStart, SENTINEL_MODES } from './sentinel-options.mjs';
 import { createSentinelReaderProcess } from './sentinel-reader-process.mjs';
 import { createSnapshotPublisher } from './sentinel-snapshot.mjs';
+
+// Callers pass a package folder already located in storage (spec-location,
+// via runtime.mjs packageDirOf), or a file inside it; this only normalizes it.
+function packageFolder(path) {
+  const real = realpathSync(path);
+  return statSync(real).isFile() ? dirname(real) : real;
+}
 
 export const SENTINEL_COALESCE_MS = 250;
 export const SENTINEL_RECONCILE_MS = 15000;
@@ -325,32 +332,24 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
     return Promise.all(closing);
   }
 
+  // Enrolls a repository's primary checkout so the reader checks it for legacy
+  // `.specs/` content. Packages are observed from storage and need no enrollment.
   async function enroll(target) {
     const directory = enrollmentDirectory({ agentDir, scope });
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     const existing = await readEnrollments({ agentDir, scope });
-    let canonical;
-    let specs = null;
-    try { canonical = canonicalPackage(resolve(target)); }
-    catch {
-      // Otherwise the target is a primary root: use its first canonical package.
-      specs = join(resolve(target), '.specs');
-      const children = readdirSync(specs, { withFileTypes: true }).slice(0, 101).filter(entry => entry.isDirectory());
-      for (const entry of children) {
-        try { canonical = canonicalPackage(join(specs, entry.name)); break; }
-        catch { /* A linked worktree copy is never canonical. */ }
-      }
-    }
-    if (!canonical) throw new Error('Enrollment requires a primary checkout root containing a canonical .specs package; linked worktrees are not enrolled.');
+    let checkout;
+    try { checkout = await resolveCheckout(resolve(target)); }
+    catch { throw new Error('Enrollment requires a Git repository root.'); }
+    if (!checkout.primary) throw new Error('Enrollment requires a primary checkout; linked worktrees are not enrolled.');
     const records = existing.records ?? [];
-    const counted = records.length;
-    const sameCommon = records.some(record => record.common === canonical.common);
-    if (counted >= SENTINEL_LIMITS.roots && !sameCommon) throw new Error(`Enrollment limit reached (${SENTINEL_LIMITS.roots} roots).`);
-    const file = join(directory, `${createHash('sha256').update(canonical.common).digest('hex')}.json`);
+    const sameCommon = records.some(record => record.common === checkout.commonDir);
+    if (records.length >= SENTINEL_LIMITS.roots && !sameCommon) throw new Error(`Enrollment limit reached (${SENTINEL_LIMITS.roots} roots).`);
+    const file = join(directory, `${createHash('sha256').update(checkout.commonDir).digest('hex')}.json`);
     const temp = `${file}.${randomUUID()}.tmp`;
-    writeFileSync(temp, `${JSON.stringify({ version: 1, root: canonical.primary, common: canonical.common, enrolled_at: new Date(now()).toISOString() }, null, 2)}\n`, { mode: 0o600 });
+    writeFileSync(temp, `${JSON.stringify({ version: 1, root: checkout.root, common: checkout.commonDir, enrolled_at: new Date(now()).toISOString() }, null, 2)}\n`, { mode: 0o600 });
     renameSync(temp, file);
-    return canonical;
+    return { primary: checkout.root, common: checkout.commonDir };
   }
 
   function lifecycleReceipt(snapshot = null, extra = {}) {
@@ -425,7 +424,7 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
         const target = rest.join(' ');
         if (!target) throw new Error(USAGE);
         const canonical = await enroll(target);
-        notify(ctx, `Enrolled ${canonical.primary} for read-only observation. Enrollment only grants reads; it never starts, stops or messages workers.`, 'info');
+        notify(ctx, `Enrolled ${canonical.primary} for read-only observation of untracked .specs content. Enrollment only grants reads; it never starts, stops or messages workers.`, 'info');
         activate();
         await run(true);
         return;
@@ -450,14 +449,14 @@ export function createSentinelObserver({ pi, context, agentDir, scope = null, ow
           notify(ctx, lines.join('\n'), 'info');
           return;
         }
-        const matched = snapshot?.runs?.find(item => item.assignment_id === id || item.workflow_id === id || item.package === id
+        const matched = snapshot?.runs?.find(item => item.assignment_id === id || item.workflow_id === id || item.package === id || item.package_ref === id
           || item.package?.split('/').pop() === id
           || item.conditions?.some(condition => condition.id === id || condition.kind === id));
         if (!matched) { notify(ctx, `No observed run or condition matches ${id}.`, 'warning'); return; }
         const condition = matched.conditions?.find(item => item.id === id || item.kind === id);
         const lines = [
           `${publicHint(matched.assignment_id)} · ${publicHint(matched.execution)}`,
-          `${publicHint(matched.repository)} · ${publicHint(matched.package)} · ${matched.checkout ? publicHint(matched.checkout) : 'checkout unknown'}`,
+          `${publicHint(matched.package_ref)} · ${publicHint(matched.package)} · ${matched.checkout ? publicHint(matched.checkout) : 'checkout unknown'}`,
           matched.coordinator_session ? `coordinator: ${publicHint(matched.coordinator_session)}` : 'coordinator: unknown',
           `${matched.workflow_id ? `workflow ${publicHint(matched.workflow_id)} · ` : ''}${matched.obligation ? publicHint(matched.obligation) : 'obligation unknown'}`,
           `activity: ${matched.activity ? publicHint(matched.activity) : 'activity unknown'}`,
@@ -1155,8 +1154,7 @@ export function recordCheckpoint({
   checkout,
   now = Date.now,
 } = {}) {
-  const canonical = canonicalPackage(packageInput);
-  const packagePath = canonical.packagePath;
+  const packagePath = packageFolder(packageInput);
   validateId(workflowId, 'workflow_id');
   if (!Number.isInteger(expectedRevision) || expectedRevision < 0) fail('expected_revision must be a non-negative integer');
   if (!CHECKPOINT_STATES.has(state)) fail(`state is unrecognized: ${state}`);
@@ -1694,8 +1692,7 @@ export function reconcileRuntimeReturn({
   checkout,
   now = Date.now,
 } = {}) {
-  const canonical = canonicalPackage(packageInput);
-  const packagePath = canonical.packagePath;
+  const packagePath = packageFolder(packageInput);
   validateId(workflowId, 'workflow_id');
   if (typeof assignmentId !== 'string' || !assignmentId) fail('assignment_id is required');
   if (!Number.isInteger(expectedRevision) || expectedRevision < 0) fail('expected_revision must be a non-negative integer');
@@ -1981,8 +1978,7 @@ function activateValidatedPolicy(authority, {
   // Package/workflow/checkout come only from the validated policy file, then the
   // retained checkpoint must match them; caller-supplied scope is never trusted.
   const policy = validatePolicy(value, { now, runtime: Boolean(isActive) });
-  const canonical = canonicalPackage(policy.package);
-  const packagePath = canonical.packagePath;
+  const packagePath = packageFolder(policy.package);
   const workflowId = policy.workflow_id;
   if (policy.coordinator_session !== coordinatorSession) fail('policy.coordinator_session does not match the native coordinator session', 'policy-scope');
   const boundCheckout = resolve(policy.checkout);
@@ -2092,7 +2088,7 @@ export function readPolicyGuard(authority, { workflow_id: workflowId, now = Date
       : readPolicyFile(state.sourcePath);
     if (sourceHash !== state.policyHash) fail('policy source hash changed since activation', 'policy-scope');
     const policy = validatePolicy(value, { now, runtime: Boolean(state.isActive) });
-    if (canonicalPackage(policy.package).packagePath !== state.packagePath) fail('policy source package changed', 'policy-scope');
+    if (packageFolder(policy.package) !== state.packagePath) fail('policy source package changed', 'policy-scope');
     if (policy.workflow_id !== state.workflowId) fail('policy source workflow changed', 'policy-scope');
     if (resolve(policy.checkout) !== state.checkout) fail('policy source checkout changed', 'policy-scope');
     if (policy.coordinator_session !== state.coordinatorSession) fail('policy source session changed', 'policy-scope');
@@ -2549,7 +2545,7 @@ export function handleBeforeSettle(event = {}, {
     const scoped = workflowId ?? state.workflowId;
     if (!scoped || scoped !== state.workflowId) return undefined;
     if (coordinatorSession != null && coordinatorSession !== state.coordinatorSession) return undefined;
-    const packagePath = canonicalPackage(packageInput).packagePath;
+    const packagePath = packageFolder(packageInput);
     if (packagePath !== state.packagePath) return undefined;
     const readInput = () => (typeof inputGuard === 'function' ? (inputGuard() ?? {}) : (inputGuard ?? {}));
     // Preserve the raw value: only an explicit false may reach the allowing branch.
@@ -2822,7 +2818,7 @@ export async function diagnoseIncident({
   if (guard.blocking) return abstain('blocked', (guard.reasons ?? []).join('; ') || 'policy-blocked');
   if (!guard.diagnosis || typeof guard.diagnosis.model !== 'string' || !guard.diagnosis.model) return abstain('denied', null);
   let packagePath;
-  try { packagePath = canonicalPackage(record?.package ?? incident.package).packagePath; }
+  try { packagePath = packageFolder(record?.package ?? incident.package); }
   catch { return abstain('skipped', 'checkpoint-unavailable'); }
   // The record, incident and retained checkpoint must agree with the live
   // authority's complete canonical scope before any packet or reservation: a
@@ -2830,7 +2826,7 @@ export async function diagnoseIncident({
   // spends this authority's budget or sends that package's facts to the model.
   if (incident.package != null) {
     let incidentPackage;
-    try { incidentPackage = canonicalPackage(incident.package).packagePath; } catch { return abstain('blocked', 'incident-package-unavailable'); }
+    try { incidentPackage = packageFolder(incident.package); } catch { return abstain('blocked', 'incident-package-unavailable'); }
     if (incidentPackage !== packagePath) return abstain('blocked', 'incident-package-mismatch');
   }
   const liveScope = authorityState(authority);
@@ -3056,10 +3052,10 @@ export async function considerCancellation({
   // A supplied current diagnosis packet hash is mandatory; never optional.
   if (typeof packetSha !== 'string' || !HASH_SHAPE.test(packetSha)) return abstain('blocked', 'diagnosis-packet-missing');
   let packagePath;
-  try { packagePath = canonicalPackage(record.package).packagePath; } catch { return abstain('skipped', 'package-unavailable'); }
+  try { packagePath = packageFolder(record.package); } catch { return abstain('skipped', 'package-unavailable'); }
   if (incident.package != null) {
     let incidentPackage;
-    try { incidentPackage = canonicalPackage(incident.package).packagePath; } catch { return abstain('blocked', 'incident-package-unavailable'); }
+    try { incidentPackage = packageFolder(incident.package); } catch { return abstain('blocked', 'incident-package-unavailable'); }
     if (incidentPackage !== packagePath) return abstain('blocked', 'incident-package-mismatch');
   }
   // Exact identity equality between the live record and the incident.
