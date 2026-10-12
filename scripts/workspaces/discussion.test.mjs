@@ -3846,11 +3846,20 @@ test("thread handoff harness preview preserves claude and codex enum settings", 
       content: "body\n",
     });
     const instructions = "Deliver the harness handoff.";
-    const expectedPrompt = (id) =>
-      `Read the assignment brief at ${join(workspaceDirectory, "assignments", `${id}.brief.md`)}.\n\n` +
-      "Perform the following request:\n\nDeliver the harness handoff.\n\n" +
-      `Assignment ${id} workspace alpha dir ${thread.execution_dir}. ` +
-      "Publication authority: none (grants no merge/deploy).";
+    const expectedPrompt = (id) => [
+      "Assignment context",
+      `- Assignment: ${id}. Its record is ${workspaceDirectory}/assignments/${id}.json; read it again if you lose earlier context.`,
+      `- Workspace: alpha (alpha) at ${workspaceDirectory}. Workspace storage holds the kit, briefs, spec packages and sessions; code changes belong in the working directory.`,
+      `- Working directory: ${thread.execution_dir} (the workspace directory; no repository target).`,
+      "- Spec package: none.",
+      `- Brief: ${workspaceDirectory}/${saved.brief}. Read the launch copy at ${join(workspaceDirectory, "assignments", `${id}.brief.md`)}; edit the source, not the copy.`,
+      "- Publication authority: none. This launch grants no push or pull request. Merge and deployment are allowed only when the request grants them.",
+      "",
+      "Request",
+      "Perform this request:",
+      "",
+      "Deliver the harness handoff.",
+    ].join("\n");
 
     const previews = [
       {

@@ -408,7 +408,7 @@ function previewObject(preview) {
     thinking: record.thinking,
     project_trust: record.project_trust,
     publication_authority: record.publication_authority,
-    publication_authority_note: 'grants no merge/deploy',
+    publication_authority_note: 'merge/deploy only when the instructions grant them',
     workflow_id: record.workflow_id,
     attempt_kind: record.attempt_kind,
     supersedes: record.supersedes,
@@ -436,7 +436,7 @@ async function printPreview(preview, options) {
       continue;
     }
     if (key === 'publication_authority') {
-      lines.push(`${key} ${value} (grants no merge/deploy)`);
+      lines.push(`${key} ${value} (merge/deploy only when the instructions grant them)`);
       continue;
     }
     lines.push(`${key} ${value === null || value === undefined ? 'null' : value}`);

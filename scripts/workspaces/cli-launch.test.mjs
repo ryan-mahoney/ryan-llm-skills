@@ -372,7 +372,7 @@ test("CLI launch preview: non-TTY and stale digest refuse before writes; matchin
   assert.match(withoutDigest.stderr, /TTY|digest/i);
   const previewText = withoutDigest.stdout.replaceAll("\r", "");
   assert.match(previewText, /launch preview/);
-  assert.match(previewText, /publication_authority pr \(grants no merge\/deploy\)/);
+  assert.match(previewText, /publication_authority pr \(merge\/deploy only when the instructions grant them\)/);
   const digestLine = /^contract_digest ([0-9a-f]{64})$/m.exec(previewText);
   assert.ok(digestLine, `missing preview digest: ${previewText}`);
   await assertNoWrites(workspaceDirectory, storageRoot);
@@ -389,7 +389,7 @@ test("CLI launch preview: non-TTY and stale digest refuse before writes; matchin
   const previewFromFile = JSON.parse(fromFile.stdout.trim());
   assert.equal(previewFromFile.contract_digest, digestLine[1]);
   assert.equal(previewFromFile.publication_authority, "pr");
-  assert.equal(previewFromFile.publication_authority_note, "grants no merge/deploy");
+  assert.equal(previewFromFile.publication_authority_note, "merge/deploy only when the instructions grant them");
   assert.deepEqual(previewFromFile.attention, []);
   await assertNoWrites(workspaceDirectory, storageRoot);
 
@@ -487,7 +487,7 @@ test("CLI launch preview: TTY confirmation binds displayed bytes and edited sour
   assert.equal(result.code, 0, `PTY CLI failed: ${result.stderr}; stdout=${result.stdout}`);
   const output = result.stdout.replaceAll("\r", "");
   assert.match(output, /Type yes to launch:/);
-  assert.match(output, /publication_authority none \(grants no merge\/deploy\)/);
+  assert.match(output, /publication_authority none \(merge\/deploy only when the instructions grant them\)/);
   const previewDigest = /^contract_digest ([0-9a-f]{64})$/m.exec(output);
   const launchedDigest = /^digest ([0-9a-f]{64})$/m.exec(output);
   assert.ok(previewDigest, `missing preview digest: ${output}`);

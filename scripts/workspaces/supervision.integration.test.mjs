@@ -855,11 +855,20 @@ test("launch CLI: harness previews", async (t) => {
     return JSON.parse(run.stdout.trim().split("\n")[0]);
   };
 
-  const prompt = (id) =>
-    `Read the assignment brief at ${join(workspaceDirectory, "assignments", `${id}.brief.md`)}.\n\n` +
-    "Perform the following request:\n\nHarness preview.\n\n" +
-    `Assignment ${id} workspace ${fixture.workspaceId} dir ${workspaceDirectory}. ` +
-    "Publication authority: none (grants no merge/deploy).";
+  const prompt = (id) => [
+    "Assignment context",
+    `- Assignment: ${id}. Its record is ${workspaceDirectory}/assignments/${id}.json; read it again if you lose earlier context.`,
+    `- Workspace: Supervision Workspace (${fixture.workspaceId}) at ${workspaceDirectory}. Workspace storage holds the kit, briefs, spec packages and sessions; code changes belong in the working directory.`,
+    `- Working directory: ${workspaceDirectory} (the workspace directory; no repository target).`,
+    "- Spec package: none.",
+    `- Brief: ${workspaceDirectory}/briefs/brief.md. Read the launch copy at ${join(workspaceDirectory, "assignments", `${id}.brief.md`)}; edit the source, not the copy.`,
+    "- Publication authority: none. This launch grants no push or pull request. Merge and deployment are allowed only when the request grants them.",
+    "",
+    "Request",
+    "Perform this request:",
+    "",
+    "Harness preview.",
+  ].join("\n");
 
   // The absent and explicit-pi previews share one assignment id so the two
   // resolved argv arrays are comparable; every other preview keeps a fresh id.

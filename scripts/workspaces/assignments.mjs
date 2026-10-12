@@ -577,23 +577,50 @@ export async function resolveAssignment(input = {}, options = {}) {
   ];
   const contractDigest = sha256Hex(Buffer.from(JSON.stringify(canonical), "utf8"));
 
-  const assignmentBlock =
-    `Assignment ${assignmentId} workspace ${workspaceId} dir ${target.execution_dir}. ` +
-    `Publication authority: ${publicationAuthority} (grants no merge/deploy).`;
+  // The context block comes first so every harness sees exact paths and the
+  // pre-computed first command before the request. It derives only from
+  // digested fields plus the assignment id and snapshot path.
+  const authorityMeaning = {
+    none: "This launch grants no push or pull request.",
+    "draft-pr": "You may push the branch and open a draft pull request.",
+    pr: "You may push the branch and open a pull request ready for review.",
+  }[publicationAuthority];
+  const buildContext = (briefLine) => [
+    "Assignment context",
+    `- Assignment: ${assignmentId}. Its record is ${join(workspace.directory, "assignments", `${assignmentId}.json`)}; ` +
+      "read it again if you lose earlier context.",
+    `- Workspace: ${workspace.name} (${workspaceId}) at ${workspace.directory}. ` +
+      "Workspace storage holds the kit, briefs, spec packages and sessions; code changes belong in the working directory.",
+    target.repository_id === null
+      ? `- Working directory: ${target.execution_dir} (the workspace directory; no repository target).`
+      : `- Working directory: ${target.execution_dir} (repository ${target.repository_id} checkout).`,
+    target.spec_package === null
+      ? "- Spec package: none."
+      : `- Spec package: ${target.package_ref} at ${target.spec_package}. ` +
+        `First run \`node ${join(home, ".agents", "scripts", "spec-location", "cli.mjs")} check ${target.package_ref}\` ` +
+        "and take every package path from its `locations`. Never copy package files into a checkout.",
+    `- Brief: ${briefPath}. ${briefLine}`,
+    `- Publication authority: ${publicationAuthority}. ${authorityMeaning} ` +
+      "Merge and deployment are allowed only when the request grants them.",
+    ...(workflowId === null ? [] : [`- Workflow: ${workflowId}.`]),
+    ...(supersedes === null ? [] : [`- Retries assignment ${supersedes}.`]),
+  ].join("\n");
   // Pi's @file prefix suppresses skill expansion and only a leading `/skill:`
   // triggers it, so the skill is delivered as a plain absolute-path
-  // instruction for the model to read itself. A general instruction starts
-  // with this fixed ordinary-text prefix so user text beginning with '-',
-  // '--' or '@' stays one message instead of an option, extension flag or
-  // file argument in the installed Pi parseArgs.
-  const initialInstruction = skillPath === null
-    ? `Perform the following request:\n\n${instructions}\n\n${assignmentBlock}`
-    : `Read the skill at ${skillPath} and perform its instructions for this request.\n\n` +
-      `${instructions}\n\n${assignmentBlock}`;
-
-  // Non-Pi harnesses receive one prompt that names the brief snapshot with a
-  // fixed ordinary-text prefix, so option-like user text stays one message.
-  const nonPiPrompt = `Read the assignment brief at ${snapshotPath}.\n\n${initialInstruction}`;
+  // instruction for the model to read itself. Every prompt starts with the
+  // fixed ordinary-text prefix "Assignment context", so user text beginning
+  // with '-', '--' or '@' stays one message instead of an option, extension
+  // flag or file argument in the installed Pi parseArgs.
+  const requestText = skillPath === null
+    ? `Request\nPerform this request:\n\n${instructions}`
+    : `Request\nRead the skill at ${skillPath} and perform its instructions for this request.\n\n${instructions}`;
+  const initialInstruction = `${buildContext(
+    `The launch copy is attached above (${snapshotPath}); edit the source, not the copy.`,
+  )}\n\n${requestText}`;
+  // Non-Pi harnesses receive no attachment, so they are told to read the copy.
+  const nonPiPrompt = `${buildContext(
+    `Read the launch copy at ${snapshotPath}; edit the source, not the copy.`,
+  )}\n\n${requestText}`;
   let piArgs;
   if (harness === "pi") {
     piArgs = [
