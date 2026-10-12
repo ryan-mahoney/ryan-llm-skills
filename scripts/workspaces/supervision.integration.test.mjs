@@ -1,8 +1,9 @@
 // Step 6 focused tests: takeover and resume CLI commands.
 //
 // The ordinary CLI runs as a subprocess over an isolated physical storage root
-// and a canonical `.specs` package inside the target fixture repository. Real
-// tmux and the fake Pi own the assignment lifetime; only the final attach
+// and a canonical `specs/` package that newPackage creates inside the fixture
+// workspace under that root (not a `.specs` directory in the target checkout).
+// Real tmux and the fake Pi own the assignment lifetime; only the final attach
 // client boundary is substituted through a PATH wrapper that delegates every
 // probe to the real tmux binary. No live root, host or store is touched.
 
@@ -183,7 +184,12 @@ function shellQuote(value) {
 // Native PTY through a real shell pipe; the sleep holder keeps the feeder open
 // for the whole attach session and dies with the group kill.
 function spawnPty(argumentVector, env) {
-  const command = `(exec sleep 60) | exec /usr/bin/script -q /dev/null ${argumentVector.map(shellQuote).join(" ")}`;
+  const assembled = argumentVector.map(shellQuote).join(" ");
+  // util-linux script takes the command through -c; BSD/macOS script takes it
+  // as trailing argv after the typescript file.
+  const command = process.platform === "linux"
+    ? `(exec sleep 60) | exec /usr/bin/script -q -e -c ${shellQuote(assembled)} /dev/null`
+    : `(exec sleep 60) | exec /usr/bin/script -q /dev/null ${assembled}`;
   const child = spawn("/bin/sh", ["-c", command], { env, detached: true, stdio: ["pipe", "pipe", "pipe"] });
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
@@ -249,6 +255,13 @@ async function createFixture(t) {
   const piPath = join(binDir, "pi");
   await writeFile(piPath, FAKE_PI_SOURCE, { mode: 0o755 });
   await chmod(piPath, 0o755);
+  // Fixed wrapper names for the harness CLI cases: ordinary PATH resolution,
+  // no --pi-path and no real model process.
+  for (const name of ["clauded", "codexd"]) {
+    const wrapper = join(binDir, name);
+    await writeFile(wrapper, FAKE_PI_SOURCE, { mode: 0o755 });
+    await chmod(wrapper, 0o755);
+  }
 
   const fakePiLog = join(root, "fake-pi.jsonl");
   const env = {
@@ -313,12 +326,13 @@ exec "$FAKE_TMUX_REAL" "$@"
   return { env, log };
 }
 
-async function launchAssignment(fixture, { id, specPackage, workflow, target = "app" }) {
+async function launchAssignment(fixture, { id, specPackage, workflow, target = "app", harness = null }) {
   const args = ["launch", fixture.workspaceId, "--brief", "briefs/brief.md",
     "--instructions", "Supervision fixture.", "--id", id, "--json"];
   if (target !== null) args.push("--target", target);
   if (specPackage !== null && specPackage !== undefined) args.push("--spec-package", specPackage);
   if (workflow !== null && workflow !== undefined) args.push("--workflow", workflow);
+  if (harness !== null) args.push("--harness", harness);
   const previewRun = await runCli(args, fixture.env);
   assert.equal(previewRun.code, 1, `preview should refuse without digest: ${previewRun.stderr}`);
   const preview = JSON.parse(previewRun.stdout.trim().split("\n")[0]);
@@ -358,11 +372,18 @@ async function inboxFiles(packagePath) {
   return { inbox: await list("inbox"), processed: await list("processed") };
 }
 
-test("takeover CLI: delivers a coordinator hold before any attach and skips attach without a TTY", async (t) => {
+async function runTakeoverHoldCase(t, { legacy }) {
   const fixture = await createFixture(t);
   writeCheckpoint(fixture.packagePath);
   const id = randomUUID();
   await launchAssignment(fixture, { id, specPackage: fixture.packagePath, workflow: "wf-1" });
+  const recordFile = join(fixture.workspaceDirectory, "assignments", `${id}.json`);
+  if (legacy) {
+    const persisted = JSON.parse(await readFile(recordFile, "utf8"));
+    delete persisted.harness;
+    await writeFile(recordFile, JSON.stringify(persisted));
+  }
+  const recordBefore = await readFile(recordFile);
   const checkpointFile = join(fixture.packagePath, "runtime", "sentinel", "wf-1", "checkpoint.json");
   const before = { bytes: await readFile(checkpointFile), mtimeMs: (await lstat(checkpointFile)).mtimeMs };
 
@@ -387,6 +408,21 @@ test("takeover CLI: delivers a coordinator hold before any attach and skips atta
 
   const after = { bytes: await readFile(checkpointFile), mtimeMs: (await lstat(checkpointFile)).mtimeMs };
   assert.deepEqual(after, before, "the hold never rewrites the checkpoint");
+  assert.deepEqual(await readFile(recordFile), recordBefore, "takeover leaves the persisted record bytes unchanged");
+  const retained = JSON.parse(await readFile(recordFile, "utf8"));
+  if (legacy) {
+    assert.ok(!Object.hasOwn(retained, "harness"), "an absent retained harness is not normalized into the record");
+  } else {
+    assert.equal(retained.harness, "pi", "the explicit Pi record is retained");
+  }
+}
+
+test("takeover CLI: delivers a coordinator hold before any attach and skips attach without a TTY", async (t) => {
+  await runTakeoverHoldCase(t, { legacy: false });
+});
+
+test("takeover CLI: delivers a coordinator hold before any attach and skips attach without a TTY (legacy absent harness)", async (t) => {
+  await runTakeoverHoldCase(t, { legacy: true });
 });
 
 test("takeover CLI: delivers the hold before the mocked final tmux attach boundary under a TTY", async (t) => {
@@ -475,11 +511,104 @@ test("takeover CLI: a non-spec assignment writes no inbox original and prints th
   assert.deepEqual(await readFile(recordFile), recordBefore);
 });
 
-test("resume CLI: requests a release direction without releasing or rewriting the hold", async (t) => {
+// Selective run:
+//   node --test --test-name-pattern='supervision CLI: non-Pi spec' scripts/workspaces/supervision.integration.test.mjs
+//
+// Non-Pi records keep a real spec package and workflow but no checkpoint: the
+// CLI must not resolve the package, run or inbox, so takeover stays attach-only
+// and resume refuses before any package/checkpoint/inbox work.
+async function runNonPiSupervisionCase(t, harness) {
+  const fixture = await createFixture(t);
+  const id = randomUUID();
+  await launchAssignment(fixture, { id, specPackage: fixture.packagePath, workflow: "wf-1", harness });
+  const recordFile = join(fixture.workspaceDirectory, "assignments", `${id}.json`);
+  const persisted = JSON.parse(await readFile(recordFile, "utf8"));
+  assert.equal(persisted.harness, harness);
+  assert.equal(persisted.spec_package, fixture.packagePath);
+  assert.equal(persisted.workflow_id, "wf-1");
+  const inventoryBefore = await inboxFiles(fixture.packagePath);
+  assert.deepEqual(inventoryBefore, { inbox: [], processed: [] });
+  await assert.rejects(
+    lstat(join(fixture.packagePath, "runtime", "sentinel", "wf-1", "checkpoint.json")),
+    { code: "ENOENT" },
+    "the non-Pi fixture records no checkpoint",
+  );
+  const recordBefore = await readFile(recordFile);
+
+  const takeover = await runCli(["takeover", id, "--run", "wf-1", "--json"], fixture.env);
+  assert.equal(takeover.code, 0, takeover.stderr);
+  const receipt = JSON.parse(takeover.stdout.trim().split("\n").at(-1));
+  assert.equal(receipt.takeover, "attach-only");
+  assert.equal(receipt.spec_package, fixture.packagePath);
+  assert.match(receipt.note, /no Pi coordinator/);
+  assert.equal(receipt.hold, null);
+  assert.equal(receipt.attached, false);
+  assert.deepEqual(receipt.attach_command, ["node", CLI_PATH, "attach", id, "--root", fixture.storageRoot]);
+  assert.deepEqual(await inboxFiles(fixture.packagePath), inventoryBefore, "non-Pi takeover writes no inbox file");
+  assert.deepEqual(await readFile(recordFile), recordBefore, "non-Pi takeover leaves the record bytes unchanged");
+
+  // --run deliberately mismatches the recorded workflow: the refusal must be
+  // the non-Pi-coordinator error, not run resolution or a missing checkpoint.
+  const resume = await runCli(["resume", id, "--hold", randomUUID(), "--run", "wf-other", "--json"], fixture.env);
+  const refusal = parseRefusal(resume);
+  assert.match(refusal.error, /no Pi coordinator/);
+  assert.doesNotMatch(refusal.error, /does not match|checkpoint|spec package/);
+  assert.deepEqual(await inboxFiles(fixture.packagePath), inventoryBefore, "non-Pi resume writes nothing");
+  assert.deepEqual(await readFile(recordFile), recordBefore, "non-Pi resume leaves the record bytes unchanged");
+
+  const { env, log } = await addTmuxWrapper(fixture);
+  const pty = spawnPty([process.execPath, CLI_PATH, "takeover", id, "--run", "wf-1", "--json"], env);
+  fixture.state.children.push(pty.child);
+  await waitFor(async () => {
+    let attachLog = "";
+    try {
+      attachLog = await readFile(log, "utf8");
+    } catch {
+      return null;
+    }
+    return attachLog.trim() !== "" && pty.output().stdout.includes('"takeover":"attach-only"') ? true : null;
+  }, "mocked attach-session boundary and attach-only receipt").catch((error) => {
+    throw new Error(`${error.message}: ${JSON.stringify(pty.output())}`);
+  });
+  const stdout = pty.output().stdout;
+  const receiptLine = stdout.split("\n").find((line) => line.includes('"takeover":"attach-only"'));
+  assert.ok(receiptLine, `attach-only receipt not found in ${JSON.stringify(stdout)}`);
+  const ttyReceipt = JSON.parse(receiptLine.trim());
+  assert.equal(ttyReceipt.spec_package, fixture.packagePath, "the TTY receipt keeps the actual package metadata");
+  assert.match(ttyReceipt.note, /no Pi coordinator/);
+  const attachLine = (await readFile(log, "utf8")).trim();
+  assert.match(attachLine, /attach-session/);
+  assert.match(attachLine, /hold=0$/, "no hold existed when the attach client started");
+  killGroup(pty.child);
+  await waitForClose(pty.child);
+
+  assert.deepEqual(await inboxFiles(fixture.packagePath), inventoryBefore, "non-Pi TTY takeover writes no inbox file");
+  const reconciled = JSON.parse(await readFile(recordFile, "utf8"));
+  assert.equal(reconciled.harness, harness, "attach reconciliation keeps the non-Pi harness");
+  assert.equal(reconciled.spec_package, fixture.packagePath, "attach reconciliation keeps the package metadata");
+  assert.equal(reconciled.workflow_id, "wf-1", "attach reconciliation keeps the workflow");
+}
+
+test("supervision CLI: non-Pi spec claude takeover is attach-only and resume refuses before package work", async (t) => {
+  await runNonPiSupervisionCase(t, "claude");
+});
+
+test("supervision CLI: non-Pi spec codex takeover is attach-only and resume refuses before package work", async (t) => {
+  await runNonPiSupervisionCase(t, "codex");
+});
+
+async function runResumeReleaseCase(t, { legacy }) {
   const fixture = await createFixture(t);
   writeCheckpoint(fixture.packagePath);
   const id = randomUUID();
   await launchAssignment(fixture, { id, specPackage: fixture.packagePath, workflow: "wf-1" });
+  const recordFile = join(fixture.workspaceDirectory, "assignments", `${id}.json`);
+  if (legacy) {
+    const persisted = JSON.parse(await readFile(recordFile, "utf8"));
+    delete persisted.harness;
+    await writeFile(recordFile, JSON.stringify(persisted));
+  }
+  const recordBefore = await readFile(recordFile);
 
   const takeover = await runCli(["takeover", id, "--json"], fixture.env);
   assert.equal(takeover.code, 0, takeover.stderr);
@@ -504,10 +633,32 @@ test("resume CLI: requests a release direction without releasing or rewriting th
   const direction = guard.items.find((item) => item.kind === "direction" && item.run === "wf-1");
   assert.ok(direction, "the direction original is retained");
   assert.equal(direction.sha256, result.direction.sha256);
+  assert.equal(result.hold.id, taken.hold.id, "the resume receipt names the delivered hold id");
+  assert.equal(result.hold.sha256, taken.hold.sha256, "the resume receipt names the delivered hold hash");
+  const directionBody = await readFile(join(fixture.packagePath, direction.path), "utf8");
+  assert.ok(
+    directionBody.includes(`Release requested for hold ${taken.hold.id} (sha256 ${taken.hold.sha256}).`),
+    "the direction body names the delivered hold id and hash",
+  );
   assert.equal(createHash("sha256").update(holdBefore).digest("hex"), taken.hold.sha256);
   assert.deepEqual(await readFile(taken.hold.path), holdBefore, "resume never rewrites the hold original");
   assert.equal((await lstat(taken.hold.path)).mtimeMs, holdMtime, "resume never touches the hold mtime");
   assert.deepEqual(await readFile(checkpointFile), checkpointBytes, "resume never touches the checkpoint");
+  assert.deepEqual(await readFile(recordFile), recordBefore, "takeover and resume leave the record bytes unchanged");
+  const retained = JSON.parse(await readFile(recordFile, "utf8"));
+  if (legacy) {
+    assert.ok(!Object.hasOwn(retained, "harness"), "an absent retained harness is not normalized into the record");
+  } else {
+    assert.equal(retained.harness, "pi", "the explicit Pi record is retained");
+  }
+}
+
+test("resume CLI: requests a release direction without releasing or rewriting the hold", async (t) => {
+  await runResumeReleaseCase(t, { legacy: false });
+});
+
+test("resume CLI: requests a release direction without releasing or rewriting the hold (legacy absent harness)", async (t) => {
+  await runResumeReleaseCase(t, { legacy: true });
 });
 
 test("resume CLI: wrong run, unknown hold and missing checkpoint refuse without writing", async (t) => {
@@ -680,4 +831,134 @@ test("takeover CLI: attach failure after a delivered hold keeps it held and a re
   await waitForClose(retry.child);
   assert.deepEqual(await inboxFiles(fixture.packagePath), inventory, "no duplicate original on retry");
   assert.deepEqual(await readFile(holdPath), holdBytes, "the delivered hold is preserved byte-for-byte");
+});
+
+test("launch CLI: harness previews", async (t) => {
+  const fixture = await createFixture(t);
+  const workspaceDirectory = fixture.workspaceDirectory;
+  const executionDirectory = await realpath(fixture.repoApp);
+
+  const previewArgs = (extra = [], id = randomUUID()) => [
+    "launch", fixture.workspaceId,
+    "--brief", "briefs/brief.md",
+    "--instructions", "Harness preview.",
+    "--id", id,
+    "--json",
+    ...extra,
+  ];
+  // The child CLI runs without --digest and without a TTY, so it prints the
+  // real parsed preview and then refuses before any write or spawn.
+  const previewOf = async (args) => {
+    const run = await runCli(args, fixture.env);
+    assert.equal(run.code, 1, `preview must refuse without a digest: ${run.stdout}${run.stderr}`);
+    assert.match(run.stderr, /requires --digest/);
+    return JSON.parse(run.stdout.trim().split("\n")[0]);
+  };
+
+  const prompt = (id) => [
+    "Assignment context",
+    `- Assignment: ${id}. Its record is ${workspaceDirectory}/assignments/${id}.json; read it again if you lose earlier context.`,
+    `- Workspace: Supervision Workspace (${fixture.workspaceId}) at ${workspaceDirectory}. Workspace storage holds the kit, briefs, spec packages and sessions; code changes belong in the working directory.`,
+    `- Working directory: ${workspaceDirectory} (the workspace directory; no repository target).`,
+    "- Spec package: none.",
+    `- Brief: ${workspaceDirectory}/briefs/brief.md. Read the launch copy at ${join(workspaceDirectory, "assignments", `${id}.brief.md`)}; edit the source, not the copy.`,
+    "- Publication authority: none. This launch grants no push or pull request. Merge and deployment are allowed only when the request grants them.",
+    "",
+    "Request",
+    "Perform this request:",
+    "",
+    "Harness preview.",
+  ].join("\n");
+
+  // The absent and explicit-pi previews share one assignment id so the two
+  // resolved argv arrays are comparable; every other preview keeps a fresh id.
+  const piId = randomUUID();
+  const absent = await previewOf(previewArgs([], piId));
+  const explicitPi = await previewOf(previewArgs(["--harness", "pi"], piId));
+  assert.equal(absent.harness, "pi");
+  assert.equal(explicitPi.harness, "pi");
+  assert.deepEqual(absent.piArgs, explicitPi.piArgs);
+  assert.ok(absent.piArgs.includes("--session-dir"));
+  assert.ok(absent.piArgs.includes("--session-id"));
+  assert.ok(absent.piArgs.includes(`@${join(workspaceDirectory, "assignments", `${absent.assignment_id}.brief.md`)}`));
+
+  const claude = await previewOf(previewArgs(["--harness", "claude", "--model", "opus", "--thinking", "high"]));
+  assert.equal(claude.harness, "claude");
+  assert.equal(claude.provider, null);
+  assert.equal(claude.model, "opus");
+  assert.equal(claude.thinking, "high");
+  assert.deepEqual(claude.piArgs, [
+    "--session-id", claude.assignment_id,
+    "--model=opus",
+    "--effort", "high",
+    prompt(claude.assignment_id),
+  ]);
+
+  const codex = await previewOf(previewArgs(["--harness", "codex", "--thinking", "ultra"]));
+  assert.equal(codex.harness, "codex");
+  assert.equal(codex.model, null);
+  assert.deepEqual(codex.piArgs, [
+    "-c", 'model_reasoning_effort="ultra"',
+    prompt(codex.assignment_id),
+  ]);
+
+  // A withheld digest never writes assignments/sessions/.sentinel or starts
+  // the fake agent.
+  await assert.rejects(lstat(join(workspaceDirectory, "assignments")), { code: "ENOENT" });
+  await assert.rejects(lstat(join(workspaceDirectory, "sessions")), { code: "ENOENT" });
+  await assert.rejects(lstat(join(fixture.storageRoot, ".sentinel")), { code: "ENOENT" });
+  assert.deepEqual(await logEntries(fixture.fakePiLog), []);
+
+  // Invalid selections refuse before any useful preview output.
+  const invalid = await runCli(previewArgs(["--harness", "other"]), fixture.env);
+  assert.match(parseRefusal(invalid).error, /invalid harness/);
+  const claudeOff = await runCli(previewArgs(["--harness", "claude", "--thinking", "off"]), fixture.env);
+  assert.match(parseRefusal(claudeOff).error, /invalid thinking level/);
+
+  // Read-only assignments output: a new claude record shows its stored enum;
+  // a legacy absent-harness ended record shows the effective pi enum without
+  // changing its bytes.
+  const { resolveAssignment } = await import("./assignments.mjs");
+  const resolvePersisted = (extra) => resolveAssignment({
+    assignment_id: randomUUID(),
+    workspace_id: fixture.workspaceId,
+    storageRoot: fixture.storageRoot,
+    home: join(fixture.root, "home"),
+    brief: "briefs/brief.md",
+    skill: "general",
+    instructions: "Persisted harness record.",
+    target: "app",
+    publication_authority: "none",
+    attempt_kind: "initial",
+    pi_path: join(fixture.root, "bin", "pi"),
+    ...extra,
+  });
+  const newHarness = { ...(await resolvePersisted({ harness: "claude", model: "opus" })).record, state: "ended" };
+  const legacy = { ...(await resolvePersisted({})).record, state: "ended" };
+  delete legacy.harness;
+  const assignmentsDirectory = join(workspaceDirectory, "assignments");
+  await mkdir(assignmentsDirectory, { recursive: true });
+  const newFile = join(assignmentsDirectory, `${newHarness.assignment_id}.json`);
+  const legacyFile = join(assignmentsDirectory, `${legacy.assignment_id}.json`);
+  await writeFile(newFile, JSON.stringify(newHarness));
+  await writeFile(legacyFile, JSON.stringify(legacy));
+  const newBytes = await readFile(newFile);
+  const legacyBytes = await readFile(legacyFile);
+
+  const listJson = await runCli(["assignments", "--json"], fixture.env);
+  assert.equal(listJson.code, 0, listJson.stderr);
+  const envelopes = JSON.parse(listJson.stdout.trim());
+  const byId = new Map(envelopes.map((envelope) => [envelope.record.assignment_id, envelope.record]));
+  assert.equal(byId.get(newHarness.assignment_id).harness, "claude");
+  assert.equal(byId.get(legacy.assignment_id).harness, "pi");
+  assert.deepEqual(await readFile(newFile), newBytes);
+  assert.deepEqual(await readFile(legacyFile), legacyBytes);
+  assert.ok(!Object.hasOwn(JSON.parse(await readFile(legacyFile, "utf8")), "harness"));
+
+  const listText = await runCli(["assignments"], fixture.env);
+  assert.equal(listText.code, 0, listText.stderr);
+  const blocks = listText.stdout.trim().split(/\n\n+/);
+  const blockFor = (id) => blocks.find((block) => block.includes(id));
+  assert.match(blockFor(newHarness.assignment_id), /harness claude/);
+  assert.match(blockFor(legacy.assignment_id), /harness pi/);
 });

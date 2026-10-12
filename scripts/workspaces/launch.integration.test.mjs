@@ -864,10 +864,20 @@ test("repeat and retry: approval boundaries and snapshot stability", async (t) =
     "--provider", "openai", "--model", "gpt-5",
     "--thinking", "high", "--approve",
     `@${snapshotPath}`,
-    "Perform the following request:\n\n" +
-      "Integration instructions.\n\n" +
-      `Assignment ABCDEF12-3456-4789-ABCD-EF1234567890 workspace workspace-0 dir ${executionDirectory}. ` +
-      "Publication authority: none (grants no merge/deploy).",
+    [
+      "Assignment context",
+      `- Assignment: ${input.assignment_id}. Its record is ${workspaceDirectory}/assignments/${input.assignment_id}.json; read it again if you lose earlier context.`,
+      `- Workspace: workspace-0 (workspace-0) at ${workspaceDirectory}. Workspace storage holds the kit, briefs, spec packages and sessions; code changes belong in the working directory.`,
+      `- Working directory: ${executionDirectory} (repository app checkout).`,
+      "- Spec package: none.",
+      `- Brief: ${workspaceDirectory}/briefs/brief.md. The launch copy is attached above (${snapshotPath}); edit the source, not the copy.`,
+      "- Publication authority: none. This launch grants no push or pull request. Merge and deployment are allowed only when the request grants them.",
+      "",
+      "Request",
+      "Perform this request:",
+      "",
+      "Integration instructions.",
+    ].join("\n"),
   ]);
   assert.equal(entries[0].snapshotSha256, sha256Hex(approvedBytes));
   assert.deepEqual(await readFile(adjacentPath), adjacentBytes);
@@ -1193,4 +1203,217 @@ test('session controls end only the confirmed assignment and preserve saved evid
   assert.equal((await probeSession(records[1])).status,'present','other assignment remains running');
   assert.equal(await readFile(records[0].brief_snapshot,'utf8'),snapshot);
   assert.equal((await service.end({assignment_id:records[0].assignment_id,expected_identity:preview.identity,confirm:true})).duplicate,true);
+});
+
+test("store preservation: harness records", async (t) => {
+  const { root, storageRoot } = await makeStorageRoot(t);
+  const workspaceDirectory = await makeWorkspace(storageRoot, "harness-records");
+  await mkdir(join(workspaceDirectory, "briefs"), { recursive: true });
+  await writeFile(join(workspaceDirectory, "briefs", "brief.md"), "Harness record brief.\n");
+  const piPath = await fakePi(join(root, "bin"));
+  const assignmentsDirectory = join(workspaceDirectory, "assignments");
+  await mkdir(assignmentsDirectory, { recursive: true });
+
+  const resolveRecord = async (extra = {}) => {
+    const resolved = await resolveAssignment({
+      assignment_id: randomUUID(),
+      workspace_id: "harness-records",
+      storageRoot,
+      brief: "briefs/brief.md",
+      skill: "general",
+      instructions: "Persist the harness record.",
+      publication_authority: "none",
+      attempt_kind: "initial",
+      pi_path: piPath,
+      ...extra,
+    });
+    return { ...resolved.record, state: "ended" };
+  };
+  const writeRecord = async (record) => {
+    const path = join(assignmentsDirectory, `${record.assignment_id}.json`);
+    await writeFileAtomic(path, JSON.stringify(record));
+    return path;
+  };
+
+  // Legacy missing-harness bytes stay unchanged through read-only list/find,
+  // and the returned record is not normalized in memory.
+  const legacy = await resolveRecord();
+  delete legacy.harness;
+  const legacyPath = await writeRecord(legacy);
+  const legacyBytes = await readFile(legacyPath);
+  const listedLegacy = await listAssignments(storageRoot);
+  assert.equal(listedLegacy.length, 1);
+  assert.ok(!Object.hasOwn(listedLegacy[0], "harness"));
+  const foundLegacy = await findAssignment(storageRoot, legacy.assignment_id);
+  assert.ok(!Object.hasOwn(foundLegacy, "harness"));
+  assert.deepEqual(await readFile(legacyPath), legacyBytes);
+  await rm(legacyPath);
+
+  // New Claude/Codex records with only a model or only an effort validate.
+  const accepted = [
+    await resolveRecord({ harness: "claude", model: "opus" }),
+    await resolveRecord({ harness: "claude", thinking: "max" }),
+    await resolveRecord({ harness: "codex", model: "gpt-5" }),
+    await resolveRecord({ harness: "codex", thinking: "ultra" }),
+  ];
+  const acceptedPaths = [];
+  for (const record of accepted) acceptedPaths.push(await writeRecord(record));
+  const listed = await listAssignments(storageRoot);
+  assert.deepEqual(
+    listed.map((record) => `${record.harness}:${record.model ?? "-"}:${record.thinking ?? "-"}`).sort(),
+    ["claude:-:max", "claude:opus:-", "codex:-:ultra", "codex:gpt-5:-"],
+  );
+  for (const path of acceptedPaths) await rm(path);
+
+  // Unknown or null persisted harness and prohibited per-harness settings
+  // refuse without normalization writes.
+  const refusals = [
+    ["null harness", { ...(await resolveRecord()), harness: null }, /harness/],
+    ["unknown harness", { ...(await resolveRecord()), harness: "other" }, /harness/],
+    ["claude provider", { ...(await resolveRecord({ harness: "claude" })), provider: "openai", model: "opus" }, /provider must be null/],
+    ["codex trust", { ...(await resolveRecord({ harness: "codex" })), project_trust: "always" }, /project_trust must be null/],
+    ["claude effort", { ...(await resolveRecord({ harness: "claude" })), thinking: "off" }, /Claude effort/],
+  ];
+  for (const [label, record, pattern] of refusals) {
+    const path = await writeRecord(record);
+    const bytes = await readFile(path);
+    await assert.rejects(listAssignments(storageRoot), pattern, label);
+    assert.deepEqual(await readFile(path), bytes, label);
+    await rm(path);
+  }
+
+  assert.equal(await exists(join(storageRoot, ".sentinel")), false);
+  assert.equal(await exists(join(workspaceDirectory, "sessions")), false);
+});
+
+// Step-2 harness lifecycle: only the final agent executable is substituted,
+// by the same sustained fixture under the committed wrapper name. Non-Pi argv
+// has no --session-dir, so the owned Pi session directory stays empty; live
+// and ended state come from the real tmux/process identity path. The launcher
+// is a forked worker so the recorded launcher identity is confirmed gone.
+async function runHarnessLifecycle(t, { harness, wrapperName }) {
+  const priorPath = process.env.PATH;
+  const hadLog = Object.hasOwn(process.env, "ADJ4_FIXTURE_LOG");
+  const priorLog = process.env.ADJ4_FIXTURE_LOG;
+  const hadStop = Object.hasOwn(process.env, "ADJ4_FIXTURE_STOP");
+  const priorStop = process.env.ADJ4_FIXTURE_STOP;
+  const { root, storageRoot, home, socket, logPath, stopPath } = await launchScenario(t, 1);
+  t.after(() => {
+    if (priorPath === undefined) delete process.env.PATH; else process.env.PATH = priorPath;
+    if (hadLog) process.env.ADJ4_FIXTURE_LOG = priorLog; else delete process.env.ADJ4_FIXTURE_LOG;
+    if (hadStop) process.env.ADJ4_FIXTURE_STOP = priorStop; else delete process.env.ADJ4_FIXTURE_STOP;
+  });
+
+  // Keep the owned tmux server reachable after the adj- session exits so
+  // probeSession reports an absent terminal instead of an unreachable server;
+  // the existing gone conjunction then drives locateAssignment to ended. The
+  // existing scenario cleanup's kill-server reaps this keepalive session.
+  const sentinelClaim = await acquireRootClaim(storageRoot);
+  sentinelClaim.release();
+  const keepalive = await tmuxExec(socket, [
+    "start-server", ";",
+    "new-session", "-d", "-s", "keepalive", "--", "/bin/sleep", "300",
+  ]);
+  assert.equal(keepalive.ok, true, keepalive.stderr);
+
+  // Only the temporary wrapper bin joins PATH; the fixture wrapper keeps the
+  // sustained launch-fixture-pi process under the committed wrapper name.
+  const wrapperBin = join(root, "wrapper-bin");
+  await mkdir(wrapperBin, { recursive: true });
+  const wrapperPath = join(wrapperBin, wrapperName);
+  await writeFile(
+    wrapperPath,
+    `#!/bin/sh\nexec "${process.execPath}" "${FIXTURE_PI}" "$@"\n`,
+    { mode: 0o755 },
+  );
+  await chmod(wrapperPath, 0o755);
+  process.env.PATH = `${wrapperBin}:${priorPath ?? ""}`;
+
+  const workspaceDirectory = join(storageRoot, "projects", "workspace-0");
+  const input = {
+    assignment_id: randomUUID(),
+    workspace_id: "workspace-0",
+    storageRoot,
+    home,
+    brief: "briefs/brief.md",
+    skill: "general",
+    instructions: "Harness lifecycle observation.",
+    target: "app",
+    publication_authority: "none",
+    attempt_kind: "initial",
+    harness,
+    // No pi_path: the fixed wrapper name resolves through the temporary PATH.
+  };
+  const resolved = await resolveAssignment(input);
+  assert.equal(resolved.record.pi_path, wrapperPath, harness);
+  assert.equal(resolved.record.harness, harness);
+
+  const launcher = await startWorker(root, {
+    action: "launch",
+    input,
+    expectedDigest: resolved.contractDigest,
+  });
+  const launched = await withTimeout(launcher.done, `${harness} launch worker`);
+  assert.equal(launched.error, undefined, launched.error?.message);
+  const record = launched.value;
+  assert.equal(record.state, "live");
+  assert.ok(record.pi_identity !== null && record.pi_identity.pid > 0, harness);
+
+  const snapshotPath = join(workspaceDirectory, "assignments", `${input.assignment_id}.brief.md`);
+  const sessionDirectory = join(workspaceDirectory, "sessions", input.assignment_id);
+  const snapshotBytes = await readFile(snapshotPath);
+
+  // Match the fixture's own log by the saved pane process PID, because Codex
+  // argv has no --session-id and no harness writes a Pi session file here.
+  await waitFor(async () => {
+    const entries = await fixtureEntries(logPath);
+    return entries.some((entry) => entry.pid === record.pi_identity.pid);
+  }, `${harness} fixture log entry for pid ${record.pi_identity.pid}`);
+  const entry = (await fixtureEntries(logPath))
+    .find((candidate) => candidate.pid === record.pi_identity.pid);
+  assert.ok(entry, harness);
+  assert.ok(!entry.argv.includes("--session-dir"), harness);
+  if (harness === "claude") {
+    assert.ok(entry.argv.includes("--session-id") && entry.argv.includes(input.assignment_id), harness);
+  } else {
+    assert.ok(!entry.argv.includes("--session-id"), harness);
+  }
+  assert.ok(
+    entry.argv[entry.argv.length - 1].includes(`Read the launch copy at ${snapshotPath}; edit the source, not the copy.`),
+    harness,
+  );
+
+  // Live location uses the owned process identity while the Pi session file
+  // remains an absent, optional observation for non-Pi harnesses.
+  const live = await locateAssignment(storageRoot, input.assignment_id);
+  assert.equal(live.state, "live", harness);
+  assert.equal(live.pi_identity.pid, record.pi_identity.pid, harness);
+  assert.equal(live.pi_session_file, null, harness);
+  assert.deepEqual(await readdir(sessionDirectory), [], harness);
+  assert.deepEqual(await readFile(snapshotPath), snapshotBytes, harness);
+
+  // The fixture stop file ends the owned process; confirmed terminal and
+  // process absence drives the record to ended. The transition also waits for
+  // the launcher/fixture process evidence to settle, so poll instead of racing
+  // the first locate.
+  await writeFile(stopPath, "stop\n");
+  await waitFor(async () => {
+    const names = await sessionNames(socket);
+    return !names.some((name) => name.startsWith("adj-"));
+  }, `${harness} fixture exit`);
+  await rm(stopPath, { force: true });
+  const ended = await waitFor(async () => {
+    const record = await locateAssignment(storageRoot, input.assignment_id);
+    return record.state === "ended" ? record : false;
+  }, `${harness} locate ended`);
+  assert.equal(ended.state, "ended", harness);
+  assert.deepEqual(await readFile(snapshotPath), snapshotBytes, harness);
+}
+
+test("assignment harness lifecycle: claude fixture resolves the clauded wrapper without pi_path", async (t) => {
+  await runHarnessLifecycle(t, { harness: "claude", wrapperName: "clauded" });
+});
+
+test("assignment harness lifecycle: codex fixture resolves the codexd wrapper without pi_path", async (t) => {
+  await runHarnessLifecycle(t, { harness: "codex", wrapperName: "codexd" });
 });

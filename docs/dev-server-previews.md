@@ -26,6 +26,21 @@ preview:
 
 The repository must belong to the kit. The Compose file must stay inside the package worktree, including after symlink resolution. Absolute paths and `..` segments are invalid. The package must have a separate worktree with the recorded repository and branch. Start runs only on the workspace execution host.
 
+### Sentinel dashboard preview
+
+This repository includes `compose.preview.yaml` for previewing the dashboard UI from the package worktree. The image rebuilds the Solid frontend from its committed lockfile, then serves the generated dashboard with a small Node proxy. The proxy sends API and package-file requests to the existing Sentinel dashboard at `https://restory-box.tail57a257.ts.net`; it does not start another Sentinel process or mount host state, credentials, or the Docker socket. The preview and canonical dashboard share the same live data and operator actions.
+
+Configure the `agent-tooling` workspace to use this repository's Compose file:
+
+```sh
+node scripts/workspaces/cli.mjs set-preview agent-tooling --repo agents --file compose.preview.yaml
+node scripts/workspaces/cli.mjs set-preview agent-tooling --repo agents --file compose.preview.yaml --apply
+```
+
+The preview URL must use the canonical Tailscale DNS name. The container derives the upstream HTTPS origin from that name and removes the allocated preview port, so its requests reach the existing dashboard on HTTPS port 443. Compose uses Tailscale's `100.100.100.100` resolver because Docker's default DNS did not resolve the host's MagicDNS name; the resolver also gives the container access to other tailnet names. The host must trust the Tailscale HTTPS endpoint from Docker containers.
+
+The UI is built from the selected package branch each time the preview image is built. Frontend changes in that branch appear in the preview after restart. Dashboard API reads and actions still run against the existing host Sentinel service; remote access keeps its existing local-only restrictions, including **Mark complete**.
+
 Without a `preview` block, package details hide the dev server controls. Imported snapshots do not expose these controls.
 
 ## Compose contract

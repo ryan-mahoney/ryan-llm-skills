@@ -94,12 +94,28 @@ git clone git@github.com:ryan-mahoney/ryan-llm-skills.git ~/.agents
 ~/.agents/sync.sh
 ```
 
-`sync.sh` does four things:
+`sync.sh` does these things:
 
 - installs the locked npm dependencies for the Pi spec runtime and Jev;
 - links skills into each installed harness;
 - links the spec runtime extension and agent profiles into `~/.pi/agent`;
-- links `adjacent-sync` into `~/.local/bin`.
+- links `adjacent-sync` into `~/.local/bin`;
+- links the `clauded` and `codexd` exec wrappers into `~/.local/bin`.
+
+Assignments that run Claude Code or Codex use those two wrappers. `clauded` runs
+`claude --dangerously-skip-permissions` and `codexd` runs
+`codex --dangerously-bypass-approvals-and-sandbox`; both skip the CLIs' approval prompts,
+and the execution host itself is the sandbox. The wrappers exec the installed `claude` and
+`codex` names through the service PATH from section 7
+(`$HOME/.local/share/pi-node/current/bin:$HOME/.local/bin:...`), so they survive CLI
+updates. Do not replace them with shell aliases: tmux and the systemd service exec argv
+directly and never read shell profiles.
+
+Before the first non-Pi assignment, authenticate both CLIs as the operator user. Run
+`claude` and `codex` once interactively with the section 7 PATH, sign in, and accept each
+CLI's first-run trust prompt; credentials live in the operator's home, outside this
+repository. A first-run or bypass prompt can also appear during a launch, in which case
+attach to the assignment's tmux session and answer it there.
 
 Run it again after every `git pull`.
 

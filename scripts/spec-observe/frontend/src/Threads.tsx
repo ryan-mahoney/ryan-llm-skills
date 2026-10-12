@@ -11,6 +11,8 @@ type Preview = { requestId: string; assignmentId: string; record: Record<string,
 type Result = { assignment: Record<string, any> | null; observation: Record<string, any> | null };
 type Props = { workspaceId: string; repositories: Repo[]; token?: string; live: boolean; refreshKey?: number };
 const LIMIT = 100;
+// The saved brief is attached to the assignment as its snapshot; the request text only points at it.
+const BRIEF_INSTRUCTION = 'Perform the attached assignment brief.';
 const labels: Record<string, string> = { active: 'Responding', idle: 'Ready', paused: 'Paused', 'history-only': 'History only', uncertain: 'Delivery uncertain', stalled: 'Stalled', 'start-failed': 'Start failed', 'session-mismatch': 'Session mismatch', 'missing-directory': 'Directory missing', 'live-owner': 'Owner not confirmed dead', 'missing-context': 'Context missing', 'policy-refusal': 'Policy refusal' };
 const tones: Record<string, string> = { active: 'good', idle: 'good', paused: 'warn', stalled: 'warn', 'history-only': 'muted', uncertain: 'bad', 'start-failed': 'bad', 'session-mismatch': 'bad', 'missing-directory': 'bad', 'live-owner': 'bad', 'missing-context': 'bad', 'policy-refusal': 'bad' };
 const uuid = () => typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3 | 8)).toString(16); });
@@ -246,24 +248,24 @@ export default function Threads(props: Props) {
     if (!actionable() || pending()) return;
     if (dirty()) return;
     setHandoffError('');
-    const req = briefRequestId(), instructions = savedContent();
-    if (!req || instructions === null) { setHandoffError('Save the brief before previewing the assignment.'); return; }
+    const req = briefRequestId();
+    if (!req || savedContent() === null) { setHandoffError('Save the brief before previewing the assignment.'); return; }
     if (!assignmentId()) setAssignmentId(uuid());
     const assignment = assignmentId() || crypto.randomUUID(), id = selected(), workspace = props.workspaceId, selection = selectionGeneration;
     try {
-      const data: any = await action('/api/thread/preview-assignment', { workspace_id: workspace, thread_id: id, request_id: req, assignment_id: assignment, instructions }, 'preview');
+      const data: any = await action('/api/thread/preview-assignment', { workspace_id: workspace, thread_id: id, request_id: req, assignment_id: assignment, instructions: BRIEF_INSTRUCTION }, 'preview');
       if (id !== selected() || workspace !== props.workspaceId || selection !== selectionGeneration) return;
       setPreview({ requestId: req, assignmentId: assignment, record: data?.record && typeof data.record === 'object' ? data.record : null, digest: str(data?.contractDigest || ''), input: data?.inputPreview }); setPreviewStale(false); setResult(null); announce('Assignment preview ready. Review the details, then launch the assignment.');
       if (!dirty()) focusHandoff('thread-assignment-launch');
     } catch (e) { if (id === selected() && selection === selectionGeneration) setHandoffError(routeError(e)); }
   }
   async function launchAssignment() {
-    const p = preview(), instructions = savedContent();
+    const p = preview();
     if (!actionable() || pending() || dirty()) return;
-    if (!p?.digest || previewStale() || instructions === null) { setHandoffError('Preview the assignment before launching.'); return; }
+    if (!p?.digest || previewStale() || savedContent() === null) { setHandoffError('Preview the assignment before launching.'); return; }
     const id = selected(), workspace = props.workspaceId, selection = selectionGeneration;
     try {
-      const data: any = await action('/api/thread/launch-assignment', { workspace_id: workspace, thread_id: id, request_id: p.requestId, assignment_id: p.assignmentId, instructions, expectedDigest: p.digest }, 'launch');
+      const data: any = await action('/api/thread/launch-assignment', { workspace_id: workspace, thread_id: id, request_id: p.requestId, assignment_id: p.assignmentId, instructions: BRIEF_INSTRUCTION, expectedDigest: p.digest }, 'launch');
       if (id !== selected() || workspace !== props.workspaceId || selection !== selectionGeneration) return;
       setResult({ assignment: data?.assignment && typeof data.assignment === 'object' ? data.assignment : null, observation: data?.observation && typeof data.observation === 'object' ? data.observation : null }); setHandoffError(''); announce(data?.assignment?.state === 'live' ? 'Assignment launched.' : 'Assignment launch is not confirmed live; review the result card.'); void loadList(); focusHandoff('thread-result');
     } catch (e) {

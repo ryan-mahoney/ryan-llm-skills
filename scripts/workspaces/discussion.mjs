@@ -2535,6 +2535,7 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
       provider: input.provider ?? null,
       model: input.model ?? null,
       thinking: input.thinking ?? null,
+      harness: input.harness ?? null,
       project_trust: input.project_trust ?? null,
       workflow_id: input.workflow_id ?? null,
       publication_authority: input.publication_authority ?? "none",
