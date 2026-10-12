@@ -1,0 +1,21 @@
+services:
+  dashboard:
+    build:
+      context: ${PREVIEW_WORKTREE:?PREVIEW_WORKTREE is required}
+      dockerfile: Dockerfile.preview
+    dns:
+      - 100.100.100.100
+    ports:
+      - "127.0.0.1:${PREVIEW_PORT:?PREVIEW_PORT is required}:3000"
+    environment:
+      PREVIEW_URL: ${PREVIEW_URL:?PREVIEW_URL is required}
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/').then(r => process.exit(r.status >= 200 && r.status < 400 ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s

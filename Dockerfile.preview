@@ -1,0 +1,19 @@
+FROM node:22.23.0-bookworm-slim AS build
+
+WORKDIR /src
+COPY scripts/spec-observe/frontend/package.json scripts/spec-observe/frontend/package-lock.json ./scripts/spec-observe/frontend/
+RUN npm ci --prefix scripts/spec-observe/frontend
+
+COPY scripts/spec-observe/frontend/ ./scripts/spec-observe/frontend/
+RUN npm run build --prefix scripts/spec-observe/frontend
+
+FROM node:22.23.0-bookworm-slim AS runtime
+
+ENV NODE_ENV=production
+WORKDIR /app
+COPY --from=build /src/scripts/spec-observe/dashboard.html ./dashboard.html
+COPY scripts/spec-observe/preview-server.mjs ./preview-server.mjs
+
+USER node
+EXPOSE 3000
+CMD ["node", "preview-server.mjs"]
