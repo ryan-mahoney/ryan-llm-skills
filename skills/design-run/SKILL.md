@@ -1,6 +1,6 @@
 ---
 name: design-run
-description: "Produce the screens of a planned design package one self-contained HTML/Tailwind file per step, copying shared chrome forward, linting, capturing and inspecting each at the declared widths, then reviewing every screen through the brief's expert and designer lenses. Use when the user says 'build the screens', 'produce the design', 'run the design', 'rebuild screen 3', or after design-plan has written design.json. Resumes by producing only missing screens."
+description: "Produce a planned design package with one self-contained HTML/Tailwind screen and matching Markdown interaction guide per step; capture, inspect and review the screens through the brief's lenses. Use when the user says 'build the screens', 'produce the design', 'run the design', 'rebuild screen 3', or after design-plan has written design.json. Resumes missing screens and guides."
 argument-hint: "<workspace-id> <design-slug> [--step N | --from N] [--review-only]"
 disable-model-invocation: true
 license: MIT
@@ -13,7 +13,8 @@ metadata:
 # Design Run — One Screen Per Step
 
 Produce the screens an existing `design.json` names, in step order, each as one
-self-contained HTML file that uses the design system through a vendored Tailwind runtime.
+self-contained HTML file that uses the design system through a vendored Tailwind runtime
+and a same-basename Markdown guide to the user's interactions and journey.
 Lint, capture and inspect every screen at every declared width, correct what the captures
 show, then review the whole set through the lenses in `brief.md`. One model does all of it.
 
@@ -26,10 +27,12 @@ output.
 
 - `workspace-id`, `design-slug` — resolve `<workspace-dir>/designs/<slug>/` as `design-plan`
   does. Stop with `outcome: blocked`, `reason: missing-design` when there is no `design.json`.
-- `--step N` — rebuild exactly one screen, even when it is already produced.
-- `--from N` — produce step N and every later screen, replacing produced files from N on.
-- `--review-only` — skip production; run the lens review over the produced screens.
-- Default: produce every screen whose file is missing, in step order, then review.
+- `--step N` — rebuild exactly one screen and its guide, even when already produced.
+- `--from N` — produce step N and every later screen, replacing HTML and guides from N on.
+- `--review-only` — skip production; review the produced screens and guides. Report missing
+  or outdated guides; refresh guides for any screens changed by the review.
+- Default: produce missing HTML in step order, fill missing guides for existing HTML without
+  rebuilding those screens, then review.
 
 ## Step 0 — Preflight
 
@@ -43,11 +46,13 @@ output.
    copies the pinned Tailwind play runtime to `vendor/tailwind.js` and refuses a digest
    mismatch. Screens reference it as `../vendor/tailwind.js`.
 3. Derive status: `node ~/.agents/scripts/design/cli.mjs status <design-dir>`. Decide the
-   work list from the arguments.
-4. Establish eyes with the sibling `see` skill once: `host-vision`, `codex-relay`, or
-   `source-only`. In `source-only` mode every visual check below is recorded as not
+   work list from the arguments. Separately check for `screens/NN-<id>.md`; CLI status
+   accounts for HTML and captures, not guides. Missing guides need a documentation pass.
+4. When producing or visually reviewing HTML, establish eyes with the sibling `see` skill
+   once: `host-vision`, `codex-relay`, or `source-only`. In `source-only` mode every visual check below is recorded as not
    performed; say so in the output instead of implying inspection.
-5. Serve the design directory on loopback in the background:
+5. When producing or visually reviewing HTML, serve the design directory on loopback
+   in the background:
    `python3 -m http.server <port> --directory <design-dir> --bind 127.0.0.1`. Pick an
    uncommon port and bump it on collision. Screens open at
    `http://127.0.0.1:<port>/screens/NN-<id>.html`.
@@ -92,6 +97,17 @@ the next.
    reasons) and add any `deviations` with token, before, after and reason. Never change a
    screen's `step`, `id`, `person`, `job`, `kind` or `state` here; a different inventory is
    a planning change and goes back to `design-plan`.
+8. **Write the interaction guide.** Write `screens/NN-<id>.md` beside the HTML, following
+   the [interaction guide contract](../../docs/design-packages.md#screen-interaction-guides).
+   Read the final screen, the brief and related screens before writing. Explain the person's
+   goal, what informs their decision, each meaningful action and its outcome, and how they
+   enter and leave this part of the process. Use exact visible control labels and relative
+   links to related screens and guides. Cover this state's feedback, recovery and retained
+   context. Distinguish intended product behavior from what the prototype demonstrates;
+   record unresolved outcomes rather than inventing them. Keep implementation details out.
+
+For an existing screen missing only its guide, perform step 8 from the existing HTML and
+brief. Do not rebuild or recapture unchanged HTML merely to add documentation.
 
 ## Step 2 — Lens review
 
@@ -105,7 +121,10 @@ After the last screen in the work list (or immediately with `--review-only`):
    person's job, and the change made or the reason it was declined. State what is strong
    only when a lens genuinely has nothing to add.
 3. Apply the changes to the affected screens. Each changed screen goes back through
-   lint, capture and inspection. Update `notes` where the reasoning changed.
+   lint, capture and inspection. Refresh its guide and any related guides whose journey
+   descriptions changed. Update `notes` where the reasoning changed.
+4. Read each guide against its screen and brief: controls, outcomes, state, links and
+   continuity must agree. Related state variants are alternatives, not consecutive steps.
 
 ## Step 3 — Final checks
 
@@ -113,15 +132,17 @@ After the last screen in the work list (or immediately with `--review-only`):
   warning explained in `notes`.
 - `node ~/.agents/scripts/design/cli.mjs status <design-dir>` shows every screen in the
   work list produced and captured at every width.
+- Every HTML screen in scope has a nonempty same-basename `.md` guide. Check relative
+  links and descriptions against the final screens; report missing or unresolved content.
 - Stop the loopback server you started.
 
 ## Output
 
 Report this compact summary before any commentary:
 
-- `outcome`: `produced`, `partial` (with the steps that are not produced and why) or
+- `outcome`: `produced`, `partial` (with steps missing screens or guides and why) or
   `blocked` (with `reason`).
-- Design directory, screens produced this run, captures per screen.
+- Design directory, screens and guides produced or refreshed this run, captures per screen.
 - Vision mode used and what inspection corrected; or that it was not performed, and why.
 - Lint result and any warnings kept, with reasons.
 - Review: findings count, changes applied, changes declined.

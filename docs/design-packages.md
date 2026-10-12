@@ -1,13 +1,16 @@
 # Design packages
 
-A design package is a folder of one self-contained HTML file per screen-state plus a
-machine-readable index. One model produces it step by step from the user's conversation and a
-design system. It lives in workspace storage, not in a repository, and Sentinel shows it
+A design package is a folder of one self-contained HTML file and matching Markdown
+interaction guide per screen-state, plus a machine-readable index. One model produces it
+step by step from the user's conversation and a design system. It lives in workspace
+storage, not in a repository, and Sentinel shows it
 through the workspace file viewer. Epics and specs reference its screens where they live;
 nothing is copied into `.specs/`.
 
-The skills are `design-plan` (context in, brief and index out) and `design-run` (produce
-the screens, capture, review). The rule that governs the content of every screen is
+The skills are `design-plan` (context in, brief and index out), `design-run` (produce
+screens and guides, capture, review), and `design-prototype-explode` (extract separate
+screens and granular context from an existing compound prototype). The rule that governs
+the content of every screen is
 [prototype-design.md](../rules/prototype-design.md).
 
 ## Location
@@ -17,6 +20,7 @@ the screens, capture, review). The rule that governs the content of every screen
   design.json                 the index (required)
   brief.md                    who, job, lenses, assumptions (written by design-plan)
   screens/NN-<id>.html        one screen, one state, self-contained
+  screens/NN-<id>.md          matching user interaction and journey guide
   captures/NN-<id>@<width>.png  inspected render per declared width
   review.md                   lens review findings and what changed (written by design-run)
   vendor/tailwind.js          pinned Tailwind play runtime, referenced relatively
@@ -55,6 +59,59 @@ A single file holding every state behind a switcher grows until an implementing 
 cannot use it, and the switcher plus its labels leak into the prototype. Each file holds
 one screen in one state. Shared chrome is copied forward from the step named in
 `shell_from`, then edited. Rationale lives in the index, never in the markup.
+
+## Screen interaction guides
+
+Every produced `screens/NN-<id>.html` has a sibling `screens/NN-<id>.md`. The guide explains
+the user's experience and the screen's place in the process. It is not an implementation
+description or a copy of the index's `notes`.
+
+Use a screen title and a relative link to its HTML. Organize the explanation around:
+
+- **Person and goal:** who arrives, what they need to decide or accomplish, and what
+  successful progress means here.
+- **Entry and context:** how they arrive, prerequisites, the selected object or scope,
+  and information carried from related screens.
+- **Decisions and interactions:** the information that informs the decision; meaningful
+  controls with exact visible labels, their outcomes, and confirmation when applicable.
+- **Feedback and continuity:** this screen's state, pending or unavailable actions,
+  recovery, retained input/selection, and relevant focus or keyboard behavior.
+- **Connections:** relative links to actual related HTML screens and their guides;
+  distinguish journey transitions from alternative states of the same surface.
+
+Use only the sections that add useful information. Match detail to the screen's job.
+Explain why information or an interaction helps the person, rather than listing every
+label. Omit markup, CSS, component structure, rendering mechanics and build instructions.
+Describe intended behavior from the brief and final design. Identify interactions the
+prototype only illustrates, proposed capabilities and unresolved outcomes; a clickable
+mockup does not establish that a real operation succeeded. Never invent a destination
+or outcome to complete the narrative.
+
+Write the guide after the screen is finalized and refresh it whenever screen behavior,
+labels or related transitions change, including changes made during lens review. A
+documentation-only pass can fill missing guides without rebuilding or recapturing HTML.
+Review guides against the final screens and brief, and check that relative links resolve.
+
+## Importing a compound prototype
+
+`design-prototype-explode` accepts existing HTML prototypes whose switchers, navigation
+or scripted interactions represent multiple screens and states. It enumerates reachable
+experiences and writes each as `screens/NN-<id>.html` with a matching `.md` interaction
+guide, plus `brief.md` and `design.json` under this contract. The source files remain intact.
+Extraction preserves the source design; missing states and source defects are reported
+rather than filled in through redesign.
+
+Supplied context is split by relevance to each screen/state. Shared requirements remain
+in the brief, and the guide repeats constraints needed to understand that screen. When
+no context exists, the guide derives the user's interactions from the source and records
+inferred goals or unresolved outcomes. An `extraction.md` record maps source activation
+paths and context sections to outputs, with aliases, conflicts, omissions and conversion
+changes. It is separate from the guides because it serves extraction traceability.
+
+Imported CSS prototypes can retain their own styles without conversion to Tailwind.
+Their resources still stay inside the design directory, and their output goes through
+the same lint, independent capture and guide checks. A missing named design system is
+recorded for later redesign work; it does not require inventing one during extraction.
 
 ## Self-contained means offline
 
@@ -129,8 +186,10 @@ Readers refuse an index over 64 KiB. Nothing about progress is stored in the ind
 | `captured` | `captures/NN-<id>@<width>.png` exists for a width; a screen is captured when every declared width is. |
 | lint | `node scripts/design/cli.mjs lint <dir>`: `pass`, `warn` or `fail`. |
 
-Rerunning `design-run` produces only screens that are not produced. `--step N` rebuilds
-one screen.
+CLI status accounts for HTML and captures; it does not track guide completeness.
+`design-run` separately checks same-basename Markdown files. Rerunning it produces missing
+screens and fills missing guides for existing screens. `--step N` rebuilds one screen and
+refreshes its guide. A completed production run requires both files for every screen in scope.
 
 ## Lint
 
