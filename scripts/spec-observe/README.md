@@ -307,7 +307,7 @@ receipt's `snapshot_path` names the current file; shutdown writes `state:
 "closed"` with the same observer UUID. The reconcile heartbeat is referenced at
 15 s; `published_at`, `sequence` and `snapshot.coverage.observed_at` advance
 while the host lives. A stale `observing` file is never proof that its monitor
-is alive; confirm the recorded PID/start identity before acting.
+is alive; confirm the recorded PID/start identity before acting. Snapshots older than the 1 hour `OBSERVER_RETENTION_MS` window are pruned by the publisher and withheld by the dashboard, while live 15 s refreshes stay fresh.
 
 The dashboard keeps the existing local/remote boundary: loopback requests get
 the same-origin action token and normal completion, while requests classified
