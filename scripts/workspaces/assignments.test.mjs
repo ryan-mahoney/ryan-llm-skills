@@ -1124,6 +1124,16 @@ test("assignment resolution harness resolves clauded and codexd wrappers with ha
       expectedPrompt(codexNumeric.record.assignment_id),
     ]);
 
+    // A DEL U+007F inside a codex effort must surface in the TOML basic
+    // string as the \u007f escape, while JSON.stringify's quote, backslash
+    // and newline escapes are preserved unchanged.
+    const codexDelEffort = 'del\u007f"\\\n';
+    const codexDel = await resolveAssignment(makeInput({ harness: "codex", thinking: codexDelEffort }));
+    assert.deepEqual(codexDel.piArgs, [
+      "-c", 'model_reasoning_effort="del\\u007f\\"\\\\\\n"',
+      expectedPrompt(codexDel.record.assignment_id),
+    ]);
+
     // Claude accepts high/max without a provider and refuses off/minimal.
     for (const thinking of ["high", "max"]) {
       const accepted = await resolveAssignment(makeInput({ harness: "claude", thinking }));

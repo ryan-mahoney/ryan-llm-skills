@@ -623,7 +623,13 @@ export async function resolveAssignment(input = {}, options = {}) {
           ...modelOptions,
           ...(thinking === null
             ? []
-            : ["-c", `model_reasoning_effort=${JSON.stringify(thinking)}`]),
+            : [
+                "-c",
+                // JSON.stringify leaves literal U+007F, which TOML basic
+                // strings reject; the six-character \u007f escape is valid
+                // TOML and preserves the value.
+                `model_reasoning_effort=${JSON.stringify(thinking).replace(/\u007f/g, "\\u007f")}`,
+              ]),
           nonPiPrompt,
         ];
   }
