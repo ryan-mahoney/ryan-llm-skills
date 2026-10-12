@@ -3,10 +3,12 @@ import { test } from 'node:test';
 import { formatHash, parseHash, routeHistoryMode, type RouteState } from './route';
 import {
   clearIncompatibleFields,
+  firstUnmatchedTargetId,
   inWorkspaceScope,
   needsWorkspacePicker,
   requiresWorkspace,
   scopeLabel,
+  targetRepositoryId,
   withWorkspace,
   type CatalogEntry,
 } from './scope';
@@ -87,14 +89,23 @@ test('a neighboring kit whose id equals the entry basename cannot cross-match ei
   assert.equal(inWorkspaceScope({ workspace: 'alpha', workspace_id: 'alpha' }, 'assignment', 'physical', catalog), false);
 });
 
-test('portfolio scope retains unmatched records with a repository-qualified first-entry label', () => {
+test('portfolio scope retains unmatched records with the unmatched record target repository label', () => {
   assert.equal(inWorkspaceScope({ workspace: 'elsewhere' }, 'run', undefined, catalog), true);
   assert.equal(inWorkspaceScope({ workspace_id: 'elsewhere' }, 'assignment', undefined, catalog), true);
   assert.equal(inWorkspaceScope({ workspace: 'elsewhere' }, 'run', 'alpha', catalog), false);
-  assert.equal(scopeLabel(undefined, catalog), 'All workspaces · alpha');
+  // Kit id (alpha), directory basename (physical) and target repository id
+  // (agents) are three distinct identities; the portfolio qualification must
+  // use the unmatched record's target repository id, never the kit identity.
+  const unmatchedRun = { workspace: 'elsewhere', targets: [{ id: 'agents', primary: '/data/agents' }] };
+  assert.equal(targetRepositoryId(unmatchedRun), 'agents');
+  assert.equal(targetRepositoryId({ workspace: 'elsewhere' }), undefined);
+  assert.equal(firstUnmatchedTargetId([unmatchedRun], 'run', catalog), 'agents');
+  assert.equal(firstUnmatchedTargetId([{ workspace: 'physical', targets: [{ id: 'agents' }] }], 'run', catalog), undefined);
+  assert.equal(firstUnmatchedTargetId([{ workspace_id: 'alpha', targets: [{ id: 'agents' }] }], 'assignment', catalog), undefined);
+  assert.equal(scopeLabel(undefined, catalog, 'agents'), 'All workspaces · agents');
+  assert.equal(scopeLabel(undefined, catalog), 'All workspaces');
   assert.equal(scopeLabel(undefined, []), 'All workspaces');
-  assert.equal(scopeLabel(undefined, [{ directory: '/data/physical' } as CatalogEntry]), 'All workspaces · physical');
-  assert.equal(scopeLabel(undefined, [{ id: '', directory: '' } as CatalogEntry]), 'All workspaces · unknown');
+  assert.equal(scopeLabel(undefined, [], 'agents'), 'All workspaces · agents');
   assert.equal(scopeLabel('alpha', catalog), 'alpha');
   assert.equal(scopeLabel('alpha', [{ id: 'alpha', directory: '/data/physical', name: 'Alpha kit' }]), 'Alpha kit');
   assert.equal(scopeLabel('missing', catalog), 'missing');

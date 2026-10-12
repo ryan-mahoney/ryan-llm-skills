@@ -25,12 +25,43 @@ export function inWorkspaceScope(
   return record?.workspace === basename(entry.directory);
 }
 
-export function scopeLabel(routeWorkspaceId: string | undefined, catalog: CatalogEntry[]): string {
+export function targetRepositoryId(record: WireRecord): string | undefined {
+  const targets = (record as { targets?: unknown })?.targets;
+  if (!Array.isArray(targets) || targets.length === 0) return undefined;
+  return text((targets[0] as { id?: unknown })?.id);
+}
+
+const matchesCatalogEntry = (
+  record: WireRecord,
+  kind: ScopeRecordKind,
+  entry: CatalogEntry,
+): boolean => {
+  if (kind === 'assignment') return record?.workspace_id === entry.id;
+  return record?.workspace === basename(entry.directory);
+};
+
+export function firstUnmatchedTargetId(
+  records: WireRecord[],
+  kind: ScopeRecordKind,
+  catalog: CatalogEntry[],
+): string | undefined {
+  for (const record of records ?? []) {
+    if ((catalog ?? []).some(entry => entry && matchesCatalogEntry(record, kind, entry))) continue;
+    const targetId = targetRepositoryId(record);
+    if (targetId) return targetId;
+  }
+  return undefined;
+}
+
+export function scopeLabel(
+  routeWorkspaceId: string | undefined,
+  catalog: CatalogEntry[],
+  unmatchedTargetId?: unknown,
+): string {
   const entries = catalog ?? [];
   if (!routeWorkspaceId) {
-    const first = entries[0];
-    if (!first) return 'All workspaces';
-    const label = text(first.id) ?? (basename(first.directory) || text(first.directory) || 'unknown');
+    const label = text(unmatchedTargetId);
+    if (!label) return 'All workspaces';
     return `All workspaces · ${label}`;
   }
   const entry = resolveCatalogEntry(entries, routeWorkspaceId);

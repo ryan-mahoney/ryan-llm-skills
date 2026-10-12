@@ -8,7 +8,7 @@ import Designs from './Designs';
 import Shell from './Shell';
 import { EmptyState, MasterDetail, type StatusTone } from './primitives';
 import { parseHash, subscribeRoute, navigate, routeHistoryMode, type Destination, type RouteState } from './route';
-import { clearIncompatibleFields, inWorkspaceScope, needsWorkspacePicker, requiresWorkspace, scopeLabel, withWorkspace, type CatalogEntry } from './scope';
+import { clearIncompatibleFields, firstUnmatchedTargetId, inWorkspaceScope, needsWorkspacePicker, requiresWorkspace, scopeLabel, withWorkspace, type CatalogEntry } from './scope';
 import { destinationEntries, type DestinationProps } from './destinations';
 
 type Filter = 'active' | 'attention' | 'completed';
@@ -74,7 +74,10 @@ export default function App() {
     return typeof value === 'string' && value ? time(value) : undefined;
   };
   const workspaceOptions = () => catalogEntries().map(entry => ({ id: String(entry.id), label: String(entry.name || entry.id || entry.directory || 'unknown') }));
-  const crumbs = () => [scopeLabel(scopeWs(), catalogEntries()), title()];
+  const portfolioTargetId = () => firstUnmatchedTargetId(records(), 'run', catalogEntries())
+    ?? firstUnmatchedTargetId(assignments(), 'assignment', catalogEntries())
+    ?? firstUnmatchedTargetId(epics(), 'epic', catalogEntries());
+  const crumbs = () => [scopeLabel(scopeWs(), catalogEntries(), scopeWs() ? undefined : portfolioTargetId()), title()];
   const packageFilesRoute = () => route().dest === 'files' && route().source === 'package' && Boolean(route().id);
   const pickerRequired = () => needsWorkspacePicker(route()) && !packageFilesRoute();
   const detailWorkspaceId = () => route().dest === 'workspaces' ? route().id : requiresWorkspace(route().dest) && !packageFilesRoute() ? route().ws : undefined;
