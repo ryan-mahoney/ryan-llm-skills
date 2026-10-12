@@ -1,21 +1,19 @@
 import { For, Show, Switch, Match, createSignal, createMemo, createEffect, on, onMount, onCleanup } from 'solid-js';
 import { getJson, postJson } from './api';
-import { str, base, time, activeRun, attention, setClock, tickClock, stale, statusMarkdown } from './format';
+import { str, base, time, activeRun, attention, setClock, tickClock, serverNow, stale, statusMarkdown } from './format';
 import { normalizeEnvelope, authoritativeObservers, collectRecords, collectAssignments, collectEpics, type Envelope, type WireRecord } from './model';
-import Threads from './Threads';
-import Files from './Files';
-import Designs from './Designs';
 import Shell from './Shell';
-import { EmptyState, MasterDetail, type StatusTone } from './primitives';
+import type { StatusTone } from './primitives';
 import { parseHash, subscribeRoute, navigate, routeHistoryMode, type Destination, type RouteState } from './route';
 import { clearIncompatibleFields, firstUnmatchedTargetId, inWorkspaceScope, needsWorkspacePicker, requiresWorkspace, scopeLabel, withWorkspace, type CatalogEntry } from './scope';
 import { destinationEntries, type DestinationProps } from './destinations';
+import { WorkspacePicker } from './destinations/workspaces';
 
 type Filter = 'active' | 'attention' | 'completed';
 type Catalog = { storage?: WireRecord; valid: CatalogEntry[]; invalid?: WireRecord[]; errors?: WireRecord[] };
 const liveBrowser = () => location.protocol !== 'file:';
 
-const registry = destinationEntries(WorkspacesCompat);
+const registry = destinationEntries();
 const [SpecsAdapter, EpicsAdapter, AgentsAdapter, ConversationsAdapter, FilesAdapter, DesignsAdapter, WorkspacesAdapter] = registry.map(entry => entry.render);
 const primaryNav = registry.filter(entry => entry.nav === 'primary').sort((a, b) => a.order - b.order).map(entry => ({ dest: entry.dest, label: entry.label }));
 const directoryNav = registry.filter(entry => entry.nav === 'directory').sort((a, b) => a.order - b.order).map(entry => ({ dest: entry.dest, label: entry.label }));
@@ -30,6 +28,10 @@ export default function App() {
   const [catalogError, setCatalogError] = createSignal('');
   const [workspace, setWorkspace] = createSignal<WireRecord | undefined>();
   const [workspaceError, setWorkspaceError] = createSignal('');
+  const [catalogPending, setCatalogPending] = createSignal(false);
+  const [workspacePending, setWorkspacePending] = createSignal(false);
+  const [catalogLoadedAt, setCatalogLoadedAt] = createSignal<number | null>(null);
+  const [workspaceLoadedAt, setWorkspaceLoadedAt] = createSignal<number | null>(null);
   const [refreshKey, setRefreshKey] = createSignal(0);
   const [completion, setCompletion] = createSignal<WireRecord | null>(null);
   const [completionBusy, setCompletionBusy] = createSignal(false);
@@ -37,7 +39,6 @@ export default function App() {
   const [endedSessions, setEndedSessions] = createSignal<string[]>([]);
   let dialog!: HTMLDialogElement;
   let stateGeneration = 0, catalogGeneration = 0, workspaceGeneration = 0;
-  let catalogBusy = false;
   let workspaceBusyId: string | null = null;
 
   const live = () => liveBrowser() && !imported();
@@ -80,7 +81,7 @@ export default function App() {
   const crumbs = () => [scopeLabel(scopeWs(), catalogEntries(), scopeWs() ? undefined : portfolioTargetId()), title()];
   const packageFilesRoute = () => route().dest === 'files' && route().source === 'package' && Boolean(route().id);
   const pickerRequired = () => needsWorkspacePicker(route()) && !packageFilesRoute();
-  const detailWorkspaceId = () => route().dest === 'workspaces' ? route().id : requiresWorkspace(route().dest) && !packageFilesRoute() ? route().ws : undefined;
+  const detailWorkspaceId = createMemo(() => route().dest === 'workspaces' ? route().ws : requiresWorkspace(route().dest) && !packageFilesRoute() ? route().ws : undefined);
 
   function go(next: RouteState) {
     navigate(next, routeHistoryMode(route(), next));
@@ -109,7 +110,7 @@ export default function App() {
   function chooseScope(ws: string | undefined) {
     go(withWorkspace(route(), ws));
   }
-  function choosePickerWorkspace(id: string) {
+  function chooseWorkspace(id: string) {
     navigate(withWorkspace(route(), id), 'push');
   }
   function replaceId(value: string | null) {
@@ -179,14 +180,15 @@ export default function App() {
     }
   }
   async function loadCatalog() {
-    if (!live() || catalogBusy) return;
-    catalogBusy = true;
+    if (!live() || catalogPending()) return;
+    setCatalogPending(true);
     const request = ++catalogGeneration;
     try {
       const value = await getJson<Catalog>('/api/workspaces');
       if (request !== catalogGeneration || !live()) return;
       setCatalog(value);
       setCatalogError('');
+      setCatalogLoadedAt(serverNow() ?? Date.now());
       const detailId = detailWorkspaceId();
       if (detailId && !value.valid.some(workspaceEntry => workspaceEntry.id === detailId)) {
         setWorkspace(undefined);
@@ -197,22 +199,25 @@ export default function App() {
     } catch {
       if (request === catalogGeneration) setCatalogError('Could not load workspaces.');
     } finally {
-      if (request === catalogGeneration) catalogBusy = false;
+      if (request === catalogGeneration) setCatalogPending(false);
     }
   }
   async function loadWorkspace(id: string) {
     if (!live() || !id || workspaceBusyId === id) return;
     workspaceBusyId = id;
+    setWorkspacePending(true);
     const request = ++workspaceGeneration;
     try {
       const value = await getJson<WireRecord>('/api/workspace?' + new URLSearchParams({ id }));
       if (request !== workspaceGeneration || detailWorkspaceId() !== id || !live()) return;
       setWorkspace(value);
       setWorkspaceError('');
+      setWorkspaceLoadedAt(serverNow() ?? Date.now());
     } catch {
       if (request === workspaceGeneration && detailWorkspaceId() === id) setWorkspaceError('Could not load workspace. Retry to reconnect.');
     } finally {
       if (request === workspaceGeneration && workspaceBusyId === id) workspaceBusyId = null;
+      if (request === workspaceGeneration) setWorkspacePending(false);
     }
   }
   async function importSnapshot(file: File | undefined) {
@@ -223,8 +228,11 @@ export default function App() {
       stateGeneration++;
       catalogGeneration++;
       workspaceGeneration++;
-      catalogBusy = false;
       workspaceBusyId = null;
+      setCatalogPending(false);
+      setWorkspacePending(false);
+      setCatalogLoadedAt(null);
+      setWorkspaceLoadedAt(null);
       setFetching(false);
       setClock(undefined);
       setPayload(value);
@@ -289,6 +297,8 @@ export default function App() {
   createEffect(on(detailWorkspaceId, (id, previous) => {
     workspaceGeneration++;
     workspaceBusyId = null;
+    setWorkspacePending(false);
+    setWorkspaceLoadedAt(null);
     setWorkspace(undefined);
     setWorkspaceError('');
     if (id && id !== previous && live()) void loadWorkspace(id);
@@ -330,11 +340,17 @@ export default function App() {
     get storageDiagnostics() { return storageDiagnostics(); },
     get workspace() { return workspace(); },
     get workspaceError() { return workspaceError(); },
+    get catalogLoaded() { return catalog() !== null; },
+    get catalogPending() { return catalogPending(); },
+    get workspacePending() { return workspacePending(); },
+    get catalogLoadedAt() { return catalogLoadedAt(); },
+    get workspaceLoadedAt() { return workspaceLoadedAt(); },
     get token() { return token(); },
     get completionToken() { return completionToken(); },
     get completionLocalOnly() { return payload()?.completion === 'local-only'; },
     get refreshKey() { return refreshKey(); },
     refresh: () => refresh(),
+    onNavigate: go,
     onSelect: selectId,
     onQuery: setQuery,
     onFilter: setFilter,
@@ -346,7 +362,7 @@ export default function App() {
     canOpenPackageFiles,
     onRetryWorkspace: id => void loadWorkspace(id),
     onRetryCatalog: () => void loadCatalog(),
-    onChooseWorkspace: choosePickerWorkspace,
+    onChooseWorkspace: chooseWorkspace,
   };
 
   return <>
@@ -360,7 +376,9 @@ export default function App() {
       onDestination={goDestination}
       crumbs={crumbs()}
       title={title()}
-      headerActions={<button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button>}
+      headerActions={route().dest === 'workspaces'
+        ? <button class="ds-btn" type="button" aria-busy={catalogPending()} onClick={() => void loadCatalog()}>Refresh workspaces</button>
+        : <button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button>}
       connection={{ label: connectionLabel(), tone: connectionTone() }}
       observedAt={observedAt()}
       onRefresh={manualRefresh}
@@ -399,137 +417,4 @@ export default function App() {
       </form>
     </dialog>
   </>;
-}
-
-function WorkspacePicker(props: DestinationProps) {
-  return (
-    <div class="full-page">
-      <div class="flow">
-        <Show
-          when={!props.live}
-          fallback={
-            <>
-              <h2>Choose a workspace</h2>
-              <p class="section-note">This destination needs a workspace before it can load.</p>
-              <Show when={props.catalogError}>
-                <div class="empty" role="alert">
-                  <h3>Workspaces unavailable</h3>
-                  <p>{props.catalogError}</p>
-                  <button type="button" onClick={props.onRetryCatalog}>Retry</button>
-                </div>
-              </Show>
-              <div class="records">
-                <For each={props.catalog} fallback={<EmptyState title="No workspaces available" text="The catalog returned no workspaces to choose from." />}>
-                  {workspaceEntry => (
-                    <button type="button" class="run-row" data-workspace={workspaceEntry.id} onClick={() => props.onChooseWorkspace(String(workspaceEntry.id))}>
-                      <div class="flex justify-between gap-3"><span class="run-title">{workspaceEntry.name || workspaceEntry.id}</span><span class="pill muted">Workspace</span></div>
-                      <p class="summary mono">{workspaceEntry.directory}</p>
-                    </button>
-                  )}
-                </For>
-              </div>
-            </>
-          }
-        >
-          <EmptyState title="A live dashboard is required" text="Workspace destinations need the local dashboard server. Import a published snapshot to inspect other data." />
-        </Show>
-      </div>
-    </div>
-  );
-}
-
-function WorkspacesCompat(props: DestinationProps) {
-  const storage = () => props.catalogStorage;
-  const q = () => (props.route.q ?? '').trim().toLowerCase();
-  const rows = () => props.catalog.filter(workspaceEntry => !q() || [workspaceEntry.id, workspaceEntry.name, workspaceEntry.directory].some(value => str(value).toLowerCase().includes(q())));
-  return (
-    <MasterDetail
-      listLabel="Workspaces"
-      list={
-        <>
-          <div class="list-controls">
-            <label class="sr-only" for="find-record">Find workspace</label>
-            <input
-              class="ds-input"
-              id="find-record"
-              type="search"
-              placeholder="Find workspace"
-              value={props.route.q ?? ''}
-              onInput={event => props.onQuery(event.currentTarget.value)}
-            />
-          </div>
-          <div class="list-caption">{props.catalog.length} observed workspaces</div>
-          <div class="records">
-            <Show when={!props.live}>
-              <EmptyState title="Workspaces require a live dashboard" text="Start the local dashboard server or import a published snapshot to inspect other data." />
-            </Show>
-            <Show when={props.live}>
-              <Show when={storage()?.status && storage()?.status !== 'ok' || props.storageDiagnostics.length}>
-                <div class="empty warn" role="status">
-                  <h3>{storage()?.status !== 'ok' ? 'Workspace storage unavailable' : 'Workspace catalog incomplete'}</h3>
-                  <p class="small">Configured root: <span class="mono">{storage()?.root}</span></p>
-                  <p class="small">Storage status: {storage()?.status}</p>
-                  <For each={props.storageDiagnostics}>{entry => <p class="small">{entry.message}<Show when={entry.path}><br />{entry.path}</Show></p>}</For>
-                  <button type="button" onClick={props.onRetryCatalog}>Retry</button>
-                </div>
-              </Show>
-              <Show when={props.catalogError}>
-                <div class="empty" role="alert">
-                  <h3>Workspaces unavailable</h3>
-                  <p>{props.catalogError}</p>
-                  <button type="button" onClick={props.onRetryCatalog}>Retry</button>
-                </div>
-              </Show>
-              <For each={rows()} fallback={<EmptyState title={props.catalog.length ? 'No matching workspaces' : 'No workspaces'} text={props.catalog.length ? 'Change the search or clear it to see every workspace.' : 'No workspace records were returned by the catalog.'} />}>
-                {workspaceEntry => (
-                  <button type="button" class="run-row" data-workspace={workspaceEntry.id} aria-pressed={props.route.id === String(workspaceEntry.id)} onClick={() => props.onSelect(String(workspaceEntry.id))}>
-                    <div class="flex justify-between gap-3"><span class="run-title">{workspaceEntry.name || workspaceEntry.id}</span><span class="pill muted">Workspace</span></div>
-                    <p class="summary mono">{workspaceEntry.directory}</p>
-                    <For each={Array.isArray(workspaceEntry.attention) ? workspaceEntry.attention : []}>{a => <p class="small warn">{str(a)}</p>}</For>
-                  </button>
-                )}
-              </For>
-              <For each={props.catalogInvalid}>{invalidEntry => (
-                <div class="info-row">
-                  <p><strong>Invalid workspace</strong></p>
-                  <small class="mono">{str(invalidEntry.directory)}</small>
-                  <For each={Array.isArray(invalidEntry.errors) ? invalidEntry.errors : []}>{e => <small class="warn">{str(e)}</small>}</For>
-                </div>
-              )}</For>
-            </Show>
-          </div>
-        </>
-      }
-    >
-      <div class="detail-body">
-        <Show
-          when={props.route.id}
-          keyed
-          fallback={<EmptyState title={storage()?.status && storage()?.status !== 'ok' ? 'Workspace storage unavailable' : 'Select a workspace'} text="Choose a workspace to browse repositories, designs, files and discussions." />}
-        >
-          {id => <WorkspaceDetail id={id} data={props.workspace} error={props.workspaceError} retry={() => props.onRetryWorkspace(id)} token={props.token} live={props.live} refreshKey={props.refreshKey} />}
-        </Show>
-      </div>
-    </MasterDetail>
-  );
-}
-
-function Empty(props: { title: string; text?: string }) {
-  return <div class="empty"><h2>{props.title}</h2><Show when={props.text}><p>{props.text}</p></Show></div>;
-}
-
-function WorkspaceDetail(props: { id: string; data: WireRecord | undefined; error: string; retry: () => void; token?: string; live: boolean; refreshKey: number }) {
-  const [file, setFile] = createSignal<string | null>(null);
-  const material = (name: string, path: string) => <section class="section"><div class="section-head"><h3>{name}</h3><span class="small muted">{props.data?.[path]?.length ?? 0} files</span></div><For each={props.data?.[path] ?? []} fallback={<p class="small muted">No {name.toLowerCase()} recorded.</p>}>{item => <p><button onClick={() => setFile(path + '/' + (typeof item === 'string' ? item : item.name))}>{typeof item === 'string' ? item : item.name}</button></p>}</For></section>;
-  return <article class="detail"><Show when={props.error}><div class="empty warn" role="alert"><h3>Workspace unavailable</h3><p>{props.error}</p><button onClick={props.retry}>Retry workspace</button></div></Show><Show when={props.data} fallback={<Empty title="Loading workspace…" />}>
-    <div class="eyebrow">{props.id} / Workspace</div><div class="detail-title"><div><h2>{props.data?.name || props.id}</h2><p class="subtitle mono">{props.id} · {props.data?.directory}</p></div><span class="pill muted">Workspace</span></div><For each={props.data?.attention ?? []}>{a => <p class="warn">{str(a)}</p>}</For>
-    <section class="section"><div class="section-head"><h3>Repositories</h3><span class="small muted">{props.data?.repositories?.length ?? 0} recorded</span></div><For each={props.data?.repositories ?? []} fallback={<p class="small muted">No repositories recorded.</p>}>{repo => <div class="info-row"><p><strong>{repo.id}</strong> · {repo.status}</p><small class="mono">{repo.path}</small><Show when={repo.remote}><small class="mono">{repo.remote}</small></Show><Show when={repo.role}><small>Role {repo.role}</small></Show><For each={repo.attention ?? []}>{a => <small class="warn">{str(a)}</small>}</For></div>}</For></section>
-    <section class="section"><div class="section-head"><h3>Context</h3><span class="small muted">{props.data?.context?.length ?? 0} recorded</span></div><For each={props.data?.context ?? []} fallback={<p class="small muted">No context entries recorded.</p>}>{item => <div class="info-row"><p>{typeof item === 'string' ? item : item.label || item.path}</p><Show when={typeof item === 'object'}><small class="mono">{item.path} · {item.status}</small></Show></div>}</For></section>
-    {material('Briefs', 'briefs')}{material('Notes', 'notes')}
-    <section class="section"><div class="section-head"><h3>Artifacts</h3><span class="small muted">{props.data?.artifacts?.length ?? 0} records</span></div><For each={props.data?.artifacts ?? []} fallback={<p class="small muted">No artifacts recorded.</p>}>{item => <div class="info-row"><p><strong>{item.title || 'Artifact'}</strong> · {item.kind || 'unknown'} · {item.status || 'unknown'}</p><small class="mono">{item.kind === 'url' ? str(typeof item.target === 'string' ? item.target : item.target?.url) : [item.target?.repository_id, item.target?.path].filter(Boolean).join(' · ')}</small><Show when={item.note}><small>{item.note}</small></Show><Show when={item.reason}><small class="warn">{item.reason}</small></Show><Show when={item.path}><small class="mono">{item.path}</small></Show></div>}</For></section>
-    <Designs workspaceId={props.id} live={props.live} />
-    <section class="section"><h3>Kit</h3><p class="small muted mono">{props.data?.kit?.id} · {props.data?.kit?.name}</p></section>
-    <Threads workspaceId={props.id} repositories={props.data?.repositories ?? []} token={props.token} live={props.live} refreshKey={props.refreshKey} />
-    <Files source="workspace" owner={props.id} live={props.live} initialFile={file()} />
-  </Show></article>;
 }

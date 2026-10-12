@@ -139,10 +139,10 @@ export default function Shell(props: ShellProps) {
           <div class="scope">
             <label for={scopeId}>Workspace</label>
             <select id={scopeId} aria-label="Workspace scope" value={props.scope ?? ''} onChange={onScopeInput}>
-              <option value="">All workspaces</option>
-              <For each={props.workspaceOptions}>{option => <option value={option.id}>{option.label}</option>}</For>
+              <option value="" selected={!props.scope}>All workspaces</option>
+              <For each={props.workspaceOptions}>{option => <option value={option.id} selected={String(option.id) === (props.scope ?? '')}>{option.label}</option>}</For>
               <Show when={scopeMissing()}>
-                <option value={props.scope ?? ''}>{props.scope}</option>
+                <option value={props.scope ?? ''} selected>{props.scope}</option>
               </Show>
             </select>
           </div>

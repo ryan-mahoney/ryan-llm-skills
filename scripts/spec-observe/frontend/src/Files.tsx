@@ -5,7 +5,7 @@ import { esc, statusMarkdown } from './format';
 type FileEntry = { name: string; available: boolean; size?: number; reason?: string };
 type Listing = { files: FileEntry[]; next_cursor?: string | number | null; truncated?: boolean; errors?: { name: string; message: string }[] };
 type LoadedFile = { kind: string; text: string | null };
-type Props = { source: 'workspace' | 'package'; owner: string; live: boolean; initialFile?: string | null; recentCompletion?: boolean; onOpen?: () => void };
+type Props = { source: 'workspace' | 'package'; owner: string; live: boolean; initialFile?: string | null; pathPrefix?: string; recentCompletion?: boolean; onOpen?: () => void };
 
 const params = (values: Record<string, string | number | undefined>) => new URLSearchParams(Object.entries(values).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)]));
 const fileApi = (source: Props['source'], owner: string, name: string, download = false) => source === 'workspace'
@@ -68,6 +68,9 @@ export default function Files(props: Props) {
   createEffect(on(() => [props.source, props.owner, props.initialFile] as const, ([, , requested]) => {
     if (requested && requested !== untrack(selected)) { setSelected(requested); setLoaded(null); setFileError(''); }
   }));
+  createEffect(on(() => props.pathPrefix, (prefix, previous) => {
+    if (prefix && prefix !== previous) { setSelected(''); setLoaded(null); setFileError(''); }
+  }));
   createEffect(() => {
     const name = selected(); const owner = ownerKey();
     if (!name) return;
@@ -113,14 +116,19 @@ export default function Files(props: Props) {
     return <pre style={{ 'white-space': 'pre-wrap', 'overflow-wrap': 'anywhere' }}>{value}</pre>;
   });
 
+  const visibleFiles = (files: FileEntry[]) => {
+    const prefix = props.pathPrefix ?? '';
+    return prefix ? files.filter(file => file.name.startsWith(prefix)) : files;
+  };
+
   return <section class="section" aria-labelledby="files-heading">
     <div class="section-head"><h3 id="files-heading">Files</h3><span class="small muted">Read-only</span><button type="button" onClick={() => { setRefreshVersion(v => v + 1); }}>Refresh files</button></div>
     <Show when={!props.live}><p class="small muted">{props.source === 'workspace' ? 'Workspace files require a live local dashboard server.' : 'Package files require a live published package on the local dashboard server.'}</p></Show>
     <Show when={listError()}><p class="warn" role="status">{listError()}</p></Show>
     <Show when={loadingList() && !listing()}><p class="small muted">Loading files…</p></Show>
     <Show when={listing()} keyed>{data => <div class="files-list">
-      <Show when={data.files.length > 0} fallback={<p class="small muted">No {props.source} files found.</p>}>
-        <For each={data.files}>{file => <p class="info-row">{file.available
+      <Show when={visibleFiles(data.files).length > 0} fallback={<p class="small muted">{props.pathPrefix ? 'No loaded files in this selection.' : `No ${props.source} files found.`}</p>}>
+        <For each={visibleFiles(data.files)}>{file => <p class="info-row">{file.available
           ? <><button type="button" aria-pressed={selected() === file.name} onClick={() => { setSelected(file.name); props.onOpen?.(); }}>{file.name}</button> <span class="small muted">{file.size ?? 0} bytes</span></>
           : <>{file.name} · {file.reason || 'Unavailable'}</>}</p>}</For>
       </Show>

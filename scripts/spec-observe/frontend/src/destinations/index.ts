@@ -8,6 +8,7 @@ import AgentsDestination from './agents';
 import ConversationsDestination from './conversations';
 import FilesDestination from './files';
 import DesignsDestination from './designs';
+import { WorkspacesDestination } from './workspaces';
 
 export type DestinationProps = {
   route: RouteState;
@@ -30,6 +31,12 @@ export type DestinationProps = {
   completionLocalOnly?: boolean;
   refreshKey: number;
   refresh: () => Promise<void>;
+  onNavigate: (next: RouteState) => void;
+  catalogLoaded: boolean;
+  catalogPending: boolean;
+  workspacePending: boolean;
+  catalogLoadedAt: number | null;
+  workspaceLoadedAt: number | null;
   onSelect: (id: string) => void;
   onQuery: (value: string) => void;
   onFilter: (value: string) => void;
@@ -58,7 +65,7 @@ export type DestinationEntry = {
 // destinations therefore start at 10 and continue in tens through 60.
 // Workspaces takes 70 and order 80 is reserved for the unrendered Models
 // entry. Reserved orders add no controls in this packet.
-export function destinationEntries(workspaces: Component<DestinationProps>): DestinationEntry[] {
+export function destinationEntries(): DestinationEntry[] {
   return [
     { dest: 'specs', label: 'Specs', order: 10, nav: 'primary', render: SpecsDestination },
     { dest: 'epics', label: 'Epics', order: 20, nav: 'primary', render: EpicsDestination },
@@ -66,6 +73,6 @@ export function destinationEntries(workspaces: Component<DestinationProps>): Des
     { dest: 'conversations', label: 'Conversations', order: 40, nav: 'primary', render: ConversationsDestination },
     { dest: 'files', label: 'Files', order: 50, nav: 'primary', render: FilesDestination },
     { dest: 'designs', label: 'Designs', order: 60, nav: 'primary', render: DesignsDestination },
-    { dest: 'workspaces', label: 'Workspaces', order: 70, nav: 'directory', render: workspaces },
+    { dest: 'workspaces', label: 'Workspaces', order: 70, nav: 'directory', render: WorkspacesDestination },
   ];
 }

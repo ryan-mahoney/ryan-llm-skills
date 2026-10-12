@@ -110,3 +110,11 @@
    despite the legacy input[type=search] rule loaded before this sheet. */
 .list-controls input.ds-input[type=search]{background:var(--ds-panel-2);border:1px solid var(--ds-input-border);border-radius:3px;color:var(--ds-ink);height:44px}
 .filter-strip button{border-radius:0}
+
+/* Workspace-owned directory and picker: keep the record row chrome from the
+   legacy button reset without outranking .record:hover/.record.selected, and
+   render route actions as reference links. The destination wrapper is
+   layout-neutral so the shell grid keeps the same children. */
+.workspace-destination{display:contents}
+:where(.workspace-destination, .workspace-picker) .record{width:100%;border:0;border-bottom:1px solid var(--ds-line);border-radius:0;background:none;text-align:left;font:inherit}
+:where(.workspace-destination, .workspace-picker) .text-link{background:none;border:0;border-radius:0;padding:0;color:var(--ds-accent-text);min-height:44px}
