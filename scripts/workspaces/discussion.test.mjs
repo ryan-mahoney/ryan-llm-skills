@@ -3684,6 +3684,13 @@ test("thread handoff preview matches the canonical assignment resolution", async
   const piPath = join(binDirectory, "pi");
   await writeFile(piPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   await chmod(piPath, 0o755);
+  // Fixed wrapper names for harness resolution through PATH; no pi_path is
+  // accepted from the handoff request.
+  for (const name of ["clauded", "codexd"]) {
+    const wrapper = join(binDirectory, name);
+    await writeFile(wrapper, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    await chmod(wrapper, 0o755);
+  }
   const savedPath = process.env.PATH;
   process.env.PATH = `${binDirectory}${delimiter}${savedPath}`;
   t.after(() => {
@@ -3729,6 +3736,7 @@ test("thread handoff preview matches the canonical assignment resolution", async
     assert.deepEqual(preview.briefBytes, oracle.briefBytes);
     assert.equal(preview.record.assignment_id, assignmentId);
     assert.equal(preview.record.workspace_id, "alpha");
+    assert.equal(preview.record.harness, "pi");
     assert.equal(preview.record.brief, saved.brief);
     assert.equal(preview.record.execution_dir, thread.execution_dir);
     assert.equal(preview.record.brief_sha256, oracle.record.brief_sha256);
@@ -3746,7 +3754,7 @@ test("thread handoff preview matches the canonical assignment resolution", async
       }),
       { code: "brief-not-found" },
     );
-    for (const override of ["root", "brief", "target", "adapters"]) {
+    for (const override of ["pi_path", "root", "brief", "target", "adapters"]) {
       await assert.rejects(
         service.previewAssignment({
           workspace_id: "alpha",
@@ -3792,6 +3800,234 @@ test("thread handoff preview matches the canonical assignment resolution", async
       child.stdout.destroy();
       child.stderr.destroy();
     }
+  }
+});
+
+test("thread handoff harness preview preserves claude and codex enum settings", { timeout: 30000 }, async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const workspaceDirectory = await setupWorkspace(storageRoot, "alpha");
+  const binDirectory = join(root, "bin");
+  await mkdir(binDirectory, { recursive: true });
+  for (const name of ["pi", "clauded", "codexd"]) {
+    const executable = join(binDirectory, name);
+    await writeFile(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    await chmod(executable, 0o755);
+  }
+  const savedPath = process.env.PATH;
+  process.env.PATH = `${binDirectory}${delimiter}${savedPath}`;
+  t.after(() => {
+    if (savedPath === undefined) delete process.env.PATH;
+    else process.env.PATH = savedPath;
+  });
+
+  const dummy = dummyProcess(t);
+  const tmux = tmuxHarness({ dummyPid: dummy.pid });
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    assignmentAdapters: {
+      tmuxRun: tmux.run,
+      observationProbes: {
+        tmuxRun: tmux.run,
+        psRun: () => ({ stdout: "", complete: true }),
+      },
+    },
+  });
+  try {
+    const thread = await service.create({ workspace_id: "alpha", title: "Harness preview" });
+    const requestId = randomUUID();
+    const saved = await service.saveBrief({
+      workspace_id: "alpha",
+      thread_id: thread.thread_id,
+      request_id: requestId,
+      title: "Title",
+      content: "body\n",
+    });
+    const instructions = "Deliver the harness handoff.";
+    const expectedPrompt = (id) =>
+      `Read the assignment brief at ${join(workspaceDirectory, "assignments", `${id}.brief.md`)}.\n\n` +
+      "Perform the following request:\n\nDeliver the harness handoff.\n\n" +
+      `Assignment ${id} workspace alpha dir ${thread.execution_dir}. ` +
+      "Publication authority: none (grants no merge/deploy).";
+
+    const previews = [
+      {
+        harness: "claude",
+        model: "opus",
+        thinking: "high",
+        executable: "clauded",
+        argv: (id) => [
+          "--session-id", id,
+          "--model=opus",
+          "--effort", "high",
+          expectedPrompt(id),
+        ],
+      },
+      {
+        harness: "codex",
+        thinking: "ultra",
+        executable: "codexd",
+        argv: (id) => [
+          "-c", 'model_reasoning_effort="ultra"',
+          expectedPrompt(id),
+        ],
+      },
+    ];
+    for (const item of previews) {
+      const assignmentId = randomUUID();
+      const request = {
+        workspace_id: "alpha",
+        thread_id: thread.thread_id,
+        request_id: requestId,
+        assignment_id: assignmentId,
+        instructions,
+        harness: item.harness,
+        ...(item.model === undefined ? {} : { model: item.model }),
+        ...(item.thinking === undefined ? {} : { thinking: item.thinking }),
+      };
+      const preview = await service.previewAssignment(request);
+      assert.equal(preview.record.harness, item.harness);
+      assert.equal(preview.record.provider, null);
+      assert.equal(preview.record.project_trust, null);
+      assert.equal(preview.record.model, item.model ?? null);
+      assert.equal(preview.record.thinking, item.thinking ?? null);
+      assert.equal(preview.record.pi_path, join(binDirectory, item.executable));
+      assert.equal(preview.record.execution_dir, thread.execution_dir);
+      assert.deepEqual(preview.piArgs, item.argv(assignmentId));
+
+      // Independent contract oracle through the imported resolver: the
+      // expected argv above is not derived from this result.
+      const oracle = await resolveAssignment({
+        storageRoot,
+        workspace_id: "alpha",
+        assignment_id: assignmentId,
+        brief: saved.brief,
+        instructions,
+        skill: "general",
+        target: null,
+        harness: item.harness,
+        ...(item.model === undefined ? {} : { model: item.model }),
+        ...(item.thinking === undefined ? {} : { thinking: item.thinking }),
+      });
+      assert.equal(preview.contractDigest, oracle.contractDigest);
+    }
+
+    // A real launch through the service: the imported launchAssignmentOwner
+    // stays concrete and only the final tmux transport is substituted.
+    const assignmentId = randomUUID();
+    const launchRequest = {
+      workspace_id: "alpha",
+      thread_id: thread.thread_id,
+      request_id: requestId,
+      assignment_id: assignmentId,
+      instructions,
+      harness: "claude",
+      model: "opus",
+      thinking: "high",
+    };
+    const preview = await service.previewAssignment(launchRequest);
+    const launched = await service.launchAssignment({
+      ...launchRequest,
+      expectedDigest: preview.contractDigest,
+    });
+    assert.equal(launched.assignment.harness, "claude");
+    assert.equal(launched.assignment.model, "opus");
+    assert.equal(launched.assignment.thinking, "high");
+    assert.equal(launched.assignment.state, "live");
+    assert.equal(launched.assignment.pi_identity.pid, dummy.pid);
+    assert.equal(launched.observation.state, "live");
+    assert.equal(tmux.newSessionCount(), 1);
+    const newSession = tmux.calls.find((call) => call.args.includes("new-session"));
+    assert.ok(newSession, "the final tmux transport saw one new-session");
+    const separator = newSession.args.indexOf("--");
+    const terminator = newSession.args.indexOf(";", separator + 1);
+    const launchedArgv = newSession.args.slice(separator + 1, terminator);
+    assert.equal(launchedArgv[0], join(binDirectory, "clauded"));
+    assert.deepEqual(launchedArgv.slice(1), preview.piArgs);
+    assert.equal(launchedArgv[launchedArgv.length - 1], expectedPrompt(assignmentId));
+    const stored = await findAssignment(storageRoot, assignmentId);
+    assert.equal(stored.harness, "claude");
+    assert.equal(stored.model, "opus");
+    assert.equal(stored.thinking, "high");
+  } finally {
+    await service.close();
+  }
+  assert.equal(tmux.newSessionCount(), 1);
+  assert.equal(tmux.destructiveCount(), 0);
+});
+
+test("thread handoff harness stale preview changes only harness", { timeout: 30000 }, async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const workspaceDirectory = await setupWorkspace(storageRoot, "alpha");
+  const binDirectory = join(root, "bin");
+  await mkdir(binDirectory, { recursive: true });
+  for (const name of ["pi", "clauded", "codexd"]) {
+    const executable = join(binDirectory, name);
+    await writeFile(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    await chmod(executable, 0o755);
+  }
+  const savedPath = process.env.PATH;
+  process.env.PATH = `${binDirectory}${delimiter}${savedPath}`;
+  t.after(() => {
+    if (savedPath === undefined) delete process.env.PATH;
+    else process.env.PATH = savedPath;
+  });
+
+  const tmux = tmuxHarness();
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    assignmentAdapters: { tmuxRun: tmux.run },
+  });
+  try {
+    const thread = await service.create({ workspace_id: "alpha", title: "Harness stale" });
+    const requestId = randomUUID();
+    const assignmentId = randomUUID();
+    const instructions = "Deliver the harness handoff.";
+    await service.saveBrief({
+      workspace_id: "alpha",
+      thread_id: thread.thread_id,
+      request_id: requestId,
+      title: "Title",
+      content: "body\n",
+    });
+    const preview = await service.previewAssignment({
+      workspace_id: "alpha",
+      thread_id: thread.thread_id,
+      request_id: requestId,
+      assignment_id: assignmentId,
+      instructions,
+      harness: "claude",
+      model: "opus",
+      thinking: "high",
+    });
+    assert.equal(preview.record.harness, "claude");
+
+    // Same assignment, brief and settings except the harness enum: the old
+    // digest is stale and the process boundary is never reached.
+    await assert.rejects(
+      service.launchAssignment({
+        workspace_id: "alpha",
+        thread_id: thread.thread_id,
+        request_id: requestId,
+        assignment_id: assignmentId,
+        expectedDigest: preview.contractDigest,
+        instructions,
+        harness: "codex",
+        model: "opus",
+        thinking: "high",
+      }),
+      { code: "stale-preview" },
+    );
+    assert.equal(tmux.calls.length, 0);
+    await assert.rejects(lstat(join(workspaceDirectory, "assignments")), { code: "ENOENT" });
+    await assert.rejects(lstat(join(storageRoot, ".sentinel")), { code: "ENOENT" });
+  } finally {
+    await service.close();
   }
 });
 
