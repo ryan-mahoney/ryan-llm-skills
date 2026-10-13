@@ -424,7 +424,13 @@ def capture_visual(url, thread1, thread2):
     expect(page.locator('[data-thread][aria-pressed="true"]')).to_have_count(1)
     expect(page.locator('[data-thread="' + thread1 + '"]')).to_have_attribute('aria-pressed', 'true')
     expect(page.locator('.object-head h2')).to_have_text('Discussion one')
+    expect(page.locator('.object-head h2')).to_have_attribute('tabindex', '-1')
     expect(page.locator('.thread-meta')).to_contain_text('Thread ' + thread1)
+    # F1: the selected thread's recorded execution target renders in the
+    # header against independent fixture facts (thread1 is repository
+    # fixture-repo); the workspace scope stays visible separately.
+    expect(page.locator('.thread-meta')).to_contain_text('Repository fixture-repo')
+    expect(page.locator('.thread-meta')).to_contain_text('fixture')
     expect(page.locator('.thread-transcript')).to_contain_text('Ready to discuss.')
     headings = page.evaluate("""() => {
       const shell = document.querySelector('.page-head h1');
@@ -445,17 +451,47 @@ def capture_visual(url, thread1, thread2):
     passed('journey ideal: Threads/list, exact selected title/meta/transcript and Shell/detail heading precedence')
 
     # 2. Keyboard operation keeps the native row contract: Enter selects B,
-    #    Space returns to A, and aria-pressed follows the route.
+    #    Space returns to A, and aria-pressed follows the route. F2: ordinary
+    #    selection moves actual focus to the selected title once (activeElement
+    #    is the detail h2, not the list row); a steady delta never steals it.
     page.locator('[data-thread="' + thread2 + '"]').focus()
     page.keyboard.press('Enter')
     expect(page).to_have_url(re.compile(r'#/conversations\?ws=fixture&id=' + re.escape(thread2)))
     expect(page.locator('[data-thread="' + thread2 + '"]')).to_have_attribute('aria-pressed', 'true')
     expect(page.locator('#thread-draft')).to_be_visible()
+    expect(page.locator('.object-head h2')).to_have_text('Discussion two')
+    expect(page.locator('.object-head h2')).to_be_focused()
+    assert page.evaluate("() => document.activeElement === document.querySelector('.object-head h2')"), 'ordinary selection did not focus the selected title'
+    # F1 workspace fact: thread2 records a workspace target.
+    expect(page.locator('.thread-meta')).to_contain_text('Workspace discussion')
+    expect(page.locator('.thread-meta')).to_contain_text('Thread ' + thread2)
+    # Steady delta keeps title focus instead of stealing it elsewhere.
+    control('delta')
+    page.wait_for_timeout(300)
+    expect(page.locator('.object-head h2')).to_be_focused()
     page.locator('[data-thread="' + thread1 + '"]').focus()
     page.keyboard.press(' ')
     expect(page).to_have_url(re.compile(r'#/conversations\?ws=fixture&id=' + re.escape(thread1)))
     expect(page.locator('[data-thread="' + thread1 + '"]')).to_have_attribute('aria-pressed', 'true')
+    expect(page.locator('.object-head h2')).to_have_text('Discussion one')
+    expect(page.locator('.object-head h2')).to_be_focused()
+    assert page.evaluate("() => document.activeElement === document.querySelector('.object-head h2')"), 'return selection did not focus the selected title'
+    # F1 worktree fact: thread3 records the fixture docs-checkout path.
+    thread3 = fixture_info.get('thread3')
+    worktree_target = fixture_info.get('worktreeTarget')
+    assert thread3 and worktree_target, (thread3, worktree_target)
+    page.goto(url + '/#/conversations?ws=fixture&id=' + thread3, wait_until='domcontentloaded')
+    expect(page.locator('.object-head h2')).to_have_text('Discussion worktree')
+    expect(page.locator('.thread-meta')).to_contain_text('Thread ' + thread3)
+    expect(page.locator('.thread-meta')).to_contain_text('Worktree')
+    assert worktree_target in page.locator('.thread-meta').inner_text(), page.locator('.thread-meta').inner_text()
+    # Return to thread1 for the populated-transcript phases below.
+    page.goto(url + '/#/conversations?ws=fixture&id=' + thread1, wait_until='domcontentloaded')
+    draft = page.locator('#thread-draft')
+    draft.wait_for()
     passed('journey ideal: row keyboard operation keeps the aria-pressed selection and route identity')
+    passed('journey ideal: ordinary selection focuses the selected title; steady delta keeps it')
+    passed('journey ideal: header shows recorded repository/workspace/worktree targets')
 
     # 3. Populated 48-entry transcript: the latest turn is visible above the
     #    stable composer, and a live delta keeps the same composer node.

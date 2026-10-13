@@ -749,6 +749,10 @@ def run_thread(browser, url, thread1, thread2):
             expect(page).to_have_url(re.compile(r'#/conversations\?ws=fixture&id=' + re.escape(thread1)))
             draft = page.locator('#thread-draft')
             expect(draft).not_to_have_value('')
+            # F2 seed precedence: the prepared-seed selection focuses the
+            # exact composer, not the selected title.
+            expect(draft).to_be_focused()
+            assert page.evaluate("() => document.activeElement === document.querySelector('#thread-draft')"), 'prepared seed did not focus the composer'
             seeded = draft.input_value()
             assert seeded.startswith('Assignment '), seeded
             assert len(posts('send')) == sends_before

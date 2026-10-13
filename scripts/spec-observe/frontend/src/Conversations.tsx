@@ -88,6 +88,12 @@ export default function Conversations(props: Props) {
   let stickBottom = true;
   let draftEl: HTMLTextAreaElement | undefined;
   let transcriptEl: HTMLDivElement | undefined;
+  let titleEl: HTMLHeadingElement | undefined;
+  // Detail focus ownership: the first successful materialization (initial page
+  // load) never steals focus; later id changes move focus to the selected
+  // title once, unless the explicit seed composer or creation composer wins.
+  let hasMaterialized = false;
+  let creationPendingId = '';
   const [announcer, setAnnouncer] = createSignal('');
   const wsId = () => props.route.ws ?? '';
   const routeId = () => props.route.id ?? '';
@@ -139,6 +145,9 @@ export default function Conversations(props: Props) {
   }
   function materialize(ws: string, id: string) {
     if (!ws || !id || (projectedWs === ws && projectedId === id)) return;
+    const isFirst = !hasMaterialized;
+    const isCreation = creationPendingId !== '' && creationPendingId === id;
+    if (isCreation) creationPendingId = '';
     persistScroll();
     projectedWs = ws; projectedId = id;
     projectionEpoch++;
@@ -150,6 +159,7 @@ export default function Conversations(props: Props) {
     rememberConversationId(ws, id);
     // The one-use result seed applies only to the exact requested thread; a
     // missing thread never seeds an unrelated fallback selection.
+    let seedFocused = false;
     if (id === routeId()) {
       const seed = consumeThreadDraft(ws, id);
       if (seed) {
@@ -158,13 +168,33 @@ export default function Conversations(props: Props) {
         announce('Result draft prepared. Review the message before sending.');
         // The seed stays unsent: focus the exact rendered composer once,
         // guarded by the unchanged ws/id/epoch so an intervening projection
-        // switch cannot steal focus.
+        // switch cannot steal focus. Seed composer focus wins over the generic
+        // selected-title focus below.
         const seedEpoch = projectionEpoch;
+        seedFocused = true;
         queueMicrotask(() => {
           if (draftEl && projectedWs === ws && projectedId === id && projectionEpoch === seedEpoch) draftEl.focus({ preventScroll: true });
         });
       }
     }
+    if (!seedFocused && isCreation) {
+      // Inline creation owns the created id: the empty composer wins over the
+      // generic selected-title focus, matching the later dialog creation
+      // precedence without stealing a newer route.
+      const createEpoch = projectionEpoch;
+      queueMicrotask(() => {
+        if (draftEl && projectedWs === ws && projectedId === id && projectionEpoch === createEpoch) draftEl.focus({ preventScroll: true });
+      });
+    } else if (!seedFocused && !isCreation && !isFirst) {
+      // Ordinary keyboard/row selection moves focus once to the selected
+      // title. Steady polls never reach materialize for the same key, so they
+      // cannot steal focus through this path.
+      const titleEpoch = projectionEpoch;
+      queueMicrotask(() => {
+        if (titleEl && projectedWs === ws && projectedId === id && projectionEpoch === titleEpoch) titleEl.focus({ preventScroll: true });
+      });
+    }
+    hasMaterialized = true;
     void loadHistory();
     openEvents();
   }
@@ -291,7 +321,10 @@ export default function Conversations(props: Props) {
       setThreads(prev => [record, ...(prev || []).filter(t => t.thread_id !== record.thread_id)]);
       setTarget('');
       // Creation success owns the created id: navigate to it so the projection
-      // materializes it (the inline new-thread UI stays for step 5).
+      // materializes it (the inline new-thread UI stays for step 5). Record
+      // the created id so materialize gives the empty composer precedence
+      // over the generic selected-title focus.
+      creationPendingId = record.thread_id;
       props.onNavigate({ ...props.route, dest: 'conversations', id: record.thread_id });
       announce('Thread created. It is named after your first message.');
       void loadList();
@@ -478,8 +511,8 @@ export default function Conversations(props: Props) {
       <Show when={active()} fallback={<EmptyState title="Threads require the live dashboard" text="Open the host dashboard to browse discussions. Imported snapshots and file pages cannot reach discussions." />}>
         <Show when={thread()} fallback={<Show when={requestedMissing()} fallback={<EmptyState title="No thread selected" text="Select a thread to read its transcript and compose a message." />}><div class="ds-callout error" id="thread-requested-unavailable" role="status"><div><p>Requested thread {routeId()} is unavailable.</p><p class="small muted">It is not in this workspace's thread list, so nothing was selected, seeded or launched.</p></div></div></Show>}>
           <div class="object-head">
-            <div class="object-top detail-title"><h2>{thread()?.title || `Thread ${routeId().slice(0, 8)}`}</h2><StatusText tone={statusTone(state())}>{label(state())}</StatusText></div>
-            <p class="small muted mono thread-meta">Runs in {workspaceName()} · Thread {routeId()}{thread()?.generation != null ? ` · generation ${thread()?.generation}` : ''}{thread()?.updated_at ? ` · updated ${time(thread()?.updated_at)} ` : ''}</p>
+            <div class="object-top detail-title"><h2 tabindex="-1" ref={el => (titleEl = el)}>{thread()?.title || `Thread ${routeId().slice(0, 8)}`}</h2><StatusText tone={statusTone(state())}>{label(state())}</StatusText></div>
+            <p class="small muted mono thread-meta">Runs in {targetDescription(thread())} · {workspaceName()} · Thread {routeId()}{thread()?.generation != null ? ` · generation ${thread()?.generation}` : ''}{thread()?.updated_at ? ` · updated ${time(thread()?.updated_at)} ` : ''}</p>
           </div>
           <Show when={help()[1]}><StateNotice tone={noticeTone(help()[2])} title={help()[0]}>{help()[1]}</StateNotice></Show>
           <Show when={historyError()}><div class="ds-callout error" role="alert"><div><p>{historyError()}</p></div><button id="thread-error-retry" type="button" class="ds-btn" onClick={() => { setHistoryError(''); void loadHistory(); }}>Retry</button></div></Show>
