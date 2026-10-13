@@ -364,7 +364,8 @@ const baseCheckpoint = (packagePath, over = {}) => ({
   ...over,
 });
 
-test('sentinel checkpoint: obligation_revision stays stable despite changed valid artifact hashes', t => {
+// node --test --test-name-pattern='intended card edits' pi/extensions/spec-runtime/sentinel.test.mjs
+test('sentinel checkpoint: intended card edits retain obligation identity and ignore legacy sha256', t => {
   const { packagePath } = canonicalFixture(t);
   const a1 = artifact(packagePath, 'a.md', 'one');
   const first = recordCheckpoint(baseCheckpoint(packagePath, { obligation: { key: 'impl:s1', stage: 'implementation', summary: 'work', artifacts: [a1] } }));
@@ -372,14 +373,19 @@ test('sentinel checkpoint: obligation_revision stays stable despite changed vali
   assert.equal(first.receipt, 'created');
   const stable = first.obligation_revision;
   assert.equal(stable, first.obligation_revision);
-  // Recompute a fresh artifact with different content/hash, same stable key.
-  const a2 = artifact(packagePath, 'a.md', 'one-changed');
+  // The prepared card changes while a persisted legacy hash remains stale.
+  writeFileSync(join(packagePath, 'a.md'), 'one-changed');
+  const legacy = readCheckpointRecord(packagePath, 'wf-1');
+  legacy.obligation.artifacts = [a1];
+  writeFileSync(checkpointPath(packagePath, 'wf-1'), JSON.stringify(legacy));
+  assert.equal(readCheckpointRecord(packagePath, 'wf-1').obligation.artifacts[0].sha256, a1.sha256);
   const second = recordCheckpoint(baseCheckpoint(packagePath, {
     expected_revision: 1,
-    obligation: { key: 'impl:s1', stage: 'implementation', summary: 'work', artifacts: [a2] },
+    obligation: { key: 'impl:s1', stage: 'implementation', summary: 'work', artifacts: [{ path: 'a.md', sha256: 'legacy-ignored' }] },
   }));
   assert.equal(second.revision, 2);
   assert.equal(second.obligation_revision, stable, 'obligation_revision depends only on workflow ID + key');
+  assert.deepEqual(second.obligation.artifacts, [{ path: 'a.md' }]);
   // A different stable key derives a new obligation revision.
   const third = recordCheckpoint(baseCheckpoint(packagePath, {
     expected_revision: 2,
@@ -415,13 +421,17 @@ test('sentinel checkpoint: a second coordinator or conflicting checkout is an ow
     /requires expected_revision 0/);
 });
 
-test('sentinel checkpoint: artifact refusal rejects oversize, hash mismatch, symlink and outside paths', t => {
+// node --test --test-name-pattern='artifact paths' pi/extensions/spec-runtime/sentinel.test.mjs
+test('sentinel checkpoint: artifact paths accept hashless cards and reject oversize, missing, symlink and outside paths', t => {
   const { packagePath, repo } = canonicalFixture(t);
   const good = artifact(packagePath, 'ok.md', 'fine');
-  const badHash = { path: 'ok.md', sha256: 'f'.repeat(64) };
+  const created = recordCheckpoint(baseCheckpoint(packagePath, {
+    workflow_id: 'wf-ok', obligation: { key: 'k', stage: 's', summary: 'x', artifacts: [{ path: 'ok.md' }] },
+  }));
+  assert.deepEqual(created.obligation.artifacts, [{ path: 'ok.md' }]);
   assert.throws(() => recordCheckpoint(baseCheckpoint(packagePath, {
-    workflow_id: 'wf-h1', obligation: { key: 'k', stage: 's', summary: 'x', artifacts: [badHash] },
-  })), /sha256 mismatch/);
+    workflow_id: 'wf-h1', obligation: { key: 'k', stage: 's', summary: 'x', artifacts: [{ path: 'missing.md' }] },
+  })), /unreadable/);
 
   const big = artifact(packagePath, 'big.md', 'x'.repeat(65 * 1024));
   assert.throws(() => recordCheckpoint(baseCheckpoint(packagePath, {
@@ -788,6 +798,20 @@ test('sentinel checkpoint: a completed owner return becomes a reconcile obligati
   const stored = readCheckpointRecord(packagePath, 'wf-rec');
   assert.equal(stored.obligation.key, 'reconcile:assign-1');
   assert.notEqual(stored.state, 'complete');
+});
+
+// node --test --test-name-pattern='long assignment identity' pi/extensions/spec-runtime/sentinel.test.mjs
+test('sentinel checkpoint: reconciliation retains long assignment identity within summary bounds', t => {
+  const { packagePath } = canonicalFixture(t);
+  const assignmentId = 'a'.repeat(128);
+  recordCheckpoint(baseCheckpoint(packagePath, { workers: [{ id: assignmentId, kind: 'owner', state: 'working' }] }));
+  const returned = reconcileRuntimeReturn({ package: packagePath, workflow_id: 'wf-1', expected_revision: 1,
+    assignment_id: assignmentId, return_state: 'completed', workers: [{ id: assignmentId, kind: 'owner', state: 'working' }],
+    ...coordinator, now: () => FIXED });
+  assert.ok(returned.obligation.summary.length <= 160);
+  assert.ok(returned.obligation.summary.includes(assignmentId));
+  assert.equal(returned.obligation.key, `reconcile:${assignmentId}`);
+  assert.equal(returned.workers.find(worker => worker.id === assignmentId).state, 'complete');
 });
 
 test('sentinel checkpoint: non-completed returns stay blocked/unknown and active workers remain vetoes', t => {
@@ -1760,14 +1784,16 @@ test('sentinel diagnosis: packet coverage marks each initial cap and value trunc
   const incident = diagnosisIncident('/pkg');
   const build = (checkpoint, record = null) => buildDiagnosisPacket({ incident, record, checkpoint, policy: null });
   const item = (id, state) => ({ id, sha256: id[0].repeat(64), state });
-  // 17 supported artifacts with every other collection below its cap.
+  // Artifacts contribute their count, not obsolete content hashes or private paths.
   const artifactsPacket = build({ obligation: { key: 'impl:key', stage: 'implementation',
     artifacts: Array.from({ length: 17 }, (_, i) => ({ path: `a-${i}.md`, sha256: String(i).repeat(64) })) } });
-  assert.equal(artifactsPacket.packet.facts.filter(fact => fact.id.startsWith('artifact.')).length, 16);
-  assert.equal(artifactsPacket.packet.facts.some(fact => fact.id === 'artifact.16.sha256'), false);
-  assert.deepEqual(artifactsPacket.packet.coverage.omitted, ['artifact-hashes']);
-  assert.ok(artifactsPacket.packet.coverage.reasons.includes('artifact-hashes-omitted'));
-  assert.equal(artifactsPacket.packet.coverage.state, 'partial');
+  assert.equal(artifactsPacket.packet.facts.find(fact => fact.id === 'checkpoint.artifacts_count').value, 17);
+  assert.equal(artifactsPacket.packet.facts.some(fact => fact.id.startsWith('artifact.')), false);
+  assert.deepEqual(artifactsPacket.packet.coverage.omitted, []);
+  assert.equal(artifactsPacket.packet.coverage.state, 'complete');
+  const hashlessPacket = build({ obligation: { key: 'impl:key', stage: 'implementation',
+    artifacts: Array.from({ length: 17 }, (_, i) => ({ path: `a-${i}.md` })) } });
+  assert.equal(hashlessPacket.json, artifactsPacket.json, 'legacy artifact hashes do not bind diagnosis');
   // 13 reason categories with items and workers below their caps.
   const reasonsPacket = build({ inbox_guard: { state: 'blocking', blocking: true,
     reasons: Array.from({ length: 13 }, (_, i) => `cat-${i}:detail`), items: [] } });

@@ -737,7 +737,9 @@ test("crash recovery: durable reservation and locate recovery across the tmux se
   await withTimeout(beforeWorker.waitForMarker("before-create"), "before-create marker");
   const beforeRecord = await findAssignment(storageRoot, beforeInput.assignment_id);
   assert.equal(beforeRecord.state, "launching");
-  assert.ok(await exists(join(beforeDir, "assignments", `${beforeInput.assignment_id}.json`)));
+  const beforeRecordPath = join(beforeDir, "assignments", `${beforeInput.assignment_id}.json`);
+  assert.ok(await exists(beforeRecordPath));
+  const beforeRecordBytes = await readFile(beforeRecordPath);
   assert.ok(await exists(join(beforeDir, "assignments", `${beforeInput.assignment_id}.brief.md`)));
   assert.ok(await exists(join(beforeDir, "sessions", beforeInput.assignment_id)));
   const free = await acquireRootClaim(storageRoot);
@@ -747,8 +749,16 @@ test("crash recovery: durable reservation and locate recovery across the tmux se
   const competingDigest = (await resolveAssignment(competing)).contractDigest;
   await assert.rejects(
     launchAssignment(competing, { expectedDigest: competingDigest }),
-    /reserves/,
+    (error) => {
+      assert.match(error.message, /reserves/);
+      assert.equal(error.code, "target-busy");
+      assert.equal(error.assignment_id, beforeInput.assignment_id);
+      assert.ok(error.message.includes(beforeInput.assignment_id));
+      return true;
+    },
   );
+  assert.deepEqual(await readFile(beforeRecordPath), beforeRecordBytes);
+  assert.equal(await exists(join(beforeDir, "assignments", `${competing.assignment_id}.json`)), false);
 
   beforeWorker.kill();
   await beforeWorker.done;
@@ -1050,7 +1060,16 @@ test("store preservation: bytes, lease refusal, scan refusals and late ownership
     specPackage: packageDirectory,
   });
   const packagedDigest = (await resolveAssignment(packaged)).contractDigest;
-  await assert.rejects(launchAssignment(packaged, { expectedDigest: packagedDigest }), /run-active/);
+  await assert.rejects(
+    launchAssignment(packaged, { expectedDigest: packagedDigest }),
+    (error) => {
+      assert.match(error.message, /run-active/);
+      assert.equal(error.code, "run-active");
+      assert.equal(error.run_id, "run-fixture");
+      assert.ok(error.message.includes("run-fixture"));
+      return true;
+    },
+  );
   assert.deepEqual(await readFile(runPath), runBytes);
   assert.equal(await exists(join(assignmentsA, `${packaged.assignment_id}.json`)), false);
   await rm(runPath, { force: true });
@@ -1154,9 +1173,22 @@ test('launch reservation: failed spawn from a live host is unknown, not still la
   assert.equal(record.state, 'launch_unknown');
   assert.match(record.attention[0], /launch spawn failed:.*extended-keys-format/);
   assert.equal((await findAssignment(storageRoot,input.assignment_id)).state,'launch_unknown');
+  const failedRecordPath = join(workspace, 'assignments', `${input.assignment_id}.json`);
+  const failedRecordBytes = await readFile(failedRecordPath);
   const competitor = {...input,assignment_id:randomUUID()};
   const preview = await resolveAssignment(competitor);
-  await assert.rejects(launchAssignment(competitor, {expectedDigest:preview.contractDigest}), /reserves/);
+  await assert.rejects(
+    launchAssignment(competitor, {expectedDigest:preview.contractDigest}),
+    (error) => {
+      assert.match(error.message, /reserves/);
+      assert.equal(error.code, 'target-busy');
+      assert.equal(error.assignment_id, input.assignment_id);
+      assert.ok(error.message.includes(input.assignment_id));
+      return true;
+    },
+  );
+  assert.deepEqual(await readFile(failedRecordPath), failedRecordBytes);
+  assert.equal(await exists(join(workspace, 'assignments', `${competitor.assignment_id}.json`)), false);
 });
 
 // node --test --test-name-pattern='session controls end only' scripts/workspaces/launch.integration.test.mjs

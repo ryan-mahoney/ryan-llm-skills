@@ -20,12 +20,13 @@ test('parseEpic accepts a valid record and keeps allowlisted fields', () => {
 });
 
 test('parseEpic keeps design references by identity and rejects malformed ones', () => {
-  const { epic } = parseEpic(record({ designs: [{ workspace: 'transitops', design: 'ladder-overview', path: '/store/projects/transitops/designs/ladder-overview' }, { workspace: 'transitops', design: 'import' }] }), { slug: 'demo' });
-  assert.deepEqual(epic.designs, [{ workspace: 'transitops', design: 'ladder-overview', path: '/store/projects/transitops/designs/ladder-overview' }, { workspace: 'transitops', design: 'import', path: null }]);
+  const { epic } = parseEpic(record({ designs: [{ workspace: 'transitops', design: '02-route-ladders-split', path: '/store/projects/transitops/designs/02-route-ladders-split' }, { workspace: 'transitops', design: 'import' }] }), { slug: 'demo' });
+  assert.deepEqual(epic.designs, [{ workspace: 'transitops', design: '02-route-ladders-split', path: '/store/projects/transitops/designs/02-route-ladders-split' }, { workspace: 'transitops', design: 'import', path: null }]);
   const bad = (designs, pattern) => assert.match(parseEpic(record({ designs }), { slug: 'demo' }).error ?? '', pattern);
   bad({}, /list of at most 20/);
   bad([{ design: 'x' }], /workspace and design slug/);
   bad([{ workspace: 'w', design: 'Bad Slug' }], /workspace and design slug/);
+  bad([{ workspace: 'w', design: '2-route-ladders-split' }], /workspace and design slug/);
   bad([{ workspace: 'w', design: 'ok', path: 'relative' }], /not absolute/);
 });
 

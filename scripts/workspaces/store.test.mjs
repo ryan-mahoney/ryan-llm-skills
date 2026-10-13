@@ -26,7 +26,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { addArtifact, addMaterial, applyKitEdit, createFileExclusive, createWorkspace, describeStorageRoot, fetchWorkspace, listKitBackups, listWorkspaces, readKitBackup, repositoryReferences, resolveRepositoryPath, resolveStorageRoot, resolveWorkspacePath, saveStorageRoot, setupStorage, storageConfigPath, storageStatus, writeFileAtomic } from "./store.mjs";
+import { addArtifact, addMaterial, applyKitEdit, createFileExclusive, createWorkspace, describeStorageRoot, fetchWorkspace, listKitBackups, listWorkspaces, readKitBackup, repositoryReferences, requestMaterialPath, resolveRepositoryPath, resolveStorageRoot, resolveWorkspacePath, saveStorageRoot, setupStorage, storageConfigPath, storageStatus, writeFileAtomic } from "./store.mjs";
 import { parseKit, planKitEdit } from "./kit.mjs";
 
 const STORE_URL = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), "store.mjs")).href;
@@ -1893,6 +1893,7 @@ test("idempotent material brief request publishes once with canonical markdown a
   const digest = createHash("sha256").update(`writer\0brief\0${requestId}`, "utf8").digest("hex");
   const expectedPath = `briefs/brief-${digest}.md`;
   const expectedBytes = "# Title\n\nbody\n";
+  assert.equal(requestMaterialPath("writer", "brief", requestId), expectedPath);
 
   const [first, second] = await Promise.all([
     addMaterial(root, "writer", { kind: "brief", title: "Title", content: "body\n", request_id: requestId }),
@@ -1900,6 +1901,8 @@ test("idempotent material brief request publishes once with canonical markdown a
   ]);
   assert.equal(first.path, expectedPath);
   assert.equal(second.path, expectedPath);
+  assert.equal(first.path, requestMaterialPath("writer", "brief", requestId));
+  assert.equal(second.path, requestMaterialPath("writer", "brief", requestId));
   assert.equal(await readFile(join(workspace, expectedPath), "utf8"), expectedBytes);
   assert.deepEqual((await readdir(join(workspace, "briefs"))).sort(), [`brief-${digest}.md`]);
 
@@ -1910,6 +1913,7 @@ test("idempotent material brief request publishes once with canonical markdown a
     request_id: requestId,
   });
   assert.equal(repeated.path, expectedPath);
+  assert.equal(repeated.path, requestMaterialPath("writer", "brief", requestId));
   await assert.rejects(
     addMaterial(root, "writer", { kind: "brief", title: "Changed", content: "body\n", request_id: requestId }),
     { code: "request-conflict" },
@@ -1942,6 +1946,20 @@ test("idempotent material refuses invalid request ids before publishing", async 
   ]) {
     await assert.rejects(
       addMaterial(root, "writer", { kind: "brief", title: "Title", content: "body\n", request_id }),
+    );
+    assert.throws(
+      () => requestMaterialPath("writer", "brief", request_id),
+      (error) => error.code === "invalid-request-id",
+    );
+  }
+  const validRequestId = "3f0e8f74-9e8f-4f6a-8a2c-6a1f5a2b7c01";
+  for (const workspaceId of [undefined, null, "", 42]) {
+    assert.throws(() => requestMaterialPath(workspaceId, "brief", validRequestId), TypeError);
+  }
+  for (const kind of [undefined, null, "memo", 42]) {
+    assert.throws(
+      () => requestMaterialPath("writer", kind, validRequestId),
+      /invalid material kind/,
     );
   }
   const files = await readdir(join(workspace, "briefs")).catch(() => []);
@@ -2007,11 +2025,19 @@ test("idempotent material hashes workspace kind and request identity separately"
     request_id: requestId,
   });
 
-  assert.equal(brief.path, `briefs/brief-${digest("alpha", "brief")}.md`);
-  assert.equal(note.path, `notes/brief-${digest("alpha", "note")}.md`);
-  assert.equal(betaBrief.path, `briefs/brief-${digest("beta", "brief")}.md`);
+  const briefPath = requestMaterialPath("alpha", "brief", requestId);
+  const notePath = requestMaterialPath("alpha", "note", requestId);
+  const betaBriefPath = requestMaterialPath("beta", "brief", requestId);
+  assert.equal(briefPath, `briefs/brief-${digest("alpha", "brief")}.md`);
+  assert.equal(notePath, `notes/brief-${digest("alpha", "note")}.md`);
+  assert.equal(betaBriefPath, `briefs/brief-${digest("beta", "brief")}.md`);
+  assert.equal(brief.path, briefPath);
+  assert.equal(note.path, notePath);
+  assert.equal(betaBrief.path, betaBriefPath);
   assert.notEqual(digest("alpha", "brief"), digest("alpha", "note"));
   assert.notEqual(digest("alpha", "brief"), digest("beta", "brief"));
+  assert.notEqual(briefPath, notePath);
+  assert.notEqual(briefPath, betaBriefPath);
 });
 
 test("storage root: flag, env, config file and default resolve in that order with their source", async (t) => {

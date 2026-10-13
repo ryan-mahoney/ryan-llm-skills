@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { setWorktree } from '../../../scripts/spec-location/index.mjs';
 import { makePackageFixture } from './package-fixture.mjs';
-import { submitCompletion, completionStatus, recordVerification, verificationReceipts, revision, refreshProgress, recordCheckpoint, installProgressContext, watchProgress } from './completion.mjs';
+import { submitCompletion, completionStatus, recordVerification, verificationReceipts, revision, refreshProgress, recordCheckpoint, installProgressContext, watchProgress, reminder } from './completion.mjs';
 
 async function fixture(t) {
   const base = await makePackageFixture({ prefix: 'completion-' });
@@ -88,6 +88,30 @@ test('checkpoint records missing evidence honestly and rejects escaped or symlin
   assert.throws(() => submitCompletion(f.r, { ...f.input, evidence: [{ ...f.input.evidence[0], artifact: '/tmp/escape' }] }), /canonical root/);
   rmSync(join(f.pkg, 'learnings'), { recursive: true }); symlinkSync(f.root, join(f.pkg, 'learnings'));
   assert.throws(() => submitCompletion(f.r, f.input), /Symlink/);
+});
+
+// Run alone: node --test --test-name-pattern='checkpoint routing' pi/extensions/spec-runtime/completion.test.mjs
+test('checkpoint routing retains legacy receipts and exposes concrete remaining action without completion repetition', async t => {
+  const f = await fixture(t);
+  const input = { ...f.input, outcome: 'checkpoint', gaps: ['Seed the authenticated fixture before EV-1'],
+    evidence: [{ id: 'EV-1', status: 'pending', proof_boundary: 'browser check unattempted' }] };
+  let status = submitCompletion(f.r, input);
+  assert.equal(status.checkpoint_reason, null);
+  assert.equal(status.next_action, 'Seed the authenticated fixture before EV-1');
+  assert.equal(verificationReceipts(f.r).length, 1);
+  assert.equal(completionStatus(f.r).status, 'recorded');
+  const remaining = ['Seed authenticated fixture, then run EV-1 and observe destination'];
+  status = submitCompletion(f.r, { ...input, checkpoint_reason: 'blocker', remaining_work: remaining });
+  assert.deepEqual(status.remaining_work, remaining);
+  assert.equal(status.checkpoint_reason, 'blocker');
+  assert.match(reminder(f.r), /Remaining action: Seed authenticated fixture/);
+  assert.doesNotMatch(reminder(f.r), /Before ending this assignment/);
+  const ledger = await refreshProgress(f.pkg);
+  assert.deepEqual(ledger.runs[0].handoff.remaining_work, remaining);
+  assert.throws(() => submitCompletion(f.r, { ...input, checkpoint_reason: 'unattempted', remaining_work: remaining }), /Unknown checkpoint_reason/);
+  assert.throws(() => submitCompletion(f.r, { ...input, checkpoint_reason: 'deadline' }), /concrete remaining_work/);
+  assert.throws(() => submitCompletion(f.r, { ...f.input, checkpoint_reason: 'blocker', remaining_work: remaining }), /Completed outcomes/);
+  assert.equal(submitCompletion(f.r, { ...input, outcome: 'decision-required', checkpoint_reason: 'decision', remaining_work: remaining }).checkpoint_reason, 'decision');
 });
 
 test('progress watcher failure is reported and disposed without crashing the host', async t => {

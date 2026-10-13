@@ -7,6 +7,7 @@ import SpecActivity, { hasActivityFacts } from '../SpecActivity';
 import { ActionBar, EmptyState, MasterDetail, RegionalSkeleton, SectionTabs, StateNotice, StatusText, type SectionTab, type StatusTone } from '../primitives';
 import { PackagePreview } from '../PackagePreview';
 import PlannedAssignment from '../PlannedAssignment';
+import RelaunchAssignment from '../RelaunchAssignment';
 import SpecOverview from '../SpecOverview';
 import type { WireRecord } from '../model';
 import type { RouteState } from '../route';
@@ -183,6 +184,12 @@ const headTone = (record: WireRecord): StatusTone =>
 
 export default function SpecsDestination(props: DestinationProps) {
   const record = () => props.records.find(item => item.key === props.route.id) ?? null;
+  // Main's relaunch feature: the most recent spec-end-to-end assignment for the
+  // selected package is offered as a relaunch (with the ordinary Planned form as
+  // the fallback when no prior assignment exists).
+  const priorAssignment = () => props.assignments.filter(item =>
+    item.skill === 'spec-end-to-end' && (item.workspace === record()?.workspace || item.workspace_id === record()?.workspace) && [record()?.package, record()?.package_ref].filter(Boolean).includes(item.spec_package)
+  ).sort((a, b) => (Date.parse(b.created_at || '') || 0) - (Date.parse(a.created_at || '') || 0))[0];
   const context = (): ObservationContext => ({ live: props.live, connectionFailed: props.connectionFailed, now: serverNow() });
   const view = () => specViewState(props.payload, record(), props.scopedObservers, context());
   const activityTab = () => tabOf(props.route) === 'activity';
@@ -419,6 +426,11 @@ export default function SpecsDestination(props: DestinationProps) {
               <Show when={!item().planned}>
                 <Show when={!activityTab()}>
                   <SpecOverview record={item()} assignments={props.assignments} context={context()} onOpenAgent={openAgent} onOpenEpic={openEpic} />
+                  <Show when={record()}>
+                    <Show when={priorAssignment()} keyed fallback={<details class="section"><summary>Run spec again</summary><PlannedAssignment record={item()} live={props.live && props.specsLive} token={props.token}/></details>}>
+                      {assignment => <RelaunchAssignment assignment={assignment} live={props.live && props.specsLive} token={props.token}/>}
+                    </Show>
+                  </Show>
                 </Show>
               </Show>
               <Show when={activityTab()}>

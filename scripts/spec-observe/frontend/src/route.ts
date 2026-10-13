@@ -5,7 +5,8 @@ export type Destination =
   | 'conversations'
   | 'files'
   | 'designs'
-  | 'workspaces';
+  | 'workspaces'
+  | 'launch';
 
 export type RouteState = {
   dest: Destination;
@@ -16,6 +17,12 @@ export type RouteState = {
   path?: string;
   filter?: string;
   q?: string;
+  // Launch-flow context: set only by the hidden launch destination and kept
+  // separate from the workspace-directory fields above.
+  thread?: string;
+  target?: string;
+  package?: string;
+  skill?: string;
 };
 
 export type RouteMode = 'push' | 'replace';
@@ -29,12 +36,13 @@ export const DESTINATIONS: readonly Destination[] = [
   'files',
   'designs',
   'workspaces',
+  'launch',
 ];
 
-export const SUPPORTED_PARAMS = ['ws', 'id', 'tab', 'source', 'path', 'filter', 'q'] as const;
+export const SUPPORTED_PARAMS = ['ws', 'id', 'tab', 'source', 'path', 'filter', 'q', 'thread', 'target', 'package', 'skill'] as const;
 export type SupportedParam = (typeof SUPPORTED_PARAMS)[number];
 
-const HISTORY_FIELDS: readonly (keyof RouteState)[] = ['dest', 'ws', 'id', 'tab', 'source', 'path'];
+const HISTORY_FIELDS: readonly (keyof RouteState)[] = ['dest', 'ws', 'id', 'tab', 'source', 'path', 'thread', 'target', 'package', 'skill'];
 
 const isDestination = (value: unknown): value is Destination =>
   typeof value === 'string' && (DESTINATIONS as readonly string[]).includes(value);
@@ -68,6 +76,30 @@ export function routeHistoryMode(prev: RouteState, next: RouteState, options: { 
   if (options.fallback === true) return 'replace';
   for (const field of HISTORY_FIELDS) if (prev?.[field] !== next?.[field]) return 'push';
   return 'replace';
+}
+
+// Busy-denial agent link: the Agents list keys rows by the observed
+// assignment key (JSON.stringify([observerWorkspace, assignment_id])) and
+// replaces an unmatched id selection with the first visible row. A raw
+// conflicting UUID therefore misdirects inspection whenever an unrelated
+// row exists first. Use the matching observed key when available; before
+// observation fall back to a workspace-scoped q=conflictingUUID route so
+// the list filters instead of selecting an unrelated agent.
+export function busyAgentsHref(
+  ws: string,
+  conflictingId: string | undefined,
+  assignments: Array<{ assignment_id?: unknown; key?: unknown }> = [],
+): string {
+  const base = `#/agents?ws=${encodeURIComponent(ws)}`;
+  if (typeof conflictingId !== 'string' || !conflictingId) return base;
+  const match = assignments.find(
+    assignment => assignment.assignment_id === conflictingId
+      && typeof assignment.key === 'string' && assignment.key,
+  );
+  if (match && typeof (match as { key: unknown }).key === 'string') {
+    return `${base}&id=${encodeURIComponent((match as { key: string }).key)}`;
+  }
+  return `${base}&q=${encodeURIComponent(conflictingId)}`;
 }
 
 const listeners = new Set<RouteListener>();

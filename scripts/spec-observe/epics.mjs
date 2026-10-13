@@ -9,6 +9,7 @@ import { lstat, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, join, posix, resolve } from 'node:path';
 
 import { listEpics } from '../spec-location/index.mjs';
+import { DESIGN_SLUG } from '../design/schema.mjs';
 
 export const EPIC_LIMITS = Object.freeze({ epics: 50, members: 100, recordBytes: 65536 });
 export const EPIC_SLUG = /^[a-z][a-z0-9-]{0,31}$/;
@@ -38,7 +39,7 @@ export function parseEpic(record, { slug } = {}) {
     if (!Array.isArray(record.designs) || record.designs.length > 20) return fail('designs must be a list of at most 20 entries');
     for (const item of record.designs) {
       if (!item || typeof item !== 'object' || typeof item.workspace !== 'string' || !item.workspace
-        || typeof item.design !== 'string' || !/^[a-z][a-z0-9-]{0,47}$/.test(item.design)) return fail('design entries need workspace and design slug');
+        || typeof item.design !== 'string' || !DESIGN_SLUG.test(item.design)) return fail('design entries need workspace and design slug');
       if (item.path !== undefined && (typeof item.path !== 'string' || !isAbsolute(item.path))) return fail(`design path of ${item.design} is not absolute`);
       designs.push({ workspace: item.workspace, design: item.design, path: item.path ?? null });
     }

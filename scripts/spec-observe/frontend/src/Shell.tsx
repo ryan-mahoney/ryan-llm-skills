@@ -7,6 +7,7 @@ export type ShellWorkspaceOption = { id: string; label: string };
 
 export type ShellProps = {
   route: RouteState;
+  currentDestination?: Destination;
   primaryNav: readonly ShellNavEntry[];
   directoryNav?: readonly ShellNavEntry[];
   workspaceOptions: readonly ShellWorkspaceOption[];
@@ -24,7 +25,7 @@ export type ShellProps = {
   children: JSX.Element;
 };
 
-const navIcons: Record<Destination, () => JSX.Element> = {
+const navIcons: Partial<Record<Destination, () => JSX.Element>> = {
   specs: () => (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
       <rect x="5" y="3" width="14" height="18" rx="2" />
@@ -69,6 +70,9 @@ const navIcons: Record<Destination, () => JSX.Element> = {
   ),
 };
 
+// The hidden launch flow has no rail entry, so the icon map stays partial.
+const navIcon = (dest: Destination) => navIcons[dest] ?? navIcons.specs!;
+
 export default function Shell(props: ShellProps) {
   const scopeId = createUniqueId();
   const headingId = createUniqueId();
@@ -95,7 +99,8 @@ export default function Shell(props: ShellProps) {
   };
 
   const navLink = (entry: ShellNavEntry) => {
-    const current = () => props.route.dest === entry.dest;
+    // A hidden child flow highlights its parent destination in the rail.
+    const current = () => (props.currentDestination ?? props.route.dest) === entry.dest;
     return (
       <a
         class={current() ? 'nav-item current' : 'nav-item'}
@@ -104,7 +109,7 @@ export default function Shell(props: ShellProps) {
         aria-current={current() ? 'page' : undefined}
         onClick={go(entry.dest)}
       >
-        {navIcons[entry.dest]()}
+        {navIcon(entry.dest)()}
         <span>{entry.label}</span>
       </a>
     );
@@ -133,7 +138,7 @@ export default function Shell(props: ShellProps) {
       <div class="app">
         <aside class="rail" aria-label="Application navigation">
           <a class="brand" href={destinationHref(home())} onClick={go(home())}>
-            {navIcons[home()]()}
+            {navIcon(home())()}
             <span>Sentinel</span>
           </a>
           <div class="scope">

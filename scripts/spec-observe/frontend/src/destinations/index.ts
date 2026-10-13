@@ -9,6 +9,7 @@ import ConversationsDestination from './conversations';
 import FilesDestination from './files';
 import DesignsDestination from './designs';
 import { WorkspacesDestination } from './workspaces';
+import LaunchDestination from './launch';
 
 export type DestinationProps = {
   route: RouteState;
@@ -56,13 +57,14 @@ export type DestinationProps = {
   onChooseWorkspace: (id: string) => void;
 };
 
-export type DestinationNav = 'primary' | 'directory';
+export type DestinationNav = 'primary' | 'directory' | 'hidden';
 
 export type DestinationEntry = {
   dest: Destination;
   label: string;
   order: number;
   nav: DestinationNav;
+  parent?: Destination;
   render: Component<DestinationProps>;
 };
 
@@ -79,5 +81,8 @@ export function destinationEntries(): DestinationEntry[] {
     { dest: 'files', label: 'Files', order: 50, nav: 'primary', render: FilesDestination },
     { dest: 'designs', label: 'Designs', order: 60, nav: 'primary', render: DesignsDestination },
     { dest: 'workspaces', label: 'Workspaces', order: 70, nav: 'directory', render: WorkspacesDestination },
+    // Launch is a hidden Agents-child flow: it adds no rail entry, and the
+    // Shell highlights Agents while it is open.
+    { dest: 'launch', label: 'Launch agent', order: 35, nav: 'hidden', parent: 'agents', render: LaunchDestination },
   ];
 }

@@ -1,7 +1,7 @@
 import { For, Show, Switch, Match, createSignal, createMemo, createEffect, on, onMount, onCleanup } from 'solid-js';
 import { getJson } from './api';
 import { str, base, time, packageFilterMatches, setClock, tickClock, serverNow, stale, statusMarkdown } from './format';
-import { normalizeEnvelope, authoritativeObservers, collectRecords, collectAssignments, collectEpics, type Envelope, type WireRecord } from './model';
+import { normalizeEnvelope, authoritativeObservers, collectRecords, packageSummaries, collectAssignments, collectEpics, type Envelope, type WireRecord } from './model';
 import Shell from './Shell';
 import type { StatusTone } from './primitives';
 import { parseHash, subscribeRoute, navigate, routeHistoryMode, type Destination, type RouteState } from './route';
@@ -10,13 +10,15 @@ import { visibleSpecs } from './spec-state';
 import { destinationEntries, type DestinationProps } from './destinations';
 import { WorkspacePicker } from './destinations/workspaces';
 import { catalogRead, type WorkspaceCatalog } from './destinations/workspace-state';
+import { getLaunchDraft, seedLaunchDraft } from './launch-state';
+import { armLaunchPickerIntent, cancelLaunchPickerIntent, createLaunchPickerIntent, shouldApplyPickerReset, shouldResetAcknowledgedDraft } from './launch-picker-intent';
 
 type Filter = 'active' | 'attention' | 'completed' | 'planned';
 type Catalog = WorkspaceCatalog;
 const liveBrowser = () => location.protocol !== 'file:';
 
 const registry = destinationEntries();
-const [SpecsAdapter, EpicsAdapter, AgentsAdapter, ConversationsAdapter, FilesAdapter, DesignsAdapter, WorkspacesAdapter] = registry.map(entry => entry.render);
+const [SpecsAdapter, EpicsAdapter, AgentsAdapter, ConversationsAdapter, FilesAdapter, DesignsAdapter, WorkspacesAdapter, LaunchAdapter] = registry.map(entry => entry.render);
 const primaryNav = registry.filter(entry => entry.nav === 'primary').sort((a, b) => a.order - b.order).map(entry => ({ dest: entry.dest, label: entry.label }));
 const directoryNav = registry.filter(entry => entry.nav === 'directory').sort((a, b) => a.order - b.order).map(entry => ({ dest: entry.dest, label: entry.label }));
 
@@ -44,10 +46,17 @@ export default function App() {
   let workspaceBusyId: string | null = null;
   let catalogTimer: ReturnType<typeof setTimeout> | undefined;
   let workspaceTimer: ReturnType<typeof setTimeout> | undefined;
+  // Explicit new-assignment intent for Agents -> All workspaces -> Launch
+  // agent -> picker choice. Armed only by prepareAgentAssignment without a
+  // concrete workspace; consumed only by the picker choice that completes
+  // that entry. Generic scope/history navigation abandons it without
+  // resetting any draft.
+  const launchPickerIntent = createLaunchPickerIntent();
 
   const live = () => liveBrowser() && !imported();
   const scopeWs = () => route().ws;
   const title = () => registry.find(entry => entry.dest === route().dest)?.label ?? 'Specs';
+  const currentDestination = () => registry.find(entry => entry.dest === route().dest)?.parent ?? route().dest;
   const catalogEntries = () => catalog()?.valid ?? [];
   const records = createMemo(() => collectRecords(payload()));
   const scopedRecords = createMemo(() => records().filter(record => inWorkspaceScope(record, 'run', scopeWs(), catalogEntries())));
@@ -95,6 +104,21 @@ export default function App() {
   function goDestination(dest: Destination) {
     go({ dest, ...(route().ws !== undefined ? { ws: route().ws } : {}) });
   }
+  function prepareAgentAssignment() {
+    const ws = scopeWs();
+    if (ws) {
+      const context = { ws };
+      if (shouldResetAcknowledgedDraft(getLaunchDraft(context))) {
+        seedLaunchDraft(context, { title: '', content: '' });
+      }
+    } else {
+      // All workspaces: no concrete draft exists yet. Arm the explicit
+      // new-assignment intent so the picker choice can apply the
+      // acknowledged-success reset once the workspace is known.
+      armLaunchPickerIntent(launchPickerIntent);
+    }
+    goDestination('launch');
+  }
   function selectId(id: string) {
     go({ ...clearIncompatibleFields(route()), id });
   }
@@ -114,9 +138,25 @@ export default function App() {
     go({ ...route(), path });
   }
   function chooseScope(ws: string | undefined) {
+    // Generic scope navigation never applies the acknowledged-success
+    // reset; abandon any armed picker intent without touching drafts.
+    cancelLaunchPickerIntent(launchPickerIntent);
     go(withWorkspace(route(), ws));
   }
   function chooseWorkspace(id: string) {
+    // Explicit picker completion of an armed All-workspaces entry: apply
+    // the acknowledged-success reset for the concrete workspace, then
+    // disarm. Generic picker visits without an armed intent navigate
+    // unchanged, and pending/failed/unconfirmed entries are preserved.
+    if (shouldApplyPickerReset(launchPickerIntent, route().dest)) {
+      const context = { ws: id };
+      if (shouldResetAcknowledgedDraft(getLaunchDraft(context))) {
+        seedLaunchDraft(context, { title: '', content: '' });
+      }
+      cancelLaunchPickerIntent(launchPickerIntent);
+    }
+    // Choosing a workspace also abandons the in-flight completion exception:
+    // the recorded Done route and its one-shot focus guard no longer apply.
     setExpectedCompletionKey(null);
     setExpectedCompletionRoute(null);
     expectedSeen = false;
@@ -129,7 +169,7 @@ export default function App() {
     navigate(next, routeHistoryMode(route(), next, { fallback: true }));
   }
   function openPackage(workspaceName: string, name: string) {
-    const matches = scopedRecords().filter(item => item.workspace === workspaceName && base(item.package) === name);
+    const matches = packageSummaries(scopedRecords()).filter(item => item.workspace === workspaceName && base(item.package) === name);
     const target = matches.find(item => packageFilterMatches(item, 'active'))
       ?? matches.find(item => item.planned)
       ?? matches.find(item => !item.recent_completion) ?? matches[0];
@@ -396,6 +436,17 @@ export default function App() {
     onCleanup(() => cancelAnimationFrame(frame));
   });
 
+  // An armed All-workspaces launch intent survives only inside the launch
+  // picker (launch without a workspace). Any other arrival abandons it
+  // without resetting drafts. The picker choice consumes synchronously
+  // before navigating, so this branch runs only for non-picker arrivals.
+  createEffect(() => {
+    const current = route();
+    if (launchPickerIntent.armed && (current.dest !== 'launch' || current.ws !== undefined)) {
+      cancelLaunchPickerIntent(launchPickerIntent);
+    }
+  });
+
   // Scope and workspace selection changes clear retained detail before loading,
   // including history navigation back to a previous scope.
   createEffect(on(detailWorkspaceId, (id, previous) => {
@@ -484,6 +535,7 @@ export default function App() {
   return <>
     <Shell
       route={route()}
+      currentDestination={currentDestination()}
       primaryNav={primaryNav}
       directoryNav={directoryNav}
       workspaceOptions={workspaceOptions()}
@@ -492,9 +544,13 @@ export default function App() {
       onDestination={goDestination}
       crumbs={crumbs()}
       title={title()}
-      headerActions={route().dest === 'workspaces'
-        ? <button class="ds-btn" type="button" aria-busy={catalogPending()} onClick={() => void loadCatalog()}>Refresh workspaces</button>
-        : <button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button>}
+      headerActions={route().dest === 'launch'
+        ? <button class="ds-btn" type="button" onClick={() => goDestination('agents')}>Return to agents</button>
+        : route().dest === 'workspaces'
+          ? <button class="ds-btn" type="button" aria-busy={catalogPending()} onClick={() => void loadCatalog()}>Refresh workspaces</button>
+          : route().dest === 'agents'
+            ? <><button id="launch-agent-action" class="ds-btn ds-btn--primary" type="button" onClick={prepareAgentAssignment}>Launch agent</button><button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button></>
+            : <button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button>}
       connection={{ label: connectionLabel(), tone: connectionTone() }}
       observedAt={observedAt()}
       onRefresh={manualRefresh}
@@ -514,6 +570,7 @@ export default function App() {
             <Match when={route().dest === 'files'}><FilesAdapter {...outletProps} /></Match>
             <Match when={route().dest === 'designs'}><DesignsAdapter {...outletProps} /></Match>
             <Match when={route().dest === 'workspaces'}><WorkspacesAdapter {...outletProps} /></Match>
+            <Match when={route().dest === 'launch'}><LaunchAdapter {...outletProps} /></Match>
           </Switch>
         }
       >

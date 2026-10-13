@@ -1,5 +1,5 @@
 import {normalize,authoritativeObservers as observers} from './model-helpers.js';
-import {str,stale,key,activeRun,attention} from './format';
+import {str,stale,key,activeRun,attention,packageFilterMatches} from './format';
 export type WireRecord=Record<string,any>;
 export interface Observer extends WireRecord {observer_id:string;state:string;published_at:string;snapshot?:{workspace?:string;runs:WireRecord[];recently_completed?:WireRecord[];planned_packages?:WireRecord[];assignments?:WireRecord[];epics?:WireRecord[];coverage?:WireRecord;assignment_coverage?:WireRecord;completion_history?:WireRecord;attention?:WireRecord[]};}
 export interface Envelope {schema_version?:number;generated_at?:string;observers:Observer[];errors?:WireRecord[];truncated?:boolean;action_token?:string;thread_action_token?:string;completion?:string;}
@@ -36,6 +36,20 @@ export function collectRecords(payload:Envelope|null):WireRecord[]{
   const excludedPackages=new Set(records.filter(r=>r.recent_completion||activeRun(r)||attention(r)||knownDone(r)).map(r=>JSON.stringify([r.workspace,r.package])));
   return records.filter(r=>!r.planned||!excludedPackages.has(JSON.stringify([r.workspace,r.package])))
     .sort((a,b)=>str(a.workspace).localeCompare(str(b.workspace))||str(a.package).localeCompare(str(b.package))||Number(b.is_current_assignment===true)-Number(a.is_current_assignment===true)||(Date.parse(b.timing?.started_at)||0)-(Date.parse(a.timing?.started_at)||0));
+}
+// Specs are packages; assignment records remain available for detail/history.
+export function packageSummaries(records:WireRecord[],filter:Parameters<typeof packageFilterMatches>[1]='all'):WireRecord[]{
+  const packages=new Map<string,WireRecord>();
+  const priority=(r:WireRecord)=>activeRun(r)?5:r.recent_completion?4:r.is_current_assignment===true?3:r.planned?2:1;
+  const updated=(r:WireRecord)=>Date.parse(r.timing?.started_at||r.completed_at||r.planned_at||r.observed_at||'')||0;
+  for(const record of records){
+    if(!packageFilterMatches(record,filter))continue;
+    const identity=JSON.stringify([record.workspace,record.package]);
+    const prior=packages.get(identity);
+    if(!prior||priority(record)>priority(prior)
+      ||priority(record)===priority(prior)&&updated(record)>updated(prior))packages.set(identity,record);
+  }
+  return [...packages.values()];
 }
 export function collectAssignments(payload:Envelope|null):WireRecord[]{
  const map=new Map<string,WireRecord>();

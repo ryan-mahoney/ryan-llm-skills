@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { activityRecorder } from './monitor.mjs';
 import { SCOUT_MODEL } from './scout.mjs';
 import { createLogSummary } from '../../../scripts/spec-facts/core.mjs';
-import { checkPackage, locatePackage, setWorktree, stamp } from '../../../scripts/spec-location/index.mjs';
+import { checkPackage, locatePackage } from '../../../scripts/spec-location/index.mjs';
+import { prepareSpecWorktree } from '../../../scripts/spec-location/worktree.mjs';
 import { decide, collectFacts } from '../../../scripts/jev/core.mjs';
 import { preparedEntry } from './startup.mjs';
 import { splitModelSelector, configurationFailure, configurationAction } from './model-selector.mjs';
@@ -17,6 +18,89 @@ const here = dirname(fileURLToPath(import.meta.url));
 const terminal = new Set(['completed', 'failed', 'cancelled', 'stale']);
 const timestamp = () => new Date().toISOString();
 const read = file => JSON.parse(readFileSync(file, 'utf8'));
+function observedRuns(packagePath, coverageGaps = []) {
+  const dir = join(packagePath, 'runtime/runs');
+  let names;
+  try { names = readdirSync(dir); } catch (error) { coverageGaps.push(`Run receipts unavailable: ${error.code}`); return []; }
+  return names.filter(name => /^[\w-]+\.json$/.test(name)).flatMap(name => {
+    try {
+      const run = read(join(dir, name));
+      return run && typeof run.id === 'string' && typeof run.step === 'string' && run.state ? [run] : [];
+    } catch (error) {
+      if (coverageGaps.length < 8) coverageGaps.push(`Unreadable observation: ${name}`);
+      return [];
+    }
+  });
+}
+// The card determines relevance; the latest attempt supplies observations. Do not
+// infer prerequisite acceptance or carry every historical blocker into a new step.
+function currentHandoff(record) {
+  const card = readFileSync(record.step, 'utf8');
+  const steps = [...new Set([basename(record.step).match(/step-(\d+)/)?.[1],
+    ...[...card.matchAll(/step-(\d+)/g)].map(match => match[1])].filter(Boolean))];
+  const runsDir = join(record.package, 'runtime/runs');
+  const coverageGaps = [];
+  const runs = observedRuns(record.package, coverageGaps);
+  const currentNumber = Number(basename(record.step).match(/step-(\d+)/)?.[1]);
+  // Cards also use prose such as "Prerequisites: steps 1–2". Supplement exact
+  // references with bounded earlier results, clearly labelled as context only.
+  const earlier = [...new Set(runs.map(run => basename(run.step).match(/step-(\d+)/)?.[1])
+    .filter(step => step && Number(step) < currentNumber))].sort((a, b) => Number(b) - Number(a));
+  for (const step of earlier.slice(0, 7)) if (!steps.includes(step)) steps.push(step);
+  const latest = new Map();
+  for (const run of runs) {
+    const step = basename(run.step || '').match(/step-(\d+)/)?.[1];
+    if (!steps.includes(step) || run.id === record.id || !run.state) continue;
+    const prior = latest.get(step);
+    if (!prior || (run.started_at || '') >= (prior.started_at || '')) latest.set(step, run);
+  }
+  const observations = steps.slice(0, 8).map(step => {
+    const run = latest.get(step);
+    const file = run && join(runsDir, `${run.id}-completion.json`);
+    let completion;
+    try {
+      if (file && existsSync(file)) {
+        completion = read(file);
+        if (!completion || typeof completion !== 'object') throw new Error('Invalid observation');
+      }
+    } catch { coverageGaps.push(`Unreadable completion observation: ${file}`); completion = undefined; }
+    const learningPath = [join(record.package, 'learnings', `step-${step}-learning.md`),
+      join(record.package, `step-${step}-learning.md`)].find(existsSync);
+    let canonical = '';
+    try { if (!completion && learningPath) canonical = readFileSync(learningPath, 'utf8').split(/(?=^##\s)/m)
+      .filter(part => /^##\s+(Decisions|Unresolved|Findings)/.test(part)).join('\n'); }
+    catch { coverageGaps.push(`Unreadable canonical learning: ${learningPath}`); }
+    const values = value => Array.isArray(value) ? value : [];
+    const scalar = value => value == null ? null : String(value).slice(0, 300);
+    const bounded = values => Array.isArray(values) ? values.slice(0, 4).map(value => String(value).slice(0, 300)) : [];
+    return { step, relevance: earlier.includes(step) && !card.includes(`step-${step}`) ? 'earlier result context; dependency not inferred' : 'same step or card reference',
+      run_id: scalar(run?.id), execution: scalar(run?.state) ?? 'no runtime result',
+      completion_path: completion ? file : null, commit: scalar(completion?.learning?.commit),
+      outcome: scalar(completion?.learning?.outcome), invalidated_at: scalar(completion?.invalidated_at),
+      checkpoint_reason: scalar(completion?.learning?.checkpoint_reason),
+      remaining_work: bounded(completion?.learning?.remaining_work),
+      decisions: bounded(completion?.decisions), unresolved_obligations: bounded(completion?.gaps),
+      findings: bounded(completion?.findings), evidence: values(completion?.learning?.evidence).filter(entry => entry && typeof entry === 'object').slice(0, 6).map(entry => ({
+        id: scalar(entry.id), status: scalar(entry.status), observedCommit: scalar(entry.observedCommit),
+        artifact: scalar(entry.artifact), proof_boundary: scalar(entry.proof_boundary),
+        applicability: scalar(entry.applicability) })),
+      learning_path: learningPath ?? null, canonical_observations: canonical.slice(0, 1200),
+      truncated: canonical.length > 1200 || ['decisions', 'gaps', 'findings'].some(key =>
+        values(completion?.[key]).length > 4 || values(completion?.[key]).some(value => String(value).length > 300))
+        || values(completion?.learning?.remaining_work).length > 4
+        || values(completion?.learning?.remaining_work).some(value => String(value).length > 300)
+        || values(completion?.learning?.evidence).length > 6
+        || values(completion?.learning?.evidence).some(entry => entry && Object.values(entry).some(value => String(value).length > 300))
+        || [completion?.learning?.commit, completion?.learning?.outcome, completion?.invalidated_at,
+          completion?.learning?.checkpoint_reason].some(value => value != null && String(value).length > 300),
+      assessment: 'Observation only; inspect the full handoff and latest review/fix evidence for applicability.' };
+  });
+  while (JSON.stringify(observations).length > 10000 && observations.length) observations.pop();
+  return `CURRENT: ${JSON.stringify({ step: record.step, checkout: record.checkout, revision: revision(record), observations,
+    omitted_steps: Math.max(0, steps.length - observations.length), coverage_gaps: coverageGaps.slice(0, 8).map(gap => gap.slice(0, 300)),
+    sources: [join(record.package, 'runtime/progress.json'), join(record.package, 'history-index.json')],
+    obligations: 'Read all card prerequisites. Reconcile historical gaps against latest evidence; worker exit and handoff outcome do not establish acceptance. Preserve original evidence revisions.' })}\n`;
+}
 function atomic(file, value) {
   mkdirSync(dirname(file), { recursive: true });
   const tmp = `${file}.${randomUUID()}.tmp`;
@@ -174,24 +258,7 @@ export async function resolveInput(input, location = {}) {
   const step = realpathSync(input.step);
   if (!inside(packagePath, step)) throw new Error('step must be inside the package');
   const target = stepTarget(locations, packagePath, step);
-  const primary = realpathSync(target.primary);
-  const common = realpathSync(target.common);
-  const worktree = target.worktree ?? resolve(join(dirname(primary), `${basename(primary)}-${basename(packagePath)}`));
-  if (!existsSync(worktree)) {
-    let existing = false;
-    try { git(primary, 'show-ref', '--verify', `refs/heads/${target.branch}`); existing = true; } catch { /* new branch */ }
-    git(primary, 'worktree', 'add', ...(existing ? [worktree, target.branch] : ['-b', target.branch, worktree, input.base || 'HEAD']));
-  }
-  const actual = realpathSync(worktree);
-  if (realpathSync(git(actual, 'rev-parse', '--path-format=absolute', '--git-common-dir')) !== common) throw new Error('worktree is not in the target repository');
-  if (git(actual, 'branch', '--show-current') !== target.branch) throw new Error(`worktree is not on the target branch ${target.branch}`);
-  if (target.worktree !== actual) {
-    const recorded = await setWorktree(locations.package_ref, target.id, actual, location);
-    if (!recorded.ok) throw refusalError(recorded);
-    // Cards written after the package was created get their Locations block on first dispatch; stamp is idempotent.
-    const stamped = await stamp(locations.package_ref, location);
-    if (!stamped.ok) throw refusalError(stamped);
-  }
+  const { primary, worktree: actual } = await prepareSpecWorktree(locations, target, { ...location, base: input.base || 'HEAD' });
   // Other targets' recorded worktrees are read-only context for the owner and editor.
   const others = locations.targets.filter(entry => entry.id !== target.id && entry.worktree).map(({ id, worktree }) => ({ id, worktree }));
   return { ...input, scout_model: input.scout_model || SCOUT_MODEL, package: packagePath, package_ref: locations.package_ref, target: target.id, primary, step, checkout: actual, other_targets: others };
@@ -306,16 +373,25 @@ export class Runtime {
     const runtimeDir = join(config.package, 'runtime');
     mkdirSync(join(runtimeDir, 'runs'), { recursive: true });
     const assignmentFile = join(runtimeDir, 'assignments', `${createHash('sha256').update(key).digest('hex')}.json`);
-    const contractParts = [config.step, config.target, config.checkout, config.owner_model, config.editor_model, config.scout_model, config.child_extensions || [], config.instructions || ''];
-    if (config.attempt_kind !== undefined || config.session_scope === 'step')
-      contractParts.push({ attempt_kind: config.attempt_kind ?? null, session_scope: config.session_scope ?? 'package' });
+    const previousAssignment = existsSync(assignmentFile) ? read(assignmentFile) : null;
+    const retained = previousAssignment ? loadRun(config.package, previousAssignment.run_id)
+      : observedRuns(config.package).filter(run => run.step === config.step)
+        .sort((a, b) => (b.started_at || '').localeCompare(a.started_at || ''))[0];
+    const scope = config.session_scope ?? (retained ? retained.session_scope ?? 'package' : 'step');
+    const legacyParts = [config.step, config.target, config.checkout, config.owner_model, config.editor_model, config.scout_model, config.child_extensions || [], config.instructions || ''];
+    const contractParts = [...legacyParts, { attempt_kind: config.attempt_kind ?? null, session_scope: scope }];
     // A supplied workflow_id joins the launch contract so an existing assignment
     // cannot be reused under another workflow; the legacy/no-workflow shape is
     // preserved exactly.
     const contract = JSON.stringify(config.workflow_id == null ? contractParts : [...contractParts, config.workflow_id]);
     if (existsSync(assignmentFile)) {
-      const previous = read(assignmentFile);
-      if (previous.contract !== contract) throw new Error('assignment_id already identifies a different launch contract; use a new explicit attempt ID for an intentional change.');
+      const previous = previousAssignment;
+      const legacy = [...legacyParts];
+      if (config.attempt_kind !== undefined) legacy.push({ attempt_kind: config.attempt_kind ?? null, session_scope: 'package' });
+      const legacyContract = JSON.stringify(config.workflow_id == null ? legacy : [...legacy, config.workflow_id]);
+      const compatibleLegacy = config.session_scope !== 'step' && previous.contract === legacyContract
+        && (loadRun(config.package, previous.run_id).session_scope ?? 'package') === 'package';
+      if (previous.contract !== contract && !compatibleLegacy) throw new Error('assignment_id already identifies a different launch contract; use a new explicit attempt ID for an intentional change.');
       return summary(loadRun(config.package, previous.run_id));
     }
     // No lock folders: a live coordinator pid in run.json is the writer claim. A dead
@@ -333,14 +409,14 @@ export class Runtime {
     }
     const id = randomUUID();
     const sessionKey = [config.target, config.checkout, config.owner_model, config.editor_model, config.child_extensions || []];
-    if (config.session_scope === 'step') sessionKey.push(config.step);
+    if (scope === 'step') sessionKey.push(config.step);
     const pair = createHash('sha256').update(JSON.stringify(sessionKey)).digest('hex').slice(0, 16);
     const sessionDir = join(runtimeDir, 'sessions', pair);
     mkdirSync(sessionDir, { recursive: true });
     const record = { schema_version: 1, completion_contract: 1, id, assignment_id: key, workflow_id: config.workflow_id ?? null, package: config.package, package_ref: config.package_ref, target: config.target, primary: config.primary, other_targets: config.other_targets,
       step: config.step, checkout: config.checkout, owner_model: config.owner_model, editor_model: config.editor_model, scout_model: config.scout_model,
       dispatch_requested_at: requestedAt, routing_reason: config.routing_reason,
-      attempt_kind: config.attempt_kind ?? null, session_scope: config.session_scope ?? 'package',
+      attempt_kind: config.attempt_kind ?? null, session_scope: scope,
       environment: environmentFacts(config.checkout, config.primary),
       child_extensions: config.child_extensions || [], owner_session: join(sessionDir, 'owner.jsonl'), editor_session: join(sessionDir, 'editor.jsonl'),
       parent_session: parentSession, coordinator_pid: process.pid, state: 'running', started_at: timestamp(), timeout_ms: input.timeout_ms || 7200000 };
@@ -348,10 +424,12 @@ export class Runtime {
     atomic(assignmentFile, { assignment_id: key, run_id: record.id, contract });
     mkdirSync(this.indexDir, { recursive: true });
     atomic(join(this.indexDir, `${id}.json`), { run_id: id, package: config.package, package_ref: config.package_ref, manifest: join(runtimeDir, 'runs', `${id}.json`), parent_session: parentSession });
-    const prompt = `Implement this prepared step as its architect/owner using spec_editor.\nPACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\n${targetFacts(record)}Read the card and required policy. Choose the implementation approach yourself, then send a short Change/Edits/Preserve/Return packet for a bounded transformation. Name affected symbols, the chosen approach and preservation constraints; let the editor choose local implementation details and batch related edits. The editor does not run tests, compile/lint checks or other executable verification. After it returns, use spec_verify for necessary focused checks and diagnose failures before assigning bounded corrections. Do not check every packet automatically; reuse valid evidence. Read/search missing source facts directly. The editor normally reads and edits in one assignment; reserve facts-only requests for a specific blocking fact unavailable through your tools. Request compact results with artifact paths, not source inventories. Do not delegate architecture, whole-step restoration, or an entire acceptance suite with open-ended repairs. Reuse retained context. Assess each returned diff/result before the next packet; commit is a separate assignment after acceptance of the completed changes and required evidence. Use spec_scout only for a bounded discovery gap worth delegating; direct reads remain the default. Do not discover models, run startup suites, poll, or start other agents outside that scout tool. The runtime retains both sessions. Before ending, call spec_complete with decisions, introduced symbols, gaps and step-owned evidence assessments. It writes the canonical learning from verification receipts; an evidence log is not a learning. Commit via the editor first when complete. Missing handoffs remain unfinished obligations. This owner assignment ends after this step; independent review belongs to the coordinator.\n${input.instructions || ''}`;
     let task;
-    try { task = this.launchProcess(record, 'owner', `${prompt}\nEnvironment paths (observations, not setup approval): ${JSON.stringify(record.environment)}`, { onEvent: this.onWorkerEvent }); }
-    catch (error) { record.state = 'failed'; record.error = error.message; save(record); throw error; }
+    try {
+      const prompt = `Implement this prepared step as its architect/owner using spec_editor.\nPACKAGE: ${record.package}\nSTEP: ${record.step}\nCHECKOUT: ${record.checkout}\nPRIMARY: ${record.primary}\n${targetFacts(record)}${currentHandoff(record)}Read the card and required policy. Choose the implementation approach yourself, then send a short Change/Edits/Preserve/Return packet for a bounded transformation. Name affected symbols, the chosen approach and preservation constraints; let the editor choose local implementation details and batch related edits. The editor does not run tests, compile/lint checks or other executable verification. After it returns, use spec_verify for necessary focused checks and diagnose failures before assigning bounded corrections. Do not check every packet automatically; reuse valid evidence. Read/search missing source facts directly. The editor normally reads and edits in one assignment; reserve facts-only requests for a specific blocking fact unavailable through your tools. Request compact results with artifact paths, not source inventories. Do not delegate architecture, whole-step restoration, or an entire acceptance suite with open-ended repairs. Reuse retained context. Assess each returned diff/result before the next packet; commit is a separate assignment after acceptance of the completed changes and required evidence. Use spec_scout only for a bounded discovery gap worth delegating; direct reads remain the default. Do not discover models, run startup suites, poll, or start other agents outside that scout tool. The runtime retains both sessions. Before ending, call spec_complete with decisions, introduced symbols, gaps and step-owned evidence assessments. It writes the canonical learning from verification receipts; an evidence log is not a learning. Commit via the editor first when complete. Missing handoffs remain unfinished obligations. This owner assignment ends after this step; independent review belongs to the coordinator.\n${input.instructions || ''}`;
+      task = this.launchProcess(record, 'owner', `${prompt}\nEnvironment paths (observations, not setup approval): ${JSON.stringify(record.environment)}`, { onEvent: this.onWorkerEvent });
+    }
+    catch (error) { record.state = 'failed'; record.finished_at = timestamp(); record.error = error.message; save(record); throw error; }
     record.pid = task.child.pid;
     save(record); refreshProgress(record.package).catch(error => { record.progress_error = error.message; }); event(record, 'run_started', { dispatch_requested_at: requestedAt, owner_session: record.owner_session, editor_session: record.editor_session, parent_session: parentSession, pid: record.pid });
     const timer = setTimeout(() => { event(record, 'deadline_reached'); this.cancel(record.package, id).then(value => this.notify(value)).catch(error => this.notify({ ...summary(record), error: error.message })); }, record.timeout_ms);

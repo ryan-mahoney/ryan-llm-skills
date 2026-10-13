@@ -449,6 +449,9 @@ export function projectAssignment(record, classification, { runs = [], activity 
 
   return {
     assignment_id: normalized.assignmentId,
+    created_at: record.created_at ?? null,
+    supersedes: record.supersedes ?? null,
+    skill: record.skill ?? null,
     spec_package: normalized.specPackage,
     workflow_id: normalized.workflowId,
     recordedState: normalized.recordedState,

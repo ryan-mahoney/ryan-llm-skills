@@ -156,7 +156,7 @@ design system's tokens in an inline `tailwind.config`.
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `schema_version` | yes | `1`. |
-| `design` | yes | Slug `^[a-z][a-z0-9-]{0,47}$`, equal to the directory name. |
+| `design` | yes | Slug `^[a-z][a-z0-9-]{0,47}$` or a two-digit numbered slug such as `01-home-split` (up to 48 characters), equal to the directory name. |
 | `title` | yes | One line. |
 | `brief`, `created_at`, `note` | no | Brief path relative to the design directory; ISO date; free text. |
 | `design_system` | no | `repository` (a kit repository id) and `paths` (repository-relative; entry document first, then tokens as config or CSS). Same shape as the kit's `design_system`, so the file moves between machines. `node scripts/design/cli.mjs system <dir>` resolves the absolute paths through the kit. The legacy form `{path, tokens}` with absolute paths is still read. |

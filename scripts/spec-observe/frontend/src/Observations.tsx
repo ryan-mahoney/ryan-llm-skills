@@ -1,4 +1,5 @@
 import SessionPanel from './SessionPanel';
+import RelaunchAssignment from './RelaunchAssignment';
 import { For, Show } from 'solid-js';
 import { age, base, inlineMarkdown, statusMarkdown, str, time } from './format';
 import { assignmentEnded, assignmentLabel, assignmentTone, epicMemberTone, epicStats, packageViewUrl } from './observation-format';
@@ -57,6 +58,7 @@ export function AgentDetail(props: { assignment: any; records: any[]; token?:str
     const action = () => a().nextAction || a().safeAction || 'No safe action recorded';
     const hold = () => run()?.workflow_state === 'user-held' || list(run()?.conditions).some(c => c.state !== 'resolved' && (c.kind === 'user-held' || c.kind === 'hold-active' || String(c.kind || '').includes('hold')));
     return <article class="detail"><div class="eyebrow">{text(a().workspace, 'observer')} / Agent</div><div class="detail-title"><div><h2 class="mono">{a().assignment_id}</h2><p class="subtitle mono">{a().spec_package || 'No spec package'} · {text(a().workflow_id, 'Workflow unknown')}</p></div><span class={`pill ${assignmentTone(a())}`}>{assignmentLabel(a())}</span></div><p class="small muted section">Safe next action: {action()}</p>
+      <Show when={a().spec_package && a().skill === 'spec-end-to-end'}><RelaunchAssignment assignment={a()} token={props.token} live={props.live}/></Show>
       <SessionPanel assignment={a()} token={props.token} live={props.live} refresh={props.refresh} onEnded={props.onEnded}/>
       <Show when={a().task_activity?.state && a().task_activity.state!=='unknown'}><section class="section"><h3>Response status</h3><p>{a().task_activity.reason}</p><Show when={a().task_activity.finished_at}><p class="small muted">Finished {time(a().task_activity.finished_at)}. A finished response does not certify the proposed work was implemented or accepted.</p></Show><Show when={a().task_activity.last_reply}><details><summary>Last response</summary><pre style={{'white-space':'pre-wrap','overflow-wrap':'anywhere'}}>{a().task_activity.last_reply}</pre></details></Show></section></Show>
       <section class="section"><h3>Execution</h3><div class="rows"><div class="info-row"><p>{assignmentLabel(a())}</p><small>Recorded {text(a().recordedState, 'unknown')} · observed {text(a().observedState, 'unknown')}</small><Show when={a().unrecorded}><small class="warn">The record differs from the observation; reconcile with the explicit locate command.</small></Show></div><For each={list(a().coverageReasons)}>{v => <div class="info-row"><p>{v}</p></div>}</For></div><p class="small muted">Coverage {text(a().coverage, 'complete')} · read-only observation; the record is never rewritten here.</p></section>

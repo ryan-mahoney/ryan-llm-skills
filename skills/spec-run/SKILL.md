@@ -139,6 +139,12 @@ the selected checkout. Reuse completed `as-specified`/`adapted` steps whose reco
 commits and acceptance evidence still apply; a filename alone does not prove completion.
 Resume interrupted/checkpoint work when its gap is still owned by that step, or carry
 the explicit later-owner handoff forward. Do not replay completed steps or reviews.
+Read a checkpoint's `checkpoint_reason`, `remaining_work` and `next_action` before
+redispatch. For legacy handoffs, derive the action from recorded gaps and unresolved
+owned gates. Assign that concrete repair, check or decision; never ask an owner only
+to re-record the same completion. A ready unattempted gate belongs in the current
+assignment, not a routine checkpoint. Preserve useful partial receipts and genuine
+blockers, interruptions, deadlines and transfers without an automatic retry loop.
 
 Normally select remaining assigned steps in ascending order. Before dispatch, use their prepared dependency boundaries and current producer evidence to determine which are executable. When a known outside dependency blocks the earliest step's implementation or required gate, preserve that step's ID, learning/checkpoint, acceptance obligations, and blocked/pending evidence; select only an already prepared independent step whose contracts and proof do not rely on the missing producer. Pass that exact canonical card to dispatch instead of relying on startup's first-unfinished selection. Do not renumber steps, re-plan a speculative dependency graph, overlap writers, or expand this package to build the outside producer.
 
@@ -152,6 +158,10 @@ For each selected executable step:
    Supply the target checkout, next-card path, index path,
    newly routed messages/constraints, and any intervening fix commits. Do not restate
    the technical brief or the skill. Require affected source refresh after external fixes.
+   Include current prerequisite results/revisions and unresolved obligations. New steps
+   default to separate retained pairs (`session_scope: step`); retries retain that step's
+   context. Preserve an explicit package-scope override and existing active assignments.
+   Historical blockers need current contradictory evidence to override this handoff.
 3. Select the owner under the run's routing policy, or use its single assigned owner.
    In Pi, invoke `spec_dispatch` with the package (`package_dir`)/card, explicit model assignments,
    and constraints. Do not pass `checkout` or `branch`; the runtime takes each target's worktree and branch from
@@ -178,6 +188,11 @@ obligation is pending review/fix work, never a completed or accepted step. Befor
 legitimate blocked or yield return, checkpoint the current obligation and worker states so
 the next coordinator resumes without replaying work; do not keep a second ledger inside
 managed Pi.
+Checkpoint artifact references are readable package paths, not content fingerprints.
+Do not compute hashes for them; intentional card edits do not invalidate the reference.
+Inbox outcome hashes remain a separate direction-identity contract. A dispatch receipt
+with `bookkeeping_error` still identifies a real existing run: reconcile that run's
+checkpoint and await it if active, never launch a replacement based on the warning.
 
 Read `spec-step-run` once per implementation session and reload only changed guidance.
 The prepared card owns planned verification; execution expands it for a concrete new
