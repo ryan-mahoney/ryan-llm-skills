@@ -1,5 +1,5 @@
 import { For, Show, Switch, Match, createSignal, createMemo, createEffect, on, onMount, onCleanup } from 'solid-js';
-import { getJson, postJson } from './api';
+import { getJson } from './api';
 import { str, base, time, packageFilterMatches, setClock, tickClock, serverNow, stale, statusMarkdown } from './format';
 import { normalizeEnvelope, authoritativeObservers, collectRecords, collectAssignments, collectEpics, type Envelope, type WireRecord } from './model';
 import Shell from './Shell';
@@ -37,11 +37,8 @@ export default function App() {
   const [catalogDelayed, setCatalogDelayed] = createSignal(false);
   const [workspaceDelayed, setWorkspaceDelayed] = createSignal(false);
   const [refreshKey, setRefreshKey] = createSignal(0);
-  const [completion, setCompletion] = createSignal<WireRecord | null>(null);
-  const [completionBusy, setCompletionBusy] = createSignal(false);
-  const [completionError, setCompletionError] = createSignal('');
+  const [expectedCompletionKey, setExpectedCompletionKey] = createSignal<string | null>(null);
   const [endedSessions, setEndedSessions] = createSignal<string[]>([]);
-  let dialog!: HTMLDialogElement;
   let stateGeneration = 0, catalogGeneration = 0, workspaceGeneration = 0;
   let workspaceBusyId: string | null = null;
   let catalogTimer: ReturnType<typeof setTimeout> | undefined;
@@ -90,7 +87,8 @@ export default function App() {
   const pickerRequired = () => needsWorkspacePicker(route()) && !packageFilesRoute();
   const detailWorkspaceId = createMemo(() => route().dest === 'workspaces' ? route().ws : requiresWorkspace(route().dest) && !packageFilesRoute() ? route().ws : undefined);
 
-  function go(next: RouteState) {
+  function go(next: RouteState, options: { keepExpected?: boolean } = {}) {
+    if (!options.keepExpected) setExpectedCompletionKey(null);
     navigate(next, routeHistoryMode(route(), next));
   }
   function goDestination(dest: Destination) {
@@ -149,27 +147,15 @@ export default function App() {
     if (path) next.path = path;
     go(next);
   }
-  function askCompletion() {
-    const current = record();
-    if (!current || !live() || !payload()?.action_token) return;
-    setCompletion(current);
-    setCompletionError('');
-    dialog.showModal();
-  }
-  async function complete() {
-    const current = completion();
-    if (!current || !payload()?.action_token || completionBusy()) return;
-    setCompletionBusy(true);
-    try {
-      await postJson('/api/package-completion', { package: current.package }, payload()!.action_token!);
-      dialog.close();
-      setCompletion(null);
-      await refresh();
-    } catch (e) {
-      setCompletionError(e instanceof Error ? e.message : 'Completion could not be saved. Retry.');
-    } finally {
-      setCompletionBusy(false);
-    }
+  // Completion navigates to the recorded row's own Done key. The expected key
+  // keeps the fallback from selecting an unrelated Done row while the next
+  // observation catches up; explicit navigation releases it.
+  function onCompletionRecorded(item: WireRecord) {
+    const key = JSON.stringify([str(item.workspace), str(item.package), 'recent-completion']);
+    setExpectedCompletionKey(key);
+    const next: RouteState = { dest: 'specs', id: key, filter: 'completed' };
+    if (scopeWs() !== undefined) next.ws = scopeWs();
+    go(next, { keepExpected: true });
   }
   function manualRefresh() {
     void refresh(true);
@@ -321,10 +307,19 @@ export default function App() {
     if (!payload()) return;
     if (scopeWs() && !catalog()) return;
     const currentId = currentRoute.id ?? null;
+    if (currentRoute.dest !== 'specs' && expectedCompletionKey() !== null) setExpectedCompletionKey(null);
     if (currentRoute.dest === 'specs') {
       const current = scopedRecords().find(item => item.key === currentId);
       if (current) selectedIdentity = { workspace: str(current.workspace), package: str(current.package) };
       const rows = visibleRecords();
+      const expected = expectedCompletionKey();
+      // go() releases the exception synchronously on explicit in-app navigation;
+      // this effect must not clear it on a transiently stale route signal.
+      if (expected !== null && !rows.some(item => item.key === expected)) {
+        // The recorded completion is not in observed rows yet; keep the pending
+        // key instead of falling back to an unrelated Done row.
+        return;
+      }
       if (!rows.some(item => item.key === currentId)) {
         const followed = currentId && selectedIdentity ? rows.find(item => !item.recent_completion && item.is_current_assignment === true && item.workspace === selectedIdentity!.workspace && item.package === selectedIdentity!.package) : undefined;
         replaceId(followed?.key ?? rows[0]?.key ?? null);
@@ -336,6 +331,32 @@ export default function App() {
       const rows = visibleEpics();
       if (!rows.some(item => item.key === currentId)) replaceId(rows[0]?.key ?? null);
     }
+  });
+
+  // Move focus to the observed completion row once per appearance and restore it
+  // when snapshot re-renders detach the focused row; focus is never taken from a
+  // live explicit element. The expected key is released only by explicit go()
+  // navigation, so a transient row appearance cannot let the fallback select an
+  // unrelated Done row.
+  let focusedCompletionKey: string | null = null;
+  createEffect(() => {
+    const key = expectedCompletionKey();
+    if (focusedCompletionKey !== key) focusedCompletionKey = null;
+    if (!key) return;
+    if (route().dest !== 'specs' || route().id !== key) return;
+    if (!scopedRecords().some(item => item.key === key)) {
+      // Re-arm once the row leaves observations so its next appearance focuses.
+      focusedCompletionKey = null;
+      return;
+    }
+    const detached = document.activeElement === null || document.activeElement === document.body;
+    if (focusedCompletionKey === key && !detached) return;
+    focusedCompletionKey = key;
+    const frame = requestAnimationFrame(() => {
+      const row = Array.from(document.querySelectorAll<HTMLElement>('.records [data-key]')).find(element => element.dataset.key === key);
+      row?.focus({ preventScroll: true });
+    });
+    onCleanup(() => cancelAnimationFrame(frame));
   });
 
   // Scope and workspace selection changes clear retained detail before loading,
@@ -412,7 +433,7 @@ export default function App() {
     onQuery: setQuery,
     onFilter: setFilter,
     onOpenFile: setOpenFile,
-    onComplete: askCompletion,
+    onCompletionRecorded,
     onEnded: id => setEndedSessions(prev => prev.includes(id) ? prev : [...prev, id]),
     onSelectPackage: openPackage,
     onOpenPackageFiles: openPackageFiles,
@@ -462,17 +483,5 @@ export default function App() {
         <WorkspacePicker {...outletProps} />
       </Show>
     </Shell>
-    <dialog ref={dialog} id="completion-dialog" aria-labelledby="completion-title" onCancel={event => { if (completionBusy()) event.preventDefault(); }}>
-      <form onSubmit={event => { event.preventDefault(); void complete(); }}>
-        <h2 id="completion-title">Mark package complete?</h2>
-        <p class="mono">{base(completion()?.package)}</p>
-        <p>This saves a completion record and moves the package to Recently completed. Running workers continue; step evidence and PR status stay as recorded. Only a new dispatch makes the package current again.</p>
-        <Show when={completionError()}><p class="warn" role="alert">{completionError()}</p></Show>
-        <div class="flex justify-end gap-3">
-          <button type="button" disabled={completionBusy()} onClick={() => dialog.close()}>Cancel</button>
-          <button type="submit" disabled={completionBusy()}>{completionBusy() ? 'Saving…' : 'Mark complete'}</button>
-        </div>
-      </form>
-    </dialog>
   </>;
 }

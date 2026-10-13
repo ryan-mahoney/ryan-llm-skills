@@ -1,7 +1,8 @@
 import { For, Show, createEffect, createSignal, onCleanup } from 'solid-js';
+import { postJson } from '../api';
 import { activeRun, attention, base, esc, inlineMarkdown, runningUnconfirmed, serverNow, str, time } from '../format';
 import { completionLabel, duration as observationDuration, runState, specProgress } from '../observation-format';
-import { linkedAssignmentKey, observationEnd, packageFromKey, packageRelative, specViewState, visibleSpecs, type ObservationContext } from '../spec-state';
+import { classifyCompletionError, linkedAssignmentKey, observationEnd, packageFromKey, packageRelative, specViewState, visibleSpecs, type ObservationContext } from '../spec-state';
 import SpecActivity, { hasActivityFacts } from '../SpecActivity';
 import { ActionBar, EmptyState, MasterDetail, RegionalSkeleton, SectionTabs, StateNotice, StatusText, type SectionTab, type StatusTone } from '../primitives';
 import { PackagePreview } from '../PackagePreview';
@@ -202,6 +203,89 @@ export default function SpecsDestination(props: DestinationProps) {
   onCleanup(() => {
     if (activityLoadingTimer !== undefined) clearTimeout(activityLoadingTimer);
   });
+  // The dialog captures one immutable request (record, package, token) at open
+  // so a settled POST can only affect the context it was submitted from.
+  type CompletionRequest = { record: WireRecord; package: string; token: string };
+  const [completionRequest, setCompletionRequest] = createSignal<CompletionRequest | null>(null);
+  const [completionBusy, setCompletionBusy] = createSignal(false);
+  const [completionError, setCompletionError] = createSignal<{ kind: 'refused' | 'uncertain'; message: string } | null>(null);
+  let completionDialog!: HTMLDialogElement;
+  let keepActiveButton: HTMLButtonElement | undefined;
+  let completionUnmounted = false;
+  onCleanup(() => { completionUnmounted = true; });
+  const completionEligible = (item: WireRecord): boolean =>
+    !item.recent_completion && !item.planned && item.is_current_assignment === true;
+  const completionHelp = (): string => props.completionToken
+    ? 'Move this package to Recently completed.'
+    : !props.live
+      ? 'Completion is available on the live dashboard.'
+      : props.completionLocalOnly
+        ? "Mark complete is available on the host's local dashboard."
+        : 'Reconnect to the live dashboard to enable completion.';
+  const completionUncertain = () => completionError()?.kind === 'uncertain';
+  const completionRefused = () => completionError()?.kind === 'refused';
+  const resetCompletion = () => {
+    setCompletionRequest(null);
+    setCompletionError(null);
+  };
+  const closeCompletion = (force = false) => {
+    if (completionBusy() && !force) return;
+    if (completionDialog.open) completionDialog.close();
+    else resetCompletion();
+  };
+  const openCompletion = (item: WireRecord) => {
+    const token = props.completionToken;
+    if (!completionEligible(item) || !token) return;
+    setCompletionRequest({ record: item, package: str(item.package), token });
+    setCompletionError(null);
+    setCompletionBusy(false);
+    if (!completionDialog.open) completionDialog.showModal();
+    requestAnimationFrame(() => keepActiveButton?.focus());
+  };
+  const refreshCompletion = () => {
+    closeCompletion(true);
+    void props.refresh();
+  };
+  // Modal dialogs keep focus inside, but browsers do not wrap Tab at the ends;
+  // wrap across the dialog's own focusable controls so focus never reaches BODY.
+  const trapCompletionTab = (event: KeyboardEvent) => {
+    if (event.key !== 'Tab') return;
+    const focusable = Array.from(completionDialog.querySelectorAll<HTMLElement>('button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled)'));
+    if (!focusable.length) {
+      event.preventDefault();
+      return;
+    }
+    const first = focusable[0], last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+  async function submitCompletion() {
+    const request = completionRequest();
+    if (!request || completionBusy()) return;
+    if (!props.live || props.connectionFailed || !props.completionToken) {
+      setCompletionError({ kind: 'refused', message: 'Completion is unavailable while the dashboard is disconnected. Refresh state and retry.' });
+      return;
+    }
+    setCompletionBusy(true);
+    setCompletionError(null);
+    try {
+      await postJson('/api/package-completion', { package: request.package }, request.token);
+      if (completionUnmounted) return;
+      props.onCompletionRecorded(request.record);
+      closeCompletion(true);
+      await props.refresh();
+    } catch (error) {
+      if (completionUnmounted) return;
+      setCompletionError(classifyCompletionError(error));
+    } finally {
+      if (!completionUnmounted) setCompletionBusy(false);
+    }
+  }
   const recovery = (): 'offline' | 'stale' | 'partial' | null => {
     const state = view();
     if (state.offline) return 'offline';
@@ -400,9 +484,21 @@ export default function SpecsDestination(props: DestinationProps) {
               <Show when={item().recent_completion} fallback={
                 <Show when={item().planned} fallback={<>
                   {recoveryActions()}
-                  <Show when={activityTab()} fallback={
+                  <Show when={activityTab()} fallback={<>
                     <button class={recovery() === null ? 'ds-btn ds-btn--primary' : 'ds-btn'} type="button" onClick={() => selectTab('activity')}>Open spec</button>
-                  }>
+                    <Show when={completionEligible(item())}>
+                      <button
+                        class="ds-btn"
+                        type="button"
+                        disabled={!props.completionToken}
+                        aria-describedby={!props.completionToken ? 'completion-help' : undefined}
+                        onClick={() => openCompletion(item())}
+                      >Mark complete</button>
+                      <Show when={!props.completionToken}>
+                        <p id="completion-help" class="small muted">{completionHelp()}</p>
+                      </Show>
+                    </Show>
+                  </>}>
                     <Show when={workTourPath(item())} fallback={<>
                       <Show when={!props.canOpenPackageFiles(item())}>
                         <span class="sr-only" id="activity-file-reason">Package files are unavailable for this selection.</span>
@@ -479,6 +575,48 @@ export default function SpecsDestination(props: DestinationProps) {
           )}
         </Show>
       </MasterDetail>
+      <dialog
+        ref={completionDialog}
+        id="completion-dialog"
+        class="dialog-content"
+        aria-labelledby="completion-title"
+        onCancel={event => { if (completionBusy()) event.preventDefault(); }}
+        onKeyDown={trapCompletionTab}
+        onClose={resetCompletion}
+      >
+        <form onSubmit={event => { event.preventDefault(); void submitCompletion(); }}>
+          <h2 id="completion-title">Mark spec complete?</h2>
+          <p><strong>{base(completionRequest()?.package)}</strong></p>
+          <p>This moves the spec to Recently completed with a manual completion basis. It does not certify accepted steps or a merged pull request.</p>
+          <Show when={completionError()}>
+            {error => (
+              <div class="ds-callout error" role="alert">
+                <div>
+                  <strong>{error().kind === 'refused' ? 'Completion was not recorded' : 'Completion is unconfirmed'}</strong>
+                  <p>{error().kind === 'refused' ? error().message : 'The save did not complete. Refresh observations to check whether completion was recorded before trying again.'}</p>
+                </div>
+              </div>
+            )}
+          </Show>
+          <div class="actions">
+            <Show when={completionUncertain()} fallback={<>
+              <button
+                ref={element => { keepActiveButton = element; }}
+                type="button"
+                class="ds-btn"
+                disabled={completionBusy()}
+                onClick={() => closeCompletion()}
+              >{completionRefused() ? 'Cancel' : 'Keep spec active'}</button>
+              <button type="submit" class="ds-btn ds-btn--primary" disabled={completionBusy()}>
+                {completionBusy() ? 'Recording completion…' : 'Mark complete'}
+              </button>
+            </>}>
+              <button type="button" class="ds-btn" onClick={() => closeCompletion()}>Return to spec</button>
+              <button type="button" class="ds-btn ds-btn--primary" onClick={refreshCompletion}>Refresh state</button>
+            </Show>
+          </div>
+        </form>
+      </dialog>
     </div>
   );
 }

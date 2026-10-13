@@ -136,3 +136,8 @@
 .detail-actions #package-preview{display:inline-flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0;max-width:100%}
 .detail-actions #package-preview .status,.detail-actions #package-preview .preview-note{white-space:normal;overflow-wrap:anywhere;max-width:100%}
 .detail-actions #package-preview .ds-btn{flex-shrink:0}
+
+/* Completion dialog: the captured request keeps one right-aligned action row
+   and dialog buttons retain the design focus ring over the legacy reset. */
+#completion-dialog .actions{justify-content:flex-end}
+#completion-dialog button:focus-visible{outline:2px solid var(--ds-accent);outline-offset:3px;border-radius:3px}

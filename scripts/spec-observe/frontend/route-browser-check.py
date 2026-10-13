@@ -1273,9 +1273,8 @@ try:
             page.locator('button:has-text("Refresh state")').first.click()
             expect(page.locator('.records .ds-callout').filter(has_text='Connection lost')).to_be_visible()
             expect(rows).to_have_count(1)
-            page.get_by_role('navigation', name='Spec sections').get_by_role('button', name='Activity', exact=True).click()
-            expect(page.locator('.completion-control').get_by_role('button', name='Mark complete', exact=True)).to_be_disabled()
-            page.get_by_role('navigation', name='Spec sections').get_by_role('button', name='Overview', exact=True).click()
+            expect(page.locator('.detail-actions').get_by_role('button', name='Mark complete', exact=True)).to_be_disabled()
+            expect(page.locator('#completion-help')).to_contain_text('Reconnect to the live dashboard')
             offline_age = rows.first.locator('small').inner_text()
             assert '2m 0s before observation' in offline_age, offline_age
             page.wait_for_timeout(1500)
@@ -1306,9 +1305,8 @@ try:
             assert '10m 0s before observation' in imported_age, imported_age
             page.wait_for_timeout(1500)
             assert rows.first.locator('small').inner_text() == imported_age, 'imported age advanced'
-            page.get_by_role('navigation', name='Spec sections').get_by_role('button', name='Activity', exact=True).click()
-            expect(page.locator('.completion-control').get_by_role('button', name='Mark complete', exact=True)).to_be_disabled()
-            page.get_by_role('navigation', name='Spec sections').get_by_role('button', name='Overview', exact=True).click()
+            expect(page.locator('.detail-actions').get_by_role('button', name='Mark complete', exact=True)).to_be_disabled()
+            expect(page.locator('#completion-help')).to_contain_text('Completion is available on the live dashboard')
             capture_both('imported')
             report['scenarios'].append('Imported rows render fixed before-observation ages and keep mutation controls unavailable')
 

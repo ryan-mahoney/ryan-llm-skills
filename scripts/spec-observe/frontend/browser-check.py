@@ -3,12 +3,19 @@
 # dependencies = ["playwright"]
 # ///
 """Run the dashboard's browser regression journey with isolated storage and fake workers.
-Usage: uv run --script scripts/spec-observe/frontend/browser-check.py
+Usage: uv run --script scripts/spec-observe/frontend/browser-check.py [--case completion]
 Requires the uishot warm browser on localhost:9222; no provider or live-store writes.
 """
-import json, os, re, select, subprocess, time, urllib.parse
+import argparse, json, os, re, select, subprocess, time, urllib.parse
 from pathlib import Path
 from playwright.sync_api import sync_playwright, expect
+
+class CompletionCaseComplete(Exception):
+    pass
+
+parser=argparse.ArgumentParser(description='Run the dashboard browser regression journey.')
+parser.add_argument('--case',choices=['completion'])
+case=parser.parse_args().case
 
 root=Path(__file__).resolve().parent
 evidence_dir=Path(os.environ.get('SENTINEL_EVIDENCE_DIR','/tmp/sentinel-browser-evidence'))
@@ -191,6 +198,230 @@ try:
                 if observed: break
             assert observed,f'{label}: keyboard focus never reached a shell control'
             assert observed['focusVisible'] and observed['outlineStyle'] not in ('none','') and observed['outlineWidth']>=1,f'{label}: focus not visibly styled {observed}'
+
+        if case=='completion':
+            # EV-8 completion-only journey: destination-owned dialog, authority
+            # states, single-POST refusal/uncertainty and the App Done handoff.
+            def capture_completion(name):
+                capture_playwright('completion-'+name+'-1280.png',1280,860)
+                capture_playwright('completion-'+name+'-1600.png',1600,900)
+                page.set_viewport_size({'width':1280,'height':860})
+            (evidence_dir/'reference').mkdir(parents=True,exist_ok=True)
+            design_screens=Path(os.environ['SENTINEL_DESIGN_SCREENS']) if os.environ.get('SENTINEL_DESIGN_SCREENS') else evidence_dir.resolve().parent.parent.parent/'designs'/'app-ui'/'screens'
+            for screen in ('14-spec-completion-confirm','94-spec-completion-saving','95-spec-completion-error'):
+                source=design_screens/f'{screen}.html'
+                if not source.exists():
+                    summary.setdefault('referenceMissing',[]).append(screen)
+                    continue
+                for width in (1280,1600):
+                    reference=context.new_page()
+                    reference.set_viewport_size({'width':width,'height':800})
+                    reference.goto(source.as_uri(),wait_until='domcontentloaded')
+                    reference.evaluate('document.fonts.ready')
+                    path=evidence_dir/'reference'/f'{screen}-{width}.png'
+                    reference.screenshot(path=str(path),full_page=True)
+                    reference.close()
+                    summary.setdefault('referenceCaptures',[]).append(str(path))
+            page.set_viewport_size({'width':1280,'height':860})
+            phase='completion-authority'
+            control('local',False)
+            page.goto(url+'/#/specs?ws=fixture',wait_until='domcontentloaded')
+            completion_row=page.locator('.records [data-key]').filter(has_text='Building the dashboard').first
+            completion_row.wait_for()
+            completion_row.click()
+            expect(page.locator('.detail-actions')).to_contain_text('Mark complete')
+            expect(page.get_by_role('button',name='Mark complete',exact=True)).to_be_disabled()
+            expect(page.locator('#completion-help')).to_contain_text("host's local dashboard")
+            capture_completion('remote')
+            passed('remote operator lacks completion authority with local-dashboard help')
+
+            imported={'action_token':'untrusted-import-token','observers':[{'observer_id':'imported','state':'unknown','snapshot':{'runs':[{'workspace':'fixture','package':'/fixture/imported','package_ref':'fixture/imported','assignment_id':'imported-completion','execution':'running','workflow_state':'waiting-worker','is_current_assignment':True,'coverage':{'state':'complete','reasons':[]},'activity':'Imported completion run'}]}}]}
+            page.locator('#import-file').set_input_files({'name':'completion-import.json','mimeType':'application/json','buffer':json.dumps(imported).encode()})
+            expect(page.locator('#connection-status')).to_contain_text('Imported snapshot')
+            imported_row=page.locator('.records [data-key]').filter(has_text='Imported completion run').first
+            imported_row.wait_for()
+            imported_row.click()
+            expect(page.get_by_role('button',name='Mark complete',exact=True)).to_be_disabled()
+            expect(page.locator('#completion-help')).to_contain_text('Completion is available on the live dashboard')
+            assert completion_posts==[],completion_posts
+            passed('imported snapshot lacks completion authority')
+
+            control('local',True)
+            # The imported snapshot lives in App memory until a fresh document loads.
+            page.goto('about:blank',wait_until='domcontentloaded')
+            page.goto(url+'/#/specs?ws=fixture',wait_until='domcontentloaded')
+            completion_row=page.locator('.records [data-key]').filter(has_text='Building the dashboard').first
+            completion_row.wait_for()
+            completion_row.click()
+            expect(page.get_by_role('button',name='Mark complete',exact=True)).to_be_enabled()
+
+            phase='completion-offline'
+            control('state-fail',True)
+            state_baseline=boundary_attempt_count('state')
+            page.locator('#refresh-button').click()
+            wait_boundary_start('state',state_baseline)
+            wait_boundary_settled('state',timeout=10)
+            expect(page.locator('main')).to_contain_text('Connection lost')
+            expect(page.get_by_role('button',name='Mark complete',exact=True)).to_be_disabled()
+            expect(page.locator('#completion-help')).to_contain_text('Reconnect to the live dashboard')
+            control('state-fail',False)
+            page.locator('.list-pane').get_by_role('button',name='Retry connection',exact=True).click()
+            wait_boundary_settled('state',timeout=10)
+            expect(page.get_by_role('button',name='Mark complete',exact=True)).to_be_enabled()
+            passed('offline retained state disables completion until retry recovers')
+
+            phase='completion-dialog'
+            dialog=page.locator('#completion-dialog')
+            page.get_by_role('button',name='Mark complete',exact=True).click()
+            expect(dialog).to_be_visible()
+            expect(dialog).to_contain_text('Mark spec complete?')
+            expect(dialog.get_by_role('button',name='Keep spec active',exact=True)).to_be_focused()
+            capture_completion('confirm')
+            for _ in range(6):
+                page.keyboard.press('Tab')
+                assert page.evaluate("() => document.querySelector('#completion-dialog')?.contains(document.activeElement)===true"),'Tab left the completion dialog'
+            page.keyboard.press('Escape')
+            expect(dialog).not_to_be_visible()
+            assert completion_posts==[],'idle dialog wrote a completion'
+            passed('dialog opens with Keep spec active focus, contains Tab and closes on Escape')
+
+            phase='completion-refused'
+            page.goto(url+'/#/specs',wait_until='domcontentloaded')
+            mismatch_row=page.locator('[data-key]').filter(has_text='Neighbor physical run').first
+            mismatch_row.wait_for()
+            mismatch_row.click()
+            expect(page.locator('main')).to_contain_text('physical-kit')
+            expect(page.get_by_role('button',name='Mark complete',exact=True)).to_be_enabled()
+            page.get_by_role('button',name='Mark complete',exact=True).click()
+            expect(dialog).to_be_visible()
+            posts_before=len(completion_posts)
+            dialog.get_by_role('button',name='Mark complete',exact=True).click()
+            expect(dialog).to_contain_text('Dashboard data unavailable')
+            expect(dialog.get_by_role('button',name='Mark complete',exact=True)).to_be_enabled()
+            expect(dialog.get_by_role('button',name='Cancel',exact=True)).to_be_enabled()
+            for _ in range(40):
+                if len(completion_posts)>posts_before: break
+                page.wait_for_timeout(50)
+            assert len(completion_posts)==posts_before+1,(posts_before,completion_posts)
+            assert completion_posts[-1]['package']==receipt['mismatchPackage'],completion_posts[-1]
+            capture_completion('refused')
+            dialog.get_by_role('button',name='Cancel',exact=True).click()
+            expect(dialog).not_to_be_visible()
+            expect(page.locator('main')).to_contain_text('physical-kit')
+            assert 'Marked complete' not in page.locator('.detail-pane').inner_text()
+            assert len(completion_posts)==posts_before+1
+            passed('server refusal keeps the dialog with the message and an explicit retry')
+
+            phase='completion-uncertain'
+            def abort_completion(route):
+                route.abort('timedout')
+            page.route('**/api/package-completion',abort_completion)
+            page.get_by_role('button',name='Mark complete',exact=True).click()
+            expect(dialog).to_be_visible()
+            posts_before=len(completion_posts)
+            dialog.get_by_role('button',name='Mark complete',exact=True).click()
+            expect(dialog).to_contain_text('Completion is unconfirmed')
+            expect(dialog.get_by_role('button',name='Refresh state',exact=True)).to_be_visible()
+            expect(dialog.get_by_role('button',name='Return to spec',exact=True)).to_be_visible()
+            assert dialog.get_by_role('button',name='Mark complete',exact=True).count()==0,'uncertain state offered a retry'
+            for _ in range(40):
+                if len(completion_posts)>posts_before: break
+                page.wait_for_timeout(50)
+            assert len(completion_posts)==posts_before+1,(posts_before,completion_posts)
+            capture_completion('uncertain')
+            state_baseline=boundary_attempt_count('state')
+            dialog.get_by_role('button',name='Refresh state',exact=True).click()
+            expect(dialog).not_to_be_visible()
+            wait_boundary_start('state',state_baseline)
+            wait_boundary_settled('state',timeout=10)
+            assert len(completion_posts)==posts_before+1,'uncertain refresh posted again'
+            page.unroute('**/api/package-completion',abort_completion)
+            passed('aborted completion shows Refresh state/Return to spec with no second POST')
+
+            phase='completion-handoff'
+            handoff={'absent':False}
+            def doctor_state(route):
+                if not handoff['absent']:
+                    route.continue_()
+                    return
+                response=route.fetch()
+                value=response.json()
+                for observer in value.get('observers',[]):
+                    snapshot=observer.get('snapshot') or {}
+                    if snapshot.get('workspace')!='fixture': continue
+                    snapshot['recently_completed']=[entry for entry in snapshot.get('recently_completed',[]) if entry.get('package')!=receipt['package']]
+                    snapshot.setdefault('recently_completed',[]).append({'workspace':'fixture','package':'/fixture/specs/unrelated-done','package_ref':'fixture/unrelated-done','assignment_id':'unrelated-done','execution':'completed','workflow_state':'complete','is_current_assignment':False,'completion_basis':'manual','completed_at':'2026-10-12T12:00:00.000Z','coverage':{'state':'complete','reasons':[]},'activity':'Unrelated completion'})
+                route.fulfill(status=response.status,headers={'content-type':'application/json'},body=json.dumps(value))
+            page.route('**/api/state**',doctor_state)
+            handoff['absent']=True
+            page.goto(url+'/#/specs?ws=fixture',wait_until='domcontentloaded')
+            completion_row=page.locator('.records [data-key]').filter(has_text='Building the dashboard').first
+            completion_row.wait_for()
+            completion_row.click()
+            page.locator('#find-record').fill('waiting-worker')
+            expect(page.locator('.records [data-key]').filter(has_text='Building the dashboard')).to_have_count(1)
+            completion_row.click()
+            expect(page.get_by_role('button',name='Mark complete',exact=True)).to_be_enabled()
+            held={'route':None,'package':None,'token':None}
+            def hold_completion(route):
+                held['route']=route
+                held['package']=json.loads(route.request.post_data or '{}').get('package')
+                held['token']=route.request.headers.get('x-sentinel-token')
+            page.route('**/api/package-completion',hold_completion)
+            page.get_by_role('button',name='Mark complete',exact=True).click()
+            expect(dialog).to_be_visible()
+            expect(dialog.get_by_role('button',name='Keep spec active',exact=True)).to_be_focused()
+            posts_before=len(completion_posts)
+            dialog.get_by_role('button',name='Mark complete',exact=True).click()
+            expect(dialog.get_by_role('button',name='Recording completion…',exact=True)).to_be_disabled()
+            expect(dialog.get_by_role('button',name='Keep spec active',exact=True)).to_be_disabled()
+            page.keyboard.press('Escape')
+            expect(dialog).to_be_visible()
+            for _ in range(40):
+                if held['route']: break
+                page.wait_for_timeout(25)
+            assert held['route'],'completion POST was not intercepted'
+            token=context.request.get(url+'/api/state').json().get('action_token')
+            assert held['package']==receipt['package'],held
+            assert held['token']==token,{'sent':held['token'],'expected':token}
+            assert len(completion_posts)==posts_before+1,completion_posts
+            capture_completion('saving')
+            held['route'].continue_()
+            expect(dialog).not_to_be_visible()
+            page.unroute('**/api/package-completion',hold_completion)
+            hash_value=page.evaluate('location.hash')
+            assert 'q=' not in hash_value,hash_value
+            assert 'filter=completed' in hash_value,hash_value
+            expected_key=json.dumps(['fixture',receipt['package'],'recent-completion'],separators=(',',':'))
+            selected_id=urllib.parse.parse_qs(hash_value.split('?',1)[1]).get('id',[None])[0]
+            assert selected_id==expected_key,{'selected':selected_id,'expected':expected_key}
+            expect(page.locator('.records [data-key]')).to_have_count(1)
+            unrelated_key=json.dumps(['fixture','/fixture/specs/unrelated-done','recent-completion'],separators=(',',':'))
+            unrelated=page.locator('.records [data-key]').first
+            assert unrelated.get_attribute('data-key')==unrelated_key,unrelated.get_attribute('data-key')
+            expect(unrelated).to_contain_text('unrelated-done')
+            expect(unrelated).to_contain_text('Marked complete')
+            assert 'selected' not in (unrelated.get_attribute('class') or ''),'unrelated Done row stole the completion selection'
+            expect(page.locator('.records [data-key].selected')).to_have_count(0)
+            assert 'Unrelated completion' not in page.locator('.detail-pane').inner_text()
+            assert len(completion_posts)==posts_before+1,'handoff posted more than once'
+            handoff['absent']=False
+            expected_row=page.locator('.records [data-key]').filter(has_text='Marked complete').first
+            expect(expected_row).to_be_visible(timeout=12000)
+            expect(expected_row).to_have_attribute('aria-pressed','true')
+            focused=page.evaluate("() => document.activeElement?.closest('[data-key]')?.getAttribute('data-key') ?? null")
+            assert focused==expected_key,{'focused':focused,'expected':expected_key}
+            expect(page.locator('.detail-pane')).to_contain_text('Marked complete')
+            expect(page.get_by_role('button',name='Done',exact=True)).to_have_attribute('aria-pressed','true')
+            capture_completion('done')
+            page.unroute('**/api/state**',doctor_state)
+            passed('search-cleared exact Done handoff focuses the observed completion without stealing an unrelated row')
+
+            summary['status']='passed'
+            summary['page_errors']=errors
+            summary['console_errors']=console_errors
+            summary['expected_http_errors']=[{'path':entry['path'],'status':entry['status'],'phase':entry['phase']} for entry in failed_responses]
+            raise CompletionCaseComplete()
 
         # Step 4 controlled Workspaces states, all at 1280x860 with resets before/after each case.
         page.set_viewport_size({'width':1280,'height':860})
@@ -502,7 +733,7 @@ try:
         passed('skip focuses the page heading from a scoped object route without hash mutation')
 
         goto_workspaces('/specs?ws=fixture')
-        page.get_by_role('button',name='Completed',exact=True).click()
+        page.get_by_role('button',name='Done',exact=True).click()
         page.locator('[data-key]').filter(has_text='PR merged').first.click()
         specs_object_url=page.url
         page.locator('[data-area="epics"]').click()
@@ -513,7 +744,7 @@ try:
         expect(page.locator('main')).to_contain_text('Demo epic')
         page.go_back()
         assert page.url==specs_object_url,(page.url,specs_object_url)
-        expect(page.get_by_role('button',name='Completed',exact=True)).to_have_attribute('aria-pressed','true')
+        expect(page.get_by_role('button',name='Done',exact=True)).to_have_attribute('aria-pressed','true')
         expect(page.locator('[data-key]').filter(has_text='PR merged').first).to_have_attribute('aria-pressed','true')
         passed('spec object -> epic member spec -> Back twice restores selection and package filter')
         page.go_forward()
@@ -525,9 +756,9 @@ try:
         page.go_back()
         page.go_back()
         assert page.url==specs_object_url,(page.url,specs_object_url)
-        expect(page.get_by_role('button',name='Completed',exact=True)).to_have_attribute('aria-pressed','true')
+        expect(page.get_by_role('button',name='Done',exact=True)).to_have_attribute('aria-pressed','true')
         expect(page.locator('[data-key]').filter(has_text='PR merged').first).to_have_attribute('aria-pressed','true')
-        passed('Forward restores epic and member spec, then Back twice restores Completed selection and filter')
+        passed('Forward restores epic and member spec, then Back twice restores Done selection and filter')
 
         phase='scope-mismatch'
         goto_workspaces('/specs?ws=alpha')
@@ -684,9 +915,12 @@ try:
             capture_uishot('/specs?ws=fixture',f'specs-ideal-{width}.png',width,height,'.detail-body')
         page.set_viewport_size({'width':1280,'height':860})
         passed('specs ideal captures at both desktop viewports')
-        expect(page.locator('main')).to_contain_text('Step durations')
+        expect(page.locator('.detail-actions')).to_contain_text('Mark complete')
         expect(page.get_by_role('button',name='Mark complete',exact=True)).to_be_disabled()
         expect(page.locator('#completion-help')).to_contain_text("host's local dashboard")
+        page.get_by_role('button',name='Open spec',exact=True).click()
+        page.get_by_role('button',name='Open work tour',exact=True).click()
+        expect(page).to_have_url(re.compile(r'#/files\?.*path=work-tour\.html'))
         page.get_by_role('button',name='spec.md',exact=True).click()
         evidence=page.locator('#file-content')
         expect(evidence).to_contain_text('Browser specification')
@@ -695,7 +929,8 @@ try:
         page.get_by_role('button',name='work-tour.html',exact=True).click()
         expect(page.frame_locator('iframe[title="work-tour.html"]').locator('h1')).to_have_text('Isolated work tour')
         assert page.locator('iframe[title="work-tour.html"]').get_attribute('sandbox')=='allow-scripts'
-        page.get_by_role('button',name='Completed',exact=True).click()
+        page.goto(url,wait_until='domcontentloaded')
+        page.get_by_role('button',name='Done',exact=True).click()
         page.locator('[data-key]').first.click()
         expect(page.locator('main')).to_contain_text('PR merged')
         end_posts_before=len(posts('endSession'))
@@ -868,7 +1103,7 @@ try:
         expect(page.locator('#completion-dialog')).to_be_visible()
         page.locator('#completion-dialog').get_by_role('button',name='Mark complete',exact=True).click()
         expect(page.locator('#completion-dialog')).not_to_be_visible()
-        page.get_by_role('button',name='Completed',exact=True).click()
+        page.get_by_role('button',name='Done',exact=True).click()
         expect(page.locator('main')).to_contain_text('Marked complete')
         phase=None
         allowed_reads={('/api/state',503),('/api/workspaces',503),('/api/workspace',503)}
@@ -937,6 +1172,8 @@ try:
         summary['console_errors']=console_errors
         summary['expected_http_errors']=summary.get('expected_http_errors',[])
         print(json.dumps({'status':'passed','scenarios':summary['scenarios'],'page_errors':errors,'screenshot':str(browser_evidence/'sentinel-solid-threads.png'),'receipt':str(evidence_dir/'ev-2-browser-check.json')}))
+    except CompletionCaseComplete:
+        pass
     except BaseException as exc:
         # Capture while the page and fixture are still owned so the next boundary
         # failure is observable without rerunning solely for logs.
@@ -970,7 +1207,7 @@ except BaseException as exc:
     summary['error']=repr(exc)
     raise
 finally:
-    receipt=evidence_dir/'ev-2-browser-check.json'
+    receipt=evidence_dir/('browser/completion.json' if case=='completion' else 'ev-2-browser-check.json')
     temporary=receipt.with_name(receipt.name+'.tmp')
     temporary.write_text(json.dumps(summary,indent=2)+'\n')
     os.replace(temporary,receipt)
@@ -981,7 +1218,8 @@ finally:
     tour+=['','## Timing facts','']+[f'- {key}: {value}s' for key,value in (summary.get('timings') or {}).items()]
     if summary.get('error'): tour+=['','## Failure','',f"```\n{summary['error']}\n```"]
     tour+=['','## Proof boundary','','Isolated production composition and approved desktop/file modes; no phone layout or live operator storage.','']
-    (evidence_dir/'qa-tour.md').write_text('\n'.join(tour)+'\n')
+    if case is None:
+        (evidence_dir/'qa-tour.md').write_text('\n'.join(tour)+'\n')
     if fixture:
         fixture.terminate()
         try: fixture.wait(timeout=5)
