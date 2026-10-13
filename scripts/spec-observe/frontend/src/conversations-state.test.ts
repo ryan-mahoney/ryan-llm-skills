@@ -309,6 +309,56 @@ test('availability: non-idle/active states disable send and preserve unknown att
   assert.ok(stalled.reason.length > 0);
 });
 
+test('availability: recovery primaries outrank queued items and response ownership', () => {
+  // A paused thread with a queued item keeps Resume, not Open queue.
+  const pausedQueued = composerAvailability({
+    view: 'ready',
+    thread: idleRow(ALPHA, 'Alpha transcript', {
+      queue_paused: true,
+      queue: [{ id: 'm1', text: 'held', state: 'queued', queue_position: 3 }],
+    }),
+    actionable: true,
+    draft: 'hello',
+    pending: false,
+  });
+  assert.equal(pausedQueued.primary, 'resume');
+  assert.equal(pausedQueued.sendEnabled, false);
+  assert.ok(pausedQueued.reason.length > 0);
+
+  // An uncertain head followed by a queued item keeps Discard, not Open queue.
+  const uncertainQueued = composerAvailability({
+    view: 'ready',
+    thread: idleRow(ALPHA, 'Alpha transcript', {
+      attention: 'uncertain',
+      queue: [{ id: 'm1', text: 'held', state: 'queued', queue_position: 3 }],
+    }),
+    actionable: true,
+    draft: 'hello',
+    pending: false,
+  });
+  assert.equal(uncertainQueued.primary, 'discard');
+  assert.equal(uncertainQueued.sendEnabled, false);
+  assert.ok(uncertainQueued.reason.length > 0);
+
+  // A stalled thread that still owns the response keeps Refresh, not Stop.
+  // owns_response stays on the row so the surface can still offer Stop secondary.
+  const stalledOwner = idleRow(ALPHA, 'Alpha transcript', {
+    attention: 'stalled',
+    owns_response: true,
+  });
+  const stalledOwned = composerAvailability({
+    view: 'ready',
+    thread: stalledOwner,
+    actionable: true,
+    draft: 'hello',
+    pending: false,
+  });
+  assert.equal(stalledOwned.primary, 'refresh');
+  assert.equal(stalledOwned.sendEnabled, false);
+  assert.ok(stalledOwned.reason.length > 0);
+  assert.equal(stalledOwner.owns_response, true);
+});
+
 test('availability: history-only threads expose no composer or send, only older', () => {
   const thread = idleRow(ALPHA, 'Alpha transcript', { history_only: true });
   const result = composerAvailability({

@@ -280,17 +280,22 @@ export function composerAvailability(input: {
     return { sendEnabled: false, reason: viewReason(view), primary };
   }
   const queued = (thread.queue ?? []).some(item => item.state === 'queued');
+  // Recovery primaries outrank ordinary responding/queued/idle actions: a
+  // paused, uncertain or stalled thread keeps its Resume/Discard/Refresh
+  // primary even with queued items or confirmed response ownership. The
+  // owns_response fact stays on the row so the surface can still offer Stop
+  // as a secondary action (stalled owner, responding thread).
   const statePrimary: ComposerPrimary =
-    state === 'active' || thread.owns_response === true
-      ? 'stop'
-      : queued
-        ? 'queue'
-        : state === 'paused'
-          ? 'resume'
-          : state === 'uncertain'
-            ? 'discard'
-            : state === 'stalled'
-              ? 'refresh'
+    state === 'paused'
+      ? 'resume'
+      : state === 'uncertain'
+        ? 'discard'
+        : state === 'stalled'
+          ? 'refresh'
+          : state === 'active' || thread.owns_response === true
+            ? 'stop'
+            : queued
+              ? 'queue'
               : state === 'idle' || state === 'active'
                 ? 'send'
                 : 'resume';
