@@ -13,6 +13,11 @@ test('package viewer rejects unpublished paths, traversal, escaping links and ov
  const gate=async id=>{if(id!=='demo')throw Error('Workspace is unavailable');return workspaceDir;};
  const state={observers:[{snapshot:{runs:[{package:pkg,workspace:'demo'},{package:join(workspaceDir,'notes'),workspace:'demo'}]}}]};
  assert.deepEqual(await authorizePackage(state,pkg,gate),{root:pkg,ref:'demo/feature'});
+ const planned={observers:[{snapshot:{runs:[],planned_packages:state.observers[0].snapshot.runs}}]};
+ assert.deepEqual(await authorizePackage(planned,pkg,gate),{root:pkg,ref:'demo/feature'},'planned folders are published without a run');
+ await assert.rejects(authorizePackage(planned,dir,gate),/not published/);
+ await assert.rejects(authorizePackage(planned,join(workspaceDir,'notes'),gate),/not canonical/);
+ await assert.rejects(authorizePackage({observers:[{snapshot:{runs:[],planned_packages:[{package:pkg,workspace:'other'}]}}]},pkg,gate),/unavailable/);
  await assert.rejects(authorizePackage(state,dir,gate),/not published/);
  await assert.rejects(authorizePackage(state,join(workspaceDir,'notes'),gate),/not canonical/,'a published folder outside specs/ is refused');
  await assert.rejects(authorizePackage({observers:[{snapshot:{runs:[{package:pkg,workspace:'other'}]}}]},pkg,gate),/unavailable/,'a workspace the gate refuses');

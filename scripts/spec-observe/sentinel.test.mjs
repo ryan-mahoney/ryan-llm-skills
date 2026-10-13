@@ -694,6 +694,58 @@ test('completion history uses recorded dates past the activity window, includes 
   assert.equal(snapshot.coverage.state, 'complete');
 });
 
+// Run alone: node --test --test-name-pattern='planned inventory includes old folders' scripts/spec-observe/sentinel.test.mjs
+test('planned inventory includes old folders and excludes active, blocked, and historical completion', async t => {
+  const { readdirSync, utimesSync } = await import('node:fs');
+  const f = sandbox(t), repo = primary(f.dir, 'planned-inventory');
+  const empty = pack(repo, 'empty-planned');
+  const settled = pack(repo, 'settled-planned');
+  const active = pack(repo, 'active');
+  const blocked = pack(repo, 'blocked');
+  const oldActive = pack(repo, 'old-active');
+  const oldBlocked = pack(repo, 'old-blocked');
+  const done = pack(repo, 'historical-done');
+  const unknownCheckpoint = pack(repo, 'unknown-checkpoint');
+  receipt(settled, { id: 'settled', state: 'cancelled', started_at: ago(9 * 86400000) });
+  receipt(active, { id: 'active', state: 'running', started_at: ago(1000) });
+  receipt(blocked, { id: 'blocked', state: 'blocked', started_at: ago(1000) });
+  receipt(oldActive, { id: 'old-active', state: 'running', started_at: ago(9 * 86400000) });
+  receipt(oldBlocked, { id: 'old-blocked', state: 'blocked', started_at: ago(9 * 86400000) });
+  const checkpointDir = join(done, 'runtime', 'sentinel', 'workflow');
+  mkdirSync(checkpointDir, { recursive: true });
+  writeFileSync(join(checkpointDir, 'checkpoint.json'), JSON.stringify({ version: 1, workflow_id: 'workflow',
+    package: done, state: 'complete', observed_at: ago(SENTINEL_LIMITS.recentCompletionMs + 1000), workers: [] }));
+  const unknownCheckpointDir = join(unknownCheckpoint, 'runtime', 'sentinel', 'workflow');
+  mkdirSync(unknownCheckpointDir, { recursive: true });
+  writeFileSync(join(unknownCheckpointDir, 'checkpoint.json'), JSON.stringify({ version: 2, workflow_id: 'workflow',
+    package: unknownCheckpoint, state: 'complete', observed_at: ago(1000), workers: [] }));
+  const ageTree = path => {
+    if (statSync(path).isDirectory()) for (const name of readdirSync(path)) ageTree(join(path, name));
+    utimesSync(path, new Date(FIXED - 9 * 86400000), new Date(FIXED - 9 * 86400000));
+  };
+  ageTree(empty);
+  ageTree(settled);
+  ageTree(done);
+  ageTree(oldActive);
+  ageTree(oldBlocked);
+  ageTree(unknownCheckpoint);
+
+  const snapshot = await collect({ roots: [repo], indexDir: f.indexDir, now });
+  assert.deepEqual(snapshot.planned_packages.map(row => basename(row.package)), ['empty-planned', 'settled-planned']);
+  assert.deepEqual(snapshot.planned_packages.map(row => [row.workspace, row.package_ref, row.targets.length]), [
+    ['planned-inventory', 'planned-inventory/empty-planned', 1],
+    ['planned-inventory', 'planned-inventory/settled-planned', 1],
+  ]);
+  assert.equal(snapshot.activity_filter.hidden_packages, 6, 'old packages stay available for lifecycle classification past the activity window');
+  assert.ok(snapshot.runs.some(run => run.package === active), 'the active package remains a run');
+  assert.ok(snapshot.runs.some(run => run.package === blocked), 'the blocked package remains visible for attention');
+  assert.ok(!snapshot.planned_packages.some(row => [oldActive, oldBlocked].includes(row.package)),
+    'old active and blocked lifecycle facts stay excluded from planned inventory');
+  assert.ok(!snapshot.planned_packages.some(row => row.package === unknownCheckpoint),
+    'an unsupported checkpoint version is unknown, not planned');
+  assert.deepEqual(snapshot.recently_completed, [], 'completion older than the history window is not reclassified as planned');
+});
+
 test('completion history caps packages independently of monitored assignments and reports omitted history', async t => {
   const f = sandbox(t), repo = primary(f.dir, 'completion-cap');
   const active = pack(repo, 'active');

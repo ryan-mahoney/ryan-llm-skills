@@ -6,7 +6,7 @@
 
 After npm run build --prefix scripts/spec-observe/frontend:
 SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 120s uv run --script \
-  scripts/spec-observe/frontend/route-browser-check.py [--case rail|files|specs|context|catalog|member|search]
+  scripts/spec-observe/frontend/route-browser-check.py [--case rail|files|specs|context|catalog|member|search|filters]
 Only the fixture substitutes workers; App, adapters and file APIs are real.
 """
 import argparse
@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 args = argparse.ArgumentParser()
-args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog', 'member', 'search'])
+args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog', 'member', 'search', 'filters'])
 case = args.parse_args().case
 root = Path(__file__).resolve().parent
 evidence = Path(os.environ.get('SENTINEL_EVIDENCE_DIR', '/tmp/sentinel-route-evidence'))
@@ -245,6 +245,147 @@ try:
             expect(page.locator('article.detail h2')).to_have_text('browser')
             report['scenarios'].append('workflow_state search row keeps its selected Spec detail, and a native hash with an unsupported parameter canonicalizes without losing selection')
 
+        if case == 'filters':
+            # Keep the server and package-file APIs real while controlling only
+            # the observer projection. The planned row points at the real
+            # fixture package so its selected detail and reader cross the seam.
+            now = '2026-10-12T12:00:00.000Z'
+            workspace = 'fixture'
+            package = receipt['package']
+            active_package = '/fixture/specs/active-browser'
+            blocked_package = '/fixture/specs/blocked-browser'
+            done_package = '/fixture/specs/done-browser'
+            active = {
+                'workspace': workspace, 'package': active_package, 'package_ref': 'fixture/active-browser',
+                'assignment_id': 'active-current', 'execution': 'running', 'workflow_state': 'working',
+                'is_current_assignment': True, 'activity': 'Active browser work', 'obligation': 'Keep active visible',
+                'observed_at': now, 'coverage': {'state': 'complete', 'reasons': []},
+            }
+            blocked = {
+                'workspace': workspace, 'package': blocked_package, 'package_ref': 'fixture/blocked-browser',
+                'assignment_id': 'blocked-current', 'execution': 'running', 'workflow_state': 'blocked',
+                'is_current_assignment': True, 'activity': 'Blocked browser work', 'obligation': 'Needs attention',
+                'observed_at': now, 'coverage': {'state': 'complete', 'reasons': []},
+            }
+            active_history = {
+                **active, 'assignment_id': 'active-history', 'execution': 'completed',
+                'workflow_state': 'complete', 'is_current_assignment': False,
+                'activity': 'Historical sibling of active browser work',
+            }
+            done = {
+                'workspace': workspace, 'package': done_package, 'package_ref': 'fixture/done-browser',
+                'assignment_id': 'done-record', 'execution': 'completed', 'workflow_state': 'complete',
+                'is_current_assignment': False, 'completion_basis': 'manual', 'completed_at': now,
+                'activity': 'Done browser work', 'obligation': 'Recently completed',
+                'observed_at': now, 'coverage': {'state': 'complete', 'reasons': []},
+            }
+            planned = {
+                'workspace': workspace, 'package': package, 'package_ref': 'fixture/browser',
+                'source_paths': ['spec.md', 'linked.md'],
+            }
+            foreign_planned = {
+                'workspace': 'other', 'package': '/other/specs/other-planned',
+                'package_ref': 'other/other-planned', 'source_paths': ['spec.md'],
+            }
+            controlled_state = {
+                'schema_version': 1, 'generated_at': now,
+                'observers': [{
+                    'observer_id': 'filter-fixture', 'state': 'observing', 'published_at': now,
+                    'snapshot': {
+                        'workspace': workspace,
+                        'coverage': {'state': 'complete', 'observed_at': now, 'reasons': []},
+                        'runs': [active, blocked, active_history],
+                        'recently_completed': [done],
+                        'planned_packages': [planned, foreign_planned],
+                        'assignments': [], 'assignment_coverage': {'state': 'complete', 'reasons': []},
+                        'epics': [],
+                    },
+                }],
+            }
+
+            page.route('**/api/state**', lambda route: route.fulfill(json=controlled_state))
+            open_route('specs', ws='fixture', filter='planned')
+            filters = page.get_by_role('navigation', name='Package filters')
+            expect(filters.get_by_role('button', name='Active', exact=True)).to_have_attribute('aria-pressed', 'false')
+            planned_tab = filters.get_by_role('button', name='Planned', exact=True)
+            expect(planned_tab).to_have_attribute('aria-pressed', 'true')
+            rows = page.locator('.observation-rows button.run-row')
+            expect(rows).to_have_count(1)
+            expect(rows.nth(0).locator('.run-title')).to_have_text('browser')
+            caption = page.locator('.list-caption')
+            expect(caption).to_contain_text('Planned')
+            expect(caption).to_contain_text('1')
+            expect(page.locator('main')).not_to_contain_text('active-browser')
+            expect(page.locator('main')).not_to_contain_text('other-planned')
+            report['scenarios'].append('Planned shows the package inventory row only, excluding active and cross-workspace package rows')
+
+            filters.get_by_role('button', name='Active', exact=True).click()
+            expect(rows).to_have_count(2)
+            expect(rows.first.locator('.run-title')).to_have_text('active-browser')
+            expect(rows.nth(1).locator('.run-title')).to_have_text('blocked-browser')
+            expect(caption).to_contain_text('Active')
+            expect(caption).to_contain_text('2')
+            filters.get_by_role('button', name='Blocked', exact=True).click()
+            expect(rows).to_have_count(1)
+            expect(rows.first.locator('.run-title')).to_have_text('blocked-browser')
+            expect(caption).to_contain_text('Blocked')
+            expect(caption).to_contain_text('1')
+            filters.get_by_role('button', name='Done', exact=True).click()
+            expect(rows).to_have_count(1)
+            expect(rows.first.locator('.run-title')).to_have_text('done-browser')
+            expect(caption).to_contain_text('Done')
+            expect(caption).to_contain_text('1')
+            filters.get_by_role('button', name='Planned', exact=True).click()
+            expect(rows).to_have_count(1)
+            expect(rows.first.locator('.run-title')).to_have_text('browser')
+            expect(caption).to_contain_text('Planned')
+            expect(caption).to_contain_text('1')
+            report['scenarios'].append('Filter clicks show matching rows and counts; Active retains blocked obligations, while Blocked narrows to attention')
+
+            page.locator('#find-record').fill('browser')
+            expect(rows).to_have_count(1)
+            page.locator('#find-record').fill('no planned match')
+            expect(rows).to_have_count(0)
+            expect(caption).to_contain_text('0')
+            expect(page.get_by_role('heading', name='No matching packages', exact=True)).to_be_visible()
+            page.locator('#find-record').fill('')
+            expect(rows).to_have_count(1)
+
+            rows.first.click()
+            expect(page.locator('article.detail h2')).to_have_text('browser')
+            expect(page.get_by_role('button', name='Open files', exact=True)).to_be_enabled()
+            selected_url = page.url
+            assert params()['filter'] == ['planned'], selected_url
+            page.screenshot(path=str(evidence / 'sentinel-planned-filter-desktop.png'), full_page=True)
+            page.reload()
+            expect(filters.get_by_role('button', name='Planned', exact=True)).to_have_attribute('aria-pressed', 'true')
+            expect(page.locator('article.detail h2')).to_have_text('browser')
+            assert params()['filter'] == ['planned'] and params().get('id'), page.url
+            page.get_by_role('button', name='Open files', exact=True).click()
+            page.get_by_role('button', name='spec.md', exact=True).click()
+            viewer('spec.md', 'Browser specification')
+            assert params()['source'] == ['package'] and params()['id'] == [package], page.url
+            report['scenarios'].append('Planned row retains its deep link and opens the real fixture package file reader')
+
+            # Legacy query keys continue to select the renamed tabs and their
+            # existing predicates, so saved links keep working.
+            open_route('specs', ws='fixture', filter='attention')
+            expect(filters.get_by_role('button', name='Blocked', exact=True)).to_have_attribute('aria-pressed', 'true')
+            expect(page.locator('.observation-rows button.run-row .run-title')).to_have_text('blocked-browser')
+            expect(page.locator('.list-caption')).to_contain_text('1')
+            open_route('specs', ws='fixture', filter='completed')
+            expect(filters.get_by_role('button', name='Done', exact=True)).to_have_attribute('aria-pressed', 'true')
+            expect(page.locator('.observation-rows button.run-row .run-title')).to_have_text('done-browser')
+            expect(page.locator('.list-caption')).to_contain_text('1')
+            report['scenarios'].append('Legacy attention and completed deep links select Blocked and Done with one matching row each')
+
+            open_route('specs', ws='fixture', filter='planned')
+            expect(rows).to_have_count(1)
+            expect(rows.first.locator('.run-title')).to_have_text('browser')
+            page.set_viewport_size({'width': 390, 'height': 844})
+            page.screenshot(path=str(evidence / 'sentinel-planned-filter-mobile.png'), full_page=True)
+            expect(filters.get_by_role('button', name='Planned', exact=True)).to_have_attribute('aria-pressed', 'true')
+
         assert not report['pageErrors'], report['pageErrors']
         context.close()
         browser.close()
@@ -260,6 +401,6 @@ finally:
         fixture.kill()
         fixture.wait()
     report['elapsedSeconds'] = round(time.monotonic() - started, 3)
-    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'step-003-fix-browser.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'step-002-fix-browser.json'
+    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'step-003-fix-browser.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'sentinel-planned-filter-browser.json' if case == 'filters' else 'step-002-fix-browser.json'
     (evidence / filename).write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))

@@ -1,30 +1,31 @@
 import { Show } from 'solid-js';
-import { activeRun, attention, str } from '../format';
+import { packageFilterMatches, str } from '../format';
 import Files from '../Files';
 import { PackageDetail, PackageList } from '../Observations';
 import { ActionBar, MasterDetail, SectionTabs, type SectionTab } from '../primitives';
 import type { DestinationProps } from './index';
 
-type Filter = 'active' | 'attention' | 'completed';
+type Filter = 'active' | 'attention' | 'completed' | 'planned';
 
 const FILTERS: SectionTab[] = [
   { key: 'active', label: 'Active' },
-  { key: 'attention', label: 'Attention' },
-  { key: 'completed', label: 'Completed' },
+  { key: 'attention', label: 'Blocked' },
+  { key: 'completed', label: 'Done' },
+  { key: 'planned', label: 'Planned' },
 ];
 
 export default function SpecsDestination(props: DestinationProps) {
   const filter = (): Filter => {
     const value = props.route.filter;
-    return value === 'attention' || value === 'completed' ? value : 'active';
+    return value === 'attention' || value === 'completed' || value === 'planned' ? value : 'active';
   };
   const record = () => props.records.find(item => item.key === props.route.id) ?? null;
   const visibleCount = () => {
     const query = (props.route.q ?? '').trim().toLowerCase();
     return props.records.filter(item =>
-      (filter() === 'completed' ? item.recent_completion === true : !item.recent_completion) &&
+      (filter() === 'completed' ? item.recent_completion === true : filter() === 'planned' ? item.planned === true : !item.recent_completion && !item.planned) &&
       (!query || [item.workspace, item.package_ref, item.package, item.activity, item.obligation, item.execution, item.workflow_state].some(value => str(value).toLowerCase().includes(query))) &&
-      (filter() === 'completed' || filter() === 'active' && activeRun(item) || filter() === 'attention' && attention(item))
+      packageFilterMatches(item, filter())
     ).length;
   };
   return (
@@ -46,7 +47,7 @@ export default function SpecsDestination(props: DestinationProps) {
             />
             <SectionTabs label="Package filters" variant="filters" active={filter()} tabs={FILTERS} onSelect={props.onFilter} />
           </div>
-          <div class="list-caption">{filter() === 'completed' ? 'Recently completed' : filter() === 'attention' ? 'Attention first' : 'Active'} · {visibleCount()} observed specs</div>
+          <div class="list-caption">{filter() === 'completed' ? 'Done' : filter() === 'attention' ? 'Blocked' : filter() === 'planned' ? 'Planned' : 'Active'} · {visibleCount()} observed specs</div>
           <div class="records">
             <PackageList
               records={props.records}
