@@ -184,9 +184,14 @@ const headTone = (record: WireRecord): StatusTone =>
 
 export default function SpecsDestination(props: DestinationProps) {
   const record = () => props.records.find(item => item.key === props.route.id) ?? null;
-  // Main's relaunch feature: the most recent spec-end-to-end assignment for the
-  // selected package is offered as a relaunch (with the ordinary Planned form as
-  // the fallback when no prior assignment exists).
+  // The most recent spec-end-to-end assignment for the selected package is
+  // offered as a relaunch (with the ordinary Planned form as the fallback when
+  // no prior assignment exists). RelaunchAssignment owns review/launch state for
+  // one assignment identity, so the keyed Show below keys on the stable row key
+  // (collectAssignments allocates a new row object on every refresh) and passes
+  // the current row reactively: the same assignment keeps its instance and
+  // pending state across refreshes, while a different latest assignment
+  // disposes and remounts it.
   const priorAssignment = () => props.assignments.filter(item =>
     item.skill === 'spec-end-to-end' && (item.workspace === record()?.workspace || item.workspace_id === record()?.workspace) && [record()?.package, record()?.package_ref].filter(Boolean).includes(item.spec_package)
   ).sort((a, b) => (Date.parse(b.created_at || '') || 0) - (Date.parse(a.created_at || '') || 0))[0];
@@ -427,8 +432,8 @@ export default function SpecsDestination(props: DestinationProps) {
                 <Show when={!activityTab()}>
                   <SpecOverview record={item()} assignments={props.assignments} context={context()} onOpenAgent={openAgent} onOpenEpic={openEpic} />
                   <Show when={record()}>
-                    <Show when={priorAssignment()} keyed fallback={<details class="section"><summary>Run spec again</summary><PlannedAssignment record={item()} live={props.live && props.specsLive} token={props.token}/></details>}>
-                      {assignment => <RelaunchAssignment assignment={assignment} live={props.live && props.specsLive} token={props.token}/>}
+                    <Show when={priorAssignment()?.key} keyed fallback={<details class="section"><summary>Run spec again</summary><PlannedAssignment record={item()} live={props.live && props.specsLive} token={props.token}/></details>}>
+                      {_key => <RelaunchAssignment assignment={priorAssignment()} live={props.live && props.specsLive} token={props.token}/>}
                     </Show>
                   </Show>
                 </Show>

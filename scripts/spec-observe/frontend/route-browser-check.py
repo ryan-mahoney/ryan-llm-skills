@@ -6,7 +6,7 @@
 
 After npm run build --prefix scripts/spec-observe/frontend:
 SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 120s uv run --script \
-  scripts/spec-observe/frontend/route-browser-check.py [--case rail|files|specs|context|catalog|member|search|filters|specs-list|specs-overview|specs-variants|specs-activity]
+  scripts/spec-observe/frontend/route-browser-check.py [--case rail|files|specs|context|catalog|member|search|filters|specs-list|specs-overview|specs-variants|specs-activity|specs-relaunch]
 Only the fixture substitutes workers; App, adapters and file APIs are real.
 """
 import argparse
@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 args = argparse.ArgumentParser()
-args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog', 'member', 'search', 'filters', 'specs-list', 'specs-overview', 'specs-variants', 'specs-activity'])
+args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog', 'member', 'search', 'filters', 'specs-list', 'specs-overview', 'specs-variants', 'specs-activity', 'specs-relaunch'])
 case = args.parse_args().case
 root = Path(__file__).resolve().parent
 evidence = Path(os.environ.get('SENTINEL_EVIDENCE_DIR', '/tmp/sentinel-route-evidence'))
@@ -1310,6 +1310,163 @@ try:
             capture_both('imported')
             report['scenarios'].append('Imported rows render fixed before-observation ages and keep mutation controls unavailable')
 
+        if case == 'specs-relaunch':
+            # Real fixture, App and polling stay in place; only /api/state is
+            # annotated with the relaunch identity and the two relaunch endpoints
+            # are fulfilled, so no agent, worktree or worker launches for real.
+            (evidence / 'screens').mkdir(parents=True, exist_ok=True)
+            package = receipt['package']
+            record_key = json.dumps(['fixture', package, 'run-1'], separators=(',', ':'))
+            run1_created = '2026-10-12T12:00:00.000Z'
+            run2_created = '2026-10-12T13:00:00.000Z'
+            preview_digest = 'specs-relaunch-digest'
+            annotation = {'display': 'ended', 'second': False}
+            held = {'hold': False, 'preview': None}
+            previews, launches = [], []
+
+            def annotate_state(route):
+                value = route.fetch().json()
+                for observer in value.get('observers', []):
+                    snapshot = observer.get('snapshot') or {}
+                    if not isinstance(snapshot.get('assignments'), list):
+                        continue
+                    rows = []
+                    for assignment in snapshot['assignments']:
+                        if assignment.get('assignment_id') != 'run-1':
+                            rows.append(assignment)
+                            continue
+                        rows.append({**assignment, 'skill': 'spec-end-to-end', 'display': annotation['display'],
+                                     'state': annotation['display'], 'created_at': run1_created})
+                        if annotation['second']:
+                            rows.append({**assignment, 'assignment_id': 'run-2', 'skill': 'spec-end-to-end',
+                                         'display': 'ended', 'state': 'ended', 'created_at': run2_created})
+                    snapshot['assignments'] = rows
+                route.fulfill(json=value)
+
+            def preview(route):
+                previews.append(route.request.post_data_json)
+                if held['hold']:
+                    held['preview'] = route
+                    return
+                route.fulfill(json={'contractDigest': preview_digest,
+                                    'record': {'execution_dir': '/fixture/relaunch-worktree', 'execution_branch': 'spec/browser-relaunch'}})
+
+            def launch(route):
+                launches.append(route.request.post_data_json)
+                route.fulfill(json={'assignment': {'assignment_id': 'run-1', 'state': 'live'}})
+
+            page.route('**/api/state**', annotate_state)
+            page.route('**/api/assignment-session/relaunch-preview', preview)
+            page.route('**/api/assignment-session/relaunch', launch)
+
+            def refresh_state():
+                with page.expect_response('**/api/state**'):
+                    page.get_by_role('button', name='Refresh state', exact=True).first.click()
+
+            def held_preview():
+                for _ in range(40):
+                    if held['preview'] is not None:
+                        return held['preview']
+                    page.wait_for_timeout(25)
+                raise AssertionError('preview POST was not intercepted')
+
+            def capture(name, width):
+                page.set_viewport_size({'width': width, 'height': 800})
+                path = evidence / 'screens' / f'specs-relaunch-{name}-{width}.png'
+                page.screenshot(path=str(path), full_page=True)
+                report.setdefault('captures', []).append(str(path))
+
+            def capture_both(name):
+                capture(name, 1280)
+                capture(name, 1600)
+
+            open_route('specs', ws='fixture', id=record_key)
+            region = page.get_by_role('region', name='Relaunch spec')
+            preview_button = region.get_by_role('button', name='Preview relaunch', exact=True)
+            start_button = region.get_by_role('button', name='Start agent', exact=True)
+            expect(preview_button).to_be_enabled()
+
+            preview_button.click()
+            expect(start_button).to_be_enabled()
+            expect(region).to_contain_text('/fixture/relaunch-worktree')
+            assert previews[-1]['assignment_id'] == 'run-1', previews
+            retry_id = previews[-1]['retry_id']
+
+            refresh_state()
+            expect(start_button).to_be_enabled()
+            expect(region).to_contain_text('/fixture/relaunch-worktree')
+            assert len(previews) == 1, previews
+            page.locator('.detail-body').evaluate('(el) => { el.scrollTop = el.scrollHeight; }')
+            capture_both('reviewed')
+            report['scenarios'].append('Reviewed worktree and Start agent survive a refreshed snapshot object for the same assignment identity')
+
+            annotation['display'] = 'live'
+            refresh_state()
+            expect(start_button).to_be_disabled()
+            expect(region).to_contain_text('The agent is still running')
+            annotation['display'] = 'ended'
+            refresh_state()
+            expect(start_button).to_be_enabled()
+            expect(region).to_contain_text('/fixture/relaunch-worktree')
+            report['scenarios'].append('A same-identity live display disables Start agent and an ended display re-enables it from reactive props with review retained')
+
+            start_button.click()
+            expect(region).to_contain_text('Agent started')
+            assert launches[-1]['assignment_id'] == 'run-1', launches
+            assert launches[-1]['retry_id'] == retry_id, launches
+            assert launches[-1]['expectedDigest'] == preview_digest, launches
+            report['scenarios'].append('Explicit launch reuses the preview retry_id and expectedDigest without worker activity')
+
+            annotation['second'] = True
+            refresh_state()
+            expect(preview_button).to_be_enabled()
+            expect(region).not_to_contain_text('/fixture/relaunch-worktree')
+            expect(start_button).to_have_count(0)
+            report['scenarios'].append('A newer assignment identity clears the previous review and remounts the relaunch control')
+
+            # A pending preview outlives a same-identity refresh and settles.
+            annotation['second'] = False
+            page.reload()
+            page.evaluate('sessionStorage.clear()')
+            expect(preview_button).to_be_enabled()
+            held['hold'] = True
+            preview_button.click()
+            expect(region.get_by_role('button', name='Preparing preview…', exact=True)).to_be_visible()
+            pending = held_preview()
+            refresh_state()
+            expect(region.get_by_role('button', name='Preparing preview…', exact=True)).to_be_visible()
+            held['hold'] = False
+            pending.fulfill(json={'contractDigest': preview_digest,
+                                  'record': {'execution_dir': '/fixture/relaunch-worktree', 'execution_branch': 'spec/browser-relaunch'}})
+            held['preview'] = None
+            expect(start_button).to_be_enabled()
+            expect(region).to_contain_text('/fixture/relaunch-worktree')
+            report['scenarios'].append('A pending preview survives a same-identity refresh and settles to Start agent')
+
+            # A delayed preview reply for the replaced identity cannot retarget it.
+            page.reload()
+            page.evaluate('sessionStorage.clear()')
+            expect(preview_button).to_be_enabled()
+            held['hold'] = True
+            preview_button.click()
+            expect(region.get_by_role('button', name='Preparing preview…', exact=True)).to_be_visible()
+            stale = held_preview()
+            annotation['second'] = True
+            refresh_state()
+            expect(preview_button).to_be_enabled()
+            held['hold'] = False
+            held['preview'] = None
+            with page.expect_response('**/api/assignment-session/relaunch-preview'):
+                stale.fulfill(json={'contractDigest': 'specs-relaunch-stale-digest',
+                                    'record': {'execution_dir': '/fixture/stale-worktree', 'execution_branch': 'spec/stale'}})
+            # Bound the wait for the disposed instance's reply continuation before
+            # asserting that the remounted control was not retargeted.
+            page.wait_for_timeout(250)
+            expect(preview_button).to_be_enabled()
+            expect(region).not_to_contain_text('/fixture/stale-worktree')
+            expect(start_button).to_have_count(0)
+            report['scenarios'].append('A delayed preview reply for the replaced assignment identity cannot retarget the new control')
+
         assert not report['pageErrors'], report['pageErrors']
         context.close()
         browser.close()
@@ -1325,7 +1482,7 @@ finally:
         fixture.kill()
         fixture.wait()
     report['elapsedSeconds'] = round(time.monotonic() - started, 3)
-    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'step-003-fix-browser.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'sentinel-planned-filter-browser.json' if case == 'filters' else 'specs-list.json' if case == 'specs-list' else 'specs-variants.json' if case == 'specs-variants' else 'specs-overview.json' if case == 'specs-overview' else 'specs-activity.json' if case == 'specs-activity' else 'step-002-fix-browser.json'
+    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'step-003-fix-browser.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'sentinel-planned-filter-browser.json' if case == 'filters' else 'specs-list.json' if case == 'specs-list' else 'specs-variants.json' if case == 'specs-variants' else 'specs-overview.json' if case == 'specs-overview' else 'specs-activity.json' if case == 'specs-activity' else 'specs-relaunch.json' if case == 'specs-relaunch' else 'step-002-fix-browser.json'
     target = evidence / filename
     temporary = target.with_name(target.name + '.tmp')
     temporary.write_text(json.dumps(report, indent=2) + '\n')
