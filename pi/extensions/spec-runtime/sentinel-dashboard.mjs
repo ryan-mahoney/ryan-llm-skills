@@ -91,7 +91,7 @@ export function createSentinelDashboard({ agentDir, port = 0, publicHost, storag
   };
 }
 
-export function createDirectDashboard({ agentDir, port = 0, publicHost, storageRoot, discussion } = {}) {
+export function createDirectDashboard({ agentDir, port = 0, publicHost, storageRoot, discussion, terminalViews } = {}) {
   let owned = null, starting = null, address = null, stopping = null;
   // Close only this owned listener. The promise settles when the listener
   // reports close, and repeated stops of the same listener share it.
@@ -99,8 +99,15 @@ export function createDirectDashboard({ agentDir, port = 0, publicHost, storageR
     if (stopping && stopping.server === server) return stopping.promise;
     const promise = new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('Dashboard cleanup exceeded 1000 ms.')), 1000);
+      // Start the terminal drain before the HTTP close; the stop settles only
+      // when both the drain and the listener close callback have completed.
+      const drained = server.closeTerminalViews();
       server.closeAllConnections();
-      server.close(() => { clearTimeout(timer); resolve(); });
+      const closed = new Promise(resolveClose => server.close(resolveClose));
+      Promise.all([drained, closed]).then(
+        () => { clearTimeout(timer); resolve(); },
+        error => { clearTimeout(timer); reject(error); },
+      );
     });
     stopping = { server, promise };
     // An abandoned stop must not crash the host; awaiting callers still see it.
@@ -115,7 +122,7 @@ export function createDirectDashboard({ agentDir, port = 0, publicHost, storageR
       let resolve, reject;
       const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
       let server;
-      try { server = createDashboardServer({ agentDir, publicHost, storageRoot, discussion }); }
+      try { server = createDashboardServer({ agentDir, publicHost, storageRoot, discussion, terminalViews }); }
       catch (error) { reject(new Error(`Dashboard service failed: ${error.code ?? error.message}`)); return promise; }
       const record = { promise, reject };
       starting = record;

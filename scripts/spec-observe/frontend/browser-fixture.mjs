@@ -325,8 +325,15 @@ const server=createServer(async(req,res)=>{
  };
  dashboard.emit('request',req,res);
 });
+// Upgrades bypass the request handler; mirror the same trusted-Serve Host/Origin
+// classification the request path applies so the dashboard upgrade boundary sees
+// a consistent operator view.
+server.on('upgrade',(req,socket,head)=>{
+ if(!localOperator){req.headers.host='dashboard.example';if(req.headers.origin)req.headers.origin='https://dashboard.example';}
+ dashboard.emit('upgrade',req,socket,head);
+});
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
 const timer=setInterval(()=>{tick++;void writeFile(observerFile,JSON.stringify(makeSnapshot()));void writeFile(mismatchObserverFile,JSON.stringify(makeMismatchSnapshot()));},1000);
 console.log(JSON.stringify({url:`http://127.0.0.1:${server.address().port}`,root,checkout,secondCheckout,otherPackage:otherPkg,...packageIdentity,thread1,thread2,thread3,worktreeTarget:docsCheckout}));
-async function close(){clearInterval(timer);server.closeAllConnections();await new Promise(r=>server.close(r));await rm(root,{recursive:true,force:true});process.exit(0);}
+async function close(){clearInterval(timer);const drained=dashboard.closeTerminalViews();server.closeAllConnections();await new Promise(r=>server.close(r));await drained.catch(()=>{});await rm(root,{recursive:true,force:true});process.exit(0);}
 process.on('SIGTERM',()=>void close());process.on('SIGINT',()=>void close());
