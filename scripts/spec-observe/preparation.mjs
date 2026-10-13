@@ -22,7 +22,9 @@ export const DECISION_EXCERPT_CHARS = 500;
 const OUTCOMES = new Set(['prepared', 'blocked', 'decision-required']);
 const STAGES = new Set(['architecture', 'specification']);
 const DECISION_KEYS = ['stage', 'question', 'recommendation', 'recorded_at'];
-const OUTCOME_LINE = /^\s*(?:overall\s+)?outcome\s*:\s*`?([a-z][a-z-]*)/i;
+const DECISION_KEY_SET = new Set(DECISION_KEYS);
+const PROPOSAL_KEY_SET = new Set(['critique_recommended']);
+const OUTCOME_LINE = /^\s*(?:overall\s+)?outcome\s*:\s*(?:`([a-z][a-z-]*)`|([a-z][a-z-]*))(?=$|[\s.,;:!?])/i;
 const DATE_HINT = /\b(?:prepared|date|review)/i;
 const DATE_VALUE = /\b((?:19|20)\d\d-\d\d-\d\d)\b/;
 const FRONT_MATTER_KEY = /^([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$/;
@@ -38,7 +40,7 @@ export function parsePreparation(text, source = null) {
   for (const line of lines) {
     const outcome = OUTCOME_LINE.exec(line);
     if (outcome) {
-      const value = outcome[1].toLowerCase();
+      const value = (outcome[1] ?? outcome[2]).toLowerCase();
       if (OUTCOMES.has(value)) outcomes.add(value);
     }
     if (reported_at === null && DATE_HINT.test(line)) {
@@ -56,7 +58,9 @@ export function parsePreparation(text, source = null) {
 // YAML-ish front matter restricted to the file start: `---`, key lines, `---`.
 // A missing closing marker or a non-key line makes the whole block unusable
 // rather than partially trusted; the body after the closing marker is ignored.
-function frontMatterFields(text) {
+// A repeated recognized key is conflicting malformed metadata, not a last-wins
+// overwrite; repeats of unrecognized keys stay ignored.
+function frontMatterFields(text, recognized = null) {
   if (typeof text !== 'string') return null;
   const lines = text.split(/\r?\n/);
   if (lines[0]?.trim() !== '---') return null;
@@ -65,7 +69,12 @@ function frontMatterFields(text) {
     if (lines[index].trim() === '---') return fields;
     const match = FRONT_MATTER_KEY.exec(lines[index]);
     if (!match) return null;
-    fields.set(match[1], match[2]);
+    const key = match[1];
+    if (fields.has(key)) {
+      if (recognized === null || recognized.has(key)) return null;
+      continue;
+    }
+    fields.set(key, match[2]);
   }
   return null;
 }
@@ -87,7 +96,7 @@ function scalarValue(raw) {
 // timestamp parseable; the recommendation may be empty. Display excerpts are
 // truncated after validation. Malformed or absent front matter returns null.
 export function parseDecision(text, source = null) {
-  const fields = frontMatterFields(text);
+  const fields = frontMatterFields(text, DECISION_KEY_SET);
   if (!fields || DECISION_KEYS.some(key => !fields.has(key))) return null;
   const stage = scalarValue(fields.get('stage'));
   const question = scalarValue(fields.get('question'));
@@ -109,7 +118,7 @@ export function parseDecision(text, source = null) {
 // selection signal. An explicit boolean is returned; no front matter, a
 // missing key or an unrecognized value is unknown (null), never false.
 export function parseProposalFrontMatter(text) {
-  const fields = frontMatterFields(text);
+  const fields = frontMatterFields(text, PROPOSAL_KEY_SET);
   if (!fields || !fields.has('critique_recommended')) return null;
   const value = scalarValue(fields.get('critique_recommended'));
   if (typeof value !== 'string') return null;

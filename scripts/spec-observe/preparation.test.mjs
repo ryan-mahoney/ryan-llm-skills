@@ -77,6 +77,19 @@ test('preparation outcomes accept observed spellings and reject conflicts', () =
   assert.equal(parsePreparation('Overall outcome: prepared.\nRevision 2026-10-13.\n', 's').reported_at, null, 'a date away from Prepared/Date/Review is not a report date');
 });
 
+test('preparation outcomes reject malformed tokens that extend or unbalance prepared', () => {
+  for (const text of [
+    'Outcome: prepared2\n',
+    'Outcome: prepared_unknown\n',
+    'Overall outcome: `prepared\n',
+    'Outcome: prepared`\n',
+    'Outcome: decision-required2\n',
+    'Outcome: `blocked\n',
+  ]) assert.equal(parsePreparation(text, 's').outcome, 'invalid', text);
+  assert.equal(parsePreparation('Outcome: `prepared`\n', 's').outcome, 'prepared');
+  assert.equal(parsePreparation('Outcome: prepared; continuing review.\n', 's').outcome, 'prepared');
+});
+
 test('a 17 KiB report needs the complete 64 KiB read; a 4 KiB-capped reader is refused', async t => {
   const { pkg } = await fixture(t);
   const report = join(pkg, 'spec-prepare.md');
@@ -207,6 +220,14 @@ test('proposal front matter reads only the leading explicit boolean', () => {
   assert.equal(parseProposalFrontMatter('# Proposal\n---\ncritique_recommended: true\n---\n'), null, 'front matter must be at the file start');
   assert.equal(parseProposalFrontMatter('---\ncritique_recommended: maybe\n---\n'), null);
   assert.equal(parseProposalFrontMatter('---\ncritique_recommended: true\n'), null, 'a missing closing marker is malformed');
+});
+
+test('front matter rejects duplicate recognized keys instead of overwriting', () => {
+  assert.equal(parseProposalFrontMatter('---\ncritique_recommended: true\ncritique_recommended: false\n---\n'), null, 'conflicting proposal booleans are malformed');
+  assert.equal(parseProposalFrontMatter('---\ncritique_recommended: false\ncritique_recommended: true\n---\n'), null);
+  assert.equal(parseDecision('---\nstage: architecture\nstage: specification\nquestion: "Q"\nrecommendation: ""\nrecorded_at: 2026-10-13T19:00:00.000Z\n---\n', 's'), null, 'duplicate stage is malformed');
+  assert.equal(parseDecision('---\nstage: architecture\nquestion: "First"\nquestion: "Second"\nrecommendation: ""\nrecorded_at: 2026-10-13T19:00:00.000Z\n---\n', 's'), null, 'duplicate question is malformed');
+  assert.equal(parseProposalFrontMatter('---\nnote: one\nnote: two\ncritique_recommended: true\n---\n'), true, 'duplicate unrecognized keys stay ignored');
 });
 
 test('planning artifacts report presence and the proposal recommendation conservatively', async t => {
