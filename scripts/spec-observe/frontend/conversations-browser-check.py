@@ -895,9 +895,10 @@ def run_response_states(url, thread1, thread2):
         expect(page.locator('#thread-send')).to_be_disabled()
         expect(page.locator('#thread-resume')).to_have_class(primary)
         expect(page.locator('#thread-queue')).to_contain_text('Queue paused')
-        expect(page.locator('#thread-queue')).to_contain_text('Nothing is being delivered')
+        expect(page.locator('#thread-queue')).to_contain_text('Queued messages wait until Resume')
         expect(page.locator('#thread-queue')).to_contain_text('1 persisted message')
         paused_queue_text = page.locator('#thread-queue').inner_text()
+        assert 'Nothing is being delivered' not in paused_queue_text, paused_queue_text
         assert 'Another thread currently owns' not in paused_queue_text, paused_queue_text
         assert 'owns the response slot' not in paused_queue_text, paused_queue_text
         paused_details_text = page.locator('#thread-queue-details').inner_text()
@@ -913,6 +914,25 @@ def run_response_states(url, thread1, thread2):
         expect(page.locator('#thread-send')).to_be_enabled()
         expect(draft).to_have_value('Paused retained draft')
         passed('response-states paused: draft/transcript retained with Resume queue primary; the exact resume restores ready')
+
+        # 2b. Paused still-owned (queue_paused with owns_response and a
+        #     delivering head plus queued follower): the paused queue copy
+        #     stays without any delivery-cessation claim while the lease is
+        #     held; Stop stays available for the confirmed owner.
+        open_state('paused-owned')
+        page.locator('#thread-draft').wait_for()
+        expect(page.locator('#thread-queue')).to_contain_text('Queue paused')
+        expect(page.locator('#thread-queue')).to_contain_text('Queued messages wait until Resume')
+        expect(page.locator('#thread-queue')).to_contain_text('1 persisted message')
+        paused_owned_text = page.locator('#thread-queue').inner_text()
+        assert 'Nothing is being delivered' not in paused_owned_text, paused_owned_text
+        assert 'owns the response slot' not in paused_owned_text, paused_owned_text
+        paused_owned_details = page.locator('#thread-queue-details').inner_text()
+        assert 'position' not in paused_owned_details.lower(), paused_owned_details
+        expect(page.locator('#thread-resume')).to_have_class(primary)
+        expect(page.locator('#thread-stop')).to_be_visible()
+        capture('conversations-response-paused-owned@1280.png')
+        passed('response-states paused still-owned: queue_paused with owns_response and delivering head keeps paused queue copy without delivery-cessation claim')
 
         # 3. Queued: saved message names the scoped owner; Open queue is
         #    primary and the disclosure exposes the persisted position; Send
@@ -1102,7 +1122,7 @@ def run_response_states(url, thread1, thread2):
         '- Case: response-states at 1280x900; production captures plus reference screens 20-25 at 1280.',
         '- Observed: responding (pre-Stop capture against reference 20) shows the partial answer and tool rail with the latest transcript retained; Stop response is primary and posts one exact pause with no send or termination copy; the post-Stop capture is separate transition evidence showing Paused status with Resume queue primary.',
         '- Observed: queued eligible shows the saved message naming the in-scope owner with Open queue primary and persisted position 2; queued-absent uses the generic another-thread fallback; queued-blocked (delivering head, null follower position) omits the rank with no fabricated zero; Send stays secondary.',
-        '- Observed: paused (queue_paused, no scoped owner) retains the draft/transcript with Resume queue primary and Send disabled; the queue notice reads paused copy without owner attribution and omits the rank for null positions; Resume posts the exact thread and restores ready.',
+        '- Observed: paused (queue_paused, no scoped owner) retains the draft/transcript with Resume queue primary and Send disabled; the queue notice reads the paused queue copy (queued messages wait until Resume) without owner attribution or delivery-cessation claim and omits the rank for null positions; the still-owned paused variant (queue_paused with owns_response and delivering head plus queued follower) keeps the same queue copy with Stop available; Resume posts the exact thread and restores ready.',
         '- Observed: uncertain shows the persisted item with duplicate-risk copy; cancelling Discard posts zero mutations and confirming removes exactly that item; Retry posts resend:true only on click.',
         '- Observed: stalled keeps last-observed ownership facts with Refresh thread primary and Stop only for the confirmed selected owner; selected-owner, scoped-elsewhere-owner (names Discussion two) and no-owner variants are distinct; refreshing never infers death from silence.',
         '- Observed: history-only retains history and Load older with zero composer/Stop/Resume/Prepare controls; other attention kinds keep existing help with Send disabled.',

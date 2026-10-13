@@ -896,7 +896,7 @@ export default function Conversations(props: Props) {
               </Show>
               <Show when={queue().waiting}>
                 <Show when={queue().paused} fallback={<p>{queue().ownerTitle ? `Your message is saved; ${queue().ownerTitle} owns the response slot.` : 'Your message is saved. Another thread currently owns the host response slot.'}</p>}>
-                  <p>{`Queue paused · ${queue().waiting} persisted message${queue().waiting === 1 ? '' : 's'} waiting · Nothing is being delivered.`}</p>
+                  <p>{`Queue paused · ${queue().waiting} persisted message${queue().waiting === 1 ? '' : 's'} waiting · Queued messages wait until Resume.`}</p>
                 </Show>
                 <details id="thread-queue-details" ref={el => (queueDetailsEl = el)}>
                   <summary>{`${queue().waiting} queued message${queue().waiting === 1 ? '' : 's'}${minimumQueuePosition() !== null ? ` · position ${minimumQueuePosition()}` : ''}`}</summary>
