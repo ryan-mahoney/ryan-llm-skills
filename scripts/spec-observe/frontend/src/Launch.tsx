@@ -15,6 +15,7 @@ import {
 import type { BriefReference } from './composerTypes';
 import type { WireRecord } from './model';
 import type { RouteState } from './route';
+import { busyAgentsHref } from './route';
 
 export type LaunchProps = {
   route: RouteState;
@@ -22,6 +23,8 @@ export type LaunchProps = {
   token?: string;
   workspace?: WireRecord;
   workspaceName: string;
+  assignments?: WireRecord[];
+  onNavigate?(next: RouteState): void;
   onReturnToAgents(): void;
 };
 
@@ -90,6 +93,34 @@ function RequestedFacts(props: { workspace: string; target: string; brief: strin
       <Show when={props.assignment}><div data-fact="assignment"><dt>Assignment</dt><dd class="mono">{props.assignment}</dd></div></Show>
       <Show when={props.digest}><div data-fact="digest"><dt>Contract digest</dt><dd class="mono">{props.digest}</dd></div></Show>
     </dl>
+  );
+}
+
+// Previous reviewed facts, retained separately from the current approval and
+// presented explicitly as unapproved in stale/denied states. Dispatch stays
+// withheld: this block never enables launch; the current requested facts
+// above remain the separate source for the next review.
+function PreviousReviewedFacts(props: { preview: LaunchPreview }) {
+  const record = () => props.preview.record;
+  const authority = () => {
+    const value = str(record().publication_authority);
+    return !value || value.toLowerCase() === 'none' ? 'None' : value;
+  };
+  return (
+    <div id="launch-review-previous">
+      <h4>Previous reviewed facts (not approved for launch)</h4>
+      <dl class="launch-facts" aria-label="Previous reviewed facts">
+        <div data-fact="previous-workspace"><dt>Workspace</dt><dd>{str(record().workspace_id) || 'Workspace'}</dd></div>
+        <div data-fact="previous-target"><dt>Reviewed target</dt><dd>{str(record().repository_id) || 'Whole workspace'}</dd></div>
+        <div data-fact="previous-execution"><dt>Execution directory</dt><dd class="mono">{str(record().execution_dir) || 'Unresolved'}</dd></div>
+        <div data-fact="previous-brief"><dt>Reviewed brief</dt><dd class="mono">{str(record().brief) || 'Recorded'}</dd></div>
+        <div data-fact="previous-skill"><dt>Skill</dt><dd>{str(record().skill) || 'General'}</dd></div>
+        <div data-fact="previous-model"><dt>Model</dt><dd>{str(record().model) || 'Pi default'}</dd></div>
+        <div data-fact="previous-authority"><dt>Publication authority</dt><dd>{authority()}</dd></div>
+        <div data-fact="previous-assignment"><dt>Reviewed assignment</dt><dd class="mono">{str(record().assignment_id)}</dd></div>
+        <div data-fact="previous-contract-digest"><dt>Reviewed digest</dt><dd class="mono">{props.preview.contractDigest}</dd></div>
+      </dl>
+    </div>
   );
 }
 
@@ -184,11 +215,12 @@ export default function Launch(props: LaunchProps) {
       && value!.revision === state?.revision && value!.target === target();
   };
   const shortAssignment = () => (draft()?.pending?.assignmentId ?? draft()?.assignmentId ?? '').slice(0, 8);
-  const agentsHref = () => {
-    const id = draft()?.error?.assignmentId ?? '';
-    const base = `#/agents?ws=${encodeURIComponent(ws())}`;
-    return id ? `${base}&id=${encodeURIComponent(id)}` : base;
-  };
+  const lastReviewed = () => draft()?.lastReviewed;
+  // Busy-denial inspection link follows the client navigation contract:
+  // the matching observed assignment key when available, otherwise a
+  // workspace-scoped q=conflictingUUID route so an unrelated first row is
+  // never selected and an absent conflict filters instead of misdirecting.
+  const agentsHref = () => busyAgentsHref(ws(), draft()?.error?.assignmentId, props.assignments ?? []);
 
   // Seed one draft per launch context; retained typed work is never clobbered.
   createEffect(() => {
@@ -203,9 +235,27 @@ export default function Launch(props: LaunchProps) {
   createEffect(on(() => saved()?.requestId, (id, previous) => {
     if (!id || id === previous) return;
     setEditing(false);
-    setAnnouncer(reviewSurface()
-      ? 'Brief saved. Resolving the execution contract before any launch.'
-      : 'Brief saved. Saving the brief does not start an agent or send a thread message.');
+    if (reviewSurface()) {
+      setAnnouncer('Brief saved. Resolving the execution contract before any launch.');
+      return;
+    }
+    setAnnouncer('Brief saved. Saving the brief does not start an agent or send a thread message.');
+    // Ordinary brief-entry save transitions to review through the route
+    // owner, then the review-surface effect resolves it. This runs only
+    // while the originating context is still active: navigation away
+    // unmounts this surface (or switches its context), so no redirect can
+    // fire after the operator leaves.
+    const current = props.route;
+    if (current.dest !== 'launch' || !ws()) return;
+    props.onNavigate?.({
+      dest: 'launch',
+      ws: ws(),
+      tab: 'review',
+      ...(current.thread ? { thread: current.thread } : {}),
+      ...(current.target ? { target: current.target } : {}),
+      ...(current.package ? { package: current.package } : {}),
+      ...(current.skill ? { skill: current.skill } : {}),
+    });
   }, { defer: true }));
   createEffect(on(saveFailure, failure => {
     if (!failure) return;
@@ -414,6 +464,7 @@ export default function Launch(props: LaunchProps) {
                       </StateNotice>
                     </div>
                     <RequestedFacts workspace={props.workspaceName || ws()} target={targetLabel(target())} brief={saved()?.brief || 'Recorded'} previousDigest={previousDigest() || undefined} />
+                    <Show when={lastReviewed()} keyed>{previous => <PreviousReviewedFacts preview={previous} />}</Show>
                     <ActionBar variant="inline">
                       <button id="launch-assignment-review" class="ds-btn ds-btn--primary" type="button" disabled={!canReview()} onClick={review}>Review assignment</button>
                       <button id="launch-assignment-edit" class="ds-btn" type="button" onClick={editAssignment}>Edit assignment</button>
@@ -447,6 +498,7 @@ export default function Launch(props: LaunchProps) {
                       </Switch>
                     </div>
                     <RequestedFacts workspace={props.workspaceName || ws()} target={targetLabel(target())} brief={saved()?.brief || 'Recorded'} />
+                    <Show when={lastReviewed()} keyed>{previous => <PreviousReviewedFacts preview={previous} />}</Show>
                     <ActionBar variant="inline">
                       <button id="launch-assignment-review" class="ds-btn ds-btn--primary" type="button" disabled={!canReview()} onClick={review}>Review assignment</button>
                       <button id="launch-assignment-edit" class="ds-btn" type="button" onClick={editAssignment}>Edit assignment</button>

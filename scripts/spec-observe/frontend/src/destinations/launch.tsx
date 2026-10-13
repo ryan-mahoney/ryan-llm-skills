@@ -14,6 +14,8 @@ export default function LaunchDestination(props: DestinationProps) {
       token={props.token}
       workspace={props.workspace}
       workspaceName={workspaceName()}
+      assignments={props.assignments}
+      onNavigate={props.onNavigate}
       onReturnToAgents={() => props.onNavigate({ dest: 'agents', ...(props.route.ws !== undefined ? { ws: props.route.ws } : {}) })}
     />
   );

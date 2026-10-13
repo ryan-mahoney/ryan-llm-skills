@@ -49,6 +49,11 @@ export type LaunchDraft = {
   saved?: SavedLaunchBrief;
   requestId?: string; assignmentId?: string;
   preview?: LaunchPreviewState;
+  // Last reviewed facts, retained separately from the current approval so
+  // stale/denied states can present previous/unapproved facts after the
+  // store clears preview. Current requested facts (workspace/target/brief)
+  // stay in saved/draft; dispatch still requires a current preview.
+  lastReviewed?: LaunchPreviewState;
   result?: LaunchResult;
   pending?: LaunchPending;
   reviewStatus: LaunchReviewStatus;
@@ -194,6 +199,7 @@ export function createLaunchStore(): LaunchStore {
     draft.assignmentId = undefined;
     draft.saved = undefined;
     draft.preview = undefined;
+    draft.lastReviewed = undefined;
     draft.reviewStatus = 'idle';
     draft.error = undefined;
     notify();
@@ -212,6 +218,8 @@ export function createLaunchStore(): LaunchStore {
     draft.revision += 1;
     // Typed work, references and the saved request identity move with the
     // draft; the approval was bound to the old target and cannot be reused.
+    // lastReviewed is retained so the stale view can present previous
+    // facts beside the current requested target.
     draft.preview = undefined;
     draft.assignmentId = undefined;
     draft.reviewStatus = hadPreview ? 'stale' : 'idle';
@@ -279,7 +287,7 @@ export function createLaunchStore(): LaunchStore {
           entry.error = draftError('review', error);
           if (error instanceof HttpError && error.reason === 'stale-preview') {
             entry.reviewStatus = 'stale';
-            return;
+            return; // lastReviewed retained for previous-facts presentation
           }
           if (error instanceof HttpError && error.reason === 'request-conflict') {
             // This request is linked elsewhere; a fresh request identity is the
@@ -292,7 +300,7 @@ export function createLaunchStore(): LaunchStore {
           }
           if (isDeniedRefusal(error)) {
             entry.reviewStatus = 'denied';
-            return;
+            return; // lastReviewed retained; dispatch stays withheld
           }
           entry.reviewStatus = 'error'; // other 4xx and ambiguous preview failures
           return;
@@ -300,6 +308,15 @@ export function createLaunchStore(): LaunchStore {
         const preview = outcome.value as LaunchPreview;
         if (entry.revision === revision && entry.target === target) {
           entry.preview = {
+            record: preview.record,
+            contractDigest: preview.contractDigest,
+            inputPreview: preview.inputPreview,
+            revision,
+            target,
+          };
+          // Retain the reviewed facts separately from the current approval;
+          // later stale/denied transitions clear preview but keep this.
+          entry.lastReviewed = {
             record: preview.record,
             contractDigest: preview.contractDigest,
             inputPreview: preview.inputPreview,
@@ -356,7 +373,7 @@ export function createLaunchStore(): LaunchStore {
           if (isDeniedRefusal(error)) {
             entry.preview = undefined;
             entry.reviewStatus = 'denied';
-            return;
+            return; // lastReviewed retained; dispatch stays withheld
           }
           if (error instanceof HttpError && error.status >= 400 && error.status < 500) {
             entry.preview = undefined; // invalidate approval; require another review
@@ -385,6 +402,7 @@ export function createLaunchStore(): LaunchStore {
     draft.result = undefined;
     draft.saved = undefined;
     draft.preview = undefined;
+    draft.lastReviewed = undefined;
     // Both identities change even when the operator keeps the same text so the
     // stored handoff and failed assignment stay untouched.
     draft.requestId = crypto.randomUUID();

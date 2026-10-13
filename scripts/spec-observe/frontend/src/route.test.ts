@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { formatHash, parseHash, routeHistoryMode, subscribeRoute, type RouteState } from './route';
+import { busyAgentsHref, formatHash, parseHash, routeHistoryMode, subscribeRoute, type RouteState } from './route';
 import {
   clearIncompatibleFields,
   firstUnmatchedTargetId,
@@ -286,4 +286,31 @@ test('a launch route without required workspace state invents nothing on mount',
   assert.equal(parseHash('#/launch').ws, undefined);
   assert.deepEqual(clearIncompatibleFields(route), { dest: 'launch', tab: 'brief' });
   assert.deepEqual(route, { dest: 'launch' });
+});
+
+test('busy denial links the observed key when available and filters by UUID before observation', () => {
+  const conflicting = 'b42f1903-9508-46c1-a4aa-a0842dbce617';
+  const unrelatedKey = JSON.stringify(['fixture', 'run-1']);
+  const conflictingKey = JSON.stringify(['fixture', conflicting]);
+  const assignments = [
+    { assignment_id: 'run-1', key: unrelatedKey },
+    { assignment_id: conflicting, key: conflictingKey },
+  ];
+  // Matching observed key wins even though an unrelated row sorts first.
+  assert.equal(
+    busyAgentsHref('fixture', conflicting, assignments),
+    `#/agents?ws=fixture&id=${encodeURIComponent(conflictingKey)}`,
+  );
+  // Conflicting assignment absent: workspace-scoped q route, never a raw id.
+  assert.equal(
+    busyAgentsHref('fixture', conflicting, [{ assignment_id: 'run-1', key: unrelatedKey }]),
+    `#/agents?ws=fixture&q=${encodeURIComponent(conflicting)}`,
+  );
+  assert.equal(
+    busyAgentsHref('fixture', conflicting, []),
+    `#/agents?ws=fixture&q=${encodeURIComponent(conflicting)}`,
+  );
+  // No conflict: plain workspace route.
+  assert.equal(busyAgentsHref('fixture', undefined, assignments), '#/agents?ws=fixture');
+  assert.equal(busyAgentsHref('fixture', '', assignments), '#/agents?ws=fixture');
 });

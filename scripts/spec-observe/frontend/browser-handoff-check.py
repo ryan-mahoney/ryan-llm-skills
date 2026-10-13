@@ -122,14 +122,23 @@ def run_brief(browser, url):
             retried = posts('dispatchSaveBrief')[-1]['input']
             assert retried['request_id'] == refused['request_id']
             passed(f'failure keeps content and retries same identity ({width})')
+            # A successful brief-entry save transitions to review through the
+            # route owner; return to brief for the save-only Enter assertion.
+            expect(page).to_have_url(re.compile(r'#/launch\?ws=fixture&tab=review'))
+            page.evaluate("location.hash = '#/launch?ws=fixture&tab=brief'")
+            expect(page.locator('#launch-brief-content')).to_be_visible()
 
-            # Enter saves only: no suggestion request, preview or launch ever follows it.
+            # Enter saves only: no new save, suggestion request, preview or
+            # launch follows it (the save->review transition may already have
+            # resolved once; Enter itself must add nothing).
             before = len(posts('dispatchSaveBrief'))
+            previews_before = len(posts('dispatchPreview'))
+            launches_before_enter = len(posts('dispatchLaunch'))
             content.press('Enter')
             page.wait_for_timeout(150)
             assert len(posts('dispatchSaveBrief')) == before
-            assert not posts('dispatchPreview')
-            assert not posts('dispatchLaunch')
+            assert len(posts('dispatchPreview')) == previews_before
+            assert len(posts('dispatchLaunch')) == launches_before_enter
             passed(f'Enter saves only ({width})')
 
             # A Runs in change retargets file suggestions with the retained
@@ -189,8 +198,6 @@ def run_review(browser, url):
         expect(page.locator('.workspace-picker')).to_be_visible()
         page.locator('.workspace-picker button[data-workspace="fixture"]').click()
         expect(page).to_have_url(re.compile(r'#/launch\?ws=fixture&tab=brief'))
-        page.evaluate("location.hash = '#/launch?ws=fixture&tab=review'")
-        expect(page).to_have_url(re.compile(r'#/launch\?ws=fixture&tab=review'))
         expect(page.locator('#launch-brief-title')).to_be_visible()
         page.locator('#launch-brief-title').fill('Keep selected files in view')
         page.locator('#launch-brief-content').fill('Outcome\nOpen selected files beside the listing, with the source and filename visible.')
@@ -202,7 +209,10 @@ def run_review(browser, url):
         control('hold-dispatch-preview', 'true')
         for width in widths:
             context, page, errors = open_page(width)
-            page.locator('#launch-brief-title').press('Enter')
+            # Ordinary brief-entry path: explicit Save transitions through the
+            # route owner to review, then the saved handoff auto-resolves.
+            page.locator('#launch-save').click()
+            expect(page).to_have_url(re.compile(r'#/launch\?ws=fixture&tab=review'))
             expect(page.locator('#launch-review-status')).to_contain_text('Resolving execution contract')
             expect(page.locator('#launch-review .skeletons')).to_be_visible()
             expect(page.locator('#launch-review-requested')).to_contain_text('Whole workspace')
@@ -249,6 +259,13 @@ def run_review(browser, url):
             expect(page.locator('#launch-review-error')).to_be_focused()
             previous = page.locator('#launch-review [data-fact="previous-digest"] dd').inner_text()
             assert re.fullmatch(r'[0-9a-f]{64}', previous), previous
+            # Refusals retain known contract facts as explicit previous facts;
+            # the current requested target/brief stay separate and dispatch is withheld.
+            expect(page.locator('#launch-review-previous')).to_contain_text('not approved for launch')
+            expect(page.locator('#launch-review [data-fact="previous-execution"] dd')).not_to_be_empty()
+            expect(page.locator('#launch-review [data-fact="previous-assignment"] dd')).to_contain_text(re.compile(r'[0-9a-f-]{36}'))
+            expect(page.locator('#launch-review [data-fact="previous-skill"] dd')).to_contain_text('general')
+            expect(page.locator('#launch-review [data-fact="previous-authority"] dd')).to_contain_text('None')
             assert page.locator('#launch-assignment-launch').count() == 0
             assert len(posts('dispatchLaunch')) == launches_before + 1
             capture(page, f'launch-stale-{width}.png')
@@ -257,13 +274,29 @@ def run_review(browser, url):
             expect(page.locator('#launch-assignment-launch')).to_be_enabled()
             passed(f'stale launch withholds dispatch ({width})')
             # Busy denial names and links the conflicting assignment UUID.
+            # The conflicting writer is absent from the fixture snapshot while
+            # the unrelated run-1 row exists first, so the link must use the
+            # workspace-scoped q route and never select the unrelated agent.
             control('dispatch-preview-refusal', 'busy')
             page.locator('#launch-assignment-review').click()
             expect(page.locator('#launch-review-error')).to_contain_text('This directory already has a writer')
             expect(page.locator('#launch-review-busy')).to_contain_text('b42f1903-9508-46c1-a4aa-a0842dbce617')
-            expect(page.locator('#launch-review-busy')).to_have_attribute('href', re.compile(r'b42f1903-9508-46c1-a4aa-a0842dbce617'))
+            busy_href = page.locator('#launch-review-busy').get_attribute('href')
+            assert busy_href is not None and 'q=b42f1903-9508-46c1-a4aa-a0842dbce617' in busy_href, busy_href
+            assert '&id=' not in busy_href, busy_href
+            expect(page.locator('#launch-review-previous')).to_contain_text('not approved for launch')
+            expect(page.locator('#launch-review [data-fact="previous-execution"] dd')).not_to_be_empty()
+            expect(page.locator('#launch-review [data-fact="previous-assignment"] dd')).to_contain_text(re.compile(r'[0-9a-f-]{36}'))
             assert page.locator('#launch-assignment-launch').count() == 0
             capture(page, f'launch-denied-{width}.png')
+            page.locator('#launch-review-busy').click()
+            expect(page).to_have_url(re.compile(r'#/agents\?ws=fixture&q=b42f1903-9508-46c1-a4aa-a0842dbce617'))
+            expect(page.locator('.observation-rows')).to_contain_text('No matching agents')
+            busy_shot = shots_dir / f'launch-busy-link-{width}.png'
+            page.screenshot(path=str(busy_shot))
+            summary['captures'].append(str(busy_shot))
+            page.evaluate("location.hash = '#/launch?ws=fixture&tab=review'")
+            expect(page.locator('#launch-review-error')).to_contain_text('This directory already has a writer')
             passed(f'busy denial names its assignment ({width})')
             control('dispatch-preview-refusal', 'none')
             page.locator('#launch-assignment-review').click()

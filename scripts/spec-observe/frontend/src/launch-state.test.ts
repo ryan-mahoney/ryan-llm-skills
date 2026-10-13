@@ -651,3 +651,86 @@ test('the store submits real adapter bodies with minted identities and the displ
   assert.equal(result.preview?.contractDigest, DIGEST_A);
   assert.equal(result.saved?.requestId, requestId);
 });
+
+// node --import tsx --test --test-name-pattern="last reviewed facts" src/launch-state.test.ts
+test('last reviewed facts survive stale and denied refusals while dispatch stays withheld', async t => {
+  const scope = scopeFetch(t);
+  const store = createLaunchStore();
+  const ctx: LaunchContext = { ws: 'ws-1', target: 'repo-1' };
+  await saveAndReview(store, scope, ctx);
+  const reviewed = store.getLaunchDraft(ctx)!;
+  assert.ok(reviewed.preview);
+  assert.deepEqual(reviewed.lastReviewed, reviewed.preview);
+  const digest = reviewed.preview!.contractDigest;
+  const assignmentId = reviewed.assignmentId!;
+
+  // Stale launch refusal clears the current approval but retains previous facts.
+  const staleLaunch = store.launchReviewedDraft(ctx, TOKEN);
+  await flush();
+  scope.reply(scope.calls.length - 1, jsonResponse(409, { error: 'changed', reason: 'stale-preview' }));
+  await assert.rejects(staleLaunch);
+  const stale = store.getLaunchDraft(ctx)!;
+  assert.equal(stale.preview, undefined);
+  assert.equal(stale.reviewStatus, 'stale');
+  assert.ok(stale.lastReviewed);
+  assert.equal(stale.lastReviewed!.contractDigest, digest);
+  assert.equal(stale.lastReviewed!.target, 'repo-1');
+  assert.equal(stale.saved?.requestId, reviewed.requestId);
+  await assert.rejects(store.launchReviewedDraft(ctx, TOKEN));
+  assert.equal(scope.calls.length, 3);
+
+  // Fresh review restores the approval; a busy denial retains the new facts.
+  const rereview = store.reviewLaunchDraft(ctx, TOKEN);
+  await flush();
+  scope.reply(scope.calls.length - 1, okPreview(DIGEST_B));
+  await rereview;
+  const current = store.getLaunchDraft(ctx)!;
+  assert.equal(current.reviewStatus, 'current');
+  assert.equal(current.lastReviewed!.contractDigest, DIGEST_B);
+  const denied = store.reviewLaunchDraft(ctx, TOKEN);
+  await flush();
+  scope.reply(scope.calls.length - 1, jsonResponse(409, { error: 'busy', reason: 'target-busy', assignment_id: 'b42f1903-9508-46c1-a4aa-a0842dbce617' }));
+  await assert.rejects(denied);
+  const afterDenied = store.getLaunchDraft(ctx)!;
+  assert.equal(afterDenied.reviewStatus, 'denied');
+  assert.equal(afterDenied.preview, undefined);
+  assert.equal(afterDenied.lastReviewed!.contractDigest, DIGEST_B);
+  assert.equal(afterDenied.error?.assignmentId, 'b42f1903-9508-46c1-a4aa-a0842dbce617');
+  await assert.rejects(store.launchReviewedDraft(ctx, TOKEN));
+});
+
+// node --import tsx --test --test-name-pattern="target change retains" src/launch-state.test.ts
+test('target change retains last reviewed facts beside current requested facts', async t => {
+  const scope = scopeFetch(t);
+  const store = createLaunchStore();
+  const ctx: LaunchContext = { ws: 'ws-1', target: 'repo-a' };
+  await saveAndReview(store, scope, ctx);
+  const digest = store.getLaunchDraft(ctx)!.preview!.contractDigest;
+  const requestId = store.getLaunchDraft(ctx)!.requestId;
+  store.changeLaunchTarget(ctx, 'repo-b');
+  const moved = store.getLaunchDraft(ctx)!;
+  assert.equal(moved.target, 'repo-b');
+  assert.equal(moved.preview, undefined);
+  assert.equal(moved.reviewStatus, 'stale');
+  assert.equal(moved.saved?.requestId, requestId);
+  assert.ok(moved.lastReviewed);
+  assert.equal(moved.lastReviewed!.contractDigest, digest);
+  assert.equal(moved.lastReviewed!.target, 'repo-a');
+  await assert.rejects(store.launchReviewedDraft(ctx, TOKEN));
+});
+
+// node --import tsx --test --test-name-pattern="brief edit clears" src/launch-state.test.ts
+test('brief edit clears last reviewed facts with the saved handoff', async t => {
+  const scope = scopeFetch(t);
+  const store = createLaunchStore();
+  const ctx: LaunchContext = { ws: 'ws-1', target: 'repo-1' };
+  await saveAndReview(store, scope, ctx);
+  assert.ok(store.getLaunchDraft(ctx)!.lastReviewed);
+  store.editLaunchDraft(ctx, { title: 'Changed title' });
+  const edited = store.getLaunchDraft(ctx)!;
+  assert.equal(edited.saved, undefined);
+  assert.equal(edited.preview, undefined);
+  assert.equal(edited.lastReviewed, undefined);
+  assert.equal(edited.reviewStatus, 'idle');
+  assert.equal(scope.calls.length, 2);
+});

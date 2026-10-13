@@ -78,6 +78,30 @@ export function routeHistoryMode(prev: RouteState, next: RouteState, options: { 
   return 'replace';
 }
 
+// Busy-denial agent link: the Agents list keys rows by the observed
+// assignment key (JSON.stringify([observerWorkspace, assignment_id])) and
+// replaces an unmatched id selection with the first visible row. A raw
+// conflicting UUID therefore misdirects inspection whenever an unrelated
+// row exists first. Use the matching observed key when available; before
+// observation fall back to a workspace-scoped q=conflictingUUID route so
+// the list filters instead of selecting an unrelated agent.
+export function busyAgentsHref(
+  ws: string,
+  conflictingId: string | undefined,
+  assignments: Array<{ assignment_id?: unknown; key?: unknown }> = [],
+): string {
+  const base = `#/agents?ws=${encodeURIComponent(ws)}`;
+  if (typeof conflictingId !== 'string' || !conflictingId) return base;
+  const match = assignments.find(
+    assignment => assignment.assignment_id === conflictingId
+      && typeof assignment.key === 'string' && assignment.key,
+  );
+  if (match && typeof (match as { key: unknown }).key === 'string') {
+    return `${base}&id=${encodeURIComponent((match as { key: string }).key)}`;
+  }
+  return `${base}&q=${encodeURIComponent(conflictingId)}`;
+}
+
 const listeners = new Set<RouteListener>();
 let bound = false;
 let observedKey: string | null = null;
