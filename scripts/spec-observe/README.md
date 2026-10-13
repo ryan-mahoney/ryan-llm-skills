@@ -173,6 +173,22 @@ lifecycle evidence prevents a folder from being classified as planned; workspace
 coverage reports incomplete reads. Search and workspace scope apply to this view,
 and planned folders can open their package files.
 
+On a planned spec's live detail page, **Start implementation** provides an editable
+brief prefilled with `/spec-end-to-end Resume after spec-write` and the package's
+reference. The initial model roles are hardcoded in the brief. **Preview settings**
+saves the brief and shows the package, execution target, model, publication
+authority, and assignment instructions. **Start agent** starts an independent
+Pi agent in tmux using that reviewed contract. The launch receives the package
+context and the `spec-end-to-end` skill, with authority to publish a ready PR.
+Editing the brief or target requires a new preview.
+
+The form uses the existing thread brief/assignment APIs to retain the saved brief;
+it does not send a discussion message or start a discussion agent. A single
+package target is selected automatically; multiple targets require a choice.
+The server resolves that checkout to a unique usable workspace repository and
+validates its package binding before previewing. Imported snapshots cannot
+launch agents.
+
 **Done** retains one entry per spec completed in the last seven days,
 newest first, with its recorded completion time and completion basis. A complete
 workflow checkpoint or matching ready-tour/non-draft PR publication establishes
