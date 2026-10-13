@@ -53,7 +53,9 @@ function nextFact(epic: WireRecord): { label: string; note: string } {
   if (!candidate) {
     const waiting = list(epic.members).filter(member => epicMemberRequires(member).waiting.length).length;
     if (waiting > 0) return { label: 'None eligible', note: `${waiting} members wait on unlanded requirements` };
-    return { label: 'None eligible', note: 'All members landed' };
+    const stats = epicStats(epic);
+    if (stats.total > 0 && stats.landed >= stats.total) return { label: 'None eligible', note: 'All members landed' };
+    return { label: 'None eligible', note: 'No eligible candidate in this observation' };
   }
   const member = list(epic.members).find(item => memberName(item) === candidate) ?? null;
   if (!member) return { label: candidate, note: 'No requirements' };
@@ -237,14 +239,22 @@ export function EpicDetail(props: {
     props.onSelectPackage(memberWorkspace(props.epic, member), memberName(member));
   };
   const coverage = () => epicCoverageReasons(props.epic);
+  const recorded = () => epicRecordedState(props.epic);
+  const stats = () => epicStats(props.epic);
+  const conflictCompact = () => {
+    if (!props.transportPrimary || !recorded().conflict) return '';
+    return `The epic is recorded as ${recordedFact(recorded())}, but landing is confirmed for ${stats().landed} of ${stats().total} members in this observation. The records have not been rewritten; the conflicting evidence is preserved.`;
+  };
   return (
     <>
       <EpicObjectHead epic={props.epic} />
       <div class="detail-body">
-        {/* Regional notice slot: step 5 mounts the transport notice here. The
-            completion conflict below stays rendered and never rewrites records. */}
+        {/* Regional notice slot: epics.tsx owns offline > stale > partial as
+            the single live notice. When transport wins, the completion
+            conflict stays as compact non-live text beside the landed fact
+            and never becomes a second live region. */}
         <Show when={props.notice}>{props.notice}</Show>
-        <EpicConflictNotice epic={props.epic} />
+        <Show when={conflictCompact()}>{compact => <p class="section-note">{compact()}</p>}</Show>
         <EpicFacts epic={props.epic} />
         <Show when={coverage().length}>
           <p class="section-note">{`Coverage ${text(props.epic.coverage?.state) || 'partial'}: ${coverage().join('; ')}`}</p>

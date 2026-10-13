@@ -5,7 +5,7 @@ import { time } from '../format';
 import { formatHash, type RouteState } from '../route';
 import { clearIncompatibleFields } from '../scope';
 import { EpicDetail } from './epic-detail';
-import { epicRecordedState, epicViewState, visibleEpics } from './epic-state';
+import { epicCoverageReasons, epicRecordedState, epicViewState, visibleEpics } from './epic-state';
 import { epicStats } from '../observation-format';
 import type { DestinationProps } from './index';
 
@@ -184,40 +184,82 @@ export default function EpicsDestination(props: DestinationProps) {
     ? <button type="button" class="ds-btn ds-btn--primary" onClick={() => void props.refresh()}>Refresh state</button>
     : undefined);
 
-  // Regional transport notice: offline wins over stale, and the notice is
-  // rebuilt only when its semantic signature changes so repeated polls keep
-  // identical text without re-announcing an unchanged live region.
+  // Regional notice priority offline > stale > partial. The announcement
+  // signature uses selection, notice state and semantic reasons only, so
+  // advancing observation timestamps never recreate the live region.
+  // Transport (offline/stale) keeps the primary recovery; partial keeps
+  // Open spec primary with no regional action.
+  const regional = () => (view().offline ? 'offline' : view().stale ? 'stale' : view().partial ? 'partial' : null);
   const transport = () => (view().offline ? 'offline' : view().stale ? 'stale' : null);
+  const receivedAt = () => {
+    const value = (props.payload as unknown as { generated_at?: unknown } | null)?.generated_at;
+    return typeof value === 'string' && value ? value : null;
+  };
   const noticeSignature = () => {
-    const kind = transport();
+    const kind = regional();
     if (!kind) return '';
-    return `${kind}|${view().observedAt ?? ''}|${String(selected()?.key ?? '')}`;
+    const epic = selected();
+    const key = String((epic as { key?: unknown } | null)?.key ?? '');
+    const observerState = String((epic as WireRecord | null)?.observer?.state ?? '');
+    const coverageState = String((epic as WireRecord | null)?.coverage?.state ?? '');
+    let reasons = '';
+    try {
+      reasons = epic ? epicCoverageReasons(epic).join(';') : '';
+    } catch {
+      reasons = '';
+    }
+    const conflict = epic ? String(epicRecordedState(epic).conflict) : '';
+    const hasObserved = view().observedAt ? '1' : '0';
+    const hasReceived = receivedAt() ? '1' : '0';
+    return `${kind}|${key}|${observerState}|${coverageState}|${reasons}|${conflict}|${hasObserved}|${hasReceived}`;
   };
   const transportNotice = () => {
-    const kind = transport();
+    const kind = regional();
     if (!kind) return undefined;
     const observedAt = view().observedAt;
-    const action = props.live
-      ? (kind === 'offline'
-        ? <button type="button" class="ds-btn ds-btn--primary" onClick={props.onRetryConnection}>Retry connection</button>
-        : <button type="button" class="ds-btn ds-btn--primary" onClick={() => void props.refresh()}>Refresh state</button>)
-      : undefined;
+    const offlineAt = receivedAt();
     if (kind === 'offline') {
+      const action = props.live
+        ? <button type="button" class="ds-btn ds-btn--primary" onClick={props.onRetryConnection}>Retry connection</button>
+        : undefined;
       return (
         <StateNotice tone="warning" title="Connection unavailable" action={action}>
-          {observedAt
-            ? `Last received at ${time(observedAt)}. These records may have changed on the host.`
+          {offlineAt
+            ? `Last received at ${time(offlineAt)}. These records may have changed on the host.`
             : 'Last received time is unavailable. These records may have changed on the host.'}
         </StateNotice>
       );
     }
+    if (kind === 'stale') {
+      const action = props.live
+        ? <button type="button" class="ds-btn ds-btn--primary" onClick={() => void props.refresh()}>Refresh state</button>
+        : undefined;
+      return (
+        <StateNotice
+          tone="warning"
+          title={observedAt ? `Last checked at ${time(observedAt)}` : 'Observation time unavailable'}
+          action={action}
+        >
+          Existing content is kept while the host revalidates it.
+        </StateNotice>
+      );
+    }
+    const epic = selected();
+    if (!epic) return undefined;
+    const recorded = epicRecordedState(epic);
+    if (recorded.conflict) {
+      const stats = epicStats(epic);
+      const state = recorded.label.replace(/^Recorded /, '');
+      const fact = state.charAt(0).toUpperCase() + state.slice(1);
+      return (
+        <StateNotice tone="warning" title="Recorded state conflicts with member evidence">
+          {`The epic is recorded as ${fact}, but landing is confirmed for ${stats.landed} of ${stats.total} members in this observation. The records have not been rewritten; the conflicting evidence is preserved.`}
+        </StateNotice>
+      );
+    }
     return (
-      <StateNotice
-        tone="warning"
-        title={observedAt ? `Last checked at ${time(observedAt)}` : 'Observation time unavailable'}
-        action={action}
-      >
-        Existing content is kept while the host revalidates it.
+      <StateNotice tone="warning" title="Member evidence incomplete">
+        Some member evidence is unavailable in this observation. Recorded statuses and notes are kept.
       </StateNotice>
     );
   };

@@ -821,6 +821,34 @@ try:
             expect(facts.nth(2)).to_contain_text('wait on unlanded requirements')
             report['scenarios'].append('detail next fact: null next renders None eligible instead of the blocked in-progress member')
 
+            # Real-producer null next with no waiting and nothing landed must
+            # not claim completion: one in-progress member, no dependencies.
+            lone_progress_epic = {
+                'workspace': 'fixture', 'epic': 'lone-progress-epic', 'title': 'Lone progress epic', 'state': 'active',
+                'members': [detail_member('solo', 'in-progress')],
+                'summary': {'total': 1, 'merged': 0, 'complete': 0, 'attention': 0},
+                'next': None,
+                'coverage': {'state': 'complete', 'reasons': []},
+            }
+            check_deadline()
+            open_detail(detail_envelope(lone_progress_epic))
+            expect(facts.nth(2).locator('strong')).to_have_text('None eligible')
+            expect(facts.nth(2)).to_contain_text('No eligible candidate in this observation')
+            expect(facts.nth(2)).not_to_contain_text('All members landed')
+            expect(facts.nth(1)).to_contain_text('0 of 1')
+            lone_published_epic = {
+                'workspace': 'fixture', 'epic': 'lone-published-epic', 'title': 'Lone published epic', 'state': 'active',
+                'members': [detail_member('solo', 'published')],
+                'summary': {'total': 1, 'merged': 0, 'complete': 0, 'attention': 0},
+                'next': None,
+                'coverage': {'state': 'complete', 'reasons': []},
+            }
+            check_deadline()
+            open_detail(detail_envelope(lone_published_epic))
+            expect(facts.nth(2).locator('strong')).to_have_text('None eligible')
+            expect(facts.nth(2)).not_to_contain_text('All members landed')
+            report['scenarios'].append('detail next fact: real-producer null next with in-progress/published and 0 of 1 landed never claims All members landed')
+
             # Step-004 F3: one-character slug keeps a 44x44 target.
             tiny_epic = {
                 'workspace': 'fixture', 'epic': 'tiny-epic', 'title': 'Tiny slug epic', 'state': 'active',
@@ -1018,6 +1046,8 @@ try:
             table = pane.locator('table.epic-members')
             transport_callouts = pane.locator('.detail-body .ds-callout').filter(has_text=re.compile('Connection unavailable|Last checked at|Observation time unavailable'))
             conflict_callout = pane.locator('.detail-body .ds-callout').filter(has_text='Recorded state conflicts with member evidence')
+            regional_callouts = pane.locator('.detail-body .ds-callout')
+            generic_callout = pane.locator('.detail-body .ds-callout').filter(has_text='Member evidence incomplete')
 
             # (1) A usable payload first, then a real header refresh failure,
             # keeps the retained list/facts/table with one regional notice.
@@ -1046,6 +1076,22 @@ try:
             expect(facts).to_have_count(3)
             expect(table.locator('tbody tr')).to_have_count(2)
             report['scenarios'].append('offline recovery: Retry connection restores the notice-free retained read')
+
+            # Offline receipt uses retained payload.generated_at, not the
+            # observation clock: deliberately different and missing observed_at.
+            expected_received = page.evaluate('iso => new Date(iso).toLocaleString()', fresh)
+            open_selected(observation_envelope(observations_epic, 'old', runs=observations_runs))
+            control['value'] = 'fail'
+            page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+            expect(transport_callouts).to_have_count(1)
+            expect(transport_callouts.first).to_contain_text(f'Last received at {expected_received}')
+            report['scenarios'].append(f'offline receipt: old observed_at still reports Last received at {expected_received} from generated_at')
+            open_selected(observation_envelope(observations_epic, 'missing', runs=observations_runs))
+            control['value'] = 'fail'
+            page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+            expect(transport_callouts).to_have_count(1)
+            expect(transport_callouts.first).to_contain_text(f'Last received at {expected_received}')
+            report['scenarios'].append(f'offline receipt: missing observed_at still reports Last received at {expected_received} from generated_at')
 
             # (2) Stale real-time wording, the missing-time fallback, and a held
             # refresh that clears only on a recent observation.
@@ -1089,30 +1135,56 @@ try:
             expect(table.locator('tbody tr')).to_have_count(2)
             report['scenarios'].append('refresh held: readable contents stay while waiting and a recent observation clears the stale notice')
 
-            # (3) Conflict facts stay beside exactly one transport notice.
+            # (3) Conflict facts stay beside exactly one regional notice: transport
+            # wins as the single live callout with the no-rewrite explanation as
+            # compact non-live text, never a second live region.
             conflict_fresh = observation_envelope(conflict_epic, 'fresh', runs=conflict_runs)
             conflict_stale = observation_envelope(conflict_epic, 'old', runs=conflict_runs)
             status = page.locator('article.detail-pane .object-head .status')
             open_selected(conflict_fresh)
             expect(status).to_contain_text('Recorded complete')
             expect(facts.nth(1)).to_contain_text('0 of 3')
+            expect(conflict_callout).to_have_count(1)
+            expect(transport_callouts).to_have_count(0)
+            expect(regional_callouts).to_have_count(1)
+            report['scenarios'].append('partial conflict: Recorded complete shows one regional conflict notice with 0 of 3 landed and no transport')
             control['value'] = 'fail'
             page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
             expect(transport_callouts).to_have_count(1)
             expect(transport_callouts.first).to_contain_text('Connection unavailable')
-            expect(conflict_callout).to_have_count(1)
-            expect(conflict_callout).to_contain_text('The records have not been rewritten')
-            expect(conflict_callout).to_contain_text('conflicting evidence is preserved')
+            expect(regional_callouts).to_have_count(1)
+            expect(conflict_callout).to_have_count(0)
+            compact = pane.locator('.detail-body .section-note', has_text='The records have not been rewritten')
+            expect(compact).to_have_count(1)
+            expect(compact.first).to_contain_text('conflicting evidence is preserved')
+            assert compact.first.evaluate('el => el.closest(".ds-callout") === null'), 'conflict compact rendered as a live callout'
             expect(status).to_contain_text('Recorded complete')
             expect(facts.nth(1)).to_contain_text('0 of 3')
             report['scenarios'].append('offline conflict: Recorded complete and the no-rewrite explanation stay beside 0 of 3 landed with exactly one transport callout')
             open_selected(conflict_stale)
             expect(transport_callouts).to_have_count(1)
             expect(transport_callouts.first).to_contain_text('Last checked at')
-            expect(conflict_callout).to_have_count(1)
+            expect(regional_callouts).to_have_count(1)
+            expect(conflict_callout).to_have_count(0)
+            expect(pane.locator('.detail-body .section-note', has_text='The records have not been rewritten')).to_have_count(1)
             expect(status).to_contain_text('Recorded complete')
             expect(facts.nth(1)).to_contain_text('0 of 3')
             report['scenarios'].append('stale conflict: the stale transport notice does not hide the Recorded complete conflict explanation')
+            # Generic partial without a completion conflict owns one live notice.
+            generic_partial_epic = {
+                'workspace': 'fixture', 'epic': 'generic-partial-epic', 'title': 'Generic partial epic', 'state': 'active',
+                'members': [detail_member('unknown-member', 'unknown')],
+                'summary': {'total': 1, 'merged': 0, 'complete': 0, 'attention': 0},
+                'next': None,
+                'coverage': {'state': 'partial', 'reasons': ['member-incomplete:unknown-member']},
+            }
+            open_selected(observation_envelope(generic_partial_epic, 'fresh', runs=()))
+            expect(generic_callout).to_have_count(1)
+            expect(generic_callout.first).to_contain_text('Some member evidence is unavailable')
+            expect(transport_callouts).to_have_count(0)
+            expect(conflict_callout).to_have_count(0)
+            expect(regional_callouts).to_have_count(1)
+            report['scenarios'].append('generic partial: Member evidence incomplete owns the single regional notice with no transport or conflict callout')
 
             # (4) Repeated identical payloads add no callout mutation, and each
             # offline -> stale -> partial transition announces once.
@@ -1152,6 +1224,18 @@ try:
             assert page.evaluate('() => window.__epicsAnnouncements.length') == 0, f'identical payload announced a new callout: {page.evaluate("() => window.__epicsAnnouncements")}'
             assert page.evaluate('() => window.__epicsTextMutations') == 0, 'identical payload changed callout text'
 
+            # Timestamp-only stale (same selection/state/reasons, advancing
+            # observation timestamp) must not insert another live region.
+            older = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time() - 700))
+            stale_two = observation_envelope(observations_epic, 'old', runs=observations_runs)
+            stale_two['observers'][0]['snapshot']['coverage']['observed_at'] = older
+            control['value'] = stale_two
+            settled_refresh()
+            page.wait_for_timeout(200)
+            expect(transport_callouts).to_have_count(1)
+            expect(transport_callouts.first).to_contain_text('Last checked at')
+            assert page.evaluate('() => window.__epicsAnnouncements.length') == 0, f'timestamp-only stale announced a new callout: {page.evaluate("() => window.__epicsAnnouncements")}'
+
             control['value'] = 'fail'
             settled_refresh()
             expect(transport_callouts.first).to_contain_text('Connection unavailable')
@@ -1170,18 +1254,56 @@ try:
             expect(conflict_callout).to_have_count(1)
             expect(conflict_callout).to_contain_text('Recorded state conflicts with member evidence')
             expect(transport_callouts).to_have_count(0)
-            partial_baseline = page.evaluate('() => window.__epicsAnnouncements.length')
-            assert partial_baseline == 2, f'partial transition changed the transport announcement count: {page.evaluate("() => window.__epicsAnnouncements")}'
+            expect(regional_callouts).to_have_count(1)
+            # Cross-epic refresh remounts the detail pane, so the stranded
+            # observer cannot see it: rebind a fresh observer on the new body
+            # to prove same-epic partial repeats and reason changes.
+            page.evaluate("""() => {
+              window.__epicsAnnouncements = [];
+              window.__epicsTextMutations = 0;
+              const region = document.querySelector('article.detail-pane .detail-body');
+              window.__epicsObserver.disconnect();
+              window.__epicsObserver = new MutationObserver(records => {
+                for (const record of records) {
+                  if (record.type === 'characterData') {
+                    const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
+                    if (target && target.closest('.ds-callout')) window.__epicsTextMutations += 1;
+                    continue;
+                  }
+                  for (const node of record.addedNodes) {
+                    const el = node.nodeType === 1 ? node : null;
+                    if (el && el.classList && el.classList.contains('ds-callout')) {
+                      window.__epicsAnnouncements.push(el.textContent.trim().slice(0, 80));
+                    }
+                  }
+                }
+              });
+              window.__epicsObserver.observe(region, {childList: true, subtree: true, characterData: true});
+            }""")
             partial_text = page.evaluate('() => window.__epicsTextMutations')
             settled_refresh()
             page.wait_for_timeout(200)
-            assert page.evaluate('() => window.__epicsAnnouncements.length') == partial_baseline, f'partial repeat announced again: {page.evaluate("() => window.__epicsAnnouncements")}'
+            assert page.evaluate('() => window.__epicsAnnouncements.length') == 0, f'partial repeat announced again: {page.evaluate("() => window.__epicsAnnouncements")}'
             assert page.evaluate('() => window.__epicsTextMutations') == partial_text, 'identical conflict payload changed callout text'
             expect(conflict_callout).to_have_count(1)
+            # Changed semantic reasons announce again: same conflict epic with
+            # an added coverage reason is a new regional signature.
+            reasoned_conflict = {**conflict_epic, 'coverage': {'state': 'complete', 'reasons': ['member-incomplete:progress-member']}}
+            reasoned_envelope = observation_envelope(reasoned_conflict, 'fresh', runs=conflict_runs)
+            control['value'] = reasoned_envelope
+            settled_refresh()
+            expect(conflict_callout).to_have_count(1)
+            expect(regional_callouts).to_have_count(1)
+            page.wait_for_function('() => window.__epicsAnnouncements.length === 1')
+            # Generic partial reason change also announces: same generic epic
+            # with an added reason is a new signature.
+            generic_reason_epic = {**generic_partial_epic, 'coverage': {'state': 'partial', 'reasons': ['member-incomplete:unknown-member', 'member-unobserved:other']}}
+            control['value'] = observation_envelope(generic_reason_epic, 'fresh', runs=())
+            open_selected(control['value'])
+            expect(generic_callout).to_have_count(1)
+            expect(regional_callouts).to_have_count(1)
             announcements = page.evaluate('() => window.__epicsAnnouncements')
-            assert 'Connection unavailable' in announcements[0], announcements
-            assert 'Last checked at' in announcements[1], announcements
-            report['scenarios'].append('signature: identical payloads add no callout mutation; offline and stale announce once each; the partial conflict callout appears once and its repeat adds no announcement')
+            report['scenarios'].append('signature: identical and timestamp-only payloads add no callout; offline and stale announce once each; same-epic partial repeat adds none while changed coverage reasons announce again')
 
             # (5) A real #import-file snapshot offers no live recovery and keeps
             # only the truncation/envelope diagnostics.
