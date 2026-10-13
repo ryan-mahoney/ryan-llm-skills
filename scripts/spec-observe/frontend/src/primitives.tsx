@@ -24,7 +24,7 @@ export function MasterDetail(props: { listLabel: string; list: JSX.Element; chil
   );
 }
 
-export function StateNotice(props: { tone?: StatusTone; title?: string; action?: JSX.Element; announce?: boolean; children: JSX.Element }) {
+export function StateNotice(props: { tone?: StatusTone; title?: JSX.Element; action?: JSX.Element; announce?: boolean; children: JSX.Element }) {
   return (
     <div class={`ds-callout ${props.tone ?? 'neutral'}`} role={props.announce === false ? undefined : 'status'}>
       <div>

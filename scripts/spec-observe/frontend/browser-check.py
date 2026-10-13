@@ -819,7 +819,7 @@ try:
         specs_object_url=page.url
         page.locator('[data-area="epics"]').click()
         expect(page.locator('main')).to_contain_text('Demo epic')
-        page.locator('.epic-table').get_by_role('button',name='browser',exact=True).click()
+        page.locator('table.epic-members').get_by_role('button',name='browser',exact=True).click()
         expect(page).to_have_url(re.compile(r'#/specs\?ws=fixture&id='))
         page.go_back()
         expect(page.locator('main')).to_contain_text('Demo epic')

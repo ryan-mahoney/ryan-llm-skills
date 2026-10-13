@@ -119,6 +119,37 @@
 :where(.workspace-destination, .workspace-picker, .specs-destination) .record{width:100%;border:0;border-bottom:1px solid var(--ds-line);border-radius:0;background:none;text-align:left;font:inherit}
 :where(.workspace-destination, .workspace-picker) .text-link{background:none;border:0;border-radius:0;padding:0;color:var(--ds-accent-text);min-height:44px}
 
+/* Epics master and cold regions: keep the record row chrome from the legacy
+   button reset without outranking .record:hover/.record.selected, and render
+   destination actions as reference links. The wrapper is layout-neutral so
+   the shell grid keeps the same children. Rows keep the 44px minimum hit box
+   and the focus ring is inset so the scrolling records region cannot clip it. */
+.epics-destination{display:contents}
+:where(.epics-destination) .record{width:100%;border:0;border-bottom:1px solid var(--ds-line);border-radius:0;background:none;text-align:left;font:inherit;min-height:44px}
+:where(.epics-destination) .text-link{background:none;border:0;border-radius:0;padding:0;color:var(--ds-accent-text);min-height:44px}
+:where(.epics-destination) .record:focus-visible{outline:2px solid var(--ds-accent);outline-offset:-2px}
+
+/* Epic detail member table (screens 03/44): long member slugs wrap inside the
+   scrolling detail region, tbody row headers keep data-cell positioning instead
+   of the sticky column-header layout, and member slug controls keep the 44px
+   hit box with an inset focus ring the scrolling region cannot clip. */
+.epic-members{width:100%}
+.epic-members th,.epic-members td{overflow-wrap:anywhere;min-width:0}
+.epic-members tbody th[scope=row]{position:static;top:auto;background:none;white-space:normal;color:var(--ds-ink-2);font-size:13px;vertical-align:top;padding-top:14px;padding-bottom:14px}
+.epic-members .text-link{display:inline-flex;align-items:center;justify-content:center;min-height:44px;min-width:44px;max-width:100%;white-space:normal;overflow-wrap:anywhere;text-align:left}
+.epic-members .text-link:focus-visible{outline:2px solid var(--ds-accent);outline-offset:-2px}
+
+/* Epic detail supporting documents table (screen 03): long absolute sources
+   wrap inside the scrolling detail region, the document row header keeps
+   data-cell positioning instead of the sticky column-header layout, and
+   document links keep the 44px hit box with an inset focus ring the
+   scrolling region cannot clip. */
+.epic-documents{width:100%}
+.epic-documents th,.epic-documents td{overflow-wrap:anywhere;min-width:0}
+.epic-documents tbody th[scope=row]{position:static;top:auto;background:none;white-space:normal;color:var(--ds-ink-2);font-size:13px;vertical-align:top;padding-top:14px;padding-bottom:14px}
+.epic-documents .text-link{display:inline-flex;align-items:center;justify-content:center;min-height:44px;min-width:44px;max-width:100%;white-space:normal;overflow-wrap:anywhere;text-align:left}
+.epic-documents .text-link:focus-visible{outline:2px solid var(--ds-accent);outline-offset:-2px}
+
 /* Specs list notices stack in the narrow list pane so the copy keeps the full
    pane width and the recovery action sits below the text. */
 .specs-destination .list-pane .ds-callout{flex-direction:column;align-items:stretch}

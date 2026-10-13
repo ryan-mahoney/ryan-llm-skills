@@ -246,7 +246,7 @@ Sentinel reads each workspace's epics through spec-location (`projects/<workspac
 member's status from the package facts it already collects, regardless of the
 24-hour activity filter and the seven-day completion window. Members are package
 slugs of the same workspace. The snapshot carries
-`epics[]` with members, summary counts, `waiting_on`, `next` and per-epic coverage;
+`epics[]` with members (declared `requires` plus derived `waiting_on`), summary counts, `next` and per-epic coverage;
 rows for member packages carry `epic`. An invalid record is a coverage reason and
 never hides its member packages; a workspace without epics is normal. Sentinel never writes an epic record. Schema and
 status rules: [docs/spec-epics.md](../../docs/spec-epics.md).

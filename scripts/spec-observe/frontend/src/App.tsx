@@ -10,6 +10,7 @@ import { visibleSpecs } from './spec-state';
 import { destinationEntries, type DestinationProps } from './destinations';
 import { WorkspacePicker } from './destinations/workspaces';
 import { catalogRead, type WorkspaceCatalog } from './destinations/workspace-state';
+import { memberRecords, visibleEpics as sharedVisibleEpics } from './destinations/epic-state';
 import { getLaunchDraft, seedLaunchDraft } from './launch-state';
 import { armLaunchPickerIntent, cancelLaunchPickerIntent, createLaunchPickerIntent, shouldApplyPickerReset, shouldResetAcknowledgedDraft } from './launch-picker-intent';
 
@@ -72,7 +73,7 @@ export default function App() {
   const q = () => query().trim().toLowerCase();
   const visibleRecords = createMemo(() => visibleSpecs(scopedRecords(), filter(), query()));
   const visibleAssignments = createMemo(() => scopedAssignments().filter(assignment => !q() || [assignment.assignment_id, assignment.spec_package, assignment.workflow_id, assignment.display, assignment.nextAction, assignment.safeAction].some(value => str(value).toLowerCase().includes(q()))));
-  const visibleEpics = createMemo(() => scopedEpics().filter(epic => !q() || [epic.title, epic.epic, epic.workspace, ...(epic.members ?? []).map((member: WireRecord) => member.name)].some(value => str(value).toLowerCase().includes(q()))));
+  const visibleEpics = createMemo(() => sharedVisibleEpics(scopedEpics(), route().q ?? ''));
   const record = createMemo(() => scopedRecords().find(item => item.key === route().id) ?? null);
   const agent = createMemo(() => scopedAssignments().find(item => item.key === route().id) ?? null);
   const epic = createMemo(() => scopedEpics().find(item => item.key === route().id) ?? null);
@@ -169,7 +170,7 @@ export default function App() {
     navigate(next, routeHistoryMode(route(), next, { fallback: true }));
   }
   function openPackage(workspaceName: string, name: string) {
-    const matches = packageSummaries(scopedRecords()).filter(item => item.workspace === workspaceName && base(item.package) === name);
+    const matches = memberRecords(packageSummaries(scopedRecords()), workspaceName, name);
     const target = matches.find(item => packageFilterMatches(item, 'active'))
       ?? matches.find(item => item.planned)
       ?? matches.find(item => !item.recent_completion) ?? matches[0];
@@ -340,8 +341,8 @@ export default function App() {
   }
   function notes() {
     const out: string[] = [];
-    // Workspaces and Specs own their connection/coverage recovery in the destination.
-    const destinationNotes = ['workspaces', 'specs'].includes(route().dest) || pickerRequired();
+    // Workspaces, Epics and Specs own their connection/coverage recovery in the destination.
+    const destinationNotes = ['workspaces', 'epics', 'specs'].includes(route().dest) || pickerRequired();
     if (error() && !destinationNotes) out.push(error());
     if (payload()?.truncated) out.push('Snapshot read budget reached; some observations are unavailable.');
     for (const e of payload()?.errors ?? []) out.push(`${e.source ? str(e.source) + ': ' : ''}${str(e.message)}`);

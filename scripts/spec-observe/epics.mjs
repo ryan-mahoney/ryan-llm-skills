@@ -140,7 +140,7 @@ export function buildEpics(entries) {
       return { name: item.package, package: fact.path, workspace: entry.workspace, status, attention,
         step: status === 'in-progress' && progress?.current_position != null
           ? { position: progress.current_position, total: progress.total_steps } : null,
-        waiting_on: item.requires, note: item.note,
+        requires: [...item.requires], waiting_on: item.requires, note: item.note,
         completed_at: fact.completion?.completed_at ?? null,
         pr_url: fact.completion?.merge?.url ?? fact.run?.merge?.url ?? null,
         assignment_id: fact.run?.assignment_id ?? null };
