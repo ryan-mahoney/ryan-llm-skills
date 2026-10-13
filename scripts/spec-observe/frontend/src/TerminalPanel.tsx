@@ -31,6 +31,12 @@ const OPENABLE_DISPLAYS = new Set(['live', 'live-unrecorded']);
 const CONNECTING_EXPLANATION_MS = 300;
 const CONNECTION_DEADLINE_MS = 5000;
 const ASSET_DEADLINE_MS = 5000;
+// The authorized-open POST/body phase emits no player events, so the
+// connection deadline cannot bound it; it gets its own finite bound. It
+// stays above the fixture's held-Connecting delay (8 s) so the step-7
+// captures keep observing Connecting, and below postJson's 30 s default
+// so a stalled open surfaces the network failure with Retry promptly.
+const OPEN_DEADLINE_MS = 10000;
 
 type AssetEntry = { promise: Promise<void>; owned: (HTMLLinkElement | HTMLScriptElement)[] };
 // Successful asset loads are shared by every panel watching the same
@@ -217,7 +223,14 @@ export function TerminalPanel(props: { assignment: TerminalPanelAssignment | nul
 
     const open = async () => {
       try {
-        await postJson<{ assignment_id?: string }>('/api/assignment-terminal/open', { assignment_id: id }, token, controller.signal);
+        // Compose lifecycle cancellation with a finite open deadline:
+        // passing controller.signal alone would replace postJson's default
+        // AbortSignal.timeout(30000) and leave a stalled POST or response
+        // body pending forever. A deadline abort rejects here as a
+        // non-HttpError, so it settles to the network failure with Retry,
+        // while a lifecycle abort stays stale-guarded above; either way the
+        // late response is refused and cannot complete the open.
+        await postJson<{ assignment_id?: string }>('/api/assignment-terminal/open', { assignment_id: id }, token, AbortSignal.any([controller.signal, AbortSignal.timeout(OPEN_DEADLINE_MS)]));
       } catch (error) {
         if (stale()) return;
         settle();

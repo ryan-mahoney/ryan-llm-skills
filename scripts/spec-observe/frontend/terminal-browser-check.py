@@ -47,6 +47,7 @@ CHANGED = "The terminal no longer belongs to this agent. Reconcile it with the l
 BUSY = "Terminal streams are unavailable. Try again shortly."
 FAILED = "The terminal stream could not be started. Retry."
 NOT_RUNNING = "The terminal stream is not running. Retry."
+NETWORK = "The terminal stream could not be reached. Check the connection and retry."
 ENDED = "This agent's terminal has ended."
 TOKENLESS = "Reconnect to the live dashboard to open the terminal."
 HOST_LOCAL = "The live terminal is available on the host's local dashboard."
@@ -431,6 +432,42 @@ def run_states(browser, report):
             "script": failed_assets_before.get("script", 0) + 2,
         }, (failed_assets_before, recovered_assets)
         report["cases"].append("failed asset hides the frame and one keyboard Retry recovers exactly once")
+
+        # 11. A never-settling open expires through the open deadline: the
+        # panel leaves Connecting for the network failure with an enabled
+        # Retry, the late fixture response is discarded, and one keyboard
+        # Retry reopens exactly once. The 15 s held open exceeds the 10 s
+        # panel deadline without touching the fixture's delay ceiling.
+        ctl("terminal-open-delay-ms", 15000)
+        stalled_start = time.monotonic()
+        stalled_open = open_count()
+        stalled_creates = creates().get(RUN_ID, 0)
+        remount_run1()
+        panel = page.locator("section.terminal-view")
+        expect(panel).to_contain_text("Connecting…")
+        expect(panel).to_contain_text(CONNECTING, timeout=15000)
+        wait_terminal(lambda current: open_count() == stalled_open + 1, "stalled open")
+        expect(panel).to_contain_text("Unavailable", timeout=15000)
+        expect(panel).to_contain_text(NETWORK, timeout=15000)
+        expect(panel.locator(".terminal-frame")).to_be_hidden()
+        retry_button = panel.get_by_role("button", name="Retry", exact=True)
+        expect(retry_button).to_be_visible()
+        expect(retry_button).to_be_enabled()
+        assert creates().get(RUN_ID, 0) == stalled_creates, creates()
+        ctl("terminal-open-delay-ms", 0)
+        retry_button.focus()
+        page.keyboard.press("Enter")
+        expect(panel).to_contain_text(LIVE)
+        wait_terminal(lambda current: open_count() == stalled_open + 2, "stalled retry open")
+        wait_terminal(lambda current: creates().get(RUN_ID, 0) == stalled_creates + 1, "stalled retry player")
+        # The first response lands after the held 15 s delay; the aborted
+        # attempt must not replay it over the recovered Live panel.
+        elapsed = time.monotonic() - stalled_start
+        if elapsed < 17:
+            page.wait_for_timeout(int((17 - elapsed) * 1000))
+        assert creates().get(RUN_ID, 0) == stalled_creates + 1, creates()
+        expect(panel).to_contain_text(LIVE)
+        report["cases"].append("never-settling open expires to network Retry and discards the late response")
 
         # Route normalization must not leak unknown query names.
         params = urlparse(page.url).fragment.partition("?")[2]
