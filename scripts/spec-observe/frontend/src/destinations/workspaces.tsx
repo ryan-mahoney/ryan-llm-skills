@@ -1,5 +1,6 @@
 import { For, Show, createEffect, createSignal } from 'solid-js';
 import { stale, time } from '../format';
+import { contextRoutePath } from '../files-model';
 import type { CatalogEntry } from '../scope';
 import { ActionBar, EmptyState, MasterDetail, RegionalSkeleton, StateNotice, StatusText, type StatusTone } from '../primitives';
 import type { DestinationProps } from './index';
@@ -316,21 +317,7 @@ function WorkspacePane(props: DestinationProps) {
   const itemName = (item: unknown): string => (typeof item === 'string' ? item : text((item as any)?.name) || text((item as any)?.path));
   const openFiles = () => props.onNavigate({ dest: 'files', ws: ws() });
   const openPath = (path: string) => props.onNavigate({ dest: 'files', ws: ws(), source: 'workspace', path });
-  const contextRoutePath = (entry: any): string | null => {
-    const path = text(entry.path);
-    if (!path) return null;
-    const directory = text(data()?.directory);
-    if (path.startsWith('/')) {
-      // contextRecord resolves absolute references before containment checks.
-      // Match that lexical resolution, without changing the file reader's checks.
-      const segments = path.split('/').reduce<string[]>((parts, part) =>
-        part === '..' ? parts.slice(0, -1) : part && part !== '.' ? [...parts, part] : parts, []);
-      const normalized = `/${segments.join('/')}`;
-      if (!directory || !normalized.startsWith(`${directory}/`)) return null;
-      return normalized.slice(directory.length + 1);
-    }
-    return path;
-  };
+  const contextPath = (entry: any): string | null => contextRoutePath(text(data()?.directory), text(entry.path));
   const retryWorkspace = () => {
     if (boundaryError(props)) { props.onRetryCatalog(); return; }
     props.onRetryWorkspace(String(ws() ?? ''));
@@ -506,7 +493,7 @@ function WorkspacePane(props: DestinationProps) {
                           <tr>
                             <td>
                               <Show
-                                when={entry.status === 'ok' ? contextRoutePath(entry) : null}
+                                when={entry.status === 'ok' ? contextPath(entry) : null}
                                 fallback={<span class="muted mono path">{text(entry.path) || text(entry.label) || 'Context'}</span>}
                               >
                                 {path => <button type="button" class="text-link" onClick={() => openPath(path())}>{path()}</button>}
