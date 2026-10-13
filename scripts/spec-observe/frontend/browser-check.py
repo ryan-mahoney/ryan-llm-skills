@@ -14,7 +14,7 @@ class CompletionCaseComplete(Exception):
     pass
 
 parser=argparse.ArgumentParser(description='Run the dashboard browser regression journey.')
-parser.add_argument('--case',choices=['completion'])
+parser.add_argument('--case',choices=['completion','completion-release'])
 case=parser.parse_args().case
 
 root=Path(__file__).resolve().parent
@@ -280,10 +280,13 @@ try:
             for _ in range(6):
                 page.keyboard.press('Tab')
                 assert page.evaluate("() => document.querySelector('#completion-dialog')?.contains(document.activeElement)===true"),'Tab left the completion dialog'
+            for _ in range(3):
+                page.keyboard.press('Shift+Tab')
+                assert page.evaluate("() => document.querySelector('#completion-dialog')?.contains(document.activeElement)===true"),'Shift+Tab left the completion dialog'
             page.keyboard.press('Escape')
             expect(dialog).not_to_be_visible()
             assert completion_posts==[],'idle dialog wrote a completion'
-            passed('dialog opens with Keep spec active focus, contains Tab and closes on Escape')
+            passed('dialog opens with Keep spec active focus, contains Tab and Shift+Tab and closes on Escape')
 
             phase='completion-refused'
             page.goto(url+'/#/specs',wait_until='domcontentloaded')
@@ -403,7 +406,13 @@ try:
             expect(unrelated).to_contain_text('Marked complete')
             assert 'selected' not in (unrelated.get_attribute('class') or ''),'unrelated Done row stole the completion selection'
             expect(page.locator('.records [data-key].selected')).to_have_count(0)
-            assert 'Unrelated completion' not in page.locator('.detail-pane').inner_text()
+            detail_text = page.locator('.detail-pane').inner_text()
+            assert 'unrelated-done' not in detail_text,'detail leaked unrelated package identity'
+            assert '/fixture/specs/unrelated-done' not in detail_text,'detail leaked unrelated package path'
+            assert 'Unrelated completion' not in detail_text,'detail leaked unrelated activity'
+            assert 'unrelated-done' not in page.locator('.object-head').inner_text(),'header leaked unrelated package identity'
+            expect(page.locator('.detail-pane')).to_contain_text('Select an observed spec')
+            expect(page.locator('.object-head')).to_contain_text('No observed record')
             assert len(completion_posts)==posts_before+1,'handoff posted more than once'
             handoff['absent']=False
             expected_row=page.locator('.records [data-key]').filter(has_text='Marked complete').first
@@ -417,6 +426,78 @@ try:
             page.unroute('**/api/state**',doctor_state)
             passed('search-cleared exact Done handoff focuses the observed completion without stealing an unrelated row')
 
+            summary['status']='passed'
+            summary['page_errors']=errors
+            summary['console_errors']=console_errors
+            summary['expected_http_errors']=[{'path':entry['path'],'status':entry['status'],'phase':entry['phase']} for entry in failed_responses]
+            raise CompletionCaseComplete()
+
+        if case == 'completion-release':
+            # Focused AC-13 native release: arm the completion exception with a
+            # delayed Done target, prove no-steal while pending, then prove a
+            # native Specs hash change releases to the ordinary fallback.
+            page.set_viewport_size({'width':1280,'height':860})
+            phase='completion-release-arm'
+            control('local',True)
+            handoff={'absent':True}
+            def doctor_release(route):
+                if not handoff['absent']:
+                    route.continue_()
+                    return
+                response=route.fetch()
+                value=response.json()
+                for observer in value.get('observers',[]):
+                    snapshot=observer.get('snapshot') or {}
+                    if snapshot.get('workspace')!='fixture': continue
+                    snapshot['recently_completed']=[entry for entry in snapshot.get('recently_completed',[]) if entry.get('package')!=receipt['package']]
+                    snapshot.setdefault('recently_completed',[]).append({'workspace':'fixture','package':'/fixture/specs/unrelated-done','package_ref':'fixture/unrelated-done','assignment_id':'unrelated-done','execution':'completed','workflow_state':'complete','is_current_assignment':False,'completion_basis':'manual','completed_at':'2026-10-12T12:00:00.000Z','coverage':{'state':'complete','reasons':[]},'activity':'Unrelated completion'})
+                route.fulfill(status=response.status,headers={'content-type':'application/json'},body=json.dumps(value))
+            page.route('**/api/state**',doctor_release)
+            page.goto(url+'/#/specs?ws=fixture',wait_until='domcontentloaded')
+            completion_row=page.locator('.records [data-key]').filter(has_text='Building the dashboard').first
+            completion_row.wait_for()
+            completion_row.click()
+            page.locator('#find-record').fill('waiting-worker')
+            expect(page.locator('.records [data-key]').filter(has_text='Building the dashboard')).to_have_count(1)
+            completion_row.click()
+            held={'route':None}
+            def hold_release(route):
+                held['route']=route
+            page.route('**/api/package-completion',hold_release)
+            dialog=page.locator('#completion-dialog')
+            page.get_by_role('button',name='Mark complete',exact=True).click()
+            expect(dialog).to_be_visible()
+            dialog.get_by_role('button',name='Mark complete',exact=True).click()
+            for _ in range(40):
+                if held['route']: break
+                page.wait_for_timeout(25)
+            assert held['route'],'release probe did not intercept completion POST'
+            held['route'].continue_()
+            expect(dialog).not_to_be_visible()
+            page.unroute('**/api/package-completion',hold_release)
+            hash_value=page.evaluate('location.hash')
+            assert 'filter=completed' in hash_value,hash_value
+            expected_key=json.dumps(['fixture',receipt['package'],'recent-completion'],separators=(',',':'))
+            expect(page.locator('.records [data-key]')).to_have_count(1)
+            unrelated=page.locator('.records [data-key]').first
+            assert 'selected' not in (unrelated.get_attribute('class') or ''),'unrelated stole pending completion'
+            expect(page.locator('.records [data-key].selected')).to_have_count(0)
+            release_detail=page.locator('.detail-pane').inner_text()
+            assert 'unrelated-done' not in release_detail,'detail leaked unrelated identity'
+            assert '/fixture/specs/unrelated-done' not in release_detail,'detail leaked unrelated path'
+            expect(page.locator('.detail-pane')).to_contain_text('Select an observed spec')
+            expect(page.locator('.object-head')).to_contain_text('No observed record')
+            passed('armed completion keeps delayed Done unselected without leaking unrelated identity')
+            phase='completion-release-native'
+            page.evaluate("location.hash = '#/specs?ws=fixture&filter=completed'")
+            page.wait_for_function("() => document.querySelectorAll('.records [data-key].selected').length === 1")
+            selected_key=page.evaluate("() => document.querySelector('.records [data-key].selected')?.getAttribute('data-key')")
+            assert selected_key != expected_key,{'selected':selected_key,'expected':expected_key}
+            unrelated_key=json.dumps(['fixture','/fixture/specs/unrelated-done','recent-completion'],separators=(',',':'))
+            assert selected_key == unrelated_key,{'selected':selected_key,'ordinary':unrelated_key}
+            expect(page.locator('.detail-pane')).to_contain_text('unrelated-done')
+            passed('native Specs navigation releases the armed completion exception with ordinary fallback')
+            page.unroute('**/api/state**',doctor_release)
             summary['status']='passed'
             summary['page_errors']=errors
             summary['console_errors']=console_errors
@@ -1207,7 +1288,7 @@ except BaseException as exc:
     summary['error']=repr(exc)
     raise
 finally:
-    receipt=evidence_dir/('browser/completion.json' if case=='completion' else 'ev-2-browser-check.json')
+    receipt=evidence_dir/('browser/completion.json' if case=='completion' else 'browser/completion-release.json' if case=='completion-release' else 'ev-2-browser-check.json')
     temporary=receipt.with_name(receipt.name+'.tmp')
     temporary.write_text(json.dumps(summary,indent=2)+'\n')
     os.replace(temporary,receipt)

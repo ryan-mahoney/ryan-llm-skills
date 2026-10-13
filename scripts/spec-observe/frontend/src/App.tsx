@@ -38,6 +38,7 @@ export default function App() {
   const [workspaceDelayed, setWorkspaceDelayed] = createSignal(false);
   const [refreshKey, setRefreshKey] = createSignal(0);
   const [expectedCompletionKey, setExpectedCompletionKey] = createSignal<string | null>(null);
+  const [expectedCompletionRoute, setExpectedCompletionRoute] = createSignal<RouteState | null>(null);
   const [endedSessions, setEndedSessions] = createSignal<string[]>([]);
   let stateGeneration = 0, catalogGeneration = 0, workspaceGeneration = 0;
   let workspaceBusyId: string | null = null;
@@ -88,7 +89,7 @@ export default function App() {
   const detailWorkspaceId = createMemo(() => route().dest === 'workspaces' ? route().ws : requiresWorkspace(route().dest) && !packageFilesRoute() ? route().ws : undefined);
 
   function go(next: RouteState, options: { keepExpected?: boolean } = {}) {
-    if (!options.keepExpected) setExpectedCompletionKey(null);
+    if (!options.keepExpected) { setExpectedCompletionKey(null); setExpectedCompletionRoute(null); expectedSeen = false; }
     navigate(next, routeHistoryMode(route(), next));
   }
   function goDestination(dest: Destination) {
@@ -116,6 +117,9 @@ export default function App() {
     go(withWorkspace(route(), ws));
   }
   function chooseWorkspace(id: string) {
+    setExpectedCompletionKey(null);
+    setExpectedCompletionRoute(null);
+    expectedSeen = false;
     navigate(withWorkspace(route(), id), 'push');
   }
   function replaceId(value: string | null) {
@@ -149,12 +153,15 @@ export default function App() {
   }
   // Completion navigates to the recorded row's own Done key. The expected key
   // keeps the fallback from selecting an unrelated Done row while the next
-  // observation catches up; explicit navigation releases it.
+  // observation catches up; explicit navigation releases it, including native
+  // Specs history/hash navigation that bypasses go().
   function onCompletionRecorded(item: WireRecord) {
     const key = JSON.stringify([str(item.workspace), str(item.package), 'recent-completion']);
-    setExpectedCompletionKey(key);
     const next: RouteState = { dest: 'specs', id: key, filter: 'completed' };
     if (scopeWs() !== undefined) next.ws = scopeWs();
+    setExpectedCompletionKey(key);
+    setExpectedCompletionRoute(next);
+    expectedSeen = false;
     go(next, { keepExpected: true });
   }
   function manualRefresh() {
@@ -272,6 +279,9 @@ export default function App() {
       setCatalogError('');
       setWorkspace(undefined);
       setWorkspaceError('');
+      setExpectedCompletionKey(null);
+      setExpectedCompletionRoute(null);
+      expectedSeen = false;
       navigate({ dest: 'specs' }, 'replace');
     } catch {
       setError('Choose a valid Sentinel JSON snapshot smaller than 12 MB.');
@@ -302,22 +312,48 @@ export default function App() {
 
   // Follow a package across dispatches without replacing the components that own editors.
   let selectedIdentity: { workspace: string; package: string } | null = null;
+  let expectedSeen = false;
   createEffect(() => {
     const currentRoute = route();
     if (!payload()) return;
     if (scopeWs() && !catalog()) return;
     const currentId = currentRoute.id ?? null;
-    if (currentRoute.dest !== 'specs' && expectedCompletionKey() !== null) setExpectedCompletionKey(null);
+    if (currentRoute.dest !== 'specs' && expectedCompletionKey() !== null) { setExpectedCompletionKey(null); setExpectedCompletionRoute(null); expectedSeen = false; }
     if (currentRoute.dest === 'specs') {
       const current = scopedRecords().find(item => item.key === currentId);
       if (current) selectedIdentity = { workspace: str(current.workspace), package: str(current.package) };
       const rows = visibleRecords();
       const expected = expectedCompletionKey();
-      // go() releases the exception synchronously on explicit in-app navigation;
-      // this effect must not clear it on a transiently stale route signal.
-      if (expected !== null && !rows.some(item => item.key === expected)) {
-        // The recorded completion is not in observed rows yet; keep the pending
-        // key instead of falling back to an unrelated Done row.
+      const expectedRoute = expectedCompletionRoute();
+      if (expected !== null && expectedRoute !== null) {
+        // Native Specs history/hash navigation bypasses go(), so release here
+        // when the Specs context (scope/filter/query/selection/tab) leaves the
+        // recorded completion navigation. Delayed-target no-steal applies only
+        // while the route still matches that navigation.
+        const diverged = currentRoute.ws !== expectedRoute.ws
+          || currentRoute.id !== expectedRoute.id
+          || currentRoute.filter !== expectedRoute.filter
+          || (currentRoute.q ?? '') !== (expectedRoute.q ?? '')
+          || (currentRoute.tab ?? '') !== (expectedRoute.tab ?? '');
+        if (!diverged) expectedSeen = true;
+        if (diverged) {
+          // The route signal can still hold the pre-completion value when this
+          // effect first observes the newly armed exception; wait for the
+          // recorded navigation instead of releasing to an unrelated fallback.
+          if (!expectedSeen) {
+            if (!rows.some(item => item.key === expected)) return;
+          } else {
+            setExpectedCompletionKey(null);
+            setExpectedCompletionRoute(null);
+            expectedSeen = false;
+          }
+        } else if (!rows.some(item => item.key === expected)) {
+          // The recorded completion is not in observed rows yet; keep the pending
+          // key instead of falling back to an unrelated Done row.
+          return;
+        }
+      } else if (expected !== null && !rows.some(item => item.key === expected)) {
+        // Armed without a recorded route; preserve no-steal.
         return;
       }
       if (!rows.some(item => item.key === currentId)) {
@@ -335,8 +371,9 @@ export default function App() {
 
   // Move focus to the observed completion row once per appearance and restore it
   // when snapshot re-renders detach the focused row; focus is never taken from a
-  // live explicit element. The expected key is released only by explicit go()
-  // navigation, so a transient row appearance cannot let the fallback select an
+  // live explicit element. The expected key is released by explicit go()
+  // navigation or by native Specs navigation away from the recorded completion
+  // route, so a transient row appearance cannot let the fallback select an
   // unrelated Done row.
   let focusedCompletionKey: string | null = null;
   createEffect(() => {
@@ -349,7 +386,7 @@ export default function App() {
       focusedCompletionKey = null;
       return;
     }
-    const detached = document.activeElement === null || document.activeElement === document.body;
+    const detached = document.activeElement === null || document.activeElement === document.body || document.activeElement === document.documentElement;
     if (focusedCompletionKey === key && !detached) return;
     focusedCompletionKey = key;
     const frame = requestAnimationFrame(() => {
