@@ -1223,21 +1223,53 @@ try:
                     page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
                 page.wait_for_function("() => { const b = document.querySelector('.head-actions button[aria-busy]'); return !b || b.getAttribute('aria-busy') !== 'true'; }")
 
+            def watch_callouts():
+                page.evaluate("""() => {
+                  window.__epicsAnnouncements = [];
+                  window.__epicsTextMutations = 0;
+                  const region = document.querySelector('article.detail-pane .detail-body');
+                  if (window.__epicsObserver) window.__epicsObserver.disconnect();
+                  window.__epicsObserver = new MutationObserver(records => {
+                    for (const record of records) {
+                      if (record.type === 'characterData') {
+                        const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
+                        if (target && target.closest('.ds-callout')) window.__epicsTextMutations += 1;
+                        continue;
+                      }
+                      for (const node of record.addedNodes) {
+                        const el = node.nodeType === 1 ? node : null;
+                        if (el && el.classList && el.classList.contains('ds-callout')) {
+                          window.__epicsAnnouncements.push(el.textContent.trim().slice(0, 80));
+                        }
+                      }
+                    }
+                  });
+                  window.__epicsObserver.observe(region, {childList: true, subtree: true, characterData: true});
+                }""")
+
             for _ in range(3):
                 settled_refresh()
             assert page.evaluate('() => window.__epicsAnnouncements.length') == 0, f'identical payload announced a new callout: {page.evaluate("() => window.__epicsAnnouncements")}'
             assert page.evaluate('() => window.__epicsTextMutations') == 0, 'identical payload changed callout text'
 
             # Timestamp-only stale (same selection/state/reasons, advancing
-            # observation timestamp) must not insert another live region.
+            # observation timestamp) must update the displayed local clock in
+            # place: the notice node is not replaced, the clock text is
+            # suppressed from live announcement, and no callout is announced.
             older = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time() - 700))
             stale_two = observation_envelope(observations_epic, 'old', runs=observations_runs)
             stale_two['observers'][0]['snapshot']['coverage']['observed_at'] = older
+            page.evaluate("() => { window.__staleNoticeNode = document.querySelector('article.detail-pane .detail-body .ds-callout'); }")
             control['value'] = stale_two
             settled_refresh()
             page.wait_for_timeout(200)
             expect(transport_callouts).to_have_count(1)
             expect(transport_callouts.first).to_contain_text('Last checked at')
+            expected_older = page.evaluate('iso => new Date(iso).toLocaleString()', older)
+            stale_clock = transport_callouts.first.locator('strong span[aria-live="off"]')
+            expect(stale_clock).to_have_count(1)
+            expect(stale_clock).to_have_text(f'Last checked at {expected_older}')
+            assert page.evaluate("() => document.querySelector('article.detail-pane .detail-body .ds-callout') === window.__staleNoticeNode"), 'timestamp-only stale replaced the notice node'
             assert page.evaluate('() => window.__epicsAnnouncements.length') == 0, f'timestamp-only stale announced a new callout: {page.evaluate("() => window.__epicsAnnouncements")}'
 
             control['value'] = 'fail'
@@ -1307,6 +1339,45 @@ try:
             expect(generic_callout).to_have_count(1)
             expect(regional_callouts).to_have_count(1)
             announcements = page.evaluate('() => window.__epicsAnnouncements')
+
+            # Conflict counts join the semantic signature: when the same
+            # conflict epic's landing evidence advances 0 of 2 -> 1 of 2, the
+            # facts and notice both show the current count and the notice
+            # remounts with exactly one announcement; the identical repeat stays
+            # quiet.
+            conflict_pair_epic = {
+                'workspace': 'fixture', 'epic': 'conflict-pair-epic', 'title': 'Conflict pair epic', 'state': 'complete',
+                'members': [detail_member('pair-one', 'published'), detail_member('pair-two', 'published')],
+                'summary': {'total': 2, 'merged': 0, 'complete': 0, 'attention': 0},
+                'next': 'pair-one',
+                'coverage': {'state': 'complete', 'reasons': []},
+            }
+            control['value'] = observation_envelope(conflict_pair_epic, 'fresh', runs=())
+            open_selected(control['value'])
+            expect(status).to_contain_text('Recorded complete')
+            expect(facts.nth(1)).to_contain_text('0 of 2')
+            expect(conflict_callout).to_have_count(1)
+            expect(conflict_callout.first).to_contain_text('0 of 2')
+            watch_callouts()
+            conflict_pair_landed = {
+                **conflict_pair_epic,
+                'members': [detail_member('pair-one', 'merged'), detail_member('pair-two', 'published')],
+                'summary': {'total': 2, 'merged': 1, 'complete': 0, 'attention': 0},
+            }
+            control['value'] = observation_envelope(conflict_pair_landed, 'fresh', runs=())
+            settled_refresh()
+            expect(facts.nth(1)).to_contain_text('1 of 2')
+            expect(conflict_callout).to_have_count(1)
+            expect(conflict_callout.first).to_contain_text('1 of 2')
+            page.wait_for_function('() => window.__epicsAnnouncements.length === 1')
+            after_change_text = page.evaluate('() => window.__epicsTextMutations')
+            settled_refresh()
+            page.wait_for_timeout(200)
+            assert page.evaluate('() => window.__epicsAnnouncements.length') == 1, 'identical advanced conflict payload announced again'
+            assert page.evaluate('() => window.__epicsTextMutations') == after_change_text, 'identical advanced conflict payload changed the notice text'
+            expect(facts.nth(1)).to_contain_text('1 of 2')
+            expect(conflict_callout.first).to_contain_text('1 of 2')
+            report['scenarios'].append('conflict count: a same-epic 0 of 2 -> 1 of 2 advance updates the landed fact and the conflict notice together and announces exactly once while the identical repeat stays quiet')
             report['scenarios'].append('signature: identical and timestamp-only payloads add no callout; offline and stale announce once each; same-epic partial repeat adds none while changed coverage reasons announce again')
 
             # (5) A real #import-file snapshot offers no live recovery and keeps
@@ -2008,16 +2079,33 @@ try:
             expect(controls.locator('button[aria-pressed="true"]', has_text='390px')).to_have_count(1)
             report['scenarios'].append('documents designs: an unchanged Refresh designs keeps the manually chosen step and width')
 
+            # A same-workspace new id owns the addressed selection: an unknown
+            # id consumes its intent and clears the previous viewer without
+            # selecting another design. Manual list picking stays usable and a
+            # refresh keeps it; removing the id consumes another new intent and
+            # clears again, before demo reopens at its first screen and width.
             page.evaluate("hash => { location.hash = hash; }", '#/designs?' + urlencode({'ws': workspace_id, 'id': 'unknown-design'}))
             page.wait_for_function("() => new URLSearchParams(location.hash.split('?')[1] || '').get('id') === 'unknown-design'")
-            page.wait_for_timeout(300)
-            expect(page.locator('section.design-viewer h4')).to_contain_text('Design fixture')
-            assert page.locator('section.design-viewer h4').count() == 1 and page.locator('button[aria-pressed="true"]', has_text='Design fixture').count() == 1, 'an unknown id selected a different design'
+            expect(page.locator('section.design-viewer')).to_have_count(0)
+            expect(page.locator('button[aria-pressed="true"]', has_text='Design fixture')).to_have_count(0)
+            design_pick = page.locator('button', has_text='Design fixture').first
+            design_pick.click()
+            expect(page.locator('section.design-viewer h4')).to_contain_text('Design fixture · Screen 1')
+            expect(page.locator('button[aria-pressed="true"]', has_text='Design fixture')).to_have_count(1)
+            with page.expect_response(lambda response: '/api/workspace-designs' in response.url):
+                page.get_by_role('button', name='Refresh designs', exact=True).click()
+            page.wait_for_timeout(200)
+            expect(page.locator('section.design-viewer h4')).to_contain_text('Design fixture · Screen 1')
+            expect(controls.locator('button[aria-pressed="true"]', has_text='390px')).to_have_count(1)
+            page.evaluate("hash => { location.hash = hash; }", '#/designs?' + urlencode({'ws': workspace_id}))
+            page.wait_for_function("() => !new URLSearchParams(location.hash.split('?')[1] || '').get('id')")
+            expect(page.locator('section.design-viewer')).to_have_count(0)
             page.evaluate("hash => { location.hash = hash; }", '#/designs?' + urlencode({'ws': workspace_id, 'id': 'demo'}))
             page.wait_for_function("() => new URLSearchParams(location.hash.split('?')[1] || '').get('id') === 'demo'")
-            expect(page.locator('section.design-viewer h4')).to_contain_text('Screen 1')
+            expect(page.locator('section.design-viewer h4')).to_contain_text('Design fixture · Screen 1')
             expect(page.locator('section.design-viewer .mono')).to_have_text('step 1 of 2')
-            report['scenarios'].append('documents designs: same-workspace demo->unknown->demo re-applies the addressed demo and an unknown id never selects a different design')
+            expect(controls.locator('button[aria-pressed="true"]', has_text='390px')).to_have_count(1)
+            report['scenarios'].append('documents designs: a same-workspace unknown id clears the previous viewer without selecting a design, manual list picking survives a refresh, removing the id clears again, and demo reopens at Screen 1 with the first 390px width')
 
             page.evaluate("hash => { location.hash = hash; }", '#/designs?' + urlencode({'ws': 'other', 'id': 'demo'}))
             page.wait_for_function("() => !document.querySelector('section.design-viewer')")

@@ -64,14 +64,16 @@ export default function Designs(props: Props) {
   };
   // Addressed route intent: once a real listing arrives, a non-empty
   // selectedSlug that matches a design opens it exactly once per [ws, slug]
-  // intent. The applied key keeps manual step/width moves authoritative, an
-  // unknown slug consumes its intent without selecting a different design,
-  // and an unchanged refresh does not reselect.
+  // intent. Consuming a new intent owns the addressed selection, so an absent
+  // or unknown slug clears the viewer instead of retaining the previous
+  // design. The applied key keeps manual step/width moves and manual list
+  // picking authoritative, and an unchanged refresh does not reselect.
   createEffect(() => {
     const result = data();
     const intent = `${props.workspaceId}|${props.selectedSlug ?? ''}`;
     if (!result || intent === appliedIntent) return;
     appliedIntent = intent;
+    setView(null);
     const slug = props.selectedSlug;
     if (!slug) return;
     const design = (result.designs ?? []).find(item => item.slug === slug);

@@ -185,8 +185,9 @@ export default function EpicsDestination(props: DestinationProps) {
     : undefined);
 
   // Regional notice priority offline > stale > partial. The announcement
-  // signature uses selection, notice state and semantic reasons only, so
-  // advancing observation timestamps never recreate the live region.
+  // signature uses selection, notice state, semantic reasons and conflict
+  // counts only, so advancing observation timestamps never recreate the live
+  // region while timestamp-only changes update the clock in place.
   // Transport (offline/stale) keeps the primary recovery; partial keeps
   // Open spec primary with no regional action.
   const regional = () => (view().offline ? 'offline' : view().stale ? 'stale' : view().partial ? 'partial' : null);
@@ -195,6 +196,7 @@ export default function EpicsDestination(props: DestinationProps) {
     const value = (props.payload as unknown as { generated_at?: unknown } | null)?.generated_at;
     return typeof value === 'string' && value ? value : null;
   };
+  const observedAt = () => view().observedAt;
   const noticeSignature = () => {
     const kind = regional();
     if (!kind) return '';
@@ -209,24 +211,27 @@ export default function EpicsDestination(props: DestinationProps) {
       reasons = '';
     }
     const conflict = epic ? String(epicRecordedState(epic).conflict) : '';
+    let conflictCounts = '';
+    if (epic && conflict === 'true') {
+      const stats = epicStats(epic);
+      conflictCounts = `${stats.landed}/${stats.total}`;
+    }
     const hasObserved = view().observedAt ? '1' : '0';
     const hasReceived = receivedAt() ? '1' : '0';
-    return `${kind}|${key}|${observerState}|${coverageState}|${reasons}|${conflict}|${hasObserved}|${hasReceived}`;
+    return `${kind}|${key}|${observerState}|${coverageState}|${reasons}|${conflict}|${conflictCounts}|${hasObserved}|${hasReceived}`;
   };
   const transportNotice = () => {
     const kind = regional();
     if (!kind) return undefined;
-    const observedAt = view().observedAt;
-    const offlineAt = receivedAt();
     if (kind === 'offline') {
       const action = props.live
         ? <button type="button" class="ds-btn ds-btn--primary" onClick={props.onRetryConnection}>Retry connection</button>
         : undefined;
       return (
         <StateNotice tone="warning" title="Connection unavailable" action={action}>
-          {offlineAt
-            ? `Last received at ${time(offlineAt)}. These records may have changed on the host.`
-            : 'Last received time is unavailable. These records may have changed on the host.'}
+          <span aria-live="off">
+            {receivedAt() ? `Last received at ${time(receivedAt())}.` : 'Last received time is unavailable.'}
+          </span>{' '}These records may have changed on the host.
         </StateNotice>
       );
     }
@@ -237,7 +242,7 @@ export default function EpicsDestination(props: DestinationProps) {
       return (
         <StateNotice
           tone="warning"
-          title={observedAt ? `Last checked at ${time(observedAt)}` : 'Observation time unavailable'}
+          title={<span aria-live="off">{observedAt() ? `Last checked at ${time(observedAt())}` : 'Observation time unavailable'}</span>}
           action={action}
         >
           Existing content is kept while the host revalidates it.
