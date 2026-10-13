@@ -6,7 +6,7 @@
 
 After npm run build --prefix scripts/spec-observe/frontend:
 SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 120s uv run --script \
-  scripts/spec-observe/frontend/route-browser-check.py [--case rail|files|specs|context|catalog|member|search|filters|specs-list|specs-overview]
+  scripts/spec-observe/frontend/route-browser-check.py [--case rail|files|specs|context|catalog|member|search|filters|specs-list|specs-overview|specs-variants]
 Only the fixture substitutes workers; App, adapters and file APIs are real.
 """
 import argparse
@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 args = argparse.ArgumentParser()
-args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog', 'member', 'search', 'filters', 'specs-list', 'specs-overview'])
+args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog', 'member', 'search', 'filters', 'specs-list', 'specs-overview', 'specs-variants'])
 case = args.parse_args().case
 root = Path(__file__).resolve().parent
 evidence = Path(os.environ.get('SENTINEL_EVIDENCE_DIR', '/tmp/sentinel-route-evidence'))
@@ -602,6 +602,173 @@ try:
             capture_both('files-offline')
             report['scenarios'].append('Imported/offline Files reports the existing unavailable boundary')
 
+        if case == 'specs-variants':
+            (evidence / 'screens').mkdir(parents=True, exist_ok=True)
+            (evidence / 'reference').mkdir(parents=True, exist_ok=True)
+            now = '2026-10-12T12:00:00.000Z'
+            earlier = '2026-10-12T10:30:00.000Z'
+            package = receipt['package']
+            done_key = json.dumps(['fixture', package, 'recent-completion'], separators=(',', ':'))
+            planned_key = json.dumps(['fixture', package, 'planned-package', None], separators=(',', ':'))
+            state = {'value': None}
+
+            def on_state(route):
+                route.fulfill(json=state['value'])
+
+            page.route('**/api/state**', on_state)
+
+            def variant_envelope(runs=(), recently=(), planned=(), epics=()):
+                return {'schema_version': 1, 'generated_at': now,
+                        'thread_action_token': 'fixture-thread-token', 'action_token': 'fixture-action-token',
+                        'observers': [{'observer_id': 'variants-fixture', 'state': 'observing', 'published_at': now,
+                                       'snapshot': {'workspace': 'fixture',
+                                                    'coverage': {'state': 'complete', 'observed_at': now, 'reasons': []},
+                                                    'runs': list(runs), 'recently_completed': list(recently),
+                                                    'planned_packages': list(planned),
+                                                    'assignments': [], 'assignment_coverage': {'state': 'complete', 'reasons': []},
+                                                    'epics': list(epics)}}]}
+
+            def done_record(basis, **extra):
+                value = {'workspace': 'fixture', 'package': package, 'package_ref': 'fixture/browser',
+                         'assignment_id': f'variant-{basis}', 'execution': 'completed', 'workflow_state': 'complete',
+                         'is_current_assignment': False, 'completion_basis': basis, 'completed_at': earlier,
+                         'activity': f'{basis} completion recorded', 'obligation': f'Final obligation for the {basis} basis',
+                         'observed_at': now, 'coverage': {'state': 'complete', 'reasons': []}}
+                value.update(extra)
+                return value
+
+            def capture(name, width):
+                page.set_viewport_size({'width': width, 'height': 800})
+                path = evidence / 'screens' / f'specs-variants-{name}-{width}.png'
+                page.screenshot(path=str(path), full_page=True)
+                report.setdefault('captures', []).append(str(path))
+
+            def capture_both(name):
+                capture(name, 1280)
+                capture(name, 1600)
+
+            publication = page.locator('.detail-body .table-wrap tbody tr')
+            done_callout = page.locator('.detail-body .ds-callout.success')
+            tour = page.locator('.detail-actions').get_by_role('button', name='Open work tour', exact=True)
+            package_files = page.locator('.detail-actions').get_by_role('button', name='Open package files', exact=True)
+
+            def open_done():
+                open_route('specs', ws='fixture', filter='completed', id=done_key)
+                expect(page.locator('.object-head h2')).to_have_text('browser')
+
+            # Manual basis: no merge facts and no evidence disable only the tour.
+            state['value'] = variant_envelope(recently=[done_record('manual')])
+            open_done()
+            expect(page.locator('.progress-track')).to_have_count(0)
+            expect(page.locator('.detail-body .facts')).to_have_count(0)
+            expect(page.locator('.detail-body')).not_to_contain_text('Elapsed at observation')
+            expect(page.locator('.detail-body')).not_to_contain_text('Needs attention')
+            expect(page.locator('.detail-body')).to_contain_text('Marked complete')
+            expect(done_callout).to_have_count(0)
+            expect(publication).to_have_count(4)
+            expect(publication.nth(0)).to_contain_text('Pull request')
+            expect(publication.nth(0)).to_contain_text('Not recorded')
+            expect(publication.nth(1)).to_contain_text('Not recorded')
+            expect(publication.nth(2)).to_contain_text('Completion time')
+            expect(publication.nth(2)).not_to_contain_text('Not recorded')
+            expect(publication.nth(3)).to_contain_text('Merge basis')
+            expect(publication.nth(3)).to_contain_text('Not recorded')
+            expect(tour).to_be_disabled()
+            expect(page.locator('#work-tour-reason')).to_contain_text('no recorded evidence')
+            expect(package_files).to_be_enabled()
+            report['scenarios'].append('Manual Done basis reads Marked complete with Not recorded publication facts, no progress/facts grid, and only the tour action disabled')
+
+            # Workflow basis.
+            state['value'] = variant_envelope(recently=[done_record('workflow-checkpoint')])
+            page.reload()
+            expect(page.locator('.detail-body')).to_contain_text('Workflow marked complete')
+            expect(done_callout).to_have_count(0)
+            report['scenarios'].append('Workflow Done basis reads Workflow marked complete')
+
+            # Ready PR: URL recorded, head/branch missing.
+            state['value'] = variant_envelope(recently=[done_record('ready-pr', merge={'url': 'https://forge.example/pr/210', 'state': 'open'})])
+            page.reload()
+            expect(page.locator('.detail-body')).to_contain_text('Ready PR published')
+            expect(publication.nth(0).locator('a')).to_have_attribute('href', 'https://forge.example/pr/210')
+            expect(publication.nth(1)).to_contain_text('Not recorded')
+            expect(publication.nth(3)).to_contain_text('open')
+            expect(done_callout).to_have_count(0)
+            report['scenarios'].append('Ready PR Done basis reads Ready PR published, links only the recorded URL and reads Not recorded for a missing head')
+
+            # Merged PR: recorded publication facts and the recorded work tour.
+            merged = {'url': 'https://forge.example/pr/211', 'head': 'f' * 12, 'branch': 'spec/fixture-browser',
+                      'state': 'merged', 'reason': 'local-pr-merge', 'evidence_source': 'local-git', 'merged_at': earlier}
+            state['value'] = variant_envelope(recently=[done_record('merged-pr', merge=merged,
+                                                                   evidence={'state': 'recorded', 'verdict': 'ready', 'source': 'work-tour.html', 'commit': 'abc123'})])
+            page.reload()
+            expect(page.locator('.detail-body')).to_contain_text('PR merged')
+            expect(done_callout).to_have_count(1)
+            expect(done_callout).to_contain_text('Merge confirmed')
+            expect(publication.nth(0).locator('a')).to_have_attribute('href', 'https://forge.example/pr/211')
+            expect(publication.nth(1)).to_contain_text('spec/fixture-browser')
+            expect(publication.nth(3)).to_contain_text('local-pr-merge')
+            expect(tour).to_be_enabled()
+            assert 'ds-btn--primary' in (tour.get_attribute('class') or ''), tour.get_attribute('class')
+            report['scenarios'].append('Merged PR Done basis shows the Merge confirmed callout, recorded publication link/head/basis and an enabled primary work tour')
+            capture_both('done-merged')
+            tour.click()
+            expect(page.locator('h1')).to_have_text('Files')
+            assert params()['source'] == ['package'] and params()['id'] == [package] and params()['path'] == ['work-tour.html'], page.url
+            expect(page.locator('.file-viewer h4')).to_have_text('work-tour.html')
+            report['scenarios'].append('Done Open work tour opens the recorded package-relative evidence file through the shared Files route')
+            page.go_back()
+            expect(page.locator('.object-head h2')).to_have_text('browser')
+
+            # Planned: prepared total without a run, no elapsed/completion/attention assertions.
+            epic = {'workspace': 'fixture', 'epic': 'variants-roadmap', 'title': 'Variants roadmap', 'state': 'active',
+                    'members': [{'name': 'browser', 'package': 'browser', 'workspace': 'fixture', 'status': 'ready'}],
+                    'summary': {'total': 1, 'merged': 0, 'complete': 0, 'attention': 0}, 'next': 'browser',
+                    'coverage': {'state': 'complete', 'reasons': []}}
+            planned = {'workspace': 'fixture', 'package': package, 'package_ref': 'fixture/browser',
+                       'source_paths': ['spec.md', 'work-tour.html'], 'obligation': 'Prepare the specs variants overview',
+                       'spec_progress': {'total_steps': 5}, 'epic': {'epic': 'variants-roadmap', 'workspace': 'fixture'},
+                       'targets': [{'id': 'main', 'primary': receipt['checkout']}]}
+            state['value'] = variant_envelope(planned=[planned], epics=[epic])
+            open_route('specs', ws='fixture', filter='planned', id=planned_key)
+            expect(page.locator('.object-head h2')).to_have_text('browser')
+            expect(page.locator('.progress-head strong')).to_have_text('5 prepared steps')
+            expect(page.locator('.progress-head .muted')).to_have_text('No run recorded')
+            expect(page.locator('.progress-track .progress-value')).to_have_count(0)
+            expect(page.locator('.detail-body .facts')).to_have_count(0)
+            expect(page.locator('.detail-body')).not_to_contain_text('Elapsed')
+            expect(page.locator('.detail-body')).not_to_contain_text('Time since spec start')
+            expect(page.locator('.detail-body')).not_to_contain_text('Needs attention')
+            expect(page.locator('.obligation')).to_contain_text('Prepare the specs variants overview')
+            expect(page.locator('.detail-body .table-wrap')).to_contain_text('Variants roadmap')
+            expect(page.locator('.detail-body .table-wrap')).to_contain_text('0 of 1 landed')
+            expect(page.locator('#planned-assignment')).to_be_visible()
+            expect(page.locator('#planned-assignment-preview')).to_be_visible()
+            open_files = page.locator('.detail-actions').get_by_role('button', name='Open files', exact=True)
+            expect(open_files).to_be_enabled()
+            assert 'ds-btn--primary' not in (open_files.get_attribute('class') or ''), open_files.get_attribute('class')
+            report['scenarios'].append('Planned Overview shows the prepared total without a progress fill, No run recorded, the related epic row and the retained launch form with files as a secondary action')
+            capture_both('planned')
+            page.get_by_role('navigation', name='Spec sections').get_by_role('button', name='Activity', exact=True).click()
+            expect(page.locator('.detail-body')).to_contain_text('No run recorded')
+            expect(page.locator('.detail-body')).not_to_contain_text('Elapsed')
+            expect(page.locator('.detail-body .facts')).to_have_count(0)
+            report['scenarios'].append('Planned Activity states that no run is recorded without run facts')
+
+            design_screens = Path(os.environ['SENTINEL_DESIGN_SCREENS']) if os.environ.get('SENTINEL_DESIGN_SCREENS') else evidence.resolve().parent.parent.parent / 'designs' / 'app-ui' / 'screens'
+            source = design_screens / '13-spec-completed.html'
+            if not source.exists():
+                report.setdefault('referenceMissing', []).append('13-spec-completed')
+            else:
+                for width in (1280, 1600):
+                    reference = context.new_page()
+                    reference.set_viewport_size({'width': width, 'height': 800})
+                    reference.goto(source.as_uri(), wait_until='domcontentloaded')
+                    reference.wait_for_timeout(200)
+                    path = evidence / 'reference' / f'13-spec-completed-{width}.png'
+                    reference.screenshot(path=str(path), full_page=True)
+                    reference.close()
+                    report.setdefault('referenceCaptures', []).append(str(path))
+
         if case == 'specs-list':
             (evidence / 'screens').mkdir(parents=True, exist_ok=True)
             now = '2026-10-12T12:00:00.000Z'
@@ -864,6 +1031,6 @@ finally:
         fixture.kill()
         fixture.wait()
     report['elapsedSeconds'] = round(time.monotonic() - started, 3)
-    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'step-003-fix-browser.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'sentinel-planned-filter-browser.json' if case == 'filters' else 'specs-list.json' if case == 'specs-list' else 'specs-overview.json' if case == 'specs-overview' else 'step-002-fix-browser.json'
+    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'step-003-fix-browser.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'sentinel-planned-filter-browser.json' if case == 'filters' else 'specs-list.json' if case == 'specs-list' else 'specs-variants.json' if case == 'specs-variants' else 'specs-overview.json' if case == 'specs-overview' else 'step-002-fix-browser.json'
     (evidence / filename).write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))

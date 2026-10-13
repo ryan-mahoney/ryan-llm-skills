@@ -202,6 +202,20 @@ export default function SpecsDestination(props: DestinationProps) {
     }
     if (!path.startsWith('/') && !path.split('/').includes('..')) props.onOpenPackageFiles(item, path);
   };
+  // Done work-tour action uses only the recorded evidence source; a missing or
+  // non-package path leaves the action disabled with a named reason.
+  const workTourPath = (item: WireRecord): string => {
+    if (str(item.evidence?.state) !== 'recorded') return '';
+    const source = str(item.evidence?.source).trim();
+    if (!source) return '';
+    const relative = packageRelative(item, source);
+    if (relative) return relative;
+    if (!source.startsWith('/') && !source.split('/').includes('..')) return source;
+    return '';
+  };
+  const workTourReason = (item: WireRecord): string => str(item.evidence?.state) !== 'recorded'
+    ? 'Open work tour is unavailable because this completion has no recorded evidence.'
+    : 'Open work tour is unavailable because the recorded evidence has no package-relative source path.';
   const selectTab = (key: string) => {
     const item = record();
     if (key === 'files') {
@@ -245,13 +259,19 @@ export default function SpecsDestination(props: DestinationProps) {
           <Show when={record()}>
             {item => <>
               <Show when={item().planned}>
-                <article class="detail planned-spec-summary">
-                  <div class="eyebrow">{str(item().workspace)} / Planned spec</div>
-                  <div class="detail-title"><div><h2>{base(item().package)}</h2><p class="subtitle mono">{str(item().package_ref)}</p></div><span class="pill muted">Planned</span></div>
-                  <p class="section">{str(item().activity || item().obligation || 'Resume this spec package.')}</p>
-                  <p class="small muted">Review the brief and agent settings, then launch.</p>
-                </article>
-                <PlannedAssignment record={item()} live={props.live && props.specsLive} token={props.token} />
+                <Show when={tabOf(props.route) === 'overview'}>
+                  <article class="detail planned-spec-summary">
+                    <div class="eyebrow">{str(item().workspace)} / Planned spec</div>
+                    <div class="detail-title"><div><h2>{base(item().package)}</h2><p class="subtitle mono">{str(item().package_ref)}</p></div><span class="pill muted">Planned</span></div>
+                    <p class="section">{str(item().activity || item().obligation || 'Resume this spec package.')}</p>
+                    <p class="small muted">Review the brief and agent settings, then launch.</p>
+                  </article>
+                  <SpecOverview record={item()} assignments={props.assignments} context={context()} onOpenAgent={openAgent} onOpenEpic={openEpic} />
+                  <PlannedAssignment record={item()} live={props.live && props.specsLive} token={props.token} />
+                </Show>
+                <Show when={tabOf(props.route) === 'activity'}>
+                  <EmptyState symbol="◇" title="No run recorded" text="This package is planned. Implementation activity appears after the first run is observed." />
+                </Show>
               </Show>
               <Show when={!item().planned}>
                 <Show when={tabOf(props.route) === 'activity'}>
@@ -280,13 +300,30 @@ export default function SpecsDestination(props: DestinationProps) {
         <Show when={record()}>
           {item => (
             <ActionBar>
-              <Show when={item().planned} fallback={<>
-                <button class="ds-btn ds-btn--primary" type="button" onClick={() => selectTab('activity')}>Open spec</button>
-                <Show when={assignmentKey()}>
-                  <button class="ds-btn" type="button" onClick={openAgent}>Open agent</button>
+              <Show when={item().recent_completion} fallback={
+                <Show when={item().planned} fallback={<>
+                  <button class="ds-btn ds-btn--primary" type="button" onClick={() => selectTab('activity')}>Open spec</button>
+                  <Show when={assignmentKey()}>
+                    <button class="ds-btn" type="button" onClick={openAgent}>Open agent</button>
+                  </Show>
+                </>}>
+                  <button class="ds-btn" type="button" disabled={!props.canOpenPackageFiles(item())} onClick={() => props.onOpenPackageFiles(item())}>Open files</button>
                 </Show>
-              </>}>
-                <button class="ds-btn" type="button" disabled={!props.canOpenPackageFiles(item())} onClick={() => props.onOpenPackageFiles(item())}>Open files</button>
+              }>
+                <Show when={!workTourPath(item())}>
+                  <span class="sr-only" id="work-tour-reason">{workTourReason(item())}</span>
+                </Show>
+                <button
+                  class="ds-btn ds-btn--primary"
+                  type="button"
+                  disabled={!workTourPath(item())}
+                  aria-describedby={!workTourPath(item()) ? 'work-tour-reason' : undefined}
+                  onClick={() => {
+                    const path = workTourPath(item());
+                    if (path) props.onOpenPackageFiles(item(), path);
+                  }}
+                >Open work tour</button>
+                <button class="ds-btn" type="button" disabled={!props.canOpenPackageFiles(item())} onClick={() => props.onOpenPackageFiles(item())}>Open package files</button>
               </Show>
             </ActionBar>
           )}
