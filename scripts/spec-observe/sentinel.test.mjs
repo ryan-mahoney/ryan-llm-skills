@@ -746,6 +746,49 @@ test('planned inventory includes old folders and excludes active, blocked, and h
   assert.deepEqual(snapshot.recently_completed, [], 'completion older than the history window is not reclassified as planned');
 });
 
+// Run alone: node --test --test-name-pattern='planned inventory excludes legacy implementation' scripts/spec-observe/sentinel.test.mjs
+test('planned inventory excludes legacy implementation artifacts and orders plans by authored time', async t => {
+  const { utimesSync } = await import('node:fs');
+  const f = sandbox(t), repo = primary(f.dir, 'planned-history');
+  const older = pack(repo, 'a-old'), newer = pack(repo, 'z-new');
+  for (const [path, age] of [[older, 8000], [newer, 1000]]) {
+    writeFileSync(join(path, 'spec.md'), '# Plan\n');
+    utimesSync(join(path, 'spec.md'), new Date(FIXED - age), new Date(FIXED - age));
+  }
+  // Rematerializing location metadata must not reorder an older plan.
+  utimesSync(older, new Date(FIXED), new Date(FIXED));
+  const tour = pack(repo, 'ready-tour');
+  writeFileSync(join(tour, 'work-tour.json'), JSON.stringify({ verdict: 'ready', commit: 'a'.repeat(40) }));
+  const legacy = pack(repo, 'legacy-pr');
+  publication(legacy, { url: 'https://github.com/org/repo/pull/1', submitted_at: ago(1000) });
+  const integrated = pack(repo, 'integrated');
+  publication(integrated, { url: null, mergedInto: 'demo', commit: 'b'.repeat(40), submitted_at: ago(1000) });
+  const draft = pack(repo, 'draft');
+  publication(draft, { url: 'https://github.com/org/repo/pull/2', mode: 'draft', submitted_at: ago(1000) });
+  const foreign = pack(repo, 'foreign-pr');
+  publication(foreign, { url: 'https://github.com/org/repo/pull/3', submitted_at: ago(1000) });
+  const foreignFile = join(foreign, 'pr-url.json');
+  const record = JSON.parse(await (await import('node:fs/promises')).readFile(foreignFile, 'utf8'));
+  writeFileSync(foreignFile, JSON.stringify({ ...record, package_ref: 'elsewhere/foreign-pr' }));
+  const unreadable = pack(repo, 'unreadable-tour');
+  writeFileSync(join(unreadable, 'work-tour.json'), '{');
+  const implemented = pack(repo, 'implemented-step');
+  receipt(implemented, { id: 'implemented', state: 'completed', started_at: ago(2000) });
+  const oldLearning = pack(repo, 'legacy-learning');
+  writeFileSync(join(oldLearning, 'step-001-learning.md'), '# Implemented step\n');
+  const nestedLearning = pack(repo, 'nested-learning');
+  mkdirSync(join(nestedLearning, 'learnings'));
+  writeFileSync(join(nestedLearning, 'learnings', 'step-001-learning.md'), '# Implemented step\n');
+
+  const snapshot = await collect({ roots: [repo], indexDir: f.indexDir, now });
+  const planned = snapshot.planned_packages;
+  assert.deepEqual(planned.filter(row => [older, newer].includes(row.package)).map(row => row.package), [newer, older]);
+  assert.equal(planned.find(row => row.package === newer).planned_at, ago(1000));
+  for (const path of [tour, legacy, integrated, unreadable, implemented, oldLearning, nestedLearning]) assert.ok(!planned.some(row => row.package === path), basename(path));
+  for (const path of [draft, foreign]) assert.ok(planned.some(row => row.package === path), basename(path));
+  assert.deepEqual(snapshot.recently_completed, [], 'exclusion from Planned does not assert accepted completion');
+});
+
 test('completion history caps packages independently of monitored assignments and reports omitted history', async t => {
   const f = sandbox(t), repo = primary(f.dir, 'completion-cap');
   const active = pack(repo, 'active');

@@ -25,7 +25,9 @@ export function PackageList(props: { records: any[]; filter: Filter; query: stri
     return (!q || [r.workspace, r.package_ref, r.package, r.activity, r.obligation, r.execution, r.workflow_state].some(v => str(v).toLowerCase().includes(q))) &&
       packageFilterMatches(r, props.filter);
   });
-  const sorted = () => [...visible()].sort((a, b) => props.filter === 'completed' ? Date.parse(b.completed_at || '') - Date.parse(a.completed_at || '') || str(a.package).localeCompare(str(b.package)) : str(a.workspace).localeCompare(str(b.workspace)) || str(a.package).localeCompare(str(b.package)));
+  const sorted = () => [...visible()].sort((a, b) => props.filter === 'planned'
+    ? (Date.parse(b.planned_at) || 0) - (Date.parse(a.planned_at) || 0) || str(a.package).localeCompare(str(b.package))
+    : props.filter === 'completed' ? Date.parse(b.completed_at || '') - Date.parse(a.completed_at || '') || str(a.package).localeCompare(str(b.package)) : str(a.workspace).localeCompare(str(b.workspace)) || str(a.package).localeCompare(str(b.package)));
   return <>
     <div class="observation-rows">
       <Show when={sorted().length} fallback={<div class="empty"><h3>{props.filter === 'completed' ? 'No recently completed specs' : all().length ? 'No matching packages' : props.filter === 'planned' ? 'No planned specs' : 'No observed packages'}</h3><p class="small" style={{ 'margin-top': '8px' }}>{props.filter === 'completed' ? 'Recent completion history appears here when the snapshot includes it.' : all().length ? 'Change the search or package filter.' : props.filter === 'planned' ? 'Planned packages appear here when the snapshot includes their inventory.' : 'Start an observer or import a published snapshot.'}</p></div>}>
@@ -33,7 +35,7 @@ export function PackageList(props: { records: any[]; filter: Filter; query: stri
           <div class="flex justify-between gap-3"><span class="run-title">{base(r.package)}<Show when={r.epic}>{ref => { const epic = list(r.observer?.snapshot?.epics).find(e => e.epic === ref().epic && (ref().workspace == null || e.workspace === ref().workspace)); return <span class="pill muted" title={epic?.title || 'Epic record unavailable in this snapshot'}>{ref().epic}{epic ? ` · ${epicStats(epic).landed}/${epicStats(epic).total}` : ''}</span>; }}</Show></span><span class={`pill ${tone(r)}`}>{state(r)}</span></div>
           <p class="summary" innerHTML={r.recent_completion ? esc(completionLabel(r)) : inlineMarkdown(r.activity || r.obligation || 'No activity hint observed', false)} />
           <Show when={!r.recent_completion}><Progress record={r} /></Show>
-          <span class="small muted">{r.recent_completion ? 'Completed' : 'Activity'} {age(r.recent_completion ? r.completed_at : r.observed_at)}</span>
+          <span class="small muted">{r.recent_completion ? 'Completed' : r.planned ? 'Planned' : 'Activity'} {age(r.recent_completion ? r.completed_at : r.planned ? r.planned_at : r.observed_at)}</span>
         </button></>}</For>
       </Show>
     </div>

@@ -734,10 +734,12 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
       || fact.actions?.some(item => ['unknown', 'blocked', 'failed'].includes(item.state));
     const hasUnresolvedCheckpoint = fact.checkpoints?.some(item => item.package !== fact.packagePath
       || item.state !== 'complete' || !validTime(item.observed_at) || item.active_workers?.length);
-    const candidatesSettled = (fact.candidates ?? []).every(item => ['completed', 'cancelled'].includes(item.receipt.state));
+    const candidatesSettled = (fact.candidates ?? []).every(item => item.receipt.state === 'cancelled');
     if (!fact.completion && !fact.staleReceipts && !fact.receiptsIncomplete && !fact.checkpointNotes.length
-        && candidatesSettled && !hasAttention && !hasUnresolvedCheckpoint) {
+        && candidatesSettled && !hasAttention && !hasUnresolvedCheckpoint
+        && !await packageHasImplementation(fact, budget, noteUnknown)) {
       planned.push({ workspace: fact.workspace, package_ref: fact.ref, package: fact.packagePath,
+        planned_at: await packagePlanTime(fact.packagePath),
         targets: fact.targets.map(({ id, primary }) => ({ id, primary })),
         source_paths: [...fact.sources.values()].map(source => source.file) });
     }
@@ -776,7 +778,7 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
     recentlyCompleted.push({ ...run, ...completion, workflow_state: 'complete', is_current_assignment: false });
   }
 
-  planned.sort((a, b) => a.package.localeCompare(b.package));
+  planned.sort((a, b) => (Date.parse(b.planned_at) || 0) - (Date.parse(a.planned_at) || 0) || a.package.localeCompare(b.package));
   const plannedPackages = planned.slice(0, SENTINEL_LIMITS.plannedPackages);
   if (planned.length > plannedPackages.length) {
     reasons.push(`planned-packages-cap: selected ${plannedPackages.length} of ${planned.length}`);
@@ -868,6 +870,58 @@ async function packageMergeInputs(fact, candidates, budget) {
   }
   if (candidates.some(c => !validTime(c.receipt.started_at ?? c.receipt.dispatch_requested_at))) return skip('dispatch-time-unavailable');
   return inputs;
+}
+
+async function packagePlanTime(packagePath) {
+  // Authored files preserve their mtime across sync. Runtime files and
+  // directory changes do not stand in for the plan's authored timestamp.
+  for (const name of ['spec.md', 'scope.json', '']) {
+    const info = await lstat(join(packagePath, name)).catch(() => null);
+    if (info && !info.isSymbolicLink() && (name ? info.isFile() : info.isDirectory())) return isoOf(info.mtimeMs);
+  }
+  return null;
+}
+
+// Implementation evidence rules a package out of Planned without claiming
+// accepted completion. Older publications and direct integrations need not
+// satisfy the stricter receipt contract used for the Done history.
+async function packageHasImplementation(fact, budget, note) {
+  // Step learning is written by implementation, including older runs that
+  // predate receipts and work tours. It establishes work began, not completion.
+  for (const directory of [fact.packagePath, join(fact.packagePath, 'learnings')]) {
+    const info = await lstat(directory).catch(() => null);
+    if (!info) continue;
+    if (!info.isDirectory() || info.isSymbolicLink()) {
+      note(`implementation-evidence-unavailable: ${directory}`);
+      return true;
+    }
+    const listed = await listDirectory(directory, 1, entry => entry.isFile() && /^step-\d+-learning\.md$/.test(entry.name), SENTINEL_LIMITS.receiptDirectoryEntries);
+    if (listed.entries?.length) return true;
+    if (listed.code || listed.truncated) {
+      note(`implementation-evidence-unavailable: ${directory}`);
+      return true;
+    }
+  }
+  const read = async name => {
+    const result = await readJson(join(fact.packagePath, name), lifecycleLimit(name), budget,
+      { within: fact.packagePath, memo: fact.reads, allow: value => value && typeof value === 'object' && !Array.isArray(value) ? value : null });
+    if (!['ok', 'missing'].includes(result.outcome)) {
+      note(result.reason ?? `implementation-evidence-unavailable: ${name}`);
+      return { unknown: true };
+    }
+    return result.record;
+  };
+  const tour = await read('work-tour.json');
+  if (tour?.unknown || (tour?.verdict === 'ready' && /^[a-f0-9]{40,64}$/.test(tour.commit ?? ''))) return true;
+  const pr = await read('pr-url.json');
+  if (pr?.unknown) return true;
+  if (pr?.package_ref !== fact.ref || pr?.kind !== 'pr_submission') return false;
+  return fact.targets.some(target => {
+    const entry = pr.targets?.[target.id];
+    return entry && entry.mode !== 'draft' && entry.draft !== true && validTime(entry.integrated_at ?? entry.submitted_at)
+      && (/^https:\/\//.test(entry.url ?? '') || (typeof entry.mergedInto === 'string' && entry.mergedInto
+        && /^[a-f0-9]{40,64}$/.test(entry.commit ?? '')));
+  });
 }
 
 // A workflow completion checkpoint is decisive; a terminal worker receipt is

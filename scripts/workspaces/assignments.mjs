@@ -329,7 +329,7 @@ export async function resolveTarget({ workspace, target = null, specPackage = nu
     }
     // Workspaces live at <storage root>/projects/<id>.
     const checked = await checkPackage(specPackage, { root: dirname(dirname(directory)) });
-    if (!checked.ok) throw new Error(`${checked.message} ${checked.remedy}`);
+    if (!checked.ok) throw typedAssignmentError('spec-package-unavailable', `${checked.message} ${checked.remedy}`);
     const { locations } = checked;
     if (await fs.realpath(locations.workspace_dir) !== directory) {
       throw new Error("spec package belongs to a different workspace than the assignment");

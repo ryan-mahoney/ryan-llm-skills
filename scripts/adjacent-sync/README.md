@@ -51,10 +51,12 @@ The tool refuses config and state inside Git checkouts or inside the client data
 It also refuses a config file that other users can read. Keep its permissions at `600`.
 
 The public ignore profile is `scripts/adjacent-sync/ignore.prf`. It excludes spec-package
-`runtime/` folders, journey QA `ux-qa/runs/` output (harness sessions hold database URLs),
+`runtime/` folders and generated `locations.json` files, journey QA `ux-qa/runs/` output (harness sessions hold database URLs),
 `.sentinel/`, `.adjacent/`, `.DS_Store`, lock and temporary files, SQLite files,
 `.workspace-publish-*`, and `.syncthing.*`. It also excludes `threads/`, `sessions/`, and
 `assignments/` under `projects/<name>/`. Review the profile before syncing a workspace.
+After syncing a new package, run `spec-location materialize <workspace>/<package>`
+on the execution host to generate its local paths. Sync preserves existing host paths.
 
 ## Use
 

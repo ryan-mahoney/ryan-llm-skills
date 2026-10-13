@@ -61,6 +61,7 @@ const STATUS_BY_CODE = new Map([
   ["invalid-handoff", 400],
   ["invalid-reference", 400],
   ["reference-unavailable", 409],
+  ["spec-package-unavailable", 409],
   ["invalid-cursor", 400],
   ["invalid-query", 400],
   ["thread-not-found", 404],
@@ -481,6 +482,10 @@ export function createDiscussionRoutes({ discussion, actionToken } = {}) {
       return true;
     } catch (error) {
       const status = STATUS_BY_CODE.get(error?.code) ?? error?.status ?? 503;
+      if (error?.code === 'spec-package-unavailable') {
+        sendJson(response, request.method, status, { error: 'Spec package paths are unavailable on the execution host. Run spec-location materialize for this package on that host, then refresh and preview again.' });
+        return true;
+      }
       if (error?.code === 'invalid-reference' || error?.code === 'reference-unavailable') {
         sendJson(response, request.method, status, { error: error.code === 'invalid-reference'
           ? 'Selected context is invalid or too large. Select text files up to 64 KiB, with 96 KiB total context.'

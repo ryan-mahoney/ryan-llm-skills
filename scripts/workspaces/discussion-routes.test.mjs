@@ -569,6 +569,7 @@ test("service failure codes map to static statuses without leaking exception det
     ["invalid-handoff", 400],
     ["thread-not-found", 404],
     ["stale-preview", 409],
+    ["spec-package-unavailable", 409],
     ["live-owner", 409],
     ["history-only", 409],
     ["delivery-uncertain", 409],
@@ -585,6 +586,7 @@ test("service failure codes map to static statuses without leaking exception det
     });
     assert.equal(response.status, status, code);
     assert.doesNotMatch(response.body, /secret|private|thread-record|failed at/, code);
+    if (code === 'spec-package-unavailable') assert.match(response.body, /spec-location materialize/);
   }
 });
 

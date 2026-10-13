@@ -309,6 +309,13 @@ test("assignment resolution validates supplied spec package against the package 
   );
   await rm(join(primary, ".specs"), { recursive: true, force: true });
 
+  // Synced paths from another machine need a typed, recoverable refusal.
+  const locationsFile = join(packageDirectory, 'locations.json');
+  const locations = JSON.parse(await readFile(locationsFile, 'utf8'));
+  await writeFile(locationsFile, JSON.stringify({ ...locations, storage_root: join(storageRoot, 'missing-host-root') }));
+  await assert.rejects(resolveTarget({ workspace, target: 'linked', specPackage: packageDirectory }),
+    { code: 'spec-package-unavailable' });
+
   await assertNoWrites(workspaceDirectory, storageRoot);
 });
 

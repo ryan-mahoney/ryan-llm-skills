@@ -170,17 +170,24 @@ attention condition, or confirmed completion. This includes folders without run
 receipts and folders older than the activity window. Snapshots publish these
 folders as `planned_packages`, separately from run and completion rows. Unreadable
 lifecycle evidence prevents a folder from being classified as planned; workspace
-coverage reports incomplete reads. Search and workspace scope apply to this view,
+coverage reports incomplete reads. Completed step receipts, step learning files,
+ready work tours, older PR publication records and direct integrations exclude a package from Planned,
+without weakening the completion evidence required for Done. The list defaults to
+newest specification edit first (`planned_at` from `spec.md`, falling back to
+`scope.json` or the package folder). Search and workspace scope apply to this view,
 and planned folders can open their package files.
 
 On a planned spec's live detail page, **Start implementation** provides an editable
 brief prefilled with `/spec-end-to-end Resume after spec-write` and the package's
-reference. The initial model roles are hardcoded in the brief. **Preview settings**
+reference. The orchestrator uses `deepseek:deepseek-flash:high`; the initial
+step-owner and other worker model roles remain in the editable brief. **Preview settings**
 saves the brief and shows the package, execution target, model, publication
 authority, and assignment instructions. **Start agent** starts an independent
 Pi agent in tmux using that reviewed contract. The launch receives the package
 context and the `spec-end-to-end` skill, with authority to publish a ready PR.
 Editing the brief or target requires a new preview.
+Unavailable package paths return a recovery message to materialize the package
+on its execution host, then refresh and preview again.
 
 The form uses the existing thread brief/assignment APIs to retain the saved brief;
 it does not send a discussion message or start a discussion agent. A single

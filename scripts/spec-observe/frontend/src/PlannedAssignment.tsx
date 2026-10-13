@@ -15,9 +15,9 @@ const BRIEF_INSTRUCTION = 'Perform the attached assignment brief.';
 const SKILL = 'spec-end-to-end';
 const AUTHORITY = 'pr';
 const HARNESS = 'pi';
-const PROVIDER = 'openrouter';
-const MODEL = 'meta/muse-spark-1.3-contributor';
-const THINKING = 'xhigh';
+const PROVIDER = 'deepseek';
+const MODEL = 'deepseek-flash';
+const THINKING = 'high';
 
 function errorText(error: unknown) {
   return error instanceof HttpError || error instanceof Error ? error.message : 'The assignment request could not be completed.';

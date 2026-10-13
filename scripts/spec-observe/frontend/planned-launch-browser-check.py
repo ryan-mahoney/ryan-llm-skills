@@ -76,7 +76,9 @@ try:
         expect(page.locator("h1")).to_have_text("Specs")
         rows = page.locator(".observation-rows button.run-row")
         expect(rows).to_have_count(2)
-        main_row = rows.filter(has_text="browser").first
+        expect(rows.first.locator(".run-title")).to_have_text("other-browser")
+        report["scenarios"].append("Planned packages sort newest first even when alphabetical order differs")
+        main_row = rows.filter(has=page.get_by_text("browser", exact=True))
         expect(main_row.locator(".run-title")).to_have_text("browser")
         expect(page.locator("main")).not_to_contain_text("Building the dashboard")
         main_row.click()
@@ -85,7 +87,7 @@ try:
         expect(form).to_be_visible()
         target = page.locator("#planned-assignment-target")
         expect(target).to_be_visible()
-        expect(form).to_contain_text("fixture/browser · spec-end-to-end · PR access · openrouter / meta/muse-spark-1.3-contributor:xhigh")
+        expect(form).to_contain_text("fixture/browser · spec-end-to-end · PR access · deepseek / deepseek-flash:high")
         expect(page.locator("#planned-assignment-title")).to_have_value("Resume fixture/browser through PR publication")
         expect(page.locator("#planned-assignment-preview")).to_be_disabled()
         expect(page.locator("#planned-assignment-launch")).to_have_count(0)
@@ -152,7 +154,7 @@ try:
         target.select_option(label=f"main · {receipt['checkout']}")
         selected_target_key = target.input_value()
         expect(page.locator("#planned-assignment-preview")).to_be_enabled()
-        page.locator(".observation-rows button.run-row").filter(has_text="browser").first.click()
+        page.locator(".observation-rows button.run-row").filter(has=page.get_by_text("browser", exact=True)).click()
         expect(page.locator("article.detail h2")).to_have_text("browser")
         target = page.locator("#planned-assignment-target")
         target.select_option(label=f"main · {receipt['checkout']}")
@@ -181,7 +183,7 @@ try:
         assert len(posts("previewAssignment")) == 0
         assert len(posts("send")) == 0
         control("delay-brief", False)
-        page.locator(".observation-rows button.run-row").filter(has_text="browser").first.click()
+        page.locator(".observation-rows button.run-row").filter(has=page.get_by_text("browser", exact=True)).click()
         expect(page.locator("article.detail h2")).to_have_text("browser")
         expect(page.locator("#planned-assignment-brief")).to_have_value(brief)
         target = page.locator("#planned-assignment-target")
@@ -216,9 +218,9 @@ try:
         assert preview_input["specPackage"] == "fixture/browser"
         assert preview_input["skill"] == "spec-end-to-end"
         assert preview_input["publication_authority"] == "pr"
-        assert preview_input["provider"] == "openrouter"
-        assert preview_input["model"] == "meta/muse-spark-1.3-contributor"
-        assert preview_input["thinking"] == "xhigh"
+        assert preview_input["provider"] == "deepseek"
+        assert preview_input["model"] == "deepseek-flash"
+        assert preview_input["thinking"] == "high"
         resolved = state["launchResolutions"][preview_input["request_id"]]
         record = resolved["record"]
         assert record["spec_package"] == receipt["package"]
@@ -228,9 +230,9 @@ try:
         assert record["publication_authority"] == "pr"
         assert record["skill"] == "spec-end-to-end"
         assert record["skill_path"] == str(Path(receipt["root"]) / ".agents/skills/spec-end-to-end/SKILL.md")
-        assert record["provider"] == "openrouter"
-        assert record["model"] == "meta/muse-spark-1.3-contributor"
-        assert record["thinking"] == "xhigh"
+        assert record["provider"] == "deepseek"
+        assert record["model"] == "deepseek-flash"
+        assert record["thinking"] == "high"
         prompt = resolved["inputPreview"]["instruction"]
         assert prompt.startswith("Assignment context\n")
         assert "node " + str(Path(receipt["root"]) / ".agents/scripts/spec-location/cli.mjs check fixture/browser") in prompt
@@ -238,9 +240,9 @@ try:
         assert "Read the skill at " + record["skill_path"] in prompt
         assert "Perform the attached assignment brief." in prompt
         argv = resolved["piArgs"]
-        assert argv[argv.index("--provider") + 1] == "openrouter"
-        assert argv[argv.index("--model") + 1] == "meta/muse-spark-1.3-contributor"
-        assert argv[argv.index("--thinking") + 1] == "xhigh"
+        assert argv[argv.index("--provider") + 1] == "deepseek"
+        assert argv[argv.index("--model") + 1] == "deepseek-flash"
+        assert argv[argv.index("--thinking") + 1] == "high"
         assert argv[-1] == prompt
         assert "fixture/browser" in resolved["inputPreview"]["brief"]
         assignment_id = preview_input["assignment_id"]
