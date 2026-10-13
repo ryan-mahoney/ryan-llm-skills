@@ -109,6 +109,9 @@ test('duplicate pending launch returns the exact promise and submits one POST', 
   const first = store.launchReviewedDraft(ctx, TOKEN);
   const second = store.launchReviewedDraft(ctx, TOKEN);
   assert.equal(first, second);
+  store.seedLaunchDraft(ctx, { title: 'Replacement', content: 'Not yet' });
+  assert.equal(store.getLaunchDraft(ctx)?.title, 'Brief');
+  assert.equal(store.getLaunchDraft(ctx)?.pending?.promise, first);
   await flush();
   assert.equal(scope.calls.length, 3);
   scope.reply(2, okLaunch());
@@ -116,6 +119,53 @@ test('duplicate pending launch returns the exact promise and submits one POST', 
   assert.deepEqual(await second, settled);
   assert.equal(store.getLaunchDraft(ctx)?.result?.kind, 'launched');
   assert.equal(store.getLaunchDraft(ctx)?.result?.assignmentId, assignmentId);
+});
+
+test('acknowledged success allows an explicit second assignment in the retained context', async t => {
+  const scope = scopeFetch(t);
+  for (const target of ['repo-1', 'repo-2']) {
+    const store = createLaunchStore();
+    const ctx: LaunchContext = { ws: 'ws-1', thread: 'thread-1', package: 'pkg-a', skill: 'skill-a', target: 'repo-1' };
+    await saveAndReview(store, scope, ctx);
+    const launch = store.launchReviewedDraft(ctx, TOKEN);
+    await flush();
+    scope.reply(scope.calls.length - 1, okLaunch());
+    await launch;
+    const previous = store.getLaunchDraft(ctx)!;
+    const snapshot = structuredClone(previous);
+    assert.equal(store.beginCorrectedAttempt(ctx), undefined);
+
+    const nextContext = { ...ctx, target };
+    const seeded = store.seedLaunchDraft(nextContext, { title: 'Second', content: 'New work' });
+    assert.equal(store.getLaunchDraft(ctx)?.title, 'Second');
+    assert.equal(seeded.target, target);
+    assert.equal(seeded.result, undefined);
+    assert.equal(seeded.saved, undefined);
+    assert.equal(seeded.preview, undefined);
+    assert.equal(seeded.reviewStatus, 'idle');
+    const save = store.saveLaunchDraft(nextContext, TOKEN);
+    await flush();
+    const saveCall = scope.calls.at(-1)!;
+    assert.equal(saveCall.body.title, 'Second');
+    assert.equal(saveCall.body.content, 'New work');
+    assert.ok(saveCall.body.request_id);
+    assert.notEqual(saveCall.body.request_id, previous.requestId);
+    scope.reply(scope.calls.length - 1, okBrief('briefs/ws-1/second.md'));
+    await save;
+    assert.equal(store.getLaunchDraft(ctx)?.saved?.brief, 'briefs/ws-1/second.md');
+
+    const review = store.reviewLaunchDraft(nextContext, TOKEN);
+    await flush();
+    const reviewCall = scope.calls.at(-1)!;
+    assert.equal(reviewCall.body.request_id, saveCall.body.request_id);
+    assert.equal(reviewCall.body.thread_id, ctx.thread);
+    assert.ok(reviewCall.body.assignment_id);
+    assert.notEqual(reviewCall.body.assignment_id, previous.assignmentId);
+    scope.reply(scope.calls.length - 1, okPreview(DIGEST_B));
+    await review;
+    assert.equal(store.getLaunchDraft(ctx)?.preview?.target, target);
+    assert.deepEqual(previous, snapshot);
+  }
 });
 
 // node --import tsx --test --test-name-pattern="pending save survives re-entry" src/launch-state.test.ts
@@ -366,6 +416,9 @@ test('a confirmed failed launch correction returns the old record and mints both
   await flush();
   scope.reply(2, okLaunch('launch_failed'));
   await launch;
+  assert.equal(store.getLaunchDraft(ctx)?.result?.kind, 'failed');
+  store.seedLaunchDraft(ctx, { title: 'Replacement', content: 'Needs correction' });
+  assert.equal(store.getLaunchDraft(ctx)?.title, 'Brief');
   assert.equal(store.getLaunchDraft(ctx)?.result?.kind, 'failed');
   const previous = store.beginCorrectedAttempt(ctx);
   assert.ok(previous);

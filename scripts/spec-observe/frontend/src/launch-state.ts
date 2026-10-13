@@ -148,9 +148,10 @@ export function createLaunchStore(): LaunchStore {
   const seedLaunchDraft = (context: LaunchContext, seed: LaunchSeed): LaunchDraft => {
     const key = contextKey(context);
     const retained = entries.get(key);
-    // Never clobber in-flight work, and keep a recorded outcome terminal until
-    // a confirmed failure correction explicitly reopens the draft.
-    if (retained?.pending || retained?.result) return retained;
+    // Never clobber in-flight or unconfirmed work; failures require the explicit
+    // correction transition. After acknowledged success, an explicit seed starts
+    // an independent draft, leaving the prior entry and its identities untouched.
+    if (retained?.pending || (retained?.result && retained.result.kind !== 'launched')) return retained;
     const draft: LaunchDraft = {
       title: seed.title,
       content: seed.content,
