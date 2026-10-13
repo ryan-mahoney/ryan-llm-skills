@@ -270,6 +270,10 @@ const server=createServer(async(req,res)=>{
   if(action==='tick')tick++;
   if(action==='local')localOperator=url.searchParams.get('value')==='true';
   if(action==='delta')for(const item of subscribers)item.callback({type:'delta',event:{delta:'Streamed reply <script>unsafe()</script>'},workspace_id:'fixture',thread_id:item.thread_id,generation:1});
+  // Opt-in settled control: an attributed, allowed service envelope exactly as
+  // the real projection would forward it to current subscribers. The default
+  // fixture behavior (only the 700ms state interval) is unchanged.
+  if(action==='settled')for(const item of subscribers)item.callback({type:'settled',event:{},workspace_id:'fixture',thread_id:item.thread_id,generation:1});
   if(action==='workspace-reset'){await restoreHealthyWorkspace();resetBoundaryControls();}
   if(action==='catalog-fail')boundary.catalogFail=url.searchParams.get('value')==='true';
   if(action==='detail-fail')boundary.detailFail=url.searchParams.get('value')==='true';
@@ -280,7 +284,7 @@ const server=createServer(async(req,res)=>{
   if(action==='state-delay-ms')boundary.stateDelayMs=numberValue(url.searchParams.get('value'),0,5000);
   if(action==='state-clock-offset-ms')boundary.stateClockOffsetMs=numberValue(url.searchParams.get('value'),-120000,120000);
   if(action==='catalog-mode')await applyCatalogMode(url.searchParams.get('value')||'healthy');
-  res.setHeader('Content-Type','application/json');res.end(JSON.stringify({...packageIdentity,posts,threads,createdThreads,tick,boundary,threadControls:{holdThreads,holdThreadsWorkspace,failThreads,longHistory,incompleteTail,invalidRecords,listFailStatus,historyFailStatus,responseState},createControls:{delayCreate,failCreate},session:{identity:sessionIdentity,ended:sessionEnded},review:{holdDispatchPreview,holdDispatchLaunch,dispatchPreviewRefusal,dispatchLaunchRefusal,staleLaunch},launch:{outcome:dispatchLaunchOutcome,published:[...launchedAssignments.keys()]},diagnostics:{resolvers:resolverDiagnostics},boundaryLog:boundaryLog.slice(-60),active:[...activeBoundary.values()],launchResolutions:Object.fromEntries(launchResolutions),briefWritesPending,completedBriefWrites}));return;
+  res.setHeader('Content-Type','application/json');res.end(JSON.stringify({...packageIdentity,posts,threads,createdThreads,tick,boundary,threadControls:{holdThreads,holdThreadsWorkspace,failThreads,longHistory,incompleteTail,invalidRecords,listFailStatus,historyFailStatus,responseState},subscribedThreadIds:[...new Set([...subscribers].map(item=>item.thread_id))],createControls:{delayCreate,failCreate},session:{identity:sessionIdentity,ended:sessionEnded},review:{holdDispatchPreview,holdDispatchLaunch,dispatchPreviewRefusal,dispatchLaunchRefusal,staleLaunch},launch:{outcome:dispatchLaunchOutcome,published:[...launchedAssignments.keys()]},diagnostics:{resolvers:resolverDiagnostics},boundaryLog:boundaryLog.slice(-60),active:[...activeBoundary.values()],launchResolutions:Object.fromEntries(launchResolutions),briefWritesPending,completedBriefWrites}));return;
  }
  // Emulate the trusted Serve endpoint so the browser exercises thread-only tokens.
  if(!localOperator){req.headers.host='dashboard.example';if(req.headers.origin)req.headers.origin='https://dashboard.example';}

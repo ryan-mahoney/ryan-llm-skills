@@ -326,7 +326,7 @@ export default function Conversations(props: Props) {
     }
   }
   async function refreshTail() {
-    const id = projectedId, workspace = projectedWs, epoch = projectionEpoch;
+    const id = projectedId, workspace = projectedWs, epoch = projectionEpoch, generation = historyGeneration;
     if (!active() || !id) return;
     try {
       const data: any = await getJson(`/api/thread/history?${params({ thread_id: id, limit: String(LIMIT) })}`);
@@ -338,7 +338,15 @@ export default function Conversations(props: Props) {
         return first < 0 ? [...prev, ...page.filter(e => !ids.has(e.id))] : [...prev.slice(0, prev.findIndex(e => e.id === page[first].id)), ...page];
       });
       setIncompleteTail(data.incomplete_tail === true); setPartial('');
-    } catch { /* Existing transcript remains readable during a temporary history failure. */ }
+    } catch (e) {
+      // A settled-triggered background read failure on the still-current
+      // projection routes through the same read-error owner as loadHistory,
+      // so denied/error presentation (and SSE closure) follows. A newer
+      // explicit loadHistory supersedes an older background failure; a later
+      // background success never clears the error (only explicit recovery).
+      if (generation !== historyGeneration || epoch !== projectionEpoch || id !== projectedId || workspace !== projectedWs || wsId() !== workspace || routeId() !== id) return;
+      setHistoryError(readErrorOf(e));
+    }
   }
   function openEvents() {
     closeSource();

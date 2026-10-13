@@ -11,6 +11,8 @@ SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 240s uv run --script \
 SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 240s uv run --script \
   scripts/spec-observe/frontend/conversations-browser-check.py --case journey \
   --capture-reference /path/to/designs/app-ui/screens/05-conversations.html
+SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 240s uv run --script \
+  scripts/spec-observe/frontend/conversations-browser-check.py --case tail-read-errors
 
 route-drafts keeps the route/draft/retry regression only. journey runs the same
 traversals against the renamed Conversations adapter, then captures the
@@ -26,6 +28,12 @@ response-states runs the screens 20-25 server-owned responding/queued/paused/
 uncertain/stalled/history-only presentation against the built App and the owned
 fixture, writing conversations-browser-response-states.json, response captures
 at 1280 and reference captures 20-25.
+tail-read-errors runs only the background (SSE settled-triggered) tail read
+failure scenarios against the built App and the owned fixture: a scoped
+Playwright route fails exactly the settled refreshTail read, and held responses
+prove the projection/generation guards. It writes
+conversations-browser-tail-read-errors.json, records no captures and claims no
+visual parity.
 
 The App, route owner, API transport and adapter are real; browser-fixture.mjs
 fakes only the final discussion service/process boundary. The checker owns its
@@ -50,7 +58,7 @@ from pathlib import Path
 from playwright.sync_api import expect, sync_playwright
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--case', choices=['route-drafts', 'journey', 'new-thread', 'view-states', 'response-states'], default='route-drafts')
+parser.add_argument('--case', choices=['route-drafts', 'journey', 'new-thread', 'view-states', 'response-states', 'tail-read-errors'], default='route-drafts')
 parser.add_argument('--capture-reference', default=None)
 parser.add_argument('--reference-dir', default=None)
 options = parser.parse_args()
@@ -84,6 +92,7 @@ report = {
                      else 'not claimed (EV-7 creation coverage; captures recorded, owner inspects images)' if case == 'new-thread'
                      else 'not claimed (view-state coverage; captures recorded, owner inspects images)' if case == 'view-states'
                      else 'not claimed (response-state coverage; captures recorded, owner inspects images)' if case == 'response-states'
+                     else 'not claimed (settled tail read-error coverage; no captures recorded)' if case == 'tail-read-errors'
                      else 'observed (production and reference captures at 1280x900 and 1600x900; see conversations-visual-inspection.md)'),
     'cleanup': {},
 }
@@ -1136,6 +1145,294 @@ def run_response_states(url, thread1, thread2):
     report['responseStates'] = {'inspection': str(inspection)}
 
 
+def run_tail_read_errors(url, thread1, thread2):
+    """Background (SSE settled-triggered) tail read failures on the built App.
+
+    A scoped Playwright route fails exactly the settled refreshTail read while
+    explicit Refresh loads, the list poll and the SSE stream stay on the live
+    fixture; held responses prove the projection/generation guards. The
+    rendered historyError owner supplies the denied/error presentation and SSE
+    closure. No captures are written and visual parity is not claimed.
+    """
+    def control(action='', value=''):
+        response = context.request.get(url + '/__fixture/control?action=' + action + '&value=' + str(value))
+        assert response.ok
+        return response.json()
+
+    def posts(name):
+        return [item for item in control()['posts'] if item['name'] == name]
+
+    def send_count():
+        return len(posts('send'))
+
+    def passed(name):
+        report['scenarios'].append(name)
+        report['scenarioTimings'].append({'scenario': name, 'atSeconds': round(time.monotonic() - started, 3)})
+
+    def settle_page():
+        # One renderer task turn after an awaited response; the stale-failure
+        # drop is intentionally silent, so give the page a chance to process
+        # the fulfilled response before asserting the rendered outcome.
+        page.evaluate('() => new Promise(resolve => setTimeout(resolve, 50))')
+
+    def wait_subscription(target, present, timeout=6.0):
+        deadline = time.monotonic() + timeout
+        observed = None
+        while time.monotonic() < deadline:
+            observed = control().get('subscribedThreadIds') or []
+            if (target in observed) == present:
+                return observed
+            page.wait_for_timeout(100)
+        raise AssertionError(f'SSE subscription for {target} present={present} not observed; ids={observed}')
+
+    def fresh_thread(target, title):
+        # A document reload restarts the Conversations mount so no scenario
+        # inherits the previous scenario's retained read error.
+        if page.url.startswith(url):
+            page.reload(wait_until='domcontentloaded')
+        page.goto(url + '/#/conversations?ws=fixture&id=' + target, wait_until='domcontentloaded')
+        draft = page.locator('#thread-draft')
+        draft.wait_for()
+        expect(page.locator('.object-head')).to_contain_text(title)
+        expect(page.locator('.thread-transcript')).to_contain_text('Ready to discuss.')
+        # 'Live' proves this document's own EventSource opened (the server
+        # subscribes before the SSE headers), so a settled control cannot be
+        # delivered only to a pre-reload stream that has not been reaped yet.
+        expect(page.locator('.detail-actions .status')).to_have_text('Live')
+        wait_subscription(target, True)
+        return draft
+
+    def emit_settled():
+        control('settled')
+
+    recorded = []
+
+    def record_response(response):
+        if '/api/thread/history' in response.url or '/api/threads' in response.url:
+            recorded.append((response.url, response.status))
+
+    page.on('response', record_response)
+
+    def await_response(predicate, description, timeout=8.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            match = [item for item in recorded if predicate(item)]
+            if match:
+                return match[-1]
+            page.wait_for_timeout(50)
+        raise AssertionError(f'no recorded response for {description}; recent={recorded[-6:]}')
+
+    def history_ok_count():
+        return len([item for item in recorded if '/api/thread/history' in item[0] and item[1] == 200])
+
+    def await_more_history_ok(before, description, timeout=8.0):
+        deadline = time.monotonic() + timeout
+        while history_ok_count() <= before and time.monotonic() < deadline:
+            page.wait_for_timeout(50)
+        assert history_ok_count() > before, f'{description}; recent={recorded[-6:]}'
+
+    handlers = []
+    held = []
+
+    def install_history_route(handler):
+        page.route('**/api/thread/history*', handler)
+        handlers.append(handler)
+
+    def remove_history_route(handler):
+        if handler in handlers:
+            page.unroute('**/api/thread/history*', handler)
+            handlers.remove(handler)
+
+    def hold_first(route):
+        if not held:
+            held.append(route)
+        else:
+            route.continue_()
+
+    def await_held(description, timeout=6.0):
+        deadline = time.monotonic() + timeout
+        while not held and time.monotonic() < deadline:
+            page.wait_for_timeout(50)
+        assert held, f'{description}: settled did not issue a background history read'
+
+    try:
+        page.set_viewport_size({'width': 1280, 'height': 900})
+
+        # 1. A settled-triggered 403 is a read refusal: the private projection
+        #    (rows/title/transcript/composer) disappears, the live stream
+        #    closes, and nothing is sent.
+        draft = fresh_thread(thread1, 'Discussion one')
+        draft.fill('Tail 403 draft')
+        wait_subscription(thread1, True)
+        sends_before = send_count()
+
+        def deny_tail(route):
+            route.fulfill(status=403, content_type='application/json', body=json.dumps({'error': 'Fixture transcript read unavailable'}))
+
+        install_history_route(deny_tail)
+        try:
+            emit_settled()
+            await_response(lambda item: '/api/thread/history' in item[0] and item[1] == 403, 'settled tail 403')
+            expect(page.locator('#thread-open-workspaces')).to_be_visible()
+            expect(page.locator('[data-thread]')).to_have_count(0)
+            expect(page.locator('.thread-transcript')).to_have_count(0)
+            expect(page.locator('#thread-draft')).to_have_count(0)
+            expect(page.locator('#thread-send')).to_have_count(0)
+            assert 'Discussion one' not in page.content(), 'private title/row text leaked in the denied view'
+            wait_subscription(thread1, False)
+            assert send_count() == sends_before, 'a send was posted during the settled tail 403 refusal'
+            passed('tail read error 403: a settled-triggered refusal suppresses rows/title/transcript/composer, closes the SSE stream and posts no send')
+        finally:
+            remove_history_route(deny_tail)
+
+        # 2. A settled-triggered 503 keeps transcript and draft with Send
+        #    disabled (button and Enter, zero POST); later successful
+        #    background tail/list reads never clear it; an explicit Retry
+        #    thread read recovers without auto-send.
+        draft = fresh_thread(thread1, 'Discussion one')
+        draft.fill('Tail 503 retained draft')
+        sends_before = send_count()
+        attempts = {'count': 0}
+
+        def fail_first_tail(route):
+            attempts['count'] += 1
+            if attempts['count'] == 1:
+                route.fulfill(status=503, content_type='application/json', body=json.dumps({'error': 'Fixture transcript read unavailable'}))
+            else:
+                route.continue_()
+
+        install_history_route(fail_first_tail)
+        try:
+            emit_settled()
+            await_response(lambda item: '/api/thread/history' in item[0] and item[1] == 503, 'settled tail 503')
+            expect(page.locator('.detail-pane')).to_contain_text('Thread state could not be read')
+            expect(page.locator('.thread-transcript')).to_contain_text('Ready to discuss.')
+            expect(draft).to_have_value('Tail 503 retained draft')
+            expect(page.locator('#thread-send')).to_be_disabled()
+            draft.focus()
+            page.keyboard.press('Enter')
+            settle_page()
+            assert send_count() == sends_before, 'Enter posted a send during the settled tail read error'
+            expect(draft).to_have_value('Tail 503 retained draft')
+            expect(page.locator('#thread-send')).to_be_disabled()
+        finally:
+            attempts['count'] = 1
+            remove_history_route(fail_first_tail)
+
+        # The next settled read reaches the live fixture: both the tail and
+        # the list succeed and must not clear the retained read error.
+        recorded.clear()
+        emit_settled()
+        await_response(lambda item: '/api/thread/history' in item[0] and item[1] == 200, 'background tail 200')
+        await_response(lambda item: '/api/threads' in item[0] and item[1] == 200, 'background list 200')
+        settle_page()
+        expect(page.locator('.detail-pane')).to_contain_text('Thread state could not be read')
+        expect(draft).to_have_value('Tail 503 retained draft')
+        expect(page.locator('#thread-send')).to_be_disabled()
+        draft.focus()
+        page.keyboard.press('Enter')
+        settle_page()
+        assert send_count() == sends_before, 'Enter posted a send after successful background reads while the error was retained'
+
+        # Explicit Retry thread issues a fresh loadHistory; only that success
+        # clears the error, and it never sends automatically.
+        before_retry = history_ok_count()
+        page.locator('#thread-error-retry').click()
+        await_more_history_ok(before_retry, 'Retry thread did not issue a successful history read')
+        expect(page.locator('#thread-error-retry')).to_have_count(0)
+        expect(page.locator('.detail-pane')).not_to_contain_text('Thread state could not be read')
+        expect(page.locator('#thread-send')).to_be_enabled()
+        expect(draft).to_have_value('Tail 503 retained draft')
+        assert send_count() == sends_before, 'Retry thread posted a send'
+        passed('tail read error 503: transcript/draft retained with Send disabled including Enter; later successful background tail/list reads never clear it; explicit Retry recovers without auto-send')
+
+        # 3. An old-thread tail failure held across a thread switch is ignored:
+        #    the current thread and draft stay visible and actionable.
+        draft = fresh_thread(thread1, 'Discussion one')
+        draft.fill('Stale tail draft')
+        sends_before = send_count()
+        install_history_route(hold_first)
+        try:
+            emit_settled()
+            await_held('old-thread held tail')
+            page.locator('[data-thread="' + thread2 + '"]').click()
+            expect(page).to_have_url(re.compile(r'#/conversations\?ws=fixture&id=' + re.escape(thread2)))
+            expect(page.locator('.object-head')).to_contain_text('Discussion two')
+            expect(page.locator('.thread-transcript')).to_contain_text('Ready to discuss.')
+            draft = page.locator('#thread-draft')
+            draft.fill('Current thread draft')
+            expect(page.locator('#thread-send')).to_be_enabled()
+            wait_subscription(thread2, True)
+            wait_subscription(thread1, False)
+            held[0].fulfill(status=403, content_type='application/json', body=json.dumps({'error': 'Fixture transcript read unavailable'}))
+            held.clear()
+            settle_page()
+            expect(page.locator('.object-head')).to_contain_text('Discussion two')
+            assert 'Discussion one' not in page.locator('.object-head').inner_text()
+            expect(page.locator('.thread-transcript')).to_contain_text('Ready to discuss.')
+            expect(draft).to_have_value('Current thread draft')
+            expect(page.locator('#thread-open-workspaces')).to_have_count(0)
+            expect(page.locator('#thread-error-retry')).to_have_count(0)
+            expect(page.locator('.detail-actions .status')).to_have_text('Live')
+            remove_history_route(hold_first)
+            draft.focus()
+            with page.expect_response('**/api/thread/send') as sent:
+                page.keyboard.press('Enter')
+            assert sent.value.ok, sent.value
+            assert send_count() == sends_before + 1, 'the current thread was not actionable after the stale refusal'
+            expect(draft).to_have_value('')
+            passed('tail stale failure: a held old-thread 403 fulfilled after switching threads is ignored; the current thread, draft and Send stay usable')
+        finally:
+            remove_history_route(hold_first)
+
+        # 4. A held same-thread tail failure is superseded by a newer explicit
+        #    successful Refresh: the captured historyGeneration drops the
+        #    stale 503 and the newer read stays usable.
+        draft = fresh_thread(thread1, 'Discussion one')
+        draft.fill('Generation guard draft')
+        sends_before = send_count()
+        install_history_route(hold_first)
+        try:
+            emit_settled()
+            await_held('same-thread held tail')
+            before_refresh = history_ok_count()
+            page.locator('[data-thread-refresh]').click()
+            await_more_history_ok(before_refresh, 'explicit Refresh did not issue a successful history read')
+            held[0].fulfill(status=503, content_type='application/json', body=json.dumps({'error': 'Fixture transcript read unavailable'}))
+            held.clear()
+            settle_page()
+            expect(page.locator('.detail-pane')).not_to_contain_text('Thread state could not be read')
+            expect(page.locator('#thread-error-retry')).to_have_count(0)
+            expect(page.locator('.thread-transcript')).to_contain_text('Ready to discuss.')
+            expect(draft).to_have_value('Generation guard draft')
+            expect(page.locator('#thread-send')).to_be_enabled()
+            remove_history_route(hold_first)
+            draft.focus()
+            with page.expect_response('**/api/thread/send') as sent:
+                page.keyboard.press('Enter')
+            assert sent.value.ok, sent.value
+            assert send_count() == sends_before + 1, 'the newer successful read did not stay usable after the superseded failure'
+            expect(draft).to_have_value('')
+            passed('tail generation: an older held 503 fulfilled after a newer explicit successful load keeps the newer read usable')
+        finally:
+            remove_history_route(hold_first)
+    finally:
+        for handler in list(handlers):
+            try:
+                page.unroute('**/api/thread/history*', handler)
+            except Exception:
+                pass
+        for route in held:
+            try:
+                route.abort()
+            except Exception:
+                pass
+        try:
+            page.remove_listener('response', record_response)
+        except Exception:
+            pass
+
+
 def run_new_thread(url, thread1, thread2):
     """EV-7 production creation coverage: the built App plus the owned fixture
     for the creation lifecycle, then an isolated Vite source-app seed proof.
@@ -1886,6 +2183,8 @@ try:
                 run_view_states(fixture_info['url'], fixture_info['thread1'], fixture_info['thread2'])
             if case == 'response-states':
                 run_response_states(fixture_info['url'], fixture_info['thread1'], fixture_info['thread2'])
+            if case == 'tail-read-errors':
+                run_tail_read_errors(fixture_info['url'], fixture_info['thread1'], fixture_info['thread2'])
             assert not report['pageErrors'], report['pageErrors']
             if case == 'new-thread':
                 unexpected_console = [text for text in report['consoleErrors'] if 'Failed to load resource' not in text]
