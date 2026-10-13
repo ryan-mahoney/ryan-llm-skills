@@ -16,7 +16,9 @@ export async function authorizePackage(state, requested, authorizedWorkspace) {
   if (root !== requested || dirname(root) !== specs || !(await lstat(root)).isDirectory()) throw Error('Package is not canonical');
   return { root, ref: `${row.workspace}/${basename(root)}` };
 }
-async function safePath(root, name, { exclude } = {}) {
+// Shared component resolver for authorized file reads. Exported so the
+// repository route reuses the same validation as package and workspace reads.
+export async function resolvePackageFilePath(root, name, { exclude } = {}) {
   if (typeof name !== 'string' || !name || name.includes('\\') || name.includes('\0')) throw Error('Invalid file path');
   const parts = name.split('/');
   if (parts.some(p => !p || p === '.' || p === '..')) throw Error('Invalid file path');
@@ -43,10 +45,10 @@ export async function listPackageFiles(root, cursor = 0, { exclude } = {}) {
         if (typeof exclude === 'function' && exclude(entry.name)) continue;
         if (++scanned > pageLimit) { truncated = true; break; }
         const name = prefix + entry.name;
-        if (scanned <= cursor) { if (entry.isDirectory()) await walk(await safePath(root, name, { exclude }), name + '/', depth + 1); if (truncated) break; continue; }
+        if (scanned <= cursor) { if (entry.isDirectory()) await walk(await resolvePackageFilePath(root, name, { exclude }), name + '/', depth + 1); if (truncated) break; continue; }
         if (entry.isSymbolicLink()) files.push({ name, available: false, reason: 'Symbolic link' });
-        else if (entry.isDirectory()) await walk(await safePath(root, name, { exclude }), name + '/', depth + 1);
-        else if (entry.isFile()) { const info = await lstat(await safePath(root, name, { exclude })); files.push({ name, size: info.size, available: info.size <= PACKAGE_FILE_LIMITS.bytes, reason: info.size > PACKAGE_FILE_LIMITS.bytes ? 'Exceeds 8 MiB limit' : null }); }
+        else if (entry.isDirectory()) await walk(await resolvePackageFilePath(root, name, { exclude }), name + '/', depth + 1);
+        else if (entry.isFile()) { const info = await lstat(await resolvePackageFilePath(root, name, { exclude })); files.push({ name, size: info.size, available: info.size <= PACKAGE_FILE_LIMITS.bytes, reason: info.size > PACKAGE_FILE_LIMITS.bytes ? 'Exceeds 8 MiB limit' : null }); }
         else files.push({ name, available: false, reason: 'Not a regular file' });
         if (truncated) break;
       }
@@ -56,7 +58,7 @@ export async function listPackageFiles(root, cursor = 0, { exclude } = {}) {
   return { files: files.sort((a,b) => a.name.localeCompare(b.name)), truncated:truncated||depthTruncated, next_cursor:truncated&&pageLimit<PACKAGE_FILE_LIMITS.totalEntries?pageLimit:null, errors, limits: PACKAGE_FILE_LIMITS };
 }
 export async function readPackageFile(root, name, { exclude } = {}) {
-  const path = await safePath(root, name, { exclude });
+  const path = await resolvePackageFilePath(root, name, { exclude });
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const info = await handle.stat();
@@ -72,4 +74,21 @@ export async function readPackageFile(root, name, { exclude } = {}) {
     const binary = bytes.includes(0) || !readable;
     return { bytes, type: images[extension] ?? (binary ? 'application/octet-stream' : extension === '.html' || extension === '.htm' ? 'text/html; charset=utf-8' : 'text/plain; charset=utf-8'), kind: images[extension] ? 'image' : binary ? 'download' : ['.html','.htm'].includes(extension) ? 'html' : ['.md','.markdown'].includes(extension) ? 'markdown' : extension === '.json' ? 'json' : 'text' };
   } finally { await handle.close(); }
+}
+// Shared response writer for authorized file reads. The kind/type/sandbox
+// headers match the existing dashboard file responses exactly: GET bytes, no
+// HEAD body, and an attachment name with a printable ASCII fallback plus an
+// RFC 5987 UTF-8 filename*.
+export function sendFile(request, response, name, file, { download = false } = {}) {
+  response.setHeader('Content-Type', file.type);
+  response.setHeader('X-Package-File-Kind', file.kind);
+  response.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  response.setHeader('Content-Security-Policy', "sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'");
+  if (download || file.kind === 'download') {
+    const base = basename(name);
+    const fallback = base.replace(/[^\x20-\x7e]|["\\]/g, '_');
+    const encoded = encodeURIComponent(base).replace(/['()*]/g, character => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+    response.setHeader('Content-Disposition', `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`);
+  }
+  response.end(request.method === 'HEAD' ? undefined : file.bytes);
 }
