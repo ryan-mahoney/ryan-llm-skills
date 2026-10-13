@@ -533,7 +533,10 @@ export default function Designs(props: DestinationProps) {
                             title={`Screen ${screen()!.step} has not been produced`}
                             text={`${[screen()!.title, screen()!.job].filter(Boolean).join(' · ')}. The planned screen is recorded; its HTML file does not exist yet.`}
                             action={
-                              <Show when={briefRoute()}>
+                              <Show
+                                when={briefRoute()}
+                                fallback={<p class="small muted">No safe relative brief is recorded, so there is no brief link to open.</p>}
+                              >
                                 {route => <a class="ds-btn ds-btn--primary" href={formatHash(route())} onClick={openBrief(route())}>Open brief</a>}
                               </Show>
                             }
@@ -583,7 +586,9 @@ export default function Designs(props: DestinationProps) {
                     <p>
                       {screen()!.person || 'Person not recorded'} · {screen()!.job || 'Job not recorded'}<br />
                       Primary action: {screen()!.primary_action || 'Not recorded'}<br />
-                      Capture: {captureText() || 'Not captured'}
+                      <Show when={screen()!.produced} fallback={<>Produced: No · Captured: {captureText() || 'No'}</>}>
+                        Capture: {captureText() || 'Not captured'}
+                      </Show>
                       <Show when={screen()!.notes}><br />Note: {screen()!.notes}</Show>
                     </p>
                     <Show when={deviations().length}>

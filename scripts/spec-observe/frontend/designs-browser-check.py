@@ -2,12 +2,15 @@
 # requires-python = ">=3.11"
 # dependencies = ["playwright"]
 # ///
-"""Focused Designs EV-3 journey: real App/adapter/API with seeded temporary design packages.
+"""Focused Designs EV-3/EV-4 checks: real App/adapter/API with seeded temporary design packages.
 
 After npm run build --prefix scripts/spec-observe/frontend:
 SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 180s uv run --script \
   scripts/spec-observe/frontend/designs-browser-check.py --case journey \
   --capture-reference /path/to/designs/app-ui/screens/08-designs.html
+SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 180s uv run --script \
+  scripts/spec-observe/frontend/designs-browser-check.py --case unproduced \
+  --capture-reference /path/to/designs/app-ui/screens/26-design-screen-unproduced.html
 
 Only the temporary fixture storage, one final index HTTP delay, and the imported
 snapshot are substituted; App, route, adapters, /api/workspace-designs and the
@@ -36,7 +39,7 @@ from urllib.parse import parse_qs, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--case', choices=['journey'], default='journey')
+parser.add_argument('--case', choices=['journey', 'unproduced'], default='journey')
 parser.add_argument('--capture-reference', default=None)
 options = parser.parse_args()
 case = options.case
@@ -171,7 +174,7 @@ def seed_designs(storage):
                      'job': 'Prove workspace scope isolation', 'kind': 'action', 'state': 'ideal'}],
     }
     (other / 'design.json').write_text(json.dumps(other_record))
-    return {
+    seeded = {
         'fixture/demo': demo_record,
         'fixture/second': second_record,
         'other/other-demo': other_record,
@@ -187,11 +190,77 @@ def seed_designs(storage):
             'other/designs/other-demo/screens/01-other-screen.html',
         ],
     }
+    if case == 'unproduced':
+        # Planned-screen branch fixtures: one produced step to enter from, one
+        # planned step with a real capture but no HTML, plus missing/unsafe briefs.
+        planned = fixture_root / 'planned'
+        (planned / 'screens').mkdir(parents=True, exist_ok=True)
+        (planned / 'captures').mkdir(parents=True, exist_ok=True)
+        (planned / 'marker.js').write_text(MARKER_JS)
+        (planned / 'screen.css').write_text(SCREEN_CSS)
+        (planned / 'brief.md').write_text('# Planned fixture brief\n\nPlanned screen guidance.\n')
+        (planned / 'screens' / '01-ready.html').write_text(screen_html('Ready screen', 'Produced ready screen'))
+        (planned / 'captures' / '01-ready@1280.png').write_bytes(PNG_1X1)
+        (planned / 'captures' / '02-kickoff@1280.png').write_bytes(PNG_1X1)
+        planned_record = {
+            'schema_version': 1,
+            'design': 'planned',
+            'title': 'Planned fixture',
+            'brief': 'brief.md',
+            'note': 'Fixture index for the planned-screen branch.',
+            'viewport': {'posture': 'responsive', 'widths': [1280, 1600]},
+            'screens': [
+                {'step': 1, 'id': 'ready', 'title': 'Ready screen', 'person': 'Operator',
+                 'job': 'Start from the produced fixture screen', 'kind': 'action', 'state': 'ideal',
+                 'primary_action': 'Continue to the planned step'},
+                {'step': 2, 'id': 'kickoff', 'title': 'Kickoff planned', 'person': 'Operator',
+                 'job': 'Choose where a new fixture discussion should run', 'kind': 'action', 'state': 'ideal',
+                 'primary_action': 'Create fixture thread', 'notes': 'Planned screen note.'},
+            ],
+        }
+        (planned / 'design.json').write_text(json.dumps(planned_record))
+
+        missing = fixture_root / 'missing-brief'
+        missing.mkdir(parents=True, exist_ok=True)
+        missing_record = {
+            'schema_version': 1, 'design': 'missing-brief', 'title': 'Missing brief fixture',
+            'viewport': {'posture': 'desktop-only', 'widths': [1280]},
+            'screens': [{'step': 1, 'id': 'no-brief', 'title': 'No brief recorded', 'person': 'Operator',
+                         'job': 'Explain the missing brief state', 'kind': 'decision', 'state': 'ideal'}],
+        }
+        (missing / 'design.json').write_text(json.dumps(missing_record))
+
+        unsafe = fixture_root / 'unsafe-brief'
+        unsafe.mkdir(parents=True, exist_ok=True)
+        unsafe_record = {
+            'schema_version': 1, 'design': 'unsafe-brief', 'title': 'Unsafe brief fixture',
+            'brief': '../brief.md',
+            'viewport': {'posture': 'desktop-only', 'widths': [1280]},
+            'screens': [{'step': 1, 'id': 'unsafe-brief', 'title': 'Unsafe brief recorded', 'person': 'Operator',
+                         'job': 'Explain the unsafe brief state', 'kind': 'decision', 'state': 'ideal'}],
+        }
+        (unsafe / 'design.json').write_text(json.dumps(unsafe_record))
+        seeded['fixture/planned'] = planned_record
+        seeded['fixture/missing-brief'] = missing_record
+        seeded['fixture/unsafe-brief'] = unsafe_record
+        seeded['plannedBrief'] = '# Planned fixture brief\n\nPlanned screen guidance.\n'
+        seeded['files'].extend([
+            'fixture/designs/planned/design.json', 'fixture/designs/planned/brief.md',
+            'fixture/designs/planned/screens/01-ready.html', 'fixture/designs/planned/marker.js',
+            'fixture/designs/planned/screen.css', 'fixture/designs/planned/captures/01-ready@1280.png',
+            'fixture/designs/planned/captures/02-kickoff@1280.png',
+            'fixture/designs/missing-brief/design.json', 'fixture/designs/unsafe-brief/design.json',
+        ])
+    return seeded
 
 
 class QuietRequestHandler(SimpleHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
+
+
+class CaseComplete(Exception):
+    """Raised after a non-journey case finishes so the shared cleanup still runs."""
 
 
 try:
@@ -276,6 +345,201 @@ try:
                   return { id: el.id || '', text: (el.textContent || '').trim().slice(0, 40),
                            disabled: el.hasAttribute('disabled'), ariaDisabled: el.getAttribute('aria-disabled') };
                 }""")
+
+            def reference_geometry(reference_page):
+                return reference_page.evaluate("""() => {
+                  const wrap = document.getElementById('design-frame-wrap');
+                  const frameElement = document.getElementById('design-frame');
+                  const canvas = document.querySelector('.design-canvas');
+                  if (!wrap || !frameElement) return null;
+                  const style = getComputedStyle(frameElement);
+                  const matrix = new DOMMatrixReadOnly(style.transform);
+                  return { wrapWidth: wrap.clientWidth, frameWidth: parseFloat(style.width),
+                           frameHeight: parseFloat(style.height), scale: matrix.a,
+                           wrapHeight: wrap.getBoundingClientRect().height,
+                           scrollTop: canvas ? canvas.scrollTop : null };
+                }""")
+
+            def capture_reference(prefix, details=True, wait_for_frame=True):
+                global reference_server
+                assert reference_html and reference_html.is_file(), reference_html
+                reference_root = reference_html.parent.parent
+                assert (reference_root / 'vendor' / 'tailwind.js').is_file(), reference_root
+                reference_server = ThreadingHTTPServer(
+                    ('127.0.0.1', 0), partial(QuietRequestHandler, directory=str(reference_root)))
+                threading.Thread(target=reference_server.serve_forever, daemon=True).start()
+                reference_page = context.new_page()
+                reference_page.on('pageerror', lambda error: report['pageErrors'].append(f'reference: {error}'))
+                reference_url = (f'http://127.0.0.1:{reference_server.server_address[1]}/'
+                                 f'{reference_html.relative_to(reference_root).as_posix()}')
+                reference_page.goto(reference_url, wait_until='load')
+                reference_page.wait_for_timeout(300)
+                reference_page.evaluate("() => { const details = document.querySelector('.design-canvas details'); if (details) details.open = true; }")
+                reference_state = []
+                for width in (1280, 1600):
+                    reference_page.set_viewport_size({'width': width, 'height': 900})
+                    reference_page.wait_for_timeout(150)
+                    reference_page.select_option('#design-width', f'{width}px')
+                    if wait_for_frame:
+                        reference_page.wait_for_function("""(declared) => {
+                          const frameElement = document.getElementById('design-frame');
+                          if (!frameElement) return false;
+                          return parseFloat(getComputedStyle(frameElement).width) === declared;
+                        }""", arg=width)
+                    reference_page.evaluate("() => { const canvas = document.querySelector('.design-canvas'); if (canvas) canvas.scrollTop = 0; }")
+                    frame_path = browser_evidence / f'{prefix}@{width}.png'
+                    reference_page.screenshot(path=str(frame_path))
+                    report['captures'].append(str(frame_path))
+                    state = {
+                        'width': width,
+                        'declaredReferenceWidth': reference_page.evaluate("() => { const select = document.getElementById('design-width'); return select ? select.value : null; }"),
+                        'frameCapture': str(frame_path),
+                    }
+                    if details:
+                        reference_page.evaluate("() => { const canvas = document.querySelector('.design-canvas'); if (canvas) { const target = canvas.querySelector('details'); if (target) target.scrollIntoView({ block: 'start' }); } }")
+                        details_path = browser_evidence / f'{prefix}-details@{width}.png'
+                        reference_page.screenshot(path=str(details_path))
+                        report['captures'].append(str(details_path))
+                        state['detailsCapture'] = str(details_path)
+                    state['geometry'] = reference_geometry(reference_page)
+                    reference_state.append(state)
+                reference_page.close()
+                report['reference'] = {'html': str(reference_html), 'url': reference_url, 'captures': reference_state}
+
+            if case == 'unproduced':
+                # Cold link enters the real destination; the planned design is
+                # selected through its row, never a preselected store.
+                page.goto(base + '/#/designs?ws=fixture', wait_until='domcontentloaded')
+                expect(page.locator('.list-caption')).to_have_text('5 design packages')
+                page.locator('.list-pane .record').filter(has_text='Planned fixture').click()
+                expect(page.locator('#design-detail-heading')).to_have_text('Planned fixture')
+                page.wait_for_function("() => location.hash.includes('path=screens%2F01-ready.html')")
+                assert params().get('ws') == ['fixture'] and params().get('id') == ['planned'], page.url
+                assert params().get('path') == ['screens/01-ready.html'] and params().get('tab') == ['1280'], page.url
+                expect(frame().locator('h1')).to_have_text('Produced ready screen')
+                planned_request = f"{base}{workspace_view}Zml4dHVyZQ/designs/planned/screens/02-kickoff.html"
+                assert not any(planned_request in item['url'] for item in requests), 'planned file was requested before selection'
+                heads_before = head_count()
+
+                # Next enters the planned step: identity is preserved, the exact
+                # job and planned details render, and the missing HTML is never
+                # probed or framed.
+                page.get_by_role('button', name='Next screen', exact=True).click()
+                page.wait_for_function("() => location.hash.includes('path=screens%2F02-kickoff.html')")
+                assert params().get('ws') == ['fixture'] and params().get('id') == ['planned'], page.url
+                assert params().get('path') == ['screens/02-kickoff.html'] and params().get('tab') == ['1280'], page.url
+                expect(page.locator('#design-detail-heading')).to_have_text('Planned fixture')
+                expect(page.get_by_text('Screen 2 · Kickoff planned', exact=True)).to_be_visible()
+                canvas = page.locator('.design-canvas')
+                empty = canvas.locator('.empty')
+                expect(empty).to_contain_text('Screen 2 has not been produced')
+                expect(empty).to_contain_text('Kickoff planned · Choose where a new fixture discussion should run.')
+                expect(empty).to_contain_text('The planned screen is recorded; its HTML file does not exist yet.')
+                open_screen = page.get_by_role('button', name='Open screen', exact=True)
+                expect(open_screen).to_be_disabled()
+                assert 'Screen 2 has not been produced' in (open_screen.get_attribute('title') or ''), open_screen.get_attribute('title')
+                assert page.locator('#design-frame').count() == 0, 'planned step mounted the frame'
+                assert not any(planned_request in item['url'] for item in requests), 'planned step was probed or framed'
+                assert head_count() == heads_before, 'planned step added a produced-screen HEAD'
+                planned_details = canvas.locator('details')
+                expect(planned_details.locator('summary')).to_have_text('Planned screen details')
+                if not planned_details.evaluate('element => element.open'):
+                    planned_details.locator('summary').click()
+                expect(planned_details).to_contain_text('Produced: No')
+                expect(planned_details).to_contain_text('Captured: 1280px')
+                assert '1600px' not in planned_details.inner_text(), planned_details.inner_text()
+                passed('Next enters a planned step: ws/id/path/tab preserved, exact job, disabled Open screen, Produced: No with truthful captures, no HEAD or iframe request')
+
+                # Previous returns to the produced step; Next comes back.
+                page.get_by_role('button', name='Previous screen', exact=True).click()
+                page.wait_for_function("() => location.hash.includes('path=screens%2F01-ready.html')")
+                expect(frame().locator('h1')).to_have_text('Produced ready screen')
+                page.get_by_role('button', name='Next screen', exact=True).click()
+                page.wait_for_function("() => location.hash.includes('path=screens%2F02-kickoff.html')")
+                expect(canvas.locator('.empty')).to_contain_text('Screen 2 has not been produced')
+
+                # Open brief follows the real Files route and reads real bytes.
+                brief_link = canvas.get_by_role('link', name='Open brief', exact=True)
+                expect(brief_link).to_have_attribute('href', '#/files?ws=fixture&source=workspace&path=designs%2Fplanned%2Fbrief.md')
+                brief_link.click()
+                expect(page).to_have_url(re.compile(r'#/files\?ws=fixture&source=workspace&path=designs%2Fplanned%2Fbrief\.md'))
+                expect(page.locator('#file-content')).to_contain_text('Planned fixture brief')
+                brief_reader = context.request.get(base + '/api/workspace-file?id=fixture&file=designs%2Fplanned%2Fbrief.md')
+                assert brief_reader.ok and 'Planned fixture brief' in brief_reader.text(), brief_reader.status
+                passed('Open brief reaches the real Files route and the fixture brief bytes read through the real workspace-file reader')
+
+                # Missing and unsafe briefs explain the absence without a link.
+                for slug, title, path, job in (
+                    ('missing-brief', 'Missing brief fixture', 'screens/01-no-brief.html', 'Explain the missing brief state'),
+                    ('unsafe-brief', 'Unsafe brief fixture', 'screens/01-unsafe-brief.html', 'Explain the unsafe brief state'),
+                ):
+                    page.goto(f'{base}/#/designs?ws=fixture&id={slug}&path={path.replace("/", "%2F")}&tab=1280', wait_until='domcontentloaded')
+                    expect(page.locator('#design-detail-heading')).to_have_text(title)
+                    empty = page.locator('.design-canvas .empty')
+                    expect(empty).to_contain_text('Screen 1 has not been produced')
+                    expect(empty).to_contain_text(job)
+                    expect(empty).to_contain_text('No safe relative brief is recorded')
+                    assert empty.get_by_role('link', name='Open brief').count() == 0, slug
+                    assert 'Open brief' not in empty.inner_text(), slug
+                passed('missing and unsafe briefs render explanatory text with no invented file link')
+
+                # Width stays available and focused on the planned step; no
+                # generation control is offered.
+                page.goto(base + '/#/designs?ws=fixture&id=planned&path=screens%2F02-kickoff.html&tab=1280', wait_until='domcontentloaded')
+                expect(page.locator('.design-canvas .empty')).to_contain_text('Screen 2 has not been produced')
+                page.locator('#design-width').focus()
+                page.select_option('#design-width', '1600')
+                assert params().get('path') == ['screens/02-kickoff.html'] and params().get('tab') == ['1600'], page.url
+                expect(page.locator('.design-canvas .empty')).to_contain_text('Screen 2 has not been produced')
+                active = active_control()
+                assert active and active['id'] == 'design-width', active
+                generation = re.compile('generate|produce|build|create html', re.I)
+                assert page.locator('.design-canvas').get_by_role('button', name=generation).count() == 0
+                assert page.locator('.design-canvas').get_by_role('link', name=generation).count() == 0
+                passed('Width stays available and focused on the planned step, and no generation control is offered')
+
+                # Captures: planned-step production at both declared widths.
+                page.goto(base + '/#/designs?ws=fixture&id=planned&path=screens%2F02-kickoff.html&tab=1280', wait_until='domcontentloaded')
+                page.reload(wait_until='domcontentloaded')
+                expect(page.locator('#design-detail-heading')).to_have_text('Planned fixture')
+                expect(page.locator('.design-canvas .empty')).to_contain_text('Screen 2 has not been produced')
+                planned_details = page.locator('.design-canvas details')
+                if not planned_details.evaluate('element => element.open'):
+                    planned_details.locator('summary').click()
+                report['captureState'] = []
+                for width in (1280, 1600):
+                    page.locator('#design-width').focus()
+                    page.select_option('#design-width', str(width))
+                    page.set_viewport_size({'width': width, 'height': 900})
+                    page.wait_for_timeout(150)
+                    page.evaluate("() => { const canvas = document.querySelector('.design-canvas'); if (canvas) canvas.scrollTop = 0; }")
+                    frame_path = browser_evidence / f'designs-unproduced@{width}.png'
+                    page.screenshot(path=str(frame_path))
+                    report['captures'].append(str(frame_path))
+                    report['captureState'].append({
+                        'width': width,
+                        'frameCapture': str(frame_path),
+                        'details': planned_details.inner_text(),
+                        'canvas': page.evaluate("""() => {
+                          const canvas = document.querySelector('.design-canvas');
+                          return canvas ? { scrollTop: canvas.scrollTop, clientHeight: canvas.clientHeight, scrollHeight: canvas.scrollHeight } : null;
+                        }"""),
+                    })
+                if reference_html:
+                    capture_reference('reference-26', details=False, wait_for_frame=False)
+                report['intentionalWaits'] = [
+                    'production and reference captures at both widths for the planned-screen state',
+                ]
+                passed('captured planned-step production at 1280 and 1600' + (' and the reference at matching widths' if reference_html else ''))
+
+                assert not report['pageErrors'], report['pageErrors']
+                assert not report['consoleErrors'], report['consoleErrors']
+                unexpected = [failure for failure in report['requestFailures'] if 'ERR_ABORTED' not in failure['failure']]
+                assert not unexpected, unexpected
+                mutations = [r for r in requests if r['method'] not in ('GET', 'HEAD')]
+                assert not mutations, f'mutation requests observed: {mutations}'
+                report['status'] = 'passed'
+                raise CaseComplete()
 
             # Migrated coverage 1/2: Workspaces Designs enters the real adapter/API.
             page.goto(base + '/#/workspaces?ws=fixture', wait_until='domcontentloaded')
@@ -576,57 +840,7 @@ try:
                     }"""),
                 })
             if reference_html:
-                assert reference_html.is_file(), reference_html
-                reference_root = reference_html.parent.parent
-                assert (reference_root / 'vendor' / 'tailwind.js').is_file(), reference_root
-                reference_server = ThreadingHTTPServer(
-                    ('127.0.0.1', 0), partial(QuietRequestHandler, directory=str(reference_root)))
-                threading.Thread(target=reference_server.serve_forever, daemon=True).start()
-                reference_page = context.new_page()
-                reference_page.on('pageerror', lambda error: report['pageErrors'].append(f'reference: {error}'))
-                reference_url = (f'http://127.0.0.1:{reference_server.server_address[1]}/'
-                                 f'{reference_html.relative_to(reference_root).as_posix()}')
-                reference_page.goto(reference_url, wait_until='load')
-                reference_page.wait_for_timeout(300)
-                reference_page.evaluate("() => { const details = document.querySelector('.design-canvas details'); if (details) details.open = true; }")
-                reference_state = []
-                for width in (1280, 1600):
-                    reference_page.set_viewport_size({'width': width, 'height': 900})
-                    reference_page.wait_for_timeout(150)
-                    reference_page.select_option('#design-width', f'{width}px')
-                    reference_page.wait_for_function("""(declared) => {
-                      const frameElement = document.getElementById('design-frame');
-                      if (!frameElement) return false;
-                      return parseFloat(getComputedStyle(frameElement).width) === declared;
-                    }""", arg=width)
-                    reference_page.evaluate("() => { const canvas = document.querySelector('.design-canvas'); if (canvas) canvas.scrollTop = 0; }")
-                    frame_path = browser_evidence / f'reference-8@{width}.png'
-                    reference_page.screenshot(path=str(frame_path))
-                    report['captures'].append(str(frame_path))
-                    reference_page.evaluate("() => { const canvas = document.querySelector('.design-canvas'); if (canvas) { const target = canvas.querySelector('details'); if (target) target.scrollIntoView({ block: 'start' }); } }")
-                    details_path = browser_evidence / f'reference-8-details@{width}.png'
-                    reference_page.screenshot(path=str(details_path))
-                    report['captures'].append(str(details_path))
-                    reference_state.append({
-                        'width': width,
-                        'declaredReferenceWidth': reference_page.evaluate("() => { const select = document.getElementById('design-width'); return select ? select.value : null; }"),
-                        'frameCapture': str(frame_path),
-                        'detailsCapture': str(details_path),
-                        'geometry': reference_page.evaluate("""() => {
-                          const wrap = document.getElementById('design-frame-wrap');
-                          const frameElement = document.getElementById('design-frame');
-                          const canvas = document.querySelector('.design-canvas');
-                          if (!wrap || !frameElement) return null;
-                          const style = getComputedStyle(frameElement);
-                          const matrix = new DOMMatrixReadOnly(style.transform);
-                          return { wrapWidth: wrap.clientWidth, frameWidth: parseFloat(style.width),
-                                   frameHeight: parseFloat(style.height), scale: matrix.a,
-                                   wrapHeight: wrap.getBoundingClientRect().height,
-                                   scrollTop: canvas ? canvas.scrollTop : null };
-                        }"""),
-                    })
-                reference_page.close()
-                report['reference'] = {'html': str(reference_html), 'url': reference_url, 'captures': reference_state}
+                capture_reference('reference-8')
             report['intentionalWaits'] = [
                 'one real five-second Designs index poll boundary',
                 'production and reference captures at both widths with separate frame and scrolled-disclosure states',
@@ -652,6 +866,8 @@ try:
                     cleanup['browserClosed'] = True
                 except Exception as error:
                     cleanup['errors'].append(f'browser close: {error}')
+except CaseComplete:
+    pass
 except BaseException:
     report['error'] = traceback.format_exc()
     raise
@@ -684,7 +900,7 @@ finally:
     report['startupSeconds'] = startup_seconds
     report['checkSeconds'] = None if check_started is None else round(finished - check_started, 3)
     report['cleanup'] = cleanup
-    target = evidence / 'designs-browser-journey.json'
+    target = evidence / f'designs-browser-{case}.json'
     temporary = target.with_suffix('.json.tmp')
     temporary.write_text(json.dumps(report, indent=2) + '\n')
     os.replace(temporary, target)
