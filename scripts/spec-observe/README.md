@@ -108,7 +108,10 @@ text render Markdown emphasis, code, headings, lists and HTTP(S) links. Raw HTML
 is displayed as text; other link schemes cannot execute. Existing public-hint
 redaction and length limits still apply before display.
 
-**Mark complete** in a current package's detail asks for confirmation, then saves
+The **Specs** destination pairs the spec list with a detail split into **Overview**,
+**Activity** and **Files** tabs. The Overview action bar owns **Mark complete** and
+its confirmation dialog, the Open spec, agent, epic and package Files actions, and
+dev-server controls for configured workspaces. **Mark complete** saves
 `sentinel-completion.json` in the package folder, bound to its `ws/slug` reference. The package moves to Recently
 completed with an explicit **Marked complete** label. This records an operator's
 lifecycle decision; workers continue and step evidence, checkpoints, and PR status
@@ -292,7 +295,9 @@ checkpoint acceptance or readiness artifacts. Cold status and the standalone
 viewer never run merge commands. Package metadata changes only through the
 explicit **Mark complete** action described above.
 
-Package details list every file type in pages of up to 500 entries, within a
+The Specs **Files** tab hands the selected package off to the shared Files
+destination by address; the Specs detail itself has no inline viewer. Files list
+every file type in pages of up to 500 entries, within a
 10,000-entry/12-level enumeration limit. **Load more files** reaches later pages;
 truncation and read errors are visible. Reads accept regular files up to 8 MiB.
 Links, traversal, unpublished packages and worktree copies are rejected. Images,
@@ -303,8 +308,9 @@ sandboxed iframe with package-relative scripts/styles/images, no external resour
 forms or parent-page access. The selected viewer stays mounted across refreshes.
 Missing tours are reported, and offline imports have no filesystem access.
 
-Details show time since the first recorded dispatch and a duration for each step
-attempt, including retries, waits and verification. Timing reuses the bounded
+The Specs **Activity** tab shows time since the first recorded dispatch and a
+duration for each step attempt, including retries, waits and verification, beside
+the observed evidence, coverage reasons, omissions and source paths. Timing reuses the bounded
 package receipts, including attempts omitted by the displayed-assignment cap.
 It does not include work before the first recorded dispatch. Missing timestamps
 stay unknown; terminal worker state does not establish spec completion. A complete
@@ -799,5 +805,5 @@ case in `scripts/workspaces/launch.integration.test.mjs`, and
 ## Package dev servers
 
 Configured workspaces expose Start dev server, Stop dev server, and a Tailscale link
-in live package details. See [Package dev server previews](../../docs/dev-server-previews.md)
+in the live Specs Overview action bar. See [Package dev server previews](../../docs/dev-server-previews.md)
 for host setup, the Compose contract, private runtime state, and cleanup behavior.
