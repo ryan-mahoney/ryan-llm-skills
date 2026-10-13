@@ -923,8 +923,6 @@ function containedPath(root, candidate, label) {
   return target;
 }
 
-const sha256File = path => createHash('sha256').update(readFileSync(path)).digest('hex');
-
 const obligationRevision = (workflowId, key) => createHash('sha256')
   .update(`${workflowId}\u0000${String(key)}`).digest('hex').slice(0, 32);
 
@@ -977,13 +975,14 @@ function validateInboxItems(items) {
 }
 
 // Validate prepared artifacts against real canonical files: package-contained,
-// regular non-symlink, exact sha256, bounded per file and total. Refuses without
+// readable regular non-symlink, bounded per file and total. Legacy sha256 fields
+// are ignored: prepared cards remain editable. Refuses without
 // claiming reconciliation.
 function validateArtifacts(packagePath, artifacts) {
   let total = 0;
   return artifacts.map((artifact, index) => {
     if (!isPlainObject(artifact)) fail(`obligation.artifacts[${index}] must be an object`);
-    validateHash(artifact.sha256, `obligation.artifacts[${index}].sha256`);
+    if (typeof artifact.path !== 'string' || !artifact.path) fail(`obligation.artifacts[${index}].path must be a non-empty string`);
     const file = containedPath(packagePath, artifact.path, `obligation.artifacts[${index}].path`);
     let info;
     try { info = statSync(file); } catch (error) { fail(`obligation.artifacts[${index}].path is unreadable: ${artifact.path} (${error?.code ?? 'error'})`, 'checkpoint-unreadable'); }
@@ -991,9 +990,8 @@ function validateArtifacts(packagePath, artifacts) {
     if (info.size > ARTIFACT_BYTES) fail(`obligation.artifacts[${index}] exceeds ${ARTIFACT_BYTES} bytes (${info.size}); use a compact ledger excerpt or source receipt`, 'checkpoint-oversize');
     total += info.size;
     if (total > ARTIFACT_TOTAL_BYTES) fail(`obligation.artifacts total exceeds ${ARTIFACT_TOTAL_BYTES} bytes`, 'checkpoint-oversize');
-    const actual = sha256File(file);
-    if (actual !== artifact.sha256) fail(`obligation.artifacts[${index}] sha256 mismatch for ${artifact.path}: expected ${artifact.sha256}, got ${actual}`, 'checkpoint-hash-mismatch');
-    return { path: artifact.path, sha256: artifact.sha256 };
+    try { readFileSync(file); } catch (error) { fail(`obligation.artifacts[${index}].path is unreadable: ${artifact.path} (${error?.code ?? 'error'})`, 'checkpoint-unreadable'); }
+    return { path: artifact.path };
   });
 }
 
@@ -1166,7 +1164,7 @@ export function recordCheckpoint({
   const preparedObligation = validateObligation(obligation);
   const preparedWorkers = validateWorkers(workers);
   const preparedItems = validateInboxItems(inbox?.items ?? []);
-  // Artifact/hash validation happens before any owner/revision mutation so a
+  // Artifact validation happens before any owner/revision mutation so a
   // refused checkpoint never touches the stored record.
   const preparedArtifacts = validateArtifacts(packagePath, preparedObligation.artifacts);
 
@@ -1724,7 +1722,7 @@ export function reconcileRuntimeReturn({
   const reconciled = completed ? 'ready' : (returnState === 'aborted' || returnState === 'error' || returnState === 'failed' ? 'blocked' : 'unknown');
   const state = RECONCILE_PRESERVED_STATES.has(existing.state) ? existing.state : reconciled;
   const key = `reconcile:${assignmentId}`;
-  const summary = `Reconcile owner return for ${assignmentId}: verify review/fix duties against the returned work before any acceptance.`;
+  const summary = `Verify review/fix duties for ${assignmentId}`.slice(0, SUMMARY_MAX);
   const obRevision = obligationRevision(workflowId, key);
 
   // Mark the matching declared worker terminal; preserve other declared workers.
@@ -2517,10 +2515,10 @@ function buildContinuationMessage(checkpoint, sourceDigest) {
 }
 
 // Stable digest over the decisive rechecked checkpoint revision, obligation
-// revision, input revision, artifact path/hash references and freshly read inbox
+// revision, input revision, artifact path references and freshly read inbox
 // source identity/hash references.
 function settleSourceRevision(checkpoint, inboxGuard) {
-  const artifacts = (checkpoint.obligation?.artifacts ?? []).map(artifact => `${artifact.path}\u0000${artifact.sha256}`).sort();
+  const artifacts = (checkpoint.obligation?.artifacts ?? []).map(artifact => artifact.path).sort();
   const inboxSources = (inboxGuard?.sources ?? []).map(source => `${source.path ?? source.id ?? ''}\u0000${source.sha256 ?? ''}`).sort();
   return createHash('sha256').update(JSON.stringify([checkpoint.revision, checkpoint.obligation_revision,
     checkpoint.input_revision, artifacts, inboxSources])).digest('hex');
@@ -2660,8 +2658,7 @@ export function buildDiagnosisPacket({ incident, record = null, checkpoint = nul
   add(base, 'checkpoint.observed_at', 'wait', checkpoint?.observed_at);
 
   const artifactList = Array.isArray(checkpoint?.obligation?.artifacts) ? checkpoint.obligation.artifacts : [];
-  const artifactsOmitted = artifactList.length > 16;
-  artifactList.slice(0, 16).forEach((entry, index) => add(artifacts, `artifact.${index}.sha256`, 'hash', entry?.sha256));
+  add(artifacts, 'checkpoint.artifacts_count', 'count', artifactList.length);
 
   const workerList = Array.isArray(checkpoint?.workers) ? checkpoint.workers : [];
   const workersOmitted = workerList.length > 8;
@@ -2703,7 +2700,6 @@ export function buildDiagnosisPacket({ incident, record = null, checkpoint = nul
   // of byte/fact overflow, so a packet below the byte and fact limits can never
   // present silently truncated evidence as complete.
   if (workersOmitted) { omitted.push('workers'); coverageReasons.push('workers-omitted'); }
-  if (artifactsOmitted) { omitted.push('artifact-hashes'); coverageReasons.push('artifact-hashes-omitted'); }
   if (reasonsOmitted) { omitted.push('reason-categories'); coverageReasons.push('reason-categories-omitted'); }
   if (itemsOmitted) { omitted.push('inbox-items'); coverageReasons.push('inbox-items-omitted'); }
   const groups = { base, artifacts, workers, inbox, reasons, items, policy: policyFacts };
@@ -2727,9 +2723,6 @@ export function buildDiagnosisPacket({ incident, record = null, checkpoint = nul
   }
   if (over(result) && groups.items.length > 2) {
     groups.items = groups.items.slice(0, 2); omitted.push('inbox-items'); coverageReasons.push('inbox-items-omitted'); result = assemble();
-  }
-  if (over(result) && groups.artifacts.length > 1) {
-    groups.artifacts = groups.artifacts.slice(0, 1); omitted.push('artifact-hashes'); coverageReasons.push('artifact-hashes-omitted'); result = assemble();
   }
   while (over(result)) {
     const group = ['policy', 'reasons', 'items', 'workers', 'artifacts'].find(key => groups[key].length);

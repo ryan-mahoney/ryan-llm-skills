@@ -9,6 +9,7 @@ const read = file => JSON.parse(readFileSync(file, 'utf8'));
 const now = () => new Date().toISOString();
 const runFile = (r, suffix) => join(r.package, 'runtime/runs', `${r.id}-${suffix}.json`);
 export const outcomes = ['as-specified', 'adapted', 'checkpoint', 'no-artifact', 'decision-required', 'needs-spec-correction'];
+export const checkpointReasons = ['blocker', 'deadline', 'decision', 'owner-transfer', 'interruption'];
 const completeOutcomes = new Set(['as-specified', 'adapted', 'no-artifact']);
 function safePath(root, file) {
   const target = resolve(root, file), rel = relative(root, target);
@@ -127,6 +128,10 @@ export function submitCompletion(r, input) {
   const head = revision(r), gates = gatesFor(r), receipts = verificationReceipts(r);
   if (!Number.isInteger(input.fix_attempts ?? 0) || (input.fix_attempts ?? 0) < 0) throw new Error('fix_attempts must be a nonnegative integer');
   const decisions = strings(input.decisions, 'decisions'), gaps = strings(input.gaps, 'gaps'), findings = strings(input.findings, 'findings');
+  const remainingWork = input.remaining_work === undefined ? undefined : strings(input.remaining_work, 'remaining_work');
+  if (input.checkpoint_reason !== undefined && !checkpointReasons.includes(input.checkpoint_reason)) throw new Error('Unknown checkpoint_reason');
+  if (completeOutcomes.has(input.outcome) && (input.checkpoint_reason !== undefined || remainingWork?.length)) throw new Error('Completed outcomes cannot carry checkpoint reason or remaining work');
+  if (input.checkpoint_reason !== undefined && !remainingWork?.length) throw new Error('checkpoint_reason requires concrete remaining_work');
   if (completeOutcomes.has(input.outcome) && gaps.length) throw new Error('Unresolved gaps require a checkpoint or decision outcome');
   if (!Array.isArray(input.introduced) || input.introduced.some(v => !v || ['symbol', 'path', 'purpose'].some(k => typeof v[k] !== 'string' || !v[k].trim()))) throw new Error('introduced must list symbol/path/purpose or be []');
   for (const item of input.introduced) if (!existsSync(safePath(r.checkout, item.path))) throw new Error(`Introduced path unavailable: ${item.path}`);
@@ -167,6 +172,8 @@ export function submitCompletion(r, input) {
     learning: { version: 2, kind: 'step', step: stepNumber(r), outcome: input.outcome,
       commit: head.commit, verification: { commit: head.commit, strategy: input.strategy,
         fix_attempts: input.fix_attempts ?? 0, commands }, evidence, introduced: input.introduced } };
+  if (input.checkpoint_reason !== undefined) submission.learning.checkpoint_reason = input.checkpoint_reason;
+  if (remainingWork !== undefined) submission.learning.remaining_work = remainingWork;
   if (completeOutcomes.has(input.outcome) && head.dirty) throw new Error('Commit tracked implementation changes before complete handoff; use checkpoint for unfinished work');
   // Save the intent first: an interrupted materialization is visible and repeatable.
   atomic(safePath(r.package, runFile(r, 'completion')), submission);
@@ -182,7 +189,12 @@ export function completionStatus(r, { checkHead = false } = {}) {
     if (submission.invalidated_at) throw new Error('work continued after submission; submit the updated handoff');
     if (submission.run_id !== r.id || readFileSync(safePath(r.package, learningPath(r)), 'utf8') !== render(submission)) throw new Error('canonical learning missing, changed, or belongs to another attempt');
     if (checkHead && (revision(r).commit !== submission.learning.commit || completeOutcomes.has(submission.learning.outcome) && revision(r).dirty)) throw new Error('HEAD changed after submission; update the handoff');
+    const remainingWork = submission.learning.remaining_work ?? (completeOutcomes.has(submission.learning.outcome) ? [] : [...(submission.gaps || []),
+      ...(submission.learning.evidence || []).filter(e => e.phase === 'merge' && e.status !== 'passed')
+        .map(e => `${e.id}: ${e.status}; ${e.proof_boundary}`)]);
     return { status: 'recorded', outcome: submission.learning.outcome, learning_path: learningPath(r), commit: submission.learning.commit,
+      checkpoint_reason: submission.learning.checkpoint_reason ?? null, remaining_work: remainingWork,
+      next_action: remainingWork[0] ?? null,
       acceptance: 'independent review/fix and evidence applicability remain coordinator obligations', missing: [] };
   } catch (error) { return { status: 'handoff_incomplete', missing: [error.message] }; }
 }
@@ -220,7 +232,8 @@ export function refreshProgress(packagePath) {
 }
 export function reminder(r, role = 'owner') {
   const status = completionStatus(r);
-  return `Spec runtime: ${basename(r.step)}; role=${role}; execution=${r.state}.\nCanonical package: ${r.package}\nHandoff: ${status.status}${status.missing.length ? '; missing: ' + status.missing.join('; ') : ''}.\n${role === 'owner' ? 'Before ending this assignment, submit spec_complete after the editor/verification returns. Use recorded verification receipts; do not rerun checks for paperwork. A recorded handoff is not independent review acceptance.' : role === 'editor' ? 'Apply the assigned edits; return to the owner. Owner submits completion and runs verification.' : 'Consume runtime/progress.json and canonical review/fix records. Missing handoffs remain obligations; worker exit is not acceptance. No polling or repeated tests.'}`;
+  const next = status.next_action ? `\nRemaining action: ${status.next_action}. Checkpoint reason: ${status.checkpoint_reason ?? 'not recorded (legacy handoff)'}. Preserve the recorded evidence; the coordinator routes this action before another completion submission.` : '';
+  return `Spec runtime: ${basename(r.step)}; role=${role}; execution=${r.state}.\nCanonical package: ${r.package}\nHandoff: ${status.status}${status.missing.length ? '; missing: ' + status.missing.join('; ') : ''}.${next}\n${role === 'owner' ? status.next_action ? 'Resolve the concrete remaining action within assigned authority, then update spec_complete. A recorded handoff is not independent review acceptance.' : 'Before ending this assignment, submit spec_complete after the editor/verification returns. Use recorded verification receipts; do not rerun checks for paperwork. A recorded handoff is not independent review acceptance.' : role === 'editor' ? 'Apply the assigned edits; return to the owner. Owner submits completion and runs verification.' : 'Consume runtime/progress.json and canonical review/fix records. Missing handoffs remain obligations; worker exit is not acceptance. No polling or repeated tests.'}`;
 }
 // Watch artifact directories rather than every transcript/tool event. Reconciliation
 // repairs missed/coalesced fs.watch notifications without any model turn.

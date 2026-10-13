@@ -125,6 +125,8 @@ export default function (pi: any) {
         parameters: Type.Object({ outcome: Type.Union(['as-specified', 'adapted', 'checkpoint', 'no-artifact', 'decision-required', 'needs-spec-correction'].map(v => Type.Literal(v))),
           strategy: Type.Union([Type.Literal('test-first'), Type.Literal('implementation-first')], { description: 'Actual execution order, not the planned card label. Test-first requires an observed behavioral failure before implementation; a later compile/setup failure does not establish it.' }),
           fix_attempts: Type.Optional(Type.Number({ minimum: 0 })),
+          checkpoint_reason: Type.Optional(Type.Union(['blocker', 'deadline', 'decision', 'owner-transfer', 'interruption'].map(v => Type.Literal(v)), { description: 'Concrete reason for returning a partial checkpoint; ready unattempted gates are work to finish in this assignment.' })),
+          remaining_work: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { description: 'Exact outstanding actions for a continuation; do not ask it merely to repeat the handoff.' })),
           decisions: Type.Array(Type.String()), gaps: Type.Array(Type.String()), findings: Type.Array(Type.String()),
           introduced: Type.Array(Type.Object({ symbol: Type.String(), path: Type.String(), purpose: Type.String() })),
           evidence: Type.Array(Type.Object({ id: Type.String(), status: Type.Union(['passed', 'failed', 'blocked', 'pending'].map(v => Type.Literal(v))), proof_boundary: Type.String(),
@@ -294,7 +296,7 @@ export default function (pi: any) {
         stage: Type.String({ minLength: 1 }),
         step: optional('Optional prepared step identity'),
         summary: Type.String({ minLength: 1, maxLength: 160 }),
-        artifacts: Type.Array(Type.Object({ path: Type.String({ minLength: 1, description: 'Package-contained artifact path' }), sha256: Type.String({ minLength: 64, maxLength: 64, description: 'Exact sha256 of the prepared artifact' }) })),
+        artifacts: Type.Array(Type.Object({ path: Type.String({ minLength: 1, description: 'Package-contained readable artifact path; intended edits do not invalidate the checkpoint' }), sha256: Type.Optional(Type.String({ description: 'Legacy field, ignored; do not compute artifact hashes' })) })),
       }),
       workers: Type.Optional(Type.Array(Type.Object({ id: Type.String({ minLength: 1, maxLength: 128 }), kind: Type.String({ minLength: 1 }),
         state: Type.Union([Type.Literal('ready'), Type.Literal('working'), Type.Literal('waiting-external'), Type.Literal('decision-required'), Type.Literal('blocked'), Type.Literal('user-held'), Type.Literal('complete'), Type.Literal('failed'), Type.Literal('aborted'), Type.Literal('cancelled'), Type.Literal('unknown')]) }))),
@@ -666,10 +668,11 @@ export default function (pi: any) {
       base: optional('Start ref for a new branch, default HEAD'),
       assignment_id: optional('Stable ID for this step attempt. Omit to use step path. Use a new ID only for an intentional subsequent attempt.'), run_id: optional('Existing run ID, otherwise latest'), workflow_id: optional('Registered workflow ID from a prior spec_sentinel_checkpoint; binds this real dispatch to its checkpoint'),
       attempt_kind: Type.Optional(Type.Union(['implementation', 'verification-continuation', 'implementation-repair', 'review-repair', 'launch-retry'].map(value => Type.Literal(value)), { description: 'Explicit reason for this assignment; observation only, grants no retry authority.' })),
-      session_scope: Type.Optional(Type.Union([Type.Literal('package'), Type.Literal('step')], { description: 'Default package retains existing sessions. Opt-in step uses separate retained sessions per canonical step; retries within that step reuse them. Supply a concise dependency handoff when opting in.' })),
+      session_scope: Type.Optional(Type.Union([Type.Literal('package'), Type.Literal('step')], { description: 'New assignments default to step: separate retained sessions per canonical step, reused for its retries. Explicit package preserves cross-step reuse. Existing attempt receipts retain their recorded scope.' })),
       instructions: optional('Scoped task direction, acceptance constraints and publication authority'), timeout_ms: Type.Optional(Type.Number({ minimum: 1000, maximum: 86400000, description: 'Whole assignment deadline, default 7200000 (2 hours)' })), child_extensions: Type.Optional(Type.Array(Type.String({ description: 'Explicit trusted pi-intercom and provider/compat extension paths; discovery is disabled in managed children' }))) }),
     async execute(_id: string, args: any, _signal: AbortSignal, _update: any, ctx: any) {
       return serializeWorkflow(async () => {
+      let receipt: any = null;
       try {
         const packagePath = await packageDirOf(args.package); progress.attach(packagePath);
         if (args.action === 'status') { const record = loadRun(packagePath, args.run_id); monitor.attach(record, ctx); return result(summary(record)); }
@@ -707,7 +710,7 @@ export default function (pi: any) {
         const configFile = join(homedir(), '.pi/agent/spec-runtime.json');
         const config = existsSync(configFile) ? JSON.parse(readFileSync(configFile, 'utf8')) : {};
         const input = { ...args, package: packagePath, scout_model: args.scout_model ?? config.scout_model ?? SCOUT_MODEL, child_extensions: args.child_extensions ?? config.child_extensions ?? [] };
-        const receipt = args.action === 'startup' ? await runtime.startup(input, ctx.sessionManager.getSessionFile()) : await runtime.start(input, ctx.sessionManager.getSessionFile());
+        receipt = args.action === 'startup' ? await runtime.startup(input, ctx.sessionManager.getSessionFile()) : await runtime.start(input, ctx.sessionManager.getSessionFile());
         if (receipt.run_id) monitor.attach(loadRun(packagePath, receipt.run_id), ctx);
         if (receipt.run_id && !ownPackages.includes(packagePath)) ownPackages.push(packagePath);
         // The actual receipt binds its run/checkout to the workflow validated above
@@ -721,10 +724,10 @@ export default function (pi: any) {
           const coordinator_session = coordinatorIdentity(ctx);
           const existing: any = readCheckpointRecord(packagePath, workflowId);
           if (!existing) {
-            return result({ error: `workflow ${workflowId} has no registered checkpoint; spec_dispatch never mints workflow ownership`, next: 'register the workflow with spec_sentinel_checkpoint first' }, true);
+            throw new Error(`workflow ${workflowId} lost its registered checkpoint after dispatch; reconcile the existing run`);
           }
           if (existing.coordinator_session !== coordinator_session) {
-            return result({ error: `workflow ${workflowId} is owned by another coordinator session; refusing an unowned mapping`, next: 'do not overwrite workflow ownership' }, true);
+            throw new Error(`workflow ${workflowId} changed coordinator ownership after dispatch; do not overwrite it`);
           }
           // A defaulted runtime assignment key is the absolute prepared card
           // path, which cannot be a checkpoint worker identity. The declared
@@ -732,6 +735,13 @@ export default function (pi: any) {
           // the runtime assignment key stays in the receipt untouched.
           const assignmentId = args.assignment_id ?? receipt.run_id;
           const boundCheckoutValue = receipt.checkout ?? existing.checkout ?? null;
+          // Retain the real run identity before checkpoint I/O: a failed update
+          // must neither hide a launched worker nor lose its terminal mapping.
+          const binding = { package: packagePath, run_id: receipt.run_id, workflow_id: workflowId,
+            assignment_id: assignmentId, checkout: boundCheckoutValue, coordinator_session };
+          dispatchBindings.set(`${packagePath}\u0000${receipt.run_id}`, binding);
+          dispatchBindings.set(workflowId, binding);
+          receipt.workflow_id = workflowId;
           const alreadyBound = existing.checkout === boundCheckoutValue
             && (existing.workers ?? []).some((worker: any) => worker.id === assignmentId
               && ['working', 'complete', 'failed', 'cancelled'].includes(worker.state));
@@ -755,15 +765,14 @@ export default function (pi: any) {
               workers, coordinator_session, checkout: boundCheckoutValue });
             revision = reconciled.revision;
           }
-          const binding = { package: packagePath, run_id: receipt.run_id, workflow_id: workflowId,
-            assignment_id: assignmentId, checkout: boundCheckoutValue, coordinator_session };
-          dispatchBindings.set(`${packagePath}\u0000${receipt.run_id}`, binding);
-          dispatchBindings.set(workflowId, binding);
-          receipt.workflow_id = workflowId;
           receipt.checkpoint_revision = revision;
         }
         return result(receipt);
-      } catch (error: any) { return result({ error: error.message, next: 'correct this specific runtime error; do not probe unrelated models or launch another writer' }, true); }
+      } catch (error: any) {
+        if (receipt?.run_id) return result({ ...receipt, bookkeeping_error: error.message,
+          next: 'The existing run is identified above; dispatch was not refused. Reconcile checkpoint bookkeeping for this run, await it if active, and never launch a replacement because of this warning.' });
+        return result({ error: error.message, next: 'correct this specific runtime error; do not probe unrelated models or launch another writer' }, true);
+      }
       });
     } });
 }

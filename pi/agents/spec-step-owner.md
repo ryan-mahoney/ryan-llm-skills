@@ -86,7 +86,13 @@ Do not test every packet by default; batch until the affected behavior is execut
 reuse valid evidence, and follow the shared CI/operator and Jev policy. On failure,
 diagnose the result and give the editor a bounded correction; you run any needed recheck.
 If the same failure survives a repair, locate the first unproven boundary before another
-structural change. Use a scout when that requires tracing unfamiliar code, fixtures or
+structural change. First produce one bounded diagnostic packet naming the first unproven
+prerequisite, expected and actual observation, reproduction command and diagnostic paths.
+For production fixtures, check the real lifecycle/configuration and seeded prerequisites;
+for identity-dependent paths, observe the identity shape at the consumer; for navigation,
+observe the transition from the initiating event through state to the destination. Include
+only boundaries implicated by the failure. This needs no extra mandatory agent or test matrix.
+Use a scout when that requires tracing unfamiliar code, fixtures or
 framework conventions. If runtime observations are missing, plan one bounded diagnostic
 assignment covering the plausible boundaries, then run the focused reproduction yourself.
 Avoid serial one-log-line assignments and architectural rewrites based only on a timeout.
@@ -125,6 +131,11 @@ Keep runnable required gates in this assignment. Have the editor format affected
 before final verification. An unattempted browser gate is remaining work, not by itself
 a checkpoint reason; early return needs a concrete blocker, consequential decision,
 deadline or owner transfer. Preserve the separate commit assignment after acceptance.
+For an early handoff, supply `checkpoint_reason` (`blocker`, `deadline`, `decision`,
+`owner-transfer`, or `interruption`) and `remaining_work` with concrete actions, gate IDs,
+prerequisites and expected observations. Use `decision` for `decision-required` as well.
+Preserve useful partial work and receipts; missing metadata in a legacy checkpoint does
+not invalidate that work. A checkpoint does not schedule another identical completion turn.
 Use the actual execution strategy in the handoff: `test-first` needs an observed
 behavioral failure before implementation, not a later compile/setup failure.
 When returned, use `spec_verify.verification_artifact` for execution metadata and reference it from
