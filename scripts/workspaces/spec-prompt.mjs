@@ -34,15 +34,23 @@ export const packagePlanningPlan=({proposal=false,critiqueRecommended=false,crit
 export const planningBriefTitle=(packageRef,plan)=>
   `Plan ${packageRef} through ${plan?.stop==='proposal'?'proposal':'preparation'}`.slice(0,200);
 
+// Human-facing stage and stop explanation shared by the epic entry and brief.
+export const planningPlanDescription=(plan)=>{
+  const stages=(plan?.stages??[]).map(skill=>planningStageLabels[skill]??skill).join(', then ');
+  const fresh=plan?.skill==='spec-architect-initial'&&(plan?.stages??[]).includes('spec-write')&&plan?.stop!=='proposal';
+  return fresh
+    ? 'Planning starts with Architecture. After architecture, inspect the resulting proposal: if critique is recommended, stop at the proposal and wait for a later launch; otherwise continue through spec-write to Prepared.'
+    : `Planning runs ${stages} and stops at ${stopLabel(plan?.stop)}.`;
+};
+
 export const planningBriefContent=(packageRef,plan)=>{
   const stopsAtProposal=plan?.stop==='proposal';
-  const isFreshArchitecture=plan?.skill==='spec-architect-initial'&&(plan?.stages??[]).includes('spec-write')&&!stopsAtProposal;
   return `/${plan?.skill??'spec-architect-initial'} Plan ${packageRef}.\n` +
     `Stages: ${stageSequence(plan?.stages??[])}.\n` +
     `Stop at ${stopLabel(plan?.stop)}. Planning only: do not implement, commit, push or open a pull request.\n` +
     `Publication authority: none. The launch service may prepare a package branch or worktree; that preparation is not implementation.\n` +
     (stopsAtProposal?`This launch ends at the proposal; critique and specification wait for a later launch.\n`:'') +
-    (isFreshArchitecture?`After architecture, inspect the resulting proposal: if critique is recommended, stop at the proposal and wait for a later launch; otherwise continue through spec-write to Prepared.\n`:'') +
+    `${planningPlanDescription(plan)}\n` +
     `Discuss any known unresolved decision before the next launch.\n\n` +
     `PACKAGE: ${packageRef}`;
 };

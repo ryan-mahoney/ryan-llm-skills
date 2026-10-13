@@ -9,9 +9,20 @@ import {
   plannedBriefTitle,
   planningBriefContent,
   planningBriefTitle,
+  planningPlanDescription,
 } from "./spec-prompt.mjs";
 
 const REF = "agent-tooling/newui-09-plan-implement-handoffs";
+
+test("planning entry description preserves resume stages and conditional architecture stop", () => {
+  assert.equal(planningPlanDescription(packagePlanningPlan({ proposal: true })),
+    "Planning runs Specification and preparation and stops at Prepared.");
+  assert.equal(planningPlanDescription(packagePlanningPlan({ proposal: true, critiqueRecommended: true })),
+    "Planning runs Critique, then Specification and preparation and stops at Prepared.");
+  assert.equal(planningPlanDescription(packagePlanningPlan({ critiqueRecommended: true })),
+    "Planning runs Architecture and stops at Proposal.");
+  assert.match(planningPlanDescription(packagePlanningPlan()), /if critique is recommended, stop at the proposal/);
+});
 
 test("fresh package selects initial architecture and stops at proposal when critique is recommended", () => {
   const plan = packagePlanningPlan({ proposal: false, critiqueRecommended: true, critique: false });

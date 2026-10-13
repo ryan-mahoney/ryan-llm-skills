@@ -5,6 +5,7 @@ import type { CatalogEntry } from '../scope';
 import { base, str, stale, time } from '../format';
 import {
   epicPlanningIncomplete, landedStatus, memberPlanning, nextToPlan, planningAssignmentFor, positivelyPrepared,
+  specReadiness,
 } from '../readiness';
 import type { PrerequisiteFact } from '../readiness';
 
@@ -142,10 +143,6 @@ export function epicMemberPrerequisites(epic: WireRecord, member: WireRecord): P
   });
 }
 
-const prerequisiteReason = (fact: PrerequisiteFact): string => fact.state === 'prepared'
-  ? `Available when ${fact.name} is merged`
-  : fact.state === 'unresolved' ? `Waiting on ${fact.name}` : `${fact.name} is not observed`;
-
 const noPackageReason = 'The package directory is missing; create the package before planning.';
 const unobservedReason = 'No observed package matches this member in this observation.';
 
@@ -163,19 +160,23 @@ export function epicMemberPlanningRow(
   const name = text(member?.name) || '';
   const workspace = text(member?.workspace) || text(epic?.workspace) || '';
   const record = epicMemberRecord(epic, member, records);
-  const owner = planningAssignmentFor(record ?? member, assignments);
   const facts = memberPlanning(member);
   const lifecycle = text(member?.status);
-  const declared = epicMemberRequires(member).names;
   const prerequisites = epicMemberPrerequisites(epic, member);
+  const readiness = specReadiness({
+    ...record, ...member, workspace,
+    package: record?.package || record?.package_ref || member.package,
+    assignment_coverage: record?.assignment_coverage ?? record?.observer?.snapshot?.assignment_coverage
+      ?? epic.observer?.snapshot?.assignment_coverage,
+  }, { assignments, prerequisites, action: facts?.prepared === true ? 'implement' : 'plan' });
+  const owner = readiness.owner;
   const none: EpicMemberAction = { kind: 'none', label: '', disabled: false, reason: null, owner: null };
 
   if (owner) {
-    const implementing = text(owner.skill) === 'spec-end-to-end' || member?.implementation_starting === true;
     const started = text(owner.created_at) ? `started ${time(text(owner.created_at))}` : '';
     return {
       name, workspace, record,
-      status: { label: implementing ? 'Implementation starting' : 'Planning', tone: 'info' },
+      status: { label: readiness.label, tone: readiness.tone },
       note: [text(owner.skill) || text(owner.display), started].filter(Boolean).join(' · '),
       action: { kind: 'open-agent', label: 'Open agent', disabled: false, reason: null, owner },
     };
@@ -189,7 +190,7 @@ export function epicMemberPlanningRow(
   if (memberIsMissing(member)) {
     return {
       name, workspace, record,
-      status: { label: 'No package', tone: 'warning' },
+      status: { label: readiness.label, tone: readiness.tone },
       note: 'Listed in the record; no package directory',
       action: { kind: 'plan', label: 'Plan', disabled: true, reason: noPackageReason, owner: null },
     };
@@ -202,45 +203,43 @@ export function epicMemberPlanningRow(
       action: { kind: 'plan', label: 'Plan', disabled: true, reason: unobservedReason, owner: null },
     };
   }
-  if (facts?.decision) {
+  if (readiness.state === 'decision') {
     return {
       name, workspace, record,
-      status: { label: 'Decision needed', tone: 'warning' },
-      note: text(facts.decision.question) || 'A recorded decision needs discussion.',
+      status: { label: readiness.label, tone: readiness.tone },
+      note: readiness.reason || '',
       action: none,
     };
   }
   if (facts?.prepared === true) {
-    const unmet = prerequisites.filter(fact => fact.state !== 'landed');
-    const reason = unmet.length ? prerequisiteReason(unmet[0]) : null;
+    const reason = readiness.reason;
     return {
       name, workspace, record,
-      status: unmet.length ? { label: 'Prepared \u00b7 waiting', tone: 'neutral' } : { label: 'Ready to implement', tone: 'info' },
+      status: { label: readiness.label, tone: readiness.tone },
       note: reason ?? (facts.steps === null ? 'Prepared' : `${facts.steps} prepared steps`),
-      action: { kind: 'implement', label: 'Implement spec', disabled: Boolean(reason), reason, owner: null },
+      action: { kind: 'implement', label: 'Implement spec', disabled: !readiness.launchable, reason, owner: null },
     };
   }
-  if (facts) {
+  if (readiness.state === 'not-planned' || readiness.state === 'incomplete') {
     // Index-only preparation (steps recorded without a positive preparation
     // report) resumes planning; an unresolved prerequisite keeps Plan
     // visible but disabled with its observed reason.
-    const waiting = prerequisites.filter(fact => fact.state !== 'prepared' && fact.state !== 'landed');
-    const reason = waiting.length ? prerequisiteReason(waiting[0]) : null;
-    const notPlanned = facts.steps === null && (!facts.preparation || facts.preparation.outcome === 'missing');
+    const reason = readiness.reason;
+    const notPlanned = readiness.state === 'not-planned';
     return {
       name, workspace, record,
-      status: notPlanned ? { label: 'Not planned', tone: 'neutral' } : { label: 'Preparation incomplete', tone: 'warning' },
+      status: { label: readiness.label, tone: readiness.tone },
       note: notPlanned ? 'Context only' : 'Resume planning to complete the preparation report and index.',
-      action: { kind: 'plan', label: 'Plan', disabled: Boolean(reason), reason, owner: null },
+      action: { kind: 'plan', label: 'Plan', disabled: !readiness.launchable, reason, owner: null },
     };
   }
   return {
     name, workspace, record,
-    status: { label: 'Readiness unknown', tone: 'warning' },
-    note: 'New preparation facts are unavailable in this observation; planning is not confirmed.',
+    status: { label: readiness.label, tone: readiness.tone },
+    note: readiness.reason || '',
     action: {
       kind: 'plan', label: 'Plan', disabled: true,
-      reason: 'New preparation facts are unavailable in this observation.', owner: null,
+      reason: readiness.reason, owner: null,
     },
   };
 }

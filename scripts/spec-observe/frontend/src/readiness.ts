@@ -42,6 +42,7 @@ export type PrerequisiteState = 'landed' | 'prepared' | 'unresolved' | 'unknown'
 export type PrerequisiteFact = { name: string; state: PrerequisiteState };
 
 export type ReadinessContext = {
+  action?: 'plan' | 'implement';
   assignments?: WireRecord[];
   coverage?: WireRecord | null;
   prerequisites?: PrerequisiteFact[];
@@ -223,6 +224,17 @@ function result(state: ReadinessState, facts: PlanningFacts | null, context: Rea
   };
 }
 
+// Planning accepts positively prepared prerequisites before they land, but
+// still requires a confirmed observation of package ownership.
+function planningPermission(record: WireRecord, context: ReadinessContext): Partial<ReadinessFacts> {
+  if (context.action !== 'plan') return {};
+  const waiting = (context.prerequisites ?? []).find(fact => fact.state !== 'landed' && fact.state !== 'prepared');
+  const coverage = coverageStateOf(record, context);
+  const reason = waiting ? prerequisiteReason(waiting)
+    : coverage !== 'complete' ? `Assignment coverage ${coverage}; the owner is not confirmed, so this package cannot start.` : null;
+  return { launchable: !reason, reason };
+}
+
 // Derive one package's readiness. Live planning/implementation assignments win
 // over stored preparation facts; otherwise a usable decision wins, then the
 // positive/known/unknown preparation facts decide. A ready package still
@@ -262,7 +274,7 @@ export function specReadiness(record: WireRecord | null | undefined, context: Re
     const noIndex = facts.steps === null;
     const reportMissing = !facts.preparation || facts.preparation.outcome === 'missing';
     if (noIndex && reportMissing) {
-      return result('not-planned', facts, context, { reason: 'No prepared specification index was observed.' });
+      return result('not-planned', facts, context, { reason: 'No prepared specification index was observed.', ...planningPermission(record!, context) });
     }
     const outcome = text(facts.preparation?.outcome);
     const reason = outcome === 'invalid' ? 'The preparation report is invalid.'
@@ -270,7 +282,7 @@ export function specReadiness(record: WireRecord | null | undefined, context: Re
       : outcome === 'decision-required' ? 'Preparation requires a decision.'
       : noIndex ? 'The prepared specification index could not be confirmed.'
       : 'The preparation report is missing or not confirmed.';
-    return result('incomplete', facts, context, { reason });
+    return result('incomplete', facts, context, { reason, ...planningPermission(record!, context) });
   }
 
   // Positively prepared: readiness still requires every declared prerequisite
@@ -347,7 +359,7 @@ export function nextToPlan(epic: WireRecord | null | undefined, records: WireRec
     if (status !== 'proposed' && status !== 'unknown' && !resumeIncomplete) continue;
     const record = memberRecord(records, epic, member);
     if (planningAssignmentFor(record ?? member, assignments)) continue;
-    if (!facts || facts.prepared === true || facts.decision) continue;
+    if (!facts || facts.prepared !== false || facts.decision) continue;
     if (Array.isArray(member.requires) && !member.requires.every((name: unknown) => typeof name === 'string')) continue;
     const satisfied = declaredRequires(member).every(name => {
       const prerequisite = byName.get(name);

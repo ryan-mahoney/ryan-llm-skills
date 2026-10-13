@@ -829,6 +829,7 @@ try:
             expect(epic_facts().nth(2)).to_contain_text("0 of 7")
             expect(epic_facts().nth(3)).to_contain_text("Next to plan")
             expect(epic_facts().nth(3)).to_contain_text("other-browser")
+            expect(page.locator(".obligation")).to_contain_text("if critique is recommended, stop at the proposal")
 
             # First eligible in record order, an independent member behind a
             # positively prepared (not landed) prerequisite stays plannable,
@@ -861,6 +862,59 @@ try:
             page.goto(epic_url, wait_until="domcontentloaded")
             expect(page.locator(".object-head h2")).to_have_text("Demo epic")
             check_deadline("plan-member")
+
+            def refresh_epic():
+                control("specs-publish-snapshot")
+                # Expire the dashboard's one-second state cache, as in specs.
+                time.sleep(1.05)
+                with page.expect_response(lambda response: "/api/state" in response.url):
+                    page.locator("header").get_by_role("button", name="Refresh state", exact=True).click()
+
+            # Intact proposals resume at the observed stage, not architecture.
+            for recommended, critique, expected in (
+                (False, False, "Planning runs Specification and preparation and stops at Prepared."),
+                (True, False, "Planning runs Critique, then Specification and preparation and stops at Prepared."),
+                (True, True, "Planning runs Specification and preparation and stops at Prepared."),
+            ):
+                control("epic-planning-facts", json.dumps({
+                    "proposal": True, "critique_recommended": recommended, "critique": critique,
+                    "prepared": False, "step_count": 0, "preparation": {"outcome": "missing"}, "decision": None,
+                }))
+                refresh_epic()
+                expect(page.locator(".obligation")).to_contain_text(expected)
+                expect(page.locator(".obligation")).not_to_contain_text("architect starts")
+            report["scenarios"].append("Epic planning explanation resumes intact proposals with spec-write or critics then spec-write, without re-architecture")
+
+            # Real row and primary entry must refuse unknown ownership/reads,
+            # even with a live token and usable targets; forced clicks cannot POST.
+            control("epic-base-status", "merged")
+            for coverage in ("partial", "unknown"):
+                control("specs-assignment-coverage", coverage)
+                refresh_epic()
+                implement = member_row("browser").locator('[data-action="implement"]')
+                expect(implement).to_be_disabled()
+                expect(member_row("browser").locator(".action-note")).to_contain_text(f"Assignment coverage {coverage}")
+                primary = page.locator('[data-action="plan-member"]')
+                expect(primary).to_be_disabled()
+                expect(page.locator('[data-action-note="plan-member"]')).to_contain_text(f"Assignment coverage {coverage}")
+                saves = len(posts("dispatchSaveBrief"))
+                implement.dispatch_event("click")
+                primary.dispatch_event("click")
+                assert len(posts("dispatchSaveBrief")) == saves
+            control("specs-assignment-coverage", "complete")
+            control("epic-planning-facts", json.dumps({
+                "prepared": None, "step_count": 0, "preparation": {"outcome": "unavailable"}, "decision": None,
+            }))
+            refresh_epic()
+            expect(member_row("other-browser")).to_contain_text("Readiness unknown")
+            expect(member_row("other-browser").locator('[data-action="plan"]')).to_be_disabled()
+            expect(member_row("other-browser").locator(".action-note")).to_contain_text("preparation read is unavailable")
+            report["scenarios"].append("Epic row and primary refuse partial/unknown assignment coverage and unavailable preparation without posting")
+            control("epic-base-status", "prepared")
+            control("epic-planning-facts", json.dumps({
+                "prepared": False, "step_count": 0, "preparation": {"outcome": "missing"}, "decision": None,
+            }))
+            refresh_epic()
 
             # Live planning changes its row to Open agent without blocking the
             # independent member, and prepared members never count as landed.

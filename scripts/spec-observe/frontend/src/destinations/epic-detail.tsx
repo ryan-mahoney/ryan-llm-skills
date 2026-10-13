@@ -6,7 +6,7 @@ import { formatHash, type RouteState } from '../route';
 import type { CatalogEntry } from '../scope';
 import { landedStatus, memberPlanning, planningAssignmentFor, type PlanningFacts } from '../readiness';
 import { plannedTargetChoices, startPackageHandoff, type PackagePlanningPlan, type PlannedTarget } from '../launch-handoff';
-import { packagePlanningPlan } from '../../../../workspaces/spec-prompt.mjs';
+import { packagePlanningPlan, planningPlanDescription } from '../../../../workspaces/spec-prompt.mjs';
 import {
   epicCoverageReasons,
   epicDocumentLinks,
@@ -359,7 +359,12 @@ export function EpicNext(props: { epic: WireRecord; records?: WireRecord[]; assi
       if (members().some(member => memberPlanning(member)?.decision)) return 'No member is eligible to plan until the recorded decision is discussed.';
       return 'No unplanned member is eligible in this observation.';
     }
-    return `Plan ${memberName(next)}. Planning runs architecture, then specification and preparation, and stops when the package is prepared.`;
+    const facts = memberPlanning(next);
+    return `Plan ${memberName(next)}. ${planningPlanDescription(packagePlanningPlan({
+      proposal: facts?.proposal === true,
+      critiqueRecommended: facts?.critiqueRecommended === true,
+      critique: facts?.critique === true,
+    }))}`;
   };
   const detail = () => {
     const next = candidate();
@@ -372,7 +377,7 @@ export function EpicNext(props: { epic: WireRecord; records?: WireRecord[]; assi
     }
     const independent = planningCandidates(props.epic, records(), assignments())
       .filter(member => member !== next && !epicMemberRequires(member).names.includes(memberName(next)));
-    const parts = ['The architect starts from context.md in the package, taken from the epic plan. Nothing is implemented.'];
+    const parts = ['Nothing is implemented.'];
     if (independent.length) {
       const names = independent.map(memberName).join(', ');
       parts.push(`${names} ${independent.length === 1 ? 'does' : 'do'} not depend on ${memberName(next)}, so ${independent.length === 1 ? 'it' : 'they'} can be planned at the same time.`);
@@ -466,7 +471,7 @@ export function EpicDetail(props: {
     const record = epicMemberRecord(props.epic, member, props.records);
     if (!record || !props.token || !props.live) return;
     const facts = memberPlanning(member);
-    const blocked = handoffReason(record) || (kind === 'plan' ? planStageReason(facts) : '');
+    const blocked = actionReason(member, epicMemberPlanningRow(props.epic, member, props.records, assignments()));
     if (blocked) {
       setHandoffError(blocked);
       return;
@@ -522,7 +527,7 @@ export function EpicDetail(props: {
       if (stats().total > 0 && stats().landed >= stats().total) return 'All members have landed; there is no member to plan.';
       return 'No unplanned member is eligible in this observation.';
     }
-    return handoffReason(epicMemberRecord(props.epic, next, props.records)) || planStageReason(memberPlanning(next));
+    return actionReason(next, epicMemberPlanningRow(props.epic, next, props.records, assignments()));
   };
   const planNextMember = () => {
     const next = nextMember();
