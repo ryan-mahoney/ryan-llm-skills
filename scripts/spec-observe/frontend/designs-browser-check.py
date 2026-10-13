@@ -14,6 +14,9 @@ SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 180s uv run --script \
 SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 180s uv run --script \
   scripts/spec-observe/frontend/designs-browser-check.py --case empty \
   --capture-reference /path/to/designs/app-ui/screens/76-designs-empty.html
+SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 180s uv run --script \
+  scripts/spec-observe/frontend/designs-browser-check.py --case loading \
+  --capture-reference /path/to/designs/app-ui/screens/77-designs-loading.html
 
 Only the temporary fixture storage, one final index HTTP delay, and the imported
 snapshot are substituted; App, route, adapters, /api/workspace-designs and the
@@ -34,6 +37,7 @@ import subprocess
 import threading
 import time
 import traceback
+from datetime import datetime
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -42,7 +46,7 @@ from urllib.parse import parse_qs, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--case', choices=['journey', 'unproduced', 'empty'], default='journey')
+parser.add_argument('--case', choices=['journey', 'unproduced', 'empty', 'loading'], default='journey')
 parser.add_argument('--capture-reference', default=None)
 options = parser.parse_args()
 case = options.case
@@ -411,6 +415,283 @@ try:
                     reference_state.append(state)
                 reference_page.close()
                 report['reference'] = {'html': str(reference_html), 'url': reference_url, 'captures': reference_state}
+
+            if case == 'loading':
+                loading_state = {}
+                held_index = []
+                held_heads = []
+                index_hold = {'on': True}
+
+                def wait_until(condition, label, timeout=5):
+                    deadline = time.monotonic() + timeout
+                    while time.monotonic() < deadline:
+                        if condition():
+                            return
+                        page.wait_for_timeout(25)
+                    raise AssertionError(f'{label} not observed')
+
+                def release_route(held):
+                    try:
+                        response = held.fetch(timeout=5000)
+                        held.fulfill(response=response)
+                        return 'fulfilled'
+                    except Exception as error:
+                        try:
+                            held.continue_()
+                            return f'continued-after:{error}'
+                        except Exception as nested:
+                            return f'aborted:{nested}'
+
+                def hold_fixture_index(route):
+                    if index_hold['on'] and '/api/workspace-designs' in route.request.url and 'id=fixture' in route.request.url:
+                        held_index.append(route)
+                    else:
+                        route.continue_()
+                page.route('**/api/workspace-designs**', hold_fixture_index)
+
+                page.clock.install(time=datetime(2026, 1, 1, 12, 0, 0))
+                page.clock.pause_at(datetime(2026, 1, 1, 12, 0, 0))
+
+                # Scenario 1: held initial index; 299ms reserves the screen-77
+                # footprint without bars, 300ms reveals the labelled skeletons.
+                page.goto(base + '/#/designs?ws=fixture', wait_until='domcontentloaded')
+                wait_until(lambda: bool(held_index), 'initial index request entered')
+                page.clock.fast_forward(100)
+                search = page.locator('#find-record')
+                search.fill('fixture')
+                page.wait_for_function("() => location.hash.includes('q=fixture')")
+                page.clock.fast_forward(199)
+                assert page.locator('.list-pane .skeletons .skeleton span').count() == 0, 'list bars flashed before 300ms'
+                assert page.locator('.design-canvas .skeleton span').count() == 0, 'canvas bars flashed before 300ms'
+                expect(page.locator('.list-caption')).to_have_text('Reading designs…')
+                expect(page.get_by_role('heading', name='Design screen', exact=True)).to_be_visible()
+                expect(page.locator('.design-toolbar')).to_have_count(0)
+                expect(page.locator('#design-frame')).to_have_count(0)
+                initial_region = page.get_by_role('region', name='Reading design index and screen', exact=True)
+                expect(initial_region).to_be_visible()
+                expect(initial_region).to_have_attribute('aria-busy', 'true')
+                loading_state['before300'] = {'listBars': 0, 'canvasBars': 0, 'caption': 'Reading designs…'}
+                page.clock.fast_forward(1)
+                list_region = page.locator('.list-pane').get_by_role('region', name='Reading designs', exact=True)
+                expect(list_region).to_be_visible()
+                expect(list_region).to_have_attribute('aria-busy', 'true')
+                expect(page.locator('.list-pane .skeleton span').first).to_be_visible()
+                expect(page.locator('.design-canvas .skeleton span').first).to_be_visible()
+                expect(page.locator('main [role="status"][aria-atomic="true"]')).to_have_text('Reading designs.')
+                expect(page.locator('.list-caption')).to_have_text('Reading designs…')
+                assert params().get('ws') == ['fixture'], page.url
+                loading_state['at300'] = {'listBars': page.locator('.list-pane .skeleton span').count(),
+                                          'canvasBars': page.locator('.design-canvas .skeleton span').count()}
+                for width in (1280, 1600):
+                    page.set_viewport_size({'width': width, 'height': 900})
+                    page.wait_for_timeout(50)
+                    path = browser_evidence / f'designs-loading@{width}.png'
+                    page.screenshot(path=str(path))
+                    report['captures'].append(str(path))
+                if reference_html:
+                    capture_reference('reference-77', details=False, wait_for_frame=False, select_width=False)
+                loading_state['release'] = release_route(held_index.pop(0))
+                expect(page.locator('#design-detail-heading')).to_have_text('Design fixture')
+                expect(page.locator('#design-width')).to_have_value('1280')
+                expect(frame().locator('h1')).to_have_text('Marker screen one')
+                assert frame().locator('html').get_attribute('data-marker') == '42'
+                assert any('/marker.js' in r['url'] for r in requests), 'relative marker script was not requested'
+                page.wait_for_function("() => location.hash.includes('id=demo') && location.hash.includes('tab=1280')")
+                assert params().get('path') == ['screens/01-screen-1.html'], page.url
+                assert params().get('q') == ['fixture'], 'q did not survive the held response'
+                loading_state['querySurvived'] = params().get('q')
+                passed('held initial index reserves the screen-77 footprint without bars, shows labelled skeletons only at 300ms, and renders the real step-1 viewer on release')
+
+                # Scenario 2: a release below the threshold adds no skeleton bars.
+                held_index.clear()
+                page.goto('about:blank')
+                page.goto(base + '/#/designs?ws=fixture', wait_until='domcontentloaded')
+                wait_until(lambda: bool(held_index), 'fast index request entered')
+                page.evaluate("""() => {
+                  window.__skeletonAdditions = 0;
+                  window.__readingAnnouncements = 0;
+                  new MutationObserver(records => {
+                    for (const record of records) for (const node of record.addedNodes) {
+                      if (node.nodeType !== 1 || !node.querySelector) continue;
+                      if (node.matches('.skeleton span') || node.querySelector('.skeleton span')) window.__skeletonAdditions += 1;
+                    }
+                  }).observe(document.body, {childList: true, subtree: true});
+                  const announcer = document.querySelector('main [role="status"][aria-atomic="true"]');
+                  if (announcer) new MutationObserver(() => {
+                    if (announcer.textContent === 'Reading designs.') window.__readingAnnouncements += 1;
+                  }).observe(announcer, {childList: true, characterData: true, subtree: true});
+                }""")
+                page.clock.fast_forward(100)
+                release_route(held_index.pop(0))
+                expect(frame().locator('h1')).to_have_text('Marker screen one')
+                page.clock.fast_forward(1000)
+                additions = page.evaluate('() => window.__skeletonAdditions')
+                reading_announcements = page.evaluate('() => window.__readingAnnouncements')
+                assert additions == 0, additions
+                assert reading_announcements == 0, reading_announcements
+                assert page.locator('.list-pane .skeletons .skeleton span').count() == 0
+                expect(page.locator('main [role="status"][aria-atomic="true"]')).to_have_text('Screen 1 of 2 · Design fixture · Screen one')
+                loading_state['fastRelease'] = {'skeletonAdditions': additions, 'readingAnnouncements': reading_announcements}
+                passed('an index released below the 300ms threshold adds no skeleton bars or delayed announcement and goes straight to the real viewer')
+
+                # Scenario 3: a held step-2 HEAD shows the frame-only checking
+                # footprint after 300ms while list/header/step/width stay usable.
+                held_heads.clear()
+                def hold_head(route):
+                    if route.request.method == 'HEAD' and 'workspace-view' in route.request.url:
+                        held_heads.append(route)
+                    else:
+                        route.continue_()
+                page.route('**/workspace-view/**', hold_head)
+                page.get_by_role('button', name='Next screen', exact=True).click()
+                page.wait_for_function("() => location.hash.includes('path=screens%2F02-screen-2.html')")
+                wait_until(lambda: bool(held_heads), 'step-2 HEAD entered')
+                page.clock.fast_forward(299)
+                assert page.locator('.design-canvas .skeleton span').count() == 0, 'checking bars flashed before 300ms'
+                expect(page.locator('.design-toolbar')).to_have_count(1)
+                expect(page.locator('#design-width')).to_have_value('1280')
+                page.clock.fast_forward(1)
+                checking_region = page.locator('.design-canvas').get_by_role('region', name='Checking screen', exact=True)
+                expect(checking_region).to_be_visible()
+                expect(checking_region).to_have_attribute('aria-busy', 'true')
+                expect(page.locator('.design-canvas .skeleton span').first).to_be_visible()
+                expect(page.locator('#design-width')).to_have_value('1280')
+                expect(page.get_by_role('button', name='Previous screen', exact=True)).to_have_attribute('aria-disabled', 'false')
+                open_screen = page.get_by_role('button', name='Open screen', exact=True)
+                expect(open_screen).to_be_disabled()
+                expect(open_screen).to_have_attribute('title', 'Checking that the recorded screen file is available…')
+                expect(page.locator('main [role="status"][aria-atomic="true"]')).to_have_text('Checking screen.')
+                loading_state['headHold'] = {'before300Bars': 0, 'at300Bars': page.locator('.design-canvas .skeleton span').count()}
+                for width in (1280, 1600):
+                    page.set_viewport_size({'width': width, 'height': 900})
+                    page.wait_for_timeout(50)
+                    path = browser_evidence / f'designs-loading-frame@{width}.png'
+                    page.screenshot(path=str(path))
+                    report['captures'].append(str(path))
+                page.set_viewport_size({'width': 1600, 'height': 900})
+                controls = [page.locator('#find-record'), page.get_by_role('button', name='Previous screen', exact=True),
+                            page.get_by_role('button', name='Next screen', exact=True), page.locator('#design-width')]
+                for control in controls:
+                    box = control.bounding_box()
+                    assert box and box['width'] >= 44 and box['height'] >= 44, (control, box)
+                page.locator('#find-record').focus()
+                reachable = []
+                for _ in range(20):
+                    reachable.append(active_control())
+                    page.keyboard.press('Tab')
+                reachable_text = [item['text'] for item in reachable if item]
+                reachable_ids = [item['id'] for item in reachable if item]
+                assert 'Previous screen' in reachable_text and 'Next screen' in reachable_text, reachable_text
+                assert 'design-width' in reachable_ids, reachable_ids
+                page.evaluate("document.documentElement.style.zoom = '2'")
+                page.wait_for_timeout(50)
+                for control in controls:
+                    control.scroll_into_view_if_needed()
+                    box = control.bounding_box()
+                    assert box and box['x'] >= 0 and box['y'] >= 0 and box['y'] < 900, (control, box)
+                page.evaluate("document.documentElement.style.zoom = ''")
+                loading_state['headRelease'] = release_route(held_heads.pop(0))
+                expect(frame().locator('h1')).to_have_text('Marker screen two')
+                assert frame().locator('html').get_attribute('data-marker') == '42'
+                page.unroute('**/workspace-view/**', hold_head)
+                passed('a held step-2 HEAD keeps list/header/step/width usable, shows the labelled checking skeleton only after 300ms, explains the disabled Open screen, and renders the real step-2 frame on release')
+
+                # Scenario 4: a late previous-identity HEAD cannot replace the frame.
+                held_heads.clear()
+                def hold_old_head(route):
+                    if route.request.method == 'HEAD' and '01-screen-1.html' in route.request.url:
+                        held_heads.append(route)
+                    else:
+                        route.continue_()
+                page.route('**/workspace-view/**', hold_old_head)
+                page.get_by_role('button', name='Previous screen', exact=True).click()
+                wait_until(lambda: bool(held_heads), 'previous step HEAD entered')
+                page.get_by_role('button', name='Next screen', exact=True).click()
+                expect(frame().locator('h1')).to_have_text('Marker screen two')
+                page.evaluate("document.getElementById('design-frame').dataset.viewer = 'stable'")
+                race_handle = page.locator('#design-frame').element_handle()
+                race_nonce = frame().locator('html').get_attribute('data-nonce')
+                page.clock.fast_forward(400)
+                race_release = release_route(held_heads.pop(0))
+                page.clock.fast_forward(200)
+                assert page.evaluate("document.getElementById('design-frame').dataset.viewer") == 'stable', 'late old HEAD replaced the frame'
+                assert frame().locator('html').get_attribute('data-nonce') == race_nonce
+                assert race_handle.evaluate('(el) => el.isConnected'), 'late old HEAD detached the frame'
+                expect(frame().locator('h1')).to_have_text('Marker screen two')
+                loading_state['cancellationRace'] = {'release': race_release, 'nonce': race_nonce, 'frameConnected': True}
+                page.unroute('**/workspace-view/**', hold_old_head)
+                passed('a late previous-identity HEAD release cannot clear or replace the current step-2 frame')
+
+                # Scenario 5: a held same-scope index refresh keeps the mounted frame
+                # while consuming an actually changed index response.
+                page.evaluate("document.getElementById('design-frame').dataset.viewer = 'stable'")
+                refresh_handle = page.locator('#design-frame').element_handle()
+                refresh_nonce = frame().locator('html').get_attribute('data-nonce')
+                heads_before = head_count()
+                changed_record = {**report['seededDesigns']['fixture/demo'], 'title': 'Design fixture refreshed'}
+                demo_index = Path(receipt['root']) / 'storage' / 'projects' / 'fixture' / 'designs' / 'demo' / 'design.json'
+                demo_index.write_text(json.dumps(changed_record))
+                report['fixtureInputsDelta'] = {'fixture/designs/demo/design.json': changed_record}
+                page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                wait_until(lambda: bool(held_index), 'same-scope index refresh entered')
+                page.clock.fast_forward(300)
+                assert page.locator('.list-pane .skeletons .skeleton span').count() == 0, 'refresh flashed list bars over retained data'
+                expect(page.locator('#design-width')).to_have_value('1280')
+                assert params().get('id') == ['demo'] and params().get('path') == ['screens/02-screen-2.html'] and params().get('tab') == ['1280'], page.url
+                assert page.evaluate("document.getElementById('design-frame').dataset.viewer") == 'stable'
+                assert frame().locator('html').get_attribute('data-nonce') == refresh_nonce
+                assert head_count() == heads_before, 'same-scope refresh added a produced-screen HEAD'
+                loading_state['revalidateRelease'] = release_route(held_index.pop(0))
+                page.clock.fast_forward(400)
+                expect(page.locator('.list-pane .record').filter(has_text='Design fixture refreshed')).to_be_visible()
+                expect(page.locator('#design-detail-heading')).to_have_text('Design fixture refreshed')
+                refreshed_announcement = 'Screen 2 of 2 · Design fixture refreshed · Screen two'
+                announcer = page.locator('main [role="status"][aria-atomic="true"]')
+                expect(announcer).to_have_text(refreshed_announcement)
+                assert page.evaluate("document.getElementById('design-frame').dataset.viewer") == 'stable'
+                assert frame().locator('html').get_attribute('data-nonce') == refresh_nonce
+                assert refresh_handle.evaluate('(el) => el.isConnected')
+                assert head_count() == heads_before, 'same-scope refresh added a produced-screen HEAD after release'
+                page.locator('#design-width').focus()
+                page.select_option('#design-width', '1600')
+                page.clock.fast_forward(50)
+                expect(announcer).to_have_text(refreshed_announcement)
+                assert page.evaluate("document.getElementById('design-frame').dataset.viewer") == 'stable'
+                assert frame().locator('html').get_attribute('data-nonce') == refresh_nonce
+                loading_state['revalidate'] = {'frameConnected': True, 'headReadsUnchanged': True, 'announcement': refreshed_announcement}
+                passed('a held same-scope index refresh consumes the changed title, keeps the iframe/route and repeats the same announcement on an unrelated width change')
+
+                # Scenario 6: a scope switch before the threshold cancels the old timer.
+                held_index.clear()
+                page.goto('about:blank')
+                page.goto(base + '/#/designs?ws=fixture', wait_until='domcontentloaded')
+                wait_until(lambda: bool(held_index), 'scope-switch fixture index entered')
+                page.clock.fast_forward(299)
+                page.get_by_label('Workspace scope').select_option('other')
+                expect(page.locator('.list-pane .record')).to_have_count(1)
+                expect(page.locator('.list-pane .record')).to_contain_text('Other fixture')
+                page.clock.fast_forward(400)
+                assert page.locator('.list-pane .skeletons .skeleton span').count() == 0, 'old scope skeleton appeared after the threshold'
+                assert page.locator('.design-canvas .skeleton span').count() == 0
+                scope_release = release_route(held_index.pop(0))
+                page.clock.fast_forward(200)
+                assert 'ws=other' in page.url, page.url
+                expect(page.locator('.list-pane .record')).to_have_count(1)
+                expect(page.locator('.list-pane .record')).to_contain_text('Other fixture')
+                loading_state['scopeSwitch'] = {'release': scope_release, 'rows': 1}
+                page.unroute('**/api/workspace-designs**', hold_fixture_index)
+                passed('a scope switch before the threshold cancels the old initial timer and the fast other response never shows the old skeleton')
+
+                report['loadingState'] = loading_state
+                report['intentionalWaits'] = ['controlled 300ms threshold advances for the initial index and produced HEAD regions']
+                assert not report['pageErrors'], report['pageErrors']
+                assert not report['consoleErrors'], report['consoleErrors']
+                unexpected = [failure for failure in report['requestFailures'] if 'ERR_ABORTED' not in failure['failure']]
+                assert not unexpected, unexpected
+                mutations = [r for r in requests if r['method'] not in ('GET', 'HEAD')]
+                assert not mutations, f'mutation requests observed: {mutations}'
+                report['status'] = 'passed'
+                raise CaseComplete()
 
             if case == 'unproduced':
                 # Cold link enters the real destination; the planned design is

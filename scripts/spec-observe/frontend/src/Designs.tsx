@@ -14,6 +14,7 @@ import type { DestinationProps } from './destinations';
 
 const INDEX_READ_DEADLINE_MS = 30000;
 const INDEX_POLL_MS = 5000;
+const LOADING_DELAY_MS = 300;
 
 const productionStatus = (design: Design): { label: string; tone: StatusTone } => {
   const total = design.summary?.total ?? design.screens.length;
@@ -25,6 +26,16 @@ const productionStatus = (design: Design): { label: string; tone: StatusTone } =
 
 const modifiedClick = (event: MouseEvent) => event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0;
 
+// Footprint-only placeholder rows used before the regional 300ms delay elapses;
+// they reserve the filled RegionalSkeleton row geometry without rendering bars.
+const SkeletonReserve = (props: { rows: number }) => (
+  <div class="skeletons" aria-hidden="true">
+    <For each={Array.from({ length: props.rows })}>
+      {() => <div class="skeleton" style={{ 'min-height': '100px' }} />}
+    </For>
+  </div>
+);
+
 export default function Designs(props: DestinationProps) {
   const [data, setData] = createSignal<DesignsResponse | null>(null);
   const [indexError, setIndexError] = createSignal('');
@@ -33,6 +44,8 @@ export default function Designs(props: DestinationProps) {
   const [pending, setPending] = createSignal(false);
   const [probe, setProbe] = createSignal<{ key: string; state: 'checking' | 'ok' | 'failed' } | null>(null);
   const [retryNonce, setRetryNonce] = createSignal(0);
+  const [initialDelayed, setInitialDelayed] = createSignal(false);
+  const [headDelayed, setHeadDelayed] = createSignal(false);
 
   let indexGeneration = 0;
   let indexController: AbortController | null = null;
@@ -234,12 +247,44 @@ export default function Designs(props: DestinationProps) {
   const openScreenTitle = () => {
     const current = screen();
     if (!current) return 'This design package records no screens yet.';
-    return current.produced ? 'The recorded screen file could not be read.' : `Screen ${current.step} has not been produced.`;
+    if (!current.produced) return `Screen ${current.step} has not been produced.`;
+    if (probeState() === 'failed') return 'The recorded screen file could not be read.';
+    if (probeState() !== 'ok') return 'Checking that the recorded screen file is available…';
+    return 'The recorded screen file could not be read.';
   };
   const briefRoute = createMemo(() => {
     const item = design();
     return item ? designBriefRoute(props.route.ws ?? '', item) : null;
   });
+
+  // Scalar pending-scope key: route-only changes (id/path/tab/q) keep the same
+  // string, so a pending index keeps its single 300ms delay instead of restarting.
+  const pendingScopeKey = createMemo(() => (
+    props.live && busy() && !data() && !indexError() ? scopeKey() : ''
+  ));
+
+  // Initial catalog read: reserve the screen-77 footprints immediately and
+  // reveal skeleton bars only after 300ms, so a fast response never flashes.
+  createEffect(on(pendingScopeKey, key => {
+    setInitialDelayed(false);
+    if (!key) return;
+    const timer = setTimeout(() => setInitialDelayed(true), LOADING_DELAY_MS);
+    onCleanup(() => clearTimeout(timer));
+  }));
+
+  // Produced-screen HEAD: reveal the checking footprint only when the current
+  // viewer identity is still checking after the same delay.
+  createEffect(on(
+    () => [props.live, viewerKey(), probeState()] as const,
+    () => {
+      setHeadDelayed(false);
+      if (!props.live || probeState() !== 'checking') return;
+      const timer = setTimeout(() => {
+        if (props.live && probeState() === 'checking') setHeadDelayed(true);
+      }, LOADING_DELAY_MS);
+      onCleanup(() => clearTimeout(timer));
+    },
+  ));
 
   // Produced identity HEAD: one read per ws/slug/file/retry identity with its
   // own generation, controller and 30s deadline; width changes never re-probe.
@@ -321,7 +366,7 @@ export default function Designs(props: DestinationProps) {
   };
   const caption = () => {
     if (!props.live) return '';
-    if (!data()) return indexError() ? 'Designs unavailable' : 'Reading design packages…';
+    if (!data()) return indexError() ? 'Designs unavailable' : 'Reading designs…';
     const total = designs().length;
     if (total === 0) return successfulEmpty() ? 'No designs recorded' : allInvalid() ? 'Design indexes could not be read' : '';
     const visible = visibleDesigns().length;
@@ -340,7 +385,10 @@ export default function Designs(props: DestinationProps) {
   };
   const announcement = createMemo(() => {
     if (!props.live) return 'Designs require a live dashboard server.';
-    if (!data()) return indexError() ? 'Designs could not be read.' : 'Reading design packages.';
+    if (!data()) {
+      if (indexError()) return 'Designs could not be read.';
+      return initialDelayed() ? 'Reading designs.' : '';
+    }
     const current = selection();
     if (current.unavailable && (props.route.id ?? '') !== '') return 'Design not found.';
     if (allInvalid()) return 'Design indexes could not be read.';
@@ -348,6 +396,7 @@ export default function Designs(props: DestinationProps) {
     if (designs().length > 0 && visibleDesigns().length === 0) return 'No designs match. Clear search to restore the design list.';
     if (!current.design) return 'Choose a design package.';
     if (!current.screen) return `${current.design.title} has no planned screens.`;
+    if (headDelayed() && current.screen.produced && probeState() === 'checking') return 'Checking screen.';
     return `Screen ${current.screen.step} of ${current.design.screens.length} · ${current.design.title} · ${current.screen.title}`;
   });
 
@@ -394,7 +443,11 @@ export default function Designs(props: DestinationProps) {
                   </StateNotice>
                 </Show>
                 <Show when={!data() && !indexError()}>
-                  <RegionalSkeleton announce={false} rows={4} label="Reading designs" />
+                  <div role="region" aria-busy="true" aria-label="Reading designs">
+                    <Show when={initialDelayed()} fallback={<SkeletonReserve rows={4} />}>
+                      <RegionalSkeleton announce={false} rows={4} label="Reading designs" />
+                    </Show>
+                  </div>
                 </Show>
                 <Show when={Boolean(data()) && Boolean(indexError())}>
                   <StateNotice
@@ -474,7 +527,38 @@ export default function Designs(props: DestinationProps) {
             </div>
           </Match>
           <Match when={!data()}>
-            <Show when={indexError()} fallback={<div class="detail-body"><RegionalSkeleton announce={false} rows={4} label="Reading designs" /></div>}>
+            <Show
+              when={indexError()}
+              fallback={
+                <>
+                  <div class="object-head">
+                    <div class="object-top">
+                      <h2 id="design-detail-heading" tabIndex={-1}>Design screen</h2>
+                    </div>
+                    <p />
+                  </div>
+                  <div class="design-canvas">
+                    <div role="region" aria-busy="true" aria-label="Reading design index and screen">
+                      <div class="skeleton" style={{ padding: '0 0 20px', border: '0', 'min-height': '64px' }}>
+                        <Show when={initialDelayed()}><span style={{ width: '38%', height: '44px' }} /></Show>
+                      </div>
+                      <div style={{ height: '480px', background: 'var(--ds-panel)', border: '1px solid var(--ds-line-2)', display: 'grid', 'grid-template-columns': '18% 27% 1fr', gap: '16px', padding: '20px' }}>
+                        <Show when={initialDelayed()} fallback={<SkeletonReserve rows={4} />}>
+                          <RegionalSkeleton announce={false} rows={4} label="Reading designs" />
+                        </Show>
+                        <Show when={initialDelayed()} fallback={<SkeletonReserve rows={3} />}>
+                          <RegionalSkeleton announce={false} rows={3} label="Reading designs" />
+                        </Show>
+                        <Show when={initialDelayed()} fallback={<SkeletonReserve rows={4} />}>
+                          <RegionalSkeleton announce={false} rows={4} label="Reading designs" />
+                        </Show>
+                      </div>
+                    </div>
+                  </div>
+                  <footer class="detail-foot">Produced and captured status comes from files · Screen content is read only</footer>
+                </>
+              }
+            >
               <div class="detail-body">
                 <EmptyState
                   symbol="◇"
@@ -569,7 +653,7 @@ export default function Designs(props: DestinationProps) {
                     <For each={widths()}>{width => <option value={String(width)}>{width}px</option>}</For>
                   </select>
                   <Show
-                    when={screen()?.produced && Boolean(screenUrl()) && probeState() !== 'failed'}
+                    when={screen()?.produced && Boolean(screenUrl()) && probeState() === 'ok'}
                     fallback={<button type="button" class="ds-btn" disabled title={openScreenTitle()}>Open screen</button>}
                   >
                     <a class="ds-btn ds-btn--primary" href={screenUrl()} target="_blank" rel="noopener">Open screen</a>
@@ -614,7 +698,22 @@ export default function Designs(props: DestinationProps) {
                           />
                         </Match>
                         <Match when={true}>
-                          <RegionalSkeleton announce={false} rows={3} label="Checking screen" />
+                          <div
+                            aria-busy="true"
+                            aria-label="Checking screen"
+                            role="region"
+                            style={{ height: '480px', background: 'var(--ds-panel)', border: '1px solid var(--ds-line-2)', display: 'grid', 'grid-template-columns': '18% 27% 1fr', gap: '16px', padding: '20px' }}
+                          >
+                            <Show when={headDelayed()} fallback={<SkeletonReserve rows={4} />}>
+                              <RegionalSkeleton announce={false} rows={4} label="Checking screen" />
+                            </Show>
+                            <Show when={headDelayed()} fallback={<SkeletonReserve rows={3} />}>
+                              <RegionalSkeleton announce={false} rows={3} label="Checking screen" />
+                            </Show>
+                            <Show when={headDelayed()} fallback={<SkeletonReserve rows={4} />}>
+                              <RegionalSkeleton announce={false} rows={4} label="Checking screen" />
+                            </Show>
+                          </div>
                         </Match>
                       </Switch>
                     }
