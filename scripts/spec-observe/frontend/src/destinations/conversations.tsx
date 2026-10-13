@@ -15,6 +15,8 @@ export default function ConversationsDestination(props: DestinationProps) {
           token={props.token}
           live={props.live}
           refreshKey={props.refreshKey}
+          requestedThreadId={props.route.id}
+          onNavigate={props.onNavigate}
         />
       </div>
     </div>

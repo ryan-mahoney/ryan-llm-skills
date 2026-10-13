@@ -126,3 +126,39 @@
 .skeletons-table .skeleton-cell{display:grid;gap:8px}
 .skeletons-table .skeleton-bar{height:10px;width:85%;background:var(--ds-chrome-hi);border-radius:2px}
 .skeletons-table .skeleton-bar--secondary{height:8px;width:60%}
+
+/* Launch brief composition reuses the reference textarea.ds-input surface.
+   Scoped to the launch form so the still-mounted thread caller keeps its
+   own thread-handoff textarea treatment. */
+#launch-form .brief-composer textarea{width:100%;max-width:100%;height:auto;min-height:132px;padding:12px;line-height:1.6;color:var(--ds-ink);background:var(--ds-panel-2);border:1px solid var(--ds-input-border);border-radius:3px;resize:vertical;font:inherit}
+#launch-form .brief-composer textarea::placeholder{color:var(--ds-muted)}
+#launch-form .brief-composer textarea:disabled{background:var(--ds-chrome);color:var(--ds-muted)}
+#launch-form .brief-composer textarea:focus-visible{outline:2px solid var(--ds-accent);outline-offset:3px}
+
+/* Launch brief flow: saved/review facts reuse the shared token surfaces and
+   do not restyle any non-launch screen. */
+.launch-facts{display:grid;gap:10px;margin:16px 0 0;padding:16px 0 0;border-top:1px solid var(--ds-line-2)}
+.launch-facts div{display:grid;grid-template-columns:160px minmax(0,1fr);gap:6px 20px;align-items:baseline}
+.launch-facts dt{font-size:13px;color:var(--ds-muted)}
+.launch-facts dd{margin:0;font-size:13px;overflow-wrap:anywhere}
+.launch-review{margin-top:20px}
+.launch-review .section-heading{align-items:center}
+.launch-review .ds-callout{margin-bottom:16px}
+.launch-review-error{outline:none;border-radius:3px}
+.launch-review-error:focus-visible{outline:2px solid var(--ds-accent)}
+.launch-contract .launch-facts{margin-top:12px}
+.launch-input{margin-top:20px}
+.launch-input h3{font-size:15px;font-weight:600;color:var(--ds-ink)}
+.launch-input p{margin-top:6px}
+.launch-input details{margin-top:12px;padding:0 0 10px}
+.launch-input summary{min-height:44px;font-weight:600}
+.launch-input pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto;font-size:12px;line-height:1.7;background:var(--ds-panel-2);border:1px solid var(--ds-line-2);border-radius:3px;padding:12px;margin:8px 0 0;color:var(--ds-ink-2)}
+
+/* Launch result stage: identity-preserving facts and actions reuse the shared
+   callout/status/fact surfaces; nothing outside the result stage is restyled. */
+.launch-result{margin-top:4px}
+.launch-result .launch-facts{margin-top:0;padding-top:16px}
+.launch-result .actions{margin-top:20px}
+.launch-result .contract-note{margin-top:16px;padding-top:14px}
+.launch-result-inspection{outline:none;border-radius:3px}
+.launch-result-inspection:focus-visible{outline:2px solid var(--ds-accent)}

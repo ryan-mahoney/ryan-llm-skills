@@ -24,6 +24,7 @@ import {
   createFileExclusive,
   fetchWorkspace,
   listWorkspaces,
+  requestMaterialPath,
   resolveRepositoryPath,
   resolveStorageRoot,
   resolveWorkspacePath,
@@ -2544,6 +2545,179 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
     };
   }
 
+  // Direct (thread-free) dispatch. Direct requests are trusted only through the
+  // service construction and the canonical workspace material: identities,
+  // instructions and references are validated, the brief path is derived from
+  // the workspace and request UUID, and every authority path, adapter or
+  // runtime override is refused before resolution.
+  const DIRECT_SAVE_KEYS = new Set(["workspace_id", "request_id", "title", "content"]);
+  const DIRECT_PREVIEW_KEYS = new Set([
+    "workspace_id",
+    "request_id",
+    "assignment_id",
+    "instructions",
+    "repository_id",
+    "references",
+    "skill",
+    "spec_package",
+  ]);
+  const DIRECT_LAUNCH_KEYS = new Set([...DIRECT_PREVIEW_KEYS, "expectedDigest"]);
+
+  function validateDirectRequest(input, label, launch) {
+    requirePlainObject(input, `${label} input`);
+    const allowed = launch ? DIRECT_LAUNCH_KEYS : DIRECT_PREVIEW_KEYS;
+    for (const key of Object.keys(input)) {
+      if (!allowed.has(key)) {
+        throw typedError("invalid-handoff", `${label} does not accept a ${key} override`);
+      }
+    }
+    const { workspace_id, request_id: requestId, assignment_id: assignmentId, instructions } = input;
+    if (typeof workspace_id !== "string" || !WORKSPACE_ID_PATTERN.test(workspace_id)) {
+      throw invalidThread("workspace_id must be a workspace id");
+    }
+    if (!isUuid(requestId)) throw typedError("invalid-handoff", "request_id must be a UUID");
+    if (!isUuid(assignmentId)) throw typedError("invalid-handoff", "assignment_id must be a UUID");
+    if (typeof instructions !== "string" || instructions === "") {
+      throw typedError("invalid-handoff", "instructions must be a non-empty string");
+    }
+    const repositoryId = input.repository_id ?? null;
+    if (repositoryId !== null && (typeof repositoryId !== "string" || repositoryId === "")) {
+      throw typedError("invalid-handoff", "repository_id must be a non-empty string when provided");
+    }
+    const skill = input.skill ?? "general";
+    if (typeof skill !== "string" || skill === "") {
+      throw typedError("invalid-handoff", "skill must be a non-empty string when provided");
+    }
+    const specPackage = input.spec_package ?? null;
+    if (specPackage !== null && (typeof specPackage !== "string" || specPackage === "")) {
+      throw typedError("invalid-handoff", "spec_package must be a non-empty string when provided");
+    }
+    let expectedDigest = null;
+    if (launch) {
+      if (typeof input.expectedDigest !== "string" || !/^[0-9a-f]{64}$/.test(input.expectedDigest)) {
+        throw typedError("invalid-handoff", "expectedDigest must be a 64-character lowercase hex digest");
+      }
+      expectedDigest = input.expectedDigest;
+    }
+    return {
+      workspaceId: workspace_id,
+      requestId,
+      assignmentId,
+      instructions,
+      repositoryId,
+      skill,
+      specPackage,
+      references: validateReferences(input.references),
+      expectedDigest,
+    };
+  }
+
+  // Resolve the canonical direct brief for one saved request. The path is
+  // derived, never supplied, and the leaf must already be an owned regular
+  // workspace file; anything else is brief-not-found.
+  async function directBrief(workspaceId, requestId) {
+    const workspace = await fetchWorkspace(configuredRoot, workspaceId);
+    const directory = await physicalDirectory(workspace.directory, "workspace directory");
+    const brief = requestMaterialPath(workspaceId, "brief", requestId);
+    let leaf;
+    try {
+      leaf = await resolveWorkspacePath(directory, brief);
+    } catch (error) {
+      throw typedError("brief-not-found", `saved brief not found: ${requestId}`, { cause: error });
+    }
+    const info = await lstatOrNull(leaf);
+    if (info === null || info.isSymbolicLink() || !info.isFile()) {
+      throw typedError("brief-not-found", `saved brief not found: ${requestId}`);
+    }
+    return brief;
+  }
+
+  // Build the trusted direct assignment input: general/Pi/none/initial
+  // defaults with no runtime overrides from the request.
+  async function directHandoffInput(input, label, launch) {
+    const validated = validateDirectRequest(input, label, launch);
+    const brief = await directBrief(validated.workspaceId, validated.requestId);
+    return {
+      trustedInput: {
+        assignment_id: validated.assignmentId,
+        workspace_id: validated.workspaceId,
+        storageRoot: configuredRoot,
+        brief,
+        instructions: validated.instructions,
+        context_references: validated.references,
+        skill: validated.skill,
+        target: validated.repositoryId,
+        specPackage: validated.specPackage,
+        provider: null,
+        model: null,
+        thinking: null,
+        harness: "pi",
+        project_trust: null,
+        workflow_id: null,
+        publication_authority: "none",
+        attempt_kind: "initial",
+        supersedes: null,
+      },
+      expectedDigest: validated.expectedDigest,
+    };
+  }
+
+  // Fresh resolution for one trusted input. A thread handoff additionally
+  // requires the resolved execution directory to equal its stored binding;
+  // direct dispatch passes null and keeps only the canonical resolver result.
+  async function resolveFreshAssignment(trustedInput, executionBinding, label) {
+    const fresh = await resolveAssignment(trustedInput, { referenceCatalog });
+    if (executionBinding !== null && (!fresh.record || fresh.record.execution_dir !== executionBinding)) {
+      throw typedError("stale-preview", `${label} target no longer matches the stored execution binding`);
+    }
+    return fresh;
+  }
+
+  // Shared launch core for thread handoffs and direct dispatch: approve the
+  // fresh digest, let the canonical assignment owner publish/claim/start,
+  // verify the stored record, optionally link the thread handoff and finally
+  // observe. Owner writer/run refusals become service typed errors carrying
+  // only the validated conflicting assignment UUID; unknown errors propagate.
+  async function executeResolvedLaunch({ trustedInput, assignmentId, expectedDigest, executionBinding, linkHandoff }) {
+    const fresh = await resolveFreshAssignment(trustedInput, executionBinding, "launch");
+    if (fresh.contractDigest !== expectedDigest) {
+      throw typedError("stale-preview", "approved contract digest no longer matches the resolved preview");
+    }
+    if (closed) throw serviceClosed();
+    try {
+      await launchAssignmentOwner(trustedInput, {
+        expectedDigest,
+        resolved: fresh,
+        adapters: launchAdapters ?? {},
+      });
+    } catch (error) {
+      if (error && error.code === "target-busy") {
+        throw typedError(
+          "target-busy",
+          error.message,
+          isUuid(error.assignment_id) ? { assignment_id: error.assignment_id } : {},
+        );
+      }
+      if (error && error.code === "run-active") {
+        throw typedError("run-active", error.message);
+      }
+      throw error;
+    }
+    const stored = await findAssignment(configuredRoot, assignmentId);
+    if (
+      stored.assignment_id !== assignmentId ||
+      stored.workspace_id !== trustedInput.workspace_id ||
+      stored.brief !== trustedInput.brief ||
+      stored.execution_dir !== (executionBinding ?? fresh.record.execution_dir) ||
+      stored.contract_digest !== fresh.contractDigest
+    ) {
+      throw typedError("stale-preview", "launched assignment record does not match the approved contract");
+    }
+    const linked = typeof linkHandoff === "function" ? await linkHandoff(stored) : null;
+    const observation = await observeAssignment(stored, launchAdapters?.observationProbes ?? {});
+    return { stored, observation, linked };
+  }
+
   /**
    * Preview an assignment from a saved handoff without launching it or writing
    * any assignment record. Returns the exact adj4 resolution object
@@ -2557,11 +2731,8 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
       const { record, workspace } = await loadServiceRecord(workspace_id, thread_id);
       const handoff = record.handoffs.find((entry) => entry.request_id === requestId);
       if (!handoff) throw typedError("brief-not-found", `saved brief not found: ${requestId}`);
-      const resolved = await resolveAssignment(await handoffInput(record, handoff, input, workspace), { referenceCatalog });
-      if (!resolved.record || resolved.record.execution_dir !== record.execution_dir) {
-        throw typedError("stale-preview", "preview target no longer matches the stored execution binding");
-      }
-      return resolved;
+      const trustedInput = await handoffInput(record, handoff, input, workspace);
+      return resolveFreshAssignment(trustedInput, record.execution_dir, "preview");
     });
   }
 
@@ -2589,44 +2760,116 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
         });
       }
       const trustedInput = await handoffInput(record, handoff, input, workspace);
-      const fresh = await resolveAssignment(trustedInput, { referenceCatalog });
-      if (!fresh.record || fresh.record.execution_dir !== record.execution_dir) {
-        throw typedError("stale-preview", "launch target no longer matches the stored execution binding");
-      }
-      if (fresh.contractDigest !== input.expectedDigest) {
-        throw typedError("stale-preview", "approved contract digest no longer matches the resolved preview");
-      }
-      if (closed) throw serviceClosed();
-      const launched = await launchAssignmentOwner(trustedInput, {
+      const launched = await executeResolvedLaunch({
+        trustedInput,
+        assignmentId,
         expectedDigest: input.expectedDigest,
-        resolved: fresh,
-        adapters: launchAdapters ?? {},
+        executionBinding: record.execution_dir,
+        linkHandoff: async () => {
+          let linked = record;
+          let linkedHandoff = handoff;
+          if (handoff.assignment_id !== assignmentId) {
+            linkedHandoff = { ...handoff, assignment_id: assignmentId };
+            linked = await persistRecord(directory, {
+              ...record,
+              handoffs: record.handoffs.map((entry) =>
+                entry.request_id === requestId ? linkedHandoff : entry,
+              ),
+              updated_at: new Date().toISOString(),
+            });
+          }
+          return { thread: linked, handoff: linkedHandoff };
+        },
       });
-      const stored = await findAssignment(configuredRoot, assignmentId);
-      if (
-        stored.assignment_id !== assignmentId ||
-        stored.workspace_id !== record.workspace_id ||
-        stored.brief !== handoff.brief ||
-        stored.execution_dir !== record.execution_dir ||
-        stored.contract_digest !== fresh.contractDigest
-      ) {
-        throw typedError("stale-preview", "launched assignment record does not match the approved contract");
-      }
-      let linked = record;
-      let linkedHandoff = handoff;
-      if (handoff.assignment_id !== assignmentId) {
-        linkedHandoff = { ...handoff, assignment_id: assignmentId };
-        linked = await persistRecord(directory, {
-          ...record,
-          handoffs: record.handoffs.map((entry) =>
-            entry.request_id === requestId ? linkedHandoff : entry,
-          ),
-          updated_at: new Date().toISOString(),
-        });
-      }
-      const observation = await observeAssignment(stored, launchAdapters?.observationProbes ?? {});
-      return { thread: linked, handoff: linkedHandoff, assignment: stored, observation };
+      return {
+        thread: launched.linked.thread,
+        handoff: launched.linked.handoff,
+        assignment: launched.stored,
+        observation: launched.observation,
+      };
     });
+  }
+
+  /**
+   * Save one direct brief material. Only the canonical workspace-relative
+   * brief path is returned; no thread or handoff record is created, and
+   * identical bytes under the same request UUID stay idempotent.
+   */
+  async function dispatchSaveBrief(input = {}) {
+    if (closed) throw serviceClosed();
+    requirePlainObject(input, "dispatchSaveBrief input");
+    for (const key of Object.keys(input)) {
+      if (!DIRECT_SAVE_KEYS.has(key)) {
+        throw typedError("invalid-brief", `dispatchSaveBrief does not accept a ${key} override`);
+      }
+    }
+    const { workspace_id, request_id: requestId, title, content } = input;
+    if (typeof workspace_id !== "string" || !WORKSPACE_ID_PATTERN.test(workspace_id)) {
+      throw invalidThread("workspace_id must be a workspace id");
+    }
+    if (!isUuid(requestId)) throw typedError("invalid-brief", "request_id must be a UUID");
+    if (typeof title !== "string" || title.trim() === "") {
+      throw typedError("invalid-brief", "brief title must be a non-empty string");
+    }
+    if (typeof content !== "string") throw typedError("invalid-brief", "brief content must be a string");
+    const material = await addMaterial(configuredRoot, workspace_id, {
+      kind: "brief",
+      title,
+      content,
+      request_id: requestId,
+    });
+    return { brief: material.path };
+  }
+
+  /**
+   * Preview a direct assignment from its canonical saved brief. Nothing is
+   * published, linked or reserved.
+   */
+  async function dispatchPreview(input = {}) {
+    if (closed) throw serviceClosed();
+    const { trustedInput } = await directHandoffInput(input, "dispatchPreview", false);
+    return resolveFreshAssignment(trustedInput, null, "preview");
+  }
+
+  /**
+   * Launch a direct assignment once the caller's reviewed digest matches the
+   * fresh resolution and the stored record verifies.
+   */
+  async function dispatchLaunch(input = {}) {
+    if (closed) throw serviceClosed();
+    const { trustedInput, expectedDigest } = await directHandoffInput(input, "dispatchLaunch", true);
+    const launched = await executeResolvedLaunch({
+      trustedInput,
+      assignmentId: trustedInput.assignment_id,
+      expectedDigest,
+      executionBinding: null,
+      linkHandoff: null,
+    });
+    return { assignment: launched.stored, observation: launched.observation };
+  }
+
+  /**
+   * Suggest skills or files for one workspace repository. The selected
+   * repository resolves through the canonical target owner without a package.
+   */
+  async function dispatchSuggestions(input = {}) {
+    if (closed) throw serviceClosed();
+    requirePlainObject(input, "dispatchSuggestions input");
+    for (const key of Object.keys(input)) {
+      if (!["workspace_id", "repository_id", "kind", "query"].includes(key)) {
+        throw typedError("invalid-handoff", `dispatchSuggestions does not accept a ${key} override`);
+      }
+    }
+    const { workspace_id, repository_id: repositoryId = null, kind, query = "" } = input;
+    if (typeof workspace_id !== "string" || !WORKSPACE_ID_PATTERN.test(workspace_id)) {
+      throw invalidThread("workspace_id must be a workspace id");
+    }
+    if (repositoryId !== null && (typeof repositoryId !== "string" || repositoryId === "")) {
+      throw typedError("invalid-handoff", "repository_id must be a non-empty string when provided");
+    }
+    const workspace = await fetchWorkspace(configuredRoot, workspace_id);
+    const resolved = await resolveTarget({ workspace, target: repositoryId ?? null, specPackage: null });
+    return referenceCatalog.suggest({ workspace, executionDir: resolved.execution_dir, kind, query });
   }
 
   function subscribe({ workspace_id, thread_id } = {}, listener) {
@@ -2729,5 +2972,5 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
     return referenceCatalog.suggest({ workspace, executionDir: record.execution_dir, kind, query });
   }
 
-  return { create, list, history, send, saveBrief, suggestions, previewAssignment, launchAssignment, discard, subscribe, resume, stop, close };
+  return { create, list, history, send, saveBrief, suggestions, dispatchSaveBrief, dispatchPreview, dispatchLaunch, dispatchSuggestions, previewAssignment, launchAssignment, discard, subscribe, resume, stop, close };
 }

@@ -70,7 +70,7 @@ export function scopeLabel(
 }
 
 export function requiresWorkspace(dest: Destination): boolean {
-  return dest === 'conversations' || dest === 'designs' || dest === 'files';
+  return dest === 'conversations' || dest === 'designs' || dest === 'files' || dest === 'launch';
 }
 
 export function needsWorkspacePicker(route: RouteState): boolean {
@@ -80,6 +80,13 @@ export function needsWorkspacePicker(route: RouteState): boolean {
 export function clearIncompatibleFields(route: RouteState): RouteState {
   const next: RouteState = { dest: route.dest };
   if (route.ws !== undefined) next.ws = route.ws;
+  // A launch draft belongs to one workspace: changing scope or workspace
+  // clears thread/package/target/assignment context and returns to the brief
+  // stage instead of reusing another workspace's context.
+  if (route.dest === 'launch') {
+    next.tab = 'brief';
+    return next;
+  }
   if (route.tab !== undefined) next.tab = route.tab;
   if (route.filter !== undefined) next.filter = route.filter;
   if (route.q !== undefined) next.q = route.q;

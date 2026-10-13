@@ -8,7 +8,7 @@ contents. Node.js is the only dependency.
 
 The dashboard is a Solid application with TypeScript components under
 `frontend/src/`. It uses the existing Node HTTP routes and SSE thread stream.
-Polling updates observed data; message and brief editors keep their own drafts
+Polling updates observed data; message and launch editors keep their own drafts
 and mounted input elements.
 
 The committed `dashboard.html` is the generated, self-contained deployment asset.
@@ -34,19 +34,23 @@ executed the handwritten renderer against a fake DOM; HTTP and file-boundary
 tests remain in `dashboard.test.mjs`. The browser journey waits through real
 five-second polls to detect editor replacement and reuses one isolated fixture
 for its sequential interactions. Three independent desktop sibling checks cover the
-retained journeys: `autocomplete-check.py`, `browser-handoff-check.py` and
+retained journeys: `autocomplete-check.py` (launch-brief autocomplete at
+1440x1100), `browser-handoff-check.py` (brief, review, result, thread-bound and
+the direct Agents -> workspace -> brief -> review -> launch journey) and
 `browser-session-check.py`. When `SENTINEL_EVIDENCE_DIR` names the package evidence
 directory, each writes its `ev-3-autocomplete.json`, `ev-4-handoff.json` or
 `ev-5-session.json` receipt and routes captures to `evidence/browser/`; otherwise
-both fall back to `/tmp`.
+each falls back to `/tmp`.
 
-In **Brief and assignment**, `/` suggests skills from the execution host's
-installed Pi catalog, including configured user and project sources. `@` suggests
-text files from the thread's selected repository and shared workspace material;
-a whole-workspace thread searches its recorded repositories. Suggestions show
-skill descriptions or file headings and source names. Arrow keys select an item,
-Enter or Tab inserts it, and Escape closes the list. Enter accepts an open
-suggestion before it saves the brief. Paths and email addresses remain ordinary text.
+In the launch brief (`#/launch?ws=<workspace>&tab=brief`), `/` suggests skills
+from the execution host's installed Pi catalog, including configured user and
+project sources. `@` suggests text files from the draft's retained target: a
+whole-workspace draft searches the shared workspace material and every checked
+out repository in the kit, while a repository target searches that checkout.
+Suggestions show skill descriptions or file headings and source names. Arrow
+keys select an item, Enter or Tab inserts it, and Escape closes the list. Enter
+accepts an open suggestion before it saves the brief. Paths and email addresses
+remain ordinary text.
 
 Selections are saved as canonical identities alongside the brief. Editing away a
 selection marker removes its identity. The server resolves identities against the
@@ -69,7 +73,7 @@ Focused reference checks run with
 journey runs with
 `uv run --script scripts/spec-observe/frontend/autocomplete-check.py` using the
 same isolated fixture. Its refresh wait protects cursor selection, and its delayed
-searches protect against stale replies after edits or thread navigation.
+searches protect against stale replies after edits or launch-context changes.
 
 In an interactive Pi session, starting `/spec-sentinel`, `observe`, `shadow`, or
 `recover` starts an owned localhost dashboard and opens it in the default browser.
@@ -147,7 +151,9 @@ The record view is read-only: it never invokes attach, takeover or resume and
 never writes records. The local live session controls only copy the attach command
 and end the session after the identity confirmation; the agent detail shows the
 bounded last response, not the transcript, and remote or imported snapshots expose
-no session controls. Older snapshots without `assignments`
+no session controls. The header's **Launch agent** action starts the direct
+assignment flow described under launch flow and assignment handoff, leaving
+this list read-only. Older snapshots without `assignments`
 simply show no agent rows.
 
 Run cards and details show the assigned step’s position, name and total prepared
@@ -346,15 +352,66 @@ it. Workspace HTML may load fonts from inside the workspace (`font-src 'self'`);
 network access stays disabled. Read-only; nothing writes a design record. Contract:
 [docs/design-packages.md](../../docs/design-packages.md).
 
-### Thread briefs and assignment handoff
+### Launch flow and assignment handoff
+
+The **Agents** view's **Launch agent** action (`#launch-agent-action`) starts the
+direct assignment flow. At portfolio scope it opens the workspace picker first;
+choosing a workspace mounts the brief at `#/launch?ws=<workspace>&tab=brief`. The
+route carries `ws` plus optional `thread`, `target`, `package` and `skill`; `tab`
+is `brief`, `review` or `result`, and a result route adds `id` (the submitted
+assignment UUID). A cold review URL without local saved state falls back to the
+brief, and a result URL whose id has no local record shows inspection guidance
+instead of claiming local confirmation. Thread **Prepare assignment** opens this
+same surface with the thread id and the thread's recorded repository target.
+
+The direct dispatch surface posts JSON to `/api/dispatch/save-brief`,
+`/api/dispatch/preview` and `/api/dispatch/launch`, and reads
+`/api/dispatch/suggestions`; thread-bound assignment work uses
+`/api/thread/save-brief`, `/api/thread/preview-assignment` and
+`/api/thread/launch-assignment`. All writes require the endpoint's exact
+same-origin URL, the dashboard action token and JSON. A brief save accepts the
+64 KiB large-body cap; preview and launch accept the 8 KiB administrative cap.
+Direct defaults are the whole workspace when no repository is selected, the
+`general` skill, the `pi` harness, no publication authority, and the fixed
+assignment instruction; references cross the wire as identity only (`kind`,
+`id`). Thread-bound preview and launch reuse the target recorded with the saved
+brief, so the server remains the binding authority.
+
+**Save brief** publishes one canonical markdown brief for the typed title and
+content, and never starts an agent. The submitted title, content, target and
+selected references stay visible and disabled while the save is pending; a
+failure keeps the typed work and retries the same request identity, and saving
+unchanged content again keeps the existing request instead of creating another
+brief. **Review** resolves the saved brief and shows the requested facts beside
+the resolved target, execution directory, skill, model and the 64-character
+`contractDigest`, with the captured **What Pi will receive** contents and
+hashes. **Launch agent** submits that exact `expectedDigest`; a changed source
+or target makes the fresh resolution differ and the service refuses with a 409
+`stale-preview`, retaining the previous facts and withholding dispatch until
+another review. `target-busy`, `run-active` and `request-conflict` also withhold
+dispatch, and an unavailable service is distinct; a busy denial names and links
+the conflicting assignment for inspection. Nothing starts until the explicit
+launch control is used, and a second launch is unavailable while dispatch is
+pending.
+
+After launch the result route shows the submitted assignment ID, execution
+directory, brief and recorded observation. `live` is a launch acknowledgement
+that never claims completion; `launch_failed` is a confirmed startup failure
+with **Correct assignment** minting fresh request and assignment identities
+while retaining the typed text; any other acknowledgement is unconfirmed and
+inspection-only — locate the submitted identity in Agents and do not relaunch
+it. **Open agent** selects the exact observed assignment when available,
+otherwise a workspace-scoped UUID filter. **Discuss result** appears only for a
+thread-bound result and fills that thread's composer with an unsent summary
+draft; nothing is sent until the operator reviews the text and presses the
+existing **Send** control on the queued-message path. The thread message
+composer and queue stay message-scoped and never launch an assignment.
 
 Selecting a workspace shows its discussion threads. The loopback dashboard and the
-configured `--public-host` endpoint support thread reads, messages, brief editing
-and assignment launch. Publish that endpoint through Tailscale Serve: the tailnet
-ACL controls who can reach it. Forwarding or identity headers alone grant no access.
-Writes require the endpoint's exact same-origin URL, the dashboard's thread action
-token and JSON. Imported snapshots expose no message, brief or launch controls.
-Package completion remains local-only.
+configured `--public-host` endpoint support thread reads and messages. Publish
+that endpoint through Tailscale Serve: the tailnet ACL controls who can reach it.
+Forwarding or identity headers alone grant no access. Imported snapshots expose
+no message, brief or launch controls. Package completion remains local-only.
 
 **Create thread** starts a thread called "New thread" in the whole workspace or a
 chosen repository. The thread's Pi runs in that directory and receives no kit or
@@ -364,33 +421,6 @@ project context. When the first message is sent, the host asks
 the open page updates without a reload. A failed or slow naming call leaves
 "New thread" in place and never delays delivery. The first message's text is
 sent to that model for naming.
-
-Below the transcript and composer, the thread detail shows the brief editor and
-the assignment handoff. **Save brief** publishes one canonical markdown brief for
-the typed title and content through `/api/thread/save-brief`; the browser
-generates the request UUID per save and reuses it when retrying an unchanged
-draft after a failure. A conflict or any error keeps both fields, shows the
-conflict text and returns focus to the save control. Saving publishes material
-automatically; it never launches an assignment.
-A visible status explains whether the brief is saved, awaiting launch, or started.
-After saving, focus and the primary action move to **Preview assignment**; after
-previewing they move to **Launch assignment**. Saving unchanged content again
-keeps the existing request and preview instead of creating another brief.
-
-**Preview assignment** calls `/api/thread/preview-assignment` with the saved
-brief and shows the resolved target, execution directory, brief, model and the
-64-character `contractDigest` before anything starts. **Launch assignment** sends
-that exact `expectedDigest` to `/api/thread/launch-assignment`; the service
-refuses when the fresh resolution no longer matches. A refused launch (409)
-keeps the preview visible, marks it stale, disables Launch and requires a new
-preview, so an operator can never dispatch a stale contract. Repeating the same
-assignment ID is idempotent and does not spawn a second session.
-
-After a launch the result card shows the assignment ID, recorded state,
-attention and a read-only anchor; the page never fetches the assignment
-automatically. **Discuss result** only fills the composer with a summary draft.
-Nothing is sent or launched until the operator reviews the text and presses the
-existing **Send** control, which uses the queued-message path.
 
 ## Observe-only host (operator)
 

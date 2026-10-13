@@ -3,7 +3,8 @@ import { getJson } from './api';
 import type { BriefReference, TriggerItem } from './composerTypes';
 
 type Query = { kind: 'skill' | 'file'; text: string; start: number; end: number };
-type Props = { id: string; value: string; references: BriefReference[]; workspaceId: string; threadId: string; enabled: boolean;
+export type SuggestionSource = { path: string; params: Record<string, string> };
+type Props = { id: string; value: string; references: BriefReference[]; workspaceId: string; suggestionSource?: SuggestionSource; enabled: boolean; disabled?: boolean;
   onChange(value: string): void; onReferencesChange(refs: BriefReference[]): void; onSave(): void };
 const tokenPresent = (text: string, token: string) => text.split(token).some((part, i, parts) => i < parts.length - 1 && (part === '' || /\s$/.test(part)) && (parts[i + 1] === '' || /^[\s.,;!?)]/.test(parts[i + 1])));
 
@@ -20,7 +21,13 @@ export default function BriefComposer(props: Props) {
   const [warnings, setWarnings] = createSignal<string[]>([]);
   const [dismissed, setDismissed] = createSignal('');
   const listId = `${props.id}-suggestions`;
-  const signature = () => `${props.workspaceId}\0${props.threadId}`;
+  // Suggestions are keyed by the full source so a caller can move its target
+  // without sharing another surface's request or cancellation identity.
+  const requestSource = (): SuggestionSource | null => props.suggestionSource ?? null;
+  const signature = () => {
+    const source = requestSource();
+    return source ? `${source.path}\0${JSON.stringify(source.params)}` : '';
+  };
   const close = () => { setQuery(null); controller?.abort(); clearTimeout(timer); generation++; setLoading(false); };
   const inspect = () => {
     if (composing || !props.enabled || document.activeElement !== editor || editor.selectionStart !== editor.selectionEnd) { close(); return; }
@@ -33,16 +40,16 @@ export default function BriefComposer(props: Props) {
   };
   createEffect(() => { const value = props.value; if (editor && editor.value !== value) editor.value = value; });
   createEffect(() => {
-    const q = query(), target = signature(), enabled = props.enabled;
+    const q = query(), source = requestSource(), target = signature(), enabled = props.enabled;
     controller?.abort(); clearTimeout(timer);
     const request = ++generation;
     setItems([]); setHighlighted(0); setError(''); setWarnings([]);
-    if (!q || !enabled || !props.threadId) { setLoading(false); return; }
+    if (!q || !enabled || !source) { setLoading(false); return; }
     setLoading(true); controller = new AbortController(); const signal = controller.signal;
     timer = setTimeout(async () => {
       try {
-        const params = new URLSearchParams({ workspace_id: props.workspaceId, thread_id: props.threadId, kind: q.kind, query: q.text });
-        const result = await getJson<{items: TriggerItem[]; warnings?: string[]; truncated?: boolean}>(`/api/thread/suggestions?${params}`, signal);
+        const params = new URLSearchParams({ ...source.params, kind: q.kind, query: q.text });
+        const result = await getJson<{items: TriggerItem[]; warnings?: string[]; truncated?: boolean}>(`${source.path}?${params}`, signal);
         if (request !== generation || target !== signature() || signal.aborted) return;
         setItems(result.items || []); setWarnings([...(result.warnings || []), ...(result.truncated ? ['More files exist. Narrow the path to find your file.'] : [])]);
       } catch (e) { if (request === generation && !signal.aborted) setError(e instanceof Error ? e.message : 'Suggestions could not be loaded.'); }
@@ -50,6 +57,7 @@ export default function BriefComposer(props: Props) {
     }, 120);
   });
   createEffect(() => { signature(); close(); setDismissed(''); });
+  createEffect(() => { if (props.disabled) close(); });
   onCleanup(close);
   function select(item: TriggerItem) {
     const q = query(); if (!q) return;
@@ -65,7 +73,7 @@ export default function BriefComposer(props: Props) {
     props.onChange(props.value.replace(ref.token, '')); props.onReferencesChange(props.references.filter(item => item.id !== ref.id)); editor.focus();
   }
   return <div class="brief-composer">
-    <textarea id={props.id} rows="6" placeholder="Write the assignment brief. Type / for skills or @ for files." ref={editor}
+    <textarea id={props.id} rows="6" placeholder="Write the assignment brief. Type / for skills or @ for files." ref={editor} disabled={props.disabled}
       role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded={!!query()} aria-controls={query() ? listId : undefined}
       aria-activedescendant={query() && items()[highlighted()] ? `${listId}-${highlighted()}` : undefined}
       onInput={e => { const value = e.currentTarget.value; props.onChange(value); props.onReferencesChange(props.references.filter(ref => tokenPresent(value, ref.token))); setDismissed(''); inspect(); }}

@@ -1306,6 +1306,34 @@ export async function createWorkspace(root, options = {}) {
 
 const REQUEST_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+/**
+ * Deterministic workspace-relative path of a request-owned material:
+ * `<folder>/brief-<sha256(workspace id NUL kind NUL request id)>.md`, where
+ * `folder` is `briefs` for a brief and `notes` for a note. Pure computation:
+ * nothing is read, created or modified; the caller owns publication and
+ * conflict checks.
+ * @param {string} workspaceId workspace kit id
+ * @param {"brief"|"note"} kind
+ * @param {string} requestId canonical RFC 4122 request id
+ * @returns {string}
+ */
+export function requestMaterialPath(workspaceId, kind, requestId) {
+  if (typeof workspaceId !== "string" || workspaceId === "") {
+    throw new TypeError("workspace id must be a non-empty string");
+  }
+  const folder = kind === "brief" ? "briefs" : kind === "note" ? "notes" : null;
+  if (folder === null) throw new Error(`invalid material kind: ${String(kind)}`);
+  if (typeof requestId !== "string" || !REQUEST_ID_PATTERN.test(requestId)) {
+    throw Object.assign(new Error(`invalid material request_id: ${String(requestId)}`), {
+      code: "invalid-request-id",
+    });
+  }
+  const digest = createHash("sha256")
+    .update(`${workspaceId}\0${kind}\0${requestId}`, "utf8")
+    .digest("hex");
+  return `${folder}/brief-${digest}.md`;
+}
+
 function materialSlug(title) {
   const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   return slug === "" ? "material" : slug;
@@ -1389,9 +1417,8 @@ export async function addMaterial(root, id, options = {}) {
 
   if (requestId !== undefined) {
     const bytes = `# ${title}\n\n${content}${content.endsWith("\n") ? "" : "\n"}`;
-    const digest = createHash("sha256").update(`${id}\0${kind}\0${requestId}`, "utf8").digest("hex");
-    const name = `brief-${digest}.md`;
-    const relativePath = `${folder}/${name}`;
+    const relativePath = requestMaterialPath(id, kind, requestId);
+    const name = basename(relativePath);
     try {
       await createFileExclusive(join(directory, name), bytes);
       return { path: relativePath };

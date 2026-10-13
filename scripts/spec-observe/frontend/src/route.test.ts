@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { formatHash, parseHash, routeHistoryMode, subscribeRoute, type RouteState } from './route';
+import { busyAgentsHref, formatHash, parseHash, routeHistoryMode, subscribeRoute, type RouteState } from './route';
 import {
   clearIncompatibleFields,
   firstUnmatchedTargetId,
@@ -231,4 +231,86 @@ test('workspace-required destinations request a picker and scope changes clear i
   assert.deepEqual(withWorkspace(route, 'beta'), { dest: 'files', ws: 'beta', tab: 'overview', filter: 'open', q: 'needle' });
   assert.deepEqual(clearIncompatibleFields(route), { dest: 'files', ws: 'alpha', tab: 'overview', filter: 'open', q: 'needle' });
   assert.deepEqual(route, original);
+});
+
+test('launch destination round-trips its context, step and assignment fields', () => {
+  const route: RouteState = {
+    dest: 'launch',
+    ws: 'fixture',
+    tab: 'brief',
+    thread: 'thread-1',
+    target: 'repo-a',
+    package: 'fixture/pkg',
+    skill: 'general',
+  };
+  assert.deepEqual(parseHash(formatHash(route)), route);
+  assert.equal(
+    formatHash(route),
+    '#/launch?ws=fixture&tab=brief&thread=thread-1&target=repo-a&package=fixture%2Fpkg&skill=general',
+  );
+  assert.deepEqual(parseHash('#/launch?ws=fixture&tab=review&id=assignment-1'), {
+    dest: 'launch',
+    ws: 'fixture',
+    tab: 'review',
+    id: 'assignment-1',
+  });
+});
+
+test('launch requires a workspace and scope changes clear context back to the brief', () => {
+  assert.equal(requiresWorkspace('launch'), true);
+  assert.equal(needsWorkspacePicker({ dest: 'launch' }), true);
+  assert.equal(needsWorkspacePicker({ dest: 'launch', ws: 'fixture' }), false);
+  const route: RouteState = {
+    dest: 'launch',
+    ws: 'fixture',
+    tab: 'review',
+    id: 'assignment-1',
+    thread: 'thread-1',
+    target: 'repo-a',
+    package: 'fixture/pkg',
+    skill: 'general',
+  };
+  const original = { ...route };
+  assert.deepEqual(clearIncompatibleFields(route), { dest: 'launch', ws: 'fixture', tab: 'brief' });
+  assert.deepEqual(withWorkspace(route, 'other'), { dest: 'launch', ws: 'other', tab: 'brief' });
+  assert.deepEqual(route, original, 'normalizing a launch route must not mutate the caller state');
+  assert.equal(routeHistoryMode(route, { ...route }), 'replace');
+  assert.equal(routeHistoryMode(route, { ...route, target: 'repo-b' }), 'push');
+  assert.equal(routeHistoryMode(route, { ...route, thread: 'thread-2' }), 'push');
+  assert.equal(routeHistoryMode(route, { ...route, tab: 'brief' }), 'push');
+});
+
+test('a launch route without required workspace state invents nothing on mount', () => {
+  const route: RouteState = { dest: 'launch' };
+  assert.deepEqual(parseHash('#/launch'), route);
+  assert.equal(parseHash('#/launch').ws, undefined);
+  assert.deepEqual(clearIncompatibleFields(route), { dest: 'launch', tab: 'brief' });
+  assert.deepEqual(route, { dest: 'launch' });
+});
+
+test('busy denial links the observed key when available and filters by UUID before observation', () => {
+  const conflicting = 'b42f1903-9508-46c1-a4aa-a0842dbce617';
+  const unrelatedKey = JSON.stringify(['fixture', 'run-1']);
+  const conflictingKey = JSON.stringify(['fixture', conflicting]);
+  const assignments = [
+    { assignment_id: 'run-1', key: unrelatedKey },
+    { assignment_id: conflicting, key: conflictingKey },
+  ];
+  // Matching observed key wins even though an unrelated row sorts first.
+  assert.equal(
+    busyAgentsHref('fixture', conflicting, assignments),
+    `#/agents?ws=fixture&id=${encodeURIComponent(conflictingKey)}`,
+  );
+  // Conflicting assignment absent: workspace-scoped q route, never a raw id.
+  assert.equal(
+    busyAgentsHref('fixture', conflicting, [{ assignment_id: 'run-1', key: unrelatedKey }]),
+    `#/agents?ws=fixture&q=${encodeURIComponent(conflicting)}`,
+  );
+  assert.equal(
+    busyAgentsHref('fixture', conflicting, []),
+    `#/agents?ws=fixture&q=${encodeURIComponent(conflicting)}`,
+  );
+  // No conflict: plain workspace route.
+  assert.equal(busyAgentsHref('fixture', undefined, assignments), '#/agents?ws=fixture');
+  assert.equal(busyAgentsHref('fixture', '', assignments), '#/agents?ws=fixture');
 });

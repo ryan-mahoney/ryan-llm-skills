@@ -14,14 +14,15 @@ import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join, delimiter } from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { processIdentity } from "../spec-observe/process-identity.mjs";
 import { createDiscussionService, readThread, validateThread } from "./discussion.mjs";
-import { createWorkspace, setupStorage, addMaterial } from "./store.mjs";
+import { createWorkspace, setupStorage, addMaterial, requestMaterialPath } from "./store.mjs";
 import { findAssignment, resolveAssignment } from "./assignments.mjs";
+import { newPackage } from "../spec-location/index.mjs";
 
 const PI_FIXTURE = fileURLToPath(new URL("./fixtures/fake-pi-rpc.mjs", import.meta.url));
 
@@ -4510,6 +4511,416 @@ test("thread handoff refuses a Git worktree with no registered repository", { ti
     );
     assert.equal(stored.handoffs[0].assignment_id, undefined);
     assert.deepEqual(stored.target, { kind: "worktree", path: linked });
+  } finally {
+    await service.close();
+  }
+});
+
+// Focused direct dispatch service acceptance (step 3, EV-5):
+//   node --test --test-name-pattern='direct dispatch service' scripts/workspaces/discussion.test.mjs
+
+test("direct dispatch service saves one canonical brief and refuses untrusted or missing briefs", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const workspaceDirectory = await setupWorkspace(storageRoot, "alpha");
+  const service = createDiscussionService({ root: storageRoot, agentDir: join(root, "agent") });
+  try {
+    const requestId = randomUUID();
+    const saved = await service.dispatchSaveBrief({
+      workspace_id: "alpha",
+      request_id: requestId,
+      title: "Title",
+      content: "body\n",
+    });
+    assert.equal(saved.brief, requestMaterialPath("alpha", "brief", requestId));
+    assert.match(saved.brief, /^briefs\/brief-[0-9a-f]{64}\.md$/);
+    const briefPath = join(workspaceDirectory, saved.brief);
+    assert.equal(await readFile(briefPath, "utf8"), "# Title\n\nbody\n");
+
+    const repeat = await service.dispatchSaveBrief({
+      workspace_id: "alpha",
+      request_id: requestId,
+      title: "Title",
+      content: "body\n",
+    });
+    assert.deepEqual(repeat, { brief: saved.brief });
+    assert.equal(await readFile(briefPath, "utf8"), "# Title\n\nbody\n");
+
+    await assert.rejects(
+      service.dispatchSaveBrief({
+        workspace_id: "alpha",
+        request_id: requestId,
+        title: "Title",
+        content: "changed\n",
+      }),
+      { code: "request-conflict" },
+    );
+    assert.equal(await readFile(briefPath, "utf8"), "# Title\n\nbody\n");
+
+    await assert.rejects(
+      service.dispatchSaveBrief({
+        workspace_id: "alpha",
+        request_id: requestId,
+        title: "Title",
+        content: "body\n",
+        path: "briefs/x.md",
+      }),
+      { code: "invalid-brief" },
+    );
+    await assert.rejects(
+      service.dispatchSaveBrief({ workspace_id: "alpha", request_id: "not-a-uuid", title: "T", content: "c" }),
+      { code: "invalid-brief" },
+    );
+    await assert.rejects(
+      service.dispatchSaveBrief({ workspace_id: "BAD ID", request_id: randomUUID(), title: "T", content: "c" }),
+      { code: "invalid-thread" },
+    );
+    await assert.rejects(
+      service.dispatchSaveBrief({ workspace_id: "alpha", request_id: randomUUID(), title: "   ", content: "c" }),
+      { code: "invalid-brief" },
+    );
+
+    const assignmentId = randomUUID();
+    const directInput = {
+      workspace_id: "alpha",
+      request_id: requestId,
+      assignment_id: assignmentId,
+      instructions: "Deliver it.",
+    };
+    await assert.rejects(service.dispatchPreview({ ...directInput, path: "briefs/x.md" }), {
+      code: "invalid-handoff",
+    });
+    await assert.rejects(service.dispatchPreview({ ...directInput, workspace_id: "BAD ID" }), {
+      code: "invalid-thread",
+    });
+    await assert.rejects(service.dispatchPreview({ ...directInput, request_id: "not-a-uuid" }), {
+      code: "invalid-handoff",
+    });
+    await assert.rejects(service.dispatchPreview({ ...directInput, assignment_id: "not-a-uuid" }), {
+      code: "invalid-handoff",
+    });
+    await assert.rejects(service.dispatchPreview({ ...directInput, instructions: "" }), {
+      code: "invalid-handoff",
+    });
+    await assert.rejects(
+      service.dispatchPreview({ ...directInput, references: [{ kind: "file", id: "file:nothex" }] }),
+      { code: "invalid-reference" },
+    );
+    await assert.rejects(service.dispatchLaunch({ ...directInput, expectedDigest: "not-a-digest" }), {
+      code: "invalid-handoff",
+    });
+    await assert.rejects(service.dispatchPreview({ ...directInput, request_id: randomUUID() }), {
+      code: "brief-not-found",
+    });
+
+    // The derived request path is the only accepted brief leaf: a symlink and
+    // a directory at that exact name refuse as brief-not-found.
+    const symlinkRequestId = randomUUID();
+    const outside = join(root, "outside.md");
+    await writeFile(outside, "# Outside\n");
+    await mkdir(join(workspaceDirectory, "briefs"), { recursive: true });
+    await symlink(outside, join(workspaceDirectory, requestMaterialPath("alpha", "brief", symlinkRequestId)));
+    await assert.rejects(service.dispatchPreview({ ...directInput, request_id: symlinkRequestId }), {
+      code: "brief-not-found",
+    });
+    const directoryRequestId = randomUUID();
+    await mkdir(join(workspaceDirectory, requestMaterialPath("alpha", "brief", directoryRequestId)));
+    await assert.rejects(service.dispatchPreview({ ...directInput, request_id: directoryRequestId }), {
+      code: "brief-not-found",
+    });
+
+    // No thread, session or assignment path was created by any refusal.
+    await assert.rejects(lstat(join(workspaceDirectory, "threads")), { code: "ENOENT" });
+    await assert.rejects(lstat(join(workspaceDirectory, "sessions")), { code: "ENOENT" });
+    await assert.rejects(lstat(join(workspaceDirectory, "assignments")), { code: "ENOENT" });
+  } finally {
+    await service.close();
+  }
+});
+
+test("direct dispatch service previews and launches a repository assignment", { timeout: 30000 }, async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const repository = await makeRepo(join(root, "repos", "app"));
+  const workspaceDirectory = await setupWorkspace(storageRoot, "repo-ws", [{ id: "app", path: repository }]);
+  await mkdir(join(repository, "docs"), { recursive: true });
+  const sourcePath = join(repository, "docs", "context.md");
+  await writeFile(sourcePath, "# Selected context\nUse this exact source.\n");
+
+  const binDirectory = join(root, "bin");
+  await mkdir(binDirectory, { recursive: true });
+  const piPath = join(binDirectory, "pi");
+  await writeFile(piPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await chmod(piPath, 0o755);
+  const savedPath = process.env.PATH;
+  process.env.PATH = `${binDirectory}${delimiter}${savedPath}`;
+  t.after(() => {
+    if (savedPath === undefined) delete process.env.PATH;
+    else process.env.PATH = savedPath;
+  });
+
+  const dummy = dummyProcess(t);
+  const tmux = tmuxHarness({ dummyPid: dummy.pid });
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    assignmentAdapters: {
+      tmuxRun: tmux.run,
+      observationProbes: { tmuxRun: tmux.run, psRun: () => ({ stdout: "", complete: true }) },
+    },
+  });
+  try {
+    const requestId = randomUUID();
+    const assignmentId = randomUUID();
+    const instructions = "Deliver the direct assignment.";
+    const saved = await service.dispatchSaveBrief({
+      workspace_id: "repo-ws",
+      request_id: requestId,
+      title: "Direct",
+      content: "body\n",
+    });
+
+    const suggestions = await service.dispatchSuggestions({
+      workspace_id: "repo-ws",
+      repository_id: "app",
+      kind: "file",
+      query: "context.md",
+    });
+    const suggestion = suggestions.items.find((item) => item.label === "docs/context.md");
+    assert.ok(suggestion, "expected the repository file suggestion");
+    assert.match(suggestion.id, /^file:[0-9a-f]{64}$/);
+    assert.equal(suggestion.source, "app");
+    const reference = { kind: "file", id: suggestion.id };
+
+    const directInput = {
+      workspace_id: "repo-ws",
+      request_id: requestId,
+      assignment_id: assignmentId,
+      instructions,
+      repository_id: "app",
+      references: [reference],
+    };
+    const preview = await service.dispatchPreview(directInput);
+    assert.equal(preview.record.assignment_id, assignmentId);
+    assert.equal(preview.record.workspace_id, "repo-ws");
+    assert.equal(preview.record.brief, saved.brief);
+    assert.equal(preview.record.repository_id, "app");
+    assert.equal(preview.record.execution_dir, repository);
+    assert.equal(preview.record.skill, "general");
+    assert.equal(preview.record.harness, "pi");
+    assert.equal(preview.record.publication_authority, "none");
+    assert.equal(preview.record.attempt_kind, "initial");
+    assert.equal(preview.record.provider, null);
+    assert.equal(preview.record.model, null);
+    assert.equal(preview.record.context_references.length, 1);
+    assert.equal(preview.record.context_references[0].id, reference.id);
+    assert.match(preview.briefBytes.toString("utf8"), /# Selected context\nUse this exact source\./);
+
+    // Direct preview writes no thread, assignment or tmux work.
+    await assert.rejects(lstat(join(workspaceDirectory, "threads")), { code: "ENOENT" });
+    await assert.rejects(lstat(join(workspaceDirectory, "assignments")), { code: "ENOENT" });
+    assert.equal(tmux.calls.length, 0);
+
+    // A captured-source change after review refuses the old digest and
+    // publishes nothing; the fresh review then launches exactly once.
+    await writeFile(sourcePath, "# Changed context\nDifferent bytes.\n");
+    await assert.rejects(service.dispatchLaunch({ ...directInput, expectedDigest: preview.contractDigest }), {
+      code: "stale-preview",
+    });
+    await assert.rejects(lstat(join(workspaceDirectory, "assignments", `${assignmentId}.json`)), {
+      code: "ENOENT",
+    });
+    assert.equal(tmux.calls.length, 0);
+
+    const fresh = await service.dispatchPreview(directInput);
+    assert.notEqual(fresh.contractDigest, preview.contractDigest);
+    assert.match(fresh.briefBytes.toString("utf8"), /# Changed context/);
+    const launched = await service.dispatchLaunch({ ...directInput, expectedDigest: fresh.contractDigest });
+    assert.equal(launched.assignment.assignment_id, assignmentId);
+    assert.equal(launched.assignment.state, "live");
+    assert.equal(launched.assignment.brief, saved.brief);
+    assert.equal(launched.assignment.execution_dir, repository);
+    assert.equal(launched.assignment.repository_id, "app");
+    assert.equal(launched.assignment.context_references[0].id, reference.id);
+    assert.equal(launched.observation.state, "live");
+    assert.equal(tmux.newSessionCount(), 1);
+    assert.deepEqual(
+      await readFile(join(workspaceDirectory, "assignments", `${assignmentId}.brief.md`)),
+      fresh.briefBytes,
+    );
+
+    const repeat = await service.dispatchLaunch({ ...directInput, expectedDigest: fresh.contractDigest });
+    assert.equal(repeat.assignment.assignment_id, assignmentId);
+    assert.equal(repeat.observation.state, "live");
+    assert.equal(tmux.newSessionCount(), 1);
+  } finally {
+    await service.close();
+  }
+
+  // Service close must not kill the launched tmux work.
+  assert.equal(tmux.newSessionCount(), 1);
+  assert.equal(tmux.destructiveCount(), 0);
+  assert.equal(dummy.exitCode, null);
+  assert.doesNotThrow(() => process.kill(dummy.pid, 0));
+});
+
+test("direct dispatch service refuses a busy execution directory with target-busy", { timeout: 30000 }, async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const repository = await makeRepo(join(root, "repos", "app"));
+  const workspaceDirectory = await setupWorkspace(storageRoot, "busy-ws", [{ id: "app", path: repository }]);
+
+  const binDirectory = join(root, "bin");
+  await mkdir(binDirectory, { recursive: true });
+  const piPath = join(binDirectory, "pi");
+  await writeFile(piPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await chmod(piPath, 0o755);
+  const savedPath = process.env.PATH;
+  process.env.PATH = `${binDirectory}${delimiter}${savedPath}`;
+  t.after(() => {
+    if (savedPath === undefined) delete process.env.PATH;
+    else process.env.PATH = savedPath;
+  });
+
+  const dummy = dummyProcess(t);
+  const tmux = tmuxHarness({ dummyPid: dummy.pid });
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    assignmentAdapters: {
+      tmuxRun: tmux.run,
+      observationProbes: { tmuxRun: tmux.run, psRun: () => ({ stdout: "", complete: true }) },
+    },
+  });
+  try {
+    const requestId = randomUUID();
+    const firstId = randomUUID();
+    const secondId = randomUUID();
+    await service.dispatchSaveBrief({
+      workspace_id: "busy-ws",
+      request_id: requestId,
+      title: "Busy",
+      content: "body\n",
+    });
+    const input = (assignmentId) => ({
+      workspace_id: "busy-ws",
+      request_id: requestId,
+      assignment_id: assignmentId,
+      instructions: "Deliver the direct assignment.",
+      repository_id: "app",
+    });
+
+    const firstPreview = await service.dispatchPreview(input(firstId));
+    const first = await service.dispatchLaunch({ ...input(firstId), expectedDigest: firstPreview.contractDigest });
+    assert.equal(first.assignment.assignment_id, firstId);
+    assert.equal(tmux.newSessionCount(), 1);
+
+    const secondPreview = await service.dispatchPreview(input(secondId));
+    assert.equal(secondPreview.record.execution_dir, repository);
+    await assert.rejects(
+      service.dispatchLaunch({ ...input(secondId), expectedDigest: secondPreview.contractDigest }),
+      (error) => {
+        assert.equal(error.code, "target-busy");
+        assert.equal(error.assignment_id, firstId);
+        assert.equal(error.run_id, undefined);
+        assert.equal(error.pid, undefined);
+        return true;
+      },
+    );
+    assert.equal(tmux.newSessionCount(), 1);
+    const records = (await readdir(join(workspaceDirectory, "assignments"))).filter((name) => name.endsWith(".json"));
+    assert.deepEqual(records, [`${firstId}.json`]);
+  } finally {
+    await service.close();
+  }
+  assert.equal(tmux.newSessionCount(), 1);
+  assert.equal(tmux.destructiveCount(), 0);
+  assert.equal(dummy.exitCode, null);
+});
+
+test("direct dispatch service refuses an active spec run with typed run-active", { timeout: 30000 }, async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const repository = await makeRepo(join(root, "repos", "app"));
+  const workspaceDirectory = await setupWorkspace(storageRoot, "pkg-ws", [{ id: "app", path: repository }]);
+
+  const binDirectory = join(root, "bin");
+  await mkdir(binDirectory, { recursive: true });
+  const piPath = join(binDirectory, "pi");
+  await writeFile(piPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await chmod(piPath, 0o755);
+  const savedPath = process.env.PATH;
+  process.env.PATH = `${binDirectory}${delimiter}${savedPath}`;
+  t.after(() => {
+    if (savedPath === undefined) delete process.env.PATH;
+    else process.env.PATH = savedPath;
+  });
+
+  // spec-location resolution requires an execution host; the shared
+  // setupWorkspace helper stays host-agnostic, so this case appends it here.
+  const kitPath = join(workspaceDirectory, "kit.yaml");
+  await writeFile(
+    kitPath,
+    `${(await readFile(kitPath, "utf8")).trimEnd()}\nexecution_host: ${JSON.stringify(hostname())}\n`,
+  );
+
+  const created = await newPackage({
+    workspace: "pkg-ws",
+    slug: "fixture",
+    targets: [{ id: "app" }],
+    root: storageRoot,
+  });
+  assert.equal(created.ok, true, JSON.stringify(created));
+  const packageDirectory = created.locations.package_dir;
+  await mkdir(join(packageDirectory, "runtime"), { recursive: true });
+  const runPath = join(packageDirectory, "runtime", "run.json");
+  await writeFile(runPath, JSON.stringify({ id: "run-fixture", state: "running", coordinator_pid: process.pid }));
+  const runBytes = await readFile(runPath);
+
+  const tmux = tmuxHarness();
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    assignmentAdapters: { tmuxRun: tmux.run },
+  });
+  try {
+    const requestId = randomUUID();
+    const assignmentId = randomUUID();
+    await service.dispatchSaveBrief({
+      workspace_id: "pkg-ws",
+      request_id: requestId,
+      title: "Packaged",
+      content: "body\n",
+    });
+    const input = {
+      workspace_id: "pkg-ws",
+      request_id: requestId,
+      assignment_id: assignmentId,
+      instructions: "Deliver the packaged assignment.",
+      repository_id: "app",
+      spec_package: packageDirectory,
+    };
+    const preview = await service.dispatchPreview(input);
+    assert.equal(preview.record.execution_dir, repository);
+    assert.equal(await realpath(preview.record.spec_package), await realpath(packageDirectory));
+    await assert.rejects(
+      service.dispatchLaunch({ ...input, expectedDigest: preview.contractDigest }),
+      (error) => {
+        assert.equal(error.code, "run-active");
+        assert.equal(error.run_id, undefined);
+        assert.equal(error.pid, undefined);
+        return true;
+      },
+    );
+    assert.deepEqual(await readFile(runPath), runBytes);
+    await assert.rejects(lstat(join(workspaceDirectory, "assignments", `${assignmentId}.json`)), {
+      code: "ENOENT",
+    });
+    assert.equal(tmux.calls.length, 0);
   } finally {
     await service.close();
   }

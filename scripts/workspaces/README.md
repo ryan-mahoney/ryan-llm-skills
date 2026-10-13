@@ -78,6 +78,36 @@ fetched.
   `--apply`, two NDJSON documents are printed: the exact plan first, then the
   `{path,backup}` result.
 
+## Direct launch dispatch
+
+The dashboard's direct launch flow uses the discussion routes in this directory
+(`discussion-routes.mjs`; implemented by `discussion.mjs`). Writes are JSON with
+the operator endpoint's exact Origin and action token; save accepts the 64 KiB
+large-body cap, while preview and launch accept the 8 KiB administrative cap.
+
+| Route | Request | Result |
+| --- | --- | --- |
+| `POST /api/dispatch/save-brief` | `{workspace_id, request_id, title, content}` | `{brief}` — canonical workspace-relative path; starts nothing |
+| `GET /api/dispatch/suggestions` | `?workspace_id=&repository_id=&kind=skill\|file&query=` | ranked skills or files for the selected target |
+| `POST /api/dispatch/preview` | `{workspace_id, request_id, assignment_id, instructions, skill, references, repository_id?, spec_package?}` | resolved contract: `{record, contractDigest, inputPreview}` |
+| `POST /api/dispatch/launch` | preview body plus the reviewed `expectedDigest` | `{assignment, observation}` |
+
+`repository_id` is optional; without it the target is the whole workspace. The
+`skill` default is `general`, the harness is `pi`, publication authority is
+`none`, and saved-brief references cross as identities only (`{kind, id}`).
+Preview recomputes the contract digest (64 lowercase hex characters) and launch
+compares it with `expectedDigest`, refusing a mismatch with 409 `stale-preview`.
+`target-busy`, `run-active` and `request-conflict` also refuse with 409, and an
+unavailable service refuses with 503. A launch records `assignment.state` as
+`live` (started acknowledgement, not completion), `launch_failed` (confirmed
+startup failure; a correction mints fresh request and assignment identities), or
+an unconfirmed state that is inspection-only: locate the submitted id and never
+relaunch it. Thread-bound assignment work uses
+`/api/thread/save-brief`, `/api/thread/preview-assignment` and
+`/api/thread/launch-assignment`, which bind the target recorded with the saved
+brief. These dashboard routes are separate from the CLI `launch` command above;
+the CLI keeps its own terminal preview/confirm authority.
+
 ## Assignment observation and attach
 
 `locate ID` reconciles one persisted assignment under the shared root claim
