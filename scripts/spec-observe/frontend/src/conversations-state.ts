@@ -325,3 +325,239 @@ export function queueSummary(
   const ownerTitle = owner ? owner.title || `Thread ${owner.thread_id.slice(0, 8)}` : null;
   return { waiting, items, ownerTitle, paused };
 }
+
+// ---------------------------------------------------------------------------
+// Retained in-memory owners (INV-2). Every store below is module-level so
+// typed work survives destination/dialog unmounting, and no helper touches
+// browser storage or the network. Thread-keyed entries use JSON [ws, thread]
+// tuples so one workspace can never read another workspace's state.
+
+export type ThreadDraft = { draft: string; retry: { id: string; draft: string } | null };
+
+const threadKey = (ws: string, thread: string): string => JSON.stringify([ws, thread]);
+
+const copyRetry = (retry: ThreadDraft['retry']): ThreadDraft['retry'] =>
+  retry ? { id: retry.id, draft: retry.draft } : null;
+
+const copyThreadDraft = (value: ThreadDraft): ThreadDraft => ({
+  draft: value.draft,
+  retry: copyRetry(value.retry),
+});
+
+const threadDrafts = new Map<string, ThreadDraft>();
+
+// A fresh absent entry is the empty draft; reading never inserts it.
+export function getThreadDraft(ws: string, thread: string): ThreadDraft {
+  const stored = ws && thread ? threadDrafts.get(threadKey(ws, thread)) : undefined;
+  return stored ? copyThreadDraft(stored) : { draft: '', retry: null };
+}
+
+export function setThreadDraft(ws: string, thread: string, value: ThreadDraft): void {
+  if (!ws || !thread) return;
+  threadDrafts.set(threadKey(ws, thread), copyThreadDraft(value));
+}
+
+export function clearThreadDraft(ws: string, thread: string): void {
+  if (!ws || !thread) return;
+  threadDrafts.delete(threadKey(ws, thread));
+}
+
+// The failed-send retry identity travels with the captured draft so a late
+// acknowledgement can recognize whether it still applies.
+export function captureThreadSend(ws: string, thread: string): ThreadDraft {
+  return getThreadDraft(ws, thread);
+}
+
+// A late acknowledgement clears the stored entry only while its text and
+// retry identity still match the captured pair; newer typing survives.
+export function acknowledgeThreadSend(ws: string, thread: string, captured: ThreadDraft): boolean {
+  if (!ws || !thread) return false;
+  const stored = threadDrafts.get(threadKey(ws, thread));
+  if (!stored) return false;
+  const sameRetry =
+    stored.retry === null
+      ? captured.retry === null
+      : captured.retry !== null &&
+        stored.retry.id === captured.retry.id &&
+        stored.retry.draft === captured.retry.draft;
+  if (stored.draft !== captured.draft || !sameRetry) return false;
+  threadDrafts.delete(threadKey(ws, thread));
+  return true;
+}
+
+// Prepared existing-thread text appends after a blank line when typed text
+// exists, never replacing it, and resets the retry identity because the
+// outgoing text changed. Applying a seed never sends.
+export function applyThreadPreparedText(ws: string, thread: string, prepared: string): ThreadDraft {
+  const current = getThreadDraft(ws, thread);
+  const draft =
+    current.draft === '' ? prepared : prepared === '' ? current.draft : `${current.draft}\n\n${prepared}`;
+  setThreadDraft(ws, thread, { draft, retry: null });
+  return getThreadDraft(ws, thread);
+}
+
+// Per-workspace remembered valid thread id used when returning through the
+// rail. Empty (invalid) ids are ignored rather than stored as a selection.
+const conversationReturnIds = new Map<string, string>();
+
+export function rememberConversationId(ws: string, thread: string): void {
+  if (!ws || !thread) return;
+  conversationReturnIds.set(ws, thread);
+}
+
+export function getConversationReturnId(ws: string): string | undefined {
+  return ws ? conversationReturnIds.get(ws) : undefined;
+}
+
+// Per-thread transcript reading position; absent means start at the bottom.
+export type ThreadScroll = { scrollTop: number; stickBottom: boolean };
+
+const threadScrolls = new Map<string, ThreadScroll>();
+
+export function setThreadScroll(ws: string, thread: string, value: ThreadScroll): void {
+  if (!ws || !thread) return;
+  threadScrolls.set(threadKey(ws, thread), { scrollTop: value.scrollTop, stickBottom: value.stickBottom });
+}
+
+export function getThreadScroll(ws: string, thread: string): ThreadScroll | undefined {
+  const stored = ws && thread ? threadScrolls.get(threadKey(ws, thread)) : undefined;
+  return stored ? { scrollTop: stored.scrollTop, stickBottom: stored.stickBottom } : undefined;
+}
+
+// One-use workspace seed for the Start conversation dialog. Writing copies the
+// seed and replaces any earlier unconsumed intent; consuming clears it so a
+// reopen cannot replay prepared text.
+export type NewThreadDraftSeed = { text: string; target?: string };
+
+const newThreadSeeds = new Map<string, NewThreadDraftSeed>();
+
+const copyNewThreadSeed = (seed: NewThreadDraftSeed): NewThreadDraftSeed => {
+  const copy: NewThreadDraftSeed = { text: seed.text };
+  if (seed.target !== undefined) copy.target = seed.target;
+  return copy;
+};
+
+export function seedNewThreadDraft(ws: string, seed: NewThreadDraftSeed): void {
+  if (!ws) return;
+  newThreadSeeds.set(ws, copyNewThreadSeed(seed));
+}
+
+export function consumeNewThreadDraft(ws: string): NewThreadDraftSeed | undefined {
+  const seed = ws ? newThreadSeeds.get(ws) : undefined;
+  if (!seed) return undefined;
+  newThreadSeeds.delete(ws);
+  return copyNewThreadSeed(seed);
+}
+
+// Retained workspace new-thread draft. Opening the dialog consumes a one-use
+// seed and merges it: text appends after a blank line when typed text exists,
+// and a seed with a repository target replaces the retained choice.
+export type NewThreadWorkspaceDraft = { text: string; target: string | null };
+
+const newThreadDrafts = new Map<string, NewThreadWorkspaceDraft>();
+
+export function getNewThreadDraft(ws: string): NewThreadWorkspaceDraft {
+  const stored = ws ? newThreadDrafts.get(ws) : undefined;
+  return stored ? { text: stored.text, target: stored.target } : { text: '', target: null };
+}
+
+export function setNewThreadDraft(ws: string, value: NewThreadWorkspaceDraft): void {
+  if (!ws) return;
+  newThreadDrafts.set(ws, { text: value.text, target: value.target ?? null });
+}
+
+// Without an expected value the clear is unconditional; with one it only
+// clears while the retained text and target still match, so a newer seed or
+// draft is never discarded by an earlier flow.
+export function clearNewThreadDraft(ws: string, expected?: NewThreadWorkspaceDraft): void {
+  if (!ws) return;
+  if (expected !== undefined) {
+    const stored = newThreadDrafts.get(ws);
+    if (!stored || stored.text !== expected.text || stored.target !== expected.target) return;
+  }
+  newThreadDrafts.delete(ws);
+}
+
+export function openNewThreadDraft(ws: string): NewThreadWorkspaceDraft {
+  const seed = consumeNewThreadDraft(ws);
+  if (seed && ws) {
+    const retained = getNewThreadDraft(ws);
+    const target = seed.target !== undefined && seed.target !== '' ? seed.target : retained.target;
+    const text =
+      seed.text === ''
+        ? retained.text
+        : retained.text === ''
+          ? seed.text
+          : `${retained.text}\n\n${seed.text}`;
+    newThreadDrafts.set(ws, { text, target });
+  }
+  return getNewThreadDraft(ws);
+}
+
+// Workspace-scoped pending creation. The entry keeps the captured text/target
+// and the in-flight promise; a closed or unmounted dialog can reopen and read
+// the same request instead of starting a duplicate.
+export type NewThreadPendingRequest = {
+  ws: string;
+  text: string;
+  target: string | null;
+  status: 'creating' | 'error';
+  error: string | null;
+  promise: Promise<unknown>;
+};
+
+const newThreadRequests = new Map<string, NewThreadPendingRequest>();
+
+export function getNewThreadRequest(ws: string): NewThreadPendingRequest | undefined {
+  const stored = ws ? newThreadRequests.get(ws) : undefined;
+  return stored ? { ...stored } : undefined;
+}
+
+export function beginNewThreadRequest<T>(
+  ws: string,
+  text: string,
+  target: string | null,
+  create: () => Promise<T>,
+): Promise<T> {
+  if (!ws) return create();
+  const stored = newThreadRequests.get(ws);
+  if (stored && stored.status === 'creating') return stored.promise as Promise<T>;
+  const promise = create();
+  newThreadRequests.set(ws, { ws, text, target: target ?? null, status: 'creating', error: null, promise });
+  return promise;
+}
+
+// Failure retains the captured text/target with its error so reopening the
+// dialog restores the operator's input; a stale failure for a different
+// capture cannot clobber a newer request.
+export function failNewThreadRequest(ws: string, captured: NewThreadWorkspaceDraft, error?: string): void {
+  const stored = ws ? newThreadRequests.get(ws) : undefined;
+  if (!stored || stored.text !== captured.text || stored.target !== captured.target) return;
+  stored.status = 'error';
+  stored.error = error ?? 'Creating the conversation failed.';
+}
+
+// Late acknowledgement: the captured text always lands on the created
+// thread's own draft even after the dialog unmounted. The pending entry and
+// the retained workspace draft are each cleared only while they still match
+// the captured text/target, so a newer request, seed or draft survives.
+// Returns true when the acknowledged request was still the workspace's
+// current pending entry (the caller may publish/navigate only then).
+export function acknowledgeNewThreadRequest(
+  ws: string,
+  captured: NewThreadWorkspaceDraft,
+  createdWs: string,
+  createdThread: string,
+): boolean {
+  if (createdWs && createdThread) applyThreadPreparedText(createdWs, createdThread, captured.text);
+  if (!ws) return false;
+  const stored = newThreadRequests.get(ws);
+  const owned = stored !== undefined && stored.text === captured.text && stored.target === captured.target;
+  const retained = newThreadDrafts.get(ws);
+  if (owned && retained && retained.text === captured.text && retained.target === captured.target) {
+    newThreadDrafts.delete(ws);
+  }
+  if (owned) newThreadRequests.delete(ws);
+  return owned;
+}
+

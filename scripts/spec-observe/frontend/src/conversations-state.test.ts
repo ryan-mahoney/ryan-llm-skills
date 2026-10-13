@@ -5,13 +5,35 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  acknowledgeNewThreadRequest,
+  acknowledgeThreadSend,
+  applyThreadPreparedText,
+  beginNewThreadRequest,
+  captureThreadSend,
+  clearNewThreadDraft,
+  clearThreadDraft,
   composerAvailability,
+  consumeNewThreadDraft,
   conversationsViewState,
+  failNewThreadRequest,
+  getConversationReturnId,
+  getNewThreadDraft,
+  getNewThreadRequest,
+  getThreadDraft,
+  getThreadScroll,
+  openNewThreadDraft,
   queueSummary,
+  rememberConversationId,
   resolveSelection,
+  seedNewThreadDraft,
+  setNewThreadDraft,
+  setThreadDraft,
+  setThreadScroll,
   threadState,
 } from './conversations-state';
-import type { ConversationRow, ConversationView, ReadError } from './conversations-state';
+import { consumeThreadDraft, seedThreadDraft } from './launch-state';
+import type { ThreadDraftSeed } from './launch-state';
+import type { ConversationRow, ConversationView, ReadError, ThreadDraft } from './conversations-state';
 
 const ALPHA = 'a1a1a1a1-1111-4111-8111-a1a1a1a1a1a1';
 const BRAVO = 'b2b2b2b2-2222-4222-8222-b2b2b2b2b2b2';
@@ -358,4 +380,253 @@ test('queue summary: paused state and the absence of a selected queue come only 
   assert.equal(noSelection.paused, false);
   // The owner label still comes from the in-scope rows.
   assert.equal(noSelection.ownerTitle, 'Bravo transcript');
+});
+
+// Step 2 retained-state cases. The step-1 permutations above stay unchanged;
+// each case uses its own workspace/thread keys so the module-level maps
+// cannot bleed across cases.
+
+const seedOf = (draft: string): ThreadDraftSeed => ({
+  assignmentId: 'assignment-1',
+  requestId: 'request-1',
+  outcome: 'launched',
+  title: 'Discuss result',
+  brief: 'brief body',
+  executionDir: '/tmp/execution',
+  draft,
+});
+
+test('draft ownership: threads and workspaces keep distinct drafts, retries, scroll and remembered ids', () => {
+  const x = '/tmp/ws-draft-x';
+  const y = '/tmp/ws-draft-y';
+  const value: ThreadDraft = { draft: 'typed A', retry: { id: 'r-a', draft: 'typed A' } };
+  setThreadDraft(x, ALPHA, value);
+  setThreadDraft(y, ALPHA, { draft: 'typed Y-A', retry: null });
+  setThreadDraft(x, BRAVO, { draft: 'typed B', retry: { id: 'r-b', draft: 'typed B' } });
+  // Mutating the caller's object after the write does not change the store.
+  value.draft = 'mutated';
+  value.retry!.id = 'mutated';
+  assert.deepEqual(getThreadDraft(x, ALPHA), { draft: 'typed A', retry: { id: 'r-a', draft: 'typed A' } });
+  assert.deepEqual(getThreadDraft(y, ALPHA), { draft: 'typed Y-A', retry: null });
+  assert.deepEqual(getThreadDraft(x, BRAVO), { draft: 'typed B', retry: { id: 'r-b', draft: 'typed B' } });
+  // Reads are copies: mutating one key's value cannot discard another key.
+  const read = getThreadDraft(x, ALPHA);
+  read.draft = 'mutated read';
+  read.retry!.draft = 'mutated retry';
+  assert.deepEqual(getThreadDraft(x, ALPHA), { draft: 'typed A', retry: { id: 'r-a', draft: 'typed A' } });
+  assert.deepEqual(getThreadDraft(x, BRAVO), { draft: 'typed B', retry: { id: 'r-b', draft: 'typed B' } });
+  // An absent read is the empty draft without inserting an entry.
+  assert.deepEqual(getThreadDraft(x, GHOST), { draft: '', retry: null });
+  // Clearing one key leaves the other workspaces/threads intact.
+  clearThreadDraft(x, ALPHA);
+  assert.deepEqual(getThreadDraft(x, ALPHA), { draft: '', retry: null });
+  assert.equal(getThreadDraft(y, ALPHA).draft, 'typed Y-A');
+  assert.equal(getThreadDraft(x, BRAVO).draft, 'typed B');
+
+  rememberConversationId(x, ALPHA);
+  rememberConversationId(y, BRAVO);
+  // Empty ids are ignored rather than stored as a selection.
+  rememberConversationId(x, '');
+  assert.equal(getConversationReturnId(x), ALPHA);
+  assert.equal(getConversationReturnId(y), BRAVO);
+  assert.equal(getConversationReturnId(''), undefined);
+  assert.equal(getConversationReturnId('/tmp/ws-draft-unset'), undefined);
+  rememberConversationId('', ALPHA);
+  assert.equal(getConversationReturnId(''), undefined);
+
+  const scroll = { scrollTop: 120, stickBottom: false };
+  setThreadScroll(x, ALPHA, scroll);
+  scroll.scrollTop = 999;
+  assert.deepEqual(getThreadScroll(x, ALPHA), { scrollTop: 120, stickBottom: false });
+  const readScroll = getThreadScroll(x, ALPHA)!;
+  readScroll.scrollTop = 7;
+  assert.deepEqual(getThreadScroll(x, ALPHA), { scrollTop: 120, stickBottom: false });
+  assert.equal(getThreadScroll(y, ALPHA), undefined);
+  assert.equal(getThreadScroll(x, BRAVO), undefined);
+  setThreadScroll(x, BRAVO, { scrollTop: 4, stickBottom: true });
+  assert.deepEqual(getThreadScroll(x, BRAVO), { scrollTop: 4, stickBottom: true });
+  assert.deepEqual(getThreadScroll(x, ALPHA), { scrollTop: 120, stickBottom: false });
+});
+
+test('draft ownership: a late send acknowledgement clears only the exact captured text and retry', () => {
+  const ws = '/tmp/ws-send-ack';
+  setThreadDraft(ws, ALPHA, { draft: 'send me', retry: { id: 'r1', draft: 'send me' } });
+  const captured = captureThreadSend(ws, ALPHA);
+  assert.deepEqual(captured, { draft: 'send me', retry: { id: 'r1', draft: 'send me' } });
+  // Newer typing (and a newer retry) survives a late acknowledgement.
+  setThreadDraft(ws, ALPHA, { draft: 'send me\n\nmore', retry: { id: 'r1', draft: 'send me' } });
+  assert.equal(acknowledgeThreadSend(ws, ALPHA, captured), false);
+  assert.equal(getThreadDraft(ws, ALPHA).draft, 'send me\n\nmore');
+  // The exact match clears the acknowledged entry.
+  assert.equal(acknowledgeThreadSend(ws, ALPHA, captureThreadSend(ws, ALPHA)), true);
+  assert.deepEqual(getThreadDraft(ws, ALPHA), { draft: '', retry: null });
+  // A mismatched retry identity keeps the text; an absent entry has nothing to clear.
+  setThreadDraft(ws, BRAVO, { draft: 'hello', retry: { id: 'r2', draft: 'hello' } });
+  assert.equal(acknowledgeThreadSend(ws, BRAVO, { draft: 'hello', retry: { id: 'r9', draft: 'hello' } }), false);
+  assert.deepEqual(getThreadDraft(ws, BRAVO), { draft: 'hello', retry: { id: 'r2', draft: 'hello' } });
+  assert.equal(acknowledgeThreadSend(ws, GHOST, captured), false);
+});
+
+test('prepared text: one-use consume, wrong key untouched, typed plus prepared text and retry reset', () => {
+  const ws = '/tmp/ws-prepared';
+  seedThreadDraft(ws, ALPHA, seedOf('prepared launch text'));
+  // The wrong thread consumes nothing and keeps its own text untouched.
+  assert.equal(consumeThreadDraft(ws, BRAVO), undefined);
+  setThreadDraft(ws, BRAVO, { draft: 'typed B', retry: { id: 'rb', draft: 'typed B' } });
+  assert.deepEqual(applyThreadPreparedText(ws, ALPHA, 'prepared launch text'), {
+    draft: 'prepared launch text',
+    retry: null,
+  });
+  assert.deepEqual(getThreadDraft(ws, BRAVO), { draft: 'typed B', retry: { id: 'rb', draft: 'typed B' } });
+  // The exact thread's seed is consumed once and never returns.
+  assert.equal(consumeThreadDraft(ws, ALPHA)?.draft, 'prepared launch text');
+  assert.equal(consumeThreadDraft(ws, ALPHA), undefined);
+  // Typed text is preserved and the prepared text follows after a blank line;
+  // the retry identity resets because the outgoing text changed.
+  const appended = applyThreadPreparedText(ws, BRAVO, 'prepared B');
+  assert.deepEqual(appended, { draft: 'typed B\n\nprepared B', retry: null });
+  assert.deepEqual(applyThreadPreparedText(ws, GHOST, 'only prepared'), { draft: 'only prepared', retry: null });
+});
+
+test('prepared text: a cleared draft never replays a consumed launch seed', () => {
+  const ws = '/tmp/ws-prepared-replay';
+  seedThreadDraft(ws, ALPHA, seedOf('replay me'));
+  const consumed = consumeThreadDraft(ws, ALPHA);
+  assert.equal(consumed?.draft, 'replay me');
+  applyThreadPreparedText(ws, ALPHA, consumed!.draft);
+  assert.equal(getThreadDraft(ws, ALPHA).draft, 'replay me');
+  clearThreadDraft(ws, ALPHA);
+  assert.deepEqual(getThreadDraft(ws, ALPHA), { draft: '', retry: null });
+  assert.equal(consumeThreadDraft(ws, ALPHA), undefined);
+});
+
+test('new thread draft: opening consumes one seed, appends to typed text and survives close/reopen', () => {
+  const ws = '/tmp/ws-new-open';
+  assert.deepEqual(getNewThreadDraft(ws), { text: '', target: null });
+  seedNewThreadDraft(ws, { text: 'prepared', target: 'repo-9' });
+  assert.deepEqual(openNewThreadDraft(ws), { text: 'prepared', target: 'repo-9' });
+  assert.equal(consumeNewThreadDraft(ws), undefined);
+  // Close/reopen: the consumed seed cannot replay, only the retained draft remains.
+  assert.deepEqual(openNewThreadDraft(ws), { text: 'prepared', target: 'repo-9' });
+  assert.deepEqual(getNewThreadDraft(ws), { text: 'prepared', target: 'repo-9' });
+  // The latest seed wins and appends after a blank line; a seed without a
+  // target keeps the retained repository choice.
+  seedNewThreadDraft(ws, { text: 'one' });
+  seedNewThreadDraft(ws, { text: 'two' });
+  assert.deepEqual(openNewThreadDraft(ws), { text: 'prepared\n\ntwo', target: 'repo-9' });
+  // Seeds, writes and reads are copies.
+  const seed = { text: 'three' };
+  seedNewThreadDraft(ws, seed);
+  seed.text = 'mutated';
+  const opened = openNewThreadDraft(ws);
+  assert.deepEqual(opened, { text: 'prepared\n\ntwo\n\nthree', target: 'repo-9' });
+  opened.text = 'mutated read';
+  assert.deepEqual(getNewThreadDraft(ws), { text: 'prepared\n\ntwo\n\nthree', target: 'repo-9' });
+  // Conditional clear leaves a nonmatching retained draft in place, then an
+  // exact match clears it.
+  clearNewThreadDraft(ws, { text: 'other', target: null });
+  assert.equal(getNewThreadDraft(ws).text, 'prepared\n\ntwo\n\nthree');
+  clearNewThreadDraft(ws, { text: 'prepared\n\ntwo\n\nthree', target: 'repo-9' });
+  assert.deepEqual(getNewThreadDraft(ws), { text: '', target: null });
+  const retained = { text: 'set me', target: 'repo-3' };
+  setNewThreadDraft(ws, retained);
+  retained.text = 'mutated';
+  assert.deepEqual(getNewThreadDraft(ws), { text: 'set me', target: 'repo-3' });
+});
+
+test('new thread draft: acknowledgement copies captured text and clears only its exact entry', () => {
+  const ws = '/tmp/ws-new-ack';
+  const createdWs = '/tmp/ws-created-ack';
+  setNewThreadDraft(ws, { text: 'captured text', target: 'repo-1' });
+  beginNewThreadRequest(ws, 'captured text', 'repo-1', () => Promise.resolve('created'));
+  const captured = getNewThreadDraft(ws);
+  assert.equal(acknowledgeNewThreadRequest(ws, captured, createdWs, ALPHA), true);
+  assert.deepEqual(getNewThreadDraft(ws), { text: '', target: null });
+  assert.equal(getNewThreadRequest(ws), undefined);
+  // The created thread's draft receives the text unsent even though the
+  // dialog/request is gone.
+  assert.deepEqual(getThreadDraft(createdWs, ALPHA), { draft: 'captured text', retry: null });
+  // A stale acknowledgement cannot clear a newer retained draft or a newer
+  // request; it still delivers its captured text to its own created thread.
+  setNewThreadDraft(ws, { text: 'newer text', target: 'repo-2' });
+  beginNewThreadRequest(ws, 'newer text', 'repo-2', () => Promise.resolve('created-2'));
+  assert.equal(acknowledgeNewThreadRequest(ws, captured, createdWs, BRAVO), false);
+  assert.deepEqual(getNewThreadDraft(ws), { text: 'newer text', target: 'repo-2' });
+  assert.equal(getNewThreadRequest(ws)?.text, 'newer text');
+  assert.deepEqual(getThreadDraft(createdWs, BRAVO), { draft: 'captured text', retry: null });
+});
+
+test('new thread draft: a later seed survives an earlier acknowledgement', () => {
+  const ws = '/tmp/ws-new-seed-ack';
+  const createdWs = '/tmp/ws-created-seed-ack';
+  seedNewThreadDraft(ws, { text: 'first' });
+  const opened = openNewThreadDraft(ws);
+  assert.deepEqual(opened, { text: 'first', target: null });
+  beginNewThreadRequest(ws, opened.text, opened.target, () => Promise.resolve('created'));
+  // A later seed is still consumable after the earlier acknowledgement.
+  seedNewThreadDraft(ws, { text: 'second' });
+  assert.equal(acknowledgeNewThreadRequest(ws, opened, createdWs, ALPHA), true);
+  assert.deepEqual(getThreadDraft(createdWs, ALPHA), { draft: 'first', retry: null });
+  assert.equal(getNewThreadRequest(ws), undefined);
+  assert.deepEqual(openNewThreadDraft(ws), { text: 'second', target: null });
+  // Once the newer draft is retained, an earlier capture cannot clear it or
+  // the newer pending entry.
+  seedNewThreadDraft(ws, { text: 'third' });
+  const merged = openNewThreadDraft(ws);
+  assert.deepEqual(merged, { text: 'second\n\nthird', target: null });
+  beginNewThreadRequest(ws, merged.text, merged.target, () => Promise.resolve('created-3'));
+  assert.equal(acknowledgeNewThreadRequest(ws, opened, createdWs, BRAVO), false);
+  assert.deepEqual(getNewThreadDraft(ws), { text: 'second\n\nthird', target: null });
+  assert.equal(getNewThreadRequest(ws)?.text, 'second\n\nthird');
+});
+
+test('new thread draft: a failed creation retains text and target until an explicit retry', () => {
+  const ws = '/tmp/ws-new-fail';
+  setNewThreadDraft(ws, { text: 'keep me', target: 'repo-7' });
+  const first = beginNewThreadRequest(ws, 'keep me', 'repo-7', () => Promise.resolve('created'));
+  failNewThreadRequest(ws, { text: 'keep me', target: 'repo-7' }, 'create failed');
+  const failed = getNewThreadRequest(ws);
+  assert.equal(failed?.status, 'error');
+  assert.equal(failed?.error, 'create failed');
+  assert.equal(failed?.text, 'keep me');
+  assert.equal(failed?.target, 'repo-7');
+  assert.deepEqual(getNewThreadDraft(ws), { text: 'keep me', target: 'repo-7' });
+  // A stale failure does not clobber the retained entry.
+  failNewThreadRequest(ws, { text: 'other', target: null }, 'late');
+  assert.equal(getNewThreadRequest(ws)?.error, 'create failed');
+  // An explicit retry starts a fresh request with a clear error.
+  const retry = beginNewThreadRequest(ws, 'keep me', 'repo-7', () => Promise.resolve('created-2'));
+  assert.notEqual(retry, first);
+  assert.equal(getNewThreadRequest(ws)?.status, 'creating');
+  assert.equal(getNewThreadRequest(ws)?.error, null);
+});
+
+test('new thread draft: one pending request is reused on reopen and released only after settlement', async () => {
+  const ws = '/tmp/ws-new-reuse';
+  const createdWs = '/tmp/ws-created-reuse';
+  let calls = 0;
+  const resolvers: Array<(value: string) => void> = [];
+  const create = (): Promise<string> => {
+    calls += 1;
+    return new Promise<string>(resolve => {
+      resolvers.push(resolve);
+    });
+  };
+  const first = beginNewThreadRequest(ws, 'draft', 'repo-5', create);
+  // Close/reopen asks again; the workspace still holds its one request.
+  const reopened = beginNewThreadRequest(ws, 'changed', 'repo-6', create);
+  assert.equal(calls, 1);
+  assert.equal(reopened, first);
+  assert.equal(getNewThreadRequest(ws)?.text, 'draft');
+  assert.equal(getNewThreadRequest(ws)?.target, 'repo-5');
+  resolvers[0]('created');
+  assert.equal(await first, 'created');
+  setNewThreadDraft(ws, { text: 'draft', target: 'repo-5' });
+  assert.equal(acknowledgeNewThreadRequest(ws, { text: 'draft', target: 'repo-5' }, createdWs, ALPHA), true);
+  // After the entry is released an explicit new creation starts fresh.
+  const next = beginNewThreadRequest(ws, 'draft', 'repo-5', create);
+  assert.equal(calls, 2);
+  assert.notEqual(next, first);
+  resolvers[1]('created again');
+  assert.equal(await next, 'created again');
 });
