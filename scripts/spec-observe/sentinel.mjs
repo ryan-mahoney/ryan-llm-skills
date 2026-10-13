@@ -42,6 +42,7 @@ export const SENTINEL_LIMITS = Object.freeze({
   recentActivityMs: 24 * 60 * 60 * 1000,
   recentCompletionMs: 7 * 24 * 60 * 60 * 1000,
   completedPackages: 50,
+  plannedPackages: 10000,
   activityEntries: 10000,
 });
 
@@ -645,6 +646,7 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
   const scan = { entries: 0 };
   const collected = [];
   const completed = [];
+  const planned = [];
   const inactive = [];
   const completionCutoff = Date.parse(readTime) - SENTINEL_LIMITS.recentCompletionMs;
   let staleReceipts = false;
@@ -725,6 +727,20 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
       }
     }
     if (active) collected.push(...candidates);
+    // Planned rows are package inventory, not run projections. Keep them only
+    // when bounded observation positively rules out active, attention, and
+    // completion lifecycle; unreadable lifecycle evidence stays unknown.
+    const hasAttention = fact.incidents?.some(item => ['open', 'unknown'].includes(item.state))
+      || fact.actions?.some(item => ['unknown', 'blocked', 'failed'].includes(item.state));
+    const hasUnresolvedCheckpoint = fact.checkpoints?.some(item => item.package !== fact.packagePath
+      || item.state !== 'complete' || !validTime(item.observed_at) || item.active_workers?.length);
+    const candidatesSettled = (fact.candidates ?? []).every(item => ['completed', 'cancelled'].includes(item.receipt.state));
+    if (!fact.completion && !fact.staleReceipts && !fact.receiptsIncomplete && !fact.checkpointNotes.length
+        && candidatesSettled && !hasAttention && !hasUnresolvedCheckpoint) {
+      planned.push({ workspace: fact.workspace, package_ref: fact.ref, package: fact.packagePath,
+        targets: fact.targets.map(({ id, primary }) => ({ id, primary })),
+        source_paths: [...fact.sources.values()].map(source => source.file) });
+    }
     if (fact.staleReceipts) staleReceipts = true;
   };
   for (const fact of facts.values()) {
@@ -760,9 +776,16 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
     recentlyCompleted.push({ ...run, ...completion, workflow_state: 'complete', is_current_assignment: false });
   }
 
+  planned.sort((a, b) => a.package.localeCompare(b.package));
+  const plannedPackages = planned.slice(0, SENTINEL_LIMITS.plannedPackages);
+  if (planned.length > plannedPackages.length) {
+    reasons.push(`planned-packages-cap: selected ${plannedPackages.length} of ${planned.length}`);
+    knownOmitted += planned.length - plannedPackages.length;
+  }
+
   // Epic membership is read for every observed workspace, outside the activity and completion windows.
   const epicState = await collectEpics({ entries: epicEntries, facts, runs, recentlyCompleted, runConditions, readTime });
-  for (const row of [...runs, ...recentlyCompleted]) {
+  for (const row of [...runs, ...recentlyCompleted, ...plannedPackages]) {
     const epic = epicState.memberships.get(row.package);
     if (epic) row.epic = epic;
   }
@@ -807,7 +830,7 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
   const coverage = makeCoverage(state, reasons, unknownOmission ? null : knownOmitted, budget.bytes, readTime);
   return reduceConditions({ version: 1, workspace, coverage, activity_filter: activityFilter, runs,
     assignments, assignment_coverage: assignmentCoverage,
-    recently_completed: recentlyCompleted, epics: epicState.epics, attention,
+    recently_completed: recentlyCompleted, planned_packages: plannedPackages, epics: epicState.epics, attention,
     completion_history: { window_ms: SENTINEL_LIMITS.recentCompletionMs, cutoff: new Date(completionCutoff).toISOString(),
       limit: SENTINEL_LIMITS.completedPackages, omitted: Math.max(0, completed.length - recentlyCompleted.length) },
     spec_roots: [...new Set([...facts.values()].map(f => dirname(f.packagePath)), ...epicEntries.map(e => dirname(e.dir)))], ...(discovery ? { discovery } : {}) });

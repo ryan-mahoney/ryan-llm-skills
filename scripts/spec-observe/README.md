@@ -159,12 +159,21 @@ steps. Snapshots expose these facts as `spec_progress`; `accepted_steps` remains
 null because observation does not establish acceptance.
 
 An active detail selection follows the package's current assignment on refresh,
-so its progress advances when the next step starts. Filters appear as **Active**, **Attention**, and **Recently completed**, with count
-badges. Active is selected initially. Attention includes current blocked or
+so its progress advances when the next step starts. Filters appear as **Active**, **Blocked**, **Done**, and **Planned**.
+Active is selected initially. Blocked includes current blocked or
 decision-required obligations and current unresolved incidents; historical attempts
 and generic coverage gaps stay available as evidence without becoming alerts.
+The existing `attention` and `completed` filter links still select Blocked and Done.
 
-**Recently completed** retains one entry per spec completed in the last seven days,
+**Planned** shows discovered package folders without an active obligation, an
+attention condition, or confirmed completion. This includes folders without run
+receipts and folders older than the activity window. Snapshots publish these
+folders as `planned_packages`, separately from run and completion rows. Unreadable
+lifecycle evidence prevents a folder from being classified as planned; workspace
+coverage reports incomplete reads. Search and workspace scope apply to this view,
+and planned folders can open their package files.
+
+**Done** retains one entry per spec completed in the last seven days,
 newest first, with its recorded completion time and completion basis. A complete
 workflow checkpoint or matching ready-tour/non-draft PR publication establishes
 completion; a worker exit alone does not. Reopened workflows, later dispatches,

@@ -1,21 +1,41 @@
 import {normalize,authoritativeObservers as observers} from './model-helpers.js';
-import {str,stale,key} from './format';
+import {str,stale,key,activeRun,attention} from './format';
 export type WireRecord=Record<string,any>;
-export interface Observer extends WireRecord {observer_id:string;state:string;published_at:string;snapshot?:{workspace?:string;runs:WireRecord[];recently_completed?:WireRecord[];assignments?:WireRecord[];epics?:WireRecord[];coverage?:WireRecord;assignment_coverage?:WireRecord;completion_history?:WireRecord;attention?:WireRecord[]};}
+export interface Observer extends WireRecord {observer_id:string;state:string;published_at:string;snapshot?:{workspace?:string;runs:WireRecord[];recently_completed?:WireRecord[];planned_packages?:WireRecord[];assignments?:WireRecord[];epics?:WireRecord[];coverage?:WireRecord;assignment_coverage?:WireRecord;completion_history?:WireRecord;attention?:WireRecord[]};}
 export interface Envelope {schema_version?:number;generated_at?:string;observers:Observer[];errors?:WireRecord[];truncated?:boolean;action_token?:string;thread_action_token?:string;completion?:string;}
 export const normalizeEnvelope=(value:unknown):Envelope=>normalize(value);
 export const authoritativeObservers=(list:Observer[]):Observer[]=>observers(list);
 export function collectRecords(payload:Envelope|null):WireRecord[]{
   const map=new Map<string,WireRecord>();
+  const knownDone=(r:WireRecord)=>r.workflow_state==='complete'||Boolean(r.completion_basis)||Number.isFinite(Date.parse(r.completed_at||''));
   for(const o of authoritativeObservers(payload?.observers??[])){
     if(!o.snapshot)continue;
     const rank=(o.state==='observing'&&!stale(o.published_at)?1e15:0)+(Date.parse(o.snapshot.coverage?.observed_at)||0);
-    for(const r of [...o.snapshot.runs.map(r=>({...r,recent_completion:false})),...(o.snapshot.recently_completed??[]).map(r=>({...r,recent_completion:true}))] as WireRecord[]){
-      const k=r.recent_completion?JSON.stringify([r.workspace,r.package,'recent-completion']):key(r);
+    const workspace=o.snapshot.workspace||o.observer_id||o.source||'unknown';
+    const packageIdentity=(r:WireRecord)=>JSON.stringify([r.workspace||workspace,r.package]);
+    const rows=[...o.snapshot.runs.map(r=>({...r,workspace:r.workspace||workspace,recent_completion:false})),...(o.snapshot.recently_completed??[]).map(r=>({...r,workspace:r.workspace||workspace,recent_completion:true}))] as WireRecord[];
+    const excludedPackages=new Set(rows.filter(r=>r.recent_completion||activeRun(r)||attention(r)||knownDone(r)).map(packageIdentity));
+    const planned=new Map<string,WireRecord>();
+    const addPlanned=(r:WireRecord)=>{
+      const normalized:WireRecord={...r,workspace:r.workspace||workspace,planned:true,recent_completion:false};
+      const identity=packageIdentity(normalized);
+      if(!normalized.package||excludedPackages.has(identity))return;
+      const k=JSON.stringify([normalized.workspace,normalized.package,'planned-package',null]);
+      const prior=planned.get(k);
+      const candidateRank=rank+(Date.parse(normalized.timing?.started_at)||Date.parse(normalized.observed_at)||0);
+      if(!prior||prior.rank<candidateRank)planned.set(k,{...prior,...normalized,targets:normalized.targets??prior?.targets,source_paths:normalized.source_paths??prior?.source_paths,epic:normalized.epic??prior?.epic,rank:candidateRank,key:k,observer:o});
+    };
+    if(Array.isArray(o.snapshot.planned_packages))for(const r of o.snapshot.planned_packages)addPlanned(r);
+    for(const r of [...rows,...planned.values()] as WireRecord[]){
+      const k=r.recent_completion?JSON.stringify([r.workspace,r.package,'recent-completion']):r.planned?r.key:key(r);
+      if(r.planned){if(!map.has(k)||map.get(k)!.rank<r.rank)map.set(k,r);continue;}
       if(!map.has(k)||map.get(k)!.rank<rank)map.set(k,{...r,observer:o,rank,key:k});
     }
   }
-  return [...map.values()].sort((a,b)=>str(a.workspace).localeCompare(str(b.workspace))||str(a.package).localeCompare(str(b.package))||Number(b.is_current_assignment===true)-Number(a.is_current_assignment===true)||(Date.parse(b.timing?.started_at)||0)-(Date.parse(a.timing?.started_at)||0));
+  const records=[...map.values()];
+  const excludedPackages=new Set(records.filter(r=>r.recent_completion||activeRun(r)||attention(r)||knownDone(r)).map(r=>JSON.stringify([r.workspace,r.package])));
+  return records.filter(r=>!r.planned||!excludedPackages.has(JSON.stringify([r.workspace,r.package])))
+    .sort((a,b)=>str(a.workspace).localeCompare(str(b.workspace))||str(a.package).localeCompare(str(b.package))||Number(b.is_current_assignment===true)-Number(a.is_current_assignment===true)||(Date.parse(b.timing?.started_at)||0)-(Date.parse(a.timing?.started_at)||0));
 }
 export function collectAssignments(payload:Envelope|null):WireRecord[]{
  const map=new Map<string,WireRecord>();

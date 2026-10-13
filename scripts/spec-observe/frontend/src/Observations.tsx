@@ -1,16 +1,16 @@
 import SessionPanel from './SessionPanel';
 import { For, Show } from 'solid-js';
 import { PackagePreview } from './PackagePreview';
-import { esc, age, attention, base, duration as sharedDuration, inlineMarkdown, pendingWorkflow, runningUnconfirmed, serverNow, stale, statusMarkdown, str, terminal, time, activeRun } from './format';
+import { esc, age, attention, base, duration as sharedDuration, inlineMarkdown, packageFilterMatches, pendingWorkflow, runningUnconfirmed, serverNow, stale, statusMarkdown, str, terminal, time, activeRun } from './format';
 import { assignmentEnded, assignmentLabel, assignmentTone, completionLabel, duration, epicMemberTone, epicStats, packageViewUrl, runState, specProgress } from './observation-format';
 
-type Filter = 'active' | 'attention' | 'completed';
+type Filter = 'active' | 'attention' | 'completed' | 'planned';
 type SelectionProps = { query: string; selected: string | null; onSelect: (key: string) => void };
 const list = (v: any) => Array.isArray(v) ? v : [];
 const text = (v: any, fallback = 'Unknown') => typeof v === 'string' && v ? v : fallback;
 const isAttention = (r: any) => typeof attention === 'function' ? attention(r) : false;
 const isActive = (r: any) => typeof activeRun === 'function' ? activeRun(r) : !r?.recent_completion && (!terminal?.has?.(r?.execution) || pendingWorkflow?.(r));
-const tone = (r: any) => r?.recent_completion ? 'good' : isAttention(r) ? 'warn' : !isActive(r) || !r?.execution || r.execution === 'unknown' ? 'muted' : 'good';
+const tone = (r: any) => r?.recent_completion ? 'good' : r?.planned ? 'muted' : isAttention(r) ? 'warn' : !isActive(r) || !r?.execution || r.execution === 'unknown' ? 'muted' : 'good';
 const state = (r: any) => runState(r, runningUnconfirmed);
 const coverageTone = (v: any) => v === 'complete' ? 'good' : v === 'partial' || v === 'unavailable' ? 'warn' : 'muted';
 const rows = (items: any[], kind: string) => <Show when={items.length} fallback={<p class="small muted">No {kind.toLowerCase()} recorded in this observation.</p>}>
@@ -19,16 +19,16 @@ const rows = (items: any[], kind: string) => <Show when={items.length} fallback=
 const Markdown = (props: { value: any; class?: string; fallback: string }) => <div class={`status-markdown ${props.class || ''}`} innerHTML={statusMarkdown(props.value || props.fallback)} />;
 
 export function PackageList(props: { records: any[]; filter: Filter; query: string; selected: string | null; onSelect: (key: string) => void }) {
-  const all = () => list(props.records).filter(r => props.filter === 'completed' ? r.recent_completion === true : !r.recent_completion);
+  const all = () => list(props.records).filter(r => props.filter === 'completed' ? r.recent_completion === true : props.filter === 'planned' ? r.planned === true : !r.recent_completion && !r.planned);
   const visible = () => all().filter(r => {
     const q = props.query.trim().toLowerCase();
     return (!q || [r.workspace, r.package_ref, r.package, r.activity, r.obligation, r.execution, r.workflow_state].some(v => str(v).toLowerCase().includes(q))) &&
-      (props.filter === 'completed' || props.filter === 'active' && isActive(r) || props.filter === 'attention' && isAttention(r));
+      packageFilterMatches(r, props.filter);
   });
   const sorted = () => [...visible()].sort((a, b) => props.filter === 'completed' ? Date.parse(b.completed_at || '') - Date.parse(a.completed_at || '') || str(a.package).localeCompare(str(b.package)) : str(a.workspace).localeCompare(str(b.workspace)) || str(a.package).localeCompare(str(b.package)));
   return <>
     <div class="observation-rows">
-      <Show when={sorted().length} fallback={<div class="empty"><h3>{props.filter === 'completed' ? 'No recently completed specs' : all().length ? 'No matching packages' : 'No observed packages'}</h3><p class="small" style={{ 'margin-top': '8px' }}>{props.filter === 'completed' ? 'Recent completion history appears here when the snapshot includes it.' : all().length ? 'Change the search or package filter.' : 'Start an observer or import a published snapshot.'}</p></div>}>
+      <Show when={sorted().length} fallback={<div class="empty"><h3>{props.filter === 'completed' ? 'No recently completed specs' : all().length ? 'No matching packages' : props.filter === 'planned' ? 'No planned specs' : 'No observed packages'}</h3><p class="small" style={{ 'margin-top': '8px' }}>{props.filter === 'completed' ? 'Recent completion history appears here when the snapshot includes it.' : all().length ? 'Change the search or package filter.' : props.filter === 'planned' ? 'Planned packages appear here when the snapshot includes their inventory.' : 'Start an observer or import a published snapshot.'}</p></div>}>
         <For each={sorted()}>{(r, index) => <><Show when={index() === 0 || sorted()[index() - 1]?.workspace !== r.workspace}><div class="repo-heading"><span title={r.workspace}>{text(r.workspace)}</span></div></Show><button type="button" class="run-row" data-key={r.key} aria-pressed={r.key === props.selected} onClick={() => props.onSelect(r.key)}>
           <div class="flex justify-between gap-3"><span class="run-title">{base(r.package)}<Show when={r.epic}>{ref => { const epic = list(r.observer?.snapshot?.epics).find(e => e.epic === ref().epic && (ref().workspace == null || e.workspace === ref().workspace)); return <span class="pill muted" title={epic?.title || 'Epic record unavailable in this snapshot'}>{ref().epic}{epic ? ` · ${epicStats(epic).landed}/${epicStats(epic).total}` : ''}</span>; }}</Show></span><span class={`pill ${tone(r)}`}>{state(r)}</span></div>
           <p class="summary" innerHTML={r.recent_completion ? esc(completionLabel(r)) : inlineMarkdown(r.activity || r.obligation || 'No activity hint observed', false)} />

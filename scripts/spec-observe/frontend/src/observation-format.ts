@@ -13,7 +13,8 @@ export const assignmentTone = (a: any) => assignmentTones[a?.display] || 'muted'
 export const completionLabel = (r: any) => r?.completion_basis === 'manual' ? 'Marked complete'
   : r?.completion_basis === 'merged-pr' ? 'PR merged' : r?.completion_basis === 'ready-pr' ? 'Ready PR published' : 'Workflow marked complete';
 export const runState = (r: any, isRunningUnconfirmed: (record: any) => boolean) => {
-  if (r?.recent_completion) return 'Completed';
+  if (r?.recent_completion) return 'Done';
+  if (r?.planned) return 'Planned';
   if (isRunningUnconfirmed(r)) return 'Running unconfirmed';
   const workflow: Record<string, string> = { ready: 'Ready for next action', 'waiting-worker': 'Waiting for worker', 'waiting-external': 'Waiting externally', 'decision-required': 'Decision needed', blocked: 'Blocked', 'user-held': 'On hold' };
   if (r?.is_current_assignment === true && ['ready', 'waiting-worker', 'waiting-external', 'decision-required', 'blocked', 'user-held'].includes(r.workflow_state) && ['completed', 'complete', 'failed', 'cancelled', 'stale', 'stopped', 'closed', 'aborted', 'done'].includes(r.execution)) return workflow[r.workflow_state];

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
-import { activeRun, attention, setClock, statusMarkdown } from './format';
+import { activeRun, attention, packageFilterMatches, setClock, statusMarkdown } from './format';
 import { collectAssignments, collectEpics, collectRecords, normalizeEnvelope, type Envelope, type Observer } from './model';
 import { completionLabel, epicMemberTone, epicStats, runState, specProgress } from './observation-format';
 
@@ -36,6 +36,9 @@ test('normalize accepts supported legacy envelopes and rejects malformed or over
   assert.throws(() => normalizeEnvelope({ runs: [], epics: [{ epic: 'e', title: 'Epic', members: Array.from({ length: 101 }, (_, i) => ({ name: `m${i}`, status: 'ready' })) }] }), { message: 'Invalid epics.' });
   assert.throws(() => normalizeEnvelope({ runs: [], epics: [{ epic: 'e', title: 'Epic', members: [{ name: 'm', status: 7 }] }] }), { message: 'Invalid epics.' });
   assert.throws(() => normalizeEnvelope({ runs: [{ actions: [null] }] }), { message: 'Invalid run entry.' });
+  assert.throws(() => normalizeEnvelope({ runs: [], planned_packages: [{ workspace: 'w', package_ref: '/w/spec', package: 'spec', source_paths: ['src/a', 3] }] }), { message: 'Invalid planned packages.' });
+  assert.throws(() => normalizeEnvelope({ runs: [], planned_packages: [{ workspace: 'w', package_ref: '/w/spec', package: 'spec', targets: [{ id: 'web', primary: true }] }] }), { message: 'Invalid planned packages.' });
+  assert.throws(() => normalizeEnvelope({ runs: [], planned_packages: Array.from({ length: 10_001 }, (_, i) => ({ workspace: 'w', package_ref: `/w/${i}`, package: `p${i}` })) }), { message: 'Invalid planned packages.' });
 });
 
 // Run from scripts/spec-observe/frontend: node --import tsx --test --test-name-pattern='authoritative workspace' src/model.test.ts
@@ -76,9 +79,88 @@ test('records preserve current obligations and manual recent completion without 
   assert.equal(byPackage.get('done')!.recent_completion, true);
   assert.equal(activeRun(byPackage.get('done')), false);
   assert.equal(completionLabel(byPackage.get('done')), 'Marked complete');
-  assert.equal(runState(byPackage.get('done'), () => false), 'Completed');
+  assert.equal(runState(byPackage.get('done'), () => false), 'Done');
   assert.equal(runState({ ...blocked, execution: 'failed' }, () => false), 'Blocked');
   assert.equal(activeRun({ ...blocked, execution: 'failed', workflow_state: 'complete' }), false);
+});
+
+// Run from scripts/spec-observe/frontend: node --import tsx --test --test-name-pattern='planned inventory records' src/model.test.ts
+test('planned inventory records keep a stable package key and stay outside active filters', () => {
+  const packageRecord = { workspace: 'w', package_ref: '/repo/.specs/next', package: '/repo/.specs/next', targets: [{ id: 'frontend', primary: '/repo' }, { id: 'library', primary: null }], source_paths: ['src/app.ts'], epic: { epic: 'roadmap' } };
+  const records = collectRecords(normalizeEnvelope(envelope(observer('inventory', 'w', { runs: [], planned_packages: [packageRecord] }))));
+  assert.equal(records.length, 1);
+  assert.equal(records[0].planned, true);
+  assert.equal(records[0].recent_completion, false);
+  assert.equal(records[0].key, JSON.stringify(['w', packageRecord.package, 'planned-package', null]));
+  assert.equal(records[0].source_paths[0], 'src/app.ts');
+  assert.equal(activeRun(records[0]), false);
+  assert.equal(attention(records[0]), false);
+  assert.equal(packageFilterMatches(records[0], 'planned'), true);
+  assert.equal(packageFilterMatches(records[0], 'active'), false);
+  assert.equal(runState(records[0], () => false), 'Planned');
+});
+
+// Run from scripts/spec-observe/frontend: node --import tsx --test --test-name-pattern='planned rows deduplicate' src/model.test.ts
+test('planned rows deduplicate by package and yield to active or recently done sibling rows', () => {
+  const historical = { workspace: 'w', package_ref: '/w/history', package: 'history', execution: 'stopped', is_current_assignment: false, observed_at: now };
+  const records = collectRecords(normalizeEnvelope(envelope(observer('inventory', 'w', {
+    runs: [
+      historical,
+      { ...historical, timing: { started_at: '2026-10-09T12:00:00Z', attempts: [] } },
+      { ...historical, assignment_id: 'planned' },
+      { workspace: 'w', package: 'active', assignment_id: 'current', execution: 'running', is_current_assignment: true },
+      { workspace: 'w', package: 'active', assignment_id: 'history', execution: 'stopped', is_current_assignment: false },
+      { workspace: 'w', package: 'done', execution: 'stopped', is_current_assignment: false },
+    ],
+    planned_packages: [
+      { workspace: 'w', package_ref: '/w/history', package: 'history', source_paths: ['from-inventory.ts'] },
+      { workspace: 'w', package_ref: '/w/active', package: 'active' },
+      { workspace: 'w', package_ref: '/w/done', package: 'done' },
+      { workspace: 'w', package_ref: '/w/inventory-only', package: 'inventory-only' },
+    ],
+    recently_completed: [{ workspace: 'w', package: 'done', completed_at: now, completion_basis: 'manual' }],
+  }))));
+  const planned = records.filter(record => packageFilterMatches(record, 'planned'));
+  assert.deepEqual(planned.map(record => record.package).sort(), ['history', 'inventory-only']);
+  assert.equal(planned.find(record => record.package === 'history')!.key, JSON.stringify(['w', 'history', 'planned-package', null]));
+  assert.equal(records.find(record => record.package === 'history' && record.assignment_id === 'planned')!.key, JSON.stringify(['w', 'history', 'planned']));
+  assert.equal(records.filter(record => record.package === 'history').length, 3);
+  assert.equal(records.filter(record => record.package === 'done').length, 2);
+  assert.equal(records.some(record => record.package === 'done' && record.recent_completion), true);
+  assert.equal(records.filter(record => record.package === 'active').length, 2);
+});
+
+// Run from scripts/spec-observe/frontend: node --import tsx --test --test-name-pattern='planned inventory is authoritative' src/model.test.ts
+test('planned inventory is authoritative and legacy snapshots retain rows without inventing Planned records', () => {
+  const completed = { workspace: 'w', package_ref: '/w/done', package: 'done', execution: 'completed', workflow_state: 'complete', is_current_assignment: false };
+  const authoritative = collectRecords(normalizeEnvelope(envelope(observer('current', 'w', { runs: [completed], planned_packages: [] }))));
+  assert.equal(authoritative.some(record => record.planned), false);
+
+  const oldSnapshot = normalizeEnvelope({ workspace: 'w', runs: [
+    { workspace: 'w', package_ref: '/w/legacy-planned', package: 'legacy-planned', execution: 'stopped', is_current_assignment: false },
+    completed,
+  ] });
+  const legacy = collectRecords(oldSnapshot);
+  assert.equal(legacy.some(record => record.planned), false);
+  assert.deepEqual(legacy.map(record => record.package).sort(), ['done', 'legacy-planned']);
+  assert.equal(legacy.find(record => record.package === 'done')!.planned, undefined);
+});
+
+// Run from scripts/spec-observe/frontend: node --import tsx --test --test-name-pattern='planned inventory excludes sibling records across snapshots' src/model.test.ts
+test('planned inventory excludes active and done siblings across authoritative snapshots', () => {
+  const inventory = observer('inventory', 'inventory-root', { planned_packages: [
+    { workspace: 'w', package_ref: '/w/active', package: 'active' },
+    { workspace: 'w', package_ref: '/w/done', package: 'done' },
+    { workspace: 'w', package_ref: '/w/clear', package: 'clear' },
+  ] });
+  const executions = observer('executions', 'execution-root', {
+    runs: [{ workspace: 'w', package: 'active', assignment_id: 'current', execution: 'running', is_current_assignment: true }],
+    recently_completed: [{ workspace: 'w', package: 'done', completed_at: now, completion_basis: 'manual' }],
+  });
+  const records = collectRecords(normalizeEnvelope(envelope(inventory, executions)));
+  assert.deepEqual(records.filter(record => record.planned).map(record => record.package), ['clear']);
+  assert.equal(records.some(record => record.package === 'active' && record.is_current_assignment === true), true);
+  assert.equal(records.some(record => record.package === 'done' && record.recent_completion === true), true);
 });
 
 // Run from scripts/spec-observe/frontend: node --import tsx --test --test-name-pattern='agent assignments deduplicate' src/model.test.ts
