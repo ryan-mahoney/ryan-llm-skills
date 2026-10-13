@@ -320,5 +320,10 @@
 .conversations-destination #thread-queue{display:grid;gap:8px}
 .conversations-destination #thread-queue summary{min-height:44px}
 .conversations-destination #thread-queue details{margin:0;border-top:0;padding:0}
-.conversations-destination #thread-queue .thread-text{margin-top:6px}
+/* Step-8 F1: the retired global .thread-text rule owned whitespace preservation
+   and long-token wrapping for surviving plain-text consumers. Keep that
+   responsibility scoped to the conversation destination (user transcript text
+   and queued message text); the dialog prepared note keeps its own rule. */
+.conversations-destination .ds-turn__body.thread-text{white-space:pre-wrap;overflow-wrap:anywhere}
+.conversations-destination #thread-queue .thread-text{margin-top:6px;white-space:pre-wrap;overflow-wrap:anywhere}
 .conversations-destination .composer textarea.ds-input[readonly]{background:var(--ds-chrome);color:var(--ds-ink-2)}
