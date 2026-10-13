@@ -181,6 +181,10 @@
    state with the same visuals as a native disabled button. */
 .design-toolbar button[aria-disabled="true"]{cursor:default;color:var(--ds-muted);background:var(--ds-chrome);border-color:var(--ds-line-2)}
 
+/* Designs index-recovery notice: the narrow list pane keeps the full-width
+   recovery copy and moves the local Refresh designs action to its own row. */
+.designs-index-error .ds-callout{flex-direction:column;align-items:flex-start}
+
 /* Launch brief composition reuses the reference textarea.ds-input surface.
    Scoped to the launch form so the still-mounted thread caller keeps its
    own thread-handoff textarea treatment. */

@@ -44,6 +44,7 @@ export default function Designs(props: DestinationProps) {
   const [pending, setPending] = createSignal(false);
   const [probe, setProbe] = createSignal<{ key: string; state: 'checking' | 'ok' | 'failed' } | null>(null);
   const [retryNonce, setRetryNonce] = createSignal(0);
+  const [probeRetry, setProbeRetry] = createSignal(0);
   const [initialDelayed, setInitialDelayed] = createSignal(false);
   const [headDelayed, setHeadDelayed] = createSignal(false);
 
@@ -57,6 +58,7 @@ export default function Designs(props: DestinationProps) {
   let detailHeading: HTMLHeadingElement | undefined;
   let frameWrap: HTMLDivElement | undefined;
   let frame: HTMLIFrameElement | undefined;
+  let explicitProbe = false;
 
   const stopIndex = () => {
     if (indexController) {
@@ -143,6 +145,8 @@ export default function Designs(props: DestinationProps) {
     setPending(false);
     setProbe(null);
     setRetryNonce(0);
+    setProbeRetry(0);
+    explicitProbe = false;
     if (live && ws) readIndex(ws, indexGeneration);
     const poll = setInterval(() => {
       if (live) readIndex(ws, indexGeneration);
@@ -242,7 +246,7 @@ export default function Designs(props: DestinationProps) {
   const probeIdentity = createMemo(() => {
     const item = design();
     const current = screen();
-    return `${props.live ? 'live' : 'imported'}\u0000${props.route.ws ?? ''}\u0000${item?.slug ?? ''}\u0000${screenPath()}\u0000${current?.produced ? 'produced' : 'planned'}\u0000${retryNonce()}`;
+    return `${props.live ? 'live' : 'imported'}\u0000${props.route.ws ?? ''}\u0000${item?.slug ?? ''}\u0000${screenPath()}\u0000${current?.produced ? 'produced' : 'planned'}\u0000${probeRetry()}`;
   });
   const openScreenTitle = () => {
     const current = screen();
@@ -256,6 +260,13 @@ export default function Designs(props: DestinationProps) {
     const item = design();
     return item ? designBriefRoute(props.route.ws ?? '', item) : null;
   });
+
+  // Explicit screen retry: re-probe without touching the frame identity; only a
+  // confirmed successful retry advances the frame nonce so the iframe reloads once.
+  const retryScreen = () => {
+    explicitProbe = true;
+    setProbeRetry(value => value + 1);
+  };
 
   // Scalar pending-scope key: route-only changes (id/path/tab/q) keep the same
   // string, so a pending index keeps its single 300ms delay instead of restarting.
@@ -289,6 +300,8 @@ export default function Designs(props: DestinationProps) {
   // Produced identity HEAD: one read per ws/slug/file/retry identity with its
   // own generation, controller and 30s deadline; width changes never re-probe.
   createEffect(on(probeIdentity, () => {
+    const explicit = explicitProbe;
+    explicitProbe = false;
     stopProbe();
     setProbe(null);
     const url = screenUrl();
@@ -302,7 +315,9 @@ export default function Designs(props: DestinationProps) {
     setProbe({ key, state: 'checking' });
     void fetch(url, { method: 'HEAD', cache: 'no-store', signal: controller.signal })
       .then(response => {
-        if (generation === probeGeneration) setProbe({ key, state: response.ok ? 'ok' : 'failed' });
+        if (generation !== probeGeneration) return;
+        if (response.ok && explicit) setRetryNonce(value => value + 1);
+        setProbe({ key: viewerKey(), state: response.ok ? 'ok' : 'failed' });
       })
       .catch(() => {
         if (generation === probeGeneration) setProbe({ key, state: 'failed' });
@@ -364,14 +379,19 @@ export default function Designs(props: DestinationProps) {
     const current = screen();
     return (design()?.deviations ?? []).filter(item => item.screen === current?.step);
   };
-  const caption = () => {
-    if (!props.live) return '';
-    if (!data()) return indexError() ? 'Designs unavailable' : 'Reading designs…';
+  const countText = () => {
     const total = designs().length;
     if (total === 0) return successfulEmpty() ? 'No designs recorded' : allInvalid() ? 'Design indexes could not be read' : '';
     const visible = visibleDesigns().length;
-    if (query() && visible !== total) return `${visible} of ${total} design packages`;
-    return `${total} ${total === 1 ? 'design package' : 'design packages'}`;
+    return query() && visible !== total ? `${visible} of ${total} design packages` : `${total} ${total === 1 ? 'design package' : 'design packages'}`;
+  };
+  const caption = () => {
+    if (!props.live) return '';
+    if (!data()) return indexError() ? 'Designs unavailable' : 'Reading designs…';
+    const text = countText();
+    if (!indexError()) return text;
+    const retained = text === 'No designs recorded' ? 'no designs recorded' : text === 'Design indexes could not be read' ? 'no readable design packages' : text || 'no readable design packages';
+    return `Last known catalog: ${retained}`;
   };
   const emptyDetailTitle = () => {
     if (unavailableSelection()) return 'Design not found';
@@ -391,6 +411,8 @@ export default function Designs(props: DestinationProps) {
     }
     const current = selection();
     if (current.unavailable && (props.route.id ?? '') !== '') return 'Design not found.';
+    const failures = [indexError() ? 'Designs could not be read.' : '', probeState() === 'failed' ? 'Screen could not be read.' : ''].filter(Boolean).join(' ');
+    if (failures) return failures;
     if (allInvalid()) return 'Design indexes could not be read.';
     if (successfulEmpty()) return 'No designs recorded.';
     if (designs().length > 0 && visibleDesigns().length === 0) return 'No designs match. Clear search to restore the design list.';
@@ -433,14 +455,16 @@ export default function Designs(props: DestinationProps) {
               </Show>
               <Show when={props.live}>
                 <Show when={!data() && Boolean(indexError())}>
-                  <StateNotice
-                    announce={false}
-                    tone="error"
-                    title="Designs could not be read"
-                    action={<button type="button" class="ds-btn" onClick={refreshIndex}>Retry</button>}
-                  >
-                    The host did not return a usable result. Your selection is kept.
-                  </StateNotice>
+                  <div class="designs-index-error">
+                    <StateNotice
+                      announce={false}
+                      tone="error"
+                      title="Designs could not be read"
+                      action={<button type="button" class="ds-btn" onClick={refreshIndex}>Refresh designs</button>}
+                    >
+                      The host did not return a usable result. Your selection is kept.
+                    </StateNotice>
+                  </div>
                 </Show>
                 <Show when={!data() && !indexError()}>
                   <div role="region" aria-busy="true" aria-label="Reading designs">
@@ -450,14 +474,16 @@ export default function Designs(props: DestinationProps) {
                   </div>
                 </Show>
                 <Show when={Boolean(data()) && Boolean(indexError())}>
-                  <StateNotice
-                    announce={false}
-                    tone="warning"
-                    title="Designs could not be refreshed"
-                    action={<button type="button" class="ds-btn" onClick={refreshIndex}>Retry</button>}
-                  >
-                    Showing the last loaded design packages.
-                  </StateNotice>
+                  <div class="designs-index-error">
+                    <StateNotice
+                      announce={false}
+                      tone="error"
+                      title="Designs could not be read"
+                      action={<button type="button" class="ds-btn" onClick={refreshIndex}>Refresh designs</button>}
+                    >
+                      The host did not return a usable result. Your selection is kept.
+                    </StateNotice>
+                  </div>
                 </Show>
                 <Show when={staleIndex() && !indexError()}>
                   <StateNotice
@@ -469,7 +495,7 @@ export default function Designs(props: DestinationProps) {
                     Existing content is kept while the host revalidates it.
                   </StateNotice>
                 </Show>
-                <Show when={successfulEmpty()}>
+                <Show when={successfulEmpty() && !indexError()}>
                   <EmptyState
                     symbol="◇"
                     title="No designs recorded"
@@ -559,14 +585,23 @@ export default function Designs(props: DestinationProps) {
                 </>
               }
             >
-              <div class="detail-body">
-                <EmptyState
-                  symbol="◇"
-                  title="Designs could not be read"
-                  text={indexError()}
-                  action={<button type="button" class="ds-btn ds-btn--primary" onClick={refreshIndex}>Retry</button>}
-                />
-              </div>
+              <>
+                <div class="object-head">
+                  <div class="object-top">
+                    <h2 id="design-detail-heading" tabIndex={-1}>Design screen</h2>
+                  </div>
+                  <p />
+                </div>
+                <div class="design-canvas">
+                  <EmptyState
+                    symbol="◇"
+                    title="Designs could not be read"
+                    text="The host did not return a usable result. Refresh the design catalog to try again."
+                    action={<button type="button" class="ds-btn ds-btn--primary" onClick={refreshIndex}>Refresh designs</button>}
+                  />
+                </div>
+                <footer class="detail-foot">Produced and captured status comes from files · Screen content is read only</footer>
+              </>
             </Show>
           </Match>
           <Match when={!design()}>
@@ -581,7 +616,26 @@ export default function Designs(props: DestinationProps) {
                   <EmptyState symbol="◇" title={emptyDetailTitle()} text={emptyDetailText()} />
                 </div>
               </Match>
-              <Match when={successfulEmpty()}>
+              <Match when={Boolean(indexError())}>
+                <>
+                  <div class="object-head">
+                    <div class="object-top">
+                      <h2 id="design-detail-heading" tabIndex={-1}>Design screen</h2>
+                    </div>
+                    <p />
+                  </div>
+                  <div class="design-canvas">
+                    <EmptyState
+                      symbol="◇"
+                      title="Designs could not be read"
+                      text="The host did not return a usable result. Refresh the design catalog to try again."
+                      action={<button type="button" class="ds-btn ds-btn--primary" onClick={refreshIndex}>Refresh designs</button>}
+                    />
+                  </div>
+                  <footer class="detail-foot">Produced and captured status comes from files · Screen content is read only</footer>
+                </>
+              </Match>
+              <Match when={successfulEmpty() && !indexError()}>
                 <>
                   <div class="object-head">
                     <div class="object-top">
@@ -612,7 +666,12 @@ export default function Designs(props: DestinationProps) {
               <div class="object-head">
                 <div class="object-top">
                   <h2 id="design-detail-heading" tabIndex={-1} ref={el => (detailHeading = el)}>{design()!.title}</h2>
-                  <StatusText tone="neutral">{design()!.viewport?.posture || 'Viewport unknown'}</StatusText>
+                  <Show
+                    when={indexError() || probeState() === 'failed'}
+                    fallback={<StatusText tone="neutral">{design()!.viewport?.posture || 'Viewport unknown'}</StatusText>}
+                  >
+                    <StatusText tone="neutral">Not confirmed</StatusText>
+                  </Show>
                 </div>
                 <Show when={screen()}>
                   <p>Screen {screen()!.step} · {screen()!.title}</p>
@@ -685,16 +744,9 @@ export default function Designs(props: DestinationProps) {
                         <Match when={probeState() === 'failed'}>
                           <EmptyState
                             symbol="◇"
-                            title={`Screen ${screen()!.step} could not be read`}
-                            text="The recorded screen file did not respond. Retry the check or open the brief."
-                            action={
-                              <>
-                                <button type="button" class="ds-btn ds-btn--primary" onClick={() => setRetryNonce(value => value + 1)}>Retry check</button>
-                                <Show when={briefRoute()}>
-                                  {route => <a class="ds-btn" href={formatHash(route())} onClick={routeClick(route())}>Open brief</a>}
-                                </Show>
-                              </>
-                            }
+                            title="Screen could not be read"
+                            text="The design index and selected step are kept. Retry the screen file."
+                            action={<button type="button" class="ds-btn ds-btn--primary" onClick={retryScreen}>Retry screen</button>}
                           />
                         </Match>
                         <Match when={true}>

@@ -17,6 +17,9 @@ SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 180s uv run --script \
 SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 180s uv run --script \
   scripts/spec-observe/frontend/designs-browser-check.py --case loading \
   --capture-reference /path/to/designs/app-ui/screens/77-designs-loading.html
+SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 180s uv run --script \
+  scripts/spec-observe/frontend/designs-browser-check.py --case error \
+  --capture-reference /path/to/designs/app-ui/screens/78-designs-error.html
 
 Only the temporary fixture storage, one final index HTTP delay, and the imported
 snapshot are substituted; App, route, adapters, /api/workspace-designs and the
@@ -46,7 +49,7 @@ from urllib.parse import parse_qs, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--case', choices=['journey', 'unproduced', 'empty', 'loading'], default='journey')
+parser.add_argument('--case', choices=['journey', 'unproduced', 'empty', 'loading', 'error'], default='journey')
 parser.add_argument('--capture-reference', default=None)
 options = parser.parse_args()
 case = options.case
@@ -383,7 +386,8 @@ try:
                                  f'{reference_html.relative_to(reference_root).as_posix()}')
                 reference_page.goto(reference_url, wait_until='load')
                 reference_page.wait_for_timeout(300)
-                reference_page.evaluate("() => { const details = document.querySelector('.design-canvas details'); if (details) details.open = true; }")
+                if details:
+                    reference_page.evaluate("() => { const details = document.querySelector('.design-canvas details'); if (details) details.open = true; }")
                 reference_state = []
                 for width in (1280, 1600):
                     reference_page.set_viewport_size({'width': width, 'height': 900})
@@ -415,6 +419,250 @@ try:
                     reference_state.append(state)
                 reference_page.close()
                 report['reference'] = {'html': str(reference_html), 'url': reference_url, 'captures': reference_state}
+
+            if case == 'error':
+                error_state = {}
+                injected = []
+                modes = {'index503': True, 'head503': False}
+
+                def wait_until(condition, label, timeout=5):
+                    deadline = time.monotonic() + timeout
+                    while time.monotonic() < deadline:
+                        if condition():
+                            return
+                        page.wait_for_timeout(25)
+                    raise AssertionError(f'{label} not observed')
+
+                def screen_gets(fragment):
+                    return len([r for r in requests if r['method'] == 'GET' and fragment in r['url']])
+
+                page.clock.install(time=datetime(2026, 1, 1, 12, 0, 0))
+                page.clock.pause_at(datetime(2026, 1, 1, 12, 0, 0))
+
+                def substitute_503(route, kind):
+                    if kind == 'index' and modes['index503'] and '/api/workspace-designs' in route.request.url and 'id=fixture' in route.request.url:
+                        injected.append({'kind': kind, 'method': route.request.method, 'url': route.request.url, 'status': 503})
+                        route.fulfill(status=503, content_type='application/json', body=json.dumps({'error': 'Fixture generic 503'}))
+                    elif kind == 'head' and modes['head503'] and route.request.method == 'HEAD' and 'workspace-view' in route.request.url:
+                        injected.append({'kind': kind, 'method': route.request.method, 'url': route.request.url, 'status': 503})
+                        route.fulfill(status=503, content_type='text/html', body='')
+                    else:
+                        route.continue_()
+                page.route('**/api/workspace-designs**', lambda route: substitute_503(route, 'index'))
+                page.route('**/workspace-view/**', lambda route: substitute_503(route, 'head'))
+
+                # Cold deep link with an injected initial index 503.
+                error_route = '#/designs?ws=fixture&id=demo&path=screens%2F01-screen-1.html&tab=1600&q=demo'
+                page.goto(base + '/' + error_route, wait_until='domcontentloaded')
+                wait_until(lambda: any(item['kind'] == 'index' for item in injected), 'initial index 503 injected')
+                expect(page.locator('.list-caption')).to_have_text('Designs unavailable')
+                expect(page.locator('.list-pane')).to_contain_text('Designs could not be read')
+                expect(page.locator('.list-pane')).to_contain_text('The host did not return a usable result. Your selection is kept.')
+                expect(page.locator('.design-canvas')).to_contain_text('Designs could not be read')
+                initial_refresh = page.locator('.design-canvas').get_by_role('button', name='Refresh designs', exact=True)
+                expect(initial_refresh).to_be_visible()
+                expect(initial_refresh).to_have_class(re.compile(r'ds-btn--primary'))
+                expect(page.locator('#design-width')).to_have_count(0)
+                expect(page.locator('#design-frame')).to_have_count(0)
+                assert page.locator('main').inner_text().count('No designs recorded') == 0
+                assert params().get('ws') == ['fixture'] and params().get('id') == ['demo'], page.url
+                assert params().get('path') == ['screens/01-screen-1.html'] and params().get('tab') == ['1600'] and params().get('q') == ['demo'], page.url
+                expect(page.locator('main [role="status"][aria-atomic="true"]')).to_have_text('Designs could not be read.')
+                report['errorCaptureState'] = []
+                for width in (1280, 1600):
+                    page.set_viewport_size({'width': width, 'height': 900})
+                    path = browser_evidence / f'designs-error-initial@{width}.png'
+                    page.screenshot(path=str(path))
+                    report['captures'].append(str(path))
+                    report['errorCaptureState'].append({'state': 'initial-index-error', 'width': width, 'capture': str(path), 'url': page.url})
+                modes['index503'] = False
+                initial_refresh.click()
+                expect(frame().locator('h1')).to_have_text('Marker screen one')
+                assert frame().locator('html').get_attribute('data-marker') == '42'
+                assert any('/marker.js' in r['url'] for r in requests), 'marker script was not requested after recovery'
+                assert params().get('ws') == ['fixture'] and params().get('id') == ['demo'], page.url
+                assert params().get('path') == ['screens/01-screen-1.html'] and params().get('tab') == ['1600'] and params().get('q') == ['demo'], page.url
+                assert page.locator('.list-pane').inner_text().count('Designs could not be read') == 0
+                passed('cold initial index 503 preserves the deep-link route and shows the exact list/detail recovery; Refresh designs renders the real marker viewer')
+
+                # Retained index 503 via the App-owned Shell Refresh state.
+                page.evaluate("document.getElementById('design-frame').dataset.viewer = 'stable'")
+                held_handle = page.locator('#design-frame').element_handle()
+                held_nonce = frame().locator('html').get_attribute('data-nonce')
+                heads_before = head_count()
+                url_before = page.url
+                modes['index503'] = True
+                page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                wait_until(lambda: 'Last known catalog' in page.locator('.list-caption').text_content(), 'retained index error caption')
+                expect(page.locator('.list-caption')).to_have_text('Last known catalog: 1 of 2 design packages')
+                expect(page.locator('.object-head')).to_contain_text('Not confirmed')
+                expect(page.locator('.list-pane')).to_contain_text('Designs could not be read')
+                expect(page.locator('.list-pane')).to_contain_text('The host did not return a usable result. Your selection is kept.')
+                expect(page.locator('.list-pane').get_by_role('button', name='Refresh designs', exact=True)).to_be_visible()
+                announcer = page.locator('main [role="status"][aria-atomic="true"]')
+                expect(announcer).to_have_count(1)
+                expect(announcer).to_have_text('Designs could not be read.')
+                retained_announcement = announcer.text_content()
+                assert page.url == url_before, page.url
+                assert page.evaluate("document.getElementById('design-frame').dataset.viewer") == 'stable'
+                assert frame().locator('html').get_attribute('data-nonce') == held_nonce
+                assert head_count() == heads_before, 'retained index error triggered a HEAD'
+                page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                page.clock.fast_forward(50)
+                assert announcer.text_content() == retained_announcement, 'repeated failed refresh changed the announcement'
+                expect(page.locator('.list-caption')).to_have_text('Last known catalog: 1 of 2 design packages')
+                for width in (1280, 1600):
+                    page.set_viewport_size({'width': width, 'height': 900})
+                    path = browser_evidence / f'designs-error-retained@{width}.png'
+                    page.screenshot(path=str(path))
+                    report['captures'].append(str(path))
+                    report['errorCaptureState'].append({'state': 'retained-index-error', 'width': width, 'capture': str(path), 'url': page.url})
+                modes['index503'] = False
+                demo_index = Path(receipt['root']) / 'storage' / 'projects' / 'fixture' / 'designs' / 'demo' / 'design.json'
+                changed_record = {**report['seededDesigns']['fixture/demo'], 'title': 'Design fixture error recovered'}
+                demo_index.write_text(json.dumps(changed_record))
+                report['fixtureInputsDelta'] = {'fixture/designs/demo/design.json': changed_record}
+                page.locator('.list-pane').get_by_role('button', name='Refresh designs', exact=True).click()
+                expect(page.locator('.list-pane .record').filter(has_text='Design fixture error recovered')).to_be_visible()
+                expect(page.locator('#design-detail-heading')).to_have_text('Design fixture error recovered')
+                expect(page.locator('.list-caption')).to_have_text('1 of 2 design packages')
+                expect(page.locator('.object-head')).not_to_contain_text('Not confirmed')
+                assert page.evaluate("document.getElementById('design-frame').dataset.viewer") == 'stable'
+                assert frame().locator('html').get_attribute('data-nonce') == held_nonce
+                assert held_handle.evaluate('(el) => el.isConnected'), 'index recovery remounted the frame'
+                assert head_count() == heads_before, 'index recovery triggered a HEAD'
+                passed('retained index 503 keeps the route, frame, single announcer and silence across repeats; local Refresh designs consumes the changed real title without remount or HEAD')
+
+                # Combined retained index 503 and step-2 HEAD 503 (reference-78 state).
+                page.locator('#find-record').fill('')
+                page.clock.fast_forward(50)
+                expect(page.locator('.list-pane .record')).to_have_count(2)
+                modes['index503'] = True
+                modes['head503'] = True
+                page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                wait_until(lambda: 'Last known catalog' in page.locator('.list-caption').text_content(), 'combined retained index error')
+                expect(page.locator('.list-caption')).to_have_text('Last known catalog: 2 design packages')
+                page.get_by_role('button', name='Next screen', exact=True).click()
+                page.wait_for_function("() => location.hash.includes('path=screens%2F02-screen-2.html')")
+                wait_until(lambda: page.locator('.design-canvas').get_by_role('button', name='Retry screen', exact=True).count() == 1, 'screen failure preview')
+                expect(page.locator('.design-canvas')).to_contain_text('Screen could not be read')
+                expect(page.locator('.design-canvas')).to_contain_text('The design index and selected step are kept. Retry the screen file.')
+                retry_button = page.locator('.design-canvas').get_by_role('button', name='Retry screen', exact=True)
+                expect(page.locator('.design-canvas').get_by_role('button')).to_have_count(1)
+                expect(page.locator('.list-pane .record')).to_have_count(2)
+                expect(page.locator('.object-head h2')).to_have_text('Design fixture error recovered')
+                expect(page.locator('.object-head')).to_contain_text('Not confirmed')
+                expect(page.get_by_text('Screen 2 · Screen two', exact=True)).to_be_visible()
+                expect(page.locator('#design-width')).to_have_value('1600')
+                details = page.locator('.design-canvas details')
+                expect(details).to_be_visible()
+                assert details.evaluate('element => element.open') is False, 'disclosure was open in the error state'
+                open_screen = page.get_by_role('button', name='Open screen', exact=True)
+                expect(open_screen).to_be_disabled()
+                expect(open_screen).to_have_attribute('title', 'The recorded screen file could not be read.')
+                for guess in ('permission', 'denied', 'removed', 'no longer exists'):
+                    assert guess not in page.locator('main').inner_text().lower(), guess
+                assert page.locator('#design-frame').count() == 0
+                for width in (1280, 1600):
+                    page.set_viewport_size({'width': width, 'height': 900})
+                    path = browser_evidence / f'designs-error@{width}.png'
+                    page.screenshot(path=str(path))
+                    report['captures'].append(str(path))
+                    report['errorCaptureState'].append({'state': 'combined-index-head-error', 'width': width, 'capture': str(path), 'url': page.url})
+                if reference_html:
+                    capture_reference('reference-78', details=False, wait_for_frame=False, select_width=False)
+                passed('combined retained index and HEAD 503 renders the reference-78 preview with retained rows, disabled Open screen and sole Retry screen')
+
+                # a11y in the error state: 44px, keyboard and zoom reachability.
+                page.set_viewport_size({'width': 1600, 'height': 900})
+                controls = [page.locator('#find-record'), page.get_by_role('button', name='Previous screen', exact=True),
+                            page.get_by_role('button', name='Next screen', exact=True), retry_button,
+                            page.locator('#design-width')]
+                for control in controls:
+                    box = control.bounding_box()
+                    assert box and box['width'] >= 44 and box['height'] >= 44, (control, box)
+                page.locator('#find-record').focus()
+                reachable = []
+                for _ in range(24):
+                    reachable.append(active_control())
+                    page.keyboard.press('Tab')
+                reachable_text = [item['text'] for item in reachable if item]
+                reachable_ids = [item['id'] for item in reachable if item]
+                assert 'Previous screen' in reachable_text and 'Next screen' in reachable_text, reachable_text
+                assert 'Retry screen' in reachable_text, reachable_text
+                assert 'design-width' in reachable_ids, reachable_ids
+                page.evaluate("document.documentElement.style.zoom = '2'")
+                page.wait_for_timeout(50)
+                for control in controls:
+                    control.scroll_into_view_if_needed()
+                    box = control.bounding_box()
+                    assert box and box['x'] >= 0 and box['y'] >= 0 and box['y'] < 900, (control, box)
+                page.evaluate("document.documentElement.style.zoom = ''")
+                passed('error-state search, step, width and Retry screen controls meet 44px, stay keyboard reachable and survive 200% zoom')
+
+                # Failed explicit retry while the HEAD is still 503.
+                heads_before_failed = head_count()
+                gets_before = screen_gets('02-screen-2.html')
+                retry_button.click()
+                wait_until(lambda: head_count() == heads_before_failed + 1, 'failed retry HEAD')
+                page.clock.fast_forward(400)
+                expect(page.locator('.design-canvas')).to_contain_text('Screen could not be read')
+                assert page.locator('#design-frame').count() == 0, 'failed retry loaded a frame'
+                assert screen_gets('02-screen-2.html') == gets_before, 'failed retry loaded the screen'
+                assert 'No designs recorded' not in page.locator('main').inner_text()
+                assert 'No design selected' not in page.locator('main').inner_text()
+                assert params().get('path') == ['screens/02-screen-2.html'] and params().get('tab') == ['1600'], page.url
+                passed('a failed Retry screen keeps the same route and preview, adds exactly one HEAD and no frame GET or fabricated empty')
+
+                # Allowed HEAD: one HEAD plus one frame/marker load; the nonce advances once.
+                modes['head503'] = False
+                heads_before_success = head_count()
+                markers_before = marker_loads()
+                gets_before_success = screen_gets('02-screen-2.html')
+                page.locator('.design-canvas').get_by_role('button', name='Retry screen', exact=True).click()
+                expect(frame().locator('h1')).to_have_text('Marker screen two')
+                assert frame().locator('html').get_attribute('data-marker') == '42'
+                assert head_count() == heads_before_success + 1, 'successful retry HEAD count'
+                assert marker_loads() == markers_before + 1, 'successful retry marker load'
+                assert screen_gets('02-screen-2.html') == gets_before_success + 1, 'successful retry screen load'
+                identity = page.locator('#design-frame-wrap').get_attribute('data-viewer-identity')
+                assert identity and identity.split('\u0000')[-1] == '1', identity
+                expect(page.locator('.list-caption')).to_have_text('Last known catalog: 2 design packages')
+                expect(page.locator('.object-head')).to_contain_text('Not confirmed')
+                page.evaluate("document.getElementById('design-frame').dataset.viewer = 'stable'")
+                recovered_handle = page.locator('#design-frame').element_handle()
+                recovered_nonce = frame().locator('html').get_attribute('data-nonce')
+                heads_before_recovery = head_count()
+                modes['index503'] = False
+                page.locator('.list-pane').get_by_role('button', name='Refresh designs', exact=True).click()
+                page.clock.fast_forward(50)
+                expect(page.locator('.list-caption')).to_have_text('2 design packages')
+                assert page.evaluate("document.getElementById('design-frame').dataset.viewer") == 'stable'
+                assert frame().locator('html').get_attribute('data-nonce') == recovered_nonce
+                assert recovered_handle.evaluate('(el) => el.isConnected')
+                assert head_count() == heads_before_recovery, 'index recovery added a HEAD'
+                page.locator('#design-width').focus()
+                page.select_option('#design-width', '1280')
+                assert page.evaluate("document.activeElement && document.activeElement.id") == 'design-width', 'width change lost control focus'
+                passed('an allowed Retry screen adds one HEAD and one frame/marker load, advances the viewer identity once, and the confirmed frame survives index recovery with step/width focus retained')
+
+                allowed_console = [message for message in report['consoleErrors'] if '503' in message]
+                unexpected_console = [message for message in report['consoleErrors'] if '503' not in message]
+                assert not unexpected_console, unexpected_console
+                assert not report['pageErrors'], report['pageErrors']
+                unexpected = [failure for failure in report['requestFailures'] if 'ERR_ABORTED' not in failure['failure']]
+                assert not unexpected, unexpected
+                mutations = [r for r in requests if r['method'] not in ('GET', 'HEAD')]
+                assert not mutations, f'mutation requests observed: {mutations}'
+                report['errorState'] = {
+                    'injected': injected,
+                    'allowedConsoleDiagnostics': allowed_console,
+                    'captureState': report['errorCaptureState'],
+                    'retainedAnnouncement': retained_announcement,
+                    'retryIdentity': identity,
+                }
+                report['status'] = 'passed'
+                raise CaseComplete()
 
             if case == 'loading':
                 loading_state = {}
