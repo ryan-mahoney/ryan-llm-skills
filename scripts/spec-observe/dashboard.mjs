@@ -18,6 +18,7 @@ import { listWorkspaceDesigns } from './designs.mjs';
 import { fetchWorkspace, listWorkspaces, resolveStorageRoot, storageStatus } from '../workspaces/store.mjs';
 import { createPreviewService } from '../dev-preview/service.mjs';
 import { createPackagePreviewRoutes } from './package-preview-routes.mjs';
+import { createRepositoryFileRoutes } from './repository-files.mjs';
 import { createDiscussionRoutes } from '../workspaces/discussion-routes.mjs';
 import { applyManualCompletions, writeManualCompletion } from './manual-completion.mjs';
 import { observerExpired } from './observer-retention.mjs';
@@ -133,18 +134,20 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
   const publicName = normalizePublicHost(publicHost);
   const workspaceRoot = storageRoot ?? resolveStorageRoot(process.env, homedir());
   const sessionRoutes=createSessionRoutes({service:sessionControl??createSessionControl({storageRoot:workspaceRoot,publicHost:publicName}),actionToken});
-  // Fresh catalog per request: only an id with exactly one valid kit maps to a directory.
-  const authorizedWorkspace = async id => {
+  // Fresh catalog per request: only an id with exactly one valid kit maps to an entry.
+  const authorizedKit = async id => {
     if (typeof id !== 'string' || id === '') throw new Error('Workspace id is required');
     const match = (await listWorkspaces(workspaceRoot)).valid.filter(entry => entry.kit && entry.kit.id === id);
     if (match.length !== 1) throw new Error('Workspace is unavailable');
-    return match[0].directory;
+    return match[0];
   };
+  const authorizedWorkspace = async id => (await authorizedKit(id)).directory;
   const previewRoutes = createPackagePreviewRoutes({
     previewService: previewService ?? createPreviewService({ storageRoot: workspaceRoot }),
     actionToken,
     authorize: async requested => authorizePackage(await readDashboardState(agentDir), requested, authorizedWorkspace),
   });
+  const repositoryRoutes = createRepositoryFileRoutes({ authorizedKit, exclude: workspaceExclude });
   return createServer(async (request, response) => {
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
@@ -179,6 +182,7 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
         remote: remote && !publicRequest,
         expectedOrigin: publicRequest ? `https://${publicName}` : `http://${host}`,
       })) return;
+      if (await repositoryRoutes(request, response, url)) return;
       if (!['GET', 'HEAD'].includes(request.method) && !completionRequest) { response.writeHead(405, { Allow: 'GET, HEAD' }); response.end(); return; }
       if (completionRequest) {
         if (remote || request.headers.origin !== `http://${host}` || request.headers['x-sentinel-token'] !== actionToken

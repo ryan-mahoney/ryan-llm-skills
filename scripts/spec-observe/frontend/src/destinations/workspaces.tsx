@@ -1,5 +1,6 @@
 import { For, Show, createEffect, createSignal } from 'solid-js';
 import { stale, time } from '../format';
+import { contextRoutePath } from '../files-model';
 import type { CatalogEntry } from '../scope';
 import { ActionBar, EmptyState, MasterDetail, RegionalSkeleton, StateNotice, StatusText, type StatusTone } from '../primitives';
 import type { DestinationProps } from './index';
@@ -316,20 +317,16 @@ function WorkspacePane(props: DestinationProps) {
   const itemName = (item: unknown): string => (typeof item === 'string' ? item : text((item as any)?.name) || text((item as any)?.path));
   const openFiles = () => props.onNavigate({ dest: 'files', ws: ws() });
   const openPath = (path: string) => props.onNavigate({ dest: 'files', ws: ws(), source: 'workspace', path });
-  const contextRoutePath = (entry: any): string | null => {
-    const path = text(entry.path);
-    if (!path) return null;
-    const directory = text(data()?.directory);
-    if (path.startsWith('/')) {
-      // contextRecord resolves absolute references before containment checks.
-      // Match that lexical resolution, without changing the file reader's checks.
-      const segments = path.split('/').reduce<string[]>((parts, part) =>
-        part === '..' ? parts.slice(0, -1) : part && part !== '.' ? [...parts, part] : parts, []);
-      const normalized = `/${segments.join('/')}`;
-      if (!directory || !normalized.startsWith(`${directory}/`)) return null;
-      return normalized.slice(directory.length + 1);
-    }
-    return path;
+  const openContext = (path: string) => props.onNavigate({ dest: 'files', ws: ws(), source: 'context', path });
+  const openRepositoryArtifact = (owner: string, path: string) => props.onNavigate({ dest: 'files', ws: ws(), source: 'repository', id: owner, path });
+  const contextPath = (entry: any): string | null => contextRoutePath(text(data()?.directory), text(entry.path));
+  // Only a complete, available repository target can ground a Files route; the
+  // record's own top-level path is the artifact JSON location, not a target path.
+  const repositoryArtifact = (item: any): { owner: string; path: string } | null => {
+    if (item?.status !== 'ok') return null;
+    const owner = text(item?.target?.repository_id);
+    const path = text(item?.target?.path);
+    return owner && path ? { owner, path } : null;
   };
   const retryWorkspace = () => {
     if (boundaryError(props)) { props.onRetryCatalog(); return; }
@@ -506,10 +503,10 @@ function WorkspacePane(props: DestinationProps) {
                           <tr>
                             <td>
                               <Show
-                                when={entry.status === 'ok' ? contextRoutePath(entry) : null}
+                                when={entry.status === 'ok' ? contextPath(entry) : null}
                                 fallback={<span class="muted mono path">{text(entry.path) || text(entry.label) || 'Context'}</span>}
                               >
-                                {path => <button type="button" class="text-link" onClick={() => openPath(path())}>{path()}</button>}
+                                {path => <button type="button" class="text-link" onClick={() => openContext(path())}>{path()}</button>}
                               </Show>
                             </td>
                             <td><StatusText tone={statusTone(entry.status)}>{statusLabel(entry.status)}</StatusText></td>
@@ -585,8 +582,15 @@ function WorkspacePane(props: DestinationProps) {
                     {item => (
                       <div class="info-row">
                         <p><strong>{text(item.title) || 'Artifact'}</strong> · {text(item.kind) || 'unknown'} · {text(item.status) || 'unknown'}</p>
-                        <Show when={item.kind === 'url' ? text(typeof item.target === 'string' ? item.target : item.target?.url) : [text(item.target?.repository_id), text(item.target?.path)].filter(Boolean).join(' · ')}>
-                          {detail => <small class="mono">{detail()}</small>}
+                        <Show
+                          when={repositoryArtifact(item)}
+                          fallback={
+                            <Show when={item.kind === 'url' ? text(typeof item.target === 'string' ? item.target : item.target?.url) : [text(item.target?.repository_id), text(item.target?.path)].filter(Boolean).join(' · ')}>
+                              {detail => <small class="mono">{detail()}</small>}
+                            </Show>
+                          }
+                        >
+                          {target => <button type="button" class="text-link mono" onClick={() => openRepositoryArtifact(target().owner, target().path)}>{`${target().owner} · ${target().path}`}</button>}
                         </Show>
                         <Show when={text(item.note)}>{note => <small>{note()}</small>}</Show>
                         <Show when={text(item.reason)}>{reason => <small class="warn">{reason()}</small>}</Show>
