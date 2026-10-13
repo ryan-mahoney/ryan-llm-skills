@@ -7,7 +7,7 @@ import { postJson } from './api';
 import type { InputPreview, ReferenceIdentity } from './composerTypes';
 import type { WireRecord } from './model';
 
-export type LaunchContext = { ws: string; thread?: string; target?: string | null; package?: string; skill?: string };
+export type LaunchContext = { ws: string; thread?: string; target?: string | null; package?: string; skill?: string; authority?: 'none' | 'draft-pr' };
 export type LaunchPreview = { record: WireRecord; contractDigest: string; inputPreview?: InputPreview };
 export type LaunchReply = { assignment: WireRecord; observation: WireRecord };
 export const FIXED_INSTRUCTION = 'Perform the attached assignment brief.';
@@ -83,6 +83,9 @@ const directAssignmentBody = (ctx: LaunchContext, ids: LaunchPreviewInput) => ({
   references: identityOnly(ids.references),
   skill: skillOf(ctx),
   ...(ctx.package ? { spec_package: ctx.package } : {}),
+  // The bound presentation owns publication authority; only an explicitly
+  // derived value crosses the wire, and thread bodies never carry it.
+  ...(ctx.authority ? { publication_authority: ctx.authority } : {}),
 });
 
 export function saveLaunchBrief(ctx: LaunchContext, requestId: string, brief: LaunchBriefInput, token: string, signal?: AbortSignal): Promise<WireRecord> {
