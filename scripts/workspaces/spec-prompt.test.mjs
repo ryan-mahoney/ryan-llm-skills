@@ -28,8 +28,14 @@ test("fresh package selects initial architecture and stops at proposal when crit
 });
 
 test("fresh package without a recommendation runs architecture then spec-write to prepared", () => {
-  assert.deepEqual(packagePlanningPlan({ proposal: false, critiqueRecommended: false, critique: false }),
+  const plan = packagePlanningPlan({ proposal: false, critiqueRecommended: false, critique: false });
+  assert.deepEqual(plan,
     { skill: "spec-architect-initial", stages: ["spec-architect-initial", "spec-write"], stop: "prepared" });
+  const content = planningBriefContent(REF, plan);
+  assert.match(content, /Stop at Prepared/);
+  assert.match(content, /inspect the resulting proposal/);
+  assert.match(content, /if critique is recommended, stop at the proposal/);
+  assert.match(content, /otherwise continue through spec-write to Prepared/);
 });
 
 test("a recommended proposal without a critique selects critics then spec-write", () => {
