@@ -483,8 +483,41 @@ def run_states(browser, report):
             item.close()
 
 
+def viewport_visible(page, locator, name, minimum_height, what):
+    """Visible region of locator inside the viewport; rejects vertical clipping."""
+    box = locator.bounding_box()
+    assert box is not None, (name, what, "missing bounding box")
+    viewport = page.viewport_size
+    assert viewport is not None, (name, "missing viewport")
+    left = max(box["x"], 0.0)
+    top = max(box["y"], 0.0)
+    right = min(box["x"] + box["width"], viewport["width"])
+    bottom = min(box["y"] + box["height"], viewport["height"])
+    visible = {"x": left, "y": top, "width": max(right - left, 0.0), "height": max(bottom - top, 0.0)}
+    assert visible["width"] > 0 and visible["height"] >= minimum_height, (name, what, box, visible)
+    return box, visible
+
+
+def assert_uncovered(page, name, what, box, visible):
+    """The visible center must hit inside the terminal section, not an overlap."""
+    viewport = page.viewport_size
+    point_x = min(max(box["x"] + box["width"] / 2, 0), viewport["width"] - 1)
+    point_y = min(max(visible["y"] + visible["height"] / 2, 0), viewport["height"] - 1)
+    hit = page.evaluate(
+        "([x, y]) => { const el = document.elementFromPoint(x, y);"
+        " const scope = document.querySelector('section.terminal-view');"
+        " return !!el && !!scope && (scope === el || scope.contains(el)); }",
+        [point_x, point_y],
+    )
+    assert hit, (name, what, "covered or clipped", box, visible)
+
+
 def run_captures(browser, report):
-    """EV-8: state screenshots for both surfaces at 1280x860 and 390x844."""
+    """EV-8: state screenshots for both surfaces at 1280x860 and 390x844.
+
+    Each capture scrolls the terminal section into view, screenshots the
+    viewport, then rejects vertical clipping and overlap of the state
+    message, recovery control and player before recording the capture."""
     report["boundary"] = "owned fixture; stub final player/process states; no real stream; captured content is stub data"
     fixtures = []
     context = None
@@ -541,15 +574,32 @@ def run_captures(browser, report):
                     expect(frame).to_be_hidden()
                 for width, height in ((1280, 860), (390, 844)):
                     page.set_viewport_size({"width": width, "height": height})
-                    page.locator("#live-terminal-heading").evaluate("el => el.scrollIntoView({block:'start'})")
+                    panel.evaluate("el => el.scrollIntoView({block:'start'})")
                     page.wait_for_timeout(120)
                     name = f"terminal-{surface}-{state}-{width}.png"
                     path = shots_dir / name
                     page.screenshot(path=str(path))
-                    report["captures"].append({"file": str(path), "surface": surface, "state": state, "width": width})
+                    checks = {}
+                    message = panel.locator("p[role='status']")
+                    expect(message).to_contain_text(copy)
+                    message_box, message_visible = viewport_visible(page, message, name, 12, "state message")
+                    assert_uncovered(page, name, "state message", message_box, message_visible)
+                    checks["message_visible_height"] = round(message_visible["height"], 1)
+                    retry = panel.get_by_role("button", name="Retry", exact=True)
+                    if retry.count() > 0:
+                        expect(retry).to_be_visible()
+                        retry_box, retry_visible = viewport_visible(page, retry, name, 24, "retry control")
+                        assert_uncovered(page, name, "retry control", retry_box, retry_visible)
+                        checks["retry_visible_height"] = round(retry_visible["height"], 1)
+                    report["captures"].append({"file": str(path), "surface": surface, "state": state, "width": width, "checks": checks})
                     if populated:
+                        expect(frame).to_contain_text("fixture terminal output")
+                        checks["player_text"] = True
                         box = frame.bounding_box()
                         assert box is not None and box["x"] >= -1 and box["x"] + box["width"] <= width + 1, (name, box)
+                        frame_box, frame_visible = viewport_visible(page, frame, name, 120, "terminal player")
+                        assert_uncovered(page, name, "terminal player", frame_box, frame_visible)
+                        checks["frame_visible_height"] = round(frame_visible["height"], 1)
                         overflow = page.evaluate("document.documentElement.scrollWidth")
                         assert overflow <= width + 1, (name, overflow)
                 report["cases"].append(f"{surface} {state} shows {label} copy")

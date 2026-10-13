@@ -335,15 +335,22 @@
 .terminal-view .terminal-frame[hidden]{display:none}
 .terminal-view .terminal-frame :is(canvas,pre,video,img,svg){max-width:100%}
 
-/* Narrow viewports: the shell stops forcing a 1080px floor and the master-
-   detail panes stack so the detail body — and its terminal frame — stay
-   inside the viewport. Desktop widths keep the existing layout. */
+/* Narrow viewports: the shell becomes one scrolling page — rail, list and
+   detail stack at natural heights — instead of keeping the desktop 100vh
+   grid with its inner scroll contracts, which starved the stacked detail
+   body and let rail flow collide with the page head. Desktop widths keep
+   the existing layout. */
 @media(max-width:1080px){
-  .app{min-width:0;max-width:100%;grid-template-columns:minmax(0,1fr)}
-  .workspace{grid-template-columns:minmax(0,1fr)}
+  .app{min-width:0;max-width:100%;grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto;height:auto;min-height:100vh}
+  .workspace{grid-template-columns:minmax(0,1fr);flex:none}
   .main,.rail,.workspace,.list-pane,.detail-pane,.detail-body,.terminal-view{min-width:0;max-width:100%}
-  .list-pane{border-right:0;border-bottom:1px solid var(--ds-line-2)}
+  .main{overflow:visible}
   .rail{border-right:0;border-bottom:1px solid var(--ds-line-2)}
+  .rail-footer{margin-top:0}
+  .list-pane{border-right:0;border-bottom:1px solid var(--ds-line-2)}
+  .records{flex:none;overflow:visible}
+  .detail-pane{overflow:visible}
+  .detail-body{flex:none;overflow:visible}
   .page-head{height:auto;flex-wrap:wrap;align-items:flex-start}
   .head-actions{flex-wrap:wrap;min-width:0;max-width:100%}
   .page-head .ds-btn,.page-head .pill,.page-head .status,.page-head .small.muted{white-space:normal;overflow-wrap:anywhere;min-width:0;max-width:100%}
