@@ -23,6 +23,9 @@ SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 180s uv run --script \
 SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 180s uv run --script \
   scripts/spec-observe/frontend/designs-browser-check.py --case partial \
   --capture-reference /path/to/designs/app-ui/screens/79-designs-partial.html
+SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 180s uv run --script \
+  scripts/spec-observe/frontend/designs-browser-check.py --case unavailable \
+  --capture-reference /path/to/designs/app-ui/screens/80-designs-unavailable.html
 
 Only the temporary fixture storage, one final index HTTP delay, and the imported
 snapshot are substituted; App, route, adapters, /api/workspace-designs and the
@@ -52,7 +55,7 @@ from urllib.parse import parse_qs, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--case', choices=['journey', 'unproduced', 'empty', 'loading', 'error', 'partial'], default='journey')
+parser.add_argument('--case', choices=['journey', 'unproduced', 'empty', 'loading', 'error', 'partial', 'unavailable'], default='journey')
 parser.add_argument('--capture-reference', default=None)
 options = parser.parse_args()
 case = options.case
@@ -446,6 +449,344 @@ try:
                     reference_state.append(state)
                 reference_page.close()
                 report['reference'] = {'html': str(reference_html), 'url': reference_url, 'captures': reference_state}
+
+            if case == 'unavailable':
+                unavailable_state = {}
+                report['unavailableState'] = unavailable_state
+                storage = Path(receipt['root']) / 'storage'
+                projects_dir = storage / 'projects'
+                fixture_dir = projects_dir / 'fixture'
+                demo_dir = fixture_dir / 'designs' / 'demo'
+                demo_index = demo_dir / 'design.json'
+                other_demo = projects_dir / 'other' / 'designs' / 'other-demo'
+                held_demo = fixture_dir / 'designs-held-demo'
+                held_fixture = storage / 'held-fixture'
+                held_projects = storage / 'held-projects'
+                degraded_marker = storage / 'projects-held-file'
+
+                def wait_until(condition, label, timeout=5):
+                    deadline = time.monotonic() + timeout
+                    while time.monotonic() < deadline:
+                        if condition():
+                            return
+                        page.wait_for_timeout(25)
+                    raise AssertionError(f'{label} not observed')
+
+                def demo_requests():
+                    return len([r for r in requests if '/designs/demo/' in r['url']])
+
+                def catalog_body():
+                    response = context.request.get(base + '/api/workspaces')
+                    assert response.ok, response.status
+                    return response.json()
+
+                def catalog_facts(body):
+                    return {
+                        'status': (body.get('storage') or {}).get('status'),
+                        'storageErrors': (body.get('storage') or {}).get('errors'),
+                        'errors': body.get('errors'),
+                        'valid': [entry.get('id') for entry in body.get('valid', [])],
+                        'invalidCount': len(body.get('invalid', [])),
+                    }
+
+                def catalog_incomplete(facts):
+                    return facts['status'] not in ('ok', 'missing_projects') or bool(facts['storageErrors']) or bool(facts['errors'])
+
+                def move_demo():
+                    if demo_dir.exists():
+                        demo_dir.rename(held_demo)
+
+                def restore_demo():
+                    if held_demo.exists() and not demo_dir.exists():
+                        held_demo.rename(demo_dir)
+
+                def move_fixture():
+                    if fixture_dir.exists() and not held_fixture.exists():
+                        fixture_dir.rename(held_fixture)
+
+                def restore_fixture():
+                    if held_fixture.exists() and not fixture_dir.exists():
+                        held_fixture.rename(fixture_dir)
+
+                def degrade_catalog():
+                    projects_dir.rename(held_projects)
+                    projects_dir.write_text('projects held for the degraded catalog boundary')
+
+                def restore_catalog():
+                    if projects_dir.is_file():
+                        projects_dir.unlink()
+                    if held_projects.is_dir() and not projects_dir.exists():
+                        held_projects.rename(projects_dir)
+
+                page.clock.install(time=datetime(2026, 1, 1, 12, 0, 0))
+                page.clock.pause_at(datetime(2026, 1, 1, 12, 0, 0))
+                try:
+                    # Scenario 1: successful omission of the explicit slug preserves identity.
+                    page.goto(base + '/#/designs?ws=fixture&id=demo&path=screens%2F01-screen-1.html&tab=1600&q=demo', wait_until='domcontentloaded')
+                    expect(page.locator('#design-detail-heading')).to_have_text('Design fixture')
+                    expect(frame().locator('h1')).to_have_text('Marker screen one')
+                    assert frame().locator('html').get_attribute('data-marker') == '42'
+                    expect(page.locator('#design-width')).to_have_value('1600')
+                    unavailable_state['initiatingRoute'] = page.url
+                    move_demo()
+                    page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    expect(page.locator('.design-canvas .empty h2')).to_have_text('Design screen unavailable')
+                    assert params().get('id') == ['demo'] and params().get('path') == ['screens/01-screen-1.html'] and params().get('tab') == ['1600'] and params().get('q') == ['demo'], page.url
+                    expect(page.locator('.object-head h2')).to_have_text('Design fixture')
+                    expect(page.locator('.object-head')).to_contain_text('Screen 1 · Screen one')
+                    expect(page.locator('.design-canvas')).to_contain_text('The workspace or selected file is no longer available through the current reader boundary.')
+                    expect(page.locator('.design-canvas')).to_contain_text('Last known selection: Design fixture · Screen 1 screens/01-screen-1.html')
+                    assert page.locator('#design-frame').count() == 0
+                    open_screen = page.get_by_role('button', name='Open screen', exact=True)
+                    expect(open_screen).to_be_disabled()
+                    expect(open_screen).to_have_attribute('title', 'The workspace or selected file is no longer available through the current reader boundary.')
+                    expect(page.get_by_role('button', name='Previous screen', exact=True)).to_be_disabled()
+                    expect(page.locator('#design-width')).to_be_disabled()
+                    demo_before = demo_requests()
+                    page.clock.fast_forward(1000)
+                    assert demo_requests() == demo_before, 'unavailable selection kept reading the demo assets'
+                    details = page.locator('.design-canvas details')
+                    if details.count() and not details.evaluate('element => element.open'):
+                        details.locator('summary').click()
+                    expect(details).to_contain_text('Screen details and deviations')
+                    for width in (1280, 1600):
+                        page.set_viewport_size({'width': width, 'height': 900})
+                        page.evaluate("() => { const canvas = document.querySelector('.design-canvas'); if (canvas) canvas.scrollTop = 0; }")
+                        path = browser_evidence / f'designs-unavailable@{width}.png'
+                        page.screenshot(path=str(path))
+                        report['captures'].append(str(path))
+                        if details.count() and not details.evaluate('element => element.open'):
+                            details.locator('summary').click()
+                        page.evaluate("() => { const canvas = document.querySelector('.design-canvas'); if (canvas) { const target = canvas.querySelector('details'); if (target) target.scrollIntoView({ block: 'start' }); } }")
+                        path = browser_evidence / f'designs-unavailable-details@{width}.png'
+                        page.screenshot(path=str(path))
+                        report['captures'].append(str(path))
+                    if reference_html:
+                        capture_reference('reference-80', details=False, wait_for_frame=False, select_width=False)
+                    unavailable_state['omission'] = {'route': page.url, 'demoReads': demo_requests() - demo_before}
+                    passed('a successful current-scope omission keeps the explicit identity, last metadata and boundary explanation with no frame access')
+
+                    # A later index 503 keeps the retained successful omission unavailable.
+                    omission_modes = {'on': True}
+                    def fail_omitted_index(route):
+                        if omission_modes['on'] and '/api/workspace-designs' in route.request.url and 'id=fixture' in route.request.url:
+                            route.fulfill(status=503, content_type='application/json', body=json.dumps({'error': 'Fixture generic 503'}))
+                        else:
+                            route.continue_()
+                    page.route('**/api/workspace-designs**', fail_omitted_index)
+                    with page.expect_response(lambda response: '/api/workspace-designs' in response.url and 'id=fixture' in response.url) as omission_failure:
+                        page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    assert omission_failure.value.status == 503
+                    expect(page.get_by_role('heading', name='Design screen unavailable', exact=True)).to_be_visible()
+                    assert params().get('id') == ['demo'] and params().get('path') == ['screens/01-screen-1.html'] and params().get('tab') == ['1600'] and params().get('q') == ['demo'], page.url
+                    assert page.locator('#design-frame').count() == 0
+                    demo_after_failure = demo_requests()
+                    page.clock.fast_forward(1000)
+                    assert demo_requests() == demo_after_failure, 'index failure resumed demo asset access'
+                    unavailable_state['omissionFailure'] = {'status': 503, 'route': page.url, 'frame': 0}
+                    omission_modes['on'] = False
+                    page.unroute('**/api/workspace-designs**', fail_omitted_index)
+                    with page.expect_response(lambda response: '/api/workspace-designs' in response.url and 'id=fixture' in response.url) as omission_recovery:
+                        page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    assert omission_recovery.value.status == 200
+                    expect(page.get_by_role('heading', name='Design screen unavailable', exact=True)).to_be_visible()
+                    assert page.locator('#design-frame').count() == 0
+
+                    # Choose design: focus search, clear id/path/tab, recover a real row, Back restores.
+                    choose = page.get_by_role('button', name='Choose design', exact=True)
+                    box = choose.bounding_box()
+                    assert box and box['width'] >= 44 and box['height'] >= 44, box
+                    page.evaluate("document.documentElement.style.zoom = '2'")
+                    page.wait_for_timeout(50)
+                    choose.scroll_into_view_if_needed()
+                    zoom_box = choose.bounding_box()
+                    assert zoom_box and zoom_box['x'] >= 0 and zoom_box['y'] >= 0 and zoom_box['y'] < 900, zoom_box
+                    page.evaluate("document.documentElement.style.zoom = ''")
+                    choose.focus()
+                    assert page.evaluate("document.activeElement && document.activeElement.textContent") == 'Choose design'
+                    page.keyboard.press('Enter')
+                    expect(page.locator('#find-record')).to_be_visible()
+                    page.wait_for_function("() => location.hash.includes('id=second')")
+                    page.clock.fast_forward(16)
+                    active_element = page.evaluate("document.activeElement ? document.activeElement.id : ''")
+                    unavailable_state['chooseRecovery'] = {'activeElement': active_element, 'route': page.url}
+                    assert params().get('ws') == ['fixture'] and params().get('q') == ['demo'], page.url
+                    assert params().get('id') != ['demo'], page.url
+                    assert active_element == 'find-record', active_element
+                    expect(page.locator('#design-detail-heading')).to_have_text('Alternate fixture')
+                    expect(frame().locator('h1')).to_have_text('Alternate wide screen')
+                    page.go_back()
+                    expect(page.locator('.design-canvas .empty h2')).to_have_text('Design screen unavailable')
+                    assert params().get('id') == ['demo'], page.url
+                    passed('Choose design clears id/path/tab, keeps ws/q, focuses the search and Back restores the unavailable identity')
+
+                    # Scenario 2: restore, corrupt the selected index, unrelated broken index stays partial.
+                    restore_demo()
+                    page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    expect(page.get_by_role('heading', name='Design screen unavailable', exact=True)).to_have_count(0)
+                    expect(frame().locator('h1')).to_have_text('Marker screen one')
+                    original_demo_index = demo_index.read_text()
+                    demo_index.write_text('{ invalid json')
+                    page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    expect(page.locator('.design-canvas .empty h2')).to_have_text('Design screen unavailable')
+                    unavailable_state['namedSlugError'] = params().get('id')
+                    demo_index.write_text(original_demo_index)
+                    unrelated = fixture_dir / 'designs' / 'broken-unrelated'
+                    unrelated.mkdir(parents=True, exist_ok=True)
+                    (unrelated / 'design.json').write_text('{ invalid json')
+                    page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    expect(page.get_by_role('heading', name='Design screen unavailable', exact=True)).to_have_count(0)
+                    expect(frame().locator('h1')).to_have_text('Marker screen one')
+                    assert frame().locator('html').get_attribute('data-marker') == '42'
+                    expect(page.locator('.design-canvas .ds-callout')).to_contain_text('1 design index could not be read.')
+                    expect(page.locator('.list-pane')).to_contain_text('designs/broken-unrelated/design.json')
+                    unrelated_details = page.locator('.design-canvas details')
+                    if not unrelated_details.evaluate('element => element.open'):
+                        unrelated_details.locator('summary').click()
+                    expect(unrelated_details).to_contain_text('designs/broken-unrelated/design.json')
+                    (unrelated / 'design.json').unlink()
+                    unrelated.rmdir()
+                    page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    expect(page.locator('.design-canvas .ds-callout')).to_have_count(0)
+                    passed('restoring the real index recovers; a selected slug error is unavailable while an unrelated broken index stays a partial warning')
+
+                    # Scenario 3: generic index/HEAD failures stay errors; a missing path normalizes.
+                    index_modes = {'on': True}
+                    def fail_index(route):
+                        if index_modes['on'] and '/api/workspace-designs' in route.request.url and 'id=fixture' in route.request.url:
+                            route.fulfill(status=503, content_type='application/json', body=json.dumps({'error': 'Fixture generic 503'}))
+                        else:
+                            route.continue_()
+                    page.route('**/api/workspace-designs**', fail_index)
+                    with page.expect_response(lambda response: '/api/workspace-designs' in response.url) as index_failure:
+                        page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    assert index_failure.value.status == 503
+                    expect(page.locator('.list-pane')).to_contain_text('The host did not return a usable result. Your selection is kept.')
+                    expect(page.get_by_role('heading', name='Design screen unavailable', exact=True)).to_have_count(0)
+                    index_modes['on'] = False
+                    page.unroute('**/api/workspace-designs**', fail_index)
+                    page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    expect(page.locator('.designs-index-error')).to_have_count(0)
+                    head_modes = {'on': True}
+                    def fail_head(route):
+                        if head_modes['on'] and route.request.method == 'HEAD' and 'workspace-view' in route.request.url:
+                            route.fulfill(status=503, content_type='text/html', body='')
+                        else:
+                            route.continue_()
+                    page.route('**/workspace-view/**', fail_head)
+                    page.get_by_role('button', name='Next screen', exact=True).click()
+                    page.wait_for_function("() => location.hash.includes('path=screens%2F02-screen-2.html')")
+                    expect(page.locator('.design-canvas')).to_contain_text('Screen could not be read')
+                    expect(page.get_by_role('heading', name='Design screen unavailable', exact=True)).to_have_count(0)
+                    head_modes['on'] = False
+                    page.unroute('**/workspace-view/**', fail_head)
+                    page.get_by_role('button', name='Retry screen', exact=True).click()
+                    expect(page.locator('#design-frame')).to_have_count(1)
+                    page.evaluate("location.hash = '#/designs?ws=fixture&id=demo&path=screens/99-missing.html&tab=1600'")
+                    page.wait_for_function("() => location.hash.includes('path=screens%2F01-screen-1.html')")
+                    expect(page.locator('#design-detail-heading')).to_have_text('Design fixture')
+                    expect(page.get_by_role('heading', name='Design screen unavailable', exact=True)).to_have_count(0)
+                    unavailable_state['genericFailures'] = {'index503': 'error', 'head503': 'error', 'missingPath': 'normalized'}
+                    passed('generic index/HEAD 503 stay errors and an omitted path inside a valid design normalizes instead of denying access')
+
+                    # Scenario 4: same-outlet transition to an all-invalid other scope.
+                    other_original = (other_demo / 'design.json').read_text()
+                    (other_demo / 'design.json').write_text('{ invalid json')
+                    demo_before_switch = demo_requests()
+                    initiating = page.url
+                    page.evaluate("location.hash = '#/designs?ws=other'")
+                    expect(page.locator('.detail-body')).to_contain_text('Design indexes could not be read')
+                    assert params().get('ws') == ['other'] and params().get('id') is None, page.url
+                    assert demo_requests() == demo_before_switch, 'scope transition requested the previous demo assets'
+                    other_api = context.request.get(base + '/api/workspace-designs?id=other')
+                    other_body = other_api.json()
+                    assert other_body.get('designs') == [] and other_body.get('errors'), other_body
+                    assert page.locator('#design-frame').count() == 0
+                    expect(page.get_by_role('heading', name='Design screen unavailable', exact=True)).to_have_count(0)
+                    expect(page.locator('.detail-body')).to_contain_text('designs/other-demo/design.json')
+                    unavailable_state['scopeTransition'] = {
+                        'initiatingRoute': initiating, 'finalRoute': page.url,
+                        'otherDesigns': other_body.get('designs'),
+                        'otherErrorNames': [item.get('name') for item in other_body.get('errors', [])],
+                        'demoReadsDuringSwitch': demo_requests() - demo_before_switch,
+                    }
+                    (other_demo / 'design.json').write_text(other_original)
+                    page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    expect(page.locator('#design-detail-heading')).to_have_text('Other fixture')
+                    passed('a same-outlet scope transition renders the real all-invalid other diagnostics without touching the previous demo assets')
+
+                    # Scenario 5: degraded catalog never removes; complete omission does.
+                    page.goto(base + '/#/designs?ws=fixture&id=demo&path=screens%2F01-screen-1.html&tab=1600', wait_until='domcontentloaded')
+                    expect(page.locator('#design-detail-heading')).to_have_text('Design fixture')
+                    expect(frame().locator('h1')).to_have_text('Marker screen one')
+                    assert frame().locator('html').get_attribute('data-marker') == '42'
+                    page.evaluate("document.getElementById('design-frame').dataset.viewer = 'stable'")
+                    degraded_handle = page.locator('#design-frame').element_handle()
+                    degraded_nonce = frame().locator('html').get_attribute('data-nonce')
+                    unavailable_state['degradedFrame'] = {'nonce': degraded_nonce}
+                    move_fixture()
+                    degrade_catalog()
+                    degraded_catalog = catalog_body()
+                    degraded_facts = catalog_facts(degraded_catalog)
+                    unavailable_state['degradedCatalog'] = degraded_facts
+                    assert catalog_incomplete(degraded_facts), degraded_facts
+                    page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    expect(page.locator('.list-pane')).to_contain_text('The host did not return a usable result. Your selection is kept.')
+                    expect(page.get_by_role('heading', name='Design screen unavailable', exact=True)).to_have_count(0)
+                    assert page.evaluate("document.getElementById('design-frame').dataset.viewer") == 'stable'
+                    assert frame().locator('html').get_attribute('data-marker') == '42'
+                    assert frame().locator('html').get_attribute('data-nonce') == degraded_nonce
+                    assert degraded_handle.evaluate('(el) => el.isConnected')
+                    page.set_viewport_size({'width': 1600, 'height': 900})
+                    path = browser_evidence / 'designs-unavailable-degraded@1600.png'
+                    page.screenshot(path=str(path))
+                    report['captures'].append(str(path))
+                    restore_catalog()
+                    complete_catalog = catalog_body()
+                    complete_facts = catalog_facts(complete_catalog)
+                    unavailable_state['completeCatalog'] = complete_facts
+                    assert complete_facts['status'] in ('ok', 'missing_projects') and not complete_facts['storageErrors'] and not complete_facts['errors'], complete_facts
+                    assert 'fixture' not in complete_facts['valid'], complete_facts
+                    page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    expect(page.locator('.design-canvas .empty h2')).to_have_text('Design screen unavailable')
+                    assert page.locator('#design-frame').count() == 0
+                    choose_removed = page.get_by_role('button', name='Choose design', exact=True)
+                    choose_removed.click()
+                    expect(page.locator('[data-workspace="other"]')).to_be_visible()
+                    assert params() == {}, page.url
+                    assert page.locator('[data-workspace="fixture"]').count() == 0, 'dead workspace still offered'
+                    restore_fixture()
+                    page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    expect(page.locator('[data-workspace="fixture"]')).to_be_visible()
+                    page.locator('[data-workspace="fixture"]').click()
+                    expect(page.locator('#design-detail-heading')).to_have_text('Design fixture')
+                    expect(frame().locator('h1')).to_have_text('Marker screen one')
+                    passed('a degraded catalog keeps the retained workspace while a complete omission removes it and offers the real unscoped picker')
+
+                    # Catalog 503 with a retained frame never removes the workspace.
+                    catalog_modes = {'on': True}
+                    def fail_catalog(route):
+                        if catalog_modes['on'] and '/api/workspaces' in route.request.url:
+                            route.fulfill(status=503, content_type='application/json', body=json.dumps({'error': 'Fixture generic 503'}))
+                        else:
+                            route.continue_()
+                    page.route('**/api/workspaces', fail_catalog)
+                    with page.expect_response(lambda response: '/api/workspaces' in response.url) as catalog_failure:
+                        page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    assert catalog_failure.value.status == 503
+                    expect(page.get_by_role('heading', name='Design screen unavailable', exact=True)).to_have_count(0)
+                    expect(frame().locator('h1')).to_have_text('Marker screen one')
+                    catalog_modes['on'] = False
+                    page.unroute('**/api/workspaces', fail_catalog)
+                    page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    passed('a catalog 503 with a retained frame never declares the workspace removed')
+                finally:
+                    restore_catalog()
+                    restore_fixture()
+                    restore_demo()
+                assert not report['pageErrors'], report['pageErrors']
+                report['status'] = 'passed'
+                raise CaseComplete()
 
             if case == 'partial':
                 partial_state = {}

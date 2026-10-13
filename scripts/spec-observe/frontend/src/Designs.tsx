@@ -9,7 +9,9 @@ import { serverNow, stale, time } from './format';
 import { fileViewUrl } from './observation-format';
 import { formatHash, navigate, type RouteState } from './route';
 import { ActionBar, EmptyState, MasterDetail, RegionalSkeleton, StateNotice, StatusText, type StatusTone } from './primitives';
-import { designBriefRoute, selectDesign, type Design, type DesignsResponse } from './destinations/designs-state';
+import { designBriefRoute, selectDesign, type Design, type DesignsResponse, type Screen } from './destinations/designs-state';
+import { catalogRead } from './destinations/workspace-state';
+import { resolveCatalogEntry } from './scope';
 import type { DestinationProps } from './destinations';
 
 const INDEX_READ_DEADLINE_MS = 30000;
@@ -37,7 +39,7 @@ const SkeletonReserve = (props: { rows: number }) => (
 );
 
 export default function Designs(props: DestinationProps) {
-  const [data, setData] = createSignal<DesignsResponse | null>(null);
+  const [indexResult, setIndexResult] = createSignal<{ scope: string; body: DesignsResponse } | null>(null);
   const [indexError, setIndexError] = createSignal('');
   const [loadedAt, setLoadedAt] = createSignal<string | null>(null);
   const [busy, setBusy] = createSignal(false);
@@ -95,10 +97,11 @@ export default function Designs(props: DestinationProps) {
     indexController = controller;
     indexDeadline = deadline;
     setBusy(true);
+    const requestScope = JSON.stringify([ws, true]);
     void getJson<DesignsResponse>(`/api/workspace-designs?${new URLSearchParams({ id: ws }).toString()}`, controller.signal)
       .then(result => {
         if (generation !== indexGeneration || controller.signal.aborted) return;
-        setData(result);
+        setIndexResult({ scope: requestScope, body: result });
         setLoadedAt(new Date(serverNow() ?? Date.now()).toISOString());
         setIndexError('');
       })
@@ -130,6 +133,13 @@ export default function Designs(props: DestinationProps) {
   // reset data, busy state, probes or the frame for an unchanged scope.
   const scopeKey = createMemo(() => JSON.stringify([props.route.ws ?? '', props.live]));
 
+  // Scope-tagged index data: retained results are consumed only while their
+  // originating scope still matches the current scalar key.
+  const data = createMemo(() => {
+    const stored = indexResult();
+    return stored && stored.scope === scopeKey() ? stored.body : null;
+  });
+
   // Scope changes and disposal invalidate every read and reset retained data.
   // The key is parsed inside the untracked on callback so the effect uses the
   // exact ws/live pair that triggered it.
@@ -138,7 +148,7 @@ export default function Designs(props: DestinationProps) {
     indexGeneration++;
     stopIndex();
     stopProbe();
-    setData(null);
+    setIndexResult(null);
     setIndexError('');
     setLoadedAt(null);
     setBusy(false);
@@ -161,6 +171,7 @@ export default function Designs(props: DestinationProps) {
 
   const selection = createMemo(() => selectDesign(props.route, data()?.designs ?? []));
   const designs = () => data()?.designs ?? [];
+  const indexDiagnostics = () => data()?.errors ?? [];
   const design = () => selection().design;
   const screen = () => selection().screen;
   const query = () => (props.route.q ?? '').trim().toLowerCase();
@@ -176,6 +187,82 @@ export default function Designs(props: DestinationProps) {
   const allInvalid = () => Boolean(data()) && designs().length === 0 && (data()!.errors?.length ?? 0) > 0;
   const unavailableSelection = () => selection().unavailable && (props.route.id ?? '') !== '';
   const filesRoute = (): RouteState => ({ dest: 'files', ws: props.route.ws, source: 'workspace' });
+
+  // Complete catalog read semantics: a workspace is only declared removed after a
+  // successful whole-catalog read omits it; degraded reads and invalid entries
+  // never remove, and missing_projects remains a valid complete read.
+  const catalogDegraded = () => {
+    const read = catalogRead({
+      valid: props.catalog,
+      invalid: props.catalogInvalid,
+      storage: props.catalogStorage,
+      errors: props.catalogError ? [{ message: props.catalogError }] : [],
+    } as any, null);
+    return read.degraded || props.storageDiagnostics.length > 0;
+  };
+  const invalidCatalogEntry = () => (props.catalogInvalid ?? []).some(entry => String((entry as any)?.id ?? '') === String(props.route.ws ?? ''));
+  const removedWorkspace = () => props.live && (props.route.ws ?? '') !== '' && props.catalogLoaded
+    && !catalogDegraded() && !invalidCatalogEntry() && !resolveCatalogEntry(props.catalog, props.route.ws ?? '');
+  const explicitSlugErrors = () => {
+    const id = props.route.id ?? '';
+    return id ? indexDiagnostics().filter(item => item.name === `designs/${id}/design.json`) : [];
+  };
+  // An explicit slug is unavailable only after a successful current-scope read
+  // omits it or names its index in errors; a generic HTTP failure stays an error.
+  const explicitUnavailable = () => {
+    const id = props.route.id ?? '';
+    if (!id || removedWorkspace() || !data()) return false;
+    if (explicitSlugErrors().length > 0) return true;
+    return !designs().some(item => item.slug === id);
+  };
+  const blockedSelection = () => removedWorkspace() || explicitUnavailable();
+
+  // Last successful selected metadata, cached for the exact ws/slug only and used
+  // for the unavailable explanation, header and disclosure; never to grant access.
+  const [lastKnown, setLastKnown] = createSignal<{ ws: string; slug: string; design: Design; screen: Screen | null; width: number | null } | null>(null);
+  createEffect(() => {
+    const item = design();
+    const ws = props.route.ws ?? '';
+    if (!item || !ws) return;
+    setLastKnown({ ws, slug: item.slug, design: item, screen: screen(), width: selection().width });
+  });
+  const cachedSelection = () => {
+    const cached = lastKnown();
+    if (!cached) return null;
+    return cached.ws === (props.route.ws ?? '') && cached.slug === (props.route.id ?? '') ? cached : null;
+  };
+  const unavailableTitle = () => cachedSelection()?.design.title ?? 'Design screen';
+  const unavailableSubtitle = () => {
+    const cached = cachedSelection();
+    return cached?.screen ? `Screen ${cached.screen.step} · ${cached.screen.title}` : 'Screen unavailable';
+  };
+  const unavailablePosture = () => cachedSelection()?.design.viewport?.posture || 'Viewport unknown';
+  const unavailableBoundary = 'The workspace or selected file is no longer available through the current reader boundary.';
+  const unavailableText = () => {
+    const cached = cachedSelection();
+    const identity = cached
+      ? `${cached.design.title}${cached.screen ? ` · Screen ${cached.screen.step} ${cached.screen.file}` : ''}`
+      : (props.route.id ?? '');
+    return identity ? `${unavailableBoundary} Last known selection: ${identity}.` : unavailableBoundary;
+  };
+  const unavailableWidths = () => cachedSelection()?.design.viewport?.widths ?? [];
+  const unavailableScreenCount = () => cachedSelection()?.design.screens.length ?? 0;
+  const unavailableCaptureText = () => {
+    const cached = cachedSelection();
+    if (!cached?.screen) return '';
+    return widthList((cached.design.viewport?.widths ?? []).filter(width => cached.screen!.captured?.[String(width)] === true));
+  };
+  const chooseDesign = () => {
+    if (removedWorkspace()) {
+      props.onNavigate({ dest: 'designs' });
+      return;
+    }
+    props.onNavigate({ dest: 'designs', ws: props.route.ws, q: props.route.q });
+    requestAnimationFrame(() => {
+      const input = document.getElementById('find-record') as HTMLInputElement | null;
+      input?.focus();
+    });
+  };
 
   // Invalid route parameters normalize once, without adding history entries.
   createEffect(() => {
@@ -235,7 +322,7 @@ export default function Designs(props: DestinationProps) {
   const viewerKey = createMemo(() => {
     const item = design();
     const current = screen();
-    if (!item || !current) return '';
+    if (!item || !current || blockedSelection()) return '';
     return `${props.route.ws ?? ''}\u0000${item.slug}\u0000${item.path}/${current.file}\u0000${retryNonce()}`;
   });
   const probeState = () => {
@@ -246,7 +333,7 @@ export default function Designs(props: DestinationProps) {
   const probeIdentity = createMemo(() => {
     const item = design();
     const current = screen();
-    return `${props.live ? 'live' : 'imported'}\u0000${props.route.ws ?? ''}\u0000${item?.slug ?? ''}\u0000${screenPath()}\u0000${current?.produced ? 'produced' : 'planned'}\u0000${probeRetry()}`;
+    return `${props.live ? 'live' : 'imported'}\u0000${props.route.ws ?? ''}\u0000${item?.slug ?? ''}\u0000${screenPath()}\u0000${current?.produced ? 'produced' : 'planned'}\u0000${blockedSelection() ? 'blocked' : 'open'}\u0000${probeRetry()}`;
   });
   const openScreenTitle = () => {
     const current = screen();
@@ -305,7 +392,7 @@ export default function Designs(props: DestinationProps) {
     stopProbe();
     setProbe(null);
     const url = screenUrl();
-    if (!props.live || !screen()?.produced || !url) return;
+    if (!props.live || !screen()?.produced || !url || blockedSelection()) return;
     const generation = probeGeneration;
     const controller = new AbortController();
     const deadline = setTimeout(() => controller.abort(), INDEX_READ_DEADLINE_MS);
@@ -383,7 +470,6 @@ export default function Designs(props: DestinationProps) {
   };
   const captureText = () => widthList(capturedWidths());
   const missingText = () => widthList(missingWidths());
-  const indexDiagnostics = () => data()?.errors ?? [];
   const captureGap = () => Boolean(screen()?.produced) && missingWidths().length > 0;
   const partialEvidence = () => Boolean(design()) && (captureGap() || indexDiagnostics().length > 0);
   const showCaptureCallout = () => Boolean(design()) && Boolean(screen()?.produced) && partialEvidence()
@@ -444,6 +530,7 @@ export default function Designs(props: DestinationProps) {
   };
   const announcement = createMemo(() => {
     if (!props.live) return 'Designs require a live dashboard server.';
+    if (removedWorkspace() || explicitUnavailable()) return 'Design screen unavailable. Choose a design.';
     if (!data()) {
       if (indexError()) return 'Designs could not be read.';
       return initialDelayed() ? 'Reading designs.' : '';
@@ -592,6 +679,57 @@ export default function Designs(props: DestinationProps) {
             <div class="detail-body">
               <EmptyState symbol="◇" title="A live dashboard is required" text="Designs need the local dashboard server. Import a published snapshot to inspect other data." />
             </div>
+          </Match>
+          <Match when={removedWorkspace() || explicitUnavailable()}>
+            <>
+              <div class="object-head">
+                <div class="object-top">
+                  <h2 id="design-detail-heading" tabIndex={-1}>{unavailableTitle()}</h2>
+                  <StatusText tone="neutral">{unavailablePosture()}</StatusText>
+                </div>
+                <p>{unavailableSubtitle()}</p>
+              </div>
+              <div class="design-toolbar">
+                <ActionBar variant="inline">
+                  <button type="button" class="ds-btn" disabled>Previous screen</button>
+                  <StatusText tone="neutral">{cachedSelection()?.screen ? `${cachedSelection()!.screen!.step} of ${unavailableScreenCount()}` : 'No screens'}</StatusText>
+                  <button type="button" class="ds-btn" disabled>Next screen</button>
+                </ActionBar>
+                <div style={{ display: 'flex', gap: '12px', 'align-items': 'center' }}>
+                  <label class="muted" for="design-width">Width</label>
+                  <select
+                    id="design-width"
+                    class="ds-input"
+                    style={{ width: '120px' }}
+                    disabled
+                    value={cachedSelection()?.width === null || cachedSelection()?.width === undefined ? '' : String(cachedSelection()!.width)}
+                  >
+                    <For each={unavailableWidths()}>{width => <option value={String(width)}>{width}px</option>}</For>
+                  </select>
+                  <button type="button" class="ds-btn" disabled title={unavailableBoundary}>Open screen</button>
+                </div>
+              </div>
+              <div class="design-canvas">
+                <EmptyState
+                  symbol="◇"
+                  title="Design screen unavailable"
+                  text={unavailableText()}
+                  action={<button type="button" class="ds-btn ds-btn--primary" onClick={chooseDesign}>Choose design</button>}
+                />
+                <Show when={cachedSelection()?.screen}>
+                  <details style={{ 'margin-top': '20px' }}>
+                    <summary>Screen details and deviations</summary>
+                    <p>
+                      {cachedSelection()!.screen!.person || 'Person not recorded'} · {cachedSelection()!.screen!.job || 'Job not recorded'}<br />
+                      Primary action: {cachedSelection()!.screen!.primary_action || 'Not recorded'}<br />
+                      Capture: {unavailableCaptureText() || 'none'}
+                      <Show when={cachedSelection()!.screen!.notes}><br />Note: {cachedSelection()!.screen!.notes}</Show>
+                    </p>
+                  </details>
+                </Show>
+              </div>
+              <footer class="detail-foot">Produced and captured status comes from files · Screen content is read only</footer>
+            </>
           </Match>
           <Match when={!data()}>
             <Show
