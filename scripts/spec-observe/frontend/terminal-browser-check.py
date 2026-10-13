@@ -12,11 +12,14 @@ Step 8 owns the real-player proof.
 Run after `npm run build --prefix scripts/spec-observe/frontend`:
   SENTINEL_EVIDENCE_DIR=... uv run --script scripts/spec-observe/frontend/terminal-browser-check.py --case states
   SENTINEL_EVIDENCE_DIR=... uv run --script scripts/spec-observe/frontend/terminal-browser-check.py --case captures
+  SENTINEL_EVIDENCE_DIR=... uv run --script scripts/spec-observe/frontend/terminal-browser-check.py --case real \
+    --url URL --assignment UUID --probe-dir DIR --package DIR --workspace WS
 
 The states case writes evidence/ev-5-terminal.json; the captures case writes
 evidence/ev-8-terminal-captures.json plus evidence/browser/terminal-*.png.
 """
 import argparse
+import base64
 import json
 import os
 import select
@@ -611,11 +614,130 @@ def run_captures(browser, report):
             item.close()
 
 
+def run_real(browser, report, args):
+    """EV-1/EV-6: real dashboard, private tmux session, asciinema stream and player.
+
+    The Node case owns the launched assignment, the raw v1.alis viewer and the
+    owned probe directory; this script only drives the ordinary browser routes
+    against the same-origin dashboard and never creates the terminal fixture."""
+    report["boundary"] = (
+        "real default dashboard (no injected terminal views, service or adapters), real private tmux "
+        "session, real asciinema 3.x stream and real bundled player through the same-origin proxy"
+    )
+    report["errors"] = []
+    package_name = Path(args.package).name if args.package else ""
+    probe_dir = Path(args.probe_dir) if args.probe_dir else None
+    context = None
+    try:
+        context = browser.new_context(viewport={"width": 1280, "height": 860})
+        page = context.new_page()
+        page.on("pageerror", lambda error: report["page_errors"].append(str(error)))
+        page.add_init_script(
+            "window.__cspViolations = [];"
+            "document.addEventListener('securitypolicyviolation',"
+            "event => window.__cspViolations.push(event.violatedDirective || 'unknown'));"
+        )
+
+        def open_route(route):
+            if route == "agents":
+                page.goto(f"{args.url}/#/agents?ws={quote(args.workspace)}", wait_until="domcontentloaded")
+                row = page.locator("[data-assignment-key]").filter(has=page.get_by_text(args.assignment, exact=True))
+                expect(row).to_have_count(1, timeout=30000)
+                row.click()
+            else:
+                page.goto(f"{args.url}/#/specs?ws={quote(args.workspace)}", wait_until="domcontentloaded")
+                row = page.locator(".records button.record").filter(has=page.get_by_text(package_name, exact=True)).first
+                expect(row).to_be_visible(timeout=30000)
+                row.click()
+            expect(page.locator("#live-terminal-heading")).to_have_count(1, timeout=30000)
+            panel = page.locator("section.terminal-view")
+            expect(panel).to_have_count(1)
+            frame = panel.locator(".terminal-frame")
+            expect(frame).to_be_visible(timeout=30000)
+            expect(frame).to_contain_text("INITIAL_TERMINAL_MARKER", timeout=45000)
+            return frame
+
+        def capture(route, width, height):
+            page.set_viewport_size({"width": width, "height": height})
+            page.locator("section.terminal-view").evaluate("el => el.scrollIntoView({block:'start'})")
+            page.wait_for_timeout(250)
+            name = f"terminal-real-{route}-{width}.png"
+            path = shots_dir / name
+            page.screenshot(path=str(path))
+            report["captures"].append({"file": str(path), "route": route, "width": width})
+
+        frame = open_route("agents")
+        report["cases"].append("ordinary agents detail renders the real launched UUID terminal with the initial marker")
+
+        # The later marker is owned output that only appears after the
+        # parent-owned trigger file exists; the browser stays attached and the
+        # captures are taken with both markers already rendered.
+        assert probe_dir is not None, "real mode requires --probe-dir"
+        probe_dir.mkdir(parents=True, exist_ok=True)
+        (probe_dir / "later-output.trigger").write_text("trigger\n")
+        expect(frame).to_contain_text("LATER_TERMINAL_MARKER", timeout=45000)
+        report["cases"].append("later owned output marker becomes visible through the real player")
+        capture("agents", 1280, 860)
+        capture("agents", 390, 844)
+
+        # Viewer keyboard input targets the player frame; the parent asserts the
+        # observed input log stays at its positive-control baseline.
+        frame.click()
+        page.keyboard.type("ADJ4-VIEWER-INPUT-ATTEMPT")
+        page.wait_for_timeout(500)
+        report["viewer_input"] = {"attempted": True, "text": "ADJ4-VIEWER-INPUT-ATTEMPT"}
+        # The init array resets per navigation; retain the agents answer before
+        # leaving the route.
+        agents_violations = page.evaluate("window.__cspViolations || []")
+
+        frame = open_route("spec")
+        expect(frame).to_contain_text("LATER_TERMINAL_MARKER", timeout=45000)
+        report["cases"].append("non-planned spec Overview renders the same UUID terminal and both markers")
+        capture("spec", 1280, 860)
+        capture("spec", 390, 844)
+
+        api = context.request
+        shell = api.get(args.url + "/")
+        assert shell.ok, shell.status
+        shell_csp = shell.headers.get("content-security-policy", "")
+        assert "default-src 'self'" in shell_csp and "frame-ancestors 'none'" in shell_csp, shell_csp
+        assert "'wasm-unsafe-eval'" in shell_csp, shell_csp
+        assert "unsafe-eval" not in shell_csp.replace("'wasm-unsafe-eval'", ""), shell_csp
+        package_token = base64.urlsafe_b64encode(args.package.encode()).decode().rstrip("=")
+        sandbox = api.get(f"{args.url}/package-view/{package_token}/sandbox.html")
+        assert sandbox.ok, sandbox.status
+        sandbox_csp = sandbox.headers.get("content-security-policy", "")
+        assert "sandbox allow-scripts" in sandbox_csp, sandbox_csp
+        assert "allow-same-origin" not in sandbox_csp, sandbox_csp
+        assert "connect-src 'none'" in sandbox_csp, sandbox_csp
+        report["csp"] = {"shell": shell_csp, "sandbox": sandbox_csp}
+
+        spec_violations = page.evaluate("window.__cspViolations || []")
+        violations = agents_violations + spec_violations
+        report["csp_violations"] = {"agents": agents_violations, "spec": spec_violations}
+        assert violations == [], violations
+        assert not report["page_errors"], report["page_errors"]
+    finally:
+        if context is not None:
+            context.close()
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--case", choices=("states", "captures"), required=True)
+    parser.add_argument("--case", choices=("states", "captures", "real"), required=True)
+    parser.add_argument("--url")
+    parser.add_argument("--assignment")
+    parser.add_argument("--probe-dir")
+    parser.add_argument("--package")
+    parser.add_argument("--workspace", default="")
     args = parser.parse_args()
-    receipt = receipt_dir / ("ev-5-terminal.json" if args.case == "states" else "ev-8-terminal-captures.json")
+    if args.case == "real":
+        required = {"--url": args.url, "--assignment": args.assignment, "--probe-dir": args.probe_dir, "--package": args.package}
+        missing = [name for name, value in required.items() if not value]
+        if missing:
+            parser.error(f"--case real requires {', '.join(missing)}")
+    receipt_names = {"states": "ev-5-terminal.json", "captures": "ev-8-terminal-captures.json", "real": "ev-6-real-player.json"}
+    receipt = receipt_dir / receipt_names[args.case]
     report = {"case": args.case, "status": "failed", "cases": [], "captures": [], "page_errors": []}
     started = time.monotonic()
     try:
@@ -623,6 +745,8 @@ def main():
             browser = playwright.chromium.connect_over_cdp("http://127.0.0.1:9222")
             if args.case == "states":
                 run_states(browser, report)
+            elif args.case == "real":
+                run_real(browser, report, args)
             else:
                 run_captures(browser, report)
         report["status"] = "passed"

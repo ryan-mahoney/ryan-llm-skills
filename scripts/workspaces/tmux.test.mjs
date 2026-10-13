@@ -630,6 +630,39 @@ test("tmux adapter: window size reads the target session's exact dimensions", as
   ]);
 });
 
+test("tmux adapter: window size optionally reads the status rows for the stream probe", async () => {
+  const socketPath = join(tmpdir(), "adj4-window-status.sock");
+  const name = sessionName();
+  const cases = [["on", 1], ["off", 0], ["0", 0], ["1", 1], ["2", 2], ["5", 5]];
+  for (const [status, statusRows] of cases) {
+    const { run, calls } = stubWindowSizeRun({ display: `200 50 ${status}\n` });
+    assert.deepEqual(
+      await windowSize({ socketPath, sessionName: name }, { run, includeStatus: true }),
+      { cols: 200, rows: 50, statusRows },
+      status,
+    );
+    // The opt-in read asks for exactly the status field in the same exact
+    // session target; the default read keeps the two-field format above.
+    assert.deepEqual(calls[1], {
+      socketPath,
+      args: ["display-message", "-p", "-t", `=${name}:`, "#{window_width} #{window_height} #{status}"],
+    });
+  }
+  for (const status of ["maybe", "6", "-1", "1.5"]) {
+    const { run } = stubWindowSizeRun({ display: `200 50 ${status}\n` });
+    await assert.rejects(
+      windowSize({ socketPath, sessionName: name }, { run, includeStatus: true }),
+      /invalid window status/,
+      status,
+    );
+  }
+  const missing = stubWindowSizeRun({ display: "200 50\n" });
+  await assert.rejects(
+    windowSize({ socketPath, sessionName: name }, { run: missing.run, includeStatus: true }),
+    /invalid window dimensions/,
+  );
+});
+
 test("tmux adapter: window size returns null only on confirmed session absence", async () => {
   const socketPath = join(tmpdir(), "adj4-window-absent.sock");
   const name = sessionName();

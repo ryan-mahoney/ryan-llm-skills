@@ -137,7 +137,7 @@ async function assignmentBytes(setup) {
   return snapshot;
 }
 
-function windowSizeRun({ size = "200 50", gate = null } = {}) {
+function windowSizeRun({ size = "200 50", status = "off", gate = null } = {}) {
   const calls = [];
   const run = async (socketPath, args) => {
     calls.push({ socketPath, args });
@@ -145,7 +145,7 @@ function windowSizeRun({ size = "200 50", gate = null } = {}) {
     if (args[0] === "list-clients") return ok();
     if (args[0] === "display-message") {
       if (gate !== null) await gate;
-      return ok(`${size}\n`);
+      return ok(`${size} ${status}\n`);
     }
     return ok();
   };
@@ -1013,7 +1013,7 @@ test("terminal view 5: default verification against a live record identity", { t
     if (args[0] === "list-clients") return ok();
     if (args[0] === "show-options") return ok(`${probe.tag}\n`);
     if (args[0] === "display-message") {
-      if (args[4] === "#{window_width} #{window_height}") return ok(`${probe.size}\n`);
+      if (args[4] === "#{window_width} #{window_height} #{status}") return ok(`${probe.size} off\n`);
       return ok(`${probe.paneId} ${probe.pid}\n`);
     }
     return ok();

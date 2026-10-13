@@ -189,19 +189,27 @@ export async function sessionPanePid({ socketPath, sessionName } = {}, { run = r
  * Read the exact session's current window dimensions. `null` is returned
  * only on confirmed session absence; an unreachable server or any other
  * transport failure throws instead of returning fabricated dimensions.
+ * With `includeStatus` the same read additionally reports the session's
+ * current status option rows (`off`/`0` → 0, `on` → 1, `1`..`5` → that
+ * count); the default call and its exact `{cols, rows}` result are unchanged.
+ * Reading the option never mutates it.
  * @param {{socketPath: string, sessionName: string}} input
- * @returns {Promise<{cols: number, rows: number}|null>}
+ * @param {{run?: Function, includeStatus?: boolean}} [options]
+ * @returns {Promise<{cols: number, rows: number, statusRows?: number}|null>}
  */
-export async function windowSize({ socketPath, sessionName } = {}, { run = runTmux } = {}) {
+export async function windowSize({ socketPath, sessionName } = {}, { run = runTmux, includeStatus = false } = {}) {
   assertAbsolutePath(socketPath, "socketPath");
   assertSessionName(sessionName);
   if (!(await hasSession({ socketPath, sessionName }, { run }))) return null;
+  const format = includeStatus
+    ? "#{window_width} #{window_height} #{status}"
+    : "#{window_width} #{window_height}";
   const result = await run(socketPath, [
     "display-message",
     "-p",
     "-t",
     `=${sessionName}:`,
-    "#{window_width} #{window_height}",
+    format,
   ]);
   if (!result.ok) {
     // The session may have vanished after the has-session probe: re-check to
@@ -209,13 +217,25 @@ export async function windowSize({ socketPath, sessionName } = {}, { run = runTm
     if (!(await hasSession({ socketPath, sessionName }, { run }))) return null;
     throw tmuxFailure("display-message", result);
   }
-  const match = /^(\d+)\s+(\d+)$/.exec(result.stdout.trim());
+  const match = (includeStatus ? /^(\d+)\s+(\d+)\s+(\S+)$/ : /^(\d+)\s+(\d+)$/).exec(result.stdout.trim());
   const cols = match === null ? NaN : Number(match[1]);
   const rows = match === null ? NaN : Number(match[2]);
   if (!Number.isSafeInteger(cols) || cols <= 0 || !Number.isSafeInteger(rows) || rows <= 0) {
     throw new Error(`tmux returned invalid window dimensions: ${JSON.stringify(result.stdout)}`);
   }
-  return { cols, rows };
+  if (!includeStatus) return { cols, rows };
+  const status = match[3];
+  const statusRows = status === "off" || status === "0"
+    ? 0
+    : status === "on"
+      ? 1
+      : /^[1-5]$/.test(status)
+        ? Number(status)
+        : null;
+  if (statusRows === null) {
+    throw new Error(`tmux returned invalid window status: ${JSON.stringify(status)}`);
+  }
+  return { cols, rows, statusRows };
 }
 
 async function resolveOwnedSession(socketPath, sessionName, run = runTmux) {

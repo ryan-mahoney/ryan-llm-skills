@@ -472,6 +472,11 @@ export function createTerminalViews({
     ].map(quote).join(" ");
     const env = { ...process.env };
     if (!env.TERM) env.TERM = "xterm-256color";
+    // The status bar occupies rows inside the recorded window; the stream
+    // must request those rows in addition to the window height or the first
+    // attached client shrinks the window. The opened result still reports the
+    // window rows.
+    const streamRows = size.rows + (size.statusRows ?? 0);
     let child;
     try {
       child = spawnProcess(
@@ -481,7 +486,7 @@ export function createTerminalViews({
           "--local",
           "--headless",
           "--window-size",
-          `${size.cols}x${size.rows}`,
+          `${size.cols}x${streamRows}`,
           "-c",
           command,
         ],
@@ -518,7 +523,7 @@ export function createTerminalViews({
     try {
       size = await windowSize(
         { socketPath: entry.record.tmux_socket, sessionName: entry.record.tmux_session },
-        tmuxOptions,
+        { ...tmuxOptions, includeStatus: true },
       );
     } catch {
       failEntry(entry, terminalError("failed", 503, "The terminal size could not be read."));
