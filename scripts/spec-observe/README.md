@@ -154,7 +154,7 @@ storage root. The list shows current rows first and groups ended or launch-faile
 rows under **Recently ended**. Each row shows the full assignment UUID, one
 display state — live, live (unrecorded), launching, launch unconfirmed, exited
 (unrecorded), terminal lost, unknown, ended or launch failed — and a safe textual
-next action (attach command, `adjacent locate <id>`, wait, do not relaunch,
+next action (attach command, `node ~/.agents/scripts/workspaces/cli.mjs locate <id>`, wait, do not relaunch,
 history, or inspect recorded workers). Quiet session activity is informational
 (no growth for 120 seconds); attached clients are presence only and never grant
 control. Selecting an agent shows separate Execution, Lifecycle and Declared
@@ -878,6 +878,7 @@ Focused verification: `node --test scripts/spec-observe/session-activity.test.mj
 scripts/spec-observe/session-routes.test.mjs`, the `session controls end only`
 case in `scripts/workspaces/launch.integration.test.mjs`, and
 `uv run --script scripts/spec-observe/frontend/browser-session-check.py`.
+
 ## Package dev servers
 
 Configured workspaces expose Start dev server, Stop dev server, and a Tailscale link
