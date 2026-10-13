@@ -31,7 +31,7 @@ export function targetRepositoryId(record: WireRecord): string | undefined {
   return text((targets[0] as { id?: unknown })?.id);
 }
 
-const matchesCatalogEntry = (
+export const matchesCatalogEntry = (
   record: WireRecord,
   kind: ScopeRecordKind,
   entry: CatalogEntry,
@@ -98,4 +98,30 @@ export function withWorkspace(route: RouteState, wsId: string | undefined): Rout
   if (wsId) next.ws = wsId;
   else delete next.ws;
   return next;
+}
+
+export function catalogEntryForRecord(
+  record: WireRecord,
+  kind: ScopeRecordKind,
+  catalog: CatalogEntry[],
+  preferredId?: string,
+): CatalogEntry | undefined {
+  const matches = (catalog ?? []).filter(entry => entry && matchesCatalogEntry(record, kind, entry));
+  if (!matches.length) return undefined;
+  const preferred = preferredId === undefined ? undefined : matches.find(entry => entry.id === preferredId);
+  if (preferred) return preferred;
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+export function workspaceRelativePath(directory: string, absolutePath: string): string | null {
+  const dir = text(directory)?.replace(/\/+$/, '');
+  const path = text(absolutePath);
+  if (!dir || !path) return null;
+  const prefix = `${dir}/`;
+  if (!path.startsWith(prefix)) return null;
+  const relative = path.slice(prefix.length);
+  if (!relative) return null;
+  const segments = relative.split('/');
+  if (segments.some(segment => !segment || segment === '.' || segment === '..' || segment.includes('\\') || segment.includes('\0'))) return null;
+  return relative;
 }
