@@ -13,13 +13,15 @@ import json, os, re, select, subprocess, sys, time
 from pathlib import Path
 from playwright.sync_api import sync_playwright, expect
 
+UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
+
 root = Path(__file__).resolve().parent
 args = sys.argv[1:]
 section = args[args.index('--section') + 1] if '--section' in args else 'handoff'
 evidence_dir = Path(os.environ['SENTINEL_EVIDENCE_DIR']) if os.environ.get('SENTINEL_EVIDENCE_DIR') else None
 shots_dir = (evidence_dir / 'browser') if evidence_dir else Path('/tmp')
 if evidence_dir: shots_dir.mkdir(parents=True, exist_ok=True)
-receipt = (evidence_dir or Path('/tmp')) / ('ev-9-brief.json' if section == 'brief' else 'ev-4-handoff.json')
+receipt = (evidence_dir or Path('/tmp')) / ('ev-10-review.json' if section == 'review' else 'ev-9-brief.json' if section == 'brief' else 'ev-4-handoff.json')
 summary = {'status':'failed','section':section,'cases':[],'page_errors':[],'captures':[],'boundary':'1440x1100 desktop' if section == 'handoff' else '1280x1100 and 1600x1100 desktop'}
 def passed(name): summary['cases'].append(name)
 def shot(locator, name):
@@ -131,6 +133,174 @@ def run_brief(browser, url):
         finally:
             context.close()
 
+def run_review(browser, url):
+    widths = (1280, 1600)
+    sessions = {}
+    api = browser.new_context()
+    def control(action='', value=''):
+        response = api.request.get(url + '/__fixture/control?action=' + action + '&value=' + value)
+        assert response.ok
+        return response.json()
+    def posts(name):
+        return [x for x in control()['posts'] if x['name'] == name]
+    def capture(page, name):
+        page.locator('#launch-review').scroll_into_view_if_needed()
+        page.locator('#launch-review').screenshot(path=str(shots_dir / name))
+        summary['captures'].append(str(shots_dir / name))
+    def open_page(width):
+        context = browser.new_context(viewport={'width': width, 'height': 1100}, device_scale_factor=1)
+        page = context.new_page()
+        errors = []
+        page.on('pageerror', lambda e: errors.append(str(e)))
+        page.goto(url + '/#/launch', wait_until='domcontentloaded')
+        expect(page.locator('.workspace-picker')).to_be_visible()
+        page.locator('.workspace-picker button[data-workspace="fixture"]').click()
+        expect(page).to_have_url(re.compile(r'#/launch\?ws=fixture&tab=brief'))
+        page.evaluate("location.hash = '#/launch?ws=fixture&tab=review'")
+        expect(page).to_have_url(re.compile(r'#/launch\?ws=fixture&tab=review'))
+        expect(page.locator('#launch-brief-title')).to_be_visible()
+        page.locator('#launch-brief-title').fill('Keep selected files in view')
+        page.locator('#launch-brief-content').fill('Outcome\nOpen selected files beside the listing, with the source and filename visible.')
+        return context, page, errors
+    try:
+        control('dispatch-preview-refusal', 'none')
+        control('dispatch-launch-refusal', 'none')
+        # Hold the first resolution until both widths captured the resolving state.
+        control('hold-dispatch-preview', 'true')
+        for width in widths:
+            context, page, errors = open_page(width)
+            page.locator('#launch-brief-title').press('Enter')
+            expect(page.locator('#launch-review-status')).to_contain_text('Resolving execution contract')
+            expect(page.locator('#launch-review .skeletons')).to_be_visible()
+            expect(page.locator('#launch-review-requested')).to_contain_text('Whole workspace')
+            expect(page.locator('#launch-assignment-launch')).to_be_disabled()
+            assert not posts('dispatchLaunch')
+            assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+            capture(page, f'launch-resolving-{width}.png')
+            sessions[width] = {'context': context, 'page': page, 'errors': errors}
+            passed(f'resolving keeps requested facts ({width})')
+        control('release-dispatch-preview', 'true')
+        for width in widths:
+            page = sessions[width]['page']
+            expect(page.locator('#launch-assignment-launch')).to_be_enabled()
+            page.evaluate("[...document.querySelectorAll('#launch-what-pi details')].forEach(d=>d.open=true)")
+            review = page.locator('#launch-review')
+            expect(review).to_contain_text('Whole workspace')
+            expect(review).to_contain_text('Pi default')
+            expect(review).to_contain_text('None')
+            digest = page.locator('#launch-review [data-fact="digest"] dd').inner_text()
+            assignment = page.locator('#launch-review [data-fact="assignment"] dd').inner_text()
+            assert re.fullmatch(r'[0-9a-f]{64}', digest), digest
+            assert UUID_RE.fullmatch(assignment), assignment
+            expect(page.locator('#launch-what-pi')).to_contain_text('Perform the attached assignment brief.')
+            expect(page.locator('#launch-what-pi')).to_contain_text('Open selected files beside the listing')
+            assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+            capture(page, f'launch-review-{width}.png')
+            passed(f'fresh review shows resolved facts ({width})')
+        for width in widths:
+            page = sessions[width]['page']
+            # Review cannot approve unsaved edits; Enter only ever saves.
+            page.locator('#launch-assignment-edit').click()
+            expect(page.locator('#launch-brief-title')).to_be_focused()
+            page.locator('#launch-brief-title').fill('Keep selected files in view v2')
+            expect(page.locator('#launch-review-unsaved')).to_contain_text('Unsaved changes are not reviewed')
+            assert page.locator('#launch-assignment-launch').count() == 0
+            page.locator('#launch-assignment-save').click()
+            expect(page.locator('#launch-assignment-launch')).to_be_enabled()
+            passed(f'unsaved edits cannot dispatch ({width})')
+            # A stale launch refusal withholds dispatch until a fresh review succeeds.
+            launches_before = len(posts('dispatchLaunch'))
+            control('dispatch-launch-refusal', 'stale')
+            page.locator('#launch-assignment-launch').click()
+            expect(page.locator('#launch-review-error')).to_contain_text('The reviewed contract changed')
+            expect(page.locator('#launch-review-error')).to_be_focused()
+            previous = page.locator('#launch-review [data-fact="previous-digest"] dd').inner_text()
+            assert re.fullmatch(r'[0-9a-f]{64}', previous), previous
+            assert page.locator('#launch-assignment-launch').count() == 0
+            assert len(posts('dispatchLaunch')) == launches_before + 1
+            capture(page, f'launch-stale-{width}.png')
+            control('dispatch-launch-refusal', 'none')
+            page.locator('#launch-assignment-review').click()
+            expect(page.locator('#launch-assignment-launch')).to_be_enabled()
+            passed(f'stale launch withholds dispatch ({width})')
+            # Busy denial names and links the conflicting assignment UUID.
+            control('dispatch-preview-refusal', 'busy')
+            page.locator('#launch-assignment-review').click()
+            expect(page.locator('#launch-review-error')).to_contain_text('This directory already has a writer')
+            expect(page.locator('#launch-review-busy')).to_contain_text('b42f1903-9508-46c1-a4aa-a0842dbce617')
+            expect(page.locator('#launch-review-busy')).to_have_attribute('href', re.compile(r'b42f1903-9508-46c1-a4aa-a0842dbce617'))
+            assert page.locator('#launch-assignment-launch').count() == 0
+            capture(page, f'launch-denied-{width}.png')
+            passed(f'busy denial names its assignment ({width})')
+            control('dispatch-preview-refusal', 'none')
+            page.locator('#launch-assignment-review').click()
+            expect(page.locator('#launch-assignment-launch')).to_be_enabled()
+            # Run-active and a missing service stay distinct from busy.
+            control('dispatch-preview-refusal', 'run-active')
+            page.locator('#launch-assignment-review').click()
+            expect(page.locator('#launch-review-error')).to_contain_text('active run')
+            expect(page.locator('#launch-review-error')).not_to_contain_text('already has a writer')
+            passed(f'run-active denial is distinct ({width})')
+            control('dispatch-preview-refusal', 'none')
+            page.locator('#launch-assignment-review').click()
+            expect(page.locator('#launch-assignment-launch')).to_be_enabled()
+            control('dispatch-preview-refusal', 'service')
+            page.locator('#launch-assignment-review').click()
+            expect(page.locator('#launch-review-error')).to_contain_text('Dispatch service unavailable')
+            passed(f'missing service is denied ({width})')
+            control('dispatch-preview-refusal', 'none')
+            page.locator('#launch-assignment-review').click()
+            expect(page.locator('#launch-assignment-launch')).to_be_enabled()
+            # An ordinary preview failure is retryable and claims no reservation.
+            control('dispatch-preview-refusal', 'error')
+            page.locator('#launch-assignment-review').click()
+            expect(page.locator('#launch-review-error')).to_contain_text('Contract could not be resolved')
+            expect(page.locator('#launch-review [data-fact="assignment"] dd')).to_have_text('Not reserved')
+            assert page.locator('#launch-assignment-launch').count() == 0
+            capture(page, f'launch-error-{width}.png')
+            passed(f'ordinary failure is retryable ({width})')
+            control('dispatch-preview-refusal', 'none')
+            page.locator('#launch-assignment-review').click()
+            expect(page.locator('#launch-assignment-launch')).to_be_enabled()
+        # Hold dispatch until both widths captured the dispatching state.
+        control('hold-dispatch-launch', 'true')
+        for width in widths:
+            page = sessions[width]['page']
+            before = len(posts('dispatchLaunch'))
+            digest = page.locator('#launch-review [data-fact="digest"] dd').inner_text()
+            assignment = page.locator('#launch-review [data-fact="assignment"] dd').inner_text()
+            page.evaluate("() => { const b = document.getElementById('launch-assignment-launch'); b.click(); b.click(); }")
+            expect(page.locator('#launch-assignment-launch')).to_be_disabled()
+            expect(page.locator('#launch-assignment-launch')).to_contain_text('Starting agent')
+            expect(page.locator('#launch-review')).to_contain_text(assignment[:8])
+            expect(page.locator('#launch-review [data-fact="digest"] dd')).to_have_text(digest)
+            assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+            capture(page, f'launch-dispatching-{width}.png')
+            assert len(posts('dispatchLaunch')) == before + 1
+            submitted = posts('dispatchLaunch')[-1]['input']
+            assert submitted['assignment_id'] == assignment
+            assert submitted['expectedDigest'] == digest
+            # Pending navigation keeps one submission and the reviewed facts.
+            page.locator('.head-actions .ds-btn').click()
+            expect(page).to_have_url(re.compile(r'#/agents'))
+            page.evaluate("location.hash = '#/launch?ws=fixture&tab=review'")
+            expect(page.locator('#launch-assignment-launch')).to_contain_text('Starting agent')
+            assert len(posts('dispatchLaunch')) == before + 1
+            passed(f'dispatching retains facts and one submission ({width})')
+        control('release-dispatch-launch', 'true')
+        for width in widths:
+            page = sessions[width]['page']
+            expect(page.locator('#launch-review')).to_contain_text('Assignment started')
+            assert not sessions[width]['errors'], sessions[width]['errors']
+            summary['page_errors'].extend(sessions[width]['errors'])
+            passed(f'dispatch confirms without a second submission ({width})')
+    finally:
+        for session in sessions.values():
+            try: session['context'].close()
+            except Exception: pass
+        try: api.close()
+        except Exception: pass
+
 started = time.monotonic()
 fixture = subprocess.Popen(['node', str(root / 'browser-fixture.mjs')], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 try:
@@ -142,6 +312,15 @@ try:
         if section == 'brief':
             try:
                 run_brief(browser, url)
+                assert not summary['page_errors'], summary['page_errors']
+                summary['status']='passed'
+                print(json.dumps({'status': 'passed', 'elapsed_seconds': round(time.monotonic() - started, 2), 'cases': summary['cases'], 'captures': summary['captures'], 'boundary': summary['boundary'], 'receipt': str(receipt)}))
+            except BaseException as exc:
+                summary['error']=repr(exc)
+                raise
+        elif section == 'review':
+            try:
+                run_review(browser, url)
                 assert not summary['page_errors'], summary['page_errors']
                 summary['status']='passed'
                 print(json.dumps({'status': 'passed', 'elapsed_seconds': round(time.monotonic() - started, 2), 'cases': summary['cases'], 'captures': summary['captures'], 'boundary': summary['boundary'], 'receipt': str(receipt)}))
