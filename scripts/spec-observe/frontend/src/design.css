@@ -266,3 +266,29 @@
 .session-controls .ds-btn.danger{min-height:44px;border-radius:3px}
 .session-controls .ds-btn.danger:focus-visible{outline:2px solid var(--ds-accent);outline-offset:3px}
 .session-controls dialog .actions{justify-content:flex-end}
+
+/* Conversations master/detail (screen 05): the layout-neutral destination
+   wrapper keeps the MasterDetail grid under the shell, the migrated thread
+   records keep the shared record chrome (44px hit box, inset focus), and the
+   list caption/new-thread plus transcript/composer/queue spacing reuse the
+   --ds-* tokens without restyling any sibling surface. The legacy thread-*
+   rules are neutralized only inside this destination. */
+.conversations-destination{display:contents}
+:where(.conversations-destination) .record{width:100%;border:0;border-bottom:1px solid var(--ds-line);border-radius:0;background:none;text-align:left;font:inherit;min-height:44px}
+:where(.conversations-destination) .record:focus-visible{outline:2px solid var(--ds-accent);outline-offset:-2px}
+.conversations-destination .list-caption{padding:0 16px 12px}
+.conversations-destination .thread-new{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:end;margin-top:12px}
+.conversations-destination .thread-new .thread-field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.conversations-destination .thread-new .thread-field label{margin-bottom:0}
+.conversations-destination .thread-new select.ds-input{width:100%;min-width:0;background:var(--ds-panel-2);border:1px solid var(--ds-input-border);border-radius:3px;color:var(--ds-ink);padding:0 30px 0 12px;height:44px}
+.conversations-destination .thread-new>p{grid-column:1/-1;margin:0}
+.conversations-destination .ds-transcript.thread-transcript{display:block;max-height:none;border:0;background:none;gap:0;padding:0 28px 20px}
+.conversations-destination .ds-turn.thread-entry{border-left:0;padding-left:0}
+.conversations-destination .ds-turn--user.thread-entry.user{border-left:0}
+.conversations-destination .composer.thread-composer{display:block;gap:0}
+.conversations-destination .composer textarea.ds-input{width:100%;background:var(--ds-panel-2);border:1px solid var(--ds-input-border);border-radius:3px;color:var(--ds-ink);padding:12px;line-height:1.6;min-height:82px;resize:none}
+.conversations-destination .composer textarea.ds-input::placeholder{color:var(--ds-muted)}
+.conversations-destination .composer textarea.ds-input:focus-visible{outline:2px solid var(--ds-accent);outline-offset:3px}
+.conversations-destination #thread-queue{padding:12px 28px}
+.conversations-destination #thread-queue .info-row:first-child{padding-top:0}
+.conversations-destination #thread-queue .info-row:last-child{border-bottom:0;padding-bottom:0}

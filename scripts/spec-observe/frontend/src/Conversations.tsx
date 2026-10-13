@@ -15,6 +15,8 @@ import {
   setThreadScroll,
 } from './conversations-state';
 import { navigate } from './route';
+import { ActionBar, EmptyState, MasterDetail, StateNotice, StatusText, type StatusTone } from './primitives';
+import { scopeLabel } from './scope';
 import type { DestinationProps } from './destinations';
 
 // launch-state.ts remains the single owner of the one-use result-draft Map;
@@ -44,7 +46,7 @@ const derived = (t?: Thread) => {
 const label = (s: string) => labels[s] || (s && s !== 'unknown' ? str(s) : 'Unknown');
 const tone = (s: string) => tones[s] || 'muted';
 
-export default function Threads(props: Props) {
+export default function Conversations(props: Props) {
   const [threads, setThreads] = createSignal<Thread[] | null>(null);
   const [invalid, setInvalid] = createSignal<any[]>([]);
   const [entries, setEntries] = createSignal<Entry[]>([]);
@@ -414,52 +416,98 @@ export default function Threads(props: Props) {
   const state = () => derived(thread());
   const help = () => ({ active: ['Responding', 'A response is being delivered to the head message. Stop pauses this queue first; the response slot is released only after confirmed idle or process death.', 'good'], paused: ['Queue paused', 'Pending messages wait until Resume. Resume unpauses after identity and context checks; delivery continues in FIFO order.', 'warn'], 'history-only': ['History only', 'This record was imported without an owned process. Browsing works; send and resume are unavailable.', 'muted'], uncertain: ['Delivery uncertain', 'A message was persisted before its acknowledgement was lost, so it may or may not have been delivered. Discard or retry under Pending messages; a retry may duplicate the response.', 'bad'], stalled: ['Stalled', 'No child events for ten minutes. The response may still be running; nothing is released automatically. Refresh to check again, or Stop if the thread still owns the slot.', 'warn'], 'start-failed': ['Start failed', 'The discussion process failed before startup completed. Send a new message or Resume to retry the owned session.', 'bad'], 'session-mismatch': ['Session mismatch', 'The stored session file does not match this thread record. Inspect the workspace session copy, then retry.', 'bad'], 'missing-directory': ['Execution directory missing', 'The recorded execution directory is gone. Restore it or update the workspace record, then retry.', 'bad'], 'live-owner': ['Owner not confirmed dead', 'A prior discussion process is still recorded or observed. A second writer fails closed until the owner exits or Stop confirms it idle.', 'bad'], 'missing-context': ['Context missing', 'Threads no longer read earlier kit context files. Resume or send again to start.', 'bad'], 'policy-refusal': ['Policy refusal', 'The installed Pi read-tool policy refused the last request. Review the policy or context, then retry.', 'bad'] } as Record<string, [string, string, string]>)[state()] || ['Ready', '', 'good'] as [string, string, string];
 
-  return <section class="section" id="threads-section" aria-labelledby="threads-heading">
-    <div class="section-head"><h3 id="threads-heading">Threads</h3><span class="small muted">Local discussions · one response slot</span></div>
-    <Show when={active()} fallback={<div class="empty"><h3>Threads require the live dashboard</h3><p class="small">Open the host dashboard to browse discussions. Imported snapshots and file pages cannot reach discussions.</p></div>}>
-      <Show when={listError()&&threads()}><p class="warn" role="status">{listError()} <button onClick={()=>void loadList()}>Retry threads</button></p></Show>
-      <Show when={!listError()||threads()!==null} fallback={<div class="empty" role="status"><h3>Threads are unavailable</h3><p class="small">{listError()}</p><button onClick={() => void loadList()}>Retry</button></div>}>
-        <Show when={threads()} fallback={<p class="empty">Loading threads…</p>}>
-          <div class="thread-new" role="group" aria-label="New thread">
-            <div class="thread-field"><label for="thread-new-target">Runs in</label><select id="thread-new-target" value={target()} onInput={e => setTarget(e.currentTarget.value)}><option value="">Whole workspace</option><For each={repositories()}>{r => <option value={r.id}>{r.id}{r.status && r.status !== 'ok' ? ` (${r.status})` : ''}</option>}</For></select></div>
-            <button id="thread-create" data-thread-create disabled={!actionable() || creating()} onClick={() => void createThread()}>{creating() ? 'Creating…' : 'Create thread'}</button>
-            <Show when={createError()}><p class="small warn" role="alert">{createError()}</p></Show>
+  // Render-only derivations for the migrated surface: the workspace label is
+  // owned by the catalog helper, and recorded target metadata is shown exactly
+  // as stored (a worktree path is never re-bound to a repository id here).
+  const noticeTone = (value: string): StatusTone => value === 'good' ? 'success' : value === 'warn' ? 'warning' : value === 'bad' ? 'error' : 'neutral';
+  const statusTone = (value: string) => noticeTone(tone(value));
+  const workspaceName = () => scopeLabel(props.route.ws, props.catalog);
+  const targetDescription = (t?: Thread): string => {
+    const target = t?.target;
+    if (!target || typeof target !== 'object' || typeof target.kind !== 'string') return 'Workspace discussion';
+    if (target.kind === 'repository') return typeof target.repository_id === 'string' && target.repository_id ? `Repository ${target.repository_id}` : 'Repository discussion';
+    if (target.kind === 'worktree') return typeof target.path === 'string' && target.path ? `Worktree ${target.path}` : 'Worktree discussion';
+    if (target.kind === 'workspace') return 'Workspace discussion';
+    return `${str(target.kind)} discussion`;
+  };
+  const countLabel = () => {
+    const rows = threads();
+    if (rows === null) return 'Reading conversations…';
+    return `${rows.length} conversation${rows.length === 1 ? '' : 's'}`;
+  };
+
+  return (
+    <MasterDetail
+      listLabel="Conversation threads"
+      list={
+        <>
+          <div class="list-controls">
+            <h2>Threads</h2>
+            <p class="muted">{workspaceName()}</p>
+            <Show when={active()}>
+              <div class="thread-new" role="group" aria-label="New thread">
+                <div class="thread-field"><label for="thread-new-target">Runs in</label><select id="thread-new-target" class="ds-input" value={target()} onInput={e => setTarget(e.currentTarget.value)}><option value="">Whole workspace</option><For each={repositories()}>{r => <option value={r.id}>{r.id}{r.status && r.status !== 'ok' ? ` (${r.status})` : ''}{r.worktrees?.length ? ` · ${r.worktrees.length} worktree${r.worktrees.length === 1 ? '' : 's'}` : ''}</option>}</For></select></div>
+                <button id="thread-create" class="ds-btn" data-thread-create disabled={!actionable() || creating()} onClick={() => void createThread()}>{creating() ? 'Creating…' : 'Create thread'}</button>
+                <Show when={createError()}><p class="small warn" role="alert">{createError()}</p></Show>
+              </div>
+            </Show>
           </div>
-          <div class="threads-split">
-            <div class="thread-list" role="list" aria-label="Threads">
-              <Show when={(threads() || []).length} fallback={<p class="empty">No threads yet. Create one above to discuss work in this workspace.</p>}>
-                <For each={threads()}>{t => { const s = derived(t); const q = t.queue || []; const waiting = q.filter((m: any) => m.state === 'queued').length; return <button class="thread-row" data-thread={t.thread_id} aria-pressed={t.thread_id === routeId()} onClick={() => selectRow(t.thread_id)}><span class="flex justify-between gap-3"><span class="run-title">{t.title || `Thread ${t.thread_id.slice(0, 8)}`}</span><span class={`pill ${tone(s)}`}>{label(s)}</span></span><span class="small muted">{q.length ? `${waiting ? `${waiting} waiting` : `${q.length} pending`}${t.queue_paused ? ' · paused queue' : ''}` : 'No pending messages'}</span></button>; }}</For>
+          <div class="list-caption">{countLabel()}</div>
+          <div class="records">
+            <Show when={active()} fallback={null}>
+              <Show when={listError() && threads()}>
+                <StateNotice
+                  tone="warning"
+                  title="Threads could not be refreshed"
+                  action={<button type="button" class="ds-btn" onClick={() => void loadList()}>Retry threads</button>}
+                >
+                  {listError()}
+                </StateNotice>
               </Show>
-            </div>
-            <div class="thread-detail">
-              <Show when={thread()} fallback={<Show when={requestedMissing()} fallback={<div class="empty"><p class="small muted">Select a thread to read its transcript and compose a message.</p></div>}><div class="thread-state bad" id="thread-requested-unavailable" role="status"><p>Requested thread {routeId()} is unavailable.</p><p class="small muted">It is not in this workspace's thread list, so nothing was selected, seeded or launched.</p></div></Show>}>
-                <div class="thread-head"><div class="section-head"><div><h4>{thread()?.title || `Thread ${routeId().slice(0, 8)}`}</h4><p class="small muted mono">{routeId()}{thread()?.generation != null ? ` · generation ${thread()?.generation}` : ''}{thread()?.updated_at ? ` · updated ${time(thread()?.updated_at)} ` : ''}</p></div><span class={`pill ${tone(state())}`}>{label(state())}</span></div>
-                  <Show when={help()[1]}><div class={`thread-state ${help()[2]}`} role="status"><p><strong>{help()[0]}</strong></p><p class="small">{help()[1]}</p></div></Show>
-                  <Show when={historyError()}><div class="thread-state bad" role="alert"><p>{historyError()}</p><button id="thread-error-retry" onClick={() => { setHistoryError(''); void loadHistory(); }}>Retry</button></div></Show>
-                  <Show when={mutationError()}><div class="thread-state bad" role="alert"><p>{mutationError()}</p></div></Show>
-                </div>
-                <div class="thread-transcript" role="log" aria-label="Thread transcript" tabindex="0" ref={transcriptEl} onScroll={e => { const el = e.currentTarget; stickBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40; }}>
-                  <Show when={older() && entries().length}><p><button data-thread-older disabled={!!pending()} onClick={() => { const first = entries()[0]?.id; if (first) void loadHistory(first, true); }}>Load older messages</button></p></Show>
-                  <Show when={loadingHistory()}><p class="small muted">Loading transcript…</p></Show>
-                  <For each={entries()}>{entry => { const role = roleOf(entry), mine = role === 'user', text = textOf(entry); return <div class={`thread-entry ${mine ? 'user' : 'assistant'}`}><p class="small muted">{mine ? 'You' : role === 'assistant' ? 'Pi' : role || 'Entry'}{entry.timestamp && Number.isFinite(Date.parse(entry.timestamp)) ? ` · ${entry.timestamp}` : ''}</p><Show when={mine} fallback={<div class="status-markdown" innerHTML={statusMarkdown(text)} />}><p class="thread-text">{text}</p></Show></div>; }}</For>
-                  <Show when={partial()}><div class="thread-entry assistant"><p class="small muted">Pi · responding</p><div class="status-markdown thread-partial" innerHTML={statusMarkdown(partial())} /></div></Show>
-                  <Show when={toolNote()}><p class="small muted">{toolNote()}</p></Show>
-                  <Show when={!entries().length && !partial() && !toolNote() && !loadingHistory()}><p class="small muted">No messages recorded for this thread yet.</p></Show>
-                  <Show when={incompleteTail()}><p class="small warn">The session file ends with an incomplete line; it is excluded from parsed history.</p></Show>
-                </div>
-                <div id="thread-queue" class="rows" aria-label="Pending messages"><For each={thread()?.queue || []}>{item => { const uncertain = item.state === 'uncertain'; return <div class="info-row"><p><strong>{uncertain ? 'Delivery uncertain' : item.state === 'delivering' ? 'Delivering' : 'Queued'}</strong>{item.queue_position != null ? ` · queue position ${item.queue_position}` : ''}</p><p class="small thread-text">{item.text || ''}</p><Show when={uncertain}><small class="warn">The prompt may or may not have been delivered. Discard removes it; retrying sends it again and may duplicate the response.</small><p class="thread-actions"><button data-thread-discard={item.id} disabled={!actionable() || ['discard', 'resend'].includes(pending())} onClick={() => void simpleAction('/api/thread/discard', 'discard', { id: item.id, resend: false })}>Discard message</button><button data-thread-resend={item.id} disabled={!actionable() || ['discard', 'resend'].includes(pending())} onClick={() => void simpleAction('/api/thread/discard', 'resend', { id: item.id, resend: true })}>Retry as new message</button></p></Show></div>; }}</For></div>
-                <Show when={state() === 'history-only'} fallback={<div class="thread-composer"><label for="thread-draft">Message thread</label><textarea id="thread-draft" rows="4" placeholder="Write a message. Enter sends; Shift+Enter adds a newline." ref={draftEl} onInput={e => { const value = e.currentTarget.value; setDraft(value); if (projectedWs && projectedId) setThreadDraft(projectedWs, projectedId, { draft: value, retry: sendPending() }); }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }} /><p class="small muted">Enter sends · Shift+Enter newline. Messages queue in order over the single local response slot.</p><div class="thread-actions"><button id="thread-send" class="primary" data-thread-send disabled={!actionable() || !!pending() || !draft().trim()} onClick={() => void send()}>{pending() === 'send' ? 'Sending…' : 'Send'}</button><Show when={state() === 'active' || thread()?.owns_response}><button id="thread-stop" data-thread-stop disabled={!actionable() || pending() === 'stop'} onClick={() => void simpleAction('/api/thread/stop', 'stop')}>{pending() === 'stop' ? 'Stopping…' : 'Stop'}</button></Show><Show when={state() === 'paused'}><button id="thread-resume" data-thread-resume disabled={!actionable() || pending() === 'resume'} onClick={() => void simpleAction('/api/thread/resume', 'resume')}>{pending() === 'resume' ? 'Resuming…' : 'Resume'}</button></Show><button data-thread-refresh onClick={refreshThread}>Refresh thread</button></div></div>}>
-                  <div class="thread-state muted" role="status"><p>{state() === 'history-only' ? 'This thread is history only: browsing and reading work, but sending and resuming are unavailable. Source sessions are never modified.' : "Message controls are available on the host's live dashboard."}</p></div>
+              <Show when={!listError() || threads() !== null} fallback={<StateNotice tone="error" title="Threads are unavailable" action={<button type="button" class="ds-btn ds-btn--primary" onClick={() => void loadList()}>Retry</button>}>{listError()}</StateNotice>}>
+                <Show when={threads()} fallback={<p class="empty">Loading threads…</p>}>
+                  <Show when={(threads() || []).length} fallback={<EmptyState title="No threads yet" text="Create one above to discuss work in this workspace." />}>
+                    <For each={threads()}>{t => { const s = derived(t); const q = t.queue || []; const waiting = q.filter((m: any) => m.state === 'queued').length; return <button class={`record thread-row${t.thread_id === routeId() ? ' selected' : ''}`} data-thread={t.thread_id} aria-pressed={t.thread_id === routeId()} onClick={() => selectRow(t.thread_id)}><span class="row-heading"><strong>{t.title || `Thread ${t.thread_id.slice(0, 8)}`}</strong><StatusText tone={statusTone(s)}>{label(s)}</StatusText></span><p>{workspaceName()} · {targetDescription(t)}</p><small>{q.length ? `${waiting ? `${waiting} waiting` : `${q.length} pending`}${t.queue_paused ? ' · paused queue' : ''}` : 'No pending messages'}</small></button>; }}</For>
+                  </Show>
                 </Show>
-                <p class="small muted"><span class={`pill ${stream() === 'live' ? 'good' : stream() === 'reconnecting' ? 'warn' : 'muted'}`}>{stream() === 'live' ? 'Live' : stream() === 'connecting' ? 'Connecting live updates…' : stream() === 'reconnecting' ? 'Live updates reconnecting…' : stream() === 'stopped' ? 'Live updates stopped' : 'Live updates unavailable'}</span> · The local stream may stay silent for 15 seconds between keepalives.</p><Show when={notice()}><p class="small muted">{notice()}</p></Show>
-                <Show when={active()}><div class="thread-actions" role="group" aria-label="Prepare assignment"><button id="thread-prepare-assignment" data-thread-prepare disabled={!actionable()} onClick={() => prepareAssignment()}>Prepare assignment</button><p class="small muted">Opens the launch brief for this thread. The server binds the worktree target at review; nothing is launched from here.</p></div></Show>
+                <Show when={invalid().length}><div class="info-row"><p><strong>Invalid thread records ({invalid().length})</strong></p><For each={invalid()}>{x => <small class="warn">{x.reason || x.error || x.message || 'Invalid record'}</small>}</For></div></Show>
               </Show>
-            </div>
+            </Show>
           </div>
-          <Show when={invalid().length}><div class="info-row"><p><strong>Invalid thread records ({invalid().length})</strong></p><For each={invalid()}>{x => <small class="warn">{x.reason || x.error || x.message || 'Invalid record'}</small>}</For></div></Show>
+        </>
+      }
+    >
+      <Show when={active()} fallback={<EmptyState title="Threads require the live dashboard" text="Open the host dashboard to browse discussions. Imported snapshots and file pages cannot reach discussions." />}>
+        <Show when={thread()} fallback={<Show when={requestedMissing()} fallback={<EmptyState title="No thread selected" text="Select a thread to read its transcript and compose a message." />}><div class="ds-callout error" id="thread-requested-unavailable" role="status"><div><p>Requested thread {routeId()} is unavailable.</p><p class="small muted">It is not in this workspace's thread list, so nothing was selected, seeded or launched.</p></div></div></Show>}>
+          <div class="object-head">
+            <div class="object-top detail-title"><h2>{thread()?.title || `Thread ${routeId().slice(0, 8)}`}</h2><StatusText tone={statusTone(state())}>{label(state())}</StatusText></div>
+            <p class="small muted mono thread-meta">Runs in {workspaceName()} · Thread {routeId()}{thread()?.generation != null ? ` · generation ${thread()?.generation}` : ''}{thread()?.updated_at ? ` · updated ${time(thread()?.updated_at)} ` : ''}</p>
+          </div>
+          <Show when={help()[1]}><StateNotice tone={noticeTone(help()[2])} title={help()[0]}>{help()[1]}</StateNotice></Show>
+          <Show when={historyError()}><div class="ds-callout error" role="alert"><div><p>{historyError()}</p></div><button id="thread-error-retry" type="button" class="ds-btn" onClick={() => { setHistoryError(''); void loadHistory(); }}>Retry</button></div></Show>
+          <Show when={mutationError()}><div class="ds-callout error" role="alert"><div><p>{mutationError()}</p></div></div></Show>
+          <div class="ds-transcript thread-transcript" role="log" aria-label="Thread transcript" tabindex="0" ref={transcriptEl} onScroll={e => { const el = e.currentTarget; stickBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40; }}>
+            <Show when={older() && entries().length}><p><button type="button" data-thread-older disabled={!!pending()} onClick={() => { const first = entries()[0]?.id; if (first) void loadHistory(first, true); }}>Load older messages</button></p></Show>
+            <Show when={loadingHistory()}><p class="small muted">Loading transcript…</p></Show>
+            <For each={entries()}>{entry => { const role = roleOf(entry), mine = role === 'user', text = textOf(entry); return <div class={`ds-turn ${mine ? 'ds-turn--user thread-entry user' : 'ds-turn--bot thread-entry assistant'}`}><div class="ds-turn__meta"><strong>{mine ? 'You' : role === 'assistant' ? 'Pi' : role || 'Entry'}</strong><Show when={entry.timestamp && Number.isFinite(Date.parse(entry.timestamp))}><span>{entry.timestamp}</span></Show></div><Show when={mine} fallback={<div class="status-markdown ds-turn__body" innerHTML={statusMarkdown(text)} />}><div class="ds-turn__body thread-text"><p>{text}</p></div></Show></div>; }}</For>
+            <Show when={partial()}><div class="ds-turn ds-turn--bot thread-entry assistant"><div class="ds-turn__meta"><strong>Pi</strong><span>responding</span></div><div class="status-markdown ds-turn__body thread-partial" innerHTML={statusMarkdown(partial())} /></div></Show>
+            <Show when={toolNote()}><p class="small muted ds-toolrail">{toolNote()}</p></Show>
+            <Show when={!entries().length && !partial() && !toolNote() && !loadingHistory()}><p class="small muted">No messages recorded for this thread yet.</p></Show>
+            <Show when={incompleteTail()}><p class="small warn">The session file ends with an incomplete line; it is excluded from parsed history.</p></Show>
+          </div>
+          <div id="thread-queue" class="rows queue" aria-label="Pending messages"><For each={thread()?.queue || []}>{item => { const uncertain = item.state === 'uncertain'; return <div class="info-row"><p><strong>{uncertain ? 'Delivery uncertain' : item.state === 'delivering' ? 'Delivering' : 'Queued'}</strong>{item.queue_position != null ? ` · queue position ${item.queue_position}` : ''}</p><p class="small thread-text">{item.text || ''}</p><Show when={uncertain}><small class="warn">The prompt may or may not have been delivered. Discard removes it; retrying sends it again and may duplicate the response.</small><p class="thread-actions"><button type="button" data-thread-discard={item.id} disabled={!actionable() || ['discard', 'resend'].includes(pending())} onClick={() => void simpleAction('/api/thread/discard', 'discard', { id: item.id, resend: false })}>Discard message</button><button type="button" data-thread-resend={item.id} disabled={!actionable() || ['discard', 'resend'].includes(pending())} onClick={() => void simpleAction('/api/thread/discard', 'resend', { id: item.id, resend: true })}>Retry as new message</button></p></Show></div>; }}</For></div>
+          <Show when={state() === 'history-only'} fallback={<div class="composer thread-composer"><label for="thread-draft">Message thread</label><textarea id="thread-draft" class="ds-input" rows="4" placeholder="Write a message. Enter sends; Shift+Enter adds a newline." ref={draftEl} onInput={e => { const value = e.currentTarget.value; setDraft(value); if (projectedWs && projectedId) setThreadDraft(projectedWs, projectedId, { draft: value, retry: sendPending() }); }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }} /><div class="composer-foot"><p class="small muted">Enter sends · Shift+Enter newline. Messages queue in order over the single local response slot.</p><ActionBar variant="inline"><button id="thread-send" type="button" class="ds-btn ds-btn--primary" data-thread-send disabled={!actionable() || !!pending() || !draft().trim()} onClick={() => void send()}>{pending() === 'send' ? 'Sending…' : 'Send'}</button><Show when={state() === 'active' || thread()?.owns_response}><button id="thread-stop" type="button" class="ds-btn" data-thread-stop disabled={!actionable() || pending() === 'stop'} onClick={() => void simpleAction('/api/thread/stop', 'stop')}>{pending() === 'stop' ? 'Stopping…' : 'Stop'}</button></Show><Show when={state() === 'paused'}><button id="thread-resume" type="button" class="ds-btn" data-thread-resume disabled={!actionable() || pending() === 'resume'} onClick={() => void simpleAction('/api/thread/resume', 'resume')}>{pending() === 'resume' ? 'Resuming…' : 'Resume'}</button></Show><button type="button" class="ds-btn" data-thread-refresh onClick={refreshThread}>Refresh thread</button></ActionBar></div></div>}>
+            <StateNotice tone="neutral">{state() === 'history-only' ? 'This thread is history only: browsing and reading work, but sending and resuming are unavailable. Source sessions are never modified.' : "Message controls are available on the host's live dashboard."}</StateNotice>
+          </Show>
+          <ActionBar>
+            <Show when={active()}><button id="thread-prepare-assignment" type="button" class="ds-btn" data-thread-prepare disabled={!actionable()} onClick={() => prepareAssignment()}>Prepare assignment</button><p class="small muted">Opens the launch brief for this thread. The server binds the worktree target at review; nothing is launched from here.</p></Show>
+            <StatusText tone={stream() === 'live' ? 'success' : stream() === 'reconnecting' ? 'warning' : 'neutral'}>{stream() === 'live' ? 'Live' : stream() === 'connecting' ? 'Connecting live updates…' : stream() === 'reconnecting' ? 'Live updates reconnecting…' : stream() === 'stopped' ? 'Live updates stopped' : 'Live updates unavailable'}</StatusText>
+            <p class="small muted">The local stream may stay silent for 15 seconds between keepalives.</p>
+            <Show when={notice()}><p class="small muted">{notice()}</p></Show>
+          </ActionBar>
         </Show>
       </Show>
-    </Show>
-    <span class="sr-only" aria-live="polite">{announcer()}</span>
-  </section>;
+      <span class="sr-only" aria-live="polite">{announcer()}</span>
+    </MasterDetail>
+  );
 }
