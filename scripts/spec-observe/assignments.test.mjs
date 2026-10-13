@@ -521,6 +521,16 @@ test("assignment projection publishes execution_dir, repository_id and the liter
   assert.equal(JSON.stringify(record), before);
 });
 
+test("assignment projection preserves a recorded execution_dir with trailing whitespace verbatim", () => {
+  const record = Object.freeze(
+    makeRecord({ execution_dir: "/storage/projects/alpha " }),
+  );
+  const before = JSON.stringify(record);
+  const row = project(record, makeClassification());
+  assert.equal(row.execution_dir, "/storage/projects/alpha ");
+  assert.equal(JSON.stringify(record), before);
+});
+
 test("assignment projection projects missing, non-string and blank execution facts as null", () => {
   const missing = project(Object.freeze(makeRecord()), makeClassification());
   assert.equal(missing.execution_dir, null);

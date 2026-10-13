@@ -61,6 +61,12 @@ function asString(value) {
   return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
 }
 
+// Recorded filesystem paths are exact execution facts: boundary whitespace
+// names a distinct directory, so a non-blank path is preserved verbatim.
+function asRecordedPath(value) {
+  return typeof value === "string" && value.trim() !== "" ? value : null;
+}
+
 // Same spelling normalization on both sides of the run join; the comparison is
 // an exact match after trailing separators are removed.
 function packageKey(value) {
@@ -114,7 +120,7 @@ function normalizeRecord(record) {
     workflowId: asString(source.workflow_id),
     recordedState: asString(source.state),
     paneId: asString(source.pane_id),
-    executionDir: asString(source.execution_dir),
+    executionDir: asRecordedPath(source.execution_dir),
     repositoryId: asString(source.repository_id),
     createdAt: normalizeTime(source.created_at),
     attention: mergeAttention(source.attention, []),
