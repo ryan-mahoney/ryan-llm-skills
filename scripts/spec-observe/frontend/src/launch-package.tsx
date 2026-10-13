@@ -10,7 +10,7 @@ import { For, Match, Show, Switch } from 'solid-js';
 import { ActionBar, StateNotice, StatusText } from './primitives';
 import { str, time } from './format';
 import { packagePlanningPlan } from '../../../workspaces/spec-prompt.mjs';
-import { nextToPlan } from './readiness';
+import { landedStatus, memberPlanning, nextToPlan, planningFactsFor, specReadiness } from './readiness';
 import type { PackagePlanningPlan } from './launch-handoff';
 import type { LaunchPreview, LaunchResult } from './launch-state';
 import type { WireRecord } from './model';
@@ -44,16 +44,147 @@ const authorityLabel = (value: string): string => {
 const packageRecordOf = (records: WireRecord[] | undefined, packageRef: string): WireRecord | undefined =>
   (records ?? []).find(record => [str(record.package), str(record.package_ref)].includes(packageRef));
 
-type EpicMember = { title: string; status: string };
+export type CanonicalMember = { epic: WireRecord; member: WireRecord };
+
+// Workspace-scoped canonical member join. The resolved record's workspace
+// (workspace_id first) scopes the match so an equal-named foreign member can
+// never supply status; within one workspace the member slug is the canonical
+// identity. Missing workspace or member data stays unknown instead of
+// claiming no prerequisites.
+export const canonicalMemberOf = (
+  epics: WireRecord[] | undefined,
+  record: WireRecord,
+  packageRef: string,
+): CanonicalMember | null => {
+  const workspace = str(record.workspace_id) || str(record.workspace) || '';
+  const candidates = [str(record.package_ref), str(record.spec_package), str(record.package), str(packageRef)].filter(Boolean);
+  const identities = new Set<string>();
+  for (const candidate of candidates) {
+    identities.add(candidate);
+    const parts = candidate.split('/').filter(Boolean);
+    if (parts.length) identities.add(parts[parts.length - 1]);
+  }
+  for (const epic of epics ?? []) {
+    const members = Array.isArray(epic.members) ? (epic.members as WireRecord[]) : [];
+    for (const member of members) {
+      const memberWorkspace = str(member.workspace) || str(epic.workspace) || '';
+      if (workspace && memberWorkspace && memberWorkspace !== workspace) continue;
+      const ids = [str(member.package), str(member.name)].filter(Boolean);
+      if (ids.some(id => identities.has(id))) return { epic, member };
+    }
+  }
+  return null;
+};
 
 // Stage ids come from the shared spec-prompt owner: the resolved planning
-// skill selects its canonical plan, never a locally re-typed stage list.
-const planningPlanFor = (record: WireRecord): PackagePlanningPlan => {
+// skill selects its canonical plan, never a locally re-typed stage list. The
+// bound brief selects the proposal-stop variant: an explicit proposal-only
+// brief stays at Proposal, while fresh architecture keeps its conditional
+// critique stop instead of promising Prepared.
+export const planningPlanFor = (record: WireRecord, inputPreview?: { brief?: unknown; instruction?: unknown }): PackagePlanningPlan => {
   const skill = str(record.skill);
   if (skill === 'spec-architect-critics') return packagePlanningPlan({ proposal: true, critiqueRecommended: true }) as PackagePlanningPlan;
   if (skill === 'spec-write') return packagePlanningPlan({ proposal: true }) as PackagePlanningPlan;
+  if (skill === 'spec-architect-initial') {
+    const briefText = `${str(inputPreview?.brief)}\n${str(inputPreview?.instruction)}`;
+    if (/This launch ends at the proposal/i.test(briefText)) return packagePlanningPlan({ proposal: false, critiqueRecommended: true }) as PackagePlanningPlan;
+    return packagePlanningPlan() as PackagePlanningPlan;
+  }
   return packagePlanningPlan() as PackagePlanningPlan;
 };
+
+export const isConditionalInitial = (record: WireRecord, plan: PackagePlanningPlan): boolean =>
+  str(record.skill) === 'spec-architect-initial'
+  && plan.skill === 'spec-architect-initial'
+  && plan.stop === 'prepared'
+  && plan.stages.includes('spec-write');
+
+export const planningStagesValue = (record: WireRecord, plan: PackagePlanningPlan): string => {
+  const stages = plan.stages.map((stage, index) => `${index + 1} ${stage}`).join(' → ');
+  if (!stages) return 'No stages recorded';
+  if (isConditionalInitial(record, plan)) return `${stages} (stops at Proposal if critique is recommended)`;
+  return stages;
+};
+
+export const planningStopValue = (record: WireRecord, plan: PackagePlanningPlan): string => {
+  if (plan.stop === 'proposal') return 'Proposal';
+  if (isConditionalInitial(record, plan)) return 'Prepared, or Proposal if critique is recommended';
+  return 'Prepared';
+};
+
+// Honest preparation from observed planning facts only. Snapshot lifecycle
+// flags (planned/planned_at, recent_completion, is_current_assignment,
+// execution) never establish preparation; positive, incomplete and unknown
+// states reuse readiness.ts facts including observed steps and report/source
+// basis.
+export const preparationValueFor = (row: WireRecord | undefined, member: WireRecord | null): string => {
+  const facts = planningFactsFor(row) ?? (member ? memberPlanning(member) : null);
+  if (!row && !member) return 'Not observed in this snapshot';
+  if (!facts) return 'Preparation not observed — readiness unknown';
+  const steps = facts.steps != null ? `${facts.steps} steps` : 'steps unconfirmed';
+  const preparation = (facts.preparation ?? null) as WireRecord | null;
+  const outcome = preparation ? str(preparation.outcome) || 'no outcome' : 'no report';
+  const reported = preparation ? str(preparation.reported_at) || str(preparation.observed_at) || '' : '';
+  const source = preparation ? str(preparation.source) || '' : '';
+  const basis = `${steps} · report ${outcome}${reported ? `, ${reported}` : ''}${source ? ` (${source})` : ''}`;
+  if (facts.prepared === true) return `Prepared · ${basis}`;
+  if (facts.prepared === false) {
+    const decision = facts.decision && !('outcome' in (facts.decision as WireRecord)) ? (facts.decision as WireRecord) : null;
+    if (decision) {
+      const question = str(decision.question) || 'a recorded decision needs discussion';
+      return `Decision needed · ${basis} · ${question}`;
+    }
+    const noIndex = facts.steps == null;
+    const reportMissing = !preparation || preparation.outcome === 'missing';
+    if (noIndex && reportMissing) return `Not planned · ${basis}`;
+    return `Preparation incomplete · ${basis}`;
+  }
+  return `Preparation unconfirmed · ${basis}`;
+};
+
+// Declared prerequisites with shared readiness facts. The canonical member
+// supplies its requires list; each requirement resolves in the same epic and
+// reports its readiness label. Missing members, undeclared requirements and
+// missing observations stay unknown instead of claiming none.
+export const prerequisiteValueFor = (found: CanonicalMember | null): string => {
+  if (!found) return 'Prerequisites not observed';
+  const requires = (found.member as WireRecord).requires;
+  if (!Array.isArray(requires)) return 'Prerequisites not observed';
+  const names = requires.filter((name): name is string => typeof name === 'string' && Boolean(name));
+  if (!names.length) return 'None declared';
+  const members = Array.isArray(found.epic.members) ? (found.epic.members as WireRecord[]) : [];
+  return names.map(name => {
+    const prerequisite = members.find(entry => str(entry.package) === name || str(entry.name) === name) ?? null;
+    if (!prerequisite) return `${name}: not observed`;
+    if (landedStatus(prerequisite.status)) return `${name}: ${str(prerequisite.status)} (landed)`;
+    return `${name}: ${specReadiness(prerequisite).label}`;
+  }).join(' · ');
+};
+
+// Captured assignment input shared with AssignmentContract. The resolver's
+// inputPreview bytes are the inspection source; nothing is reconstructed
+// from editable or snapshot state.
+export function CapturedInput(props: { preview: LaunchPreview }) {
+  const input = () => props.preview.inputPreview;
+  return (
+    <Show when={input()}>
+      <div id="launch-what-pi" class="launch-input">
+        <h3>What Pi will receive</h3>
+        <p class="small muted">The saved brief and selected contents below are captured together. Changed source contents require a new review before launch.</p>
+        <For each={input()?.references ?? []}>{reference => (
+          <details>
+            <summary>{reference.kind === 'skill' ? 'Skill' : 'File'}: {reference.label}{reference.source ? ` · ${reference.source}` : ''}</summary>
+            <p class="small mono">{reference.path}</p>
+            <p class="small mono">SHA-256 {reference.sha256}</p>
+            <pre>{reference.content}</pre>
+          </details>
+        )}</For>
+        <details><summary>Complete brief and context</summary><pre>{input()?.brief}</pre></details>
+        <details><summary>Assignment instructions</summary><pre>{input()?.instruction}</pre></details>
+      </div>
+    </Show>
+  );
+}
 
 export function PackageContract(props: {
   preview: LaunchPreview;
@@ -64,30 +195,10 @@ export function PackageContract(props: {
 }) {
   const record = () => props.preview.record;
   const snapshot = () => packageRecordOf(props.records, props.packageRef);
-  const epicMember = (): EpicMember | null => {
-    const slug = props.packageRef.split('/').filter(Boolean).pop() ?? props.packageRef;
-    for (const epic of props.epics ?? []) {
-      const members = Array.isArray(epic.members) ? epic.members as WireRecord[] : [];
-      const member = members.find(entry => [str(entry.package), str(entry.name)].includes(slug));
-      if (member) return { title: str(epic.title) || str(epic.epic), status: str(member.status) || str(member.state) || 'Recorded' };
-    }
-    return null;
-  };
-  const planningPlan = () => planningPlanFor(record());
-  const prerequisiteValue = () => {
-    const attention = snapshot()?.attention;
-    if (Array.isArray(attention) && attention.length) return attention.filter(Boolean).map(String).join(' · ');
-    const member = epicMember();
-    return member ? `${member.title}: ${member.status}` : 'None declared';
-  };
-  const preparationValue = () => {
-    const row = snapshot();
-    if (!row) return 'Not observed in this snapshot';
-    if (row.planned) return str(row.planned_at) ? `Planned ${str(row.planned_at)}` : 'Planned';
-    if (row.recent_completion) return 'Prepared and completed';
-    if (row.is_current_assignment) return 'Prepared; work in progress';
-    return str(row.execution) ? `Prepared; execution ${str(row.execution)}` : 'Prepared';
-  };
+  const canonical = () => canonicalMemberOf(props.epics, record(), props.packageRef);
+  const planningPlan = () => planningPlanFor(record(), props.preview.inputPreview);
+  const prerequisiteValue = () => prerequisiteValueFor(canonical());
+  const preparationValue = () => preparationValueFor(snapshot(), canonical()?.member ?? null);
   const modelValue = () => {
     const provider = str(record().provider);
     const model = str(record().model);
@@ -97,7 +208,7 @@ export function PackageContract(props: {
   const facts = (): ContractFact[] => {
     const plan = props.kind === 'plan';
     const branch = str(record().execution_branch);
-    const stages = planningPlan().stages.map((stage, index) => `${index + 1} ${stage}`).join(' → ');
+    const bound = planningPlan();
     return [
       { key: 'package', label: 'Package', value: str(record().package_ref) || props.packageRef },
       { key: 'target', label: 'Target', value: str(record().repository_id) || 'Whole workspace' },
@@ -106,9 +217,9 @@ export function PackageContract(props: {
       { key: 'prerequisite', label: 'Prerequisite', value: prerequisiteValue() },
       { key: 'preparation', label: 'Preparation', value: preparationValue() },
       plan
-        ? { key: 'stages', label: 'Stages', value: stages || 'No stages recorded' }
+        ? { key: 'stages', label: 'Stages', value: planningStagesValue(record(), bound) }
         : { key: 'workflow', label: 'Workflow', value: str(record().skill) || IMPLEMENTATION_SKILL },
-      { key: 'stop', label: 'Stops at', value: plan ? (planningPlan().stop === 'proposal' ? 'Proposal' : 'Prepared') : 'Draft pull request' },
+      { key: 'stop', label: 'Stops at', value: plan ? planningStopValue(record(), bound) : 'Draft pull request' },
       { key: 'authority', label: 'Publication authority', value: authorityLabel(str(record().publication_authority)) },
       { key: 'host', label: 'Execution host', value: str(record().host) || 'Host default' },
       { key: 'model', label: 'Model', value: modelValue() },
@@ -126,9 +237,14 @@ export function PackageContract(props: {
           </div>
         )}</For>
       </dl>
+      <CapturedInput preview={props.preview} />
       <p class="contract-note">
         {props.kind === 'plan'
-          ? 'Planning stops before implementation. A package worktree may be prepared; no commit, push or pull request is authorized.'
+          ? isConditionalInitial(record(), planningPlan())
+            ? 'Planning stops at Prepared, or at Proposal when architecture recommends critique. A package worktree may be prepared; no commit, push or pull request is authorized.'
+            : planningPlan().stop === 'proposal'
+              ? 'Planning stops at the proposal; critique and specification wait for a later launch. No commit, push or pull request is authorized.'
+              : 'Planning stops before implementation. A package worktree may be prepared; no commit, push or pull request is authorized.'
           : 'Implementation runs in this package worktree and may open a draft pull request. Merge stays with the operator.'}
       </p>
     </div>
@@ -217,7 +333,7 @@ export function PackageResult(props: {
 }) {
   const record = () => props.preview.record;
   const plan = () => props.kind === 'plan';
-  const planningPlan = () => planningPlanFor(record());
+  const planningPlan = () => planningPlanFor(record(), props.preview.inputPreview);
   const startedValue = () => {
     const assignment = props.result.assignment ?? {};
     const observation = props.result.observation ?? {};
@@ -225,14 +341,7 @@ export function PackageResult(props: {
       || str(observation.observed_at) || str(assignment.updated_at) || str(assignment.created_at);
     return value ? time(value) : 'Not recorded';
   };
-  const epicRecord = (): WireRecord | null => {
-    const slug = props.packageRef.split('/').filter(Boolean).pop() ?? props.packageRef;
-    for (const epic of props.epics ?? []) {
-      const members = Array.isArray(epic.members) ? epic.members as WireRecord[] : [];
-      if (members.some(member => [str(member.package), str(member.name)].includes(slug))) return epic;
-    }
-    return null;
-  };
+  const epicRecord = (): WireRecord | null => canonicalMemberOf(props.epics, record(), props.packageRef)?.epic ?? null;
   const nextMember = (): WireRecord | null => {
     const epic = epicRecord();
     return epic ? nextToPlan(epic, props.records ?? []) : null;
@@ -240,14 +349,16 @@ export function PackageResult(props: {
   const packageValue = () => str(record().package_ref) || props.packageRef;
   const hostValue = () => str(record().host) || 'Host default';
   const facts = (): ContractFact[] => {
-    const stages = planningPlan().stages.map((stage, index) => `${index + 1} ${stage}`).join(' → ') || 'No stages recorded';
+    const bound = planningPlan();
+    const stages = planningStagesValue(record(), bound);
+    const stop = planningStopValue(record(), bound);
     const branch = str(record().execution_branch);
     return plan()
       ? [
           { key: 'assignment', label: 'Assignment', value: props.result.assignmentId },
           { key: 'package', label: 'Member package', value: packageValue() },
           { key: 'stages', label: 'Stages', value: stages },
-          { key: 'stop', label: 'Stops at', value: 'Prepared. No branch, no implementation, no pull request.' },
+          { key: 'stop', label: 'Stops at', value: `${stop}. No branch, no implementation, no pull request.` },
           { key: 'host', label: 'Execution host', value: hostValue() },
           { key: 'started', label: 'Started', value: startedValue() },
         ]

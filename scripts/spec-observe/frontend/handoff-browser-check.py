@@ -137,6 +137,25 @@ try:
                 report["captures"].append(str(path))
             page.set_viewport_size({"width": 1280, "height": 900})
 
+        def capture_scrolled(name):
+            # Scrolled lower-pane evidence: full-page captures clip inner
+            # overflow panes, so scroll the review flow to its lower content
+            # and capture the viewport at both widths.
+            for width in (1280, 1600):
+                page.set_viewport_size({"width": width, "height": 900})
+                page.evaluate("""() => {
+                    const target = document.querySelector('#launch-review') || document.querySelector('.flow');
+                    if (target) target.scrollIntoView({block: 'end'});
+                    const pane = document.querySelector('.full-page');
+                    if (pane) pane.scrollTo(0, pane.scrollHeight);
+                    window.scrollTo(0, document.body.scrollHeight);
+                }""")
+                page.wait_for_timeout(300)
+                path = evidence / f"production-{name}-scrolled-{width}.png"
+                page.screenshot(path=str(path), full_page=False)
+                report["captures"].append(str(path))
+            page.set_viewport_size({"width": 1280, "height": 900})
+
         def launch_route(package, skill):
             return receipt["url"] + "/#/launch?" + urlencode({
                 "ws": "fixture", "tab": "brief", "package": package, "skill": skill, "target": "fixture-repo",
@@ -180,7 +199,15 @@ try:
             expect(fact("stop")).to_have_text("Draft pull request")
             expect(fact("authority")).to_have_text("Draft pull request only")
             expect(fact("model")).to_have_text("Host default")
+            expect(fact("prerequisite")).to_contain_text("base")
+            expect(fact("prerequisite")).to_contain_text("Ready to implement")
+            expect(fact("preparation")).to_contain_text("Prepared")
+            expect(fact("preparation")).to_contain_text("3 steps")
+            expect(fact("preparation")).to_contain_text("prepared")
             expect(page.locator("#launch-review .launch-contract--package")).to_contain_text("Merge stays with the operator")
+            expect(page.locator("#launch-what-pi")).to_be_visible()
+            expect(page.locator("#launch-what-pi")).to_contain_text("What Pi will receive")
+            expect(page.locator("#launch-what-pi")).to_contain_text("Complete brief and context")
             expect(page.locator("#launch-assignment-launch")).to_have_text("Start implementation")
             expect(page.locator("#launch-assignment-edit")).to_have_text("Edit brief")
             # Sole commitment: one primary Start control, no save control, and no
@@ -199,10 +226,17 @@ try:
             expect(page.locator("#launch-review-heading")).to_have_text("Review planning assignment")
             expect(fact("stages")).to_contain_text("spec-architect-initial")
             expect(fact("stages")).to_contain_text("spec-write")
-            expect(fact("stop")).to_have_text("Prepared")
+            expect(fact("stages")).to_contain_text("stops at Proposal if critique is recommended")
+            expect(fact("stop")).to_contain_text("Prepared, or Proposal if critique is recommended")
             expect(fact("authority")).to_have_text("None")
             expect(fact("execution")).to_contain_text("checkout-browser")
-            expect(page.locator("#launch-review .launch-contract--package")).to_contain_text("Planning stops before implementation")
+            expect(fact("prerequisite")).to_contain_text("base")
+            expect(fact("prerequisite")).to_contain_text("Ready to implement")
+            expect(fact("preparation")).to_contain_text("Prepared")
+            expect(fact("preparation")).to_contain_text("3 steps")
+            expect(page.locator("#launch-review .launch-contract--package")).to_contain_text("or at Proposal when architecture recommends critique")
+            expect(page.locator("#launch-what-pi")).to_be_visible()
+            expect(page.locator("#launch-what-pi")).to_contain_text("What Pi will receive")
             expect(page.locator("#launch-assignment-launch")).to_have_text("Start planning")
             assert posts("dispatchLaunch") == []
             assert worker_starts() == []
@@ -224,6 +258,7 @@ try:
             assert worker_starts() == []
             report["scenarios"].append("Target-busy removes the commitment, links the conflicting agent and keeps the process-start count unchanged")
             capture("target-busy-denied")
+            capture_scrolled("target-busy-denied")
 
             # Run-active conflict routes to the exact holding spec run.
             control("review-preview-refusal", "run-active")
@@ -240,6 +275,33 @@ try:
             assert worker_starts() == []
             report["scenarios"].append("Run-active removes the commitment, names the holding run and routes to its spec without starting a process")
             capture("run-active-denied")
+            capture_scrolled("run-active-denied")
+
+            # Implementation-denied (reference 12): a run-active refusal on the
+            # implement hand-off keeps the holding run identity and routes to
+            # its spec without starting a process. The implement draft from
+            # the first scenario is reused; navigate to its review surface
+            # instead of seeding a second brief.
+            page.goto(receipt["url"] + "/#/launch?" + urlencode({
+                "ws": "fixture", "tab": "review", "package": "fixture/browser", "skill": "spec-end-to-end", "target": "fixture-repo",
+            }), wait_until="domcontentloaded")
+            expect(page.locator("#launch-heading")).to_have_text("Review implementation assignment")
+            control("review-preview-refusal", "run-active")
+            control("review-holding-run", HOLDING_RUN)
+            time.sleep(1.3)
+            refresh_state()
+            page.locator("#launch-assignment-review").click()
+            expect(page.locator("#launch-package-open-spec")).to_be_visible()
+            implement_spec_href = page.locator("#launch-package-open-spec").get_attribute("href")
+            assert implement_spec_href and implement_spec_href.startswith("#/specs?ws=fixture"), implement_spec_href
+            expect(page.locator("#launch-package-denied")).to_contain_text(HOLDING_RUN)
+            expect(page.locator("#launch-package-denied")).to_have_attribute("data-denied-reason", "run-active")
+            expect(page.locator("#launch-assignment-launch")).to_have_count(0)
+            assert len(posts("dispatchLaunch")) == starts_before_conflicts
+            assert worker_starts() == []
+            report["scenarios"].append("Implementation run-active removes the commitment, names the holding run and routes to its spec without starting a process")
+            capture("implement-denied")
+            capture_scrolled("implement-denied")
 
             # Stale digest: a refused launch never offers another commitment.
             control("review-preview-refusal", "none")
@@ -254,6 +316,7 @@ try:
             report["scenarios"].append("A stale digest removes the launch control and starts no worker")
             control("stale-launch", "false")
             capture("stale-digest")
+            capture_scrolled("stale-digest")
 
             # Unconfirmed outcome: the result surface never offers another launch.
             control("dispatch-launch-outcome", "unknown")
@@ -291,9 +354,12 @@ try:
             expect(page.locator("#launch-review-heading")).to_have_text("Assignment review")
             expect(page.locator("#launch-assignment-launch")).to_have_text("Launch agent")
             expect(page.locator("#launch-assignment-edit")).to_have_text("Edit assignment")
+            expect(page.locator("#launch-what-pi")).to_be_visible()
+            expect(page.locator("#launch-what-pi")).to_contain_text("What Pi will receive")
             assert worker_starts() == []
             report["scenarios"].append("An unbound generic package skill keeps the ordinary AssignmentContract")
             capture("generic-unbound")
+            capture_scrolled("generic-unbound")
 
         def run_result():
             # Confirmed planning launch: same-epic return, Planning outcomes and

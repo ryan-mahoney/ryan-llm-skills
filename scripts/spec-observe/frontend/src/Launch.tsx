@@ -13,7 +13,7 @@ import {
   reviewLaunchDraft, saveLaunchDraft, seedLaunchDraft, seedThreadDraft,
   type LaunchContext, type LaunchDraftError, type LaunchPreview,
 } from './launch-state';
-import { PackageContract, PackageDenied, PackageResult, packageReviewKind } from './launch-package';
+import { CapturedInput, PackageContract, PackageDenied, PackageResult, packageReviewKind } from './launch-package';
 import { publicationAuthorityForSkill } from './launch-handoff';
 import type { BriefReference } from './composerTypes';
 import type { WireRecord } from './model';
@@ -61,7 +61,6 @@ function threadTargetOf(record: WireRecord | null | undefined): ThreadTarget | n
 // owner, and the planned newui-13 panel can reuse the same facts.
 export function AssignmentContract(props: { preview: LaunchPreview }) {
   const record = () => props.preview.record;
-  const input = () => props.preview.inputPreview;
   // Display-only normalization: the wire value stays untouched for dispatch,
   // while empty or any casing of "none" keeps the design's title-case label.
   const authority = () => {
@@ -90,22 +89,7 @@ export function AssignmentContract(props: { preview: LaunchPreview }) {
           </div>
         )}</For>
       </dl>
-      <Show when={input()}>
-        <div id="launch-what-pi" class="launch-input">
-          <h3>What Pi will receive</h3>
-          <p class="small muted">The saved brief and selected contents below are captured together. Changed source contents require a new review before launch.</p>
-          <For each={input()?.references ?? []}>{reference => (
-            <details>
-              <summary>{reference.kind === 'skill' ? 'Skill' : 'File'}: {reference.label}{reference.source ? ` · ${reference.source}` : ''}</summary>
-              <p class="small mono">{reference.path}</p>
-              <p class="small mono">SHA-256 {reference.sha256}</p>
-              <pre>{reference.content}</pre>
-            </details>
-          )}</For>
-          <details><summary>Complete brief and context</summary><pre>{input()?.brief}</pre></details>
-          <details><summary>Assignment instructions</summary><pre>{input()?.instruction}</pre></details>
-        </div>
-      </Show>
+      <CapturedInput preview={props.preview} />
     </div>
   );
 }
