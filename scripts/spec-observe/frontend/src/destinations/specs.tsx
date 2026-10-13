@@ -253,16 +253,15 @@ export default function SpecsDestination(props: DestinationProps) {
     }
     if (!path.startsWith('/') && !path.split('/').includes('..')) props.onOpenPackageFiles(item, path);
   };
-  // Done work-tour action uses only the recorded evidence source; a missing or
-  // non-package path leaves the action disabled with a named reason.
+  // Done work-tour action gates on recorded evidence but opens the rendered
+  // package tour through the shared Files address; the evidence source names
+  // the assessed work-tour.json manifest, which Files renders as raw JSON.
+  // A missing source leaves the action disabled with a named reason, and a
+  // missing work-tour.html then surfaces the honest Files recovery.
   const workTourPath = (item: WireRecord): string => {
     if (str(item.evidence?.state) !== 'recorded') return '';
-    const source = str(item.evidence?.source).trim();
-    if (!source) return '';
-    const relative = packageRelative(item, source);
-    if (relative) return relative;
-    if (!source.startsWith('/') && !source.split('/').includes('..')) return source;
-    return '';
+    if (!str(item.evidence?.source).trim()) return '';
+    return 'work-tour.html';
   };
   const workTourReason = (item: WireRecord): string => str(item.evidence?.state) !== 'recorded'
     ? 'Open work tour is unavailable because this completion has no recorded evidence.'

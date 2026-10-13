@@ -720,10 +720,12 @@ try:
             report['scenarios'].append('Ready PR Done basis reads Ready PR published, links only the recorded URL and reads Not recorded for a missing head')
 
             # Merged PR: recorded publication facts and the recorded work tour.
+            # Production sentinel.mjs readTourEvidence publishes source work-tour.json;
+            # the action still opens the rendered work-tour.html tour, not the manifest.
             merged = {'url': 'https://forge.example/pr/211', 'head': 'f' * 12, 'branch': 'spec/fixture-browser',
                       'state': 'merged', 'reason': 'local-pr-merge', 'evidence_source': 'local-git', 'merged_at': earlier}
             state['value'] = variant_envelope(recently=[done_record('merged-pr', merge=merged,
-                                                                   evidence={'state': 'recorded', 'verdict': 'ready', 'source': 'work-tour.html', 'commit': 'abc123'})])
+                                                                   evidence={'state': 'recorded', 'verdict': 'ready', 'source': 'work-tour.json', 'commit': 'abc123'})])
             page.reload()
             expect(page.locator('.detail-body')).to_contain_text('PR merged')
             expect(done_callout).to_have_count(1)
@@ -739,7 +741,7 @@ try:
             expect(page.locator('h1')).to_have_text('Files')
             assert params()['source'] == ['package'] and params()['id'] == [package] and params()['path'] == ['work-tour.html'], page.url
             expect(page.locator('.file-viewer h4')).to_have_text('work-tour.html')
-            report['scenarios'].append('Done Open work tour opens the recorded package-relative evidence file through the shared Files route')
+            report['scenarios'].append('Done Open work tour opens the rendered package tour through the shared Files route from production work-tour.json evidence, not the JSON manifest')
             page.go_back()
             expect(page.locator('.object-head h2')).to_have_text('browser')
 
