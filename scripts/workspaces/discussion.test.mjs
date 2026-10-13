@@ -4925,3 +4925,219 @@ test("direct dispatch service refuses an active spec run with typed run-active",
     await service.close();
   }
 });
+
+// Focused direct publication authority acceptance (step 5, EV-5):
+//   node --test --test-name-pattern='direct publication_authority' scripts/workspaces/discussion.test.mjs
+
+test("direct publication_authority draft-pr binds the reviewed digest and stored record", { timeout: 30000 }, async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const repository = await makeRepo(join(root, "repos", "app"));
+  await setupWorkspace(storageRoot, "authority-ws", [{ id: "app", path: repository }]);
+
+  const binDirectory = join(root, "bin");
+  await mkdir(binDirectory, { recursive: true });
+  const piPath = join(binDirectory, "pi");
+  await writeFile(piPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await chmod(piPath, 0o755);
+  const savedPath = process.env.PATH;
+  process.env.PATH = `${binDirectory}${delimiter}${savedPath}`;
+  t.after(() => {
+    if (savedPath === undefined) delete process.env.PATH;
+    else process.env.PATH = savedPath;
+  });
+
+  const dummy = dummyProcess(t);
+  const tmux = tmuxHarness({ dummyPid: dummy.pid });
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    assignmentAdapters: {
+      tmuxRun: tmux.run,
+      observationProbes: { tmuxRun: tmux.run, psRun: () => ({ stdout: "", complete: true }) },
+    },
+  });
+  try {
+    const requestId = randomUUID();
+    const assignmentId = randomUUID();
+    await service.dispatchSaveBrief({
+      workspace_id: "authority-ws",
+      request_id: requestId,
+      title: "Authority",
+      content: "body\n",
+    });
+    const directInput = {
+      workspace_id: "authority-ws",
+      request_id: requestId,
+      assignment_id: assignmentId,
+      instructions: "Deliver the reviewed direct assignment.",
+      repository_id: "app",
+    };
+
+    const nonePreview = await service.dispatchPreview({ ...directInput, publication_authority: "none" });
+    assert.equal(nonePreview.record.publication_authority, "none");
+    const draftPreview = await service.dispatchPreview({ ...directInput, publication_authority: "draft-pr" });
+    assert.equal(draftPreview.record.publication_authority, "draft-pr");
+    assert.notEqual(draftPreview.contractDigest, nonePreview.contractDigest);
+
+    // The digest binds the reviewed authority: the none digest refuses once
+    // draft-pr is requested.
+    await assert.rejects(
+      service.dispatchLaunch({
+        ...directInput,
+        publication_authority: "draft-pr",
+        expectedDigest: nonePreview.contractDigest,
+      }),
+      { code: "stale-preview" },
+    );
+    assert.equal(tmux.calls.length, 0);
+
+    // Draft-pr launches through the same fake final worker boundary; this
+    // launch path performs no push or merge of its own.
+    const launched = await service.dispatchLaunch({
+      ...directInput,
+      publication_authority: "draft-pr",
+      expectedDigest: draftPreview.contractDigest,
+    });
+    assert.equal(launched.assignment.publication_authority, "draft-pr");
+    assert.equal(launched.assignment.state, "live");
+    assert.equal(launched.observation.state, "live");
+    assert.equal(tmux.newSessionCount(), 1);
+    assert.equal(tmux.destructiveCount(), 0);
+  } finally {
+    await service.close();
+  }
+  assert.equal(tmux.newSessionCount(), 1);
+  assert.equal(tmux.destructiveCount(), 0);
+  assert.equal(dummy.exitCode, null);
+});
+
+test("direct publication_authority missing defaults none and invalid values refuse before launch", { timeout: 30000 }, async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  const repository = await makeRepo(join(root, "repos", "app"));
+  await setupWorkspace(storageRoot, "authority-default-ws", [{ id: "app", path: repository }]);
+
+  const binDirectory = join(root, "bin");
+  await mkdir(binDirectory, { recursive: true });
+  const piPath = join(binDirectory, "pi");
+  await writeFile(piPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await chmod(piPath, 0o755);
+  const savedPath = process.env.PATH;
+  process.env.PATH = `${binDirectory}${delimiter}${savedPath}`;
+  t.after(() => {
+    if (savedPath === undefined) delete process.env.PATH;
+    else process.env.PATH = savedPath;
+  });
+
+  const dummy = dummyProcess(t);
+  const tmux = tmuxHarness({ dummyPid: dummy.pid });
+  const service = createDiscussionService({
+    root: storageRoot,
+    agentDir: join(root, "agent"),
+    assignmentAdapters: {
+      tmuxRun: tmux.run,
+      observationProbes: { tmuxRun: tmux.run, psRun: () => ({ stdout: "", complete: true }) },
+    },
+  });
+  try {
+    const requestId = randomUUID();
+    const assignmentId = randomUUID();
+    await service.dispatchSaveBrief({
+      workspace_id: "authority-default-ws",
+      request_id: requestId,
+      title: "Authority default",
+      content: "body\n",
+    });
+    const directInput = {
+      workspace_id: "authority-default-ws",
+      request_id: requestId,
+      assignment_id: assignmentId,
+      instructions: "Deliver the direct assignment.",
+      repository_id: "app",
+    };
+
+    // Missing and explicitly undefined authority both default to none; the
+    // previewed contract remains launchable under that default.
+    const missing = await service.dispatchPreview(directInput);
+    assert.equal(missing.record.publication_authority, "none");
+    const explicitUndefined = await service.dispatchPreview({
+      ...directInput,
+      publication_authority: undefined,
+    });
+    assert.equal(explicitUndefined.record.publication_authority, "none");
+    assert.equal(explicitUndefined.contractDigest, missing.contractDigest);
+
+    // pr, null, unknown strings and non-strings refuse before any brief read
+    // or process start on both preview and launch.
+    for (const value of ["pr", null, "merge", 7, true]) {
+      await assert.rejects(
+        service.dispatchPreview({ ...directInput, publication_authority: value }),
+        { code: "invalid-handoff" },
+      );
+      await assert.rejects(
+        service.dispatchLaunch({
+          ...directInput,
+          publication_authority: value,
+          expectedDigest: "0".repeat(64),
+        }),
+        { code: "invalid-handoff" },
+      );
+    }
+    assert.equal(tmux.calls.length, 0);
+
+    const launched = await service.dispatchLaunch({ ...directInput, expectedDigest: missing.contractDigest });
+    assert.equal(launched.assignment.publication_authority, "none");
+    assert.equal(launched.assignment.state, "live");
+    assert.equal(tmux.newSessionCount(), 1);
+    assert.equal(tmux.destructiveCount(), 0);
+  } finally {
+    await service.close();
+  }
+  assert.equal(tmux.newSessionCount(), 1);
+  assert.equal(tmux.destructiveCount(), 0);
+  assert.equal(dummy.exitCode, null);
+});
+
+test("direct publication_authority runtime overrides remain refused invalid-handoff", async (t) => {
+  const root = await tempRoot(t);
+  const storageRoot = join(root, "storage");
+  await setupStorage(storageRoot);
+  await setupWorkspace(storageRoot, "authority-override-ws");
+  const service = createDiscussionService({ root: storageRoot, agentDir: join(root, "agent") });
+  try {
+    const requestId = randomUUID();
+    const assignmentId = randomUUID();
+    await service.dispatchSaveBrief({
+      workspace_id: "authority-override-ws",
+      request_id: requestId,
+      title: "Authority overrides",
+      content: "body\n",
+    });
+    const directInput = {
+      workspace_id: "authority-override-ws",
+      request_id: requestId,
+      assignment_id: assignmentId,
+      instructions: "Deliver the direct assignment.",
+    };
+    for (const override of [
+      { model: "some-model" },
+      { provider: "some-provider" },
+      { harness: "other" },
+      { pi_path: "/tmp/pi" },
+      { publication_authority: "pr", model: "some-model" },
+    ]) {
+      await assert.rejects(service.dispatchPreview({ ...directInput, ...override }), {
+        code: "invalid-handoff",
+      });
+      await assert.rejects(
+        service.dispatchLaunch({ ...directInput, ...override, expectedDigest: "0".repeat(64) }),
+        { code: "invalid-handoff" },
+      );
+    }
+  } finally {
+    await service.close();
+  }
+});
