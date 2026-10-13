@@ -185,6 +185,39 @@ export async function sessionPanePid({ socketPath, sessionName } = {}, { run = r
   return { paneId: match[1], panePid };
 }
 
+/**
+ * Read the exact session's current window dimensions. `null` is returned
+ * only on confirmed session absence; an unreachable server or any other
+ * transport failure throws instead of returning fabricated dimensions.
+ * @param {{socketPath: string, sessionName: string}} input
+ * @returns {Promise<{cols: number, rows: number}|null>}
+ */
+export async function windowSize({ socketPath, sessionName } = {}, { run = runTmux } = {}) {
+  assertAbsolutePath(socketPath, "socketPath");
+  assertSessionName(sessionName);
+  if (!(await hasSession({ socketPath, sessionName }, { run }))) return null;
+  const result = await run(socketPath, [
+    "display-message",
+    "-p",
+    "-t",
+    `=${sessionName}:`,
+    "#{window_width} #{window_height}",
+  ]);
+  if (!result.ok) {
+    // The session may have vanished after the has-session probe: re-check to
+    // distinguish confirmed absence from a transport failure.
+    if (!(await hasSession({ socketPath, sessionName }, { run }))) return null;
+    throw tmuxFailure("display-message", result);
+  }
+  const match = /^(\d+)\s+(\d+)$/.exec(result.stdout.trim());
+  const cols = match === null ? NaN : Number(match[1]);
+  const rows = match === null ? NaN : Number(match[2]);
+  if (!Number.isSafeInteger(cols) || cols <= 0 || !Number.isSafeInteger(rows) || rows <= 0) {
+    throw new Error(`tmux returned invalid window dimensions: ${JSON.stringify(result.stdout)}`);
+  }
+  return { cols, rows };
+}
+
 async function resolveOwnedSession(socketPath, sessionName, run = runTmux) {
   const pane = await sessionPanePid({ socketPath, sessionName }, { run });
   if (pane === null) throw new Error(`tmux session is absent: ${sessionName}`);
