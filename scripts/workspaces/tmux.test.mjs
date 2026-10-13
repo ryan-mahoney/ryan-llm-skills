@@ -18,7 +18,14 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sameProcess } from "../spec-observe/process-identity.mjs";
-import { attachArgs, hasSession, probeSession, sessionPanePid, startSession } from "./tmux.mjs";
+import {
+  attachArgs,
+  hasSession,
+  probeSession,
+  sessionPanePid,
+  startSession,
+  windowSize,
+} from "./tmux.mjs";
 
 const TEST_TIMEOUT_MS = 10000;
 const FIXTURE_PATH = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-pi.mjs");
@@ -575,4 +582,164 @@ test("tmux adapter: probeSession opt-in attached count distinguishes zero, posit
     includeAttached: true,
   });
   assert.equal(mismatch.status, "unknown");
+});
+
+// Injected final boundary for window-size reads: scripted session existence,
+// server reachability and display-message reply, recording every invocation.
+// `sessionExists` may be a function of the 1-based has-session probe number,
+// and `display` may be a function returning a full transport result.
+function stubWindowSizeRun({ sessionExists = true, serverReachable = true, display = "200 50" } = {}) {
+  const calls = [];
+  let probes = 0;
+  const run = async (socketPath, args) => {
+    calls.push({ socketPath, args: [...args] });
+    if (args[0] === "has-session") {
+      const exists = typeof sessionExists === "function" ? sessionExists(++probes) : sessionExists;
+      return exists
+        ? { ok: true, code: 0, stdout: "", stderr: "" }
+        : { ok: false, code: 1, stdout: "", stderr: "can't find session", message: "tmux has-session failed" };
+    }
+    if (args[0] === "list-clients") {
+      return serverReachable
+        ? { ok: true, code: 0, stdout: "", stderr: "" }
+        : { ok: false, code: 1, stdout: "", stderr: "no server", message: "tmux list-clients failed" };
+    }
+    if (args[0] === "display-message") {
+      return typeof display === "function"
+        ? display()
+        : { ok: true, code: 0, stdout: display, stderr: "" };
+    }
+    return { ok: false, code: 1, stdout: "", stderr: "unexpected command", message: "unexpected command" };
+  };
+  return { run, calls };
+}
+
+test("tmux adapter: window size reads the target session's exact dimensions", async () => {
+  const socketPath = join(tmpdir(), "adj4-window-size.sock");
+  const name = sessionName();
+  const { run, calls } = stubWindowSizeRun({ display: "200 50\n" });
+  assert.deepEqual(await windowSize({ socketPath, sessionName: name }, { run }), { cols: 200, rows: 50 });
+  // The probe and the read target the exact explicit socket and `=name:`
+  // session; the display format asks for exactly the two size fields.
+  assert.deepEqual(calls, [
+    { socketPath, args: ["has-session", "-t", `=${name}`] },
+    {
+      socketPath,
+      args: ["display-message", "-p", "-t", `=${name}:`, "#{window_width} #{window_height}"],
+    },
+  ]);
+});
+
+test("tmux adapter: window size optionally reads the status rows for the stream probe", async () => {
+  const socketPath = join(tmpdir(), "adj4-window-status.sock");
+  const name = sessionName();
+  const cases = [["on", 1], ["off", 0], ["0", 0], ["1", 1], ["2", 2], ["5", 5]];
+  for (const [status, statusRows] of cases) {
+    const { run, calls } = stubWindowSizeRun({ display: `200 50 ${status}\n` });
+    assert.deepEqual(
+      await windowSize({ socketPath, sessionName: name }, { run, includeStatus: true }),
+      { cols: 200, rows: 50, statusRows },
+      status,
+    );
+    // The opt-in read asks for exactly the status field in the same exact
+    // session target; the default read keeps the two-field format above.
+    assert.deepEqual(calls[1], {
+      socketPath,
+      args: ["display-message", "-p", "-t", `=${name}:`, "#{window_width} #{window_height} #{status}"],
+    });
+  }
+  for (const status of ["maybe", "6", "-1", "1.5"]) {
+    const { run } = stubWindowSizeRun({ display: `200 50 ${status}\n` });
+    await assert.rejects(
+      windowSize({ socketPath, sessionName: name }, { run, includeStatus: true }),
+      /invalid window status/,
+      status,
+    );
+  }
+  const missing = stubWindowSizeRun({ display: "200 50\n" });
+  await assert.rejects(
+    windowSize({ socketPath, sessionName: name }, { run: missing.run, includeStatus: true }),
+    /invalid window dimensions/,
+  );
+});
+
+test("tmux adapter: window size returns null only on confirmed session absence", async () => {
+  const socketPath = join(tmpdir(), "adj4-window-absent.sock");
+  const name = sessionName();
+
+  // A reachable server without the session confirms absence.
+  const missing = stubWindowSizeRun({ sessionExists: false });
+  assert.equal(await windowSize({ socketPath, sessionName: name }, { run: missing.run }), null);
+  assert.deepEqual(missing.calls, [
+    { socketPath, args: ["has-session", "-t", `=${name}`] },
+    { socketPath, args: ["list-clients"] },
+  ]);
+
+  // A session that vanishes between the probe and display-message is likewise
+  // confirmed absence, not a fabricated size.
+  const vanished = stubWindowSizeRun({
+    sessionExists: (probe) => probe === 1,
+    display: () => ({
+      ok: false, code: 1, stdout: "", stderr: "session vanished", message: "tmux display-message failed",
+    }),
+  });
+  assert.equal(await windowSize({ socketPath, sessionName: name }, { run: vanished.run }), null);
+  assert.deepEqual(
+    vanished.calls.map((call) => call.args[0]),
+    ["has-session", "display-message", "has-session", "list-clients"],
+  );
+
+  // The same display failure with the session still present is a transport
+  // failure and must throw.
+  const failed = stubWindowSizeRun({
+    display: () => ({
+      ok: false, code: 1, stdout: "", stderr: "boom", message: "tmux display-message failed",
+    }),
+  });
+  await assert.rejects(
+    windowSize({ socketPath, sessionName: name }, { run: failed.run }),
+    /tmux display-message failed: boom/,
+  );
+});
+
+test("tmux adapter: window size fails closed when the explicit server is unreachable", async () => {
+  const socketPath = join(tmpdir(), "adj4-window-unreachable.sock");
+  const name = sessionName();
+  const { run, calls } = stubWindowSizeRun({ sessionExists: false, serverReachable: false });
+  await assert.rejects(
+    windowSize({ socketPath, sessionName: name }, { run }),
+    /tmux server is unreachable/,
+  );
+  assert.deepEqual(calls, [
+    { socketPath, args: ["has-session", "-t", `=${name}`] },
+    { socketPath, args: ["list-clients"] },
+  ]);
+  assert.ok(
+    !calls.some((call) => call.args[0] === "display-message"),
+    "an unreachable server must not produce fabricated dimensions",
+  );
+});
+
+test("tmux adapter: window size rejects zero, nonnumeric and unsafe dimensions", async () => {
+  const socketPath = join(tmpdir(), "adj4-window-invalid.sock");
+  const name = sessionName();
+  const cases = [
+    "0 50\n",
+    "200 0\n",
+    "0 0\n",
+    "200\n",
+    "200 50 10\n",
+    "cols 50\n",
+    "200 fifty\n",
+    "9007199254740993 50\n",
+    "200 9007199254740993\n",
+  ];
+  for (const display of cases) {
+    const { run } = stubWindowSizeRun({ display });
+    await assert.rejects(
+      windowSize({ socketPath, sessionName: name }, { run }),
+      /invalid window dimensions/,
+      `display ${JSON.stringify(display)} must be rejected`,
+    );
+  }
 });

@@ -9,6 +9,7 @@ import { PackagePreview } from '../PackagePreview';
 import PlannedAssignment from '../PlannedAssignment';
 import RelaunchAssignment from '../RelaunchAssignment';
 import SpecOverview from '../SpecOverview';
+import TerminalPanel from '../TerminalPanel';
 import type { WireRecord } from '../model';
 import type { RouteState } from '../route';
 import type { DestinationProps } from './index';
@@ -340,6 +341,13 @@ export default function SpecsDestination(props: DestinationProps) {
     const item = record();
     return item ? linkedAssignmentKey(item, props.assignments) : null;
   };
+  // The panel mounts on the stable linked key while the current row flows in
+  // reactively: a refresh allocates new row objects, and TerminalPanel's own
+  // scalar identity decides whether the open/player is retained.
+  const linkedAssignment = (): WireRecord | null => {
+    const key = assignmentKey();
+    return key ? props.assignments.find(item => item.key === key) ?? null : null;
+  };
   const openFile = (path: string) => {
     const item = record();
     if (!item || !path) return;
@@ -431,6 +439,16 @@ export default function SpecsDestination(props: DestinationProps) {
               <Show when={!item().planned}>
                 <Show when={!activityTab()}>
                   <SpecOverview record={item()} assignments={props.assignments} context={context()} onOpenAgent={openAgent} onOpenEpic={openEpic} />
+                  <Show when={linkedAssignment()?.key} keyed>
+                    {_key => (
+                      <TerminalPanel
+                        assignment={linkedAssignment()}
+                        live={props.live && props.specsLive}
+                        localOnly={props.completionLocalOnly ?? false}
+                        token={props.completionToken}
+                      />
+                    )}
+                  </Show>
                   <Show when={record()}>
                     <Show when={priorAssignment()?.key} keyed fallback={<details class="section"><summary>Run spec again</summary><PlannedAssignment record={item()} live={props.live && props.specsLive} token={props.token}/></details>}>
                       {_key => <RelaunchAssignment assignment={priorAssignment()} live={props.live && props.specsLive} token={props.token}/>}

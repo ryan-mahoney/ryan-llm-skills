@@ -185,6 +185,59 @@ export async function sessionPanePid({ socketPath, sessionName } = {}, { run = r
   return { paneId: match[1], panePid };
 }
 
+/**
+ * Read the exact session's current window dimensions. `null` is returned
+ * only on confirmed session absence; an unreachable server or any other
+ * transport failure throws instead of returning fabricated dimensions.
+ * With `includeStatus` the same read additionally reports the session's
+ * current status option rows (`off`/`0` → 0, `on` → 1, `1`..`5` → that
+ * count); the default call and its exact `{cols, rows}` result are unchanged.
+ * Reading the option never mutates it.
+ * @param {{socketPath: string, sessionName: string}} input
+ * @param {{run?: Function, includeStatus?: boolean}} [options]
+ * @returns {Promise<{cols: number, rows: number, statusRows?: number}|null>}
+ */
+export async function windowSize({ socketPath, sessionName } = {}, { run = runTmux, includeStatus = false } = {}) {
+  assertAbsolutePath(socketPath, "socketPath");
+  assertSessionName(sessionName);
+  if (!(await hasSession({ socketPath, sessionName }, { run }))) return null;
+  const format = includeStatus
+    ? "#{window_width} #{window_height} #{status}"
+    : "#{window_width} #{window_height}";
+  const result = await run(socketPath, [
+    "display-message",
+    "-p",
+    "-t",
+    `=${sessionName}:`,
+    format,
+  ]);
+  if (!result.ok) {
+    // The session may have vanished after the has-session probe: re-check to
+    // distinguish confirmed absence from a transport failure.
+    if (!(await hasSession({ socketPath, sessionName }, { run }))) return null;
+    throw tmuxFailure("display-message", result);
+  }
+  const match = (includeStatus ? /^(\d+)\s+(\d+)\s+(\S+)$/ : /^(\d+)\s+(\d+)$/).exec(result.stdout.trim());
+  const cols = match === null ? NaN : Number(match[1]);
+  const rows = match === null ? NaN : Number(match[2]);
+  if (!Number.isSafeInteger(cols) || cols <= 0 || !Number.isSafeInteger(rows) || rows <= 0) {
+    throw new Error(`tmux returned invalid window dimensions: ${JSON.stringify(result.stdout)}`);
+  }
+  if (!includeStatus) return { cols, rows };
+  const status = match[3];
+  const statusRows = status === "off" || status === "0"
+    ? 0
+    : status === "on"
+      ? 1
+      : /^[1-5]$/.test(status)
+        ? Number(status)
+        : null;
+  if (statusRows === null) {
+    throw new Error(`tmux returned invalid window status: ${JSON.stringify(status)}`);
+  }
+  return { cols, rows, statusRows };
+}
+
 async function resolveOwnedSession(socketPath, sessionName, run = runTmux) {
   const pane = await sessionPanePid({ socketPath, sessionName }, { run });
   if (pane === null) throw new Error(`tmux session is absent: ${sessionName}`);
@@ -486,6 +539,13 @@ export async function probeSession(record, { run = runTmux, includeAttached = fa
   };
 }
 
+// Evaluated inside tmux's queue, not by the shell or an earlier probe.
+export function terminalIdentityCondition(record) {
+  if (!/^%\d+$/.test(record.pane_id ?? "")
+    || !Number.isSafeInteger(record.pi_identity?.pid) || record.pi_identity.pid <= 0) return "0";
+  return `#{&&:#{==:#{@adjacent_assignment_id},${record.assignment_id}},#{&&:#{==:#{pane_id},${record.pane_id}},#{==:#{pane_pid},${record.pi_identity.pid}}}}`;
+}
+
 /** Close only the exact, freshly verified recorded terminal. Never kill a server. */
 export async function endSession(record,{run=runTmux}={}) {
   const observed=await probeSession(record,{run});
@@ -495,7 +555,7 @@ export async function endSession(record,{run=runTmux}={}) {
   }
   // Check the full UUID and pane again inside tmux's command queue. A session
   // replaced between the read-only probe and this command must survive.
-  const condition=`#{&&:#{==:#{@adjacent_assignment_id},${record.assignment_id}},#{&&:#{==:#{pane_id},${record.pane_id}},#{==:#{pane_pid},${record.pi_identity.pid}}}}`;
+  const condition=terminalIdentityCondition(record);
   const result=await run(record.tmux_socket,['if-shell','-F','-t',`=${record.tmux_session}:`,condition,
     `kill-session -t =${record.tmux_session}`,'display-message -p identity-changed']);
   if(!result.ok)throw tmuxFailure('end-session',result);
