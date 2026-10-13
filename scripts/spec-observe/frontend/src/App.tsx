@@ -9,6 +9,7 @@ import { clearIncompatibleFields, firstUnmatchedTargetId, inWorkspaceScope, need
 import { destinationEntries, type DestinationProps } from './destinations';
 import { WorkspacePicker } from './destinations/workspaces';
 import { catalogRead, type WorkspaceCatalog } from './destinations/workspace-state';
+import { visibleEpics as sharedVisibleEpics } from './destinations/epic-state';
 import { getLaunchDraft, seedLaunchDraft } from './launch-state';
 import { armLaunchPickerIntent, cancelLaunchPickerIntent, createLaunchPickerIntent, shouldApplyPickerReset, shouldResetAcknowledgedDraft } from './launch-picker-intent';
 
@@ -73,7 +74,7 @@ export default function App() {
   const q = () => query().trim().toLowerCase();
   const visibleRecords = createMemo(() => packageSummaries(scopedRecords(),filter()).filter(record => (!q() || [record.workspace, record.package_ref, record.package, record.activity, record.obligation, record.execution, record.workflow_state].some(value => str(value).toLowerCase().includes(q()))) && packageFilterMatches(record, filter())).sort((a, b) => filter() === 'completed' ? Date.parse(b.completed_at) - Date.parse(a.completed_at) || str(a.package).localeCompare(str(b.package)) : 0));
   const visibleAssignments = createMemo(() => scopedAssignments().filter(assignment => !q() || [assignment.assignment_id, assignment.spec_package, assignment.workflow_id, assignment.display, assignment.nextAction, assignment.safeAction].some(value => str(value).toLowerCase().includes(q()))));
-  const visibleEpics = createMemo(() => scopedEpics().filter(epic => !q() || [epic.title, epic.epic, epic.workspace, ...(epic.members ?? []).map((member: WireRecord) => member.name)].some(value => str(value).toLowerCase().includes(q()))));
+  const visibleEpics = createMemo(() => sharedVisibleEpics(scopedEpics(), route().q ?? ''));
   const record = createMemo(() => scopedRecords().find(item => item.key === route().id) ?? null);
   const agent = createMemo(() => scopedAssignments().find(item => item.key === route().id) ?? null);
   const epic = createMemo(() => scopedEpics().find(item => item.key === route().id) ?? null);

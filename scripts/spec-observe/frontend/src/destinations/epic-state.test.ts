@@ -50,7 +50,7 @@ test('member status keeps the recorded vocabulary and notes stay text', () => {
 
 test('declared requirements stay distinct from unmet-only reports and focus order is fixed', () => {
   const declared = epicMemberRequires({ requires: ['a'], waiting_on: [] });
-  assert.deepEqual(declared, { names: ['a'], waiting: [], declared: true });
+  assert.deepEqual(declared, { names: ['a'], waiting: [] as string[], declared: true });
   declared.names.push('mutated');
   declared.waiting.push('mutated');
   assert.deepEqual(epicMemberRequires({ requires: ['a'], waiting_on: [] }), { names: ['a'], waiting: [], declared: true });
