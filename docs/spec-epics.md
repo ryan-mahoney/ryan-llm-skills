@@ -97,7 +97,7 @@ time. `node ~/.agents/scripts/spec-observe/cli.mjs epic lint --workspace W --epi
 validates a record and prints its waves; the record never stores them.
 
 A member's `waiting_on` lists the `requires` entries whose status is not `merged`
-or `complete`; it is empty for a member that has itself landed. The epic's `next` is the first member in array order whose status is
+or `complete`; it is empty for a member that has itself landed. `requires` is the member's declared requirement list from the record, including `[]`, while `waiting_on` is its unlanded subset. The epic's `next` is the first member in array order whose status is
 `proposed` or `prepared` and whose `waiting_on` is empty.
 
 ## Sentinel
@@ -114,7 +114,7 @@ snapshot.epics[] = {
   record,                // absolute path of epic.json
   plan,                  // absolute path or null
   members[] = { name, package, workspace, status, attention, step: { position, total } | null,
-                waiting_on[], note, completed_at, pr_url, assignment_id },
+                requires[], waiting_on[], note, completed_at, pr_url, assignment_id },
   summary = { total, merged, complete, published, in_progress, prepared, proposed, missing, unobserved, unknown, attention },
   next,                  // member name or null
   coverage = { state, reasons[] }

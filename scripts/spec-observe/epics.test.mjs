@@ -103,6 +103,8 @@ test('buildEpics derives summary, waiting_on and next from member facts', () => 
   assert.deepEqual(epic.summary, { total: 5, merged: 1, complete: 0, published: 0, in_progress: 1, prepared: 1, proposed: 0, missing: 1, unobserved: 1, unknown: 0, attention: 1 });
   assert.deepEqual(epic.members.map(m => [m.name, m.status, m.waiting_on]), [
     ['a', 'merged', []], ['b', 'in-progress', []], ['c', 'prepared', ['b']], ['d', 'missing', ['b']], ['e', 'unobserved', []]]);
+  assert.deepEqual(epic.members.map(m => [m.name, m.requires]), [
+    ['a', []], ['b', ['a']], ['c', ['b']], ['d', ['b']], ['e', []]], 'every member exposes its declared requirements');
   assert.deepEqual(epic.members[1].step, { position: 2, total: 5 });
   assert.equal(epic.members[0].pr_url, 'https://github.com/o/r/pull/1');
   assert.equal(epic.next, null, 'the only prepared member still waits on an unlanded dependency');
@@ -113,6 +115,7 @@ test('buildEpics derives summary, waiting_on and next from member facts', () => 
   entry.members[1] = member('b', { completion: { completion_basis: 'manual', completed_at: '2026-10-02T00:00:00.000Z' } });
   const landed = buildEpics([entry]).epics[0];
   assert.equal(landed.next, 'c', 'first prepared member in array order once its requirements landed');
+  assert.deepEqual(landed.members[1].requires, ['a'], 'declared requirements persist after a member completes');
   assert.deepEqual(landed.members[2].waiting_on, []);
 });
 
@@ -130,6 +133,7 @@ test('incomplete receipts yield unknown unless a completion is recorded, and lan
     member('b', { completion: { completion_basis: 'merged-pr', completed_at: '2026-10-11T00:00:00Z' } }),
     member('c', { prepared: true }) ] }]);
   assert.deepEqual(epics[0].members.map(m => [m.name, m.status, m.waiting_on]), [['a', 'unknown', []], ['b', 'merged', []], ['c', 'prepared', ['a']]]);
+  assert.deepEqual(epics[0].members.slice(0, 2).map(m => [m.name, m.requires]), [['a', []], ['b', ['a']]], 'declared requirements are projected independently of receipt state');
   assert.equal(epics[0].summary.unknown, 1);
   assert.equal(epics[0].next, null);
 });
