@@ -2,8 +2,11 @@ import { For, Show, type JSX } from 'solid-js';
 import { ActionBar, StateNotice, StatusText } from '../primitives';
 import type { WireRecord } from '../model';
 import { epicStats } from '../observation-format';
+import { formatHash, type RouteState } from '../route';
+import type { CatalogEntry } from '../scope';
 import {
   epicCoverageReasons,
+  epicDocumentLinks,
   epicMemberRequires,
   epicMemberStatus,
   epicRecordedState,
@@ -159,6 +162,65 @@ export function EpicMembersTable(props: {
   );
 }
 
+type DocumentEntry = { name: string; source: string; route: RouteState | null };
+
+function DocumentRow(props: { entry: DocumentEntry; onNavigate: (route: RouteState) => void }) {
+  const follow = (event: MouseEvent) => {
+    const route = props.entry.route;
+    if (!route) return;
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    props.onNavigate(route);
+  };
+  return (
+    <tr>
+      <th scope="row">
+        <Show when={props.entry.route} fallback={<span class="mono">{props.entry.name}</span>}>
+          {route => (
+            <a class="text-link mono" href={formatHash(route())} onClick={follow}>
+              {props.entry.name}
+            </a>
+          )}
+        </Show>
+      </th>
+      <td><span class="mono">{props.entry.source}</span></td>
+    </tr>
+  );
+}
+
+export function EpicDocuments(props: {
+  epic: WireRecord;
+  catalog: CatalogEntry[];
+  preferredWs?: string;
+  onNavigate: (route: RouteState) => void;
+}) {
+  const rows = (): DocumentEntry[] => {
+    const links = epicDocumentLinks(props.epic, props.catalog, props.preferredWs);
+    return links.plan ? [links.plan, ...links.designs] : links.designs;
+  };
+  return (
+    <Show when={rows().length}>
+      <section class="section epic-documents">
+        <div class="section-heading"><h3>Supporting documents</h3><span class="muted" /></div>
+        <div class="table-wrap">
+          <table class="epic-documents">
+            <caption class="sr-only">{`Supporting documents of ${epicTitle(props.epic)}`}</caption>
+            <thead>
+              <tr>
+                <th scope="col">Document</th>
+                <th scope="col">Source</th>
+              </tr>
+            </thead>
+            <tbody>
+              <For each={rows()}>{entry => <DocumentRow entry={entry} onNavigate={props.onNavigate} />}</For>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </Show>
+  );
+}
+
 export function EpicNext(props: { epic: WireRecord }) {
   const members = () => list(props.epic.members);
   const focus = () => focusMember(props.epic);
@@ -217,6 +279,9 @@ export function EpicDetail(props: {
   records: WireRecord[];
   rememberedMember?: string | null;
   onSelectPackage: (workspace: string, slug: string) => void;
+  catalog: CatalogEntry[];
+  preferredWs?: string;
+  onNavigate: (route: RouteState) => void;
   notice?: JSX.Element;
   transportPrimary?: boolean;
 }) {
@@ -260,6 +325,7 @@ export function EpicDetail(props: {
           <p class="section-note">{`Coverage ${text(props.epic.coverage?.state) || 'partial'}: ${coverage().join('; ')}`}</p>
         </Show>
         <EpicMembersTable epic={props.epic} records={props.records} rememberedMember={props.rememberedMember} onSelectPackage={props.onSelectPackage} />
+        <EpicDocuments epic={props.epic} catalog={props.catalog} preferredWs={props.preferredWs} onNavigate={props.onNavigate} />
         <EpicNext epic={props.epic} />
         <EpicNotes epic={props.epic} />
       </div>

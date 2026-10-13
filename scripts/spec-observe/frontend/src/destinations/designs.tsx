@@ -5,7 +5,7 @@ export default function DesignsDestination(props: DestinationProps) {
   return (
     <div class="full-page">
       <div class="detail">
-        <Designs workspaceId={props.route.ws ?? ''} live={props.live} />
+        <Designs workspaceId={props.route.ws ?? ''} live={props.live} selectedSlug={props.route.id} />
       </div>
     </div>
   );

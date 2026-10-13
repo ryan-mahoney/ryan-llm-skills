@@ -4,7 +4,7 @@ import { getJson } from './api';
 type Screen = { step: number; file: string; title: string; produced: boolean; person?: string; job?: string; kind?: string; state?: string; primary_action?: string; shell_from?: number; notes?: string; captured?: Record<string, boolean> };
 type Design = { slug: string; title: string; path: string; summary: { produced: number; total: number; captured: number }; viewport: { posture: string; widths: number[] }; design_system?: { repository?: string; paths?: string[]; path?: string }; screens: Screen[]; deviations?: { screen: number; token: string; from: string; to: string; reason: string }[] };
 type DesignsResponse = { designs: Design[]; errors?: { name: string; message: string }[] };
-type Props = { workspaceId: string; live: boolean; onOpenFile?: (file: string) => void };
+type Props = { workspaceId: string; live: boolean; onOpenFile?: (file: string) => void; selectedSlug?: string };
 const query = (values: Record<string, string>) => new URLSearchParams(values);
 const workspaceFile = (id: string, file: string, download = false) => `/api/workspace-file?${query({ id, file, ...(download ? { download: '1' } : {}) })}`;
 
@@ -14,6 +14,9 @@ export default function Designs(props: Props) {
   const [view, setView] = createSignal<{ slug: string; step: number; width: number } | null>(null);
   const [refresh, setRefresh] = createSignal(0);
   let request = 0;
+  let appliedIntent = '';
+  let prevWsLiveKey = '';
+  let abortLoad: (() => void) | undefined;
   const loadDesigns = (id: string, live: boolean) => {
     const current = ++request; const controller = new AbortController();
     setError('');
@@ -23,11 +26,23 @@ export default function Designs(props: Props) {
       .catch(() => { if (current === request && !controller.signal.aborted) setError('Could not load designs. Refresh to retry.'); });
     return () => { controller.abort(); };
   };
+  // Same-workspace id-only route changes re-read props.route, so this effect
+  // re-fires even when workspaceId/live are unchanged. The key guard leaves
+  // the loaded listing, selection and intent tracking untouched for a
+  // duplicate key and only aborts/clears/loads on a real workspace or live
+  // change. Abort ownership stays with this component so a duplicate-key
+  // re-fire cannot cancel an in-flight listing.
   createEffect(on(() => [props.workspaceId, props.live] as const, ([id, live]) => {
-    setData(null); setError(''); setView(null);
-    const abort = loadDesigns(id, live);
-    onCleanup(() => { abort(); request++; });
+    const key = `${id}|${live}`;
+    if (key === prevWsLiveKey) return;
+    prevWsLiveKey = key;
+    if (abortLoad) { abortLoad(); abortLoad = undefined; request++; }
+    setData(null); setError(''); setView(null); appliedIntent = '';
+    abortLoad = loadDesigns(id, live);
   }));
+  onCleanup(() => {
+    if (abortLoad) { abortLoad(); abortLoad = undefined; request++; }
+  });
   createEffect(on(refresh, version => {
     if (version > 0) untrack(() => loadDesigns(props.workspaceId, props.live));
   }));
@@ -47,6 +62,22 @@ export default function Designs(props: Props) {
     const index = d.screens.findIndex(s => s.step === state.step);
     const next = d.screens[index + delta]; if (next) setView({ ...state, step: next.step });
   };
+  // Addressed route intent: once a real listing arrives, a non-empty
+  // selectedSlug that matches a design opens it exactly once per [ws, slug]
+  // intent. The applied key keeps manual step/width moves authoritative, an
+  // unknown slug consumes its intent without selecting a different design,
+  // and an unchanged refresh does not reselect.
+  createEffect(() => {
+    const result = data();
+    const intent = `${props.workspaceId}|${props.selectedSlug ?? ''}`;
+    if (!result || intent === appliedIntent) return;
+    appliedIntent = intent;
+    const slug = props.selectedSlug;
+    if (!slug) return;
+    const design = (result.designs ?? []).find(item => item.slug === slug);
+    if (!design) return;
+    untrack(() => open(design));
+  });
   const designSystemText = (design: Design) => {
     const ref = design.design_system; if (!ref) return '';
     return ref.repository ? `${ref.repository}: ${(ref.paths ?? []).join(', ')}` : ref.path ?? '';

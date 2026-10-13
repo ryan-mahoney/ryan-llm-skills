@@ -418,6 +418,9 @@ export default function EpicsDestination(props: DestinationProps) {
                   records={props.records}
                   rememberedMember={rememberedMember()}
                   onSelectPackage={rememberMember}
+                  catalog={props.catalog}
+                  preferredWs={props.route.ws}
+                  onNavigate={props.onNavigate}
                   notice={notice}
                   transportPrimary={Boolean(transport())}
                 />

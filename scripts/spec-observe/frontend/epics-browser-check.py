@@ -14,7 +14,9 @@ a11y/captures); `--case detail` runs the EV-6 facts/table/conflict gate with
 bound app-ui reference captures; `--case observations` runs the EV-7 retained
 transport/import gate with bound app-ui reference captures; `--case member`
 runs the EV-4 real absolute-path member, return focus/scroll and precedence
-gate; the other choices run one group for debugging.
+gate; `--case documents` runs the EV-8 Supporting documents link/selection
+gate through the real files and designs APIs; the other choices run one group
+for debugging.
 Only the final /api/state HTTP response is substituted through page.route; the
 fixture's real dashboard, catalog, files, the built App/registry and
 browser-fixture.mjs stay untouched. No live Sentinel is contacted.
@@ -36,7 +38,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--case', choices=['list', 'loading', 'cold', 'file', 'a11y', 'detail', 'observations', 'member'], default='list')
+parser.add_argument('--case', choices=['list', 'loading', 'cold', 'file', 'a11y', 'detail', 'observations', 'member', 'documents'], default='list')
 case = parser.parse_args().case
 root = Path(__file__).resolve().parent
 evidence = Path(os.environ.get('SENTINEL_EVIDENCE_DIR', '/tmp/sentinel-epics-evidence'))
@@ -59,6 +61,8 @@ report = {
         'Bound app-ui reference frames are digest-checked and captured for inspection; correspondence is not pixel-asserted, and no live Sentinel or production state is read.',
     ],
 }
+if case == 'documents':
+    report['proofLimits'].append('Read/link selection only; no new file access authorization, iframe fidelity redesign or unavailable external producer mock.')
 fixture = None
 
 
@@ -1732,8 +1736,230 @@ try:
             assert no_member_focus(), 'a missing remembered member focused an unrelated row'
             report['scenarios'].append('member return: an unavailable remembered member does not focus an unrelated member row')
 
+        def group_documents(page):
+            # EV-8: Supporting documents links through the real files and
+            # designs routes. Only the final /api/state response is substituted;
+            # the catalog, workspace-file and workspace-designs routes stay
+            # real, and the plan fixture lives inside fixture-owned storage that
+            # browser-fixture.mjs removes with its temporary root on close.
+            catalog_payload = context.request.get(receipt['url'] + '/api/workspaces').json()
+            catalog_entries = catalog_payload.get('valid') or []
+            fixture_entry = next((entry for entry in catalog_entries if entry.get('id') == 'fixture'), None)
+            if fixture_entry is None:
+                fixture_entry = next((entry for entry in catalog_entries if Path(str(entry.get('directory', ''))).name == 'fixture'), None)
+            assert fixture_entry is not None, f'fixture workspace entry missing from the real catalog: {catalog_entries}'
+            workspace_id = str(fixture_entry['id'])
+            documents_dir = str(fixture_entry.get('directory') or run_package.parents[1])
+            fixture_basename = Path(documents_dir).name
+            assert fixture_basename == 'fixture', f'catalog fixture directory is not the fixture workspace: {documents_dir}'
+
+            marker = f'Documents marker {os.getpid()} independently written plan sentence for the real Files reader.'
+            plan_relative = f'plans/documents-plan-{os.getpid()}.md'
+            plan_name = Path(plan_relative).name
+            plan_file = Path(documents_dir) / plan_relative
+            plan_file.parent.mkdir(parents=True, exist_ok=True)
+            plan_file.write_text(f'# Supporting plan fixture\n\n{marker}\n')
+            plan_absolute = str(plan_file)
+
+            served_plan = context.request.get(receipt['url'] + '/api/workspace-file?' + urlencode({'id': workspace_id, 'file': plan_relative}))
+            assert served_plan.ok and marker in served_plan.text(), 'real /api/workspace-file did not serve the independently written plan'
+            served_designs = context.request.get(receipt['url'] + '/api/workspace-designs?' + urlencode({'id': workspace_id})).json()
+            assert any(design.get('slug') == 'demo' for design in served_designs.get('designs', [])), 'real /api/workspace-designs does not expose the fixture demo design'
+
+            linked_epic = {
+                'workspace': fixture_basename, 'epic': 'documents-linked', 'title': 'Documents linked epic', 'state': 'active',
+                'plan': plan_absolute,
+                'designs': [{'workspace': workspace_id, 'design': 'demo', 'path': f'{documents_dir}/designs/demo'}],
+                'members': [detail_member('linked-member', 'merged')],
+                'summary': {'total': 1, 'merged': 1, 'complete': 0, 'attention': 0},
+                'next': '',
+                'coverage': {'state': 'complete', 'reasons': []},
+            }
+            fallback_epic = {
+                'workspace': fixture_basename, 'epic': 'documents-unresolved', 'title': 'Documents unresolved epic', 'state': 'active',
+                'plan': '/outside-of-workspace/documents-plan.md',
+                'designs': [{'workspace': 'no-such-kit', 'design': 'outside-design', 'path': '/outside-of-workspace/designs/outside'}],
+                'members': [detail_member('fallback-member', 'prepared')],
+                'summary': {'total': 1, 'merged': 0, 'complete': 0, 'attention': 0},
+                'next': 'fallback-member',
+                'coverage': {'state': 'complete', 'reasons': []},
+            }
+            mode = {'value': detail_envelope(linked_epic, runs=[])}
+            mode['value']['observers'][0]['snapshot']['epics'] = [linked_epic, fallback_epic]
+
+            def handler(route):
+                if mode['value'] is None:
+                    route.continue_()
+                else:
+                    route.fulfill(json=mode['value'])
+
+            page.route('**/api/state**', handler)
+
+            def href_params(href):
+                return parse_qs(urlsplit(href or '').fragment.partition('?')[2])
+
+            def assert_no_document_overflow():
+                width = page.viewport_size['width']
+                assert page.evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth'), f'document overflow at {width}'
+
+            def measure(locator, label):
+                box = locator.bounding_box()
+                assert box, f'{label} has no bounding box'
+                assert box['width'] >= 44 and box['height'] >= 44, f'{label} is {box["width"]}x{box["height"]}, below 44x44'
+                report.setdefault('hitBoxes', {})[label] = {'width': round(box['width'], 1), 'height': round(box['height'], 1)}
+
+            def tab_until(predicate, limit=120):
+                for _ in range(limit):
+                    page.keyboard.press('Tab')
+                    if page.evaluate(predicate):
+                        return True
+                return False
+
+            def focus_visible():
+                assert page.evaluate('document.activeElement && document.activeElement.matches(":focus-visible")'), 'focused element has no :focus-visible ring'
+                assert page.evaluate('getComputedStyle(document.activeElement).outlineStyle !== "none"'), 'focused element has no outline'
+
+            def capture(locator, name):
+                path = browser_evidence / name
+                locator.screenshot(path=str(path))
+                report['screenshots'].append(str(path))
+                return str(path)
+
+            pane = page.locator('article.detail-pane')
+            open_epics(page, ws=workspace_id)
+            expect(rows_on(page)).to_have_count(2)
+            page.locator('.records .record', has_text='Documents linked epic').click()
+            expect(pane.locator('.object-head h2')).to_have_text('Documents linked epic')
+            linked_id = params_on(page).get('id', [None])[0]
+            assert linked_id, page.url
+
+            documents = pane.locator('section.epic-documents')
+            table = documents.locator('table.epic-documents')
+            expect(documents).to_have_count(1)
+            expect(documents.get_by_role('heading', name='Supporting documents', exact=True)).to_be_visible()
+            expect(table.locator('caption')).to_have_text('Supporting documents of Documents linked epic')
+            headers = table.locator('thead th[scope=col]')
+            expect(headers.nth(0)).to_have_text('Document')
+            expect(headers.nth(1)).to_have_text('Source')
+            rows = table.locator('tbody tr')
+            expect(rows).to_have_count(2)
+            plan_link = rows.nth(0).locator('a.text-link.mono')
+            expect(plan_link).to_have_text(plan_name)
+            plan_params = href_params(plan_link.get_attribute('href'))
+            assert plan_params.get('ws') == [workspace_id], plan_link.get_attribute('href')
+            assert plan_params.get('source') == ['workspace'], plan_link.get_attribute('href')
+            assert plan_params.get('path') == [plan_relative], plan_link.get_attribute('href')
+            expect(rows.nth(0).locator('td')).to_contain_text(plan_absolute)
+            design_link = rows.nth(1).locator('a.text-link.mono')
+            expect(design_link).to_have_text('demo')
+            design_params = href_params(design_link.get_attribute('href'))
+            assert design_params.get('ws') == [workspace_id] and design_params.get('id') == ['demo'], design_link.get_attribute('href')
+            expect(rows.nth(1).locator('td')).to_contain_text(f'{documents_dir}/designs/demo')
+            report['scenarios'].append('documents: real catalog resolves the plan to #/files ws/source/path and the design to #/designs ws/id with caption, headers and source text')
+
+            page.locator('#find-record').focus()
+            assert tab_until(f"document.activeElement && document.activeElement.textContent.trim() === '{plan_name}'"), 'Tab never reached the plan document link'
+            focus_visible()
+            measure(plan_link, 'plan document link')
+            page.keyboard.press('Tab')
+            assert page.evaluate("document.activeElement && document.activeElement.textContent.trim() === 'demo'"), 'Tab after the plan did not reach the design link'
+            focus_visible()
+            measure(design_link, 'design document link')
+            report['scenarios'].append('documents keyboard: plan and design links expose visible focus and 44x44 hit boxes')
+
+            plan_link.click()
+            expect(page.locator('h1')).to_have_text('Files')
+            assert params_on(page).get('ws') == [workspace_id] and params_on(page).get('source') == ['workspace'] and params_on(page).get('path') == [plan_relative], page.url
+            viewer = page.locator('section.file-viewer')
+            expect(viewer.locator('h4')).to_have_text(plan_relative)
+            expect(viewer.locator('#file-content')).to_contain_text(marker)
+            report['scenarios'].append('documents: clicking the plan link opens the real Files source=workspace reader and displays the independently written plan text, not only the URL')
+
+            page.go_back()
+            expect(page.locator('h1')).to_have_text('Epics')
+            page.locator('.records .record', has_text='Documents unresolved epic').click()
+            expect(pane.locator('.object-head h2')).to_have_text('Documents unresolved epic')
+            fallback_documents = pane.locator('section.epic-documents')
+            expect(fallback_documents).to_have_count(1)
+            expect(fallback_documents.locator('a')).to_have_count(0)
+            expect(fallback_documents).to_contain_text('documents-plan.md')
+            expect(fallback_documents).to_contain_text('/outside-of-workspace/documents-plan.md')
+            expect(fallback_documents).to_contain_text('outside-design')
+            expect(page.get_by_text('No plan or designs recorded', exact=False)).to_have_count(0)
+            report['scenarios'].append('documents: an unresolved plan/design outside the catalog renders source and name as plain text with no fabricated destination')
+
+            page.locator('.records .record', has_text='Documents linked epic').click()
+            expect(pane.locator('.object-head h2')).to_have_text('Documents linked epic')
+            page.locator('table.epic-documents tbody tr').nth(1).locator('a.text-link.mono').click()
+            expect(page.locator('h1')).to_have_text('Designs')
+            assert params_on(page).get('ws') == [workspace_id] and params_on(page).get('id') == ['demo'], page.url
+            expect(page.locator('section.design-viewer h4')).to_contain_text('Design fixture')
+            report['scenarios'].append('documents: clicking the design link routes ws=<kit id>&id=demo and the real /api/workspace-designs listing selects the demo design')
+
+            check_deadline()
+            page.goto('about:blank')
+            page.goto(receipt['url'] + '/#/designs?' + urlencode({'ws': workspace_id, 'id': 'demo'}), wait_until='domcontentloaded')
+            expect(page.locator('section.design-viewer h4')).to_contain_text('Design fixture · Screen 1')
+            report['scenarios'].append('documents designs: a cold addressed #/designs ws/id route selects demo on load')
+
+            controls = page.locator('section.design-viewer .design-controls')
+            controls.get_by_role('button', name='Next', exact=True).click()
+            expect(page.locator('section.design-viewer h4')).to_contain_text('Screen 2')
+            controls.get_by_role('button', name='390px', exact=True).click()
+            expect(controls.locator('button[aria-pressed="true"]', has_text='390px')).to_have_count(1)
+            with page.expect_response(lambda response: '/api/workspace-designs' in response.url):
+                page.get_by_role('button', name='Refresh designs', exact=True).click()
+            page.wait_for_timeout(200)
+            expect(page.locator('section.design-viewer h4')).to_contain_text('Screen 2')
+            expect(page.locator('section.design-viewer .mono')).to_have_text('step 2 of 2')
+            expect(controls.locator('button[aria-pressed="true"]', has_text='390px')).to_have_count(1)
+            report['scenarios'].append('documents designs: an unchanged Refresh designs keeps the manually chosen step and width')
+
+            page.evaluate("hash => { location.hash = hash; }", '#/designs?' + urlencode({'ws': workspace_id, 'id': 'unknown-design'}))
+            page.wait_for_function("() => new URLSearchParams(location.hash.split('?')[1] || '').get('id') === 'unknown-design'")
+            page.wait_for_timeout(300)
+            expect(page.locator('section.design-viewer h4')).to_contain_text('Design fixture')
+            assert page.locator('section.design-viewer h4').count() == 1 and page.locator('button[aria-pressed="true"]', has_text='Design fixture').count() == 1, 'an unknown id selected a different design'
+            page.evaluate("hash => { location.hash = hash; }", '#/designs?' + urlencode({'ws': workspace_id, 'id': 'demo'}))
+            page.wait_for_function("() => new URLSearchParams(location.hash.split('?')[1] || '').get('id') === 'demo'")
+            expect(page.locator('section.design-viewer h4')).to_contain_text('Screen 1')
+            expect(page.locator('section.design-viewer .mono')).to_have_text('step 1 of 2')
+            report['scenarios'].append('documents designs: same-workspace demo->unknown->demo re-applies the addressed demo and an unknown id never selects a different design')
+
+            page.evaluate("hash => { location.hash = hash; }", '#/designs?' + urlencode({'ws': 'other', 'id': 'demo'}))
+            page.wait_for_function("() => !document.querySelector('section.design-viewer')")
+            expect(page.locator('section.design-viewer')).to_have_count(0)
+            expect(page.locator('button', has_text='Design fixture')).to_have_count(0)
+            report['scenarios'].append('documents designs: changing ws clears the old selection before the new listing with no stale demo title')
+            page.evaluate("hash => { location.hash = hash; }", '#/designs?' + urlencode({'ws': workspace_id, 'id': 'demo'}))
+            expect(page.locator('section.design-viewer h4')).to_contain_text('Design fixture')
+            report['scenarios'].append('documents designs: returning to the fixture workspace reselects demo from the new listing and ignores the prior request result')
+
+            check_deadline()
+            design_dir = resolve_designs_dir()
+            ref_path, digest = verify_reference(design_dir, 'screens/03-epics.html', 'fe1742c3d469dd9efa7b860d2c30828ff68ee1aae7b1302c8536f6bb3f443d28')
+            report['references'] = {'designsDir': str(design_dir), 'files': [{'path': str(ref_path), 'sha256': digest}]}
+            for width in (1280, 1600):
+                check_deadline()
+                page.set_viewport_size({'width': width, 'height': 800})
+                page.goto(detail_uri(ref_path), wait_until='domcontentloaded')
+                reference_pane = page.locator('article.detail-pane')
+                expect(reference_pane).to_be_visible()
+                capture(reference_pane, f'epics-ref-03-{width}.png')
+                page.goto(receipt['url'] + '/#/epics?' + urlencode({'ws': workspace_id, 'id': linked_id}), wait_until='domcontentloaded')
+                expect(pane.locator('.object-head h2')).to_have_text('Documents linked epic')
+                documents_section = pane.locator('section.epic-documents')
+                expect(documents_section).to_be_visible()
+                documents_section.scroll_into_view_if_needed()
+                capture(pane, f'epics-documents-03-{width}.png')
+                assert_no_document_overflow()
+                assert pane.locator('.detail-body').evaluate('el => el.scrollWidth <= el.clientWidth'), 'detail region scrolled horizontally'
+                assert documents_section.evaluate('el => el.scrollWidth <= el.clientWidth'), 'documents section scrolled horizontally'
+                report['scenarios'].append(f'documents capture: reference and production lower regions captured at {width}x800 with no document or detail overflow')
+            report['captures'] = {'production': ['epics-documents-03-1280.png', 'epics-documents-03-1600.png'], 'reference': ['epics-ref-03-1280.png', 'epics-ref-03-1600.png']}
+
         groups = {'list': group_list, 'loading': group_loading, 'cold': group_cold, 'file': group_file, 'a11y': group_a11y}
-        handlers = {**groups, 'detail': group_detail, 'observations': group_observations, 'member': group_member}
+        handlers = {**groups, 'detail': group_detail, 'observations': group_observations, 'member': group_member, 'documents': group_documents}
         selected = list(groups) if case == 'list' else [case]
         for name in selected:
             check_deadline()
@@ -1754,7 +1980,7 @@ except BaseException:
 finally:
     stop_fixture()
     report['elapsedSeconds'] = round(time.monotonic() - started, 3)
-    report_file = evidence / {'detail': 'epics-detail.json', 'observations': 'epics-observations.json', 'member': 'epics-member.json'}.get(case, 'epics-list.json')
+    report_file = evidence / {'detail': 'epics-detail.json', 'observations': 'epics-observations.json', 'member': 'epics-member.json', 'documents': 'epics-documents.json'}.get(case, 'epics-list.json')
     report['reportPath'] = str(report_file)
     report_file.write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))
