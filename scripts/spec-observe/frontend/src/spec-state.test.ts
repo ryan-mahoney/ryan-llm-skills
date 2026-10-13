@@ -69,7 +69,7 @@ test('read state distinguishes pending, failed and ready payloads', () => {
 
 test('scope coverage failures stay partial with no selected record', () => {
   const payload = { generated_at: '2026-10-12T12:00:00Z', truncated: true, errors: [{ source: 'scope-read', message: 'unreadable receipt' }], observers: [] };
-  const scoped = [{ observer_id: 'observer-1', state: 'observing', published_at: '2026-10-12T12:00:00Z', snapshot: { workspace: 'fixture', coverage: { state: 'unavailable', observed_at: '2026-10-11T12:00:00Z', reasons: ['checkout unavailable'] } } }];
+  const scoped = [{ observer_id: 'observer-1', state: 'observing', published_at: '2026-10-12T12:00:00Z', snapshot: { workspace: 'fixture', runs: [], coverage: { state: 'unavailable', observed_at: '2026-10-11T12:00:00Z', reasons: ['checkout unavailable'] } } }];
   const state = specViewState(payload, null, scoped, { live: true, connectionFailed: false, now: at('2026-10-12T12:00:00Z') });
   assert.equal(state.read, 'ready');
   assert.equal(state.partial, true);

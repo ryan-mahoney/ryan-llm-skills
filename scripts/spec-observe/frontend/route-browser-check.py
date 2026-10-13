@@ -6,7 +6,7 @@
 
 After npm run build --prefix scripts/spec-observe/frontend:
 SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 120s uv run --script \
-  scripts/spec-observe/frontend/route-browser-check.py [--case rail|files|specs|context|catalog|member|search|filters]
+  scripts/spec-observe/frontend/route-browser-check.py [--case rail|files|specs|context|catalog|member|search|filters|specs-list]
 Only the fixture substitutes workers; App, adapters and file APIs are real.
 """
 import argparse
@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 args = argparse.ArgumentParser()
-args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog', 'member', 'search', 'filters'])
+args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog', 'member', 'search', 'filters', 'specs-list'])
 case = args.parse_args().case
 root = Path(__file__).resolve().parent
 evidence = Path(os.environ.get('SENTINEL_EVIDENCE_DIR', '/tmp/sentinel-route-evidence'))
@@ -46,6 +46,12 @@ try:
         context = browser.new_context(viewport={'width': 1280, 'height': 860})
         page = context.new_page()
         page.on('pageerror', lambda error: report['pageErrors'].append(str(error)))
+
+        def control(action, value=None):
+            query = urlencode({'action': action, **({'value': value} if value is not None else {})})
+            response = context.request.get(receipt['url'] + '/__fixture/control?' + query)
+            assert response.ok, response.text()
+            return response.json()
 
         def params():
             return parse_qs(urlsplit(page.url).fragment.partition('?')[2])
@@ -228,7 +234,7 @@ try:
             # parameter must canonicalize without losing that selection.
             open_route('specs', ws='fixture')
             page.locator('#find-record').fill('waiting-worker')
-            row = page.locator('.observation-rows button.run-row')
+            row = page.locator('.records button.record[data-key]')
             expect(row).to_have_count(1)
             row.click()
             assert params()['q'] == ['waiting-worker'], page.url
@@ -316,7 +322,7 @@ try:
             expect(filters.get_by_role('button', name='Active', exact=True)).to_have_attribute('aria-pressed', 'false')
             planned_tab = filters.get_by_role('button', name='Planned', exact=True)
             expect(planned_tab).to_have_attribute('aria-pressed', 'true')
-            rows = page.locator('.observation-rows button.run-row')
+            rows = page.locator('.records button.record[data-key]')
             expect(rows).to_have_count(1)
             expect(rows.nth(0).locator('.run-title')).to_have_text('browser')
             caption = page.locator('.list-caption')
@@ -328,8 +334,8 @@ try:
 
             filters.get_by_role('button', name='Active', exact=True).click()
             expect(rows).to_have_count(2)
-            expect(rows.first.locator('.run-title')).to_have_text('active-browser')
-            expect(rows.nth(1).locator('.run-title')).to_have_text('blocked-browser')
+            expect(rows.first.locator('.run-title')).to_have_text('blocked-browser')
+            expect(rows.nth(1).locator('.run-title')).to_have_text('active-browser')
             expect(caption).to_contain_text('Active')
             expect(caption).to_contain_text('2')
             filters.get_by_role('button', name='Blocked', exact=True).click()
@@ -347,14 +353,14 @@ try:
             expect(rows.first.locator('.run-title')).to_have_text('browser')
             expect(caption).to_contain_text('Planned')
             expect(caption).to_contain_text('1')
-            report['scenarios'].append('Filter clicks show matching rows and counts; Active retains blocked obligations, while Blocked narrows to attention')
+            report['scenarios'].append('Filter clicks show matching rows and counts; Active orders blocked before healthy, while Blocked narrows to attention')
 
             page.locator('#find-record').fill('browser')
             expect(rows).to_have_count(1)
             page.locator('#find-record').fill('no planned match')
             expect(rows).to_have_count(0)
             expect(caption).to_contain_text('0')
-            expect(page.get_by_role('heading', name='No matching packages', exact=True)).to_be_visible()
+            expect(page.get_by_role('heading', name='No matching specs', exact=True)).to_be_visible()
             page.locator('#find-record').fill('')
             expect(rows).to_have_count(1)
 
@@ -378,11 +384,11 @@ try:
             # existing predicates, so saved links keep working.
             open_route('specs', ws='fixture', filter='attention')
             expect(filters.get_by_role('button', name='Blocked', exact=True)).to_have_attribute('aria-pressed', 'true')
-            expect(page.locator('.observation-rows button.run-row .run-title')).to_have_text('blocked-browser')
+            expect(page.locator('.records button.record[data-key] .run-title')).to_have_text('blocked-browser')
             expect(page.locator('.list-caption')).to_contain_text('1')
             open_route('specs', ws='fixture', filter='completed')
             expect(filters.get_by_role('button', name='Done', exact=True)).to_have_attribute('aria-pressed', 'true')
-            expect(page.locator('.observation-rows button.run-row .run-title')).to_have_text('done-browser')
+            expect(page.locator('.records button.record[data-key] .run-title')).to_have_text('done-browser')
             expect(page.locator('.list-caption')).to_contain_text('1')
             report['scenarios'].append('Legacy attention and completed deep links select Blocked and Done with one matching row each')
 
@@ -403,6 +409,211 @@ try:
             page.screenshot(path=str(evidence / 'sentinel-planned-filter-mobile.png'), full_page=True)
             expect(filters.get_by_role('button', name='Planned', exact=True)).to_have_attribute('aria-pressed', 'true')
 
+        if case == 'specs-list':
+            (evidence / 'screens').mkdir(parents=True, exist_ok=True)
+            now = '2026-10-12T12:00:00.000Z'
+            state = {'value': None, 'active': False, 'fail': False}
+
+            def on_state(route):
+                if state['fail']:
+                    route.fulfill(status=503, json={'error': 'fixture-state-failure'})
+                elif state['active']:
+                    route.fulfill(json=state['value'])
+                else:
+                    route.continue_()
+
+            page.route('**/api/state**', on_state)
+            rows = page.locator('.records button.record[data-key]')
+
+            def capture(name, width):
+                page.set_viewport_size({'width': width, 'height': 800})
+                path = evidence / 'screens' / f'specs-{name}-{width}.png'
+                page.screenshot(path=str(path), full_page=True)
+                report.setdefault('captures', []).append(str(path))
+
+            def capture_both(name):
+                capture(name, 1280)
+                capture(name, 1600)
+
+            def record(workspace, slug, **extra):
+                value = {'workspace': workspace, 'package': f'/fixture/specs/{slug}', 'package_ref': f'{workspace}/{slug}',
+                         'assignment_id': f'{slug}-assignment', 'execution': 'running', 'workflow_state': 'working',
+                         'is_current_assignment': True, 'activity': f'{slug} activity', 'obligation': f'{slug} obligation',
+                         'observed_at': now, 'coverage': {'state': 'complete', 'reasons': []},
+                         'spec_progress': {'current_position': 1, 'total_steps': 2, 'current_name': 'List step'}}
+                value.update(extra)
+                return value
+
+            def observer(observer_id, workspace, runs, coverage_state='complete', observed_at=now, reasons=None):
+                return {'observer_id': observer_id, 'state': 'observing', 'published_at': now,
+                        'snapshot': {'workspace': workspace,
+                                     'coverage': {'state': coverage_state, 'observed_at': observed_at, 'reasons': reasons or []},
+                                     'runs': runs, 'recently_completed': [], 'planned_packages': [],
+                                     'assignments': [], 'assignment_coverage': {'state': 'complete', 'reasons': []}, 'epics': []}}
+
+            def fixture_snapshot(runs, recently=None, planned=None, coverage_state='complete', observed_at=now, reasons=None, extra_observers=()):
+                primary = observer('list-fixture', 'fixture', runs, coverage_state, observed_at, reasons)
+                primary['snapshot']['recently_completed'] = recently or []
+                primary['snapshot']['planned_packages'] = planned or []
+                return {'schema_version': 1, 'generated_at': now, 'observers': [primary, *extra_observers]}
+
+            active_healthy = record('fixture', 'healthy-a')
+            blocked_z = record('fixture', 'blocked-z', workflow_state='blocked', activity='Blocked z activity')
+            done_c = record('fixture', 'done-c', is_current_assignment=False, execution='completed', workflow_state='complete', completion_basis='manual', completed_at=now)
+            planned_d = {'workspace': 'fixture', 'package': '/fixture/specs/planned-d', 'package_ref': 'fixture/planned-d', 'source_paths': ['spec.md']}
+            unmapped_e = record('unmapped-repo', 'unmapped-e')
+
+            # Loading: the fixture delays /api/state so the skeleton must wait for 300ms.
+            control('state-delay-ms', 1200)
+            started = time.monotonic()
+            open_route('specs', ws='fixture')
+            page.wait_for_timeout(150)
+            assert page.locator('.records .skeletons').count() == 0, 'skeleton rendered before 300ms'
+            expect(page.locator('.list-caption')).to_have_text('Reading specs…')
+            page.locator('.records .skeletons').first.wait_for(timeout=5000)
+            elapsed = time.monotonic() - started
+            assert elapsed >= 0.3, f'skeleton appeared after {elapsed:.2f}s'
+            capture_both('loading')
+            expect(rows).to_have_count(1)
+            control('state-delay-ms', 0)
+            report['scenarios'].append('Delayed state read shows Reading specs, skeleton after 300ms, then rows')
+
+            # Filter, search, caption and App fallback share one attention-first result.
+            state['active'] = True
+            state['value'] = fixture_snapshot([active_healthy, blocked_z], recently=[done_c], planned=[planned_d],
+                                              extra_observers=[observer('unmapped-observer', 'unmapped-repo', [unmapped_e])])
+            page.reload()
+            expect(rows).to_have_count(2)
+            expect(rows.first.locator('.run-title')).to_have_text('blocked-z')
+            expect(rows.nth(1).locator('.run-title')).to_have_text('healthy-a')
+            expect(page.locator('.list-caption')).to_have_text('Active · 2 observed specs')
+            expect(page.locator('article.detail h2')).to_have_text('blocked-z')
+            capture_both('list')
+            report['scenarios'].append('Active rows, caption and App selection fallback share the attention-first order')
+
+            page.locator('#find-record').fill('healthy')
+            expect(rows).to_have_count(1)
+            expect(rows.first.locator('.run-title')).to_have_text('healthy-a')
+            expect(page.locator('.list-caption')).to_have_text('Active · 1 observed specs')
+            expect(page.locator('article.detail h2')).to_have_text('healthy-a')
+            assert params()['q'] == ['healthy'], page.url
+            page.locator('#find-record').fill('')
+
+            filters = page.get_by_role('navigation', name='Package filters')
+            filters.get_by_role('button', name='Blocked', exact=True).click()
+            expect(rows).to_have_count(1)
+            expect(rows.first.locator('.run-title')).to_have_text('blocked-z')
+            expect(page.locator('.list-caption')).to_have_text('Blocked · 1 observed specs')
+            filters.get_by_role('button', name='Done', exact=True).click()
+            expect(rows.first.locator('.run-title')).to_have_text('done-c')
+            expect(page.locator('.list-caption')).to_have_text('Done · 1 observed specs')
+            filters.get_by_role('button', name='Planned', exact=True).click()
+            expect(rows.first.locator('.run-title')).to_have_text('planned-d')
+            expect(page.locator('.list-caption')).to_have_text('Planned · 1 observed specs')
+
+            for key, label, slug in [('attention', 'Blocked', 'blocked-z'), ('completed', 'Done', 'done-c'), ('planned', 'Planned', 'planned-d')]:
+                open_route('specs', ws='fixture', filter=key)
+                expect(filters.get_by_role('button', name=label, exact=True)).to_have_attribute('aria-pressed', 'true')
+                expect(rows.first.locator('.run-title')).to_have_text(slug)
+            report['scenarios'].append('Legacy attention, completed and planned links select their renamed filters and rows')
+
+            open_route('specs')
+            expect(rows).to_have_count(3)
+            expect(page.locator('main')).to_contain_text('unmapped-repo')
+            open_route('specs', ws='fixture')
+            expect(page.locator('main')).not_to_contain_text('unmapped-e')
+            report['scenarios'].append('All workspaces keeps the unmapped repository row; a concrete scope hides it')
+
+            open_route('specs', ws='fixture', filter='planned')
+            page.locator('#find-record').fill('no-such-spec')
+            expect(rows).to_have_count(0)
+            expect(page.locator('.list-caption')).to_have_text('0 matching specs')
+            expect(page.get_by_role('heading', name='No matching specs', exact=True)).to_be_visible()
+            capture_both('no-match')
+            page.get_by_role('button', name='Clear filters', exact=True).click()
+            expect(rows).to_have_count(2)
+            assert 'q' not in params() and 'filter' not in params(), page.url
+            report['scenarios'].append('Clear filters removes query and filter in one navigation')
+
+            state['value'] = fixture_snapshot([])
+            page.reload()
+            expect(rows).to_have_count(0)
+            expect(page.locator('.list-caption')).to_have_text('No specs recorded')
+            expect(page.get_by_role('heading', name='No observed specs', exact=True)).to_be_visible()
+            expect(page.locator('.records').get_by_role('button', name='Refresh state', exact=True)).to_be_visible()
+            capture_both('empty')
+            report['scenarios'].append('Healthy empty scope renders the named empty state, not a failure')
+
+            state['value'] = fixture_snapshot([], coverage_state='unavailable', reasons=['checkout unavailable'])
+            page.reload()
+            expect(page.get_by_role('heading', name='No observed specs', exact=True)).to_be_visible()
+            incomplete = page.locator('.records .ds-callout').filter(has_text='Observation incomplete')
+            expect(incomplete).to_be_visible()
+            expect(incomplete).to_contain_text('checkout unavailable')
+            capture_both('partial-empty')
+            report['scenarios'].append('Unavailable scope coverage with zero rows still discloses Observation incomplete')
+
+            state['value'] = fixture_snapshot([active_healthy], coverage_state='partial', reasons=['scan limit'])
+            page.reload()
+            expect(rows).to_have_count(1)
+            expect(page.locator('.records .ds-callout').filter(has_text='Observation incomplete')).to_be_visible()
+            capture_both('partial-rows')
+
+            stale_coverage = '2026-10-12T10:00:00.000Z'
+            stale_activity = '2026-10-12T09:58:00.000Z'
+            state['value'] = fixture_snapshot([record('fixture', 'stale-b', observed_at=stale_activity)], observed_at=stale_coverage)
+            page.reload()
+            expect(rows).to_have_count(1)
+            expect(page.locator('.records .ds-callout').filter(has_text='Observation needs refreshing')).to_be_visible()
+            age_text = rows.first.locator('small').inner_text()
+            assert '2m 0s before observation' in age_text, age_text
+            page.wait_for_timeout(1500)
+            assert rows.first.locator('small').inner_text() == age_text, 'retained age advanced with the clock'
+            capture_both('stale')
+            report['scenarios'].append('Old coverage with a fresh heartbeat is stale and its row age stays fixed as the clock advances')
+
+            state['value'] = fixture_snapshot([record('fixture', 'offline-f', observed_at='2026-10-12T11:58:00.000Z')])
+            page.reload()
+            expect(rows).to_have_count(1)
+            state['fail'] = True
+            page.locator('button:has-text("Refresh state")').first.click()
+            expect(page.locator('.records .ds-callout').filter(has_text='Connection lost')).to_be_visible()
+            expect(rows).to_have_count(1)
+            expect(page.locator('.completion-control').get_by_role('button', name='Mark complete', exact=True)).to_be_disabled()
+            offline_age = rows.first.locator('small').inner_text()
+            assert '2m 0s before observation' in offline_age, offline_age
+            page.wait_for_timeout(1500)
+            assert rows.first.locator('small').inner_text() == offline_age, 'offline age advanced'
+            capture_both('offline')
+            state['fail'] = False
+            page.get_by_role('button', name='Retry connection', exact=True).click()
+            expect(page.locator('.records .ds-callout').filter(has_text='Connection lost')).to_have_count(0)
+            report['scenarios'].append('Offline retains rows and fixed ages and disables completion while failure is visible')
+
+            state['fail'] = True
+            state['value'] = fixture_snapshot([active_healthy])
+            open_route('specs', ws='fixture')
+            page.reload()
+            expect(page.locator('.records .ds-callout').filter(has_text='Specs unavailable')).to_be_visible()
+            expect(page.locator('.list-caption')).to_have_text('Last known catalog: Observations unavailable')
+            capture_both('error')
+            state['fail'] = False
+            page.locator('.records').get_by_role('button', name='Retry state', exact=True).click()
+            expect(rows).to_have_count(1)
+            report['scenarios'].append('Initial read failure shows Specs unavailable and retry renders rows')
+
+            imported = fixture_snapshot([record('fixture', 'imported-g', observed_at='2026-10-12T09:20:00.000Z')], observed_at='2026-10-12T09:30:00.000Z')
+            imported['generated_at'] = '2026-10-12T09:30:00.000Z'
+            page.locator('#import-file').set_input_files({'name': 'specs-list-import.json', 'mimeType': 'application/json', 'buffer': json.dumps(imported).encode()})
+            expect(rows).to_have_count(1)
+            imported_age = rows.first.locator('small').inner_text()
+            assert '10m 0s before observation' in imported_age, imported_age
+            page.wait_for_timeout(1500)
+            assert rows.first.locator('small').inner_text() == imported_age, 'imported age advanced'
+            expect(page.locator('.completion-control').get_by_role('button', name='Mark complete', exact=True)).to_be_disabled()
+            capture_both('imported')
+            report['scenarios'].append('Imported rows render fixed before-observation ages and keep mutation controls unavailable')
+
         assert not report['pageErrors'], report['pageErrors']
         context.close()
         browser.close()
@@ -418,6 +629,6 @@ finally:
         fixture.kill()
         fixture.wait()
     report['elapsedSeconds'] = round(time.monotonic() - started, 3)
-    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'step-003-fix-browser.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'sentinel-planned-filter-browser.json' if case == 'filters' else 'step-002-fix-browser.json'
+    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'step-003-fix-browser.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'sentinel-planned-filter-browser.json' if case == 'filters' else 'specs-list.json' if case == 'specs-list' else 'step-002-fix-browser.json'
     (evidence / filename).write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))

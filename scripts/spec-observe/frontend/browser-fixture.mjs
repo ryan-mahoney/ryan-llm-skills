@@ -66,7 +66,7 @@ let entries=[{id:'entry-1',timestamp:new Date().toISOString(),message:{role:'ass
 let localOperator=false;
 let tick=0,staleLaunch=!plannedLaunch,failSend=false,delaySend=false,delayBrief=false;
 const posts=[];
-const boundary={catalogFail:false,detailFail:false,stateFail:false,catalogDelayMs:0,detailDelayMs:0,detailDelayId:'',stateClockOffsetMs:0,catalogMode:'healthy'};
+const boundary={catalogFail:false,detailFail:false,stateFail:false,catalogDelayMs:0,detailDelayMs:0,detailDelayId:'',stateDelayMs:0,stateClockOffsetMs:0,catalogMode:'healthy'};
 const boundaryLog=[];
 const activeBoundary=new Map();
 let boundaryAttempt=0;
@@ -78,7 +78,7 @@ const projectsBackup=join(root,'projects-backup');
 const invalidKitDir=join(projectsDir,'broken');
 const partialKit=`version: 1\nid: fixture\nname: Browser fixture\nrepositories:\n  - id: fixture-repo\n    path: ${checkout}\n    role: Browser verification\n  - id: fixture-missing\n    path: ${join(root,'checkout-missing')}\n    role: Missing checkout\ncontext:\n  - ${contextPath}\n  - ${join(root,'outside-context.md')}\n`;
 const exists=async path=>{try{await access(path);return true;}catch{return false;}};
-const resetBoundaryControls=()=>{boundary.catalogFail=false;boundary.detailFail=false;boundary.stateFail=false;boundary.catalogDelayMs=0;boundary.detailDelayMs=0;boundary.detailDelayId='';boundary.stateClockOffsetMs=0;boundary.catalogMode='healthy';if(activeBoundary.size===0){boundaryLog.length=0;boundaryAttempt=0;}};
+const resetBoundaryControls=()=>{boundary.catalogFail=false;boundary.detailFail=false;boundary.stateFail=false;boundary.catalogDelayMs=0;boundary.detailDelayMs=0;boundary.detailDelayId='';boundary.stateDelayMs=0;boundary.stateClockOffsetMs=0;boundary.catalogMode='healthy';if(activeBoundary.size===0){boundaryLog.length=0;boundaryAttempt=0;}};
 async function moveProjectsToBackup(){await rm(projectsBackup,{recursive:true,force:true});await rename(projectsDir,projectsBackup);}
 async function restoreHealthyWorkspace(){if(await exists(projectsBackup)){await rm(projectsDir,{recursive:true,force:true});await rename(projectsBackup,projectsDir);}await rm(invalidKitDir,{recursive:true,force:true});await writeFile(join(workspace.directory,'kit.yaml'),healthyKit);}
 async function applyCatalogMode(mode){if(mode==='empty'){await restoreHealthyWorkspace();await moveProjectsToBackup();await mkdir(projectsDir,{recursive:true});}else if(mode==='missing_projects'){await restoreHealthyWorkspace();await moveProjectsToBackup();}else if(mode==='partial'){await restoreHealthyWorkspace();await mkdir(invalidKitDir,{recursive:true});await writeFile(join(invalidKitDir,'kit.yaml'),'id: [broken\n');await writeFile(join(workspace.directory,'kit.yaml'),partialKit);}else{await restoreHealthyWorkspace();}boundary.catalogMode=mode;}
@@ -149,6 +149,7 @@ const server=createServer(async(req,res)=>{
   if(action==='catalog-delay-ms')boundary.catalogDelayMs=numberValue(url.searchParams.get('value'),0,5000);
   if(action==='detail-delay-ms')boundary.detailDelayMs=numberValue(url.searchParams.get('value'),0,5000);
   if(action==='detail-delay-id')boundary.detailDelayId=url.searchParams.get('value')??'';
+  if(action==='state-delay-ms')boundary.stateDelayMs=numberValue(url.searchParams.get('value'),0,5000);
   if(action==='state-clock-offset-ms')boundary.stateClockOffsetMs=numberValue(url.searchParams.get('value'),-120000,120000);
   if(action==='catalog-mode')await applyCatalogMode(url.searchParams.get('value')||'healthy');
   res.setHeader('Content-Type','application/json');res.end(JSON.stringify({...packageIdentity,posts,threads,tick,boundary,boundaryLog:boundaryLog.slice(-60),active:[...activeBoundary.values()],launchResolutions:Object.fromEntries(launchResolutions),briefWritesPending,completedBriefWrites}));return;
@@ -160,7 +161,7 @@ const server=createServer(async(req,res)=>{
  const id=url.searchParams.get('id')??'';
  const attempt={
   fail:readKind==='catalog'?boundary.catalogFail:readKind==='detail'?boundary.detailFail:boundary.stateFail,
-  delayMs:readKind==='catalog'?boundary.catalogDelayMs:readKind==='detail'?boundary.detailDelayMs:0,
+  delayMs:readKind==='catalog'?boundary.catalogDelayMs:readKind==='detail'?boundary.detailDelayMs:readKind==='state'?boundary.stateDelayMs:0,
   applies:readKind!=='detail'||!boundary.detailDelayId||boundary.detailDelayId===id,
   offset:readKind==='state'?boundary.stateClockOffsetMs:0,
  };

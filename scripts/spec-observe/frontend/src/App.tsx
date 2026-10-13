@@ -72,6 +72,7 @@ export default function App() {
   const token = () => live() && !error() ? payload()?.thread_action_token || payload()?.action_token : undefined;
   const completionToken = () => live() && !error() ? payload()?.action_token : undefined;
   const observers = createMemo(() => authoritativeObservers(payload()?.observers ?? []));
+  const scopedObservers = createMemo(() => observers().filter(observer => inWorkspaceScope({ workspace: str(observer.snapshot?.workspace) || str(observer.observer_id) || str(observer.source) || 'unknown' }, 'run', scopeWs(), catalogEntries())));
   const freshObservers = () => observers().filter(observer => observer.state === 'observing' && !stale(observer.published_at));
   const epicSupport = () => !observers().length ? 'No observer snapshots' : !observers().some(observer => Array.isArray(observer.snapshot?.epics)) ? 'Epic data unavailable' : null;
   const connectionLabel = () => imported() ? 'Imported snapshot' : error() ? 'Connection unavailable' : freshObservers().length ? 'Monitor connected' : observers().length ? 'Monitor stale' : 'Waiting for monitor';
@@ -302,10 +303,12 @@ export default function App() {
   }
   function notes() {
     const out: string[] = [];
-    if (error() && route().dest !== 'workspaces' && !pickerRequired()) out.push(error());
+    // Workspaces and Specs own their connection/coverage recovery in the destination.
+    const destinationNotes = ['workspaces', 'specs'].includes(route().dest) || pickerRequired();
+    if (error() && !destinationNotes) out.push(error());
     if (payload()?.truncated) out.push('Snapshot read budget reached; some observations are unavailable.');
     for (const e of payload()?.errors ?? []) out.push(`${e.source ? str(e.source) + ': ' : ''}${str(e.message)}`);
-    if (!imported() && !error() && observers().length && !freshObservers().length && route().dest !== 'workspaces' && !pickerRequired()) out.push('Observer heartbeat is stale; work may have continued since this snapshot.');
+    if (!imported() && !error() && observers().length && !freshObservers().length && !destinationNotes) out.push('Observer heartbeat is stale; work may have continued since this snapshot.');
     for (const observer of observers()) for (const a of observer.snapshot?.attention ?? []) if (a.kind === 'legacy-location') out.push(`Untracked .specs in ${a.repository} (${a.count} entries). Remedy: ${a.remedy}.`);
     return out;
   }
@@ -381,6 +384,7 @@ export default function App() {
     get records() { return scopedRecords(); },
     get assignments() { return scopedAssignments(); },
     get epics() { return scopedEpics(); },
+    get scopedObservers() { return scopedObservers(); },
     get epicSupport() { return epicSupport(); },
     get catalog() { return catalogEntries(); },
     get catalogInvalid() { return catalog()?.invalid ?? []; },
