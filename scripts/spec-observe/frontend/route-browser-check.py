@@ -544,6 +544,27 @@ try:
             expect(tabs.get_by_role('button', name='Overview', exact=True)).to_have_attribute('aria-pressed', 'true')
             assert params()['ws'] == ['fixture'] and params()['filter'] == ['active'] and params()['q'] == ['Building'] and params()['id'] == [record_key], page.url
 
+            # Full-page screenshots do not expose overflow inside the detail pane.
+            # Capture the populated Overview at both pane positions and retain
+            # the actual scroll geometry beside the image paths.
+            for width in (1280, 1600):
+                page.set_viewport_size({'width': width, 'height': 800})
+                pane = page.locator('.detail-body')
+                for position in ('populated', 'populated-lower'):
+                    pane.evaluate('(el, lower) => { el.scrollTop = lower ? el.scrollHeight : 0; }', position.endswith('lower'))
+                    if position.endswith('lower'):
+                        expect(pane.get_by_role('heading', name='Related work', exact=True)).to_be_in_viewport()
+                        expect(pane.get_by_role('link', name='Demo epic \u00b7 member 1 of 1', exact=True)).to_be_in_viewport()
+                    capture(position, width)
+                    report.setdefault('captureMetadata', []).append({
+                        'path': report['captures'][-1], 'state': position,
+                        'viewport': {'width': width, 'height': 800},
+                        'scrollContainer': '.detail-body',
+                        **pane.evaluate('(el) => ({scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight})'),
+                    })
+                pane.evaluate('(el) => { el.scrollTop = 0; }')
+            report['scenarios'].append('Populated Overview and its lower Related work region are captured at 1280 and 1600 with detail-pane scroll metadata')
+
             open_route('specs', ws='fixture', id=record_key, tab='activity')
             expect(tabs.get_by_role('button', name='Activity', exact=True)).to_have_attribute('aria-pressed', 'true')
             expect(page.locator('.object-head h2')).to_have_text('browser')
