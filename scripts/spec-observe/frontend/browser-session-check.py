@@ -77,15 +77,51 @@ try:
             page.get_by_role('button',name='End session…',exact=True).click()
             dialog=page.get_by_role('dialog')
             expect(dialog).to_be_visible()
-            page.locator('header').get_by_role('button',name='Refresh state',exact=True).evaluate('(el)=>el.click()')
+            original_describe=context.request.get(url+'/api/assignment-session?assignment_id=run-1').json()
+            original_identity=original_describe['identity']
+            assert original_identity=='fixture-identity',original_describe
+            expect(dialog).to_contain_text('run-1')
+            with page.expect_response(lambda r: '/api/state' in r.url and r.request.method=='GET',timeout=15000) as refresh_info:
+                page.locator('header').get_by_role('button',name='Refresh state',exact=True).evaluate('(el)=>el.click()')
+            refresh_resp=refresh_info.value
+            assert refresh_resp.ok
             expect(dialog).to_be_visible()
             expect(dialog).to_contain_text('Saved files and the transcript will remain')
+            expect(dialog).to_contain_text('run-1')
+            poll_resp=None
+            with page.expect_response(lambda r: '/api/state' in r.url and r.request.method=='GET',timeout=15000) as poll_info:
+                page.wait_for_timeout(6000)
+            poll_resp=poll_info.value
+            assert poll_resp.ok
+            expect(dialog).to_be_visible()
+            expect(dialog).to_contain_text('Saved files and the transcript will remain')
+            expect(dialog).to_contain_text('run-1')
+            expect(canonical_assignment).to_have_count(1)
+            control('session-identity','substituted-identity')
+            substituted=context.request.get(url+'/api/assignment-session?assignment_id=run-1').json()
+            assert substituted['identity']=='substituted-identity',substituted
+            assert substituted['identity']!=original_identity,substituted
+            expect(dialog).to_be_visible()
+            expect(dialog).to_contain_text('run-1')
+            expect(dialog).to_contain_text('Saved files and the transcript will remain')
+            dialog.get_by_role('button',name='End session',exact=True).click()
+            expect(dialog.get_by_role('alert')).to_contain_text('identity changed')
+            expect(dialog).to_be_visible()
+            pinned=ends()[-1]['input']
+            assert pinned['confirm'] is True,pinned
+            assert pinned['expected_identity']==original_identity,pinned
+            assert pinned['expected_identity']!=substituted['identity'],pinned
+            control('session-identity','fixture-identity')
+            restored=context.request.get(url+'/api/assignment-session?assignment_id=run-1').json()
+            assert restored['identity']==original_identity,restored
+            passed('refresh poll keeps review and pins original identity')
             session_shot('ev-5-session@1280.png',1280,860)
             session_shot('ev-5-session@1600.png',1600,860)
             page.set_viewport_size({'width':1440,'height':1100})
             full_shot('ev-5-session-desktop.png')
             dialog.get_by_role('button',name='Cancel',exact=True).click()
-            assert not ends()
+            assert len(ends())==1,ends()
+            assert ends()[-1]['input']['expected_identity']==original_identity,ends()
             passed('cancel without mutation')
             control('session-end-fails','true')
             page.get_by_role('button',name='End session…',exact=True).click()
@@ -105,8 +141,9 @@ try:
             expect(page.get_by_text('Session ended. Saved files and transcript remain available.',exact=True)).to_be_visible()
             expect(page.get_by_role('button',name='End session…',exact=True)).to_have_count(0)
             expect(page.locator('#session-attach-command')).to_have_count(0)
-            assert len(ends())==2
+            assert len(ends())==3,ends()
             assert ends()[-1]['input']['confirm'] is True
+            assert ends()[-1]['input']['expected_identity']==original_identity,ends()[-1]
             assert ends()[-1]['input']['expected_identity']=='fixture-identity'
             ended_params=agents_params(filter='ended',id=session_key)
             assert ended_params['filter']==['ended'],ended_params
