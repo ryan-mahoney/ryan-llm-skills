@@ -4,6 +4,7 @@ import { completionLabel, duration as observationDuration, runState, specProgres
 import { linkedAssignmentKey, observationEnd, packageFromKey, packageRelative, specViewState, visibleSpecs, type ObservationContext } from '../spec-state';
 import SpecActivity, { hasActivityFacts } from '../SpecActivity';
 import { ActionBar, EmptyState, MasterDetail, RegionalSkeleton, SectionTabs, StateNotice, StatusText, type SectionTab, type StatusTone } from '../primitives';
+import { PackagePreview } from '../PackagePreview';
 import PlannedAssignment from '../PlannedAssignment';
 import SpecOverview from '../SpecOverview';
 import type { WireRecord } from '../model';
@@ -460,6 +461,11 @@ export default function SpecsDestination(props: DestinationProps) {
                     }}
                   >Open work tour</button>
                   <button class="ds-btn" type="button" disabled={!props.canOpenPackageFiles(item())} onClick={() => props.onOpenPackageFiles(item())}>Open package files</button>
+                </Show>
+              </Show>
+              <Show when={!activityTab()}>
+                <Show when={item().package} keyed>
+                  {pkg => <PackagePreview package={pkg} live={props.live && props.specsLive} token={props.token} />}
                 </Show>
               </Show>
             </ActionBar>

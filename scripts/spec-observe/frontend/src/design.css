@@ -130,3 +130,9 @@
 .skeletons-table .skeleton-cell{display:grid;gap:8px}
 .skeletons-table .skeleton-bar{height:10px;width:85%;background:var(--ds-chrome-hi);border-radius:2px}
 .skeletons-table .skeleton-bar--secondary{height:8px;width:60%}
+
+/* Dev-server preview controls sit in the Overview ActionBar as one wrapping
+   group so long status and recovery copy never clip the fixed action bar. */
+.detail-actions #package-preview{display:inline-flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0;max-width:100%}
+.detail-actions #package-preview .status,.detail-actions #package-preview .preview-note{white-space:normal;overflow-wrap:anywhere;max-width:100%}
+.detail-actions #package-preview .ds-btn{flex-shrink:0}
