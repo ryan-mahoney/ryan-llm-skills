@@ -129,7 +129,7 @@ export default function App() {
   }
   function setFilter(value: string) {
     const next: RouteState = { ...route() };
-    if (value === 'active') delete next.filter;
+    if (value === 'all') delete next.filter;
     else next.filter = value;
     go(next);
   }
