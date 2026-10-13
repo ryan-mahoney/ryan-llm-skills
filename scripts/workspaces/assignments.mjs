@@ -1424,7 +1424,10 @@ async function assertNoActiveRun(record) {
   } catch {
     return;
   }
-  throw new Error(`run-active: spec run ${run.id} is ${run.state} and its coordinator (pid ${pid}) is alive; refusing launch`);
+  throw Object.assign(
+    new Error(`run-active: spec run ${run.id} is ${run.state} and its coordinator (pid ${pid}) is alive; refusing launch`),
+    { code: "run-active", run_id: run.id, pid },
+  );
 }
 
 // Publish the durable launching reservation first, then the approved snapshot
@@ -1601,8 +1604,11 @@ export async function launchAssignment(input = {}, options = {}) {
     for (const entry of records) {
       if (entry.assignment_id === id || entry.assignment_id === supersededId) continue;
       if (entry.execution_dir === record.execution_dir && EXCLUSION_STATES.has(entry.state)) {
-        throw new Error(
-          `another ${entry.state} assignment reserves ${record.execution_dir}: ${entry.assignment_id}`,
+        throw Object.assign(
+          new Error(
+            `another ${entry.state} assignment reserves ${record.execution_dir}: ${entry.assignment_id}`,
+          ),
+          { code: "target-busy", assignment_id: entry.assignment_id },
         );
       }
     }
