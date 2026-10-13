@@ -35,7 +35,7 @@ export type AgentDetailProps = {
   view: AgentViewState;
   sourceUnavailable: boolean;
   listPartial: boolean;
-  listObservedAt: string | null;
+  selectedObservedAt: string | null;
   connectionFailed: boolean;
   observationStale: boolean;
   onRetryConnection: () => void;
@@ -93,7 +93,7 @@ function AgentDetailBody(props: AgentDetailProps) {
   const recovery = (): 'Retry state' | 'Retry connection' | 'Refresh state' | null => {
     if (props.view === 'error' && props.sourceUnavailable) return 'Retry state';
     if (props.view === 'offline') return 'Retry connection';
-    if (props.view === 'stale') return 'Refresh state';
+    if (props.live && props.observationStale) return 'Refresh state';
     return null;
   };
   // A source-unavailable read retains the last-known identity but cannot
@@ -115,15 +115,15 @@ function AgentDetailBody(props: AgentDetailProps) {
     if (recovery() === 'Retry state')
       return {
         title: 'Source unavailable',
-        body: `Assignment coverage could not be read${props.listObservedAt ? ` as of ${time(props.listObservedAt)}` : ''}. The selected assignment is retained; no process failure has been inferred.`,
+        body: `Assignment coverage could not be read${props.selectedObservedAt ? ` as of ${time(props.selectedObservedAt)}` : ''}. The selected assignment is retained; no process failure has been inferred.`,
       };
     if (recovery() === 'Retry connection')
       return {
         title: 'Connection unavailable',
-        body: `Last received at ${time(props.listObservedAt)}. These records may have changed on the host.`,
+        body: `Last received at ${time(props.selectedObservedAt)}. These records may have changed on the host.`,
       };
     if (recovery() === 'Refresh state')
-      return { title: `Last checked at ${time(props.listObservedAt)}`, body: 'Existing content is kept while the host revalidates it.' };
+      return { title: `Last checked at ${time(props.selectedObservedAt)}`, body: 'Existing content is kept while the host revalidates it.' };
     if (a().unrecorded)
       return {
         title: 'Identity and record disagree',

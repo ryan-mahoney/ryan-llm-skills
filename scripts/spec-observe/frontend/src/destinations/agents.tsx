@@ -44,15 +44,16 @@ export default function AgentsDestination(props: DestinationProps) {
   const sourceUnavailable = () => props.agentsCoverage?.sourceUnavailable === true;
   const listPartial = () => props.agentsCoverage?.listPartial === true;
   const listObservedAt = () => props.agentsCoverage?.listObservedAt ?? null;
+  const selectedObservedAt = () => props.agentsCoverage?.selectedObservedAt ?? null;
   const payloadPresent = () => props.payload !== null;
 
-  const view = () =>
+  const view = (observedAt = listObservedAt()) =>
     agentViewState({
       payloadPresent: payloadPresent(),
       live: props.live,
       connectionFailed: props.connectionFailed,
       sourceUnavailable: sourceUnavailable(),
-      observationStale: stale(listObservedAt()),
+      observationStale: stale(observedAt),
       total: props.assignments.length,
       visible: visible().length,
       query: props.route.q ?? '',
@@ -415,12 +416,12 @@ export default function AgentsDestination(props: DestinationProps) {
           }}
           ws={props.route.ws}
           routeQuery={props.route.q}
-          view={view()}
+          view={view(selectedObservedAt())}
           sourceUnavailable={sourceUnavailable()}
           listPartial={listPartial()}
-          listObservedAt={listObservedAt()}
+          selectedObservedAt={selectedObservedAt()}
           connectionFailed={props.connectionFailed}
-          observationStale={stale(listObservedAt())}
+          observationStale={stale(selectedObservedAt())}
           onRetryConnection={props.onRetryConnection}
         />
       </Show>

@@ -1563,6 +1563,29 @@ try:
         expect(page.locator('article.detail .footer')).not_to_contain_text(fresh_label)
         expect(page.locator('#connection-status')).to_contain_text('Monitor connected')
         report['urls']['stale-a'] = urlsplit(page.url).fragment
+        # All workspaces is the composition counterexample: the list's fresh
+        # B read must not mask selected A's old read or recovery action.
+        native_hash('#/agents?' + urlencode({'id': key_a}))
+        detail_notice = page.locator('.agent-detail .ds-callout')
+        expect(detail_notice).to_have_count(1)
+        expect(detail_notice).to_contain_text('Last checked at ' + stale_label)
+        expect(detail_notice).not_to_contain_text(fresh_label)
+        expect(page.locator('.records .ds-callout')).to_have_count(0)
+        primaries = page.locator('.agent-detail .ds-btn--primary')
+        expect(primaries).to_have_count(1)
+        expect(primaries).to_have_text('Refresh state')
+        state['value'] = 'fail'
+        page.locator('#refresh-button').click()
+        expect(detail_notice).to_contain_text('Connection unavailable')
+        expect(detail_notice).to_contain_text('Last received at ' + stale_label)
+        expect(detail_notice).not_to_contain_text(fresh_label)
+        expect(primaries).to_have_count(1)
+        expect(primaries).to_have_text('Retry connection')
+        state['value'] = noted
+        primaries.click()
+        expect(detail_notice).to_contain_text('Last checked at ' + stale_label)
+        expect(primaries).to_have_text('Refresh state')
+        report['scenarios'].append('All-workspaces portfolio keeps selected old A stale despite fresh B, with its own timestamp and one recovery primary; offline and retry preserve A time')
         native_hash('#/agents?' + urlencode({'ws': 'other', 'id': key_a}))
         expect(page.get_by_role('heading', name='Select an observed agent', exact=True)).to_be_visible()
         expect(page.locator('main')).not_to_contain_text('selected-a')
