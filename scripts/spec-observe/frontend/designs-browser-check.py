@@ -459,7 +459,7 @@ try:
             if case == 'stale':
                 stale_state = {}
                 report['staleState'] = stale_state
-                modes = {'hold_index': False, 'fail_index': False}
+                modes = {'hold_index': False, 'fail_index': False, 'fail_head': False}
                 state_mode = {'kind': 'normal', 'generated_at': None}
                 held_index = []
 
@@ -504,8 +504,15 @@ try:
                         body.pop('generated_at', None)
                     headers = {key: value for key, value in response.headers.items() if key.lower() != 'content-length'}
                     route.fulfill(status=response.status, headers=headers, json=body)
+
+                def head_boundary(route):
+                    if modes['fail_head'] and route.request.method == 'HEAD':
+                        route.fulfill(status=503)
+                    else:
+                        route.continue_()
                 page.route('**/api/workspace-designs**', designs_boundary)
                 page.route('**/api/state**', state_boundary)
+                page.route('**/workspace-view/**', head_boundary)
 
                 page.clock.install(time=datetime(2026, 1, 1, 12, 0, 0))
                 page.clock.pause_at(datetime(2026, 1, 1, 12, 0, 0))
@@ -709,7 +716,83 @@ try:
                     expect(page.locator('.designs-index-error')).to_have_count(0)
                     passed('a held revalidation 503 becomes the ordinary error with the age-entry frame and nonce retained')
 
-                    # 5. A scope change while a revalidation read is pending never inherits the delay.
+                    # 5. A failed selected-screen HEAD must not hide independent
+                    #    inventory freshness or redirect either recovery action.
+                    modes['fail_head'] = True
+                    with page.expect_response(lambda response: response.request.method == 'HEAD') as failed_head:
+                        page.get_by_role('button', name='Next screen', exact=True).click()
+                    assert failed_head.value.status == 503
+                    retry_screen = page.get_by_role('button', name='Retry screen', exact=True)
+                    expect(retry_screen).to_be_visible()
+                    expect(page.locator('.design-canvas')).to_contain_text('Screen could not be read')
+                    failed_route = page.url
+                    failed_heads = head_count()
+                    modes['hold_index'] = True
+                    page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    wait_until(lambda: len(held_index) == 1, 'held inventory refresh with failed screen')
+                    page.clock.fast_forward(300)
+                    freshness = page.locator('.design-canvas .ds-callout').filter(has_text='Last checked at')
+                    expect(freshness).to_be_visible()
+                    expect(retry_screen).to_be_visible()
+                    expect(page.locator('.list-pane .record.selected')).to_contain_text('2 of 3 screens produced')
+                    expect(page.locator('#design-detail-heading')).to_have_text('Design fixture revalidated')
+                    assert page.url == failed_route and head_count() == failed_heads
+
+                    # Consuming the delayed read clears only freshness, not the screen error.
+                    modes['hold_index'] = False
+                    while held_index:
+                        held_index.pop(0).continue_()
+                    expect(freshness).to_have_count(0)
+                    expect(retry_screen).to_be_visible()
+                    baseline_iso = context.request.get(base + '/api/state').json()['generated_at']
+                    state_mode['kind'] = 'offset'
+                    state_mode['generated_at'] = iso_offset(baseline_iso, 45001)
+                    modes['hold_index'] = True
+                    with page.expect_response(lambda response: '/api/state' in response.url):
+                        page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    expect(freshness).to_be_visible()
+                    expect(retry_screen).to_be_visible()
+                    reads_before = index_reads()
+                    with page.expect_response(lambda response: response.request.method == 'HEAD') as retry_failure:
+                        retry_screen.click()
+                    assert retry_failure.value.status == 503
+                    assert head_count() == failed_heads + 1 and index_reads() == reads_before
+                    failed_heads = head_count()
+                    expect(freshness).to_be_visible()
+                    modes['hold_index'] = False
+                    while held_index:
+                        held_index.pop(0).continue_()
+                    expect(freshness).to_have_count(0)
+                    expect(retry_screen).to_be_visible()
+                    # Unknown time supplies a persistent freshness notice after
+                    # a completed read, so Refresh designs can issue a new read.
+                    state_mode['kind'] = 'invalid'
+                    with page.expect_response(lambda response: '/api/workspace-designs' in response.url):
+                        page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    freshness = page.locator('.design-canvas .ds-callout').filter(has_text='Last checked time unknown')
+                    expect(freshness).to_be_visible()
+                    reads_before = index_reads()
+                    with page.expect_response(lambda response: '/api/workspace-designs' in response.url):
+                        freshness.get_by_role('button', name='Refresh designs', exact=True).click()
+                    assert index_reads() == reads_before + 1
+                    assert head_count() == failed_heads
+                    expect(retry_screen).to_be_visible()
+                    modes['fail_head'] = False
+                    reads_before = index_reads()
+                    with page.expect_response(lambda response: response.request.method == 'HEAD'):
+                        retry_screen.click()
+                    expect(frame().locator('h1')).to_have_text('Marker screen two')
+                    assert head_count() == failed_heads + 1 and index_reads() == reads_before
+                    expect(freshness).to_be_visible()
+                    assert page.url == failed_route
+                    stale_state['screenFailureFreshness'] = {'delayed': 'coexists', 'aged': 'coexists',
+                                                            'refreshDesigns': 'index only', 'retryScreen': 'HEAD only'}
+                    passed('failed selected-screen HEAD coexists with delayed/aged retained inventory freshness; Refresh designs reads only inventory and Retry screen reads only HEAD')
+                    state_mode['kind'] = 'normal'
+                    page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    expect(freshness).to_have_count(0)
+
+                    # 6. A scope change while a revalidation read is pending never inherits the delay.
                     held_index.clear()
                     modes['hold_index'] = True
                     page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
@@ -737,6 +820,7 @@ try:
                             pass
                     page.unroute('**/api/workspace-designs**', designs_boundary)
                     page.unroute('**/api/state**', state_boundary)
+                    page.unroute('**/workspace-view/**', head_boundary)
                 report['status'] = 'passed'
                 raise CaseComplete()
 

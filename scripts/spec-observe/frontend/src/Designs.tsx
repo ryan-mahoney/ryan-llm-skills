@@ -532,7 +532,7 @@ export default function Designs(props: DestinationProps) {
   const captureGap = () => Boolean(screen()?.produced) && missingWidths().length > 0;
   const partialEvidence = () => Boolean(design()) && (captureGap() || indexDiagnostics().length > 0);
   const showRevalidation = () => Boolean(data()) && (staleIndex() || revalidationDelayed())
-    && !blockedSelection() && !offline() && !indexError() && probeState() !== 'failed';
+    && !blockedSelection() && !offline() && !indexError();
   const showCaptureCallout = () => Boolean(design()) && Boolean(screen()?.produced) && partialEvidence()
     && !indexError() && !staleIndex() && probeState() !== 'failed' && !offline() && !showRevalidation();
   const unreadableIndexText = () => {
