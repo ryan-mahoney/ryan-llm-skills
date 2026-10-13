@@ -6,31 +6,52 @@ import { classifyCompletionError, linkedAssignmentKey, observationEnd, packageFr
 import SpecActivity, { hasActivityFacts } from '../SpecActivity';
 import { ActionBar, EmptyState, MasterDetail, RegionalSkeleton, SectionTabs, StateNotice, StatusText, type SectionTab, type StatusTone } from '../primitives';
 import { PackagePreview } from '../PackagePreview';
-import PlannedAssignment from '../PlannedAssignment';
+import { landedStatus, memberPlanning, planningFactsFor, positivelyPrepared, specReadiness } from '../readiness';
 import RelaunchAssignment from '../RelaunchAssignment';
 import SpecOverview from '../SpecOverview';
+import SpecReadiness, { SpecImplementEntry } from '../SpecReadiness';
 import type { WireRecord } from '../model';
 import type { RouteState } from '../route';
 import type { DestinationProps } from './index';
 
-type Filter = 'active' | 'attention' | 'completed' | 'planned';
+type Filter = 'active' | 'attention' | 'completed' | 'ready';
 
+// Ready replaced the planned-only inventory view: the prepared partition is
+// the same scoped rows, the legacy `planned` route value is its history alias,
+// and readiness (not just presence) decides the row order and actions.
 const FILTERS: SectionTab[] = [
   { key: 'active', label: 'Active' },
   { key: 'attention', label: 'Blocked' },
+  { key: 'ready', label: 'Ready' },
   { key: 'completed', label: 'Done' },
-  { key: 'planned', label: 'Planned' },
 ];
 
-const FILTER_LABELS: Record<Filter, string> = { active: 'Active', attention: 'Blocked', completed: 'Done', planned: 'Planned' };
+const FILTER_LABELS: Record<Filter, string> = { active: 'Active', attention: 'Blocked', completed: 'Done', ready: 'Ready' };
 
 const filterOf = (route: RouteState): Filter => {
   const value = route.filter;
-  return value === 'attention' || value === 'completed' || value === 'planned' ? value : 'active';
+  if (value === 'attention' || value === 'completed') return value;
+  if (value === 'ready' || value === 'planned') return 'ready';
+  return 'active';
 };
 
-function SpecsRow(props: { record: WireRecord; selected: boolean; context: ObservationContext; onSelect: (key: string) => void }) {
-  const tone = (): StatusTone => props.record.recent_completion ? 'success' : props.record.planned ? 'neutral' : attention(props.record) ? 'warning' : activeRun(props.record) && str(props.record.execution) && props.record.execution !== 'unknown' ? 'info' : 'neutral';
+// Unplanned epic-member count for the Ready-empty explanation: landed or
+// positively prepared members are excluded; legacy `prepared` status alone is
+// never counted as planned (readiness.ts owns that rule).
+const unplannedMembers = (epics: WireRecord[]): number => epics.reduce((count, epic) =>
+  count + (Array.isArray(epic.members)
+    ? epic.members.filter((member: WireRecord) => !(landedStatus(member.status) || positivelyPrepared(memberPlanning(member)))).length
+    : 0), 0);
+const readyEmptyText = (epics: WireRecord[]): string => {
+  const count = unplannedMembers(epics);
+  return `A spec appears here when its package is prepared and nothing has been dispatched. ${count === 0 ? 'No unplanned epic members were observed.' : `${count} epic member${count === 1 ? ' is' : 's are'} not planned yet.`}`;
+};
+
+function SpecsRow(props: { record: WireRecord; selected: boolean; context: ObservationContext; assignments: WireRecord[]; onSelect: (key: string) => void }) {
+  const readiness = () => props.record.planned || props.record.implementation_starting === true
+    ? specReadiness(props.record, { assignments: props.assignments })
+    : null;
+  const tone = (): StatusTone => props.record.recent_completion ? 'success' : readiness() ? readiness()!.tone : attention(props.record) ? 'warning' : activeRun(props.record) && str(props.record.execution) && props.record.execution !== 'unknown' ? 'info' : 'neutral';
   const summary = () => props.record.recent_completion ? completionLabel(props.record) : str(props.record.activity || props.record.obligation || 'No activity hint observed');
   const age = (): string => {
     const end = observationEnd(props.record, props.context);
@@ -39,6 +60,11 @@ function SpecsRow(props: { record: WireRecord; selected: boolean; context: Obser
     const live = props.context.live && !props.context.connectionFailed
       && props.context.now !== null && end === new Date(props.context.now).toISOString();
     return `${span} ${live ? 'since activity' : 'before observation'}`;
+  };
+  const small = (): string => {
+    if (!props.record.planned) return `${specProgress(props.record).label} · ${age()}`;
+    const steps = planningFactsFor(props.record)?.steps ?? null;
+    return `${steps === null ? 'Prepared steps unknown' : `${steps} steps prepared`} · ${age()}`;
   };
   return (
     <button
@@ -50,12 +76,12 @@ function SpecsRow(props: { record: WireRecord; selected: boolean; context: Obser
     >
       <div class="row-heading">
         <strong class="run-title">{base(props.record.package)}</strong>
-        <StatusText tone={tone()}>{runState(props.record, runningUnconfirmed)}</StatusText>
+        <StatusText tone={tone()}>{readiness() ? readiness()!.label : runState(props.record, runningUnconfirmed)}</StatusText>
       </div>
       <p>
         {str(props.record.workspace)} · <span innerHTML={props.record.recent_completion ? esc(summary()) : inlineMarkdown(summary(), false)} />
       </p>
-      <small>{specProgress(props.record).label} · {age()}</small>
+      <small>{small()}</small>
     </button>
   );
 }
@@ -91,19 +117,33 @@ function SpecsList(props: DestinationProps) {
   const caption = (): string => {
     if (view().read === 'loading') return 'Reading specs…';
     if (view().read === 'error') return 'Last known catalog: Observations unavailable';
+    if (filter() === 'ready' && !query()) return `Prepared, not started · ${rows().length} spec${rows().length === 1 ? '' : 's'}`;
     if (!rows().length) return query() ? '0 matching specs' : 'No specs recorded';
     return `${FILTER_LABELS[filter()]} · ${rows().length} observed specs`;
   };
+  const unplannedMembersCount = (): number => unplannedMembers(props.epics);
   const emptyCopy = (): { title: string; text: string } => {
     if (query()) return { title: 'No matching specs', text: `No spec matches “${props.route.q ?? ''}” in this scope.` };
     if (filter() === 'attention') return { title: 'No blocked specs', text: 'Blocked specs appear when an observation reports attention.' };
     if (filter() === 'completed') return { title: 'No recently completed specs', text: 'Recent completion history appears here when the snapshot includes it.' };
-    if (filter() === 'planned') return { title: 'No planned specs', text: 'Planned packages appear here when the snapshot includes their inventory.' };
+    if (filter() === 'ready') {
+      const count = unplannedMembersCount();
+      return {
+        title: 'No specs are ready to implement',
+        text: `A spec appears here when its package is prepared and nothing has been dispatched. ${count === 0 ? 'No unplanned epic members were observed.' : `${count} epic member${count === 1 ? ' is' : 's are'} not planned yet.`}`,
+      };
+    }
     return { title: 'No observed specs', text: 'Specs appear after the host publishes an observation.' };
+  };
+  const openEpics = () => {
+    const next: RouteState = { dest: 'epics' };
+    if (props.route.ws !== undefined) next.ws = props.route.ws;
+    props.onNavigate(next);
   };
   const emptyAction = () => {
     if (query()) return <button type="button" class="ds-btn ds-btn--primary" onClick={clearFilters}>Clear filters</button>;
     if (filter() === 'active') return <button type="button" class="ds-btn" onClick={() => void props.refresh()}>Refresh state</button>;
+    if (filter() === 'ready') return <button type="button" class="ds-btn ds-btn--primary" onClick={openEpics}>Open epics</button>;
     return undefined;
   };
   return (
@@ -154,16 +194,21 @@ function SpecsList(props: DestinationProps) {
           </Show>
           <Show
             when={rows().length}
-            fallback={
-              <EmptyState
-                symbol="◇"
-                title={emptyCopy().title}
-                text={emptyCopy().text}
-                action={emptyAction()}
-              />
-            }
+            fallback={<>
+              <Show when={!query() && filter() === 'ready'}>
+                <p class="list-hint">Specs that have started appear under Active.</p>
+              </Show>
+              <Show when={query() || filter() !== 'ready'}>
+                <EmptyState
+                  symbol="◇"
+                  title={emptyCopy().title}
+                  text={emptyCopy().text}
+                  action={emptyAction()}
+                />
+              </Show>
+            </>}
           >
-            <For each={rows()}>{record => <SpecsRow record={record} selected={record.key === props.route.id} context={context()} onSelect={props.onSelect} />}</For>
+            <For each={rows()}>{record => <SpecsRow record={record} selected={record.key === props.route.id} context={context()} assignments={props.assignments} onSelect={props.onSelect} />}</For>
           </Show>
         </Show>
       </div>
@@ -180,7 +225,11 @@ const SPEC_TABS: SectionTab[] = [
 const tabOf = (route: RouteState): 'overview' | 'activity' => route.tab === 'activity' ? 'activity' : 'overview';
 
 const headTone = (record: WireRecord): StatusTone =>
-  record.recent_completion ? 'success' : record.planned ? 'neutral' : attention(record) ? 'warning' : activeRun(record) && str(record.execution) && record.execution !== 'unknown' ? 'info' : 'neutral';
+  record.recent_completion ? 'success'
+    : record.planned || record.implementation_starting === true ? specReadiness(record).tone
+      : attention(record) ? 'warning' : activeRun(record) && str(record.execution) && record.execution !== 'unknown' ? 'info' : 'neutral';
+const headLabel = (record: WireRecord): string =>
+  record.planned || record.implementation_starting === true ? specReadiness(record).label : runState(record, runningUnconfirmed);
 
 export default function SpecsDestination(props: DestinationProps) {
   const record = () => props.records.find(item => item.key === props.route.id) ?? null;
@@ -200,6 +249,10 @@ export default function SpecsDestination(props: DestinationProps) {
   const activityTab = () => tabOf(props.route) === 'activity';
   const [coverageIntent, setCoverageIntent] = createSignal(false);
   const [activityLoadingDelayed, setActivityLoadingDelayed] = createSignal(false);
+  // Footer target for the readiness action contract: the selected SpecReadiness
+  // portals its state actions here so the primary stays in the fixed action
+  // region; the destination owns only the mount, never the actions.
+  const [actionsMount, setActionsMount] = createSignal<HTMLElement>();
   let activityLoadingTimer: ReturnType<typeof setTimeout> | undefined;
   createEffect(() => {
     if (!activityTab() || view().read !== 'loading') {
@@ -388,6 +441,14 @@ export default function SpecsDestination(props: DestinationProps) {
     if (props.route.ws !== undefined) next.ws = props.route.ws;
     props.onNavigate(next);
   };
+  const openEpics = () => {
+    const next: RouteState = { dest: 'epics' };
+    if (props.route.ws !== undefined) next.ws = props.route.ws;
+    props.onNavigate(next);
+  };
+  const readyEmpty = (): boolean => filterOf(props.route) === 'ready'
+    && !(props.route.q ?? '').trim()
+    && visibleSpecs(props.records, 'ready', '').length === 0;
   const recoveryActions = () => <>
     <Show when={recovery() === 'offline'}>
       <button class="ds-btn ds-btn--primary" type="button" onClick={props.onRetryConnection}>Retry connection</button>
@@ -405,34 +466,66 @@ export default function SpecsDestination(props: DestinationProps) {
         listLabel="Specs"
         list={<SpecsList {...props} />}
       >
-        <div class="object-head">
-          <div class="object-top">
-            <h2>{headTitle()}</h2>
-            <Show when={record()}>{item => <StatusText tone={headTone(item())}>{runState(item(), runningUnconfirmed)}</StatusText>}</Show>
+        <Show when={record() || !readyEmpty()}>
+          <div class="object-head">
+            <div class="object-top">
+              <h2>{headTitle()}</h2>
+              <Show when={record()}>{item => <StatusText tone={headTone(item())}>{headLabel(item())}</StatusText>}</Show>
+            </div>
+            <p>{record() ? `${str(record()!.workspace)} / ${str(record()!.package_ref)}` : 'No observed record for this selection'}</p>
           </div>
-          <p>{record() ? `${str(record()!.workspace)} / ${str(record()!.package_ref)}` : 'No observed record for this selection'}</p>
-        </div>
-        <SectionTabs label="Spec sections" tabs={SPEC_TABS} active={tabOf(props.route)} onSelect={selectTab} />
+          <SectionTabs label="Spec sections" tabs={SPEC_TABS} active={tabOf(props.route)} onSelect={selectTab} />
+        </Show>
         <div class="detail-body">
           <Show when={record()}>
             {item => <>
               <Show when={item().planned}>
                 <Show when={!activityTab()}>
-                  <article class="detail planned-spec-summary">
-                    <div class="eyebrow">{str(item().workspace)} / Planned spec</div>
-                    <div class="detail-title"><div><h2>{base(item().package)}</h2><p class="subtitle mono">{str(item().package_ref)}</p></div><span class="pill muted">Planned</span></div>
-                    <p class="section">{str(item().activity || item().obligation || 'Resume this spec package.')}</p>
-                    <p class="small muted">Review the brief and agent settings, then launch.</p>
-                  </article>
-                  <SpecOverview record={item()} assignments={props.assignments} context={context()} onOpenAgent={openAgent} onOpenEpic={openEpic} />
-                  <PlannedAssignment record={item()} live={props.live && props.specsLive} token={props.token} />
+                  <SpecReadiness
+                    record={item()}
+                    records={props.records}
+                    assignments={props.assignments}
+                    epics={props.epics}
+                    live={props.live && props.specsLive}
+                    token={props.token}
+                    onOpenAgent={openAgent}
+                    onOpenEpic={openEpic}
+                    onOpenSpec={key => props.onSelect(key)}
+                    onOpenPackageFiles={props.onOpenPackageFiles}
+                    canOpenPackageFiles={props.canOpenPackageFiles}
+                    onNavigate={props.onNavigate}
+                    actionsMount={actionsMount()}
+                  />
                 </Show>
               </Show>
               <Show when={!item().planned}>
                 <Show when={!activityTab()}>
-                  <SpecOverview record={item()} assignments={props.assignments} context={context()} onOpenAgent={openAgent} onOpenEpic={openEpic} />
+                  <Show
+                    when={item().implementation_starting === true}
+                    fallback={<SpecOverview record={item()} assignments={props.assignments} context={context()} onOpenAgent={openAgent} onOpenEpic={openEpic} />}
+                  >
+                    <SpecReadiness
+                      record={item()}
+                      records={props.records}
+                      assignments={props.assignments}
+                      epics={props.epics}
+                      live={props.live && props.specsLive}
+                      token={props.token}
+                      onOpenAgent={openAgent}
+                      onOpenEpic={openEpic}
+                      onOpenSpec={key => props.onSelect(key)}
+                      onOpenPackageFiles={props.onOpenPackageFiles}
+                      canOpenPackageFiles={props.canOpenPackageFiles}
+                      onNavigate={props.onNavigate}
+                      actionsMount={actionsMount()}
+                    />
+                  </Show>
                   <Show when={record()}>
-                    <Show when={priorAssignment()?.key} keyed fallback={<details class="section"><summary>Run spec again</summary><PlannedAssignment record={item()} live={props.live && props.specsLive} token={props.token}/></details>}>
+                    <Show
+                      when={priorAssignment()?.key}
+                      keyed
+                      fallback={<SpecImplementEntry record={item()} live={props.live && props.specsLive} token={props.token} onOpenPackageFiles={props.onOpenPackageFiles} canOpenPackageFiles={props.canOpenPackageFiles} onNavigate={props.onNavigate} />}
+                    >
                       {_key => <RelaunchAssignment assignment={priorAssignment()} live={props.live && props.specsLive} token={props.token}/>}
                     </Show>
                   </Show>
@@ -491,7 +584,17 @@ export default function SpecsDestination(props: DestinationProps) {
               </Show>
             </Show>
             <Show when={!activityTab()}>
-              <EmptyState symbol="◇" title="Select an observed spec" text="Choose a package to inspect its obligation, activity and files." />
+              <Show
+                when={readyEmpty()}
+                fallback={<EmptyState symbol="◇" title="Select an observed spec" text="Choose a package to inspect its obligation, activity and files." />}
+              >
+                <EmptyState
+                  symbol="◇"
+                  title="No specs are ready to implement"
+                  text={readyEmptyText(props.epics)}
+                  action={<button type="button" class="ds-btn ds-btn--primary" onClick={openEpics}>Open epics</button>}
+                />
+              </Show>
             </Show>
           </Show>
         </div>
@@ -500,19 +603,29 @@ export default function SpecsDestination(props: DestinationProps) {
             <ActionBar>
               <Show when={item().recent_completion} fallback={
                 <Show when={item().planned} fallback={<>
-                  {recoveryActions()}
+                  <Show when={activityTab() || item().implementation_starting !== true}>
+                    {recoveryActions()}
+                  </Show>
                   <Show when={activityTab()} fallback={<>
-                    <button class={recovery() === null ? 'ds-btn ds-btn--primary' : 'ds-btn'} type="button" onClick={() => selectTab('activity')}>Open spec</button>
-                    <Show when={completionEligible(item())}>
-                      <button
-                        class="ds-btn"
-                        type="button"
-                        disabled={!props.completionToken}
-                        aria-describedby={!props.completionToken ? 'completion-help' : undefined}
-                        onClick={() => openCompletion(item())}
-                      >Mark complete</button>
-                      <Show when={!props.completionToken}>
-                        <p id="completion-help" class="small muted">{completionHelp()}</p>
+                    <Show
+                      when={item().implementation_starting !== true}
+                      fallback={<>
+                        <div class="readiness-actions-mount" ref={element => setActionsMount(element)} />
+                        <button class="ds-btn" type="button" disabled={!props.canOpenPackageFiles(item())} onClick={() => props.onOpenPackageFiles(item())}>Open files</button>
+                      </>}
+                    >
+                      <button class={recovery() === null ? 'ds-btn ds-btn--primary' : 'ds-btn'} type="button" onClick={() => selectTab('activity')}>Open spec</button>
+                      <Show when={completionEligible(item())}>
+                        <button
+                          class="ds-btn"
+                          type="button"
+                          disabled={!props.completionToken}
+                          aria-describedby={!props.completionToken ? 'completion-help' : undefined}
+                          onClick={() => openCompletion(item())}
+                        >Mark complete</button>
+                        <Show when={!props.completionToken}>
+                          <p id="completion-help" class="small muted">{completionHelp()}</p>
+                        </Show>
                       </Show>
                     </Show>
                   </>}>
@@ -531,13 +644,14 @@ export default function SpecsDestination(props: DestinationProps) {
                       {path => <button class={recovery() === null ? 'ds-btn ds-btn--primary' : 'ds-btn'} type="button" onClick={() => props.onOpenPackageFiles(item(), path())}>Open work tour</button>}
                     </Show>
                   </Show>
-                  <Show when={assignmentKey()}>
+                  <Show when={assignmentKey() && (activityTab() || item().implementation_starting !== true)}>
                     <button class="ds-btn" type="button" onClick={openAgent}>Open agent</button>
                   </Show>
                 </>}>
-                  <Show when={activityTab()} fallback={
-                    <button class="ds-btn" type="button" disabled={!props.canOpenPackageFiles(item())} onClick={() => props.onOpenPackageFiles(item())}>Open files</button>
-                  }>
+                  <Show when={activityTab()} fallback={<>
+                    <div class="readiness-actions-mount" ref={element => setActionsMount(element)} />
+                    <button class="ds-btn" type="button" disabled={!props.canOpenPackageFiles(item())} onClick={() => props.onOpenPackageFiles(item())}>Open spec files</button>
+                  </>}>
                     {recoveryActions()}
                     <button class="ds-btn" type="button" disabled={!props.canOpenPackageFiles(item())} onClick={() => props.onOpenPackageFiles(item())}>Open files</button>
                   </Show>

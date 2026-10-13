@@ -16,7 +16,7 @@ import { getConversationReturnId } from './conversations-state';
 import { armLaunchPickerIntent, cancelLaunchPickerIntent, createLaunchPickerIntent, shouldApplyPickerReset, shouldResetAcknowledgedDraft } from './launch-picker-intent';
 import { agentCoverage, effectiveAgentFilter, retainSelectedAgent, visibleAgents } from './agent-state';
 
-type Filter = 'active' | 'attention' | 'completed' | 'planned';
+type Filter = 'active' | 'attention' | 'completed' | 'ready';
 type Catalog = WorkspaceCatalog;
 const liveBrowser = () => location.protocol !== 'file:';
 
@@ -73,7 +73,9 @@ export default function App() {
   const query = () => route().q ?? '';
   const filter = (): Filter => {
     const value = route().filter;
-    return value === 'attention' || value === 'completed' || value === 'planned' ? value : 'active';
+    if (value === 'attention' || value === 'completed') return value;
+    if (value === 'ready' || value === 'planned') return 'ready';
+    return 'active';
   };
   const q = () => query().trim().toLowerCase();
   const visibleRecords = createMemo(() => visibleSpecs(scopedRecords(), filter(), query()));
@@ -224,7 +226,7 @@ export default function App() {
     const next: RouteState = { dest: 'specs', id: target.key };
     if (scopeWs() !== undefined) next.ws = scopeWs();
     if (target.recent_completion) next.filter = 'completed';
-    else if (target.planned) next.filter = 'planned';
+    else if (target.planned) next.filter = 'ready';
     go(next);
   }
   function canOpenPackageFiles(item: WireRecord) {

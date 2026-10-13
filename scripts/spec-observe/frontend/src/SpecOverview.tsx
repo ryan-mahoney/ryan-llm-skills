@@ -34,12 +34,6 @@ const safeHttpUrl = (value: unknown): string | null => {
   const url = text(value);
   return /^https?:\/\//i.test(url) ? url : null;
 };
-const plannedTotalText = (record: WireRecord): string => {
-  const total = specProgress(record).total;
-  if (total === null) return 'Spec size unknown';
-  if (total === 0) return 'No prepared steps';
-  return `${total} prepared step${total === 1 ? '' : 's'}`;
-};
 const completionNote = (record: WireRecord): string => {
   const basis = text(record.completion_basis);
   if (basis === 'manual') return 'Marked complete by the operator. Accepted step evidence and merge status remain as recorded.';
@@ -297,53 +291,6 @@ export default function SpecOverview(props: SpecOverviewProps) {
                 </td>
               </tr>
               <tr><td>Merge basis</td><td>{mergeBasisText(record())}</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-    </Show>
-    <Show when={record().planned}>
-      <div class="progress-head">
-        <strong>{plannedTotalText(record())}</strong>
-        <span class="muted">No run recorded</span>
-      </div>
-      <div
-        class="progress-track"
-        role="progressbar"
-        aria-label="Prepared step total"
-        aria-valuemin="0"
-        aria-valuemax={specProgress(record()).total ?? 1}
-        aria-valuetext={plannedTotalText(record())}
-      />
-      <section class="section">
-        <div class="section-heading"><h3>Planned obligation</h3></div>
-        <div class="obligation"><div class="status-markdown" innerHTML={statusMarkdown(text(record().obligation) || 'No obligation summary was observed.')} /></div>
-      </section>
-      <section class="section">
-        <div class="section-heading"><h3>Related epic</h3></div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th scope="col">Epic</th><th scope="col">Progress</th></tr></thead>
-            <tbody>
-              <tr>
-                <td>
-                  <Show when={relatedEpic()} fallback={<span>{text(record().epic?.epic) ? `Epic ${text(record().epic.epic)}` : 'Epic'}</span>}>
-                    {epic => <a
-                      class="text-link"
-                      href={formatHash({ dest: 'epics', id: epicKey(epic()) })}
-                      onClick={event => {
-                        event.preventDefault();
-                        props.onOpenEpic(epicKey(epic()));
-                      }}
-                    >{epicTitle(epic())}</a>}
-                  </Show>
-                </td>
-                <td>
-                  <Show when={relatedEpic()} fallback={text(record().epic?.epic) ? 'Epic record unavailable in this snapshot' : 'Not recorded'}>
-                    {epic => `${epicStats(epic()).landed} of ${epicStats(epic()).total} landed`}
-                  </Show>
-                </td>
-              </tr>
             </tbody>
           </table>
         </div>

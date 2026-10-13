@@ -10,6 +10,9 @@ SENTINEL_EVIDENCE_DIR=/tmp/sentinel-handoff-evidence uv run --script \
 SENTINEL_EVIDENCE_DIR=/tmp/sentinel-handoff-evidence uv run --script \
   scripts/spec-observe/frontend/handoff-browser-check.py --case result
 
+SENTINEL_EVIDENCE_DIR=/tmp/sentinel-handoff-evidence uv run --script \
+  scripts/spec-observe/frontend/handoff-browser-check.py --case specs
+
 The fixture runs with SENTINEL_PLANNED_LAUNCH=1 so the real package resolver,
 saved brief, skill lookup and contract digest drive the bound review and result
 while the final worker process boundary stays fake. Reference captures load the
@@ -36,11 +39,11 @@ HOLDING_RUN = "7c2a91d4-3e58-4b06-a1f7-95d0e6b83c12"
 parser = argparse.ArgumentParser()
 parser.add_argument("--case", default="review")
 arguments = parser.parse_args()
-if arguments.case not in ("review", "result"):
+if arguments.case not in ("review", "result", "specs"):
     raise SystemExit(f"unsupported case: {arguments.case}")
 
 root = Path(__file__).resolve().parent
-evidence = Path(os.environ.get("SENTINEL_EVIDENCE_DIR", "/tmp/sentinel-handoff-evidence")) / ("06-states" if arguments.case == "result" else "04-states")
+evidence = Path(os.environ.get("SENTINEL_EVIDENCE_DIR", "/tmp/sentinel-handoff-evidence")) / ("07-states" if arguments.case == "specs" else "06-states" if arguments.case == "result" else "04-states")
 evidence.mkdir(parents=True, exist_ok=True)
 started = time.monotonic()
 report = {"status": "failed", "case": arguments.case, "scenarios": [], "pageErrors": [], "captures": []}
@@ -60,6 +63,8 @@ def design_screens() -> Path | None:
 
 fixture_env = dict(os.environ)
 fixture_env["SENTINEL_PLANNED_LAUNCH"] = "1"
+if arguments.case == "specs":
+    fixture_env["SENTINEL_SPECS_READINESS"] = "1"
 fixture = subprocess.Popen(
     ["node", str(root / "browser-fixture.mjs")],
     stdout=subprocess.PIPE,
@@ -85,7 +90,7 @@ try:
         if screens:
             reference = browser.new_context(viewport={"width": 1280, "height": 900}, device_scale_factor=1)
             reference_page = reference.new_page()
-            reference_screens = ("06-plan-result", "13-implement-result") if arguments.case == "result" else ("04-plan-review", "05-plan-review-denied", "11-implement-review", "12-implement-review-denied")
+            reference_screens = ("06-plan-result", "13-implement-result") if arguments.case == "result" else ("07-specs-ready", "08-spec-ready-waiting", "09-spec-ready-unverified", "10-specs-ready-empty") if arguments.case == "specs" else ("04-plan-review", "05-plan-review-denied", "11-implement-review", "12-implement-review-denied")
             for name in reference_screens:
                 for width in (1280, 1600):
                     reference_page.set_viewport_size({"width": width, "height": 900})
@@ -93,11 +98,15 @@ try:
                     screenshot = evidence / f"reference-{name}-{width}.png"
                     reference_page.screenshot(path=str(screenshot), full_page=True)
                     report["captures"].append(str(screenshot))
-                    if arguments.case == "result":
+                    if arguments.case in ("result", "specs"):
                         # Scrolled lower-pane evidence: full-page captures clip
                         # the lower inner content, so scroll to the populated
                         # lower content and capture the viewport as well.
-                        reference_page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+                        reference_page.evaluate("""() => {
+                            const pane = document.querySelector('.detail-body');
+                            if (pane) pane.scrollTo(0, pane.scrollHeight);
+                            window.scrollTo(0, document.body.scrollHeight);
+                        }""")
                         reference_page.wait_for_timeout(300)
                         scrolled = evidence / f"reference-{name}-{width}-scrolled.png"
                         reference_page.screenshot(path=str(scrolled), full_page=False)
@@ -141,6 +150,9 @@ try:
         def capture(name):
             for width in (1280, 1600):
                 page.set_viewport_size({"width": width, "height": 900})
+                # Normal state captures start from the pane top: the live detail
+                # keeps the previous scroll when the selected record changes.
+                page.evaluate("() => { const pane = document.querySelector('.detail-pane .detail-body'); if (pane) pane.scrollTo(0, 0); }")
                 path = evidence / f"production-{name}-{width}.png"
                 page.screenshot(path=str(path), full_page=True)
                 report["captures"].append(str(path))
@@ -148,14 +160,15 @@ try:
 
         def capture_scrolled(name):
             # Scrolled lower-pane evidence: full-page captures clip inner
-            # overflow panes, so scroll the review flow to its lower content
-            # and capture the viewport at both widths.
+            # overflow panes, so scroll the actual pane (launch flow or spec
+            # detail) to its lower content and capture the viewport at both
+            # widths.
             for width in (1280, 1600):
                 page.set_viewport_size({"width": width, "height": 900})
                 page.evaluate("""() => {
                     const target = document.querySelector('#launch-review') || document.querySelector('.flow');
                     if (target) target.scrollIntoView({block: 'end'});
-                    const pane = document.querySelector('.full-page');
+                    const pane = document.querySelector('.full-page') || document.querySelector('.detail-pane .detail-body');
                     if (pane) pane.scrollTo(0, pane.scrollHeight);
                     window.scrollTo(0, document.body.scrollHeight);
                 }""")
@@ -523,10 +536,164 @@ try:
             cold_context.close()
             report["scenarios"].append("Failed and cold result links preserve the exact requested and local inspection identity without fabricating success")
 
+        def run_specs():
+            # Ready spec states through the real route and hand-off: readiness
+            # facts, per-state primaries, cold planned alias normalization and
+            # the legacy relaunch protection, all with no thread creation.
+            deadline = started + 180
+
+            def check_deadline(label):
+                if time.monotonic() > deadline:
+                    raise RuntimeError(f"specs case exceeded the 180 second deadline at {label}")
+
+            def specs_route(**params):
+                return receipt["url"] + "/#/specs?" + urlencode({"ws": "fixture", **params})
+
+            def readiness_fact(key):
+                return page.locator(f"#spec-readiness [data-fact={key}]")
+
+            check_deadline("start")
+            page.goto(specs_route(filter="ready"), wait_until="domcontentloaded")
+            expect(page.get_by_role("button", name="Ready", exact=True)).to_have_attribute("aria-pressed", "true")
+            expect(page.locator(".list-caption")).to_contain_text("Prepared, not started")
+            rows = page.locator(".records button.record[data-key]")
+            expect(rows).to_have_count(6)
+            expect(rows.nth(0).locator(".run-title")).to_have_text("browser")
+            expect(rows.nth(1).locator(".run-title")).to_have_text("decision-browser")
+            expect(rows.nth(2).locator(".run-title")).to_have_text("waiting-browser")
+            expect(rows.nth(3).locator(".run-title")).to_have_text("incomplete-browser")
+            report["scenarios"].append("Ready lists the scoped inventory in readiness order ahead of unplanned and legacy rows")
+
+            rows.nth(0).click()
+            expect(page.locator(".object-head h2")).to_have_text("browser")
+            expect(page.locator("#spec-readiness")).to_have_attribute("data-state", "ready")
+            expect(readiness_fact("prepared-steps")).to_contain_text("3")
+            expect(readiness_fact("preparation-report")).to_contain_text("Prepared")
+            expect(readiness_fact("execution-history")).to_contain_text("None")
+            expect(readiness_fact("prerequisites")).to_contain_text("All landed")
+            expect(page.locator("#spec-readiness-actions .ds-btn--primary")).to_have_count(1)
+            implement = page.get_by_role("button", name="Implement spec", exact=True)
+            expect(implement).to_be_enabled()
+            expect(page.locator("#planned-assignment")).to_have_count(0)
+            report["scenarios"].append("Ready detail renders the four observed facts with exactly one enabled Implement spec primary and no legacy launch form")
+            capture("ready")
+            capture_scrolled("ready")
+
+            # Implement spec uses the step-8 hand-off: the canonical target
+            # resolves from the recorded inventory and no thread is created.
+            implement.click()
+            expect(page.locator("#launch-heading")).to_have_text("Review implementation assignment")
+            expect(fact("target")).to_contain_text("fixture-repo")
+            expect(fact("target")).not_to_contain_text("main")
+            assert len(posts("dispatchSaveBrief")) == 1
+            assert posts("create") == []
+            report["scenarios"].append("Implement spec opens the bound review with the canonical target alias and no thread creation")
+            capture("implement-review")
+            check_deadline("implement-review")
+
+            # Waiting cannot submit; its single primary is the named
+            # prerequisite and the disabled Implement keeps its reason.
+            page.goto(specs_route(filter="ready"), wait_until="domcontentloaded")
+            page.locator(".records button.record").filter(has_text="waiting-browser").click()
+            expect(page.locator("#spec-readiness")).to_have_attribute("data-state", "waiting")
+            expect(readiness_fact("prerequisites")).to_contain_text("other-browser")
+            saves_before_waiting = len(posts("dispatchSaveBrief"))
+            disabled_implement = page.get_by_role("button", name="Implement spec", exact=True)
+            expect(disabled_implement).to_be_disabled()
+            expect(page.locator("#spec-readiness-actions [data-action-note=implement]")).to_contain_text("Waiting on other-browser")
+            primary = page.locator("#spec-readiness-actions .ds-btn--primary")
+            expect(primary).to_have_count(1)
+            expect(primary).to_have_text("Open prerequisite")
+            capture("waiting")
+            capture_scrolled("waiting")
+            primary.click()
+            expect(page.locator(".object-head h2")).to_have_text("other-browser")
+            assert len(posts("dispatchSaveBrief")) == saves_before_waiting
+            assert posts("create") == []
+            report["scenarios"].append("Waiting keeps one Open prerequisite primary, disables Implement with its reason and opens the named prerequisite without a submission")
+
+            # Resume planning derives its stage from the intact proposal facts;
+            # no architecture stage is re-run and no thread is created.
+            page.locator(".records button.record").filter(has_text="incomplete-browser").click()
+            expect(page.locator("#spec-readiness")).to_have_attribute("data-state", "incomplete")
+            expect(readiness_fact("prepared-steps")).to_contain_text("4")
+            expect(page.locator("#spec-readiness-actions .ds-btn--primary")).to_have_count(1)
+            capture("incomplete")
+            capture_scrolled("incomplete")
+            resume = page.get_by_role("button", name="Resume planning", exact=True)
+            expect(resume).to_be_enabled()
+            resume.click()
+            expect(page.locator("#launch-heading")).to_have_text("Review planning assignment")
+            expect(fact("stages")).to_contain_text("spec-write")
+            expect(fact("stages")).not_to_contain_text("spec-architect-initial")
+            expect(fact("stop")).to_contain_text("Prepared")
+            assert posts("create") == []
+            report["scenarios"].append("Resume planning derives the intact spec-write stage without re-architecture and creates no thread")
+            capture("resume-planning")
+            check_deadline("resume-planning")
+
+            # An unresolved decision stays a discuss/read-files action.
+            page.goto(specs_route(filter="ready"), wait_until="domcontentloaded")
+            page.locator(".records button.record").filter(has_text="decision-browser").click()
+            expect(page.locator("#spec-readiness")).to_have_attribute("data-state", "decision")
+            expect(page.locator("#spec-readiness-actions .ds-btn--primary")).to_have_count(1)
+            expect(page.locator("#spec-readiness-actions .ds-btn--primary")).to_have_text("Open preparation report")
+            expect(page.get_by_role("button", name="Resume planning", exact=True)).to_have_count(0)
+            report["scenarios"].append("A recorded decision keeps a discuss/read-files primary instead of resume planning")
+
+            # Cold planned link normalizes to Ready; imported older fields stay
+            # unknown with no launch and the observed reason.
+            page.goto(specs_route(filter="planned"), wait_until="domcontentloaded")
+            expect(page.get_by_role("button", name="Ready", exact=True)).to_have_attribute("aria-pressed", "true")
+            expect(page.locator(".list-caption")).to_contain_text("Prepared, not started")
+            page.locator(".records button.record").filter(has_text="legacy-browser").click()
+            expect(page.locator("#spec-readiness")).to_have_attribute("data-state", "unknown")
+            expect(page.get_by_role("button", name="Implement spec", exact=True)).to_be_disabled()
+            expect(page.locator("#spec-readiness-actions [data-action-note=implement]")).to_contain_text("New preparation facts are unavailable")
+            report["scenarios"].append("Cold planned links normalize to Ready and imported older fields show unknown with no launch")
+
+            # Search-empty and Ready-empty stay distinct.
+            page.locator("#find-record").fill("no-such-spec")
+            expect(page.get_by_role("heading", name="No matching specs", exact=True)).to_be_visible()
+            expect(page.get_by_role("button", name="Clear filters", exact=True)).to_be_visible()
+            page.locator("#find-record").fill("")
+            page.goto(receipt["url"] + "/#/specs?" + urlencode({"ws": "other", "filter": "ready"}), wait_until="domcontentloaded")
+            expect(page.get_by_role("heading", name="No specs are ready to implement", exact=True)).to_be_visible()
+            expect(page.locator(".list-hint")).to_contain_text("started appear under Active")
+            expect(page.get_by_role("button", name="Open epics", exact=True)).to_be_visible()
+            report["scenarios"].append("Ready-empty explains unplanned epic work with a list hint and Open epics while search-empty keeps Clear filters")
+            capture("ready-empty")
+
+            # Legacy relaunch protection: a published end-to-end assignment
+            # keeps the RelaunchAssignment review entry beside the starting
+            # projection, still with no thread creation.
+            control("publish-assignment", "a1b2c3d4-0000-4000-8000-000000000011", skill="spec-end-to-end", package=receipt["package"])
+            time.sleep(1.3)
+            page.goto(receipt["url"] + "/#/agents?ws=fixture", wait_until="domcontentloaded")
+            with page.expect_response(lambda response: "/api/state" in response.url) as response:
+                page.locator("header").get_by_role("button", name="Refresh state", exact=True).click()
+            assert response.value.status == 200
+            page.goto(receipt["url"] + "/#/specs?" + urlencode({"ws": "fixture", "filter": "active"}), wait_until="domcontentloaded")
+            page.locator(".records button.record").filter(has_text="browser").first.click()
+            expect(page.get_by_role("heading", name="Run spec again", exact=True)).to_be_visible()
+            expect(page.get_by_role("button", name="Preview relaunch", exact=True)).to_be_visible()
+            expect(page.locator("#spec-readiness")).to_have_attribute("data-state", "starting")
+            expect(readiness_fact("prerequisites")).to_contain_text("All landed")
+            footer_primary = page.locator(".detail-actions .ds-btn--primary")
+            expect(footer_primary).to_have_count(1)
+            expect(footer_primary).to_have_text("Open agent")
+            assert posts("create") == []
+            report["scenarios"].append("A published assignment keeps the starting projection and the legacy relaunch entry with no thread creation")
+            capture("starting-relaunch")
+            control("clear-launch-publications")
+            check_deadline("end")
+
         if arguments.case == "review":
             run_review()
-        else:
+        elif arguments.case == "result":
             run_result()
+        else:
+            run_specs()
 
         assert not report["pageErrors"], report["pageErrors"]
         assert all(url.startswith(receipt["url"] + "/") for url in post_urls), post_urls

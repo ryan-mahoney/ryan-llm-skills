@@ -146,6 +146,85 @@ test('direct bodies bind repository_id/spec_package with identity-only reference
   assertNoOverrides(calls);
 });
 
+// A bound direct request carries the package's canonical primary path while
+// the workspace inventory declares the repository as ~/relative/symlink text:
+// the stored physical canonical_path resolves it to the registered id, and the
+// request context itself stays unchanged. The declared-path fallback stays for
+// older snapshots and the fixture.
+test('direct canonical package target maps repository id via canonical_path without mutating the context', async (t) => {
+  const workspace = {
+    directory: '/home/operator/projects/ws-canonical',
+    repositories: [{ id: 'repo-canonical', path: '~/checkouts/primary', status: 'ok', canonical_path: '/checkout/primary' }],
+  };
+  const calls = scopeFetch(t, [
+    jsonResponse(200, workspace),
+    jsonResponse(200, {}),
+    jsonResponse(200, { record: { assignment_id: ASSIGNMENT_ID }, contractDigest: DIGEST }),
+    jsonResponse(200, workspace),
+    jsonResponse(200, { assignment: { assignment_id: ASSIGNMENT_ID }, observation: { assignment_id: ASSIGNMENT_ID } }),
+  ]);
+  const ctx: LaunchContext = { ws: 'ws-canonical', target: '/checkout/primary', package: '/storage/proj/specs/canonical' };
+  const original = { ...ctx };
+  const preview = await previewLaunchAssignment(ctx, { requestId: REQUEST_ID, assignmentId: ASSIGNMENT_ID }, TOKEN);
+  const launch = await submitLaunchAssignment(ctx, { requestId: REQUEST_ID, assignmentId: ASSIGNMENT_ID, expectedDigest: DIGEST }, TOKEN);
+
+  assert.deepEqual(preview, { record: { assignment_id: ASSIGNMENT_ID }, contractDigest: DIGEST });
+  assert.deepEqual(launch, { assignment: { assignment_id: ASSIGNMENT_ID }, observation: { assignment_id: ASSIGNMENT_ID } });
+  assert.deepEqual(ctx, original);
+  const [workspaceCall, prepareCall, previewCall, workspaceAgain, launchCall] = calls;
+  assert.equal(calls.length, 5);
+  assert.equal(workspaceCall.url, '/api/workspace?id=ws-canonical');
+  assert.equal(prepareCall.url, '/api/dispatch/prepare-spec-target');
+  assert.deepEqual(prepareCall.body, { workspace_id: 'ws-canonical', spec_package: '/storage/proj/specs/canonical', repository_id: 'repo-canonical' });
+  assert.equal(previewCall.url, '/api/dispatch/preview');
+  assert.deepEqual(previewCall.body, {
+    workspace_id: 'ws-canonical', repository_id: 'repo-canonical', request_id: REQUEST_ID, assignment_id: ASSIGNMENT_ID,
+    instructions: FIXED_INSTRUCTION, references: [], skill: 'general', spec_package: '/storage/proj/specs/canonical',
+  });
+  assert.equal(workspaceAgain.url, '/api/workspace?id=ws-canonical');
+  assert.equal(launchCall.url, '/api/dispatch/launch');
+  assert.deepEqual(launchCall.body, { ...previewCall.body, expectedDigest: DIGEST });
+  assertNoOverrides([prepareCall, previewCall, launchCall]);
+});
+
+// An ambiguous usable mapping refuses before prepare/preview; only the
+// workspace read happens.
+test('direct canonical package target refuses an ambiguous usable mapping before any POST', async (t) => {
+  const calls = scopeFetch(t, [jsonResponse(200, {
+    directory: '/home/operator/projects/ws-canonical',
+    repositories: [
+      { id: 'repo-one', path: '/checkout/primary', status: 'ok', canonical_path: '/checkout/primary' },
+      { id: 'repo-two', path: '~/checkouts/primary', status: 'ok', canonical_path: '/checkout/primary' },
+    ],
+  })]);
+  const ctx: LaunchContext = { ws: 'ws-canonical', target: '/checkout/primary', package: '/storage/proj/specs/canonical' };
+  await assert.rejects(
+    previewLaunchAssignment(ctx, { requestId: REQUEST_ID, assignmentId: ASSIGNMENT_ID }, TOKEN),
+    /matches more than one repository/,
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, '/api/workspace?id=ws-canonical');
+});
+
+// A matching canonical_path on an unusable record never counts, and an absent
+// mapping refuses before prepare/preview.
+test('direct canonical package target refuses an absent or unusable mapping before any POST', async (t) => {
+  const calls = scopeFetch(t, [jsonResponse(200, {
+    directory: '/home/operator/projects/ws-canonical',
+    repositories: [
+      { id: 'repo-other', path: '/checkout/other', status: 'ok', canonical_path: '/checkout/other' },
+      { id: 'repo-unusable', path: '~/checkouts/primary', status: 'not_git', canonical_path: '/checkout/primary' },
+    ],
+  })]);
+  const ctx: LaunchContext = { ws: 'ws-canonical', target: '/checkout/primary', package: '/storage/proj/specs/canonical' };
+  await assert.rejects(
+    previewLaunchAssignment(ctx, { requestId: REQUEST_ID, assignmentId: ASSIGNMENT_ID }, TOKEN),
+    /is not a usable repository/,
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, '/api/workspace?id=ws-canonical');
+});
+
 // The bound direct surface sends the publication authority it was seeded with
 // on preview and launch; thread requests keep the stored binding and never
 // carry it. Authority-unset defaults stay covered by the earlier

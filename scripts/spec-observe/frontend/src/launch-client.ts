@@ -3,7 +3,7 @@
 // differently but return the same review and launch facts; this module owns
 // endpoint selection, the fixed instruction and the field mapping. It adds no
 // fetch stack: api.ts stays the only JSON decoder.
-import { postJson } from './api';
+import { getJson, postJson } from './api';
 import type { InputPreview, ReferenceIdentity } from './composerTypes';
 import type { WireRecord } from './model';
 
@@ -88,6 +88,34 @@ const directAssignmentBody = (ctx: LaunchContext, ids: LaunchPreviewInput) => ({
   ...(ctx.authority ? { publication_authority: ctx.authority } : {}),
 });
 
+// A bound direct hand-off carries the package's canonical primary path, while
+// the assignment backend binds targets by repository id. Resolve the requested
+// absolute path against the workspace's usable repository inventory: exactly
+// one usable repository must match its stored canonical_path (physical
+// realpath) or, for older snapshots, its declared path as written or relative
+// to the workspace directory. Already-resolved repository ids, generic direct
+// contexts and thread contexts pass through, and an absent or ambiguous match
+// refuses explicitly instead of guessing a package alias.
+const boundRepositoryId = async (ctx: LaunchContext, signal?: AbortSignal): Promise<string | null> => {
+  if (ctx.thread || !ctx.package || typeof ctx.target !== 'string' || !ctx.target.startsWith('/')) return ctx.target ?? null;
+  const workspace = await getJson<WireRecord>('/api/workspace?' + new URLSearchParams({ id: ctx.ws }).toString(), signal);
+  const directory = typeof workspace.directory === 'string' ? workspace.directory.replace(/\/+$/, '') : '';
+  const declares = (repository: WireRecord): boolean => {
+    // The stored physical checkout wins; the declared path stays the fallback
+    // for older snapshots and fixtures that predate canonical_path.
+    if (repository.canonical_path === ctx.target) return true;
+    const path = repository.path;
+    if (typeof path !== 'string' || path === '' || path.startsWith('~')) return false;
+    if (path === ctx.target) return true;
+    return !path.startsWith('/') && directory !== '' && `${directory}/${path.replace(/^\.\//, '')}` === ctx.target;
+  };
+  const matches = (Array.isArray(workspace.repositories) ? workspace.repositories : [])
+    .filter(repository => repository && repository.status === 'ok' && typeof repository.id === 'string' && repository.id && declares(repository));
+  if (matches.length === 0) throw new Error(`The package target ${ctx.target} is not a usable repository in this workspace.`);
+  if (matches.length > 1) throw new Error(`The package target ${ctx.target} matches more than one repository in this workspace.`);
+  return matches[0].id as string;
+};
+
 export function saveLaunchBrief(ctx: LaunchContext, requestId: string, brief: LaunchBriefInput, token: string, signal?: AbortSignal): Promise<WireRecord> {
   if (ctx.thread) {
     return postJson<WireRecord>(THREAD_SAVE, {
@@ -108,19 +136,21 @@ export function saveLaunchBrief(ctx: LaunchContext, requestId: string, brief: La
 }
 
 export async function previewLaunchAssignment(ctx: LaunchContext, input: LaunchPreviewInput, token: string, signal?: AbortSignal): Promise<LaunchPreview> {
-  if (ctx.package) await postJson('/api/dispatch/prepare-spec-target', {
-    workspace_id: ctx.ws, spec_package: ctx.package,
-    ...(ctx.thread ? { thread_id: ctx.thread } : { repository_id: ctx.target }),
+  const bound: LaunchContext = { ...ctx, target: await boundRepositoryId(ctx, signal) };
+  if (bound.package) await postJson('/api/dispatch/prepare-spec-target', {
+    workspace_id: bound.ws, spec_package: bound.package,
+    ...(bound.thread ? { thread_id: bound.thread } : { repository_id: bound.target }),
   }, token, signal);
-  const data = ctx.thread
-    ? await postJson<WireRecord>(THREAD_PREVIEW, threadAssignmentBody(ctx, input), token, signal)
-    : await postJson<WireRecord>(DIRECT_PREVIEW, directAssignmentBody(ctx, input), token, signal);
+  const data = bound.thread
+    ? await postJson<WireRecord>(THREAD_PREVIEW, threadAssignmentBody(bound, input), token, signal)
+    : await postJson<WireRecord>(DIRECT_PREVIEW, directAssignmentBody(bound, input), token, signal);
   return normalizePreview(data);
 }
 
 export async function submitLaunchAssignment(ctx: LaunchContext, input: LaunchSubmitInput, token: string, signal?: AbortSignal): Promise<LaunchReply> {
   const ids = { requestId: input.requestId, assignmentId: input.assignmentId, references: input.references };
-  const body = ctx.thread ? threadAssignmentBody(ctx, ids) : directAssignmentBody(ctx, ids);
-  const data = await postJson<WireRecord>(ctx.thread ? THREAD_LAUNCH : DIRECT_LAUNCH, { ...body, expectedDigest: input.expectedDigest }, token, signal);
+  const bound: LaunchContext = { ...ctx, target: await boundRepositoryId(ctx, signal) };
+  const body = bound.thread ? threadAssignmentBody(bound, ids) : directAssignmentBody(bound, ids);
+  const data = await postJson<WireRecord>(bound.thread ? THREAD_LAUNCH : DIRECT_LAUNCH, { ...body, expectedDigest: input.expectedDigest }, token, signal);
   return normalizeReply(data);
 }

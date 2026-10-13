@@ -1,0 +1,673 @@
+// Specs Ready surface: readiness facts, related work and the per-state action
+// contract for prepared package inventory and epic members. Readiness comes
+// only from observed planning facts (readiness.ts); the launch entry routes
+// through the step-8 bound hand-off owner (launch-handoff.ts), which never
+// creates a conversation/thread of its own. Exactly one primary action is
+// rendered for the state; unavailable actions stay visible with the observed
+// reason so an imported/offline/unknown snapshot cannot imply a launch.
+import { For, Show, createMemo, createSignal } from 'solid-js';
+import { Portal } from 'solid-js/web';
+import { base, str, time } from './format';
+import { ActionBar, StateNotice, StatusText } from './primitives';
+import {
+  landedStatus, memberPlanning, planningFactsFor, positivelyPrepared, specReadiness,
+  type PlanningFacts, type PrerequisiteFact,
+} from './readiness';
+import { plannedTargetChoices, startPackageHandoff, type HandoffInput, type PackagePlanningPlan, type PlannedTarget } from './launch-handoff';
+import { linkedAssignmentKey } from './spec-state';
+import { formatHash } from './route';
+import { packagePlanningPlan } from '../../../workspaces/spec-prompt.mjs';
+import type { WireRecord } from './model';
+import type { RouteState } from './route';
+
+const list = (value: unknown): WireRecord[] =>
+  Array.isArray(value) ? value.filter((item): item is WireRecord => typeof item === 'object' && item !== null) : [];
+const text = (value: unknown): string => (typeof value === 'string' ? value : '');
+const shortId = (value: unknown): string => {
+  const id = text(value);
+  return id.length > 8 ? id.slice(0, 8) : id;
+};
+
+export type SpecReadinessProps = {
+  record: WireRecord;
+  records?: WireRecord[];
+  assignments: WireRecord[];
+  epics?: WireRecord[];
+  live: boolean;
+  token?: string;
+  onOpenAgent: (key: string) => void;
+  onOpenEpic: (key: string) => void;
+  onOpenSpec?: (key: string) => void;
+  onOpenPackageFiles: (record: WireRecord, path?: string) => void;
+  canOpenPackageFiles: (record: WireRecord) => boolean;
+  onNavigate: (next: RouteState) => void;
+  // When the destination supplies a footer target, the action contract is
+  // portaled there so the primary stays in the fixed action region; without a
+  // target (standalone use) the inline ActionBar below remains the fallback.
+  actionsMount?: HTMLElement;
+};
+
+// Shared hand-off seed: observed identity plus the canonical package targets
+// already carried by the record. The presentation/stage derivation stays with
+// launch-handoff and spec-prompt, never in this view.
+function handoffInput(record: WireRecord, kind: 'implement' | 'plan', facts: PlanningFacts | null): HandoffInput {
+  const ws = text(record.workspace);
+  return {
+    ws,
+    packageRef: str(record.package) || str(record.package_ref),
+    targets: Array.isArray(record.targets) ? (record.targets as PlannedTarget[]) : [],
+    planningPlan: kind === 'plan'
+      ? packagePlanningPlan({
+          proposal: facts?.proposal === true,
+          critiqueRecommended: facts?.critiqueRecommended === true,
+          critique: facts?.critique === true,
+        }) as PackagePlanningPlan
+      : undefined,
+    returnRoute: { dest: 'specs', ws, filter: 'ready' },
+  };
+}
+
+export default function SpecReadiness(props: SpecReadinessProps) {
+  const record = (): WireRecord => props.record;
+  const [handoffBusy, setHandoffBusy] = createSignal<'' | 'implement' | 'plan'>('');
+  const [handoffError, setHandoffError] = createSignal('');
+  const [handoffStatus, setHandoffStatus] = createSignal('');
+
+  // Identity candidates for the observed record and a tolerant member match:
+  // equality or basename equality against member.package/name, with the same
+  // rule prerequisiteRecord uses. The workspace guard stays.
+  const recordCandidates = (): string[] =>
+    [str(record().package), str(record().package_ref), str(record().name)].filter(Boolean);
+  const memberMatches = (member: WireRecord): boolean => {
+    const candidates = [text(member.package), text(member.name)].filter(Boolean);
+    if (!candidates.length) return false;
+    if (member.workspace != null && member.workspace !== record().workspace) return false;
+    return candidates.some(candidate =>
+      recordCandidates().some(value => value === candidate || base(value) === base(candidate)));
+  };
+  const epicOf = (): WireRecord | null => {
+    const reference = record().epic;
+    if (reference && reference.epic) {
+      const observed = list(record().observer?.snapshot?.epics).find(epic =>
+        epic.epic === reference.epic && (reference.workspace == null || epic.workspace === reference.workspace));
+      if (observed) return observed;
+      return list(props.epics).find(epic =>
+        epic.epic === reference.epic && (reference.workspace == null || epic.workspace === reference.workspace)) ?? null;
+    }
+    // Planned-package rows may carry no epic pointer: fall back to the epic
+    // that actually carries a member matching this record's identity.
+    const inScope = (epic: WireRecord): boolean =>
+      (epic.workspace == null || epic.workspace === record().workspace)
+      && list(epic.members).some(member => memberMatches(member));
+    return list(record().observer?.snapshot?.epics).find(inScope)
+      ?? list(props.epics).find(inScope) ?? null;
+  };
+  const memberOf = (): WireRecord | null => {
+    const epic = epicOf();
+    if (!epic) return null;
+    return list(epic.members).find(member => memberMatches(member)) ?? null;
+  };
+  // Observed epic-member prerequisite facts: a sibling that positively landed
+  // is landed, a positively prepared sibling is available when merged, and an
+  // absent or unknown sibling stays unknown.
+  const prerequisitesOf = (): PrerequisiteFact[] | undefined => {
+    const member = memberOf();
+    if (!member || !Array.isArray(member.requires)) return undefined;
+    const byName = new Map(list(epicOf()?.members).map(item => [text(item.name), item]));
+    return member.requires
+      .filter((name: unknown): name is string => typeof name === 'string' && Boolean(name))
+      .map(name => {
+        const sibling = byName.get(name);
+        const state = !sibling || text(sibling.status) === 'unknown' ? 'unknown' as const
+          : landedStatus(sibling.status) ? 'landed' as const
+          : positivelyPrepared(memberPlanning(sibling)) ? 'prepared' as const
+          : 'unresolved' as const;
+        return { name, state };
+      });
+  };
+  const facts = (): PlanningFacts | null => planningFactsFor(record()) ?? memberPlanning(memberOf());
+  const readiness = createMemo(() => specReadiness(record(), {
+    assignments: props.assignments,
+    prerequisites: prerequisitesOf(),
+  }));
+
+  const obligationTitle = (): string => {
+    const value = readiness();
+    if (value.state === 'waiting') return value.waitingOn.length ? `Waiting on ${value.waitingOn.join(' · ')}` : 'Prepared · waiting';
+    if (value.state === 'planning') return 'Planning';
+    if (value.state === 'decision') return 'Decision needed';
+    if (value.state === 'starting') return 'Implementation starting';
+    if (value.state === 'no-package') return 'No package';
+    if (value.state === 'unknown') return 'Readiness unknown';
+    return value.label;
+  };
+  const obligationText = (): string => {
+    const value = readiness();
+    if (value.state === 'ready') return 'Implementation runs spec-end-to-end from the prepared package through a draft pull request.';
+    if (value.state === 'waiting') return value.reason ?? 'This package waits for its declared prerequisites.';
+    if (value.state === 'incomplete') return value.reason ?? 'Preparation needs to be resumed before implementation.';
+    if (value.state === 'not-planned') return value.reason ?? 'Planning needs to be started for this package.';
+    if (value.state === 'decision') return value.reason ?? 'A recorded decision needs discussion before starting.';
+    if (value.state === 'planning') return value.reason ?? 'A planning assignment owns this package.';
+    if (value.state === 'starting') return value.reason ?? 'An implementation assignment owns this package.';
+    if (value.state === 'no-package') return value.reason ?? 'The package directory is missing.';
+    return value.reason ?? 'Readiness is not confirmed for this package.';
+  };
+  const obligationNote = (): string => {
+    const value = readiness();
+    if (value.state === 'ready') {
+      return value.launchable
+        ? 'Merge stays with the operator. Nothing has been dispatched for this package.'
+        : value.reason ?? 'Assignment coverage is incomplete.';
+    }
+    if (value.state === 'waiting') return 'Implementation stays unavailable until every prerequisite has landed.';
+    if (value.state === 'incomplete') return 'Resume planning to complete the preparation report and index.';
+    if (value.state === 'not-planned') return 'Start planning to prepare the specification and steps.';
+    if (value.state === 'decision') return 'Discuss the recorded decision and review the package files before starting.';
+    if (value.state === 'starting') return 'No run receipt is observed; this package remains assigned-only until a run is reported.';
+    return '';
+  };
+
+  const preparedSteps = () => {
+    const steps = facts()?.steps ?? null;
+    if (steps === null) return { value: 'Unknown', note: 'No prepared specification index was observed.' };
+    if (steps === 0) return { value: '0', note: 'No prepared steps recorded.' };
+    return { value: String(steps), note: 'Steps in spec-steps.json' };
+  };
+  const preparationReport = () => {
+    const preparation = facts()?.preparation ?? null;
+    const outcome = text(preparation?.outcome);
+    if (!preparation || !outcome) return { value: 'Not recorded', note: 'No preparation report was observed for this package.' };
+    // An observed missing outcome is missing, never a recorded report: the old
+    // fallback note claimed a report that was never read.
+    if (outcome === 'missing') return { value: 'Missing', note: 'No preparation report was observed.' };
+    const label = outcome.charAt(0).toUpperCase() + outcome.slice(1);
+    const source = text(preparation.source);
+    const reportedAt = text(preparation.reported_at);
+    return {
+      value: label,
+      note: [source, reportedAt ? time(reportedAt) : ''].filter(Boolean).join(' · ') || 'Preparation report recorded',
+    };
+  };
+  const relatedAssignments = (): WireRecord[] => list(props.assignments).filter(item =>
+    text(item.workspace) === text(record().workspace)
+    && [str(record().package), str(record().package_ref), str(record().package_path)].filter(Boolean).includes(text(item.spec_package)),
+  ).sort((a, b) => (Date.parse(text(b.created_at)) || 0) - (Date.parse(text(a.created_at)) || 0));
+  const executionHistory = () => {
+    const owner = readiness().owner;
+    if (owner) {
+      return {
+        value: 'Assignment owned',
+        note: `${shortId(owner.assignment_id)} · ${text(owner.display) || 'recorded'}`,
+      };
+    }
+    const related = relatedAssignments();
+    if (related.length) {
+      const latest = related[0];
+      return {
+        value: `${related.length} recorded`,
+        note: `Latest ${shortId(latest.assignment_id)} · ${text(latest.display) || 'recorded'}`,
+      };
+    }
+    if (facts()?.worktreeRecorded) return { value: 'Recorded', note: 'A worktree was recorded for this package.' };
+    return { value: 'None', note: 'No dispatch, no worktree' };
+  };
+  // Observed epic prerequisites stay visible on assignment-owned details: the
+  // readiness result drops them for planning/starting owners, so display rows
+  // fall back to the observed member facts without changing owner precedence.
+  const prerequisiteRows = (): PrerequisiteFact[] =>
+    readiness().prerequisites.length ? readiness().prerequisites : (prerequisitesOf() ?? []);
+  const prerequisiteFact = () => {
+    const rows = prerequisiteRows();
+    if (!rows.length) return { value: 'None', note: 'Nothing to wait for' };
+    const waiting = rows.filter(item => item.state !== 'landed');
+    return {
+      value: waiting.length ? `${waiting.length} waiting` : 'All landed',
+      note: rows.map(item => `${item.name} · ${item.state}`).join(', '),
+    };
+  };
+
+  const epicKey = (): string => {
+    const epic = epicOf();
+    return epic ? JSON.stringify([epic.workspace, epic.epic]) : '';
+  };
+  const epicTitle = (): string => {
+    const epic = epicOf();
+    if (!epic) return '';
+    const members = list(epic.members);
+    const member = memberOf();
+    const index = member ? members.indexOf(member) : -1;
+    const title = text(epic.title) || text(epic.epic);
+    return index >= 0 ? `${title} · member ${index + 1} of ${members.length}` : title;
+  };
+  const prerequisiteRecord = (name: string): WireRecord | null => {
+    const epic = epicOf();
+    const sibling = epic ? list(epic.members).find(item => text(item.name) === name) : null;
+    const workspace = text(sibling?.workspace) || text(epic?.workspace) || text(record().workspace);
+    const target = text(sibling?.package) || name;
+    return list(props.records).find(item =>
+      text(item.workspace) === workspace
+      && [str(item.package), str(item.package_ref), str(item.name)].some(value => value === target || base(value) === base(target)),
+    ) ?? null;
+  };
+  const reportPath = (): string => {
+    const source = text(facts()?.preparation?.source);
+    if (!source) return '';
+    if (source.startsWith('/')) return source;
+    return source.split('/').includes('..') ? '' : source;
+  };
+  const ownerKey = (): string | null => {
+    const owner = readiness().owner;
+    if (owner) return JSON.stringify([text(owner.workspace) || text(owner.workspace_id), text(owner.assignment_id)]);
+    return linkedAssignmentKey(record(), props.assignments);
+  };
+
+  const gate = (): string => {
+    if (!props.live) return 'Connect to the live workspace service to prepare this hand-off.';
+    if (!props.token) return 'The workspace action token is unavailable.';
+    if (plannedTargetChoices(Array.isArray(record().targets) ? record().targets as PlannedTarget[] : []).length === 0) {
+      return 'No usable package target is available.';
+    }
+    return '';
+  };
+  // Planning stages past an intact proposal depend on observed critique facts.
+  // An unknown recommendation is never coerced into no-critique and an
+  // automatic spec-write: Resume planning stays disabled until the proposal
+  // and package files are inspected.
+  const planGate = (): string => {
+    const baseGate = gate();
+    if (baseGate) return baseGate;
+    const value = facts();
+    if (value?.proposal === true && value.critiqueRecommended === null) {
+      return 'The proposal does not record whether critique is recommended; inspect the proposal and package files before resuming planning.';
+    }
+    if (value?.critiqueRecommended === true && value.critique === null) {
+      return 'The recommended critique outcome is not observed; inspect the proposal and package files before resuming planning.';
+    }
+    return '';
+  };
+  const implementGate = (): string => {
+    const baseGate = gate();
+    if (baseGate) return baseGate;
+    const value = readiness();
+    if (value.state !== 'ready') return value.reason ?? 'This package is not ready to implement.';
+    if (!value.launchable) return value.reason ?? 'Assignment coverage does not confirm the owner for this package.';
+    return '';
+  };
+
+  async function startHandoff(kind: 'implement' | 'plan') {
+    if (handoffBusy() || !props.live || !props.token) return;
+    // A planning launch must never coerce an unknown stage into spec-write:
+    // the same gate that disables Resume planning blocks the dispatch itself.
+    if (kind === 'plan' && planGate()) return;
+    setHandoffBusy(kind);
+    setHandoffError('');
+    setHandoffStatus('');
+    try {
+      const outcome = await startPackageHandoff(kind, handoffInput(record(), kind, facts()), props.token, props.onNavigate);
+      if (!outcome.ok) {
+        setHandoffError(outcome.reason);
+        return;
+      }
+      setHandoffStatus(kind === 'plan'
+        ? 'Planning brief opened. Nothing has been dispatched yet.'
+        : 'Assignment review opened. Nothing has been dispatched yet.');
+    } catch (error) {
+      setHandoffError(error instanceof Error && error.message
+        ? error.message
+        : 'The hand-off could not be prepared. Retry from this package.');
+    } finally {
+      setHandoffBusy('');
+    }
+  }
+
+  const filesGate = (): string => props.canOpenPackageFiles(record()) ? '' : 'Package files are unavailable for this selection.';
+  // Waiting and decision states give the prerequisite link or the read-files
+  // action the state's single primary; Implement stays secondary beside it.
+  const implementButton = (secondary = false) => (
+    <>
+      <button
+        type="button"
+        class={secondary ? 'ds-btn' : 'ds-btn ds-btn--primary'}
+        data-action="implement"
+        disabled={Boolean(implementGate()) || Boolean(handoffBusy())}
+        aria-describedby={implementGate() ? 'readiness-implement-reason' : undefined}
+        onClick={() => void startHandoff('implement')}
+      >{handoffBusy() === 'implement' ? 'Preparing review…' : 'Implement spec'}</button>
+      <Show when={implementGate()}>
+        <span class="action-note" id="readiness-implement-reason" data-action-note="implement">{implementGate()}</span>
+      </Show>
+      <Show when={!implementGate() && handoffStatus()}>
+        <span class="action-note" data-action-note="handoff-status" role="status">{handoffStatus()}</span>
+      </Show>
+      <Show when={!implementGate() && handoffError()}>
+        <span class="action-note" data-action-note="implement-error" role="alert">{handoffError()} Nothing has been dispatched.</span>
+      </Show>
+    </>
+  );
+  const prerequisitePrimary = () => {
+    const name = readiness().waitingOn[0] ?? readiness().prerequisites.find(item => item.state !== 'landed')?.name ?? '';
+    const target = name ? prerequisiteRecord(name) : null;
+    if (target) {
+      const key = text(target.key);
+      return (
+        <a
+          class="ds-btn ds-btn--primary"
+          data-action="open-prerequisite"
+          data-prerequisite={name}
+          href={formatHash({ dest: 'specs', id: key })}
+          onClick={event => {
+            event.preventDefault();
+            props.onOpenSpec?.(key);
+          }}
+        >Open prerequisite</a>
+      );
+    }
+    return (
+      <>
+        <button type="button" class="ds-btn ds-btn--primary" data-action="open-prerequisite" disabled aria-describedby="readiness-prerequisite-reason">Open prerequisite</button>
+        <span class="action-note" id="readiness-prerequisite-reason" data-action-note="prerequisite">
+          The prerequisite {name || 'record'} is not observed in this snapshot.
+        </span>
+      </>
+    );
+  };
+  const resumePlanning = () => (
+    <>
+      <button
+        type="button"
+        class="ds-btn ds-btn--primary"
+        data-action="resume-planning"
+        disabled={Boolean(planGate()) || Boolean(handoffBusy())}
+        aria-describedby={planGate() ? 'readiness-plan-reason' : undefined}
+        onClick={() => void startHandoff('plan')}
+      >{handoffBusy() === 'plan' ? 'Preparing brief…' : 'Resume planning'}</button>
+      <Show when={planGate()}>
+        <span class="action-note" id="readiness-plan-reason" data-action-note="resume-planning">{planGate()}</span>
+      </Show>
+      <Show when={reportPath()}>
+        <button
+          type="button"
+          class="ds-btn"
+          data-action="open-preparation-report"
+          disabled={Boolean(filesGate())}
+          aria-describedby={filesGate() ? 'readiness-files-reason' : undefined}
+          onClick={() => props.onOpenPackageFiles(record(), reportPath())}
+        >Open preparation report</button>
+      </Show>
+      <button
+        type="button"
+        class="ds-btn"
+        data-action="open-package-files"
+        disabled={Boolean(filesGate())}
+        aria-describedby={filesGate() ? 'readiness-files-reason' : undefined}
+        onClick={() => props.onOpenPackageFiles(record())}
+      >Open package files</button>
+      <Show when={filesGate()}>
+        <span class="action-note" id="readiness-files-reason" data-action-note="package-files">{filesGate()}</span>
+      </Show>
+      <Show when={handoffStatus()}>
+        <span class="action-note" data-action-note="handoff-status" role="status">{handoffStatus()}</span>
+      </Show>
+      <Show when={handoffError()}>
+        <span class="action-note" data-action-note="plan-error" role="alert">{handoffError()} Nothing has been dispatched.</span>
+      </Show>
+    </>
+  );
+  const openAgent = () => (
+    <>
+      <button
+        type="button"
+        class="ds-btn ds-btn--primary"
+        data-action="open-agent"
+        disabled={Boolean(ownerKey()) ? false : true}
+        aria-describedby={ownerKey() ? undefined : 'readiness-agent-reason'}
+        onClick={() => {
+          const key = ownerKey();
+          if (key) props.onOpenAgent(key);
+        }}
+      >Open agent</button>
+      <Show when={!ownerKey()}>
+        <span class="action-note" id="readiness-agent-reason" data-action-note="open-agent">The owning assignment is not observed in this snapshot.</span>
+      </Show>
+    </>
+  );
+  const decisionPrimary = () => (
+    <>
+      <button
+        type="button"
+        class="ds-btn ds-btn--primary"
+        data-action="open-preparation"
+        disabled={Boolean(filesGate())}
+        aria-describedby={filesGate() ? 'readiness-files-reason' : undefined}
+        onClick={() => props.onOpenPackageFiles(record(), reportPath() || undefined)}
+      >{reportPath() ? 'Open preparation report' : 'Open package files'}</button>
+      <Show when={filesGate()}>
+        <span class="action-note" id="readiness-files-reason" data-action-note="package-files">{filesGate()}</span>
+      </Show>
+    </>
+  );
+  const actions = () => {
+    const value = readiness();
+    if (value.state === 'waiting') return <>{prerequisitePrimary()}{implementButton(true)}</>;
+    if (value.state === 'incomplete' || value.state === 'not-planned') return resumePlanning();
+    if (value.state === 'planning' || value.state === 'starting') return openAgent();
+    if (value.state === 'decision') return <>{decisionPrimary()}{implementButton(true)}</>;
+    return implementButton();
+  };
+
+  return (
+    <section class="section spec-readiness" id="spec-readiness" data-state={readiness().state} aria-labelledby="readiness-heading">
+      <div class="section-heading">
+        <h3 id="readiness-heading">{obligationTitle()}</h3>
+        <StatusText tone={readiness().tone}>{readiness().label}</StatusText>
+      </div>
+      <Show
+        when={readiness().state === 'incomplete'}
+        fallback={
+          <div class="obligation">
+            <p>{obligationText()}</p>
+            <Show when={obligationNote()}>
+              <p>{obligationNote()}</p>
+            </Show>
+          </div>
+        }
+      >
+        <StateNotice tone="warning" title="Implementation is unavailable until preparation completes">
+          {obligationText()}
+        </StateNotice>
+      </Show>
+      <div class="facts four">
+        <div class="fact" data-fact="prepared-steps">
+          <label>Prepared steps</label>
+          <strong class="mono">{preparedSteps().value}</strong>
+          <p>{preparedSteps().note}</p>
+        </div>
+        <div class="fact" data-fact="preparation-report">
+          <label>Preparation report</label>
+          <strong>{preparationReport().value}</strong>
+          <p>{preparationReport().note}</p>
+        </div>
+        <div class="fact" data-fact="execution-history">
+          <label>Execution history</label>
+          <strong>{executionHistory().value}</strong>
+          <p>{executionHistory().note}</p>
+        </div>
+        <div class="fact" data-fact="prerequisites">
+          <label>Prerequisites</label>
+          <strong>{prerequisiteFact().value}</strong>
+          <p>{prerequisiteFact().note}</p>
+        </div>
+      </div>
+      <section class="section">
+        <div class="section-heading"><h3>Related work</h3></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th scope="col">Object</th><th scope="col">Reference</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>Epic</td>
+                <td>
+                  <Show
+                    when={epicOf()}
+                    fallback={<span>{text(record().epic?.epic) ? `Epic ${text(record().epic?.epic)} is not in this snapshot` : 'Not recorded'}</span>}
+                  >
+                    <a
+                      class="text-link"
+                      data-related="epic"
+                      href={formatHash({ dest: 'epics', id: epicKey() })}
+                      onClick={event => {
+                        event.preventDefault();
+                        props.onOpenEpic(epicKey());
+                      }}
+                    >{epicTitle()}</a>
+                  </Show>
+                </td>
+              </tr>
+              <For each={prerequisiteRows()}>{fact => {
+                const target = () => prerequisiteRecord(fact.name);
+                return (
+                  <tr>
+                    <td>Prerequisite · {fact.name}</td>
+                    <td>
+                      <Show when={target()} fallback={<span>{fact.name}</span>}>
+                        {item => (
+                          <a
+                            class="text-link"
+                            data-prerequisite={fact.name}
+                            href={formatHash({ dest: 'specs', id: text(item().key) })}
+                            onClick={event => {
+                              event.preventDefault();
+                              props.onOpenSpec?.(text(item().key));
+                            }}
+                          >{fact.name}</a>
+                        )}
+                      </Show>
+                      <span class="muted"> {fact.state}</span>
+                    </td>
+                  </tr>
+                );
+              }}</For>
+              <Show when={reportPath()}>
+                <tr>
+                  <td>Preparation report</td>
+                  <td>
+                    <button
+                      type="button"
+                      class="ds-btn"
+                      data-related="preparation-report"
+                      disabled={Boolean(filesGate())}
+                      aria-describedby={filesGate() ? 'readiness-related-files-reason' : undefined}
+                      onClick={() => props.onOpenPackageFiles(record(), reportPath())}
+                    >Open preparation report</button>
+                  </td>
+                </tr>
+              </Show>
+              <Show when={facts()?.proposal === true}>
+                <tr>
+                  <td>Proposal</td>
+                  <td>
+                    <button
+                      type="button"
+                      class="ds-btn"
+                      data-related="proposal"
+                      disabled={Boolean(filesGate())}
+                      aria-describedby={filesGate() ? 'readiness-related-files-reason' : undefined}
+                      onClick={() => props.onOpenPackageFiles(record())}
+                    >Proposal recorded · open package files</button>
+                  </td>
+                </tr>
+              </Show>
+              <tr>
+                <td>Package files</td>
+                <td>
+                  <button
+                    type="button"
+                    class="ds-btn"
+                    data-related="package-files"
+                    disabled={Boolean(filesGate())}
+                    aria-describedby={filesGate() ? 'readiness-related-files-reason' : undefined}
+                    onClick={() => props.onOpenPackageFiles(record())}
+                  >Open package files</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <Show when={filesGate()}>
+          <p class="small muted" id="readiness-related-files-reason">{filesGate()}</p>
+        </Show>
+      </section>
+      <Show
+        when={props.actionsMount}
+        fallback={<ActionBar variant="inline">{actions()}</ActionBar>}
+      >
+        {mount => (
+          <Portal mount={mount()}>
+            <div id="spec-readiness-actions" aria-label="Readiness actions">{actions()}</div>
+          </Portal>
+        )}
+      </Show>
+      <Show when={handoffError()}>
+        <StateNotice tone="error" title="Hand-off not prepared">
+          {handoffError()} Nothing has been dispatched; the observed package facts are retained.
+        </StateNotice>
+      </Show>
+    </section>
+  );
+}
+
+export type SpecImplementEntryProps = {
+  record: WireRecord;
+  live: boolean;
+  token?: string;
+  onOpenPackageFiles: (record: WireRecord, path?: string) => void;
+  canOpenPackageFiles: (record: WireRecord) => boolean;
+  onNavigate: (next: RouteState) => void;
+};
+
+// Adjacent fallback entry for packages without a prior end-to-end assignment:
+// the same bound implement hand-off as the Ready primary, but secondary (the
+// row's own action bar keeps the primary action) and with no thread creation.
+export function SpecImplementEntry(props: SpecImplementEntryProps) {
+  const [busy, setBusy] = createSignal(false);
+  const [error, setError] = createSignal('');
+  const gate = (): string => {
+    if (!props.live) return 'Connect to the live workspace service to start implementation.';
+    if (!props.token) return 'The workspace action token is unavailable.';
+    if (plannedTargetChoices(Array.isArray(props.record.targets) ? props.record.targets as PlannedTarget[] : []).length === 0) {
+      return 'No usable package target is available.';
+    }
+    return '';
+  };
+  async function start() {
+    if (busy() || gate()) return;
+    setBusy(true);
+    setError('');
+    try {
+      const outcome = await startPackageHandoff('implement', handoffInput(props.record, 'implement', planningFactsFor(props.record)), props.token ?? '', props.onNavigate);
+      if (!outcome.ok) setError(outcome.reason);
+    } catch (cause) {
+      setError(cause instanceof Error && cause.message
+        ? cause.message
+        : 'The hand-off could not be prepared. Retry from this package.');
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <ActionBar variant="inline">
+      <button
+        type="button"
+        class="ds-btn"
+        data-action="implement-again"
+        disabled={Boolean(gate()) || busy()}
+        aria-describedby={gate() ? 'spec-implement-again-reason' : undefined}
+        onClick={() => void start()}
+      >{busy() ? 'Preparing review…' : 'Implement spec'}</button>
+      <span class="action-note" id="spec-implement-again-reason" data-action-note="implement-again" role={gate() ? undefined : 'status'}>
+        {gate() || error() || 'Opens the assignment review; nothing is dispatched until you start it.'}
+      </span>
+    </ActionBar>
+  );
+}

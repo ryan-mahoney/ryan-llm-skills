@@ -855,6 +855,10 @@ async function repositoryRecord(workspaceDirectory, repository) {
       return record;
     }
     record.status = "ok";
+    // Resolved physical checkout for a positively validated repository. The
+    // transport can compare a registered canonical target without
+    // re-implementing filesystem path resolution in the browser.
+    record.canonical_path = physical;
   } catch (error) {
     if (
       typeof error?.code === "string" ||
