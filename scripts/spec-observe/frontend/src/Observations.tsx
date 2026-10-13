@@ -29,10 +29,15 @@ function EpicMembers(props: { epic: any; current?: any; records?: any[]; onSelec
 }
 
 export function AgentList(props: { assignments: any[]; query: string; selected: string | null; onSelect: (key: string) => void }) {
-  const visible = () => list(props.assignments).filter(a => !props.query.trim() || [a.assignment_id, a.spec_package, a.workflow_id, a.display, a.nextAction, a.safeAction].some(v => str(v).toLowerCase().includes(props.query.trim().toLowerCase()))).sort((a, b) => Number(assignmentEnded(a)) - Number(assignmentEnded(b)) || str(a.spec_package).localeCompare(str(b.spec_package)) || str(a.assignment_id).localeCompare(str(b.assignment_id)));
-  const active = () => visible().filter(a => !assignmentEnded(a)), ended = () => visible().filter(assignmentEnded);
+  // The shared visibleAgents owner settles search and order before this
+  // transitional list: render the supplied rows verbatim without
+  // re-filtering (execution_dir included) or re-sorting (uncertain first).
+  // The group split below only preserves the ended section heading and
+  // keeps supplied order within each group.
+  const rows = () => list(props.assignments);
+  const active = () => rows().filter(a => !assignmentEnded(a)), ended = () => rows().filter(assignmentEnded);
   const row = (a: any) => <button type="button" class="run-row" data-assignment-key={a.key} aria-pressed={a.key === props.selected} onClick={() => props.onSelect(a.key)}><div class="flex justify-between gap-3"><span class="run-title mono">{a.assignment_id}</span><span class={`pill ${assignmentTone(a)}`}>{assignmentLabel(a)}</span></div><p class="summary">{a.nextAction || a.safeAction || 'No safe action recorded'}{a.quiet ? ' · Quiet' : ''}{a.attachedCount ? ` · ${a.attachedCount} attached` : ''}</p><span class="small muted">{a.spec_package ? base(a.spec_package) : 'No spec package'} · {age(a.observer?.snapshot?.coverage?.observed_at || a.observer?.published_at)}</span><Show when={list(a.attention).length}><p class="small warn">{list(a.attention).slice(0, 2).join(' · ')}</p></Show></button>;
-  return <><Show when={list(props.assignments).some(a => a.assignment_coverage?.state === 'partial')}><div class="coverage-note">Assignment coverage partial</div></Show><div class="observation-rows"><Show when={visible().length} fallback={<div class="empty"><h3>{props.assignments.length ? 'No matching agents' : 'No agents observed'}</h3><p class="small" style={{ 'margin-top': '8px' }}>{props.assignments.length ? 'Change the search.' : 'An absent assignment snapshot differs from an empty one; assignment coverage explains partial reads.'}</p></div>}><For each={active()}>{row}</For><Show when={ended().length}><div class="repo-heading">Recently ended</div><For each={ended()}>{row}</For></Show></Show></div></>;
+  return <><Show when={list(props.assignments).some(a => a.assignment_coverage?.state === 'partial')}><div class="coverage-note">Assignment coverage partial</div></Show><div class="observation-rows"><Show when={rows().length} fallback={<div class="empty"><h3>{props.assignments.length ? 'No matching agents' : 'No agents observed'}</h3><p class="small" style={{ 'margin-top': '8px' }}>{props.assignments.length ? 'Change the search.' : 'An absent assignment snapshot differs from an empty one; assignment coverage explains partial reads.'}</p></div>}><For each={active()}>{row}</For><Show when={ended().length}><div class="repo-heading">Recently ended</div><For each={ended()}>{row}</For></Show></Show></div></>;
 }
 
 function linkedRun(a: any, records: any[]) {

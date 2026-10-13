@@ -536,6 +536,50 @@ try:
         expect(page.locator('[data-assignment-key]')).to_have_count(0)
         report['scenarios'].append('Ended-only query infers Ended; deliberate Active keeps Active and the ended row hidden; clearing the query preserves ws')
 
+        # 3b. Typing an ended-only query from a selected active row reselects
+        #     in one transaction instead of hiding every row behind the stale id.
+        open_route('agents', ws='fixture', id=key_a)
+        expect(page.locator('article.detail .detail-title h2')).to_have_text('selected-a')
+        page.locator('#find-record').fill('shared-ended')
+        expect(row(key_e)).to_have_attribute('aria-pressed', 'true')
+        expect(page.locator('article.detail .detail-title h2')).to_have_text('shared-ended')
+        expect(row(key_a)).to_have_count(0)
+        expect(page.get_by_text('No matching agents', exact=True)).to_have_count(0)
+        assert params()['q'] == ['shared-ended'] and params()['ws'] == ['fixture'], page.url
+        assert params()['id'] == [key_e], page.url
+        report['urls']['typed-ended-query'] = urlsplit(page.url).fragment
+        report['scenarios'].append('Typing an ended-only query from selected active A reselects the ended row in one transaction')
+
+        # 3c. The transitional list renders the shared settled rows: an
+        #     execution_dir-only match stays visible and uncertain rows sort
+        #     first, exactly as the shared owner orders them.
+        key_plain = record_key('f3-plain')
+        key_dir = record_key('f3-dir')
+        key_uncertain = record_key('f3-uncertain')
+        shared_owner_state = envelope([observer([
+            assignment('f3-plain', execution_dir='/other/dir'),
+            assignment('f3-dir', execution_dir='/repo/worktrees/Alpha'),
+            assignment('f3-uncertain', 'unknown', execution_dir='/other/dir'),
+        ])])
+        note_state('shared-owner', shared_owner_state)
+        state['value'] = shared_owner_state
+        open_route('agents', ws='fixture')
+        page.locator('#refresh-button').click()
+        expect(row(key_uncertain)).to_have_count(1)
+        order = page.evaluate("Array.from(document.querySelectorAll('[data-assignment-key]')).map(el => el.getAttribute('data-assignment-key'))")
+        assert order == [key_uncertain, key_dir, key_plain], order
+        open_route('agents', ws='fixture', q='worktrees/alpha')
+        page.locator('#refresh-button').click()
+        expect(row(key_dir)).to_have_count(1)
+        expect(row(key_plain)).to_have_count(0)
+        expect(row(key_uncertain)).to_have_count(0)
+        expect(page.get_by_text('No matching agents', exact=True)).to_have_count(0)
+        expect(row(key_dir)).to_have_attribute('aria-pressed', 'true')
+        report['urls']['shared-owner'] = urlsplit(page.url).fragment
+        report['scenarios'].append('Execution_dir-only matches stay visible and uncertain rows sort first under the shared visible-list owner')
+        note_state('retry-healthy', envelope(live_observers))
+        state['value'] = envelope(live_observers)
+
         # 4. Unavailable/partial omission retains the exact id and its
         #    qualified source timestamp; complete absence withholds facts and
         #    never falls through to B.
@@ -586,6 +630,33 @@ try:
         expect(row(key_b)).to_have_attribute('aria-pressed', 'false')
         expect(page.locator('main')).not_to_contain_text('selected-a')
         report['scenarios'].append('HTTP 200 unavailable/partial omission retains A with its qualified timestamp; complete absence withholds facts, keeps the URL id and never picks B')
+
+        # 4b. Complete absence invalidates the pin: a later partial read
+        #     omitting A must not resurrect its facts.
+        partial_after_complete = envelope([observer(
+            [assignment('b-row', nextAction='Attach to b-row partial-after-complete')],
+            coverage='partial', observed_at=old_at, published_at=old_at,
+        )])
+        note_state('partial-after-complete', partial_after_complete)
+        state['value'] = partial_after_complete
+        page.locator('#refresh-button').click()
+        expect(row(key_b)).to_contain_text('partial-after-complete')
+        expect(page.get_by_role('heading', name='Select an observed agent', exact=True)).to_be_visible()
+        expect(page.locator('article.detail')).to_have_count(0)
+        assert params()['id'] == [key_a], page.url
+        expect(page.locator('main')).not_to_contain_text('selected-a')
+
+        # 4c. Moving to an absent id drops the old pin; returning to A under
+        #     the same partial read cannot revive it.
+        absent_c = record_key('absent-c')
+        open_route('agents', ws='fixture', id=absent_c)
+        expect(page.get_by_role('heading', name='Select an observed agent', exact=True)).to_be_visible()
+        expect(page.locator('main')).not_to_contain_text('selected-a')
+        native_hash('#/agents?' + urlencode({'ws': 'fixture', 'id': key_a}))
+        expect(page.get_by_role('heading', name='Select an observed agent', exact=True)).to_be_visible()
+        expect(page.locator('main')).not_to_contain_text('selected-a')
+        assert params()['id'] == [key_a], page.url
+        report['scenarios'].append('Complete absence invalidates the retained pin and id changes drop it; later partial reads never resurrect A')
 
         # 5. Selected stale A is never qualified by fresh healthy B; another
         #    scope cannot show A, and returning re-resolves it.

@@ -426,9 +426,21 @@ export default function App() {
       } else if (!currentId) {
         const first = visibleAgentRows()[0]?.key ?? null;
         if (first) replaceId(first);
+      } else {
+        // An explicit id absent from this read keeps its URL verbatim, but
+        // the stored pin must not survive invalidation: a complete
+        // owning-source absence drops it so a later partial read cannot
+        // resurrect it, and moving to another id drops the previous pin.
+        // Same-id incomplete reads keep their pin via the retained memo.
+        const stored = retainedAgent();
+        if (stored && stored.id !== currentId) {
+          setRetainedAgent(null);
+        } else if (stored) {
+          const coverage = agentsCoverage();
+          if (payload() !== null && !coverage.sourceUnavailable && !coverage.listPartial) setRetainedAgent(null);
+        }
       }
-      // An explicit id absent from this read keeps its URL verbatim; the
-      // retained memo alone decides whether previous facts stay qualified.
+      // polling never swaps a resolved selection for a sibling row.
     } else if (currentRoute.dest === 'epics') {
       const rows = visibleEpics();
       if (!rows.some(item => item.key === currentId)) replaceId(rows[0]?.key ?? null);

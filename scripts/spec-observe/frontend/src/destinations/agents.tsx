@@ -134,10 +134,27 @@ export default function AgentsDestination(props: DestinationProps) {
 
   let recordsEl: HTMLDivElement | undefined;
 
-  createEffect(on(() => [props.route.ws, props.refreshKey, props.live] as const, () => agentScrollOffsets.clear(), { defer: true }));
-  createEffect(on(() => formatHash(props.route), key => {
-    const top = agentScrollOffsets.get(key);
-    if (recordsEl && top) recordsEl.scrollTop = top;
+  // Adapter-owned scroll continuity: save the outgoing offset before each
+  // route change, then restore the settled route's offset (zero included).
+  // A missing entry means an unvisited route and starts at the top. This
+  // runs on mount as well as on route changes; only a genuine scope/import
+  // context change clears the map, so ordinary refresh/polling keeps it.
+  let lastAgentsRouteKey: string | null = null;
+  createEffect(() => {
+    const key = formatHash(props.route);
+    const previous = lastAgentsRouteKey;
+    lastAgentsRouteKey = key;
+    if (previous !== null && previous !== key && recordsEl) {
+      agentScrollOffsets.set(previous, recordsEl.scrollTop);
+    }
+    if (recordsEl) {
+      const saved = agentScrollOffsets.get(key);
+      recordsEl.scrollTop = saved ?? 0;
+    }
+  });
+  createEffect(on(() => [props.route.ws, props.live] as const, () => {
+    agentScrollOffsets.clear();
+    lastAgentsRouteKey = null;
   }, { defer: true }));
 
   const rememberScroll = () => {
@@ -149,6 +166,29 @@ export default function AgentsDestination(props: DestinationProps) {
   const clearFilters = () => {
     props.onQuery('');
     props.onFilter('all');
+  };
+
+  // Agents-specific search transaction: settle the visible list for the next
+  // query under the preserved explicit filter, then clear or reselect the
+  // identity in the same navigation so a stale id can neither hide the new
+  // rows nor linger beside them. A still-visible selection is kept (so
+  // clearing the query preserves it); otherwise the id is dropped and the
+  // query alone settles the group, selecting the first settled row.
+  const onAgentsSearch = (value: string) => {
+    const next = { ...props.route };
+    if (value) next.q = value;
+    else delete next.q;
+    const previousId = typeof next.id === 'string' && next.id ? next.id : null;
+    const settled = visibleAgents(props.assignments, effectiveAgentFilter(next, props.assignments), next.q ?? '');
+    if (previousId && settled.some(row => row.key === previousId)) {
+      next.id = previousId;
+    } else {
+      delete next.id;
+      const fallback = visibleAgents(props.assignments, effectiveAgentFilter(next, props.assignments), next.q ?? '');
+      const first = fallback[0]?.key ?? null;
+      if (first) next.id = first;
+    }
+    props.onNavigate(next);
   };
 
   return (
@@ -166,7 +206,7 @@ export default function AgentsDestination(props: DestinationProps) {
               type="search"
               placeholder="Find agent"
               value={props.route.q ?? ''}
-              onInput={event => props.onQuery(event.currentTarget.value)}
+              onInput={event => onAgentsSearch(event.currentTarget.value)}
             />
             <SectionTabs
               label="Agent status"
