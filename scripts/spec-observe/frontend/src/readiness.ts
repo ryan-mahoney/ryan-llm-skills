@@ -85,9 +85,9 @@ const segment = (value: unknown): string => {
   return parts.length ? parts[parts.length - 1] : '';
 };
 
-// Canonical package identity: exact workspace plus the package path carried as
-// `package` or `package_ref`. An epic-member slug without a record falls back
-// to the assignment's final path segment.
+// Canonical package identity: exact workspace plus the canonical package path
+// carried as `package`, `package_ref` or `package_path`. Basename-only matches are
+// rejected: equal slugs under distinct canonical paths must never join.
 const assignmentMatches = (record: WireRecord | null | undefined, assignment: WireRecord | null | undefined): boolean => {
   if (!record || !assignment) return false;
   const workspace = text(record.workspace);
@@ -95,9 +95,8 @@ const assignmentMatches = (record: WireRecord | null | undefined, assignment: Wi
   if (!workspace || workspace !== assignmentWorkspace) return false;
   const specPackage = text(assignment.spec_package);
   if (!specPackage) return false;
-  const candidates = [text(record.package), text(record.package_ref), text(record.package_path), text(record.name)].filter(Boolean);
-  if (candidates.some(candidate => candidate === specPackage)) return true;
-  return candidates.some(candidate => segment(candidate) !== '' && segment(candidate) === segment(specPackage));
+  const candidates = [text(record.package), text(record.package_ref), text(record.package_path)].filter(Boolean);
+  return candidates.some(candidate => candidate === specPackage);
 };
 
 // The live-blocking assignment for a package, or null when there is no
@@ -222,15 +221,22 @@ export function specReadiness(record: WireRecord | null | undefined, context: Re
   }
 
   // Positively prepared: readiness still requires every declared prerequisite
-  // to have landed (merged/complete).
-  const requires = Array.isArray(context.requires)
+  // to have landed (merged/complete). Observed prerequisite facts cover the
+  // declared requirements; absent observations stay unknown instead of
+  // authorizing implementation.
+  const declared = Array.isArray(context.requires)
     ? context.requires.filter((name): name is string => typeof name === 'string' && Boolean(name))
     : Array.isArray(record?.requires)
       ? record.requires.filter((name): name is string => typeof name === 'string' && Boolean(name))
       : [];
-  const prerequisites = Array.isArray(context.prerequisites)
+  const observed = Array.isArray(context.prerequisites)
     ? context.prerequisites.filter(fact => object(fact) && typeof fact.name === 'string' && Boolean(fact.name))
-    : requires.map(name => ({ name, state: 'unknown' as const }));
+    : null;
+  const observedByName = new Map((observed ?? []).map(fact => [fact.name, fact]));
+  const prerequisites = observed === null
+    ? declared.map(name => ({ name, state: 'unknown' as const }))
+    : [...declared.map(name => observedByName.get(name) ?? { name, state: 'unknown' as const }),
+       ...observed.filter(fact => !declared.includes(fact.name))];
   const waiting = prerequisites.filter(fact => fact.state !== 'landed');
   const coverage = coverageStateOf(record, context);
   const covered = coverage === 'complete';
@@ -271,16 +277,23 @@ const memberRecord = (records: WireRecord[], epic: WireRecord | null | undefined
 
 // First member in record order eligible for planning: proposed/incomplete, no
 // live blocking assignment, no recorded decision, and every prerequisite
-// positively prepared or landed.
+// positively prepared or landed. A receipt-free legacy `prepared` status whose
+// observed planning facts establish incomplete preparation is a Resume-planning
+// candidate; positive preparation, decisions, live owners and execution
+// history still exclude.
 export function nextToPlan(epic: WireRecord | null | undefined, records: WireRecord[] = [], assignments: WireRecord[] = []): WireRecord | null {
   const members = list(epic?.members).filter(member => typeof member.name === 'string' && member.name);
   const byName = new Map(members.map(member => [member.name, member]));
   for (const member of members) {
     const status = text(member.status);
-    if (status !== 'proposed' && status !== 'unknown') continue;
+    const facts = memberPlanning(member);
+    const resumeIncomplete = status === 'prepared'
+      && facts?.prepared === false
+      && !facts?.decision
+      && (facts?.receipts?.length ?? 0) === 0;
+    if (status !== 'proposed' && status !== 'unknown' && !resumeIncomplete) continue;
     const record = memberRecord(records, epic, member);
     if (planningAssignmentFor(record ?? member, assignments)) continue;
-    const facts = memberPlanning(member);
     if (!facts || facts.prepared === true || facts.decision) continue;
     if (Array.isArray(member.requires) && !member.requires.every((name: unknown) => typeof name === 'string')) continue;
     const satisfied = declaredRequires(member).every(name => {

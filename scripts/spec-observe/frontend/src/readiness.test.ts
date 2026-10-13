@@ -105,6 +105,18 @@ test('readiness separates ready, waiting, incomplete, not-planned, decision and 
   assert.equal(specReadiness({ workspace: 'fixture', package: '/store/projects/fixture/specs/gone', status: 'missing' }).state, 'no-package');
   assert.equal(specReadiness({ workspace: 'fixture' }).state, 'no-package');
 
+  // Declared prerequisites survive partial observations: absent facts stay
+  // unknown instead of authorizing implementation.
+  const erased = specReadiness(preparedRow({ requires: ['base'] }), { coverage: { state: 'complete' }, prerequisites: [] });
+  assert.equal(erased.state, 'waiting');
+  assert.deepEqual(erased.waitingOn, ['base']);
+  assert.equal(erased.launchable, false);
+
+  const partial = specReadiness(preparedRow({ requires: ['a', 'b'] }), { coverage: { state: 'complete' }, prerequisites: [{ name: 'a', state: 'landed' }] });
+  assert.equal(partial.state, 'waiting');
+  assert.deepEqual(partial.waitingOn, ['b']);
+  assert.equal(partial.launchable, false);
+
   // Prepared work never increases landed evidence.
   assert.equal(landedStatus('prepared'), false);
   assert.equal(landedStatus('published'), false);
@@ -140,6 +152,14 @@ test('starting and planning follow live assignments and coverage gates a Ready l
   assert.equal(absent.state, 'ready');
   assert.equal(absent.launchable, false);
   assert.match(String(absent.reason), /unknown/);
+
+  // Equal basenames under distinct canonical paths never join: the current
+  // package keeps its action while the previous-path assignment owns nothing.
+  const currentRecord: WireRecord = { workspace: 'w', package: '/storage/current/specs/foo', package_ref: '/storage/current/specs/foo' };
+  const previousOwner: WireRecord = { assignment_id: 'a-9', workspace: 'w', workspace_id: 'w', spec_package: '/storage/previous/specs/foo', display: 'live', skill: 'spec-architect-initial' };
+  assert.equal(planningAssignmentFor(currentRecord, [previousOwner]), null);
+  const exactOwner: WireRecord = { assignment_id: 'a-10', workspace: 'w', workspace_id: 'w', spec_package: '/storage/current/specs/foo', display: 'live', skill: 'spec-architect-initial' };
+  assert.equal(planningAssignmentFor(currentRecord, [exactOwner])?.assignment_id, 'a-10');
 });
 
 test('planning eligibility follows record order, positive preparation and landed prerequisites', () => {
@@ -166,6 +186,22 @@ test('planning eligibility follows record order, positive preparation and landed
 
   // A positively prepared member is implementation work, not planning work.
   assert.equal(nextToPlan(epic([proposal('one', { planning: memberFacts({ prepared: true }) }), proposal('two')]))?.name, 'two');
+
+  // Producer-shaped resume: index present with a blocked report and no
+  // receipts keeps legacy prepared status but incomplete planning facts.
+  const blockedResume: WireRecord = { name: 'base', status: 'prepared', package: 'base', workspace: 'w', planning: { ...memberFacts(), prepared: false, step_count: 3, preparation: { outcome: 'blocked' } }, requires: [] };
+  assert.equal(nextToPlan(epic([blockedResume]))?.name, 'base');
+
+  // Resume exclusions hold: positive preparation, decisions, live owners and
+  // execution history keep a legacy prepared member out of planning.
+  const preparedPositive: WireRecord = { name: 'base', status: 'prepared', package: 'base', workspace: 'w', planning: { ...memberFacts(), prepared: true, step_count: 3 } , requires: [] };
+  assert.equal(nextToPlan(epic([preparedPositive])), null);
+  const resumeDecision: WireRecord = { name: 'base', status: 'prepared', package: 'base', workspace: 'w', planning: { ...memberFacts(), prepared: false, step_count: 3, preparation: { outcome: 'blocked' }, decision: { stage: 'architecture', question: 'q', recorded_at: '2026-10-10T12:00:00Z' } }, requires: [] };
+  assert.equal(nextToPlan(epic([resumeDecision])), null);
+  const resumeOwner = { assignment_id: 'live-2', workspace: 'w', spec_package: 'base', display: 'live', skill: 'spec-architect-initial' };
+  assert.equal(nextToPlan(epic([blockedResume]), [], [resumeOwner]), null);
+  const resumeHistory: WireRecord = { name: 'base', status: 'prepared', package: 'base', workspace: 'w', planning: { ...memberFacts(), prepared: false, step_count: 3, preparation: { outcome: 'blocked' }, receipts: [{ state: 'active' }] }, requires: [] };
+  assert.equal(nextToPlan(epic([resumeHistory])), null);
 });
 
 test('epic planning incomplete counts only positive preparation or landed members', () => {
