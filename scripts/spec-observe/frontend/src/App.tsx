@@ -6,6 +6,7 @@ import Shell from './Shell';
 import type { StatusTone } from './primitives';
 import { parseHash, subscribeRoute, navigate, routeHistoryMode, type Destination, type RouteState } from './route';
 import { clearIncompatibleFields, firstUnmatchedTargetId, inWorkspaceScope, needsWorkspacePicker, requiresWorkspace, scopeLabel, withWorkspace, type CatalogEntry } from './scope';
+import { visibleSpecs } from './spec-state';
 import { destinationEntries, type DestinationProps } from './destinations';
 import { WorkspacePicker } from './destinations/workspaces';
 import { catalogRead, type WorkspaceCatalog } from './destinations/workspace-state';
@@ -62,7 +63,7 @@ export default function App() {
     return value === 'attention' || value === 'completed' || value === 'planned' ? value : 'active';
   };
   const q = () => query().trim().toLowerCase();
-  const visibleRecords = createMemo(() => scopedRecords().filter(record => (!q() || [record.workspace, record.package_ref, record.package, record.activity, record.obligation, record.execution, record.workflow_state].some(value => str(value).toLowerCase().includes(q()))) && packageFilterMatches(record, filter())).sort((a, b) => filter() === 'completed' ? Date.parse(b.completed_at) - Date.parse(a.completed_at) || str(a.package).localeCompare(str(b.package)) : 0));
+  const visibleRecords = createMemo(() => visibleSpecs(scopedRecords(), filter(), query()));
   const visibleAssignments = createMemo(() => scopedAssignments().filter(assignment => !q() || [assignment.assignment_id, assignment.spec_package, assignment.workflow_id, assignment.display, assignment.nextAction, assignment.safeAction].some(value => str(value).toLowerCase().includes(q()))));
   const visibleEpics = createMemo(() => scopedEpics().filter(epic => !q() || [epic.title, epic.epic, epic.workspace, ...(epic.members ?? []).map((member: WireRecord) => member.name)].some(value => str(value).toLowerCase().includes(q()))));
   const record = createMemo(() => scopedRecords().find(item => item.key === route().id) ?? null);

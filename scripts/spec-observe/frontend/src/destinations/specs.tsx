@@ -1,5 +1,6 @@
 import { Show } from 'solid-js';
-import { base, packageFilterMatches, str } from '../format';
+import { base, str } from '../format';
+import { visibleSpecs } from '../spec-state';
 import Files from '../Files';
 import { PackageDetail, PackageList } from '../Observations';
 import { ActionBar, MasterDetail, SectionTabs, type SectionTab } from '../primitives';
@@ -21,14 +22,7 @@ export default function SpecsDestination(props: DestinationProps) {
     return value === 'attention' || value === 'completed' || value === 'planned' ? value : 'active';
   };
   const record = () => props.records.find(item => item.key === props.route.id) ?? null;
-  const visibleCount = () => {
-    const query = (props.route.q ?? '').trim().toLowerCase();
-    return props.records.filter(item =>
-      (filter() === 'completed' ? item.recent_completion === true : filter() === 'planned' ? item.planned === true : !item.recent_completion && !item.planned) &&
-      (!query || [item.workspace, item.package_ref, item.package, item.activity, item.obligation, item.execution, item.workflow_state].some(value => str(value).toLowerCase().includes(query))) &&
-      packageFilterMatches(item, filter())
-    ).length;
-  };
+  const visibleCount = () => visibleSpecs(props.records, filter(), props.route.q ?? '').length;
   return (
     <MasterDetail
       listLabel="Specs"
