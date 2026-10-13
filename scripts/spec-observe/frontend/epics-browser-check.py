@@ -12,8 +12,9 @@ Run after `npm run build --prefix scripts/spec-observe/frontend`:
 `--case list` runs the complete list/cold suite (list, loading, cold, file and
 a11y/captures); `--case detail` runs the EV-6 facts/table/conflict gate with
 bound app-ui reference captures; `--case observations` runs the EV-7 retained
-transport/import gate with bound app-ui reference captures; the other choices
-run one group for debugging.
+transport/import gate with bound app-ui reference captures; `--case member`
+runs the EV-4 real absolute-path member, return focus/scroll and precedence
+gate; the other choices run one group for debugging.
 Only the final /api/state HTTP response is substituted through page.route; the
 fixture's real dashboard, catalog, files, the built App/registry and
 browser-fixture.mjs stay untouched. No live Sentinel is contacted.
@@ -35,7 +36,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--case', choices=['list', 'loading', 'cold', 'file', 'a11y', 'detail', 'observations'], default='list')
+parser.add_argument('--case', choices=['list', 'loading', 'cold', 'file', 'a11y', 'detail', 'observations', 'member'], default='list')
 case = parser.parse_args().case
 root = Path(__file__).resolve().parent
 evidence = Path(os.environ.get('SENTINEL_EVIDENCE_DIR', '/tmp/sentinel-epics-evidence'))
@@ -1269,8 +1270,348 @@ try:
             assert not external, f'observations made a non-fixture request: {external}'
             report['scenarios'].append('captures: bound 45/46/44 digests recorded; reference and production panes captured at 1280 and 1600 with single-primary hierarchy, 44px targets and no overflow')
 
+        def group_member(page):
+            # EV-4: real absolute-path member records plus in-session return.
+            # buildEpics publishes member.package as the absolute canonical
+            # package directory, so a member control that forwards the path
+            # instead of the slug cannot resolve. Expectations are hand-derived
+            # from docs/spec-epics.md R-3 and the published return contract.
+            run_package = Path(real_observer['snapshot']['runs'][0]['package'])
+            assert run_package.name == 'browser', f'unexpected fixture package path: {run_package}'
+            fixture_dir = run_package.parents[1]
+            projects_dir = run_package.parents[2]
+            fixture_package = str(run_package)
+            foreign_package = str(projects_dir / 'other' / 'specs' / 'browser')
+
+            def stamp():
+                return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+
+            def member(name, status='in-progress'):
+                return {
+                    'name': name,
+                    'package': str(fixture_dir / 'specs' / name),
+                    'workspace': 'fixture',
+                    'status': status,
+                    'waiting_on': [],
+                    'requires': [],
+                }
+
+            def member_run(assignment, package, workspace='fixture', **extra):
+                record = {
+                    'workspace': workspace,
+                    'package': package,
+                    'package_ref': f'{workspace}/{Path(package).name}',
+                    'assignment_id': assignment,
+                    'workflow_id': f'{assignment}-workflow',
+                    'execution': 'running',
+                    'workflow_state': 'waiting-worker',
+                    'is_current_assignment': False,
+                    'observed_at': stamp(),
+                    'coverage': {'state': 'complete', 'reasons': []},
+                }
+                record.update(extra)
+                return record
+
+            def member_envelope(epics, runs=(), completed=(), planned=()):
+                published = stamp()
+                observer = {
+                    'schema_version': 1,
+                    'observer_id': 'epics-member-fixture',
+                    'state': 'observing',
+                    'published_at': published,
+                    'snapshot': {
+                        'workspace': 'fixture',
+                        'coverage': {'state': 'complete', 'observed_at': published, 'reasons': []},
+                        'runs': list(runs),
+                        'recently_completed': list(completed),
+                        'assignments': [],
+                        'assignment_coverage': {'state': 'complete', 'reasons': []},
+                        'epics': list(epics),
+                        'planned_packages': list(planned),
+                    },
+                }
+                return {**real_state, 'observers': [observer]}
+
+            def member_epic(slug, title, members):
+                return {
+                    'workspace': 'fixture',
+                    'epic': slug,
+                    'title': title,
+                    'state': 'active',
+                    'members': members,
+                    'next': members[-1]['name'] if members else '',
+                    'coverage': {'state': 'complete', 'reasons': []},
+                }
+
+            continuity_members = [member(f'member-{index:02d}', status='merged') for index in range(18)]
+            continuity_members.append(member('browser'))
+            continuity_members.extend(member(f'member-{index:02d}', status='prepared') for index in range(19, 40))
+            filler_epics = [
+                member_epic(f'filler-{index:02d}', f'Continuity filler {index:02d}', [member(f'filler-{index:02d}-member', status='prepared')])
+                for index in range(1, 29)
+            ]
+
+            def continuity_payload(members=None, runs=None):
+                target = member_epic('continuity', 'Continuity epic', members or continuity_members)
+                trailing = member_epic('continuity-b', 'Continuity zebra', [member('beta-member', status='prepared')])
+                records = [real_observer['snapshot']['runs'][0]] if runs is None else runs
+                return member_envelope([target, trailing, *filler_epics], runs=records)
+
+            mode = {'value': None}
+
+            def member_handler(route):
+                if mode['value'] is None:
+                    route.continue_()
+                else:
+                    route.fulfill(json=mode['value'])
+
+            page.route('**/api/state**', member_handler)
+
+            def open_continuity():
+                mode['value'] = continuity_payload()
+                page.goto('about:blank')
+                open_epics(page, ws='fixture', q='continuity')
+                expect(rows_on(page)).to_have_count(30)
+                page.wait_for_function("() => location.hash.includes('id=')")
+                assert params_on(page).get('id'), page.url
+
+            def list_scroller():
+                return page.locator('.list-pane .records')
+
+            def detail_scroller():
+                return page.locator('.detail-pane .detail-body')
+
+            def scroll_and_click_member():
+                list_scroller().evaluate('el => { el.scrollTop = el.scrollHeight; }')
+                page.wait_for_timeout(50)
+                list_scroll = list_scroller().evaluate('el => el.scrollTop')
+                assert list_scroll > 0, 'epic list pane did not scroll'
+                button = page.locator('table.epic-members button', has_text='browser')
+                expect(button).to_have_count(1)
+                button.scroll_into_view_if_needed()
+                detail_scroll = detail_scroller().evaluate('el => el.scrollTop')
+                assert detail_scroll > 0, 'epic detail pane did not scroll'
+                button.click()
+                return list_scroll, detail_scroll
+
+            def wait_restored_member(list_scroll, detail_scroll):
+                page.wait_for_function("""() => {
+                  const active = document.activeElement;
+                  return Boolean(active && active.closest('table.epic-members')
+                    && active.textContent.trim() === 'browser');
+                }""")
+                page.wait_for_function("""expected => {
+                  const list = document.querySelector('.list-pane .records');
+                  const detail = document.querySelector('.detail-pane .detail-body');
+                  return Boolean(list && detail
+                    && Math.abs(list.scrollTop - expected[0]) <= 2
+                    && Math.abs(detail.scrollTop - expected[1]) <= 2);
+                }""", arg=[list_scroll, detail_scroll])
+
+            def refresh_state():
+                with page.expect_response(lambda response: '/api/state' in response.url):
+                    page.evaluate("""() => {
+                      const button = [...document.querySelectorAll('.head-actions button')]
+                        .find(el => el.textContent.trim() === 'Refresh state');
+                      if (button) button.click();
+                    }""")
+                page.wait_for_timeout(300)
+
+            def wait_epic_id(expected):
+                page.wait_for_function(
+                    "expected => new URLSearchParams(location.hash.split('?')[1] || '').get('id') === expected",
+                    arg=expected,
+                )
+
+            def no_member_focus():
+                return page.evaluate("""() => {
+                  const active = document.activeElement;
+                  return Boolean(!active || !active.closest || !active.closest('table.epic-members'));
+                }""")
+
+            def panes_at_top():
+                return page.evaluate("""() => {
+                  const list = document.querySelector('.list-pane .records');
+                  const detail = document.querySelector('.detail-pane .detail-body');
+                  return Boolean(list && detail && Math.abs(list.scrollTop) <= 2 && Math.abs(detail.scrollTop) <= 2);
+                }""")
+
+            # (a) an ordinary absolute-path member opens its real Specs record;
+            # Back restores epic id/q/ws, member focus and both pane scrolls,
+            # and Forward selects the same spec.
+            check_deadline()
+            open_continuity()
+            epic_id = params_on(page)['id'][0]
+            list_scroll, detail_scroll = scroll_and_click_member()
+            expect(page.locator('h1')).to_have_text('Specs')
+            spec_id = params_on(page).get('id', [None])[0]
+            assert spec_id and 'recent-completion' not in spec_id, page.url
+            assert params_on(page)['ws'] == ['fixture'], page.url
+            assert not {'q', 'filter', 'tab', 'path', 'source'} & params_on(page).keys(), page.url
+            expect(page.locator('#find-record')).to_have_value('')
+            expect(page.locator('article.detail h2')).to_have_text('browser')
+            expect(page.locator('article.detail')).to_contain_text('Building the dashboard')
+            report['scenarios'].append('member: a real absolute-path member opens its same-workspace Specs record with no epic q/filter/tab left behind')
+
+            page.go_back()
+            expect(page.locator('h1')).to_have_text('Epics')
+            assert params_on(page)['id'] == [epic_id], page.url
+            assert params_on(page)['q'] == ['continuity'] and params_on(page)['ws'] == ['fixture'], page.url
+            wait_restored_member(list_scroll, detail_scroll)
+            report['scenarios'].append('member: Back restores epic id/query/workspace plus member focus and list/detail scroll')
+
+            page.go_forward()
+            expect(page.locator('h1')).to_have_text('Specs')
+            assert params_on(page).get('id') == [spec_id], page.url
+            expect(page.locator('article.detail h2')).to_have_text('browser')
+            report['scenarios'].append('member: Forward selects the same Specs record')
+
+            # (b) same-workspace active > planned > non-recent precedence, a
+            # same-slug other-workspace record cannot win, and a member without
+            # a record has no active control.
+            active_run = member_run('member-active', fixture_package, is_current_assignment=True, activity='Active member record')
+            historical_run = member_run('member-history', str(projects_dir / 'fixture' / 'archive' / 'browser'), execution='cancelled', workflow_state='cancelled', activity='Historical member record')
+            completed_run = member_run('member-done', str(projects_dir / 'fixture' / 'done' / 'browser'), execution='completed', workflow_state='complete', completion_basis='merged-pr', completed_at=stamp(), activity='Recently completed member record')
+            foreign_run = member_run('member-foreign', foreign_package, workspace='other', is_current_assignment=True, activity='Foreign workspace record')
+            planned_record = {'workspace': 'fixture', 'package': str(projects_dir / 'fixture' / 'planned' / 'browser'), 'package_ref': 'fixture/planned-browser', 'source_paths': ['spec.md']}
+            precedence_epic = member_epic('precedence', 'Precedence epic', [member('browser'), member('ghost-member', status='prepared')])
+
+            def open_precedence(runs, completed=(), planned=()):
+                mode['value'] = member_envelope([precedence_epic], runs=runs, completed=completed, planned=planned)
+                page.goto('about:blank')
+                open_epics(page, ws='fixture', q='precedence')
+                page.wait_for_function("() => location.hash.includes('id=')")
+                expect(rows_on(page)).to_have_count(1)
+
+            def click_browser():
+                button = page.locator('table.epic-members button', has_text='browser')
+                expect(button).to_have_count(1)
+                button.click()
+
+            def assert_spec_record(activity=None, filter_value=None, ref=None, completion=False):
+                expect(page.locator('h1')).to_have_text('Specs')
+                selected = params_on(page).get('id', [None])[0]
+                assert selected, page.url
+                if completion:
+                    assert 'recent-completion' in selected, page.url
+                else:
+                    assert 'recent-completion' not in selected, page.url
+                if filter_value is None:
+                    assert 'filter' not in params_on(page), page.url
+                else:
+                    assert params_on(page)['filter'] == [filter_value], page.url
+                detail = page.locator('article.detail')
+                expect(detail).to_have_count(1)
+                if activity:
+                    expect(detail).to_contain_text(activity)
+                if ref:
+                    expect(detail).to_contain_text(ref)
+
+            check_deadline()
+            open_precedence(runs=[active_run, historical_run, foreign_run], completed=[completed_run], planned=[planned_record])
+            ghost = page.locator('table.epic-members tbody tr', has_text='ghost-member')
+            expect(ghost.locator('button')).to_have_count(0)
+            expect(ghost).to_contain_text('No observed package matches this member in scope.')
+            report['scenarios'].append('member: a member without a matching record stays text with no active control')
+            click_browser()
+            assert_spec_record(activity='Active member record')
+            report['scenarios'].append('member precedence: an active same-workspace record wins over planned, historical and recent records')
+
+            check_deadline()
+            open_precedence(runs=[historical_run, foreign_run], completed=[completed_run], planned=[planned_record])
+            click_browser()
+            assert_spec_record(filter_value='planned', ref='fixture/planned-browser')
+            report['scenarios'].append('member precedence: without an active record the planned package record wins')
+
+            check_deadline()
+            open_precedence(runs=[historical_run, foreign_run], completed=[completed_run])
+            click_browser()
+            assert_spec_record(activity='Historical member record')
+            report['scenarios'].append('member precedence: without active or planned records the non-recent run wins')
+
+            check_deadline()
+            open_precedence(runs=[foreign_run], completed=[completed_run])
+            click_browser()
+            assert_spec_record(filter_value='completed', activity='Recently completed member record', completion=True)
+            report['scenarios'].append('member precedence: a recently completed record is chosen only last')
+
+            check_deadline()
+            open_precedence(runs=[foreign_run, historical_run])
+            click_browser()
+            assert_spec_record(activity='Historical member record')
+            expect(page.locator('article.detail')).not_to_contain_text('Foreign workspace record')
+            report['scenarios'].append('member precedence: a same-slug active record in another workspace cannot win')
+
+            # (c1) a consumed token is one-use: an unchanged same-epic poll does
+            # not steal focus or scroll back to the remembered member.
+            check_deadline()
+            open_continuity()
+            list_scroll, detail_scroll = scroll_and_click_member()
+            expect(page.locator('h1')).to_have_text('Specs')
+            page.go_back()
+            expect(page.locator('h1')).to_have_text('Epics')
+            wait_restored_member(list_scroll, detail_scroll)
+            page.locator('#find-record').focus()
+            page.evaluate("""() => {
+              const list = document.querySelector('.list-pane .records');
+              const detail = document.querySelector('.detail-pane .detail-body');
+              list.scrollTop = 0;
+              detail.scrollTop = 0;
+            }""")
+            refresh_state()
+            assert page.evaluate("() => document.activeElement && document.activeElement.id === 'find-record'"), 'unchanged poll moved focus away from the user selection'
+            assert panes_at_top(), 'unchanged poll restored a consumed scroll token'
+            report['scenarios'].append('member return: an unchanged same-epic poll does not reapply the consumed focus/scroll token')
+
+            # (c2) a deliberate different epic or scope drops the token.
+            check_deadline()
+            open_continuity()
+            scroll_and_click_member()
+            expect(page.locator('h1')).to_have_text('Specs')
+            epic_a = json.dumps(['fixture', 'continuity'], separators=(',', ':'))
+            epic_b = json.dumps(['fixture', 'continuity-b'], separators=(',', ':'))
+            page.evaluate("hash => { location.hash = hash; }", '#/epics?' + urlencode({'ws': 'fixture', 'q': 'continuity', 'id': epic_b}))
+            expect(page.locator('h1')).to_have_text('Epics')
+            wait_epic_id(epic_b)
+            page.evaluate("hash => { location.hash = hash; }", '#/epics?' + urlencode({'ws': 'fixture', 'q': 'continuity', 'id': epic_a}))
+            wait_epic_id(epic_a)
+            page.wait_for_timeout(300)
+            assert no_member_focus(), 'a stale token focused the member after a deliberate epic change'
+            assert panes_at_top(), 'a stale token restored scroll after a deliberate epic change'
+            report['scenarios'].append('member return: a deliberate different epic drops the token instead of restoring stale focus/scroll')
+
+            page.locator('table.epic-members button', has_text='browser').click()
+            expect(page.locator('h1')).to_have_text('Specs')
+            page.evaluate("hash => { location.hash = hash; }", '#/epics?' + urlencode({'ws': 'other'}))
+            expect(page.locator('h1')).to_have_text('Epics')
+            page.wait_for_function("() => new URLSearchParams(location.hash.split('?')[1] || '').get('ws') === 'other'")
+            expect(page.get_by_role('heading', name='No epics recorded', exact=True)).to_be_visible()
+            page.evaluate("hash => { location.hash = hash; }", '#/epics?' + urlencode({'ws': 'fixture', 'q': 'continuity', 'id': epic_a}))
+            wait_epic_id(epic_a)
+            page.wait_for_timeout(300)
+            assert no_member_focus(), 'a stale token focused the member after a deliberate scope change'
+            assert panes_at_top(), 'a stale token restored scroll after a deliberate scope change'
+            report['scenarios'].append('member return: a deliberate scope change drops the token instead of restoring stale focus/scroll')
+
+            # (c3) an unavailable remembered member must not focus an
+            # unrelated member row.
+            check_deadline()
+            open_continuity()
+            scroll_and_click_member()
+            expect(page.locator('h1')).to_have_text('Specs')
+            alternate_run = member_run('member-alternate', str(fixture_dir / 'specs' / 'browser-two'), is_current_assignment=True, activity='Alternate member record')
+            mode['value'] = continuity_payload([member('browser-two', status='prepared')], runs=[real_observer['snapshot']['runs'][0], alternate_run])
+            refresh_state()
+            expect(page.locator('h1')).to_have_text('Specs')
+            page.go_back()
+            expect(page.locator('h1')).to_have_text('Epics')
+            expect(page.locator('table.epic-members button', has_text='browser-two')).to_have_count(1)
+            page.wait_for_timeout(400)
+            assert no_member_focus(), 'a missing remembered member focused an unrelated row'
+            report['scenarios'].append('member return: an unavailable remembered member does not focus an unrelated member row')
+
         groups = {'list': group_list, 'loading': group_loading, 'cold': group_cold, 'file': group_file, 'a11y': group_a11y}
-        handlers = {**groups, 'detail': group_detail, 'observations': group_observations}
+        handlers = {**groups, 'detail': group_detail, 'observations': group_observations, 'member': group_member}
         selected = list(groups) if case == 'list' else [case]
         for name in selected:
             check_deadline()
@@ -1291,7 +1632,7 @@ except BaseException:
 finally:
     stop_fixture()
     report['elapsedSeconds'] = round(time.monotonic() - started, 3)
-    report_file = evidence / {'detail': 'epics-detail.json', 'observations': 'epics-observations.json'}.get(case, 'epics-list.json')
+    report_file = evidence / {'detail': 'epics-detail.json', 'observations': 'epics-observations.json', 'member': 'epics-member.json'}.get(case, 'epics-list.json')
     report['reportPath'] = str(report_file)
     report_file.write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))

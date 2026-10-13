@@ -9,7 +9,7 @@ import { clearIncompatibleFields, firstUnmatchedTargetId, inWorkspaceScope, need
 import { destinationEntries, type DestinationProps } from './destinations';
 import { WorkspacePicker } from './destinations/workspaces';
 import { catalogRead, type WorkspaceCatalog } from './destinations/workspace-state';
-import { visibleEpics as sharedVisibleEpics } from './destinations/epic-state';
+import { memberRecords, visibleEpics as sharedVisibleEpics } from './destinations/epic-state';
 import { getLaunchDraft, seedLaunchDraft } from './launch-state';
 import { armLaunchPickerIntent, cancelLaunchPickerIntent, createLaunchPickerIntent, shouldApplyPickerReset, shouldResetAcknowledgedDraft } from './launch-picker-intent';
 
@@ -164,7 +164,7 @@ export default function App() {
     navigate(next, routeHistoryMode(route(), next, { fallback: true }));
   }
   function openPackage(workspaceName: string, name: string) {
-    const matches = packageSummaries(scopedRecords()).filter(item => item.workspace === workspaceName && base(item.package) === name);
+    const matches = memberRecords(packageSummaries(scopedRecords()), workspaceName, name);
     const target = matches.find(item => packageFilterMatches(item, 'active'))
       ?? matches.find(item => item.planned)
       ?? matches.find(item => !item.recent_completion) ?? matches[0];

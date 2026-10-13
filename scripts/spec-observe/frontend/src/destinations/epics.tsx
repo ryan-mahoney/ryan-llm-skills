@@ -11,6 +11,20 @@ import type { DestinationProps } from './index';
 
 const text = (value: unknown): string => (typeof value === 'string' ? value : '');
 
+// One-use in-session return token for member navigation. It stays module-local
+// (no route field, store or persistence) and is consumed by the same epic's
+// remount so unchanged polls never reapply focus or pane scroll.
+type MemberReturn = {
+  epicKey: string | null;
+  memberSlug: string;
+  ws: string | undefined;
+  q: string;
+  id: string | null;
+  listScroll: number;
+  detailScroll: number;
+};
+let memberReturn: MemberReturn | null = null;
+
 // Route identity is a serialized [workspace, epic] tuple. Decode it for display
 // only: a valid tuple shows its epic slug, anything else is not a selection.
 const epicSlug = (id: unknown): string | null => {
@@ -97,6 +111,53 @@ export default function EpicsDestination(props: DestinationProps) {
     }
   });
   onCleanup(() => clearTimeout(timer));
+
+  let returnRestored = false;
+  // The marker is only valid for the epic/scope the token was saved from; any
+  // other mounted epic keeps the row unmarked so it cannot receive focus.
+  const rememberedMember = () => {
+    const token = memberReturn;
+    if (!token) return null;
+    if ((props.route.id ?? null) !== token.id || (props.route.ws ?? null) !== (token.ws ?? null)) return null;
+    return token.memberSlug;
+  };
+  const rememberMember = (workspace: string, name: string) => {
+    const list = document.querySelector<HTMLElement>('.list-pane .records');
+    const detail = document.querySelector<HTMLElement>('.detail-pane .detail-body');
+    memberReturn = {
+      epicKey: props.route.id ?? null,
+      memberSlug: name,
+      ws: props.route.ws,
+      q: props.route.q ?? '',
+      id: props.route.id ?? null,
+      listScroll: list?.scrollTop ?? 0,
+      detailScroll: detail?.scrollTop ?? 0,
+    };
+    props.onSelectPackage(workspace, name);
+  };
+  createEffect(() => {
+    const token = memberReturn;
+    if (!token) return;
+    // A deliberate different epic or scope drops the token.
+    if ((props.route.id ?? null) !== token.id || (props.route.ws ?? null) !== (token.ws ?? null)) {
+      memberReturn = null;
+      return;
+    }
+    if (returnRestored) return;
+    returnRestored = true;
+    // Consume before the asynchronous restore so a poll in between cannot
+    // replay it. A missing remembered member never focuses a sibling row.
+    memberReturn = null;
+    const button = document.querySelector<HTMLButtonElement>('table.epic-members [data-remembered-member="true"] button');
+    if (!button) return;
+    requestAnimationFrame(() => {
+      const list = document.querySelector<HTMLElement>('.list-pane .records');
+      const detail = document.querySelector<HTMLElement>('.detail-pane .detail-body');
+      if (list) list.scrollTop = token.listScroll;
+      if (detail) detail.scrollTop = token.detailScroll;
+      button.focus({ preventScroll: true });
+    });
+  });
 
   const caption = () => {
     if (coldFile()) return '';
@@ -313,7 +374,8 @@ export default function EpicsDestination(props: DestinationProps) {
                 <EpicDetail
                   epic={epic()}
                   records={props.records}
-                  onSelectPackage={props.onSelectPackage}
+                  rememberedMember={rememberedMember()}
+                  onSelectPackage={rememberMember}
                   notice={notice}
                   transportPrimary={Boolean(transport())}
                 />

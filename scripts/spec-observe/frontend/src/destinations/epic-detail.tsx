@@ -91,6 +91,7 @@ export function EpicFacts(props: { epic: WireRecord }) {
 export function EpicMembersTable(props: {
   epic: WireRecord;
   records: WireRecord[];
+  rememberedMember?: string | null;
   onSelectPackage: (workspace: string, slug: string) => void;
 }) {
   const members = () => list(props.epic.members);
@@ -116,8 +117,9 @@ export function EpicMembersTable(props: {
                 const requires = () => epicMemberRequires(member);
                 const observed = () => epicMemberStatus(member);
                 const matched = () => memberRecords(props.records, workspace(), name()).length > 0;
+                const remembered = () => Boolean(name()) && props.rememberedMember === name();
                 return (
-                  <tr>
+                  <tr data-remembered-member={remembered() ? 'true' : undefined}>
                     <th scope="row">
                       <Show
                         when={matched()}
@@ -129,7 +131,12 @@ export function EpicMembersTable(props: {
                           </>
                         }
                       >
-                        <button type="button" class="text-link mono" onClick={() => props.onSelectPackage(workspace(), name())}>
+                        <button
+                          type="button"
+                          class="text-link mono"
+                          aria-current={remembered() ? 'true' : undefined}
+                          onClick={() => props.onSelectPackage(workspace(), name())}
+                        >
                           {name() || 'Unnamed member'}
                         </button>
                       </Show>
@@ -206,6 +213,7 @@ export function EpicNotes(props: { epic: WireRecord }) {
 export function EpicDetail(props: {
   epic: WireRecord;
   records: WireRecord[];
+  rememberedMember?: string | null;
   onSelectPackage: (workspace: string, slug: string) => void;
   notice?: JSX.Element;
   transportPrimary?: boolean;
@@ -241,7 +249,7 @@ export function EpicDetail(props: {
         <Show when={coverage().length}>
           <p class="section-note">{`Coverage ${text(props.epic.coverage?.state) || 'partial'}: ${coverage().join('; ')}`}</p>
         </Show>
-        <EpicMembersTable epic={props.epic} records={props.records} onSelectPackage={props.onSelectPackage} />
+        <EpicMembersTable epic={props.epic} records={props.records} rememberedMember={props.rememberedMember} onSelectPackage={props.onSelectPackage} />
         <EpicNext epic={props.epic} />
         <EpicNotes epic={props.epic} />
       </div>

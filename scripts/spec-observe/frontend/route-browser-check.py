@@ -201,8 +201,11 @@ try:
             # the current record and leaves no epic q/filter/tab behind.
             open_route('epics', ws='fixture', q='Demo epic')
             expect(page.locator('#find-record')).to_have_value('Demo epic')
-            expect(page.locator('article.detail h2')).to_have_text('Demo epic')
-            page.get_by_role('button', name='browser', exact=True).click()
+            # Epic-side selectors only: the rewritten Epics detail keeps its
+            # heading in article.detail-pane and the remembered-member marker
+            # lives on the eligible member table button.
+            expect(page.locator('article.detail-pane .object-head h2')).to_have_text('Demo epic')
+            page.locator('table.epic-members button', has_text='browser').click()
             expect(page.locator('h1')).to_have_text('Specs')
             assert params()['ws'] == ['fixture'], page.url
             assert params().get('id'), page.url
@@ -213,7 +216,7 @@ try:
             page.go_back()
             expect(page.locator('h1')).to_have_text('Epics')
             expect(page.locator('#find-record')).to_have_value('Demo epic')
-            expect(page.locator('article.detail h2')).to_have_text('Demo epic')
+            expect(page.locator('article.detail-pane .object-head h2')).to_have_text('Demo epic')
             assert params()['q'] == ['Demo epic'], page.url
             page.go_forward()
             expect(page.locator('h1')).to_have_text('Specs')
