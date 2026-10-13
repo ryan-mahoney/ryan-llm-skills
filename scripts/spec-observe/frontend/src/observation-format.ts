@@ -38,10 +38,3 @@ export const duration = (start: unknown, end: unknown) => {
   const s = Math.floor((b - a) / 1000), d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
   return d ? `${d}d ${h}h ${m}m` : h ? `${h}h ${m}m ${s % 60}s` : m ? `${m}m ${s % 60}s` : `${s}s`;
 };
-export const packageViewUrl = (packagePath: string, file: string) => {
-  const bytes = new TextEncoder().encode(packagePath);
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  const encoded = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
-  return `/package-view/${encoded}/${file.split('/').map(encodeURIComponent).join('/')}`;
-};

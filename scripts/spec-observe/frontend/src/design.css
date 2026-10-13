@@ -237,3 +237,10 @@
    row matches .record's 90px min-height using only shared tokens. */
 .agents-skeleton .skeletons{padding:0}
 .agents-skeleton .skeleton{min-height:90px;padding:18px 16px;border-bottom:1px solid var(--ds-line)}
+
+/* Agents detail keeps the object head and action bar visible while the body
+   scrolls, and lets recorded execution paths wrap inside the semantic table. */
+.agent-detail{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0;max-width:none;margin:0;width:100%}
+.agent-detail>.object-head{flex-shrink:0}
+.agent-detail .path{overflow-wrap:anywhere;word-break:break-word}
+.agent-detail .locate-command{width:100%;white-space:pre-wrap;overflow-wrap:anywhere}

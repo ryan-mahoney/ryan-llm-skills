@@ -357,8 +357,9 @@ export default function App() {
   }
   function notes() {
     const out: string[] = [];
-    // Workspaces, Epics and Specs own their connection/coverage recovery in the destination.
-    const destinationNotes = ['workspaces', 'epics', 'specs'].includes(route().dest) || pickerRequired();
+    // Workspaces, Epics, Specs and Agents own their connection/coverage and freshness
+    // recovery in the destination, so the global strip must not duplicate or shift it.
+    const destinationNotes = ['workspaces', 'epics', 'specs', 'agents'].includes(route().dest) || pickerRequired();
     if (error() && !destinationNotes) out.push(error());
     if (payload()?.truncated) out.push('Snapshot read budget reached; some observations are unavailable.');
     for (const e of payload()?.errors ?? []) out.push(`${e.source ? str(e.source) + ': ' : ''}${str(e.message)}`);

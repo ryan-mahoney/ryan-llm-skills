@@ -1,6 +1,7 @@
-import { createEffect, createSignal, on, onCleanup, Show } from 'solid-js';
-import { AgentDetail, AgentList } from '../Observations';
-import { EmptyState, MasterDetail, RegionalSkeleton, SectionTabs, StateNotice } from '../primitives';
+import { createEffect, createMemo, createSignal, on, onCleanup, Show } from 'solid-js';
+import AgentDetail from '../AgentDetail';
+import { AgentList } from '../Observations';
+import { EmptyState, MasterDetail, RegionalSkeleton, SectionTabs, StateNotice, StatusText } from '../primitives';
 import { agentCounts, agentViewState, effectiveAgentFilter, visibleAgents } from '../agent-state';
 import { stale, time } from '../format';
 import { authoritativeObservers } from '../model';
@@ -8,9 +9,10 @@ import type { Envelope, WireRecord } from '../model';
 import { formatHash } from '../route';
 import type { DestinationProps } from './index';
 
-// Adapter-owned in-memory list offsets, keyed by the exact rendered route.
+// Adapter-owned in-memory scroll offsets, keyed by the exact rendered route.
 // They hold only scroll positions and never cross a scope/import context.
-const agentScrollOffsets = new Map<string, number>();
+type AgentScrollOffsets = { list: number; detail: number };
+const agentScrollOffsets = new Map<string, AgentScrollOffsets>();
 
 // Observer assignment-coverage reasons for the partial-list notice: the
 // payload is the only owner of these facts, so they are read, not inferred.
@@ -151,37 +153,92 @@ export default function AgentsDestination(props: DestinationProps) {
   };
 
   let recordsEl: HTMLDivElement | undefined;
+  let detailEl: HTMLDivElement | undefined;
+  let restoreTimer: ReturnType<typeof setTimeout> | undefined;
+  let settledRouteKey: string | null = null;
+  // Programmatic restoration dispatches its own scroll events; while the flag
+  // is set they must not be mistaken for operator scroll positions.
+  let restoring = false;
 
-  // Adapter-owned scroll continuity: save the outgoing offset before each
-  // route change, then restore the settled route's offset (zero included).
-  // A missing entry means an unvisited route and starts at the top. This
-  // runs on mount as well as on route changes; only a genuine scope/import
-  // context change clears the map, so ordinary refresh/polling keeps it.
-  let lastAgentsRouteKey: string | null = null;
-  createEffect(() => {
-    const key = formatHash(props.route);
-    const previous = lastAgentsRouteKey;
-    lastAgentsRouteKey = key;
-    if (previous !== null && previous !== key && recordsEl) {
-      agentScrollOffsets.set(previous, recordsEl.scrollTop);
-    }
-    if (recordsEl) {
-      const saved = agentScrollOffsets.get(key);
-      recordsEl.scrollTop = saved ?? 0;
-    }
+  const currentRouteKey = () => formatHash(props.route);
+
+  // Positions come from the live scrollers, never from the route-derived
+  // state: by the time the route effect runs the next filter/query may
+  // already have clamped the list to zero.
+  const scrollSnapshot = (): AgentScrollOffsets => ({
+    list: recordsEl ? recordsEl.scrollTop : 0,
+    detail: detailEl && detailEl.isConnected ? detailEl.scrollTop : 0,
   });
-  createEffect(on(() => [props.route.ws, props.live] as const, () => {
-    agentScrollOffsets.clear();
-    lastAgentsRouteKey = null;
-  }, { defer: true }));
 
-  const rememberScroll = () => {
-    if (recordsEl) agentScrollOffsets.set(formatHash(props.route), recordsEl.scrollTop);
+  // Initiating callbacks run before the new route renders, so the outgoing
+  // positions are still the ones the operator saw.
+  const saveOutgoingScroll = () => {
+    agentScrollOffsets.set(currentRouteKey(), scrollSnapshot());
   };
+
+  const rememberListScroll = () => {
+    if (restoring) return;
+    const key = currentRouteKey();
+    const prior = agentScrollOffsets.get(key);
+    agentScrollOffsets.set(key, {
+      list: recordsEl ? recordsEl.scrollTop : prior?.list ?? 0,
+      detail: prior?.detail ?? 0,
+    });
+  };
+
+  const rememberDetailScroll = () => {
+    if (restoring) return;
+    const key = currentRouteKey();
+    const prior = agentScrollOffsets.get(key);
+    agentScrollOffsets.set(key, {
+      list: prior?.list ?? 0,
+      detail: detailEl && detailEl.isConnected ? detailEl.scrollTop : prior?.detail ?? 0,
+    });
+  };
+
+  // Restore in a bounded task so the settled route's rows and detail body are
+  // in the DOM; the key guard drops a superseded route's restore.
+  const scheduleScrollRestore = (key: string) => {
+    if (restoreTimer !== undefined) clearTimeout(restoreTimer);
+    restoreTimer = setTimeout(() => {
+      restoreTimer = undefined;
+      if (currentRouteKey() !== key) return;
+      const saved = agentScrollOffsets.get(key);
+      restoring = true;
+      if (recordsEl) recordsEl.scrollTop = saved?.list ?? 0;
+      if (detailEl && detailEl.isConnected) detailEl.scrollTop = saved?.detail ?? 0;
+      requestAnimationFrame(() => {
+        restoring = false;
+      });
+    }, 0);
+  };
+
+  // The route effect restores the settled route after layout and never saves
+  // the outgoing one: it can already see the clamped list. Back/Forward rely
+  // on the settled scroll events recorded while the outgoing route was shown.
+  createEffect(() => {
+    const key = currentRouteKey();
+    if (settledRouteKey === key) return;
+    settledRouteKey = key;
+    scheduleScrollRestore(key);
+  });
+  // Context equality is a scalar, not a tuple literal: `on` would otherwise
+  // fire the clear for every route update because each tuple is a fresh
+  // reference. Only a genuine ws/import change may drop the saved offsets.
+  const scrollContext = createMemo(() => JSON.stringify([props.route.ws, props.live]));
+  createEffect(on(scrollContext, () => {
+    agentScrollOffsets.clear();
+    settledRouteKey = null;
+  }, { defer: true }));
+  onCleanup(() => {
+    if (restoreTimer !== undefined) clearTimeout(restoreTimer);
+    if (settledRouteKey) agentScrollOffsets.set(settledRouteKey, scrollSnapshot());
+  });
 
   // Clear both parts of the filter in one user action; App.setQuery/setFilter
   // compose synchronously and preserve ws.
   const clearFilters = () => {
+    saveOutgoingScroll();
     props.onQuery('');
     props.onFilter('all');
   };
@@ -193,6 +250,7 @@ export default function AgentsDestination(props: DestinationProps) {
   // clearing the query preserves it); otherwise the id is dropped and the
   // query alone settles the group, selecting the first settled row.
   const onAgentsSearch = (value: string) => {
+    saveOutgoingScroll();
     const next = { ...props.route };
     if (value) next.q = value;
     else delete next.q;
@@ -231,11 +289,14 @@ export default function AgentsDestination(props: DestinationProps) {
               variant="filters"
               active={filter()}
               tabs={[{ key: 'active', label: 'Active' }, { key: 'ended', label: 'Ended' }]}
-              onSelect={props.onFilter}
+              onSelect={value => {
+                saveOutgoingScroll();
+                props.onFilter(value);
+              }}
             />
           </div>
           <div class="list-caption">{caption()}</div>
-          <div class="records" ref={el => (recordsEl = el)} onScroll={rememberScroll}>
+          <div class="records" ref={el => (recordsEl = el)} onScroll={rememberListScroll}>
             <Show when={view() === 'loading' && initialDelayElapsed()}>
               <div class="agents-skeleton">
                 <RegionalSkeleton rows={4} label="Loading agents" />
@@ -295,7 +356,10 @@ export default function AgentsDestination(props: DestinationProps) {
                   assignments={visible()}
                   query={props.route.q ?? ''}
                   selected={props.route.id ?? null}
-                  onSelect={props.onSelect}
+                  onSelect={id => {
+                    saveOutgoingScroll();
+                    props.onSelect(id);
+                  }}
                 />
               </div>
             </Show>
@@ -303,34 +367,62 @@ export default function AgentsDestination(props: DestinationProps) {
         </>
       }
     >
-      <div class="detail-body">
-        <Show when={view() === 'loading' && initialDelayElapsed()}>
+      <Show when={view() === 'loading' && initialDelayElapsed()}>
+        <div class="detail-body">
           <RegionalSkeleton rows={3} label="Loading agents" />
-        </Show>
-        <Show when={view() !== 'loading' && errorDetail()}>
-          <StateNotice
-            tone="error"
-            title="Agent observation unavailable"
-            action={
-              <button type="button" class="ds-btn" onClick={props.onRetryConnection}>
-                Retry state
-              </button>
-            }
-          >
-            The host could not read assignment observations. No process failure has been inferred.
-          </StateNotice>
-        </Show>
-        <Show when={view() !== 'loading' && !errorDetail()}>
-          <AgentDetail
-            assignment={selected()}
-            records={props.records}
-            token={props.token}
-            live={props.live}
-            refresh={props.refresh}
-            onEnded={props.onEnded}
-          />
-        </Show>
-      </div>
+        </div>
+      </Show>
+      <Show when={view() !== 'loading' && errorDetail()}>
+        <article class="detail agent-detail">
+          <Show when={typeof props.route.id === 'string' && props.route.id !== ''}>
+            <div class="object-head">
+              <div class="object-top detail-title">
+                <h2 class="mono" title={props.route.id}>{props.route.id}</h2>
+                <StatusText tone="neutral">Not confirmed</StatusText>
+              </div>
+            </div>
+          </Show>
+          <div class="detail-body">
+            <StateNotice
+              tone="error"
+              title="Agent observation unavailable"
+              action={
+                <button type="button" class="ds-btn" onClick={props.onRetryConnection}>
+                  Retry state
+                </button>
+              }
+            >
+              The host could not read assignment observations. No process failure has been inferred.
+            </StateNotice>
+          </div>
+        </article>
+      </Show>
+      <Show when={view() !== 'loading' && !errorDetail()}>
+        <AgentDetail
+          assignment={selected()}
+          records={props.records}
+          token={props.token}
+          live={props.live}
+          refresh={props.refresh}
+          onEnded={props.onEnded}
+          onNavigate={next => {
+            saveOutgoingScroll();
+            props.onNavigate(next);
+          }}
+          onDetailScroll={rememberDetailScroll}
+          detailBodyRef={el => {
+            detailEl = el;
+          }}
+          ws={props.route.ws}
+          view={view()}
+          sourceUnavailable={sourceUnavailable()}
+          listPartial={listPartial()}
+          listObservedAt={listObservedAt()}
+          connectionFailed={props.connectionFailed}
+          observationStale={stale(listObservedAt())}
+          onRetryConnection={props.onRetryConnection}
+        />
+      </Show>
     </MasterDetail>
   );
 }

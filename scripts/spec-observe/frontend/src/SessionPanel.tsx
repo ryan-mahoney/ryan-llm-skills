@@ -1,5 +1,6 @@
 import {Show, createSignal, onCleanup, onMount} from 'solid-js';
 import {getJson,postJson} from './api';
+import {copyText} from './clipboard';
 
 type Session={assignment_id:string;identity:string;can_end:boolean;state:string;reason:string;attach_command:string|null;local_command:string|null};
 export default function SessionPanel(props:{assignment:any;token?:string;live:boolean;refresh:()=>Promise<void>;onEnded:(id:string)=>void}) {
@@ -20,8 +21,8 @@ export default function SessionPanel(props:{assignment:any;token?:string;live:bo
   }
   async function copy(){
     const text=session()?.attach_command;if(!text)return;
-    try{await navigator.clipboard.writeText(text);setCopied('Attach command copied. Paste it into your terminal.');}
-    catch{command.focus();command.select();setCopied('Select and copy the command, then paste it into your terminal.');}
+    const result=await copyText(text,command);
+    setCopied(result==='copied'?'Attach command copied. Paste it into your terminal.':'Select and copy the command, then paste it into your terminal.');
   }
   function ask(){const s=session();if(!s?.can_end||busy())return;setReview({...s});setError('');dialog.showModal();}
   async function end(){

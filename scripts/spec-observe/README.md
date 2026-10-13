@@ -157,13 +157,25 @@ display state — live, live (unrecorded), launching, launch unconfirmed, exited
 next action (attach command, `node ~/.agents/scripts/workspaces/cli.mjs locate <id>`, wait, do not relaunch,
 history, or inspect recorded workers). Quiet session activity is informational
 (no growth for 120 seconds); attached clients are presence only and never grant
-control. Selecting an agent shows separate Execution, Lifecycle and Declared
-evidence sections: Execution reports recorded versus observed state and coverage,
-Lifecycle reports the linked workflow run, quiet, attachment and unconfirmed
-workers, and Declared evidence reports a ready/blocked verdict at its declared
-commit with `declared-artifact` scope, or `not-assessed` when no artifact was
-read. Assignment coverage (`complete` or `partial`) explains missing probe reads.
-The record view is read-only: it never invokes attach, takeover or resume and
+control. Selecting an agent opens the dedicated AgentDetail composition: a
+non-scrolling object head with identity status and a `tabindex="-1"` heading
+focused only when the selected identity changes, a scrolling body that renders
+one qualification notice at most (recovery for error/offline/stale, then
+identity/record disagreement, unconfirmed workers and partial assignment
+coverage), the agent guidance headline and caution, separated recorded/observed
+facts, a semantic Execution table (execution directory and repository id wrap
+inside the table), the Terminal session panel (same-key mounted across polls and
+retained reads), an explicit operator locate command with a native copy control
+and a readonly textarea fallback when the clipboard is denied, declared evidence
+from the compatible linked workflow record or an explicitly labelled package-level
+fallback (not this assignment acceptance), and attention/coverage disclosure. A
+persistent ActionBar keeps Copy locate command, Open spec (planned/completed
+filter and workspace preserved through the shared spec route) and Open work tour
+(`source=package`/`id=<canonical package>`/`path=work-tour.html`, rendered by the
+real sandboxed Files reader) visible on long detail, elevating exactly one
+recovery primary (Retry state, Retry connection or Refresh state) for
+error/offline/stale reads. The record view is read-only: it never invokes attach,
+takeover or resume and
 never writes records. The local live session controls only copy the attach command
 and end the session after the identity confirmation; the agent detail shows the
 bounded last response, not the transcript, and remote or imported snapshots expose
