@@ -270,21 +270,42 @@
 /* Conversations master/detail (screen 05): the layout-neutral destination
    wrapper keeps the MasterDetail grid under the shell, the migrated thread
    records keep the shared record chrome (44px hit box, inset focus), and the
-   list caption/new-thread plus transcript/composer/queue spacing reuse the
-   --ds-* tokens without restyling any sibling surface. The legacy thread-*
-   rules are neutralized only inside this destination. */
+   list caption plus transcript/composer/queue spacing reuse the --ds-* tokens
+   without restyling any sibling surface. The legacy thread-* rules are
+   neutralized only inside this destination; the user card keeps its shared
+   18px left inset. */
 .conversations-destination{display:contents}
 :where(.conversations-destination) .record{width:100%;border:0;border-bottom:1px solid var(--ds-line);border-radius:0;background:none;text-align:left;font:inherit;min-height:44px}
 :where(.conversations-destination) .record:focus-visible{outline:2px solid var(--ds-accent);outline-offset:-2px}
 .conversations-destination .list-caption{padding:0 16px 12px}
-.conversations-destination .thread-new{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:end;margin-top:12px}
-.conversations-destination .thread-new .thread-field{display:flex;flex-direction:column;gap:4px;min-width:0}
-.conversations-destination .thread-new .thread-field label{margin-bottom:0}
-.conversations-destination .thread-new select.ds-input{width:100%;min-width:0;background:var(--ds-panel-2);border:1px solid var(--ds-input-border);border-radius:3px;color:var(--ds-ink);padding:0 30px 0 12px;height:44px}
-.conversations-destination .thread-new>p{grid-column:1/-1;margin:0}
+/* Start conversation (screens 09/83/84): the native modal panel reuses the
+   captured dialog-content geometry over the reference full dark backdrop;
+   field, prepared-note and action styling stay scoped to this dialog. */
+#thread-new-dialog{width:480px;max-width:calc(100vw - 48px);max-height:80vh;padding:28px;border:1px solid var(--ds-line-2);border-radius:4px;background:var(--ds-panel);color:var(--ds-ink-2);box-shadow:var(--ds-shadow-lg)}
+#thread-new-dialog::backdrop{background:rgba(0,0,0,.68)}
+/* Legacy dialog typography is neutralized only here: the reference panel uses
+   zero paragraph margins, a zero-margin field label and normal heading
+   tracking, while the callout and prepared-note spacing below stay intact. */
+#thread-new-dialog p{margin:0}
+#thread-new-dialog h2{letter-spacing:normal}
+#thread-new-dialog .field{gap:8px;margin:20px 0}
+#thread-new-dialog .field label{font-weight:600;font-size:13px;color:var(--ds-ink);margin-bottom:0}
+#thread-new-dialog .field small{font-size:12px;color:var(--ds-muted)}
+#thread-new-dialog select.ds-input{width:100%;min-width:0;background:var(--ds-panel-2);border:1px solid var(--ds-input-border);border-radius:3px;color:var(--ds-ink);padding:0 30px 0 12px;height:44px}
+#thread-new-dialog .thread-new-fields{margin-top:16px}
+#thread-new-dialog .thread-new-prepared{padding:14px 16px;border:1px solid var(--ds-line-2);border-left:2px solid var(--ds-accent);border-radius:3px;background:var(--ds-panel-2)}
+#thread-new-dialog .thread-new-prepared p{color:var(--ds-ink-2);font-size:13px;margin-top:8px;white-space:pre-wrap;overflow-wrap:anywhere}
+#thread-new-dialog .thread-new-prepared p:first-child{margin-top:0}
+#thread-new-dialog .ds-callout{margin-bottom:20px}
+#thread-new-dialog .ds-callout p{margin-top:4px}
+#thread-new-dialog .actions{justify-content:flex-end}
+/* The disabled create control stays neutral at full opacity; the legacy
+   sheet's disabled opacity must not tint the primary action purple. */
+#thread-new-dialog #thread-create:disabled,#thread-new-dialog #thread-create:disabled:hover{background:var(--ds-chrome);color:var(--ds-muted);border-color:var(--ds-line-2);opacity:1}
+#thread-new-dialog button:focus-visible{outline:2px solid var(--ds-accent);outline-offset:3px;border-radius:3px}
 .conversations-destination .ds-transcript.thread-transcript{display:block;max-height:none;border:0;background:none;gap:0;padding:0 28px 20px}
 .conversations-destination .ds-turn.thread-entry{border-left:0;padding-left:0}
-.conversations-destination .ds-turn--user.thread-entry.user{border-left:0}
+.conversations-destination .ds-turn--user.thread-entry.user{border-left:0;padding-left:18px}
 .conversations-destination .composer.thread-composer{display:block;gap:0}
 .conversations-destination .composer textarea.ds-input{width:100%;background:var(--ds-panel-2);border:1px solid var(--ds-input-border);border-radius:3px;color:var(--ds-ink);padding:12px;line-height:1.6;min-height:82px;resize:none}
 .conversations-destination .composer textarea.ds-input::placeholder{color:var(--ds-muted)}

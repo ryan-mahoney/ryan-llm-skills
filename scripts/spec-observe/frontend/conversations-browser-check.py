@@ -16,7 +16,9 @@ route-drafts keeps the route/draft/retry regression only. journey runs the same
 traversals against the renamed Conversations adapter, then captures the
 production reading surface and the reference at 1280x900 and 1600x900, writing
 conversations-*.png captures, conversations-visual-inspection.md and
-conversations-browser-journey.json.
+conversations-browser-journey.json. new-thread runs only the EV-7 creation
+scenarios against the built App plus an isolated Vite source-app seed proof,
+writing conversations-browser-new-thread.json; it never runs route-drafts.
 
 The App, route owner, API transport and adapter are real; browser-fixture.mjs
 fakes only the final discussion service/process boundary. The checker owns its
@@ -41,7 +43,7 @@ from pathlib import Path
 from playwright.sync_api import expect, sync_playwright
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--case', choices=['route-drafts', 'journey'], default='route-drafts')
+parser.add_argument('--case', choices=['route-drafts', 'journey', 'new-thread'], default='route-drafts')
 parser.add_argument('--capture-reference', default=None)
 options = parser.parse_args()
 case = options.case
@@ -69,7 +71,9 @@ report = {
     'observedCommit': None,
     'dirty': None,
     'reference': str(reference_html) if reference_html else None,
-    'visualParity': 'not claimed (route/draft regression only)' if case == 'route-drafts' else 'observed (production and reference captures at 1280x900 and 1600x900; see conversations-visual-inspection.md)',
+    'visualParity': ('not claimed (route/draft regression only)' if case == 'route-drafts'
+                     else 'not claimed (EV-7 creation coverage; captures recorded, owner inspects images)' if case == 'new-thread'
+                     else 'observed (production and reference captures at 1280x900 and 1600x900; see conversations-visual-inspection.md)'),
     'cleanup': {},
 }
 fixture = None
@@ -78,6 +82,32 @@ browser = None
 context = None
 fixture_info = {}
 cleanup = {'fixtureTerminated': False, 'browserClosed': False, 'temporaryFixtureRootRemoved': None, 'errors': []}
+VITE_SOURCE_SCRIPT = """
+import {createServer} from 'vite';
+import solid from 'vite-plugin-solid';
+const server = await createServer({
+  configFile: false,
+  root: process.cwd(),
+  logLevel: 'silent',
+  plugins: [solid()],
+  server: {
+    host: '127.0.0.1',
+    port: 0,
+    strictPort: false,
+    proxy: {
+      '/api': {target: process.env.FIXTURE_URL, changeOrigin: true},
+      '/package-view': {target: process.env.FIXTURE_URL, changeOrigin: true},
+    },
+  },
+});
+await server.listen();
+const address = server.httpServer.address();
+console.log(JSON.stringify({url: 'http://127.0.0.1:' + address.port + '/'}));
+const stop = async () => { try { await server.close(); } finally { process.exit(0); } };
+process.stdin.on('end', stop);
+process.on('SIGTERM', stop);
+process.on('SIGINT', stop);
+"""
 
 
 class QuietRequestHandler(SimpleHTTPRequestHandler):
@@ -353,6 +383,463 @@ def run(url, thread1, thread2):
                 pass
 
 
+def run_new_thread(url, thread1, thread2):
+    """EV-7 production creation coverage: the built App plus the owned fixture
+    for the creation lifecycle, then an isolated Vite source-app seed proof.
+
+    This case owns its scenarios and never runs the route-drafts traversal.
+    Ordinary scenarios and captures use the built dashboard; the seed proof
+    starts its own installed Vite server (configFile:false) and uses only the
+    public conversations-state seed/open path.
+    """
+    global reference_server
+
+    def control(action='', value=''):
+        response = context.request.get(url + '/__fixture/control?action=' + action + '&value=' + str(value))
+        assert response.ok
+        return response.json()
+
+    def posts(name):
+        return [item for item in control()['posts'] if item['name'] == name]
+
+    def create_posts():
+        return posts('create')
+
+    def send_count():
+        return len(posts('send'))
+
+    def passed(name):
+        report['scenarios'].append(name)
+        report['scenarioTimings'].append({'scenario': name, 'atSeconds': round(time.monotonic() - started, 3)})
+
+    def capture(name):
+        path = browser_evidence / name
+        page.screenshot(path=str(path))
+        report['captures'].append(str(path))
+        return str(path)
+
+    def active_id(target_page=None):
+        return (target_page or page).evaluate("() => document.activeElement ? document.activeElement.id : ''")
+
+    def active_text(target_page=None):
+        return (target_page or page).evaluate("() => document.activeElement ? document.activeElement.textContent.trim() : ''")
+
+    def wait_target_options(target_page):
+        target_page.wait_for_function("() => [...document.querySelectorAll('#thread-new-target option')].some(option => option.value === 'fixture-repo')")
+
+    vite = None
+    try:
+        # 0. Cold addressable entry: a direct tab=new deep link opens the real
+        #    dialog for the same thread id, and Escape removes only the tab.
+        page.set_viewport_size({'width': 1280, 'height': 900})
+        page.goto(url + '/#/conversations?ws=fixture&id=' + thread1 + '&tab=new', wait_until='domcontentloaded')
+        expect(page.locator('#thread-new-dialog')).to_be_visible()
+        page.locator('#thread-new-target').wait_for()
+        expect(page.locator('[data-thread="' + thread1 + '"]')).to_have_attribute('aria-pressed', 'true')
+        page.keyboard.press('Escape')
+        expect(page.locator('#thread-new-dialog')).not_to_be_visible()
+        assert 'tab=new' not in page.url, page.url
+        expect(page).to_have_url(re.compile(r'#/conversations\?ws=fixture&id=' + re.escape(thread1) + r'$'))
+        passed('new thread: a cold tab=new deep link opens the dialog for the same thread id and Escape removes only the tab')
+
+        # 1. Real header entry at both widths; the selected thread draft is
+        #    retained; dialog Tab/Shift+Tab wraps; Escape removes only the tab
+        #    and restores header focus.
+        page.goto(url + '/#/conversations?ws=fixture&id=' + thread1, wait_until='domcontentloaded')
+        draft = page.locator('#thread-draft')
+        draft.wait_for()
+        draft.fill('Creation route draft')
+        expect(page.locator('#thread-new-action')).to_be_visible()
+        page.set_viewport_size({'width': 1600, 'height': 900})
+        page.wait_for_timeout(120)
+        expect(page.locator('#thread-new-action')).to_be_visible()
+        page.set_viewport_size({'width': 1280, 'height': 900})
+        page.wait_for_timeout(120)
+        page.locator('#thread-new-action').click()
+        expect(page).to_have_url(re.compile(r'tab=new'))
+        expect(page.locator('#thread-new-dialog')).to_be_visible()
+        page.wait_for_function("() => document.activeElement && document.activeElement.id === 'thread-new-target'")
+        expect(page.locator('#thread-draft')).to_have_value('Creation route draft')
+        page.locator('#thread-create').focus()
+        page.keyboard.press('Tab')
+        assert active_id() == 'thread-new-target', ('forward wrap', active_id())
+        page.keyboard.press('Shift+Tab')
+        assert active_id() == 'thread-create', ('backward wrap', active_id())
+        page.locator('#thread-new-target').focus()
+        expect(page.locator('#thread-new-target')).to_be_focused()
+        capture('conversations-new-thread-ideal@1280.png')
+        page.set_viewport_size({'width': 1600, 'height': 900})
+        page.wait_for_timeout(150)
+        capture('conversations-new-thread-ideal@1600.png')
+        page.set_viewport_size({'width': 1280, 'height': 900})
+        page.wait_for_timeout(120)
+        page.keyboard.press('Escape')
+        expect(page.locator('#thread-new-dialog')).not_to_be_visible()
+        assert 'tab=new' not in page.url, page.url
+        page.wait_for_function("() => document.activeElement && document.activeElement.id === 'thread-new-action'")
+        expect(page.locator('#thread-draft')).to_have_value('Creation route draft')
+        passed('new thread: header entry at both widths, dialog Tab wrap, Escape removes only the tab and restores header focus with the thread draft retained')
+
+        # 2. Chosen fixture repository: exact POST target shape, exact returned
+        #    id selection, focused empty composer, zero send.
+        sends_before = send_count()
+        page.locator('#thread-new-action').click()
+        expect(page.locator('#thread-new-dialog')).to_be_visible()
+        wait_target_options(page)
+        page.locator('#thread-new-target').select_option('fixture-repo')
+        with page.expect_response('**/api/thread/create') as creation_response:
+            page.locator('#thread-create').click()
+        assert creation_response.value.ok, creation_response.value
+        created = create_posts()[-1]
+        assert created['input']['workspace_id'] == 'fixture', created['input']
+        assert created['input']['target'] == {'kind': 'repository', 'repository_id': 'fixture-repo'}, created['input']
+        created_id = created['result']['thread_id']
+        expect(page).to_have_url(re.compile(r'#/conversations\?ws=fixture&id=' + re.escape(created_id)))
+        expect(page.locator('[data-thread="' + created_id + '"]')).to_have_attribute('aria-pressed', 'true')
+        expect(page.locator('#thread-draft')).to_have_value('')
+        page.wait_for_function("() => document.activeElement && document.activeElement.id === 'thread-draft'")
+        assert send_count() == sends_before, 'creation triggered a send'
+        passed('new thread: chosen repository target posts exactly, the exact created id is selected and its empty composer is focused with no send')
+
+        # 3. Held create: fields/Create disabled, Return enabled and focused
+        #    with a single-control Tab wrap, one POST reused across
+        #    Return/reopen, then settlement to the exact created id.
+        control('delay-create', 'true')
+        page.goto(url + '/#/conversations?ws=fixture&id=' + thread1, wait_until='domcontentloaded')
+        draft = page.locator('#thread-draft')
+        draft.wait_for()
+        page.locator('#thread-new-action').click()
+        expect(page.locator('#thread-new-dialog')).to_be_visible()
+        wait_target_options(page)
+        page.locator('#thread-new-target').select_option('fixture-repo')
+        creates_before = len(create_posts())
+        with page.expect_request('**/api/thread/create'):
+            page.locator('#thread-create').click()
+        expect(page.locator('#thread-new-target')).to_be_disabled()
+        expect(page.locator('#thread-create')).to_be_disabled()
+        expect(page.locator('#thread-new-dialog')).to_have_attribute('aria-busy', 'true')
+        page.wait_for_function("() => document.activeElement && document.activeElement.textContent.trim() === 'Return to threads'")
+        page.keyboard.press('Tab')
+        assert active_text() == 'Return to threads', ('pending wrap', active_text())
+        capture('conversations-new-thread-pending@1280.png')
+        assert len(create_posts()) == creates_before + 1, create_posts()
+        page.locator('#thread-new-dialog button:has-text("Return to threads")').click()
+        expect(page.locator('#thread-new-dialog')).not_to_be_visible()
+        assert 'tab=new' not in page.url, page.url
+        page.locator('#thread-new-action').click()
+        expect(page.locator('#thread-create')).to_be_disabled()
+        page.wait_for_function("() => document.activeElement && document.activeElement.textContent.trim() === 'Return to threads'")
+        assert len(create_posts()) == creates_before + 1, 'reopen started a duplicate create'
+        with page.expect_response('**/api/thread/create') as held_response:
+            control('release-create', 'true')
+        assert held_response.value.ok, held_response.value
+        held_id = create_posts()[-1]['result']['thread_id']
+        expect(page).to_have_url(re.compile(r'#/conversations\?ws=fixture&id=' + re.escape(held_id)))
+        page.wait_for_function("() => document.activeElement && document.activeElement.id === 'thread-draft'")
+        assert len(create_posts()) == creates_before + 1, 'acknowledgement started another create'
+        passed('new thread: held create disables fields/Create, focuses and wraps the enabled Return, reuses one POST across reopen and settles to the exact created id with composer focus')
+
+        # 4. Held create closed and left for Files: the late release never
+        #    steals the route and the created row is discoverable on return.
+        control('delay-create', 'true')
+        page.goto(url + '/#/conversations?ws=fixture&id=' + thread1, wait_until='domcontentloaded')
+        draft = page.locator('#thread-draft')
+        draft.wait_for()
+        draft.fill('Retained thread draft')
+        page.locator('#thread-new-action').click()
+        expect(page.locator('#thread-new-dialog')).to_be_visible()
+        wait_target_options(page)
+        page.locator('#thread-new-target').select_option('fixture-repo')
+        creates_before = len(create_posts())
+        with page.expect_request('**/api/thread/create'):
+            page.locator('#thread-create').click()
+        page.keyboard.press('Escape')
+        expect(page.locator('#thread-new-dialog')).not_to_be_visible()
+        page.locator('.nav-item[data-area="files"]').click()
+        expect(page).to_have_url(re.compile(r'#/files'))
+        with page.expect_response('**/api/thread/create') as away_response:
+            control('release-create', 'true')
+        assert away_response.value.ok, away_response.value
+        away_id = create_posts()[-1]['result']['thread_id']
+        assert len(create_posts()) == creates_before + 1
+        page.wait_for_timeout(300)
+        expect(page).to_have_url(re.compile(r'#/files'))
+        page.locator('.nav-item[data-area="conversations"]').click()
+        expect(page).to_have_url(re.compile(r'#/conversations\?ws=fixture&id=' + re.escape(thread1)))
+        expect(page.locator('[data-thread="' + away_id + '"]')).to_be_visible()
+        expect(page.locator('#thread-draft')).to_have_value('Retained thread draft')
+        passed('new thread: a held create closed before release never steals the Files route and the created row is discoverable with the thread draft retained on return')
+
+        # 5. Failed create with a chosen target: warning and target retained,
+        #    Refresh threads stays GET-only, reopen keeps the warning and
+        #    Create unavailable — no automatic retry.
+        control('fail-create', 'true')
+        page.goto(url + '/#/conversations?ws=fixture&id=' + thread1, wait_until='domcontentloaded')
+        draft = page.locator('#thread-draft')
+        draft.wait_for()
+        page.locator('#thread-new-action').click()
+        expect(page.locator('#thread-new-dialog')).to_be_visible()
+        wait_target_options(page)
+        page.locator('#thread-new-target').select_option('fixture-repo')
+        creates_before = len(create_posts())
+        with page.expect_response('**/api/thread/create'):
+            page.locator('#thread-create').click()
+        expect(page.locator('#thread-new-dialog .ds-callout.error')).to_contain_text('Creation could not be confirmed')
+        expect(page.locator('#thread-create')).to_have_count(0)
+        expect(page.locator('#thread-new-target')).to_have_value('fixture-repo')
+        assert len(create_posts()) == creates_before + 1
+        capture('conversations-new-thread-error@1280.png')
+        with page.expect_request(lambda request: '/api/threads' in request.url and request.method == 'GET'):
+            page.locator('#thread-new-dialog button:has-text("Refresh threads")').click()
+        page.wait_for_timeout(250)
+        assert len(create_posts()) == creates_before + 1, 'Refresh threads sent a create'
+        page.keyboard.press('Escape')
+        expect(page.locator('#thread-new-dialog')).not_to_be_visible()
+        page.locator('#thread-new-action').click()
+        expect(page.locator('#thread-new-dialog .ds-callout.error')).to_contain_text('Creation could not be confirmed')
+        expect(page.locator('#thread-new-target')).to_have_value('fixture-repo')
+        expect(page.locator('#thread-create')).to_have_count(0)
+        assert len(create_posts()) == creates_before + 1, 'reopen sent a create'
+        control('fail-create', 'false')
+        passed('new thread: failed create retains the warning and chosen target, Refresh threads stays GET-only, and reopening keeps the warning with Create unavailable')
+
+        # References 09/83/84 through the owned loopback static server at the
+        # matching widths; image inspection belongs to the owner.
+        if reference_html:
+            reference_root = reference_html.parent.parent
+            assert (reference_root / 'vendor' / 'tailwind.js').is_file(), reference_root
+            screens = [
+                (reference_html, 'conversations-new-thread-reference-09', (1280, 1600)),
+                (reference_html.with_name('83-new-thread-creating.html'), 'conversations-new-thread-reference-83', (1280,)),
+                (reference_html.with_name('84-new-thread-error.html'), 'conversations-new-thread-reference-84', (1280,)),
+            ]
+            for screen, _prefix, _widths in screens:
+                assert screen.is_file(), screen
+            if reference_server is None:
+                reference_server = ThreadingHTTPServer(('127.0.0.1', 0), partial(QuietRequestHandler, directory=str(reference_root)))
+                threading.Thread(target=reference_server.serve_forever, daemon=True).start()
+            base_url = f'http://127.0.0.1:{reference_server.server_address[1]}/'
+            reference_page = context.new_page()
+            reference_page.on('pageerror', lambda error: report['pageErrors'].append(f'reference: {error}'))
+            reference_captures = []
+            for screen, prefix, widths in screens:
+                reference_page.goto(base_url + screen.relative_to(reference_root).as_posix(), wait_until='load')
+                reference_page.wait_for_timeout(300)
+                for width in widths:
+                    reference_page.set_viewport_size({'width': width, 'height': 900})
+                    reference_page.wait_for_timeout(150)
+                    path = browser_evidence / f'{prefix}@{width}.png'
+                    reference_page.screenshot(path=str(path))
+                    report['captures'].append(str(path))
+                    reference_captures.append(str(path))
+            reference_page.close()
+            report['reference'] = {'html': str(reference_html), 'captures': reference_captures}
+            passed('new thread: reference captures for 09/83/84 from the owned loopback static server')
+
+        # Seed proof: isolated Vite source App; ordinary captures above stay on
+        # the built dashboard. Only the public seed/open path is used.
+        vite = subprocess.Popen(
+            ['node', '--input-type=module', '-e', VITE_SOURCE_SCRIPT],
+            cwd=str(root), env={**os.environ, 'FIXTURE_URL': url},
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        source_info = None
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            remaining = max(0.1, deadline - time.monotonic())
+            if not select.select([vite.stdout], [], [], remaining)[0]:
+                break
+            line = vite.stdout.readline()
+            if not line:
+                break
+            try:
+                candidate = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(candidate, dict) and candidate.get('url'):
+                source_info = candidate
+                break
+        if source_info is None:
+            vite.terminate()
+            try:
+                _, error_output = vite.communicate(timeout=5)
+            except Exception:
+                vite.kill()
+                error_output = ''
+            vite = None
+            raise RuntimeError(f'Vite source readiness exceeded 15 seconds: {(error_output or "")[-2000:]}')
+        source_url = source_info['url']
+        source_page = context.new_page()
+        source_page.on('pageerror', lambda error: report['pageErrors'].append(f'source: {error}'))
+        source_page.on('console', lambda message: report['consoleErrors'].append(f'source: {message.text}') if message.type == 'error' else None)
+
+        # Case A (fresh document): the workspace GET is the actual App ready
+        # signal; the seed is written only after it, then the dialog opens and
+        # its rendered options are awaited. All later assertions stay in-app.
+        with source_page.expect_response(re.compile(r'/api/workspace\?id=fixture')) as workspace_ready:
+            source_page.goto(source_url + '#/conversations?ws=fixture&id=' + thread1, wait_until='domcontentloaded')
+        assert workspace_ready.value.ok, workspace_ready.value
+        source_draft = source_page.locator('#thread-draft')
+        source_draft.wait_for()
+        source_creates_before = len(create_posts())
+        source_sends_before = send_count()
+        source_page.evaluate("async () => { const mod = await import('/src/conversations-state.ts'); mod.seedNewThreadDraft('fixture', { text: 'Source prepared text', target: 'fixture-repo' }); }")
+        source_page.locator('#thread-new-action').click()
+        expect(source_page).to_have_url(re.compile(r'tab=new'))
+        wait_target_options(source_page)
+        expect(source_page.locator('#thread-new-target')).to_have_value('fixture-repo')
+        expect(source_page.locator('#thread-new-fields')).to_contain_text('Source prepared text')
+        expect(source_page.locator('#thread-new-fields textarea')).to_have_count(0)
+        expect(source_draft).to_have_value('')
+        source_page.keyboard.press('Escape')
+        expect(source_page.locator('#thread-new-dialog')).not_to_be_visible()
+        source_page.locator('#thread-new-action').click()
+        expect(source_page.locator('#thread-new-fields')).to_contain_text('Source prepared text')
+        with source_page.expect_response('**/api/thread/create') as source_response:
+            source_page.locator('#thread-create').click()
+        assert source_response.value.ok, source_response.value
+        source_created = create_posts()[-1]['result']['thread_id']
+        expect(source_page).to_have_url(re.compile(r'#/conversations\?ws=fixture&id=' + re.escape(source_created)))
+        expect(source_page.locator('#thread-draft')).to_have_value('Source prepared text')
+        source_page.wait_for_function("() => document.activeElement && document.activeElement.id === 'thread-draft'")
+        assert send_count() == source_sends_before, 'source seed proof posted a send'
+        assert len(create_posts()) == source_creates_before + 1, 'source seed proof posted extra creates'
+        passed('new thread seed proof: the public seed opens the real dialog with the prepared unsent note, Escape/reopen keeps it, and Create lands the exact text once with zero send')
+
+        # Case B (reload resets the independent case): Escape the modal before
+        # leaving for Files; the exact created id is re-entered through in-app
+        # hash navigation so the in-memory prepared text survives.
+        with source_page.expect_response(re.compile(r'/api/workspace\?id=fixture')) as workspace_ready:
+            source_page.reload(wait_until='domcontentloaded')
+        assert workspace_ready.value.ok, workspace_ready.value
+        source_page.evaluate("(id) => { location.hash = '#/conversations?ws=fixture&id=' + id; }", thread1)
+        source_page.locator('#thread-draft').wait_for()
+        source_page.evaluate("async () => { const mod = await import('/src/conversations-state.ts'); mod.seedNewThreadDraft('fixture', { text: 'Held source text', target: 'fixture-repo' }); }")
+        control('delay-create', 'true')
+        source_page.locator('#thread-new-action').click()
+        expect(source_page).to_have_url(re.compile(r'tab=new'))
+        wait_target_options(source_page)
+        expect(source_page.locator('#thread-new-target')).to_have_value('fixture-repo')
+        source_creates_before = len(create_posts())
+        with source_page.expect_request('**/api/thread/create'):
+            source_page.locator('#thread-create').click()
+        source_page.keyboard.press('Escape')
+        expect(source_page.locator('#thread-new-dialog')).not_to_be_visible()
+        source_page.locator('.nav-item[data-area="files"]').click()
+        expect(source_page).to_have_url(re.compile(r'#/files'))
+        with source_page.expect_response('**/api/thread/create') as held_source_response:
+            control('release-create', 'true')
+        assert held_source_response.value.ok, held_source_response.value
+        held_source_id = create_posts()[-1]['result']['thread_id']
+        source_page.wait_for_timeout(300)
+        expect(source_page).to_have_url(re.compile(r'#/files'))
+        assert len(create_posts()) == source_creates_before + 1
+        source_page.evaluate("(id) => { location.hash = '#/conversations?ws=fixture&id=' + id; }", held_source_id)
+        expect(source_page).to_have_url(re.compile(r'#/conversations\?ws=fixture&id=' + re.escape(held_source_id)))
+        expect(source_page.locator('#thread-draft')).to_have_value('Held source text')
+        passed('new thread seed proof: a held prepared create released while Files is active never steals the route and the exact created id retains the prepared text')
+
+        # Case C (reload resets): a newer seed written while the request is
+        # pending replaces the retained draft and survives the earlier
+        # acknowledgement; every later assertion stays in-app.
+        with source_page.expect_response(re.compile(r'/api/workspace\?id=fixture')) as workspace_ready:
+            source_page.reload(wait_until='domcontentloaded')
+        assert workspace_ready.value.ok, workspace_ready.value
+        source_page.evaluate("(id) => { location.hash = '#/conversations?ws=fixture&id=' + id; }", thread1)
+        source_page.locator('#thread-draft').wait_for()
+        source_page.evaluate("async () => { const mod = await import('/src/conversations-state.ts'); mod.seedNewThreadDraft('fixture', { text: 'First pending text', target: 'fixture-repo' }); }")
+        control('delay-create', 'true')
+        source_page.locator('#thread-new-action').click()
+        expect(source_page).to_have_url(re.compile(r'tab=new'))
+        wait_target_options(source_page)
+        expect(source_page.locator('#thread-new-target')).to_have_value('fixture-repo')
+        with source_page.expect_request('**/api/thread/create'):
+            source_page.locator('#thread-create').click()
+        source_page.keyboard.press('Escape')
+        expect(source_page.locator('#thread-new-dialog')).not_to_be_visible()
+        source_page.evaluate("async () => { const mod = await import('/src/conversations-state.ts'); mod.seedNewThreadDraft('fixture', { text: 'Newer retained text' }); }")
+        source_page.locator('#thread-new-action').click()
+        expect(source_page.locator('#thread-new-fields')).to_contain_text('Newer retained text')
+        with source_page.expect_response('**/api/thread/create') as newer_response:
+            control('release-create', 'true')
+        assert newer_response.value.ok, newer_response.value
+        newer_created = create_posts()[-1]['result']['thread_id']
+        expect(source_page).to_have_url(re.compile(r'#/conversations\?ws=fixture&id=' + re.escape(newer_created)))
+        expect(source_page.locator('#thread-draft')).to_have_value('First pending text')
+        source_page.locator('#thread-new-action').click()
+        expect(source_page.locator('#thread-new-fields')).to_contain_text('Newer retained text')
+        passed('new thread seed proof: a newer seed arriving during a pending create survives the earlier acknowledgement as the retained draft')
+
+        # Case D (reload resets): an invalid repository seed falls back to
+        # Whole workspace while its prepared text is retained.
+        with source_page.expect_response(re.compile(r'/api/workspace\?id=fixture')) as workspace_ready:
+            source_page.reload(wait_until='domcontentloaded')
+        assert workspace_ready.value.ok, workspace_ready.value
+        source_page.evaluate("(id) => { location.hash = '#/conversations?ws=fixture&id=' + id; }", thread1)
+        source_page.locator('#thread-draft').wait_for()
+        source_page.evaluate("async () => { const mod = await import('/src/conversations-state.ts'); mod.seedNewThreadDraft('fixture', { text: 'Invalid target text', target: 'missing-repo' }); }")
+        source_page.locator('#thread-new-action').click()
+        expect(source_page).to_have_url(re.compile(r'tab=new'))
+        wait_target_options(source_page)
+        expect(source_page.locator('#thread-new-target')).to_have_value('')
+        expect(source_page.locator('#thread-new-fields')).to_contain_text('Invalid target text')
+        passed('new thread seed proof: an invalid repository seed falls back to Whole workspace while its prepared text is retained')
+
+        # Case E (reload resets): a public seeded failure keeps the prepared
+        # note and chosen target through Refresh threads and Escape/reopen with
+        # no extra create or send.
+        with source_page.expect_response(re.compile(r'/api/workspace\?id=fixture')) as workspace_ready:
+            source_page.reload(wait_until='domcontentloaded')
+        assert workspace_ready.value.ok, workspace_ready.value
+        source_page.evaluate("(id) => { location.hash = '#/conversations?ws=fixture&id=' + id; }", thread1)
+        source_page.locator('#thread-draft').wait_for()
+        source_page.evaluate("async () => { const mod = await import('/src/conversations-state.ts'); mod.seedNewThreadDraft('fixture', { text: 'Failed prepared text', target: 'fixture-repo' }); }")
+        control('fail-create', 'true')
+        source_creates_before = len(create_posts())
+        source_sends_before = send_count()
+        source_page.locator('#thread-new-action').click()
+        expect(source_page).to_have_url(re.compile(r'tab=new'))
+        wait_target_options(source_page)
+        expect(source_page.locator('#thread-new-target')).to_have_value('fixture-repo')
+        expect(source_page.locator('#thread-new-fields')).to_contain_text('Failed prepared text')
+        with source_page.expect_response('**/api/thread/create'):
+            source_page.locator('#thread-create').click()
+        expect(source_page.locator('#thread-new-dialog .ds-callout.error')).to_contain_text('Creation could not be confirmed')
+        expect(source_page.locator('#thread-new-target')).to_have_value('fixture-repo')
+        expect(source_page.locator('#thread-new-fields')).to_contain_text('Failed prepared text')
+        with source_page.expect_request(lambda request: '/api/threads' in request.url and request.method == 'GET'):
+            source_page.locator('#thread-new-dialog button:has-text("Refresh threads")').click()
+        source_page.wait_for_timeout(250)
+        source_page.keyboard.press('Escape')
+        expect(source_page.locator('#thread-new-dialog')).not_to_be_visible()
+        source_page.locator('#thread-new-action').click()
+        expect(source_page.locator('#thread-new-dialog .ds-callout.error')).to_contain_text('Creation could not be confirmed')
+        expect(source_page.locator('#thread-new-target')).to_have_value('fixture-repo')
+        expect(source_page.locator('#thread-new-fields')).to_contain_text('Failed prepared text')
+        assert len(create_posts()) == source_creates_before + 1, 'source failure retried create'
+        assert send_count() == source_sends_before, 'source failure posted a send'
+        control('fail-create', 'false')
+        passed('new thread seed proof: a failed public seeded create retains the prepared note and chosen target through Refresh threads and Escape/reopen with no retry')
+        source_page.close()
+    finally:
+        if vite is not None:
+            try:
+                vite.terminate()
+                vite.wait(timeout=10)
+            except Exception as error:
+                cleanup['errors'].append(f'vite source stop: {error}')
+                try:
+                    vite.kill()
+                    vite.wait()
+                except Exception:
+                    pass
+        for action in ('release-create', 'delay-create', 'fail-create'):
+            try:
+                context.request.get(url + '/__fixture/control?action=' + action + '&value=false')
+            except Exception:
+                pass
+
+
 def capture_visual(url, thread1, thread2):
     # journey-only phase: the same route/draft/retry traversals have already
     # run against the renamed Conversations adapter. This captures the ideal
@@ -418,7 +905,7 @@ def capture_visual(url, thread1, thread2):
     page.goto(url + '/#/conversations?ws=fixture&id=' + thread1, wait_until='domcontentloaded')
     draft = page.locator('#thread-draft')
     draft.wait_for()
-    expect(page.locator('#thread-create')).to_be_visible()
+    expect(page.locator('#thread-new-action')).to_be_visible()
     expect(page.locator('.list-controls h2')).to_have_text('Threads')
     expect(page.locator('.list-controls p.muted')).to_contain_text('fixture')
     expect(page.locator('[data-thread][aria-pressed="true"]')).to_have_count(1)
@@ -636,10 +1123,16 @@ try:
                 {'method': request.method, 'url': request.url, 'failure': str(request.failure)}))
             startup_seconds = round(time.monotonic() - started, 3)
             check_started = time.monotonic()
-            run(fixture_info['url'], fixture_info['thread1'], fixture_info['thread2'])
+            if case != 'new-thread':
+                run(fixture_info['url'], fixture_info['thread1'], fixture_info['thread2'])
             if case == 'journey':
                 capture_visual(fixture_info['url'], fixture_info['thread1'], fixture_info['thread2'])
+            if case == 'new-thread':
+                run_new_thread(fixture_info['url'], fixture_info['thread1'], fixture_info['thread2'])
             assert not report['pageErrors'], report['pageErrors']
+            if case == 'new-thread':
+                unexpected_console = [text for text in report['consoleErrors'] if 'Failed to load resource' not in text]
+                assert not unexpected_console, unexpected_console
             report['status'] = 'passed'
         finally:
             if context is not None:

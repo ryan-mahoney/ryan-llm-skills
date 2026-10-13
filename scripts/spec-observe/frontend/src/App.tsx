@@ -110,6 +110,11 @@ export default function App() {
   });
   const agentsSelectionRetained = createMemo(() => agent() === null && agentsSelected() !== null);
   const token = () => live() && !error() ? payload()?.thread_action_token || payload()?.action_token : undefined;
+  const newThreadUnavailableReason = () => !live()
+    ? 'New thread is available on the live dashboard.'
+    : !token()
+      ? 'Reconnect to the live dashboard before starting a conversation.'
+      : '';
   const completionToken = () => live() && !error() ? payload()?.action_token : undefined;
   const observers = createMemo(() => authoritativeObservers(payload()?.observers ?? []));
   const scopedObservers = createMemo(() => observers().filter(observer => inWorkspaceScope({ workspace: str(observer.snapshot?.workspace) || str(observer.observer_id) || str(observer.source) || 'unknown' }, 'run', scopeWs(), catalogEntries())));
@@ -625,7 +630,9 @@ export default function App() {
           ? <button class="ds-btn" type="button" aria-busy={catalogPending()} onClick={() => void loadCatalog()}>Refresh workspaces</button>
           : route().dest === 'agents'
             ? <><button id="launch-agent-action" class="ds-btn ds-btn--primary" type="button" onClick={prepareAgentAssignment}>Launch agent</button><button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button></>
-            : <button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button>}
+            : route().dest === 'conversations'
+              ? <><button id="thread-new-action" class="ds-btn ds-btn--primary" type="button" disabled={!live() || !token()} title={newThreadUnavailableReason()} aria-describedby={!live() || !token() ? 'thread-new-action-reason' : undefined} onClick={() => go({ ...route(), tab: 'new' })}>New thread</button><Show when={!live() || !token()}><span id="thread-new-action-reason" class="sr-only">{newThreadUnavailableReason()}</span></Show><button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button></>
+              : <button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button>}
       connection={{ label: connectionLabel(), tone: connectionTone() }}
       observedAt={observedAt()}
       onRefresh={manualRefresh}

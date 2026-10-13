@@ -4,16 +4,24 @@ import { str, time, statusMarkdown } from './format';
 import { consumeThreadDraft, getLaunchDraft, seedLaunchDraft, seedThreadDraft } from './launch-state';
 import { shouldResetAcknowledgedDraft } from './launch-picker-intent';
 import {
+  acknowledgeNewThreadRequest,
   acknowledgeThreadSend,
   applyThreadPreparedText,
+  beginNewThreadRequest,
   captureThreadSend,
+  failNewThreadRequest,
+  getNewThreadDraft,
+  getNewThreadRequest,
   getThreadDraft,
   getThreadScroll,
+  openNewThreadDraft,
   rememberConversationId,
   resolveSelection,
+  setNewThreadDraft,
   setThreadDraft,
   setThreadScroll,
   subscribeThreadDraft,
+  type NewThreadRequestCapture,
 } from './conversations-state';
 import { navigate } from './route';
 import { ActionBar, EmptyState, MasterDetail, StateNotice, StatusText, type StatusTone } from './primitives';
@@ -65,9 +73,11 @@ export default function Conversations(props: Props) {
   const [mutationError, setMutationError] = createSignal('');
   const [pending, setPending] = createSignal('');
   const [draft, setDraft] = createSignal('');
-  const [target, setTarget] = createSignal('');
-  const [creating, setCreating] = createSignal(false);
-  const [createError, setCreateError] = createSignal('');
+  const [newText, setNewText] = createSignal('');
+  const [newTarget, setNewTarget] = createSignal('');
+  const [newBusy, setNewBusy] = createSignal(false);
+  const [newError, setNewError] = createSignal('');
+  const [newEnabled, setNewEnabled] = createSignal(false);
   const [requestedMissing, setRequestedMissing] = createSignal(false);
   const [sendPending, setSendPending] = createSignal<{ id: string; draft: string } | null>(null);
   let source: EventSource | undefined;
@@ -75,7 +85,6 @@ export default function Conversations(props: Props) {
   let projectionEpoch = 0;
   let historyGeneration = 0;
   let opGeneration = 0;
-  let createGeneration = 0;
   let listBusy = false;
   let lastWorkspace = props.route.ws ?? '';
   let lastProjectionKey = '';
@@ -94,6 +103,20 @@ export default function Conversations(props: Props) {
   // title once, unless the explicit seed composer or creation composer wins.
   let hasMaterialized = false;
   let creationPendingId = '';
+  // Start conversation dialog identity. The dialog is route-owned, but its
+  // request/text live in the retained workspace owner; these locals only
+  // identify the current opening so a stale observer can never navigate.
+  let newDialog!: HTMLDialogElement;
+  let newSelectEl: HTMLSelectElement | undefined;
+  let newReturnEl: HTMLButtonElement | undefined;
+  let newInitKey = '';
+  let newDialogEpoch = 0;
+  let newDialogWs = '';
+  let newDialogId = '';
+  let newDialogRequestId = 0;
+  let newCloseFocus = '';
+  let newUnmounted = false;
+  onCleanup(() => { newUnmounted = true; });
   const [announcer, setAnnouncer] = createSignal('');
   const wsId = () => props.route.ws ?? '';
   const routeId = () => props.route.id ?? '';
@@ -178,9 +201,9 @@ export default function Conversations(props: Props) {
       }
     }
     if (!seedFocused && isCreation) {
-      // Inline creation owns the created id: the empty composer wins over the
-      // generic selected-title focus, matching the later dialog creation
-      // precedence without stealing a newer route.
+      // Dialog creation owns the created id: the composer (with any prepared
+      // text applied by settlement) wins over the generic selected-title focus
+      // without stealing a newer route.
       const createEpoch = projectionEpoch;
       queueMicrotask(() => {
         if (draftEl && projectedWs === ws && projectedId === id && projectionEpoch === createEpoch) draftEl.focus({ preventScroll: true });
@@ -310,26 +333,167 @@ export default function Conversations(props: Props) {
     try { return await postJson<T>(path, body, props.token || '', undefined); }
     finally { if (generation === opGeneration && workspace === wsId() && id === routeId() && epoch === projectionEpoch) setPending(''); }
   }
-  async function createThread() {
-    if (!actionable() || creating()) return;
-    const workspace = wsId(), request = ++createGeneration;
-    const dest = target() ? { kind: 'repository', repository_id: target() } : { kind: 'workspace' };
-    setCreating(true); setCreateError('');
-    try {
-      const record = await postJson<Thread>('/api/thread/create', { workspace_id: workspace, target: dest }, props.token || '');
-      if (workspace !== wsId() || request !== createGeneration) return;
-      setThreads(prev => [record, ...(prev || []).filter(t => t.thread_id !== record.thread_id)]);
-      setTarget('');
-      // Creation success owns the created id: navigate to it so the projection
-      // materializes it (the inline new-thread UI stays for step 5). Record
-      // the created id so materialize gives the empty composer precedence
-      // over the generic selected-title focus.
-      creationPendingId = record.thread_id;
-      props.onNavigate({ ...props.route, dest: 'conversations', id: record.thread_id });
-      announce('Thread created. It is named after your first message.');
-      void loadList();
-    } catch (e) { if (workspace === wsId() && request === createGeneration) setCreateError(routeError(e)); }
-    finally { if (workspace === wsId() && request === createGeneration) setCreating(false); }
+  // Start conversation dialog. Opening consumes the one-use prepared seed into
+  // the workspace-retained draft and observes any pending create request;
+  // closing or leaving the route only invalidates this opening's navigation,
+  // never the retained request or its text.
+  const newThreadAvailable = () => active() && Boolean(props.token);
+  const newThreadUnavailableReason = () => !props.live
+    ? 'Starting a conversation requires the live dashboard. Imported snapshots and file pages cannot reach discussions.'
+    : !wsId()
+      ? 'Choose a workspace before starting a conversation.'
+      : 'The dashboard has not issued a thread action token. Refresh state to reconnect before starting a conversation.';
+  function returnToThreads() {
+    newCloseFocus = 'restore';
+    const next: any = { ...props.route, dest: 'conversations' };
+    delete next.tab;
+    props.onNavigate(next);
+  }
+  // Route removal closes the native dialog. Focus returns to the New thread
+  // control (or the retained title when it is gone) for Return/Escape; a
+  // successful create deliberately leaves focus to the composer.
+  function handleNewThreadClose() {
+    const focus = newCloseFocus;
+    newCloseFocus = '';
+    if (newUnmounted || focus !== 'restore') return;
+    const opener = document.getElementById('thread-new-action');
+    if (opener instanceof HTMLElement) { opener.focus({ preventScroll: true }); return; }
+    titleEl?.focus({ preventScroll: true });
+  }
+  // A retained repository choice is validated against the loaded workspace
+  // record: an id the workspace no longer contains falls back to Whole
+  // workspace without touching the prepared text.
+  function validNewThreadTarget(ws: string, retained: { text: string; target: string | null }): string | null {
+    const record: any = props.workspace;
+    const list: Repo[] = record && Array.isArray(record.repositories) ? record.repositories : [];
+    if (record && retained.target && !list.some(r => r.id === retained.target)) {
+      setNewThreadDraft(ws, { text: retained.text, target: null });
+      return null;
+    }
+    return retained.target;
+  }
+  // Reopening while a request is pending reuses the retained promise: this
+  // observer only reflects the completion and, if this opening still owns the
+  // request and route, navigates to the created thread. The once-only
+  // transport settlement is attached when the request starts.
+  function observeNewThreadRequest(ws: string, epoch: number) {
+    const request = getNewThreadRequest(ws);
+    if (!request) { newDialogRequestId = 0; setNewBusy(false); setNewError(''); return; }
+    newDialogRequestId = request.id;
+    if (request.status === 'error') { setNewBusy(false); setNewError(request.error || 'Creating the conversation failed.'); return; }
+    setNewBusy(true); setNewError('');
+    request.promise.then((record: any) => {
+      if (newUnmounted || epoch !== newDialogEpoch) return;
+      const createdThread = record && typeof record.thread_id === 'string' ? record.thread_id : '';
+      if (!createdThread) return;
+      settleCreatedThread(ws, record as Thread, epoch, request.id);
+    }, (error: unknown) => {
+      if (newUnmounted || epoch !== newDialogEpoch || newDialogRequestId !== request.id) return;
+      setNewBusy(false);
+      setNewError(getNewThreadRequest(ws)?.error || routeError(error));
+    });
+  }
+  function initializeNewThreadDialog(ws: string, id: string, available: boolean) {
+    newDialogEpoch++;
+    const epoch = newDialogEpoch;
+    newDialogWs = ws; newDialogId = id; newDialogRequestId = 0;
+    setNewEnabled(available);
+    if (!ws) { setNewText(''); setNewTarget(''); setNewBusy(false); setNewError(''); return; }
+    if (!available) {
+      const retained = getNewThreadDraft(ws);
+      setNewText(retained.text); setNewTarget(''); setNewBusy(false); setNewError('');
+      return;
+    }
+    const retained = openNewThreadDraft(ws);
+    const target = validNewThreadTarget(ws, retained);
+    setNewText(retained.text);
+    setNewTarget(target ?? '');
+    observeNewThreadRequest(ws, epoch);
+    const pendingCreate = newBusy();
+    requestAnimationFrame(() => {
+      if (newUnmounted || epoch !== newDialogEpoch) return;
+      (pendingCreate ? newReturnEl : newSelectEl)?.focus({ preventScroll: true });
+    });
+  }
+  // The created record is published to the captured workspace's list owner.
+  // Only the opening that still owns the request, workspace, thread id and
+  // tab navigates; any other completion leaves the newer route alone and lets
+  // the refreshed catalog discover the thread.
+  function settleCreatedThread(ws: string, record: Thread, epoch: number, requestId: number) {
+    if (newUnmounted || wsId() !== ws) return;
+    const createdThread = record.thread_id;
+    setThreads(prev => [record, ...(prev || []).filter(item => item.thread_id !== createdThread)]);
+    announce('Thread created. It is named after your first message.');
+    void loadList();
+    const owns = epoch === newDialogEpoch
+      && newDialogRequestId === requestId
+      && props.route.tab === 'new'
+      && routeId() === newDialogId
+      && wsId() === newDialogWs;
+    if (!owns) return;
+    // Creation success owns the created id: navigate to it so the projection
+    // materializes it and the composer (with any prepared text) takes focus
+    // instead of the generic selected-title focus.
+    creationPendingId = createdThread;
+    const next: any = { ...props.route, dest: 'conversations', id: createdThread };
+    delete next.tab;
+    newCloseFocus = 'creation';
+    props.onNavigate(next);
+  }
+  function createNewThread() {
+    const ws = wsId(), selected = newTarget();
+    if (!newThreadAvailable() || !ws || newBusy() || newError()) return;
+    const dest = selected ? { kind: 'repository', repository_id: selected } : { kind: 'workspace' };
+    // A cold, untouched dialog still publishes a coherent retained draft
+    // before the request starts, so acknowledgement owns exactly this object
+    // and the captured target/text match what the surface shows.
+    setNewThreadDraft(ws, { text: newText(), target: selected || null });
+    const promise = beginNewThreadRequest<Thread>(ws, newText(), selected || null, () => postJson<Thread>('/api/thread/create', { workspace_id: ws, target: dest }, props.token || ''));
+    const request = getNewThreadRequest(ws);
+    if (!request || request.status !== 'creating') return;
+    newDialogRequestId = request.id;
+    const captured: NewThreadRequestCapture = { id: request.id, text: request.text, target: request.target };
+    const epoch = newDialogEpoch;
+    setNewBusy(true); setNewError('');
+    // The submit control becomes disabled with the rest of the fields; move
+    // focus to the only enabled control (Return) without letting a later
+    // opening steal it.
+    requestAnimationFrame(() => {
+      if (newUnmounted || epoch !== newDialogEpoch) return;
+      newReturnEl?.focus({ preventScroll: true });
+    });
+    promise.then((record: any) => {
+      const createdThread = record && typeof record.thread_id === 'string' ? record.thread_id : '';
+      if (!createdThread) {
+        failNewThreadRequest(ws, captured, 'The created conversation was not returned.');
+        if (!newUnmounted && epoch === newDialogEpoch && newDialogRequestId === captured.id) {
+          setNewBusy(false); setNewError(getNewThreadRequest(ws)?.error || 'The created conversation was not returned.');
+        }
+        return;
+      }
+      // Transport settlement lands the captured text on the exact returned
+      // thread before any UI guard, so a late completion survives closed
+      // dialogs, remounts and route changes.
+      acknowledgeNewThreadRequest(ws, captured, ws, createdThread);
+      settleCreatedThread(ws, record as Thread, epoch, captured.id);
+    }, (error: unknown) => {
+      failNewThreadRequest(ws, captured, routeError(error));
+      if (!newUnmounted && epoch === newDialogEpoch && newDialogRequestId === captured.id) {
+        setNewBusy(false);
+        setNewError(getNewThreadRequest(ws)?.error || routeError(error));
+      }
+    });
+  }
+  // Native modal dialogs keep focus inside, but Tab does not wrap at the ends;
+  // wrap across this dialog's own focusable controls (Specs completion-dialog
+  // precedent) so focus never reaches BODY while Start conversation is open.
+  function trapNewThreadTab(event: KeyboardEvent) {
+    if (event.key !== 'Tab') return;
+    const focusable = Array.from(newDialog.querySelectorAll<HTMLElement>('button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled)'));
+    if (!focusable.length) { event.preventDefault(); return; }
+    const first = focusable[0], last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   }
   async function send() {
     const id = projectedId, workspace = projectedWs;
@@ -413,10 +577,9 @@ export default function Conversations(props: Props) {
     props.live; props.refreshKey;
     if (!active()) {
       lastWorkspace = ws; lastProjectionKey = '';
-      listGeneration++; createGeneration++; listBusy = false;
+      listGeneration++; listBusy = false;
       clearProjection();
       setThreads(null); setInvalid([]); setListError(''); setRequestedMissing(false);
-      setCreating(false); setCreateError(''); setTarget('');
       return;
     }
     if (ws !== lastWorkspace) {
@@ -427,7 +590,6 @@ export default function Conversations(props: Props) {
       listGeneration++; listBusy = false;
       clearProjection();
       setThreads(null); setInvalid([]); setListError(''); setRequestedMissing(false);
-      setCreating(false); setCreateError(''); setTarget('');
     } else {
       const key = ws && id ? JSON.stringify([ws, id]) : '';
       if (key !== lastProjectionKey) {
@@ -442,6 +604,48 @@ export default function Conversations(props: Props) {
   createEffect(() => {
     entries(); partial(); toolNote();
     if (stickBottom && transcriptEl) queueMicrotask(() => { if (stickBottom && transcriptEl) transcriptEl.scrollTop = transcriptEl.scrollHeight; });
+  });
+  // The dialog is route-addressable: tab=new opens it on mount and direct
+  // entry, and removing the tab closes it. A workspace/thread/availability
+  // change while open re-opens the retained draft for the new identity;
+  // closing invalidates this opening's navigation only.
+  createEffect(() => {
+    const open = props.route.tab === 'new';
+    const ws = wsId(), id = routeId();
+    const available = newThreadAvailable();
+    if (!open) {
+      if (newDialog?.open) {
+        newDialog.close();
+        newInitKey = '';
+        newDialogEpoch++;
+      }
+      return;
+    }
+    const key = JSON.stringify([ws, id, available]);
+    if (!newDialog?.open) {
+      newDialog.showModal();
+      newInitKey = key;
+      initializeNewThreadDialog(ws, id, available);
+      return;
+    }
+    if (newInitKey !== key) {
+      newInitKey = key;
+      initializeNewThreadDialog(ws, id, available);
+    }
+  });
+  // A retained repository target can only be validated once the workspace
+  // record is available; a late load that lacks the id falls back to Whole
+  // workspace without touching the prepared text.
+  createEffect(() => {
+    const ws = wsId();
+    const record: any = props.workspace;
+    if (props.route.tab !== 'new' || !newEnabled() || !ws || !record) return;
+    const list: Repo[] = Array.isArray(record.repositories) ? record.repositories : [];
+    const chosen = newTarget();
+    if (chosen && !list.some(r => r.id === chosen)) {
+      setNewTarget('');
+      setNewThreadDraft(ws, { text: newText(), target: null });
+    }
   });
 
   const state = () => derived(thread());
@@ -468,6 +672,7 @@ export default function Conversations(props: Props) {
   };
 
   return (
+    <>
     <MasterDetail
       listLabel="Conversation threads"
       list={
@@ -475,13 +680,6 @@ export default function Conversations(props: Props) {
           <div class="list-controls">
             <h2>Threads</h2>
             <p class="muted">{workspaceName()}</p>
-            <Show when={active()}>
-              <div class="thread-new" role="group" aria-label="New thread">
-                <div class="thread-field"><label for="thread-new-target">Runs in</label><select id="thread-new-target" class="ds-input" value={target()} onInput={e => setTarget(e.currentTarget.value)}><option value="">Whole workspace</option><For each={repositories()}>{r => <option value={r.id}>{r.id}{r.status && r.status !== 'ok' ? ` (${r.status})` : ''}{r.worktrees?.length ? ` · ${r.worktrees.length} worktree${r.worktrees.length === 1 ? '' : 's'}` : ''}</option>}</For></select></div>
-                <button id="thread-create" class="ds-btn" data-thread-create disabled={!actionable() || creating()} onClick={() => void createThread()}>{creating() ? 'Creating…' : 'Create thread'}</button>
-                <Show when={createError()}><p class="small warn" role="alert">{createError()}</p></Show>
-              </div>
-            </Show>
           </div>
           <div class="list-caption">{countLabel()}</div>
           <div class="records">
@@ -497,7 +695,7 @@ export default function Conversations(props: Props) {
               </Show>
               <Show when={!listError() || threads() !== null} fallback={<StateNotice tone="error" title="Threads are unavailable" action={<button type="button" class="ds-btn ds-btn--primary" onClick={() => void loadList()}>Retry</button>}>{listError()}</StateNotice>}>
                 <Show when={threads()} fallback={<p class="empty">Loading threads…</p>}>
-                  <Show when={(threads() || []).length} fallback={<EmptyState title="No threads yet" text="Create one above to discuss work in this workspace." />}>
+                  <Show when={(threads() || []).length} fallback={<EmptyState title="No threads yet" text="Use New thread to start a conversation in this workspace." />}>
                     <For each={threads()}>{t => { const s = derived(t); const q = t.queue || []; const waiting = q.filter((m: any) => m.state === 'queued').length; return <button class={`record thread-row${t.thread_id === routeId() ? ' selected' : ''}`} data-thread={t.thread_id} aria-pressed={t.thread_id === routeId()} onClick={() => selectRow(t.thread_id)}><span class="row-heading"><strong>{t.title || `Thread ${t.thread_id.slice(0, 8)}`}</strong><StatusText tone={statusTone(s)}>{label(s)}</StatusText></span><p>{workspaceName()} · {targetDescription(t)}</p><small>{q.length ? `${waiting ? `${waiting} waiting` : `${q.length} pending`}${t.queue_paused ? ' · paused queue' : ''}` : 'No pending messages'}</small></button>; }}</For>
                   </Show>
                 </Show>
@@ -540,5 +738,45 @@ export default function Conversations(props: Props) {
       </Show>
       <span class="sr-only" aria-live="polite">{announcer()}</span>
     </MasterDetail>
+      <dialog
+        ref={newDialog}
+        id="thread-new-dialog"
+        class="dialog-content"
+        aria-labelledby="thread-new-title"
+        aria-busy={newBusy()}
+        onCancel={event => { event.preventDefault(); returnToThreads(); }}
+        onClose={handleNewThreadClose}
+        onKeyDown={trapNewThreadTab}
+      >
+        <form onSubmit={event => { event.preventDefault(); createNewThread(); }}>
+          <h2 id="thread-new-title">Start conversation</h2>
+          <p>Choose where the thread runs. Its title comes from your first message.</p>
+          <span class="sr-only" role="status" aria-live="polite">{newBusy() ? 'Creating the conversation' : ''}</span>
+          <Show when={newEnabled()} fallback={
+            <>
+              <div class="ds-callout error" role="alert"><div><strong>Starting a conversation is unavailable</strong><p>{newThreadUnavailableReason()}</p></div></div>
+              <div class="actions"><button ref={element => (newReturnEl = element)} type="button" class="ds-btn" onClick={returnToThreads}>Return to threads</button></div>
+            </>
+          }>
+            <div class="field thread-new-field">
+              <label for="thread-new-target">Runs in</label>
+              <select id="thread-new-target" class="ds-input" ref={element => (newSelectEl = element)} value={newTarget()} disabled={newBusy()} onInput={event => { const value = event.currentTarget.value; setNewTarget(value); setNewThreadDraft(wsId(), { text: newText(), target: value || null }); }}>
+                <For each={repositories()}>{r => <option value={r.id}>{r.id}{r.status && r.status !== 'ok' ? ` (${r.status})` : ''}{r.worktrees?.length ? ` · ${r.worktrees.length} worktree${r.worktrees.length === 1 ? '' : 's'}` : ''}</option>}</For>
+                <option value="">Whole workspace</option>
+              </select>
+              <small>Workspace: {workspaceName()}</small>
+            </div>
+            <div id="thread-new-fields" class="thread-new-fields"><Show when={newText()}><div class="thread-new-prepared"><p class="small muted">Prepared message · unsent. It opens in the composer after creation.</p><p class="thread-text">{newText()}</p></div></Show></div>
+            <Show when={newError()}><div class="ds-callout error" role="alert"><div><strong>Creation could not be confirmed</strong><p>{newError()}</p><p class="small muted">Check the thread list before creating another thread; retrying could duplicate the conversation.</p></div></div></Show>
+            <div class="actions">
+              <button ref={element => (newReturnEl = element)} type="button" class="ds-btn" onClick={returnToThreads}>Return to threads</button>
+              <Show when={!newError()} fallback={<button type="button" class="ds-btn ds-btn--primary" onClick={() => void loadList()}>Refresh threads</button>}>
+                <button id="thread-create" type="submit" class="ds-btn ds-btn--primary" data-thread-create disabled={newBusy()}>{newBusy() ? 'Creating thread…' : 'Create thread'}</button>
+              </Show>
+            </div>
+          </Show>
+        </form>
+      </dialog>
+    </>
   );
 }
