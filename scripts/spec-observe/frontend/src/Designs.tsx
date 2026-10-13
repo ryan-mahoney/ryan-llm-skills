@@ -155,6 +155,10 @@ export default function Designs(props: DestinationProps) {
   };
   const widths = () => design()?.viewport?.widths ?? [];
   const staleIndex = () => Boolean(data() && loadedAt() !== null && stale(loadedAt()));
+  const successfulEmpty = () => Boolean(data()) && designs().length === 0 && (data()!.errors?.length ?? 0) === 0;
+  const allInvalid = () => Boolean(data()) && designs().length === 0 && (data()!.errors?.length ?? 0) > 0;
+  const unavailableSelection = () => selection().unavailable && (props.route.id ?? '') !== '';
+  const filesRoute = (): RouteState => ({ dest: 'files', ws: props.route.ws, source: 'workspace' });
 
   // Invalid route parameters normalize once, without adding history entries.
   createEffect(() => {
@@ -319,33 +323,37 @@ export default function Designs(props: DestinationProps) {
     if (!props.live) return '';
     if (!data()) return indexError() ? 'Designs unavailable' : 'Reading design packages…';
     const total = designs().length;
-    if (total === 0) return 'No design packages recorded';
+    if (total === 0) return successfulEmpty() ? 'No designs recorded' : allInvalid() ? 'Design indexes could not be read' : '';
     const visible = visibleDesigns().length;
     if (query() && visible !== total) return `${visible} of ${total} design packages`;
     return `${total} ${total === 1 ? 'design package' : 'design packages'}`;
   };
   const emptyDetailTitle = () => {
-    if (designs().length === 0) return 'No design packages recorded';
-    if (selection().unavailable && (props.route.id ?? '') !== '') return 'Design not found';
+    if (unavailableSelection()) return 'Design not found';
+    if (allInvalid()) return 'Design indexes could not be read';
     return 'Choose a design';
   };
   const emptyDetailText = () => {
-    if (designs().length === 0) return 'design-plan writes designs/<slug>/design.json; see docs/design-packages.md.';
-    if (selection().unavailable && (props.route.id ?? '') !== '') return 'The selected design package is not in this workspace. Choose another package from the list.';
+    if (unavailableSelection()) return 'The selected design package is not in this workspace. Choose another package from the list.';
+    if (allInvalid()) return 'The recorded design indexes could not be read. Fix them in the workspace, then refresh.';
     return 'Choose a design package to inspect its planned screens, widths and captures.';
   };
   const announcement = createMemo(() => {
     if (!props.live) return 'Designs require a live dashboard server.';
     if (!data()) return indexError() ? 'Designs could not be read.' : 'Reading design packages.';
-    if (designs().length === 0) return 'No design packages recorded.';
     const current = selection();
     if (current.unavailable && (props.route.id ?? '') !== '') return 'Design not found.';
+    if (allInvalid()) return 'Design indexes could not be read.';
+    if (successfulEmpty()) return 'No designs recorded.';
+    if (designs().length > 0 && visibleDesigns().length === 0) return 'No designs match. Clear search to restore the design list.';
     if (!current.design) return 'Choose a design package.';
     if (!current.screen) return `${current.design.title} has no planned screens.`;
     return `Screen ${current.screen.step} of ${current.design.screens.length} · ${current.design.title} · ${current.screen.title}`;
   });
 
-  const openBrief = (route: RouteState) => (event: MouseEvent) => {
+  // Shared route link handler: modified clicks keep the native anchor, ordinary
+  // clicks push the explicit route through the App navigation owner.
+  const routeClick = (route: RouteState) => (event: MouseEvent) => {
     if (modifiedClick(event)) return;
     event.preventDefault();
     props.onNavigate(route);
@@ -408,11 +416,26 @@ export default function Designs(props: DestinationProps) {
                     Existing content is kept while the host revalidates it.
                   </StateNotice>
                 </Show>
-                <Show when={Boolean(data()) && designs().length === 0}>
-                  <EmptyState title="No design packages recorded" text="design-plan writes designs/<slug>/design.json; see docs/design-packages.md." />
+                <Show when={successfulEmpty()}>
+                  <EmptyState
+                    symbol="◇"
+                    title="No designs recorded"
+                    text="Create a design plan in this workspace to begin."
+                    action={
+                      <>
+                        <a class="ds-btn" href={formatHash(filesRoute())} onClick={routeClick(filesRoute())}>Open files</a>
+                        <button type="button" class="ds-btn" onClick={refreshIndex}>Refresh designs</button>
+                      </>
+                    }
+                  />
                 </Show>
                 <Show when={Boolean(data()) && designs().length > 0 && visibleDesigns().length === 0}>
-                  <EmptyState title="No matching designs" text="Clear the search to restore the design list." />
+                  <EmptyState
+                    symbol="◇"
+                    title="No designs match"
+                    text="Clear the search to restore the design list."
+                    action={<button type="button" class="ds-btn" onClick={() => props.onQuery('')}>Clear search</button>}
+                  />
                 </Show>
                 <For each={visibleDesigns()}>
                   {item => {
@@ -463,9 +486,42 @@ export default function Designs(props: DestinationProps) {
             </Show>
           </Match>
           <Match when={!design()}>
-            <div class="detail-body">
-              <EmptyState symbol="◇" title={emptyDetailTitle()} text={emptyDetailText()} />
-            </div>
+            <Switch>
+              <Match when={unavailableSelection()}>
+                <div class="detail-body">
+                  <EmptyState symbol="◇" title={emptyDetailTitle()} text={emptyDetailText()} />
+                </div>
+              </Match>
+              <Match when={allInvalid()}>
+                <div class="detail-body">
+                  <EmptyState symbol="◇" title={emptyDetailTitle()} text={emptyDetailText()} />
+                </div>
+              </Match>
+              <Match when={successfulEmpty()}>
+                <>
+                  <div class="object-head">
+                    <div class="object-top">
+                      <h2 id="design-detail-heading" tabIndex={-1}>Design screen</h2>
+                    </div>
+                    <p />
+                  </div>
+                  <div class="design-canvas">
+                    <EmptyState
+                      symbol="◇"
+                      title="No design selected"
+                      text="Open Files to read the planning material for this workspace."
+                      action={<a class="ds-btn ds-btn--primary" href={formatHash(filesRoute())} onClick={routeClick(filesRoute())}>Open files</a>}
+                    />
+                  </div>
+                  <footer class="detail-foot">Produced and captured status comes from files · Screen content is read only</footer>
+                </>
+              </Match>
+              <Match when={true}>
+                <div class="detail-body">
+                  <EmptyState symbol="◇" title={emptyDetailTitle()} text={emptyDetailText()} />
+                </div>
+              </Match>
+            </Switch>
           </Match>
           <Match when={design()}>
             <>
@@ -537,7 +593,7 @@ export default function Designs(props: DestinationProps) {
                                 when={briefRoute()}
                                 fallback={<p class="small muted">No safe relative brief is recorded, so there is no brief link to open.</p>}
                               >
-                                {route => <a class="ds-btn ds-btn--primary" href={formatHash(route())} onClick={openBrief(route())}>Open brief</a>}
+                                {route => <a class="ds-btn ds-btn--primary" href={formatHash(route())} onClick={routeClick(route())}>Open brief</a>}
                               </Show>
                             }
                           />
@@ -551,7 +607,7 @@ export default function Designs(props: DestinationProps) {
                               <>
                                 <button type="button" class="ds-btn ds-btn--primary" onClick={() => setRetryNonce(value => value + 1)}>Retry check</button>
                                 <Show when={briefRoute()}>
-                                  {route => <a class="ds-btn" href={formatHash(route())} onClick={openBrief(route())}>Open brief</a>}
+                                  {route => <a class="ds-btn" href={formatHash(route())} onClick={routeClick(route())}>Open brief</a>}
                                 </Show>
                               </>
                             }

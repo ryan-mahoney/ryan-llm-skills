@@ -11,6 +11,9 @@ SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 180s uv run --script \
 SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 180s uv run --script \
   scripts/spec-observe/frontend/designs-browser-check.py --case unproduced \
   --capture-reference /path/to/designs/app-ui/screens/26-design-screen-unproduced.html
+SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 180s uv run --script \
+  scripts/spec-observe/frontend/designs-browser-check.py --case empty \
+  --capture-reference /path/to/designs/app-ui/screens/76-designs-empty.html
 
 Only the temporary fixture storage, one final index HTTP delay, and the imported
 snapshot are substituted; App, route, adapters, /api/workspace-designs and the
@@ -39,7 +42,7 @@ from urllib.parse import parse_qs, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--case', choices=['journey', 'unproduced'], default='journey')
+parser.add_argument('--case', choices=['journey', 'unproduced', 'empty'], default='journey')
 parser.add_argument('--capture-reference', default=None)
 options = parser.parse_args()
 case = options.case
@@ -161,10 +164,6 @@ def seed_designs(storage):
     (second / 'design.json').write_text(json.dumps(second_record))
 
     other = other_root / 'other-demo'
-    (other / 'screens').mkdir(parents=True, exist_ok=True)
-    (other / 'marker.js').write_text(MARKER_JS)
-    (other / 'screen.css').write_text(SCREEN_CSS)
-    (other / 'screens' / '01-other-screen.html').write_text(screen_html('Other screen', 'Other workspace screen'))
     other_record = {
         'schema_version': 1,
         'design': 'other-demo',
@@ -173,11 +172,16 @@ def seed_designs(storage):
         'screens': [{'step': 1, 'id': 'other-screen', 'title': 'Other screen', 'person': 'Operator',
                      'job': 'Prove workspace scope isolation', 'kind': 'action', 'state': 'ideal'}],
     }
-    (other / 'design.json').write_text(json.dumps(other_record))
+    if case != 'empty':
+        (other / 'screens').mkdir(parents=True, exist_ok=True)
+        (other / 'marker.js').write_text(MARKER_JS)
+        (other / 'screen.css').write_text(SCREEN_CSS)
+        (other / 'screens' / '01-other-screen.html').write_text(screen_html('Other screen', 'Other workspace screen'))
+        (other / 'design.json').write_text(json.dumps(other_record))
     seeded = {
         'fixture/demo': demo_record,
         'fixture/second': second_record,
-        'other/other-demo': other_record,
+        'other/other-demo': other_record if case != 'empty' else 'absent (empty case: other workspace has no designs directory)',
         'markerScriptSource': MARKER_JS,
         'screenCssSource': SCREEN_CSS,
         'screenHtmlSources': {'01-screen-1.html': demo_first, '02-screen-2.html': demo_second},
@@ -186,9 +190,10 @@ def seed_designs(storage):
             'fixture/designs/demo/screens/02-screen-2.html', 'fixture/designs/demo/marker.js',
             'fixture/designs/demo/screen.css', 'fixture/designs/demo/captures/01-screen-1@1280.png',
             'fixture/designs/demo/captures/01-screen-1@1600.png', 'fixture/designs/second/design.json',
-            'fixture/designs/second/screens/01-wide-shot.html', 'other/designs/other-demo/design.json',
-            'other/designs/other-demo/screens/01-other-screen.html',
-        ],
+            'fixture/designs/second/screens/01-wide-shot.html',
+        ] + ([] if case == 'empty' else [
+            'other/designs/other-demo/design.json', 'other/designs/other-demo/screens/01-other-screen.html',
+        ]),
     }
     if case == 'unproduced':
         # Planned-screen branch fixtures: one produced step to enter from, one
@@ -360,7 +365,7 @@ try:
                            scrollTop: canvas ? canvas.scrollTop : null };
                 }""")
 
-            def capture_reference(prefix, details=True, wait_for_frame=True):
+            def capture_reference(prefix, details=True, wait_for_frame=True, select_width=True):
                 global reference_server
                 assert reference_html and reference_html.is_file(), reference_html
                 reference_root = reference_html.parent.parent
@@ -379,8 +384,9 @@ try:
                 for width in (1280, 1600):
                     reference_page.set_viewport_size({'width': width, 'height': 900})
                     reference_page.wait_for_timeout(150)
-                    reference_page.select_option('#design-width', f'{width}px')
-                    if wait_for_frame:
+                    if select_width:
+                        reference_page.select_option('#design-width', f'{width}px')
+                    if select_width and wait_for_frame:
                         reference_page.wait_for_function("""(declared) => {
                           const frameElement = document.getElementById('design-frame');
                           if (!frameElement) return false;
@@ -531,6 +537,231 @@ try:
                     'production and reference captures at both widths for the planned-screen state',
                 ]
                 passed('captured planned-step production at 1280 and 1600' + (' and the reference at matching widths' if reference_html else ''))
+
+                assert not report['pageErrors'], report['pageErrors']
+                assert not report['consoleErrors'], report['consoleErrors']
+                unexpected = [failure for failure in report['requestFailures'] if 'ERR_ABORTED' not in failure['failure']]
+                assert not unexpected, unexpected
+                mutations = [r for r in requests if r['method'] not in ('GET', 'HEAD')]
+                assert not mutations, f'mutation requests observed: {mutations}'
+                report['status'] = 'passed'
+                raise CaseComplete()
+
+            if case == 'empty':
+                list_pane = page.locator('.list-pane')
+                canvas = page.locator('.design-canvas')
+                announcement = page.locator('main [role="status"][aria-atomic="true"]')
+
+                # Ordinary entry: Workspaces ws=other -> Designs action -> real empty index.
+                page.goto(base + '/#/workspaces?ws=other', wait_until='domcontentloaded')
+                with page.expect_response(lambda response: '/api/workspace-designs' in response.url) as empty_response:
+                    page.get_by_role('button', name='Designs', exact=True).click()
+                assert empty_response.value.status == 200, empty_response.value.status
+                empty_body = empty_response.value.json()
+                assert empty_body.get('designs') == [], empty_body
+                assert empty_body.get('errors') == [], empty_body
+                expect(page).to_have_url(re.compile(r'#/designs\?ws=other'))
+                expect(page.locator('.list-caption')).to_have_text('No designs recorded')
+                expect(list_pane.get_by_role('heading', name='No designs recorded', exact=True)).to_be_visible()
+                expect(list_pane).to_contain_text('Create a design plan in this workspace to begin.')
+                expect(page.locator('.object-head h2')).to_have_text('Design screen')
+                expect(canvas.get_by_role('heading', name='No design selected', exact=True)).to_be_visible()
+                expect(canvas).to_contain_text('Open Files to read the planning material for this workspace.')
+                expect(page.locator('.design-toolbar')).to_have_count(0)
+                expect(page.locator('#design-width')).to_have_count(0)
+                expect(page.locator('#design-frame-wrap')).to_have_count(0)
+                expect(page.locator('#design-frame')).to_have_count(0)
+                expect(canvas.locator('details')).to_have_count(0)
+                expect(page.locator('.detail-foot')).to_have_text('Produced and captured status comes from files · Screen content is read only')
+                files_links = page.get_by_role('link', name='Open files', exact=True)
+                expect(files_links).to_have_count(2)
+                for index in range(2):
+                    href = files_links.nth(index).get_attribute('href')
+                    assert href == '#/files?ws=other&source=workspace', href
+                expect(page.locator('.detail-pane a.ds-btn--primary', has_text='Open files')).to_have_count(1)
+                expect(page.locator('.list-pane a.ds-btn--primary')).to_have_count(0)
+                refresh_local = list_pane.get_by_role('button', name='Refresh designs', exact=True)
+                expect(refresh_local).to_be_visible()
+                expect(announcement).to_have_count(1)
+                expect(announcement).to_have_text('No designs recorded.')
+                passed('other workspace with no designs renders No designs recorded and No design selected with no frame/toolbar and one primary Open files')
+
+                # Both Files links cross the real Files adapter with ws=other preserved.
+                for index in range(2):
+                    files_links.nth(index).click()
+                    expect(page).to_have_url(re.compile(r'#/files\?ws=other&source=workspace'))
+                    expect(page.locator('h1')).to_have_text('Files')
+                    page.go_back()
+                    expect(page).to_have_url(re.compile(r'#/designs\?ws=other'))
+                passed('both empty Files links enter the real Files route with ws=other preserved')
+
+                # Empty captures at both widths; reference 76 has no width control.
+                report['emptyCaptureState'] = []
+                for width in (1280, 1600):
+                    page.set_viewport_size({'width': width, 'height': 900})
+                    page.wait_for_timeout(150)
+                    path = browser_evidence / f'designs-empty@{width}.png'
+                    page.screenshot(path=str(path))
+                    report['captures'].append(str(path))
+                    report['emptyCaptureState'].append({
+                        'width': width,
+                        'capture': str(path),
+                        'url': page.url,
+                        'announcement': announcement.text_content(),
+                        'framePresent': page.locator('#design-frame').count(),
+                        'toolbarPresent': page.locator('.design-toolbar').count(),
+                    })
+                if reference_html:
+                    capture_reference('reference-76', details=False, wait_for_frame=False, select_width=False)
+                report['intentionalWaits'] = ['empty production and reference captures at both widths']
+                passed('captured empty production at 1280 and 1600' + (' and the 76 reference at matching widths' if reference_html else ''))
+
+                # 44px, keyboard and 200% zoom reachability for the empty controls.
+                search = page.locator('#find-record')
+                controls = [search, refresh_local, files_links.nth(0), files_links.nth(1)]
+                for control in controls:
+                    box = control.bounding_box()
+                    assert box and box['width'] >= 44 and box['height'] >= 44, (control, box)
+                search.focus()
+                reachable = []
+                for _ in range(24):
+                    reachable.append(active_control())
+                    page.keyboard.press('Tab')
+                reachable_ids = [item['id'] for item in reachable if item]
+                reachable_text = [item['text'] for item in reachable if item]
+                assert 'find-record' in reachable_ids, reachable_ids
+                assert 'Refresh designs' in reachable_text, reachable_text
+                assert 'Open files' in reachable_text, reachable_text
+                page.evaluate("document.documentElement.style.zoom = '2'")
+                page.wait_for_timeout(150)
+                for control in controls:
+                    control.scroll_into_view_if_needed()
+                    box = control.bounding_box()
+                    assert box and box['x'] >= 0 and box['y'] >= 0 and box['y'] < 900, (control, box)
+                page.evaluate("document.documentElement.style.zoom = ''")
+                passed('empty search, local Refresh designs and both Files links meet 44px, stay keyboard reachable and survive 200% zoom')
+
+                # Explicit unknown id keeps the unavailable contract while the catalog is empty.
+                page.evaluate("location.hash = '#/designs?ws=other&id=missing-design'")
+                expect(page.locator('.detail-body')).to_contain_text('Design not found')
+                expect(page.locator('.design-canvas')).to_have_count(0)
+                expect(page.locator('.list-caption')).to_have_text('No designs recorded')
+                assert params().get('id') == ['missing-design'], page.url
+                expect(announcement).to_have_text('Design not found.')
+                passed('an explicit unknown id keeps the unavailable detail and its id while the real catalog stays empty')
+
+                # Write a real temporary design, then let the local Refresh designs discover it.
+                page.evaluate("location.hash = '#/designs?ws=other'")
+                expect(page.locator('.list-caption')).to_have_text('No designs recorded')
+                other_design = Path(receipt['root']) / 'storage' / 'projects' / 'other' / 'designs' / 'empty-demo'
+                discovered_record = {
+                    'schema_version': 1, 'design': 'empty-demo', 'title': 'Empty discovered',
+                    'viewport': {'posture': 'desktop-only', 'widths': [1280]},
+                    'screens': [{'step': 1, 'id': 'empty-screen', 'title': 'Empty discovered screen', 'person': 'Operator',
+                                 'job': 'Prove the local refresh discovers a new temporary design',
+                                 'kind': 'action', 'state': 'ideal'}],
+                }
+                discovered_screen = screen_html('Empty discovered screen', 'Discovered empty screen')
+                (other_design / 'screens').mkdir(parents=True, exist_ok=True)
+                (other_design / 'marker.js').write_text(MARKER_JS)
+                (other_design / 'screen.css').write_text(SCREEN_CSS)
+                (other_design / 'screens' / '01-empty-screen.html').write_text(discovered_screen)
+                (other_design / 'design.json').write_text(json.dumps(discovered_record))
+                report['fixtureInputs'] = {
+                    'designJson': discovered_record,
+                    'screenHtml': discovered_screen,
+                    'markerScript': MARKER_JS,
+                    'screenCss': SCREEN_CSS,
+                }
+                with page.expect_response(lambda response: '/api/workspace-designs' in response.url and 'id=other' in response.url) as discovered:
+                    refresh_local.click()
+                discovered_body = discovered.value.json()
+                assert [item['slug'] for item in discovered_body.get('designs', [])] == ['empty-demo'], discovered_body
+                expect(page.locator('.list-pane .record')).to_have_count(1)
+                expect(page.locator('.list-pane .record')).to_contain_text('Empty discovered')
+                expect(page.locator('#design-detail-heading')).to_have_text('Empty discovered')
+                page.wait_for_function("() => location.hash.includes('id=empty-demo') && location.hash.includes('tab=1280')")
+                assert params().get('id') == ['empty-demo'], page.url
+                assert params().get('path') == ['screens/01-empty-screen.html'], page.url
+                assert params().get('tab') == ['1280'], page.url
+                passed('the local Refresh designs discovers a newly written design and normalizes the actual selection')
+
+                # Invalid index on disk: the shell refresh, real errors, no false empty state.
+                invalid_index = '{ this is not json'
+                report['fixtureInputs']['invalidIndexLiteral'] = invalid_index
+                (other_design / 'design.json').write_text(invalid_index)
+                with page.expect_response(lambda response: '/api/workspace-designs' in response.url and 'id=other' in response.url) as invalidated:
+                    page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                invalid_body = invalidated.value.json()
+                assert invalid_body.get('designs') == [], invalid_body
+                assert invalid_body.get('errors'), invalid_body
+                expect(page.locator('.list-caption')).to_have_text('Design indexes could not be read')
+                expect(page.locator('.list-pane .warn')).to_contain_text('designs/empty-demo/design.json')
+                expect(page.locator('main')).not_to_contain_text('No designs recorded')
+                expect(page.locator('main')).not_to_contain_text('No design selected')
+                page.evaluate("location.hash = '#/designs?ws=other'")
+                expect(page.locator('.detail-body')).to_contain_text('Design indexes could not be read')
+                expect(announcement).to_have_text('Design indexes could not be read.')
+                passed('an all-invalid index exposes its diagnostic instead of claiming No designs recorded or No design selected')
+
+                # No-match search on the populated fixture keeps the selected detail.
+                canonical = base + '/#/designs?ws=fixture&id=demo&path=screens%2F02-screen-2.html&tab=1600'
+                page.goto(canonical, wait_until='domcontentloaded')
+                page.reload(wait_until='domcontentloaded')
+                expect(page.locator('#design-detail-heading')).to_have_text('Design fixture')
+                expect(page.locator('#design-width')).to_have_value('1600')
+                expect(frame().locator('h1')).to_have_text('Marker screen two')
+                page.evaluate("document.getElementById('design-frame').dataset.viewer = 'stable'")
+                frame_handle = page.locator('#design-frame').element_handle()
+                stable_nonce = frame().locator('html').get_attribute('data-nonce')
+                heads_before = head_count()
+                search = page.locator('#find-record')
+                search.fill('Design fixture')
+                expect(page.locator('.list-pane .record')).to_have_count(1)
+                expect(page.locator('.list-pane .record').first).to_contain_text('Design fixture')
+                search.fill('second')
+                expect(page.locator('.list-pane .record')).to_have_count(1)
+                expect(page.locator('.list-pane .record').first).to_contain_text('Alternate fixture')
+                expect(page.locator('#design-detail-heading')).to_have_text('Design fixture')
+                assert params().get('id') == ['demo'], page.url
+                search.fill('no-such-design')
+                expect(page.locator('.list-pane')).to_contain_text('No designs match')
+                clear_search = page.locator('.list-pane').get_by_role('button', name='Clear search', exact=True)
+                expect(clear_search).to_be_visible()
+                expect(page.locator('.detail-pane').get_by_role('button', name='Clear search', exact=True)).to_have_count(0)
+                expect(announcement).to_have_count(1)
+                expect(announcement).to_have_text('No designs match. Clear search to restore the design list.')
+                no_match_announcement = announcement.text_content()
+                clear_box = clear_search.bounding_box()
+                assert clear_box and clear_box['width'] >= 44 and clear_box['height'] >= 44, clear_box
+                assert params().get('id') == ['demo'] and params().get('path') == ['screens/02-screen-2.html'] and params().get('tab') == ['1600'], page.url
+                expect(page.locator('#design-detail-heading')).to_have_text('Design fixture')
+                assert page.evaluate("document.getElementById('design-frame').dataset.viewer") == 'stable'
+                assert frame().locator('html').get_attribute('data-nonce') == stable_nonce
+                assert head_count() == heads_before, 'search added a produced-screen HEAD'
+                for width in (1280, 1600):
+                    page.set_viewport_size({'width': width, 'height': 900})
+                    page.wait_for_timeout(150)
+                    path = browser_evidence / f'designs-no-match@{width}.png'
+                    page.screenshot(path=str(path))
+                    report['captures'].append(str(path))
+                clear_search.click()
+                expect(page.locator('.list-pane .record')).to_have_count(2)
+                expect(page.locator('#design-detail-heading')).to_have_text('Design fixture')
+                assert page.evaluate("document.getElementById('design-frame').dataset.viewer") == 'stable'
+                assert frame().locator('html').get_attribute('data-nonce') == stable_nonce
+                assert head_count() == heads_before, 'clear added a produced-screen HEAD'
+                assert frame_handle.evaluate('(el) => el.isConnected'), 'no-match search replaced the iframe'
+                expect(announcement).to_have_count(1)
+                expect(announcement).to_have_text('Screen 2 of 2 · Design fixture · Screen two')
+                report['noMatchIdentity'] = {
+                    'announcement': no_match_announcement,
+                    'id': params().get('id'), 'path': params().get('path'), 'tab': params().get('tab'),
+                    'nonce': stable_nonce,
+                    'headReadsBefore': heads_before, 'headReadsAfter': head_count(),
+                    'frameConnected': frame_handle.evaluate('(el) => el.isConnected'),
+                }
+                passed('title and slug search match rows, an impossible q shows No designs match with Clear search, and the detail, width, iframe and HEAD count survive')
 
                 assert not report['pageErrors'], report['pageErrors']
                 assert not report['consoleErrors'], report['consoleErrors']
