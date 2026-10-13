@@ -547,6 +547,12 @@ def run_view_states(url, thread1, thread2):
         expect(page.locator('.thread-transcript')).to_contain_text('Ready to discuss.')
         expect(draft).to_have_value('Retained read draft')
         expect(page.locator('#thread-send')).to_be_disabled()
+        draft.focus()
+        page.keyboard.press('Enter')
+        page.wait_for_timeout(500)
+        assert send_count() == sends_before, 'Enter posted a send during history error'
+        expect(draft).to_have_value('Retained read draft')
+        expect(page.locator('#thread-send')).to_be_disabled()
         page.wait_for_timeout(5500)
         expect(page.locator('.detail-pane')).to_contain_text('Thread state could not be read')
         capture('conversations-state-error@1280.png')
@@ -555,6 +561,11 @@ def run_view_states(url, thread1, thread2):
         expect(page.locator('.detail-pane')).not_to_contain_text('Thread state could not be read')
         assert send_count() == sends_before, 'Retry thread posted a send'
         expect(page.locator('#thread-send')).to_be_enabled()
+        draft.fill('Keyboard recovery draft')
+        draft.focus()
+        page.keyboard.press('Enter')
+        expect(draft).to_have_value('', timeout=10000)
+        assert send_count() == sends_before + 1, 'keyboard Enter did not send after recovery'
         passed('view-states error: history 503 keeps transcript/draft and disables Send; list poll alone never clears it; Retry clears only after history succeeds with no send')
 
         control('fail-send', 'true')
@@ -568,6 +579,40 @@ def run_view_states(url, thread1, thread2):
         retried = posts('send')[-1]['input']
         assert retried['id'] == first_id and retried['thread_id'] == thread1, (first_id, retried)
         passed('view-states error: a failed send keeps the retry id and error until an explicit successful recovery')
+
+        # F2: a failed send followed by reconnecting keeps the recovery gate:
+        # the offline notice returns, Send (button and Enter) stays disabled,
+        # the mutation callout is retained, and the same retry id succeeds
+        # only after an explicit reconnect.
+        control('fail-send', 'true')
+        draft.fill('Combined offline draft')
+        page.locator('#thread-send').click()
+        expect(page.locator('#thread-mutation-error')).to_contain_text('Discussion service unavailable')
+        combined_id = posts('send')[-1]['input']['id']
+        combined_sends = send_count()
+        page.route('**/api/thread/events*', lambda route: route.abort())
+        page.locator('[data-thread-refresh]').click()
+        page.locator('#thread-reconnect').wait_for(timeout=8000)
+        expect(page.locator('#thread-mutation-error')).to_contain_text('Discussion service unavailable')
+        expect(page.locator('#thread-send')).to_be_disabled()
+        expect(draft).to_have_value('Combined offline draft')
+        draft.focus()
+        page.keyboard.press('Enter')
+        page.wait_for_timeout(500)
+        assert send_count() == combined_sends, 'Enter posted a send during reconnecting mutation'
+        expect(draft).to_have_value('Combined offline draft')
+        page.unroute('**/api/thread/events*')
+        with page.expect_request(lambda request: '/api/thread/events' in request.url):
+            page.locator('#thread-reconnect').click()
+        expect(page.locator('#thread-reconnect')).to_have_count(0, timeout=10000)
+        expect(page.locator('#thread-mutation-error')).to_contain_text('Discussion service unavailable')
+        expect(page.locator('#thread-send')).to_be_enabled()
+        control('fail-send', 'false')
+        page.locator('#thread-send').click()
+        expect(draft).to_have_value('')
+        combined_retry = posts('send')[-1]['input']
+        assert combined_retry['id'] == combined_id and combined_retry['thread_id'] == thread1, (combined_id, combined_retry)
+        passed('view-states error: failed send followed by reconnecting keeps Send disabled until explicit recovery with same retry id')
 
         # 5. Partial: incomplete-tail and invalid-record warnings name reasons
         #    without raw dumps; transcript, older page and composer stay usable.
@@ -620,6 +665,13 @@ def run_view_states(url, thread1, thread2):
         expect(page.locator('.thread-transcript')).to_contain_text('Ready to discuss.')
         expect(draft).to_have_value('Offline retained draft')
         expect(page.locator('#thread-send')).to_be_disabled()
+        offline_enter_before = send_count()
+        draft.focus()
+        page.keyboard.press('Enter')
+        page.wait_for_timeout(500)
+        assert send_count() == offline_enter_before, 'Enter posted a send while offline'
+        expect(draft).to_have_value('Offline retained draft')
+        expect(page.locator('#thread-send')).to_be_disabled()
         capture('conversations-state-offline@1280.png')
         sends_before = send_count()
         with page.expect_request(lambda request: '/api/thread/events' in request.url):
@@ -653,6 +705,14 @@ def run_view_states(url, thread1, thread2):
         page.locator('#thread-stale-refresh').wait_for(timeout=8000)
         expect(page.locator('.thread-transcript')).to_contain_text('Ready to discuss.')
         expect(draft).to_have_value('Stale retained draft')
+        expect(page.locator('#thread-send')).to_be_disabled()
+        stale_enter_before = send_count()
+        draft.focus()
+        page.keyboard.press('Enter')
+        page.wait_for_timeout(500)
+        assert send_count() == stale_enter_before, 'Enter posted a send while stale'
+        expect(draft).to_have_value('Stale retained draft')
+        expect(page.locator('#thread-send')).to_be_disabled()
         capture('conversations-state-stale@1280.png')
         page.locator('#thread-stale-refresh').click()
         page.wait_for_timeout(200)
@@ -738,10 +798,10 @@ def run_view_states(url, thread1, thread2):
         '- Case: view-states at 1280x900 plus an ideal production capture at 1600x900.',
         '- Observed: loading shows RegionalSkeleton only (no selection/composer); empty shows EmptyState and Create thread enters tab=new.',
         '- Observed: list 503/403, history 403 and an imported snapshot suppress rows/title/transcript/composer and offer Open workspaces preserving ws.',
-        '- Observed: history 503 keeps transcript/draft and disables Send; a successful list poll never clears it; Retry thread clears only after history succeeds with no send; a failed send keeps its retry id until explicit recovery.',
+        '- Observed: history 503 keeps transcript/draft and disables Send (button and Enter); a successful list poll never clears it; Retry thread clears only after history succeeds with no send; keyboard Enter sends after recovery; a failed send keeps its retry id until explicit recovery; failed send followed by reconnecting keeps Send disabled until explicit recovery with the same retry id.',
         '- Observed: incomplete-tail and invalid-record notices name reasons without raw dumps; parsed transcript, older page and composer stay usable.',
-        '- Observed: aborted SSE retains content/draft with Reconnect thread; reconnecting opens a fresh stream and reloads the list without auto-send.',
-        '- Observed: >45s browser-local elapsed observation yields stale with retained data; a server clock offset does not; a successful list refresh restores ready.',
+        '- Observed: aborted SSE retains content/draft with Reconnect thread; Enter never sends while offline; reconnecting opens a fresh stream and reloads the list without auto-send.',
+        '- Observed: >45s browser-local elapsed observation yields stale with retained data and disabled Send (button and Enter); a server clock offset does not; a successful list refresh restores ready.',
         '- Observed: a held old-workspace list cannot leak rows/draft/controls under another workspace.',
         '- Recorded deviation: Prepare assignment stays in the detail ActionBar; the reference has no detail action bar.',
         '',

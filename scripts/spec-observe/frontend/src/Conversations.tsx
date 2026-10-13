@@ -151,9 +151,21 @@ export default function Conversations(props: Props) {
     streamState: stream(),
     observationStale: observationStale(),
   });
-  // A mutation-only failure keeps the composer's own explicit retry control:
-  // the read view it gates stays ready while the retained callout remains.
-  const readView = () => view() === 'error' && mutationError() && !listError() && !historyError() ? 'ready' : view();
+  // The read/connection view excludes the mutation failure: it reports the
+  // underlying list/history/stream/stale state through the same owner, so a
+  // failed send never masks reconnecting/stale. The mutation-error callout
+  // and captured retry identity stay independent; explicit retry is enabled
+  // only when this underlying view is usable (ready).
+  const readView = () => conversationsViewState({
+    live: active(),
+    listLoaded: threads() !== null,
+    rows: threads() ?? [],
+    listError: listError(),
+    historyError: historyError(),
+    mutationError: false,
+    streamState: stream(),
+    observationStale: observationStale(),
+  });
   const composer = () => composerAvailability({
     view: readView(),
     thread: thread() ?? null,
@@ -557,6 +569,10 @@ export default function Conversations(props: Props) {
   async function send() {
     const id = projectedId, workspace = projectedWs;
     if (!actionable() || !id || id !== routeId() || workspace !== wsId() || !draft().trim() || pending()) return;
+    // Every entrypoint (button and keyboard Enter) shares the composer's
+    // availability decision: an unavailable connection/read view rejects the
+    // send before any retry identity is minted. Route/key guards above stay.
+    if (!composer().sendEnabled) return;
     const submitted = draft();
     // The captured retry identity travels with the submitted text so a failed
     // send retries with the same request id and a late acknowledgement only
