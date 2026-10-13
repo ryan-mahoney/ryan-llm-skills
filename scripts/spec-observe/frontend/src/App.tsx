@@ -1,7 +1,7 @@
 import { For, Show, Switch, Match, createSignal, createMemo, createEffect, on, onMount, onCleanup } from 'solid-js';
 import { getJson, postJson } from './api';
 import { str, base, time, packageFilterMatches, setClock, tickClock, serverNow, stale, statusMarkdown } from './format';
-import { normalizeEnvelope, authoritativeObservers, collectRecords, collectAssignments, collectEpics, type Envelope, type WireRecord } from './model';
+import { normalizeEnvelope, authoritativeObservers, collectRecords, packageSummaries, collectAssignments, collectEpics, type Envelope, type WireRecord } from './model';
 import Shell from './Shell';
 import type { StatusTone } from './primitives';
 import { parseHash, subscribeRoute, navigate, routeHistoryMode, type Destination, type RouteState } from './route';
@@ -71,7 +71,7 @@ export default function App() {
     return value === 'active' || value === 'attention' || value === 'completed' || value === 'planned' ? value : 'all';
   };
   const q = () => query().trim().toLowerCase();
-  const visibleRecords = createMemo(() => scopedRecords().filter(record => (!q() || [record.workspace, record.package_ref, record.package, record.activity, record.obligation, record.execution, record.workflow_state].some(value => str(value).toLowerCase().includes(q()))) && packageFilterMatches(record, filter())).sort((a, b) => filter() === 'completed' ? Date.parse(b.completed_at) - Date.parse(a.completed_at) || str(a.package).localeCompare(str(b.package)) : 0));
+  const visibleRecords = createMemo(() => packageSummaries(scopedRecords(),filter()).filter(record => (!q() || [record.workspace, record.package_ref, record.package, record.activity, record.obligation, record.execution, record.workflow_state].some(value => str(value).toLowerCase().includes(q()))) && packageFilterMatches(record, filter())).sort((a, b) => filter() === 'completed' ? Date.parse(b.completed_at) - Date.parse(a.completed_at) || str(a.package).localeCompare(str(b.package)) : 0));
   const visibleAssignments = createMemo(() => scopedAssignments().filter(assignment => !q() || [assignment.assignment_id, assignment.spec_package, assignment.workflow_id, assignment.display, assignment.nextAction, assignment.safeAction].some(value => str(value).toLowerCase().includes(q()))));
   const visibleEpics = createMemo(() => scopedEpics().filter(epic => !q() || [epic.title, epic.epic, epic.workspace, ...(epic.members ?? []).map((member: WireRecord) => member.name)].some(value => str(value).toLowerCase().includes(q()))));
   const record = createMemo(() => scopedRecords().find(item => item.key === route().id) ?? null);
@@ -163,7 +163,7 @@ export default function App() {
     navigate(next, routeHistoryMode(route(), next, { fallback: true }));
   }
   function openPackage(workspaceName: string, name: string) {
-    const matches = scopedRecords().filter(item => item.workspace === workspaceName && base(item.package) === name);
+    const matches = packageSummaries(scopedRecords()).filter(item => item.workspace === workspaceName && base(item.package) === name);
     const target = matches.find(item => packageFilterMatches(item, 'active'))
       ?? matches.find(item => item.planned)
       ?? matches.find(item => !item.recent_completion) ?? matches[0];

@@ -1,4 +1,5 @@
 import type { JSX } from 'solid-js';
+import { packageSummaries } from './model';
 import RelaunchAssignment from './RelaunchAssignment';
 import SessionPanel from './SessionPanel';
 import { For, Show } from 'solid-js';
@@ -21,8 +22,8 @@ const rows = (items: any[], kind: string) => <Show when={items.length} fallback=
 const Markdown = (props: { value: any; class?: string; fallback: string }) => <div class={`status-markdown ${props.class || ''}`} innerHTML={statusMarkdown(props.value || props.fallback)} />;
 
 export function PackageList(props: { records: any[]; filter: Filter; query: string; selected: string | null; onSelect: (key: string) => void }) {
-  const all = () => list(props.records);
-  const visible = () => all().filter(r => {
+  const all = () => packageSummaries(list(props.records));
+  const visible = () => packageSummaries(list(props.records),props.filter).filter(r => {
     const q = props.query.trim().toLowerCase();
     return (!q || [r.workspace, r.package_ref, r.package, r.activity, r.obligation, r.execution, r.workflow_state].some(v => str(v).toLowerCase().includes(q))) &&
       packageFilterMatches(r, props.filter);
