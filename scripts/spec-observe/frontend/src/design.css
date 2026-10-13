@@ -327,3 +327,8 @@
 .conversations-destination .ds-turn__body.thread-text{white-space:pre-wrap;overflow-wrap:anywhere}
 .conversations-destination #thread-queue .thread-text{margin-top:6px;white-space:pre-wrap;overflow-wrap:anywhere}
 .conversations-destination .composer textarea.ds-input[readonly]{background:var(--ds-chrome);color:var(--ds-ink-2)}
+/* Live terminal panel: the reusable section owns one installed-player frame,
+   kept black and clipped at both documented widths. Hiding is explicit so
+   the frame's own display cannot outrank the hidden attribute. */
+.terminal-view .terminal-frame{background:#000;margin-top:12px;border:1px solid var(--ds-line-2);border-radius:3px;min-height:240px;width:100%;max-width:100%;overflow:hidden}
+.terminal-view .terminal-frame[hidden]{display:none}
