@@ -1025,102 +1025,10 @@ try:
         expect(page.locator('main')).to_contain_text('Epic members')
         page.goto(url+'/#/files?ws=fixture&source=workspace&path=notes%2Fbrowser.md',wait_until='domcontentloaded')
         expect(page.locator('#file-content')).to_contain_text('A recorded note')
-        page.goto(url+'/#/conversations?ws=fixture',wait_until='domcontentloaded')
-        draft=page.locator('#thread-draft')
-        draft.wait_for()
-        draft.fill('A message edited in the middle')
-        draft.focus()
-        draft.evaluate('(el)=>el.setSelectionRange(10,10)')
-        control('delta')
-        expect(page.get_by_role('log',name='Thread transcript')).to_contain_text('Streamed reply')
-        page.wait_for_timeout(6100)  # Cross a real 5-second poll and multiple SSE state frames.
-        assert draft.evaluate('(el)=>el.selectionStart')==10
-        assert draft.evaluate('(el)=>el.selectionEnd')==10
-        expect(draft).to_be_focused()
-        expect(draft).to_have_value('A message edited in the middle')
-        page.keyboard.type('X')
-        expect(draft).to_have_value('A message Xedited in the middle')
-        brief=page.locator('#thread-brief-content');title=page.locator('#thread-brief-title')
-        title.fill('Browser brief');brief.fill('First draft')
-        brief.focus();brief.evaluate('(el)=>el.setSelectionRange(3,5)')
-        page.wait_for_timeout(5200)
-        assert brief.evaluate('(el)=>[el.selectionStart,el.selectionEnd]')==[3,5]
-        expect(brief).to_be_focused()
-        control('delay-brief',True)
-        page.locator('[data-thread-brief-save]').click()
-        brief.fill('New edit while saving')
-        expect(page.locator('[data-thread-preview]')).to_be_disabled()
-        expect(page.locator('#thread-handoff-status')).to_be_visible()
-        expect(page.locator('#thread-handoff-status')).to_contain_text('editor has unsaved changes')
-        expect(brief).to_have_value('New edit while saving')
-        control('delay-brief',False)
-        page.locator('[data-thread-brief-save]').click()
-        expect(page.locator('[data-thread-preview]')).to_be_enabled()
-        page.locator('[data-thread-preview]').click()
-        expect(page.locator('#thread-assignment-launch')).to_be_enabled()
-        first_digest=page.locator('#thread-preview .thread-facts > div').filter(has_text='Contract digest').locator('dd').inner_text()
-        expect(page.locator('#thread-preview')).to_contain_text('Contract digest')
-        phase='stale-launch'
-        page.locator('#thread-assignment-launch').click()
-        expect(page.locator('#thread-assignment-launch')).to_be_disabled()
-        expect(page.locator('#thread-preview')).to_contain_text('Re-preview required')
-        assert posts('launchAssignment')[-1]['input']['expectedDigest']==first_digest
-        control('stale-launch',False)
-        phase=None
-        page.locator('[data-thread-preview]').click()
-        expect(page.locator('#thread-assignment-launch')).to_be_enabled()
-        page.locator('#thread-assignment-launch').click()
-        expect(page.locator('#thread-result')).to_contain_text('Live')
-        before_send=len(posts('send'))
-        page.locator('[data-thread-discuss]').click()
-        expect(draft).to_have_value(__import__('re').compile('Discuss assignment'))
-        assert len(posts('send'))==before_send
-        control('fail-send',True)
-        phase='fail-send'
-        draft.fill('Retry this message')
-        page.locator('#thread-send').click()
-        expect(page.locator('[role="alert"]')).to_contain_text('Discussion service unavailable')
-        expect(draft).to_have_value('Retry this message')
-        first=posts('send')[-1]['input']['id']
-        control('fail-send',False)
-        phase=None
-        page.locator('#thread-send').click()
-        expect(draft).to_have_value('')
-        assert posts('send')[-1]['input']['id']==first
-        control('delay-send',True)
-        draft.fill('Submitted before thread change')
-        page.locator('#thread-send').click()
-        page.get_by_role('button',name=__import__('re').compile('Discussion two')).click()
-        draft.fill('New thread draft')
-        page.wait_for_timeout(1000)
-        expect(draft).to_have_value('New thread draft')
-        control('delay-send',False)
-        page.get_by_role('button',name=__import__('re').compile('Discussion one')).click()
-        control('attention')
-        page.wait_for_timeout(1100)
-        expect(page.locator('#thread-stop')).to_be_visible()
-        page.locator('#thread-stop').click()
-        expect(page.locator('#thread-resume')).to_be_visible()
-        page.locator('#thread-resume').click()
-        control('queue')
-        page.wait_for_timeout(1000)
-        page.locator('[data-thread-discard]').click()
-        expect(page.get_by_text('Uncertain message',exact=True)).to_have_count(0)
-        control('clear-attention')
-        page.locator('[data-thread-older]').click()
-        expect(page.get_by_role('log',name='Thread transcript')).to_contain_text('Older message')
-        page.locator('#thread-create').click()
-        expect(page.locator('#thread-create')).to_be_enabled()
-        expect(page.locator('#threads-section')).to_contain_text('New thread')
-        page.locator('#threads-section').scroll_into_view_if_needed()
-        threads_capture=str(browser_evidence/'sentinel-solid-threads.png')
-        page.screenshot(path=threads_capture)
-        if threads_capture not in summary['captures']: summary['captures'].append(threads_capture)
-        page.locator('.scope select').select_option('other')
-        expect(page.locator('#threads-section')).to_contain_text('No threads yet')
-        assert page.locator('#thread-draft').count()==0
-        page.locator('.scope select').select_option('fixture')
-        page.locator('#thread-draft').wait_for()
+        # The migrated conversation-thread journey now lives in owned checkers:
+        # EV-3 route/draft checks, EV-4 view states and EV-8 response states in
+        # conversations-browser-check.py; the thread-bound brief (EV-5) in
+        # browser-handoff-check.py.
         before_import=len(control()['posts'])
         imported={'action_token':'untrusted-import-token','observers':[{'observer_id':'imported','state':'unknown','snapshot':{'runs':[{'workspace':'imported','package':'/imported/example','execution':'running','assignment_id':'imported-run','is_current_assignment':True,'coverage':{'state':'complete','reasons':[]},'activity':'Imported activity'}]}}]}
         page.locator('#import-file').set_input_files({'name':'snapshot.json','mimeType':'application/json','buffer':json.dumps(imported).encode()})
@@ -1182,10 +1090,6 @@ try:
         def failure_reason(entry):
             if entry['phase']=='state-errors' and (entry['path'],entry['status']) in allowed_reads:
                 return 'controlled state read failure'
-            if entry['phase']=='stale-launch' and entry['path']=='/api/thread/launch-assignment' and entry['status']==409:
-                return 'intentional stale-preview launch refusal'
-            if entry['phase']=='fail-send' and entry['path']=='/api/thread/send' and entry['status']==503:
-                return 'intentional service-closed send refusal'
             if entry['phase']=='import-to-live' and package_query(entry['query'])=='/imported/example' and ((entry['path']=='/api/package-files' and entry['status']==503) or (entry['path']=='/api/package-preview' and entry['status']==403)):
                 return 'safe unpublished-package refusal during import-to-live'
             if entry['path'] in ('/api/package-files','/api/package-preview') and ((entry['path']=='/api/package-files' and entry['status']==503) or (entry['path']=='/api/package-preview' and entry['status']==403)) and package_query(entry['query']) in {receipt.get('mismatchPackage'),receipt.get('mismatchAlphaPackage')}:
@@ -1236,11 +1140,11 @@ try:
         page.remove_listener('request',track_file_api)
         passed('file asset import is read-only with live-required workspaces/picker and no API traffic')
         summary['status']='passed'
-        summary['scenarios'].extend(['healthy workspaces directory, detail, scope search and focus','workspace route actions and exact-path files','workspace picker and imported live requirement','package filters/files/sandbox/relative Markdown','agent execution and lifecycle','epic membership','workspace files and design navigation','message and brief cursor through polling/SSE','in-flight brief edits','stale preview refusal and reviewed launch','discuss result without sending','send failure retry identity','late send across thread switch','stalled stop/resume and uncertain discard','older history','create request cleanup','workspace change','offline snapshot read-only even with supplied token','explicit local package completion'])
+        summary['scenarios'].extend(['healthy workspaces directory, detail, scope search and focus','workspace route actions and exact-path files','workspace picker and imported live requirement','package filters/files/sandbox/relative Markdown','agent execution and lifecycle','epic membership','workspace files and design navigation','offline snapshot read-only even with supplied token','explicit local package completion'])
         summary['page_errors']=errors
         summary['console_errors']=console_errors
         summary['expected_http_errors']=summary.get('expected_http_errors',[])
-        print(json.dumps({'status':'passed','scenarios':summary['scenarios'],'page_errors':errors,'screenshot':str(browser_evidence/'sentinel-solid-threads.png'),'receipt':str(evidence_dir/'ev-2-browser-check.json')}))
+        print(json.dumps({'status':'passed','scenarios':summary['scenarios'],'page_errors':errors,'receipt':str(evidence_dir/'ev-2-browser-check.json')}))
     except CompletionCaseComplete:
         pass
     except BaseException as exc:

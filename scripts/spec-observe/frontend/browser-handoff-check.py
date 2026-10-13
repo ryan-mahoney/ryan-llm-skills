@@ -9,7 +9,7 @@ Run: uv run --script scripts/spec-observe/frontend/browser-handoff-check.py [--s
 Uses isolated fixture storage and fake workers; never launches a real assignment.
 The default handoff journey and the brief section share fixture/browser startup.
 """
-import json, os, re, select, subprocess, sys, time
+import json, os, re, select, shutil, subprocess, sys, time
 from pathlib import Path
 from playwright.sync_api import sync_playwright, expect
 
@@ -23,6 +23,13 @@ shots_dir = (evidence_dir / 'browser') if evidence_dir else Path('/tmp')
 if evidence_dir: shots_dir.mkdir(parents=True, exist_ok=True)
 receipt = (evidence_dir or Path('/tmp')) / ('final-review-browser.json' if section == 'final-review' else 'ev-12-thread.json' if section == 'thread' else 'ev-10-review.json' if section == 'review' else 'ev-11-result.json' if section == 'result' else 'ev-9-brief.json' if section == 'brief' else 'ev-4-handoff.json')
 summary = {'status':'failed','section':section,'cases':[],'page_errors':[],'captures':[],'boundary':'1440x1100 desktop' if section == 'handoff' else '1280x1100 and 1600x1100 desktop'}
+# Shared receipt metadata: actual revision/dirty plus the owned-resource
+# cleanup record. Only the thread section launches and closes its own
+# Playwright Chromium; every other section keeps the CDP browser contract.
+browser = None
+fixture_info = {}
+checkout = root.parents[2]
+cleanup = {'fixtureTerminated': False, 'browserClosed': False, 'temporaryFixtureRootRemoved': None, 'errors': []}
 def passed(name): summary['cases'].append(name)
 def shot(locator, name):
     path = shots_dir / name
@@ -712,17 +719,25 @@ def run_thread(browser, url, thread1, thread2):
             assert 'tab=brief' in hash_value, hash_value
             page.locator('#launch-brief-title').fill('Thread entry brief')
             page.locator('#launch-brief-content').fill('Outcome\nPrepare the launch brief from the thread entry.')
+            # Requested facts are a pending-review view. Hold the final
+            # preview boundary so the assertion cannot race its replacement
+            # by the reviewed contract.
+            control('hold-dispatch-preview', 'true')
             page.locator('#launch-save').click()
             # Requested facts render the route-carried repository identity while
-            # the contract resolves; the resolved contract facts stay
-            # server-bound and are never invented from the client route.
+            # the contract resolves; the resolved contract binds the thread's
+            # stored repository target server-side (fixture-repo) and is never
+            # invented from the client route.
             expect(page.locator('#launch-review-requested [data-fact="target"] dd')).to_have_text('fixture-repo')
-            expect(page.locator('.launch-contract [data-fact="target"] dd')).to_have_text('Whole workspace')
+            control('release-dispatch-preview')
+            expect(page.locator('.launch-contract [data-fact="target"] dd')).to_have_text('fixture-repo')
             assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
             finish(errors, f'thread Prepare opens the same launch identity with the server-bound target ({width})')
 
-        # Return: Discuss seeds the exact thread once without sending; a thread
-        # switch or remount cannot replay the seed.
+        # Return: Discuss seeds the exact thread once without sending. The
+        # retained per-thread draft survives A -> B -> A; once explicitly
+        # cleared it stays cleared across switches and the Files rail return,
+        # and the consumed one-use seed never replays.
         for width in widths:
             reset()
             page, errors = open(width)
@@ -734,18 +749,33 @@ def run_thread(browser, url, thread1, thread2):
             expect(page).to_have_url(re.compile(r'#/conversations\?ws=fixture&id=' + re.escape(thread1)))
             draft = page.locator('#thread-draft')
             expect(draft).not_to_have_value('')
+            # F2 seed precedence: the prepared-seed selection focuses the
+            # exact composer, not the selected title.
+            expect(draft).to_be_focused()
+            assert page.evaluate("() => document.activeElement === document.querySelector('#thread-draft')"), 'prepared seed did not focus the composer'
             seeded = draft.input_value()
             assert seeded.startswith('Assignment '), seeded
             assert len(posts('send')) == sends_before
             capture(page, f'thread-return-{width}.png')
+            # Retained draft: A -> B -> A restores the seeded text.
             page.locator('[data-thread="' + thread2 + '"]').click()
             expect(draft).to_have_value('')
             page.locator('[data-thread="' + thread1 + '"]').click()
+            expect(draft).to_have_value(seeded)
+            # Explicitly clear A: switching away/back and leaving through the
+            # Files rail both keep the empty retained draft, and no send is
+            # ever posted for the seeded or cleared text.
+            draft.fill('')
+            page.locator('[data-thread="' + thread2 + '"]').click()
+            page.locator('[data-thread="' + thread1 + '"]').click()
             expect(draft).to_have_value('')
-            page.goto(url + '/#/conversations?ws=fixture&id=' + thread1, wait_until='domcontentloaded')
+            page.locator('.nav-item[data-area="files"]').click()
+            expect(page).to_have_url(re.compile(r'#/files'))
+            page.locator('.nav-item[data-area="conversations"]').click()
+            expect(page).to_have_url(re.compile(r'#/conversations\?ws=fixture&id=' + re.escape(thread1)))
             expect(page.locator('#thread-draft')).to_have_value('')
             assert len(posts('send')) == sends_before
-            finish(errors, f'Discuss result returns the exact thread and the one-use seed never replays ({width})')
+            finish(errors, f'Discuss result returns the exact thread, retains the seed until cleared and never replays it ({width})')
 
         # Missing requested thread: the conversations surface selects nothing and
         # the launch surface refuses fallback and mutations, so no draft is
@@ -1025,13 +1055,22 @@ try:
     if not select.select([fixture.stdout], [], [], 10)[0]:
         raise RuntimeError('Fixture startup timed out')
     fixture_info = json.loads(fixture.stdout.readline())
+    summary['observedCommit'] = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=checkout, text=True).strip()
+    summary['dirty'] = bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=checkout, text=True).strip())
     url = fixture_info['url']
     thread1 = fixture_info['thread1']
     thread2 = fixture_info['thread2']
     thread3 = fixture_info['thread3']
     worktree_target = fixture_info['worktreeTarget']
     with sync_playwright() as p:
-        browser = p.chromium.connect_over_cdp(os.environ.get('SENTINEL_CDP_URL', 'http://127.0.0.1:9222'))
+        if section == 'thread':
+            # The thread route/draft section owns its Playwright Chromium (no
+            # CDP) so it can run standalone against the temporary fixture;
+            # every other section keeps the existing CDP contract.
+            executable = shutil.which('google-chrome')
+            browser = p.chromium.launch(**({'executable_path': executable} if executable else {}), headless=True, args=['--no-sandbox'])
+        else:
+            browser = p.chromium.connect_over_cdp(os.environ.get('SENTINEL_CDP_URL', 'http://127.0.0.1:9222'))
         if section == 'brief':
             try:
                 run_brief(browser, url)
@@ -1068,6 +1107,17 @@ try:
             except BaseException as exc:
                 summary['error']=repr(exc)
                 raise
+            finally:
+                # Close the thread-owned Chromium inside the live Playwright
+                # session: closing after the context manager exits raises
+                # "Event loop is closed". browserClosed records only an
+                # observed successful close.
+                if browser is not None:
+                    try:
+                        browser.close()
+                        cleanup['browserClosed'] = True
+                    except Exception as error:
+                        cleanup['errors'].append(f'browser close: {error}')
         elif section == 'final-review':
             try:
                 run_final_review(browser, url, thread1, thread2, thread3, worktree_target)
@@ -1225,12 +1275,21 @@ try:
             finally:
                 context.close()
 finally:
+    fixture.terminate()
     try:
-        write_receipt()
-    finally:
-        fixture.terminate()
+        fixture.wait(timeout=10)
+        cleanup['fixtureTerminated'] = True
+    except subprocess.TimeoutExpired:
+        fixture.kill()
+        fixture.wait()
+        cleanup['fixtureTerminated'] = True
+    if fixture_info.get('root'):
         try:
-            fixture.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            fixture.kill()
-            fixture.wait()
+            cleanup['temporaryFixtureRootRemoved'] = not Path(fixture_info['root']).exists()
+            if not cleanup['temporaryFixtureRootRemoved']:
+                cleanup['errors'].append(f"temporary fixture root still present: {fixture_info['root']}")
+        except Exception as error:
+            cleanup['errors'].append(f'temporary fixture root check: {error}')
+    summary['elapsedSeconds'] = round(time.monotonic() - started, 3)
+    summary['cleanup'] = cleanup
+    write_receipt()

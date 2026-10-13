@@ -24,22 +24,31 @@ The build checks TypeScript, bundles Solid and the styles, and writes
 `dashboard.html`. Commit source and generated HTML together. Runtime assets do
 not use a CDN. Snapshot import also works when the HTML is opened from disk.
 
-Focused model tests run with `npm test --prefix scripts/spec-observe/frontend`.
-The isolated browser journey runs with
+Focused model tests run with `npm test --prefix scripts/spec-observe/frontend`,
+including the pure `src/conversations-state.test.ts` owner cases for
+selection/view/availability decisions (EV-1) and retained drafts and prepared
+seeds (EV-6). The shared isolated browser journey runs with
 `uv run --script scripts/spec-observe/frontend/browser-check.py` after starting
 Chromium through the `uishot` skill. It uses temporary storage and simulated
-workers to exercise polling, SSE, cursor selection, files, designs, dispatch,
-retries, late responses and read-only imports. It replaces the old tests that
-executed the handwritten renderer against a fake DOM; HTTP and file-boundary
-tests remain in `dashboard.test.mjs`. The browser journey waits through real
-five-second polls to detect editor replacement and reuses one isolated fixture
-for its sequential interactions. Three independent desktop sibling checks cover the
-retained journeys: `autocomplete-check.py` (launch-brief autocomplete at
+workers to exercise polling, SSE, cursor selection, files, designs, dispatch
+and read-only imports. It replaces the old tests that executed the handwritten
+renderer against a fake DOM; HTTP and file-boundary tests remain in
+`dashboard.test.mjs`. The browser journey waits through real five-second polls
+to detect editor replacement and reuses one isolated fixture for its sequential
+interactions. The **Conversations** destination keeps its own isolated check,
+`conversations-browser-check.py`: its `route-drafts` and `journey` cases cover
+the production route/draft/send/transcript path (EV-3), `view-states` covers
+connection and view states (EV-4), `response-states` covers responses, queues
+and action gating (EV-8), and `new-thread` covers addressable creation (EV-7);
+`browser-handoff-check.py --section thread` retains the launch-thread handoff
+and one-use prepared text (EV-5). Three independent desktop sibling checks cover
+the remaining journeys: `autocomplete-check.py` (launch-brief autocomplete at
 1440x1100), `browser-handoff-check.py` (brief, review, result, thread-bound and
 the direct Agents -> workspace -> brief -> review -> launch journey) and
 `browser-session-check.py`. When `SENTINEL_EVIDENCE_DIR` names the package evidence
-directory, each writes its `ev-3-autocomplete.json`, `ev-4-handoff.json` or
-`ev-5-session.json` receipt and routes captures to `evidence/browser/`; otherwise
+directory, each writes its receipt (`conversations-browser-<case>.json`,
+`ev-12-thread.json`, `ev-3-autocomplete.json`, `ev-4-handoff.json` or
+`ev-5-session.json`) and routes captures to `evidence/browser/`; otherwise
 each falls back to `/tmp`.
 
 In the launch brief (`#/launch?ws=<workspace>&tab=brief`), `/` suggests skills
@@ -110,7 +119,8 @@ stay inside the package.
 `frontend/src/route.ts` is the single hash-route owner for `dest`, `ws`, `id`, `tab`,
 `source`, `path`, `filter` and `q`, encoded with `URLSearchParams`; an empty or
 unknown destination canonicalizes to the Specs landing route. Examples: `#/specs`,
-`#/workspaces`, `#/conversations?ws=fixture`, and the grammar example
+`#/workspaces`, `#/conversations?ws=fixture&id=<thread>` (`id` selects that
+thread; `tab=new` opens the addressable Start conversation dialog), and the grammar example
 `#/files?ws=alpha&id=fixture%2Fbrowser&tab=activity&source=spec&path=docs%2Fcaf%C3%A9+notes.md&filter=open&q=`.
 The `id` value is a destination-specific opaque selection key; that example
 illustrates encoding only and does not mean the route id is a package reference.
@@ -487,6 +497,13 @@ thread-bound result and fills that thread's composer with an unsent summary
 draft; nothing is sent until the operator reviews the text and presses the
 existing **Send** control on the queued-message path. The thread message
 composer and queue stay message-scoped and never launch an assignment.
+`launch-state.ts` (`seedThreadDraft`/`consumeThreadDraft`, re-exported through
+`Conversations.tsx`) is the public producer for that one-use seed, and the
+consumer clears it after the exact requested thread applies it. Composer,
+retry and reading-position drafts live in `conversations-state.ts` for the
+browser session: they survive destination navigation, polls and ordinary
+remounts but not a reload or a second tab, and nothing is written to browser
+storage.
 
 Selecting a workspace shows its discussion threads. The loopback dashboard and the
 configured `--public-host` endpoint support thread reads and messages. Publish
@@ -495,7 +512,12 @@ Forwarding or identity headers alone grant no access. Imported snapshots expose
 no message, brief or launch controls. Package completion remains local-only.
 
 **Create thread** starts a thread called "New thread" in the whole workspace or a
-chosen repository. The thread's Pi runs in that directory and receives no kit or
+chosen repository. The **Start conversation** dialog is route-addressable:
+`tab=new` opens it on mount and direct entry, removing the tab closes it, and a
+workspace/thread/availability change reconciles it without stealing the route.
+Its prepared text and repository target come from the public
+`seedNewThreadDraft`/`consumeNewThreadDraft` producer in
+`conversations-state.ts`, consumed once into the created thread. The thread's Pi runs in that directory and receives no kit or
 project context. When the first message is sent, the host asks
 `openrouter/inception/mercury-2.5` for a short title through a tool-less
 `pi --print` call and saves it only if the thread still has the default title;

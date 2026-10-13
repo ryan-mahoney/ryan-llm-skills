@@ -12,6 +12,7 @@ import { WorkspacePicker } from './destinations/workspaces';
 import { catalogRead, type WorkspaceCatalog } from './destinations/workspace-state';
 import { memberRecords, visibleEpics as sharedVisibleEpics } from './destinations/epic-state';
 import { getLaunchDraft, seedLaunchDraft } from './launch-state';
+import { getConversationReturnId } from './conversations-state';
 import { armLaunchPickerIntent, cancelLaunchPickerIntent, createLaunchPickerIntent, shouldApplyPickerReset, shouldResetAcknowledgedDraft } from './launch-picker-intent';
 import { agentCoverage, effectiveAgentFilter, retainSelectedAgent, visibleAgents } from './agent-state';
 
@@ -109,6 +110,11 @@ export default function App() {
   });
   const agentsSelectionRetained = createMemo(() => agent() === null && agentsSelected() !== null);
   const token = () => live() && !error() ? payload()?.thread_action_token || payload()?.action_token : undefined;
+  const newThreadUnavailableReason = () => !live()
+    ? 'New thread is available on the live dashboard.'
+    : !token()
+      ? 'Reconnect to the live dashboard before starting a conversation.'
+      : '';
   const completionToken = () => live() && !error() ? payload()?.action_token : undefined;
   const observers = createMemo(() => authoritativeObservers(payload()?.observers ?? []));
   const scopedObservers = createMemo(() => observers().filter(observer => inWorkspaceScope({ workspace: str(observer.snapshot?.workspace) || str(observer.observer_id) || str(observer.source) || 'unknown' }, 'run', scopeWs(), catalogEntries())));
@@ -134,7 +140,16 @@ export default function App() {
     navigate(next, routeHistoryMode(route(), next));
   }
   function goDestination(dest: Destination) {
-    go({ dest, ...(route().ws !== undefined ? { ws: route().ws } : {}) });
+    const ws = route().ws;
+    const next: RouteState = { dest, ...(ws !== undefined ? { ws } : {}) };
+    // Conversations is the only destination that restores its last explicitly
+    // selected thread on rail return; every other destination keeps its
+    // existing scope-only navigation.
+    if (dest === 'conversations' && ws !== undefined) {
+      const remembered = getConversationReturnId(ws);
+      if (remembered) next.id = remembered;
+    }
+    go(next);
   }
   function prepareAgentAssignment() {
     const ws = scopeWs();
@@ -615,7 +630,9 @@ export default function App() {
           ? <button class="ds-btn" type="button" aria-busy={catalogPending()} onClick={() => void loadCatalog()}>Refresh workspaces</button>
           : route().dest === 'agents'
             ? <><button id="launch-agent-action" class="ds-btn ds-btn--primary" type="button" onClick={prepareAgentAssignment}>Launch agent</button><button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button></>
-            : <button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button>}
+            : route().dest === 'conversations'
+              ? <><button id="thread-new-action" class="ds-btn ds-btn--primary" type="button" disabled={!live() || !token()} title={newThreadUnavailableReason()} aria-describedby={!live() || !token() ? 'thread-new-action-reason' : undefined} onClick={() => go({ ...route(), tab: 'new' })}>New thread</button><Show when={!live() || !token()}><span id="thread-new-action-reason" class="sr-only">{newThreadUnavailableReason()}</span></Show><button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button></>
+              : <button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button>}
       connection={{ label: connectionLabel(), tone: connectionTone() }}
       observedAt={observedAt()}
       onRefresh={manualRefresh}

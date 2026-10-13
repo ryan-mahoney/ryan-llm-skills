@@ -9,39 +9,13 @@
 dialog{max-width:480px;width:calc(100% - 32px);padding:24px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:8px}dialog::backdrop{background:#0009}dialog p{margin:14px 0}button:disabled{cursor:default;opacity:.55}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 body{max-width:100%;overflow-x:clip}
-.threads-split{display:grid;grid-template-columns:minmax(220px,320px) minmax(0,1fr);gap:16px;align-items:start}
-.threads-split>*{min-width:0;max-width:100%}
-.thread-list{border:1px solid var(--line);border-radius:5px;overflow:hidden;background:#141720}
-.thread-row{display:block;width:100%;text-align:left;border:0;border-radius:0;border-left:3px solid transparent;padding:12px 14px;min-height:56px}
-.thread-row+.thread-row{border-top:1px solid var(--line)}
-.thread-row[aria-pressed=true]{border-left-color:var(--accent);background:#222638}
-.thread-row .run-title{display:block;overflow-wrap:anywhere}
-.thread-detail{min-width:0;display:flex;flex-direction:column;gap:14px}
-.thread-head .section-head{margin-bottom:8px}
-.thread-head h4{margin:0;font-size:14px;font-weight:650}
-.thread-transcript{max-width:100%;max-height:420px;overflow:auto;border:1px solid var(--line);border-left:3px solid var(--accent);background:#141720;padding:14px;display:flex;flex-direction:column;gap:10px;overflow-wrap:anywhere}
-.thread-transcript:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
-.thread-entry{max-width:100%;overflow-wrap:anywhere}
-.thread-entry.user{border-left:3px solid var(--accent);padding-left:10px}
-.thread-entry.assistant{border-left:3px solid var(--green);padding-left:10px}
-.thread-text{white-space:pre-wrap;overflow-wrap:anywhere}
-.thread-partial{opacity:.85}
 .thread-state{border:1px solid var(--line);border-left:3px solid var(--amber);padding:10px 12px;background:#211e16;overflow-wrap:anywhere}
 .thread-state.bad{border-left-color:var(--red)}
 .thread-state.good{border-left-color:var(--green)}
 .thread-state.muted{border-left-color:var(--muted);color:var(--muted);background:#141720}
-.thread-composer{display:flex;flex-direction:column;gap:8px;max-width:100%}
-.thread-composer textarea{width:100%;max-width:100%;min-height:88px;background:#11141a;border:1px solid var(--line);border-radius:5px;color:var(--ink);padding:10px 12px;resize:vertical;font:inherit}
-.thread-composer textarea:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .thread-actions{display:flex;flex-wrap:wrap;gap:10px}
 .thread-actions .primary{background:#2c2d4c;border-color:#6568a1;color:#d8dfff}
 .thread-actions .primary:hover{background:#35376b}
-.thread-new{display:grid;grid-template-columns:minmax(160px,280px) auto;justify-content:start;gap:10px;align-items:end;margin-bottom:14px}
-.thread-new .thread-field{display:flex;flex-direction:column;gap:4px;min-width:0}
-.thread-new select{width:100%;max-width:100%;background:#11141a;border:1px solid var(--line);border-radius:5px;color:var(--ink);padding:10px 12px;font:inherit}
-.thread-new select:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
-.thread-new>p{grid-column:1/-1;margin:0}
-@media(max-width:650px){.threads-split,.thread-new{grid-template-columns:minmax(0,1fr)}.thread-list{max-height:280px;overflow:auto}}
 .epic-table th:last-child,.epic-table td:last-child{white-space:normal;text-align:left}.epic-table tr[aria-current=true] th{font-weight:650}.epic-table th button{min-height:32px;padding:0 8px;font-size:13px}
 
 /* Contextual brief composer: native editing stays stable across live updates. */
