@@ -29,6 +29,24 @@ const textValue = (value: unknown): string => (typeof value === 'string' ? value
 const list = (value: unknown): any[] => (Array.isArray(value) ? value : []);
 const distinct = (values: string[]): string[] => [...new Set(values)];
 
+// Byte identity is only needed for the feature-local active image bytes: a
+// same-file healthy recheck compares fresh bytes with the bytes the mounted
+// image actually decoded so an unchanged resource keeps its exact node/src.
+type ActiveResourceBytes = {
+  scopeKey: string;
+  path: string;
+  kind: string;
+  bytes: Uint8Array;
+};
+
+const sameBytes = (left: Uint8Array, right: Uint8Array): boolean => {
+  if (left.byteLength !== right.byteLength) return false;
+  for (let index = 0; index < left.byteLength; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
+};
+
 // Feature-local continuity metadata, deliberately not persisted. It remembers
 // the last selected path, the listing scroll and each path's reader scroll in
 // the [workspace,source,owner] scope key so a source switch or destination
@@ -156,6 +174,10 @@ export default function FilesDestination(props: DestinationProps) {
   let listRestoreToken = 0;
   let readerRestoreToken = 0;
   let restoreReaderOnPublish = false;
+  // Bytes of the currently published image only. Never persisted, never
+  // shared across sources; a changed selection or scope clears them and a
+  // same-file healthy recheck compares them with the fresh response bytes.
+  let activeResourceBytes: ActiveResourceBytes | null = null;
 
   // Known unavailable reason for the requested path. Context rows classify
   // against the loaded workspace context detail; every other source uses the
@@ -366,6 +388,7 @@ export default function FilesDestination(props: DestinationProps) {
     if (sameIdentity) saveScroll(requestedKey, requested);
 
     if (!requested || !props.live) {
+      activeResourceBytes = null;
       setLoaded(null);
       renderedReaderKey = '';
       renderedReaderPath = '';
@@ -400,6 +423,7 @@ export default function FilesDestination(props: DestinationProps) {
         setPendingRead(false);
         return;
       }
+      activeResourceBytes = null;
       setLoaded(null);
       renderedReaderKey = '';
       renderedReaderPath = '';
@@ -416,6 +440,7 @@ export default function FilesDestination(props: DestinationProps) {
       setResourceError('');
       // A changed identity clears old bytes immediately; the 300 ms skeleton
       // timer runs only for this first load, never for a retained recheck.
+      activeResourceBytes = null;
       setLoaded(null);
       renderedReaderKey = '';
       renderedReaderPath = '';
@@ -429,33 +454,45 @@ export default function FilesDestination(props: DestinationProps) {
 
     const controller = new AbortController();
     readController = controller;
+    // One bounded request lifetime covers the initial read, its body and the
+    // package document. A timeout aborts only this request; controller.signal
+    // stays unaborted, so the deadline is a localized read/recheck failure and
+    // any retained copy and receipt survive.
+    const requestSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(30000)]);
     void (async () => {
       try {
-        const response = await fetch(url, { cache: 'no-store', signal: controller.signal });
+        const response = await fetch(url, { cache: 'no-store', signal: requestSignal });
         if (!response.ok) throw new Error('unavailable');
         const kind = response.headers.get('X-Package-File-Kind') || 'text';
         const type = response.headers.get('Content-Type') || '';
-        let text = kind === 'text' || kind === 'markdown' || kind === 'json' ? await response.text() : null;
-        if (kind === 'html') {
-          // Retain the mounted document on healthy same-file rechecks. For a
-          // new document, validate the exact response whose bytes the frame
-          // will display; iframe load alone cannot distinguish HTTP errors.
-          if (sameIdentity && prior?.kind === kind && prior.text !== null && !untrack(resourceError)) {
-            text = prior.text;
-          } else {
-            const documentUrl = requestedScope.source === 'package'
-              ? packageViewUrl(requestedScope.owner!, requested)
-              : url;
-            const documentResponse = requestedScope.source === 'package'
-              ? await fetch(documentUrl, { cache: 'no-store', signal: controller.signal })
-              : response;
-            if (!documentResponse.ok) throw new Error('document unavailable');
-            const policy = documentResponse.headers.get('Content-Security-Policy');
-            if (!policy) throw new Error('document policy unavailable');
-            // The trusted base precedes base-uri:none; subsequent document
-            // bases are refused. Attribute escaping keeps headers/URLs inert.
-            text = `<base href="${esc(new URL(documentUrl, location.href).href)}"><meta http-equiv="Content-Security-Policy" content="${esc(policy)}"><!-- resource_retry=${untrack(resourceRetryVersion)} -->${await documentResponse.text()}`;
-          }
+        let text: string | null = null;
+        let bodySize: number | null = null;
+        let imageBytes: Uint8Array | null = null;
+        if (kind === 'text' || kind === 'markdown' || kind === 'json') {
+          text = await response.text();
+        } else if (kind === 'html') {
+          // Always validate and consume the exact document response whose
+          // bytes the frame displays: package HTML through package-view, every
+          // other source through the read response itself. A healthy recheck
+          // therefore reads fresh bytes instead of reusing prior.text.
+          const documentUrl = requestedScope.source === 'package'
+            ? packageViewUrl(requestedScope.owner!, requested)
+            : url;
+          const documentResponse = requestedScope.source === 'package'
+            ? await fetch(documentUrl, { cache: 'no-store', signal: requestSignal })
+            : response;
+          if (!documentResponse.ok) throw new Error('document unavailable');
+          const policy = documentResponse.headers.get('Content-Security-Policy');
+          if (!policy) throw new Error('document policy unavailable');
+          // The trusted base precedes base-uri:none; subsequent document
+          // bases are refused. Attribute escaping keeps headers/URLs inert.
+          text = `<base href="${esc(new URL(documentUrl, location.href).href)}"><meta http-equiv="Content-Security-Policy" content="${esc(policy)}"><!-- resource_retry=${untrack(resourceRetryVersion)} -->${await documentResponse.text()}`;
+        } else {
+          // Image and download bodies publish only once fully consumed; header
+          // facts alone never certify bytes, size or an enabled Download.
+          const buffer = await response.arrayBuffer();
+          bodySize = buffer.byteLength;
+          if (kind === 'image') imageBytes = new Uint8Array(buffer);
         }
         if (token !== fileGeneration) return;
         const headerLength = Number(response.headers.get('Content-Length'));
@@ -468,17 +505,41 @@ export default function FilesDestination(props: DestinationProps) {
           kind,
           text,
           type,
-          size: Number.isFinite(headerLength) ? headerLength : 0,
+          size: bodySize !== null ? bodySize : Number.isFinite(headerLength) ? headerLength : 0,
           receivedAt: Date.now(),
         });
         memoryFor(requestedKey).path = requested;
-        const resourceKind = kind === 'image' || kind === 'html';
-        if (resourceKind) {
-          // A same-identity same-kind recheck keeps the exact image/iframe
-          // node and src, so no new load fires: retain the actual prior state
-          // instead of disabling Download forever.
-          setResourceReady(sameIdentity && prior?.kind === kind ? untrack(resourceReady) : false);
+        if (kind === 'html') {
+          // Byte-identical candidate HTML keeps the exact srcdoc/node and its
+          // actual readiness; changed bytes update the same iframe and wait
+          // for that document's real load.
+          const retained = Boolean(sameIdentity && prior !== null && prior.kind === kind && prior.text !== null && text === prior.text);
+          activeResourceBytes = null;
+          setResourceReady(retained ? untrack(resourceReady) : false);
+        } else if (kind === 'image' && imageBytes) {
+          const retained = Boolean(
+            sameIdentity
+            && prior !== null
+            && prior.kind === kind
+            && activeResourceBytes !== null
+            && activeResourceBytes.scopeKey === requestedKey
+            && activeResourceBytes.path === requested
+            && activeResourceBytes.kind === kind
+            && sameBytes(activeResourceBytes.bytes, imageBytes),
+          );
+          if (retained) {
+            // The browser already decoded these exact bytes: keep the node,
+            // src and actual readiness.
+            setResourceReady(untrack(resourceReady));
+          } else {
+            // Changed bytes invalidate the decoded node: reuse the existing
+            // retry-version URL and bind readiness to the real load event.
+            activeResourceBytes = { scopeKey: requestedKey, path: requested, kind, bytes: imageBytes };
+            setResourceReady(false);
+            if (sameIdentity) setResourceRetryVersion(version => version + 1);
+          }
         } else {
+          activeResourceBytes = null;
           setResourceReady(true);
         }
         setAnnouncement(`Read ${requested}`);

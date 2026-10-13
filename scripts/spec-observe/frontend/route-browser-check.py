@@ -6,10 +6,11 @@
 
 After npm run build --prefix scripts/spec-observe/frontend:
 SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 120s uv run --script \
-  scripts/spec-observe/frontend/route-browser-check.py [--case rail|files|specs|context|catalog|member|search|filters|specs-list|specs-overview|specs-variants|specs-activity|specs-relaunch|files-workspace|files-sources|files-continuity|files-recovery]
+  scripts/spec-observe/frontend/route-browser-check.py [--case rail|files|specs|context|catalog|member|search|filters|specs-list|specs-overview|specs-variants|specs-activity|specs-relaunch|files-workspace|files-sources|files-continuity|files-recovery|files-read-refresh]
 Only the fixture substitutes workers; App, adapters and file APIs are real.
 """
 import argparse
+import base64
 import datetime
 import hashlib
 import json
@@ -27,7 +28,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 args = argparse.ArgumentParser()
-args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog', 'member', 'search', 'filters', 'specs-list', 'specs-overview', 'specs-variants', 'specs-activity', 'specs-relaunch', 'files-workspace', 'files-sources', 'files-continuity', 'files-recovery'])
+args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog', 'member', 'search', 'filters', 'specs-list', 'specs-overview', 'specs-variants', 'specs-activity', 'specs-relaunch', 'files-workspace', 'files-sources', 'files-continuity', 'files-recovery', 'files-read-refresh'])
 case = args.parse_args().case
 root = Path(__file__).resolve().parent
 evidence = Path(os.environ.get('SENTINEL_EVIDENCE_DIR', '/tmp/sentinel-route-evidence'))
@@ -84,7 +85,7 @@ the App, route/scope/registry, files-model and the server file APIs are real.
 fixture_env = dict(os.environ)
 if case == 'context':
     fixture_env['SENTINEL_NONCANONICAL_CONTEXT'] = '1'
-if case in ('files-workspace', 'files-sources', 'files-continuity', 'files-recovery'):
+if case in ('files-workspace', 'files-sources', 'files-continuity', 'files-recovery', 'files-read-refresh'):
     fixture_env['SENTINEL_REPOSITORY_FILES'] = '1'
 fixture = subprocess.Popen(['node', str(root / 'browser-fixture.mjs')], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=fixture_env)
 try:
@@ -1853,6 +1854,309 @@ try:
             report['references'] = references
             report['scenarios'].append('Bound reference screens 61/63/64/65/68 match their card sha256 digests and render at 1280/1600')
 
+        if case == 'files-read-refresh':
+            # Real built Files destination over the real file APIs; only the
+            # final read responses are held, failed or replaced at the browser
+            # boundary. A 2x1 PNG is decoded from a page-canvas data URL before
+            # any interception so changed bytes have real pixel dimensions and
+            # no dependency is added.
+            png_data = page.evaluate("""() => {
+                const canvas = document.createElement('canvas');
+                canvas.width = 2;
+                canvas.height = 1;
+                const context = canvas.getContext('2d');
+                context.fillStyle = '#d02020';
+                context.fillRect(0, 0, 2, 1);
+                return canvas.toDataURL('image/png');
+            }""")
+            changed_png = base64.b64decode(png_data.split(',', 1)[1])
+
+            gate = {'reads': {'hold': {}, 'replace': {}, 'held': [], 'counts': {}}}
+
+            def refresh_http(route):
+                split = urlsplit(route.request.url)
+                if split.path != '/api/workspace-file':
+                    route.continue_()
+                    return
+                query = parse_qs(split.query)
+                file = (query.get('file') or [''])[0]
+                gate['reads']['counts'][file] = gate['reads']['counts'].get(file, 0) + 1
+                # Metadata reads carry the read response; resource reads are the
+                # browser-owned image loads. Both are held when armed so pending
+                # state and byte provenance are asserted before release.
+                resource = 'resource_retry' in query
+                armed = gate['reads']['replace'] if resource else gate['reads']['hold']
+                if file in armed:
+                    response = route.fetch()
+                    gate['reads']['held'].append({'file': file, 'resource': resource, 'route': route, 'response': response, 'replacement': armed[file]})
+                    return
+                route.continue_()
+
+            page.route('**/api/workspace-file**', refresh_http)
+
+            def matching_refresh_reads(file=None, resource=None):
+                return [entry for entry in gate['reads']['held']
+                        if (file is None or entry['file'] == file)
+                        and (resource is None or entry['resource'] == resource)]
+
+            def wait_refresh_held(file=None, resource=None, count=1):
+                deadline = time.monotonic() + 5
+                while len(matching_refresh_reads(file, resource)) < count and time.monotonic() < deadline:
+                    page.wait_for_timeout(20)
+                assert len(matching_refresh_reads(file, resource)) >= count, f'read was not held at the browser boundary: {file} resource={resource}'
+
+            def release_refresh_reads(file=None, resource=None):
+                remaining = []
+                for entry in gate['reads']['held']:
+                    if (file is None or entry['file'] == file) and (resource is None or entry['resource'] == resource):
+                        try:
+                            if entry['replacement'] is None:
+                                entry['route'].fulfill(response=entry['response'])
+                            else:
+                                entry['route'].fulfill(response=entry['response'], body=entry['replacement'])
+                        except Exception:
+                            pass
+                    else:
+                        remaining.append(entry)
+                gate['reads']['held'] = remaining
+
+            def refresh_file():
+                page.locator('.files-destination .ds-btn').filter(has_text=re.compile(r'^Refresh file$')).first.click()
+
+            def retry_file():
+                page.locator('.files-destination .ds-btn').filter(has_text=re.compile(r'^Retry file$')).first.click()
+
+            def enabled_download():
+                return page.locator('.files-destination').get_by_role('link', name='Download file', exact=True).first
+
+            def disabled_download():
+                return page.locator('.files-destination').get_by_role('button', name='Download file', exact=True).first
+
+            def retained_receipt():
+                footer = page.locator('.files-destination footer.detail-foot').first
+                expect(footer).to_contain_text('last received')
+                return footer.inner_text()
+
+            # (1) Unchanged HTML then changed HTML bytes on the same mounted
+            # iframe. Each read is held until pending state is asserted, so the
+            # original node/srcdoc witness survives the unchanged release and
+            # the changed release updates that same node.
+            open_route('files', ws='fixture', path='files/sandbox.html')
+            expect(page.frame_locator('.files-destination iframe.html-frame').locator('h1')).to_have_text('Sandbox fixture')
+            expect(enabled_download()).to_be_visible()
+            frame_document = page.evaluate("""() => {
+                const el = document.querySelector('.files-destination iframe.html-frame');
+                window.__readRefreshFrame = el;
+                return el.getAttribute('srcdoc');
+            }""")
+            assert frame_document and '/api/workspace-file' in frame_document, frame_document
+            gate['reads']['hold']['files/sandbox.html'] = None
+            refresh_file()
+            wait_refresh_held('files/sandbox.html', resource=False)
+            expect(page.locator('.files-destination .reader')).to_contain_text('Rechecking')
+            expect(disabled_download()).to_be_disabled()
+            release_refresh_reads('files/sandbox.html', resource=False)
+            gate['reads']['hold'].pop('files/sandbox.html', None)
+            expect(page.locator('.files-destination .reader')).not_to_contain_text('Rechecking')
+            expect(page.frame_locator('.files-destination iframe.html-frame').locator('h1')).to_have_text('Sandbox fixture')
+            assert page.evaluate("() => window.__readRefreshFrame === document.querySelector('.files-destination iframe.html-frame')") is True, 'unchanged HTML recheck replaced the iframe node'
+            assert page.evaluate("() => document.querySelector('.files-destination iframe.html-frame').getAttribute('srcdoc')") == frame_document, 'unchanged HTML recheck changed the frame document'
+            expect(enabled_download()).to_be_visible()
+            report['scenarios'].append('An unchanged HTML recheck retains the exact mounted iframe node, srcdoc and enabled Download')
+
+            changed_html = '<!doctype html><html><body><h1>Updated sandbox</h1></body></html>'
+            gate['reads']['hold']['files/sandbox.html'] = changed_html
+            refresh_file()
+            wait_refresh_held('files/sandbox.html', resource=False)
+            expect(page.locator('.files-destination .reader')).to_contain_text('Rechecking')
+            expect(disabled_download()).to_be_disabled()
+            expect(page.frame_locator('.files-destination iframe.html-frame').locator('h1')).to_have_text('Sandbox fixture')
+            release_refresh_reads('files/sandbox.html', resource=False)
+            gate['reads']['hold'].pop('files/sandbox.html', None)
+            expect(page.frame_locator('.files-destination iframe.html-frame').locator('h1')).to_have_text('Updated sandbox')
+            expect(enabled_download()).to_be_visible()
+            assert page.evaluate("() => window.__readRefreshFrame === document.querySelector('.files-destination iframe.html-frame')") is True, 'changed HTML bytes replaced the iframe node'
+            updated_document = page.evaluate("() => document.querySelector('.files-destination iframe.html-frame').getAttribute('srcdoc')")
+            assert 'Updated sandbox' in updated_document and updated_document != frame_document, updated_document
+            report['scenarios'].append('Changed HTML bytes update the same iframe srcdoc and enable Download only after the new document loads')
+
+            # (2) Unchanged then changed PNG bytes on the same mounted img. The
+            # changed metadata read and the browser-owned resource_retry read
+            # are both held and both released with the 2x1 bytes, so the real
+            # decode proves the changed bytes reached every request.
+            open_route('files', ws='fixture', path='files/pixel.png')
+            page.wait_for_function("() => document.querySelector('.files-destination img.image-preview')?.naturalWidth === 1")
+            expect(enabled_download()).to_be_visible()
+            image_source = page.evaluate("""() => {
+                const el = document.querySelector('.files-destination img.image-preview');
+                window.__readRefreshImage = el;
+                return el.getAttribute('src');
+            }""")
+            assert image_source and 'file=files%2Fpixel.png' in image_source, image_source
+            gate['reads']['hold']['files/pixel.png'] = None
+            refresh_file()
+            wait_refresh_held('files/pixel.png', resource=False)
+            expect(page.locator('.files-destination .reader')).to_contain_text('Rechecking')
+            expect(disabled_download()).to_be_disabled()
+            release_refresh_reads('files/pixel.png', resource=False)
+            gate['reads']['hold'].pop('files/pixel.png', None)
+            expect(page.locator('.files-destination .reader')).not_to_contain_text('Rechecking')
+            page.wait_for_function("() => document.querySelector('.files-destination img.image-preview')?.naturalWidth === 1")
+            assert page.evaluate("() => window.__readRefreshImage === document.querySelector('.files-destination img.image-preview')") is True, 'unchanged image recheck replaced the image node'
+            assert page.evaluate("() => document.querySelector('.files-destination img.image-preview').getAttribute('src')") == image_source, 'unchanged image recheck changed the image src'
+            expect(enabled_download()).to_be_visible()
+            report['scenarios'].append('An unchanged image recheck retains the exact img node/src and enabled Download')
+
+            gate['reads']['hold']['files/pixel.png'] = changed_png
+            gate['reads']['replace']['files/pixel.png'] = changed_png
+            refresh_file()
+            wait_refresh_held('files/pixel.png', resource=False)
+            expect(page.locator('.files-destination .reader')).to_contain_text('Rechecking')
+            expect(disabled_download()).to_be_disabled()
+            page.wait_for_function("() => document.querySelector('.files-destination img.image-preview')?.naturalWidth === 1")
+            release_refresh_reads('files/pixel.png', resource=False)
+            gate['reads']['hold'].pop('files/pixel.png', None)
+            wait_refresh_held('files/pixel.png', resource=True)
+            assert page.evaluate("() => window.__readRefreshImage === document.querySelector('.files-destination img.image-preview')") is True, 'changed image bytes replaced the mounted image node'
+            changed_source = page.evaluate("() => document.querySelector('.files-destination img.image-preview').getAttribute('src')")
+            assert 'resource_retry=' in changed_source and changed_source != image_source, changed_source
+            expect(disabled_download()).to_be_disabled()
+            expect(page.locator('.files-destination .reader')).not_to_contain_text('Rechecking')
+            release_refresh_reads('files/pixel.png', resource=True)
+            gate['reads']['replace'].pop('files/pixel.png', None)
+            page.wait_for_function("() => { const el = document.querySelector('.files-destination img.image-preview'); return Boolean(el && el.naturalWidth === 2 && el.naturalHeight === 1); }")
+            expect(page.locator('.files-destination .reader')).not_to_contain_text('Rechecking')
+            expect(enabled_download()).to_be_visible()
+            report['scenarios'].append('Changed PNG bytes refresh the same img node to real 2x1 decoded dimensions and enable Download after load')
+
+            # (3) A failed body can never certify a download: the first read
+            # stays error-only, and a retained recheck keeps its bytes, receipt
+            # and disabled Download until a complete retry. Only the final
+            # browser response body is replaced: the real /api/workspace-file
+            # request still runs, so its successful status and headers stay
+            # genuine, while an independent ReadableStream error distinguishes
+            # a header-only publication from a completed-byte publication
+            # (response.ok is never faked). The fixed Date makes the receipt
+            # oracle exact: it advances past the retained second before the
+            # failure, so a republished timestamp must differ.
+            open_route('files', ws='fixture', path='files/overview.md')
+            files_viewer('files/overview.md', 'Fixture overview')
+            page.evaluate("""() => {
+                window.__nativeReadFetch = window.fetch.bind(window);
+                window.__failBinaryReadBody = false;
+                window.fetch = (input, init) => {
+                    const href = typeof input === 'string' ? input : (input instanceof URL ? input.href : input.url);
+                    const target = new URL(href, location.origin);
+                    if (target.pathname !== '/api/workspace-file' || target.searchParams.get('file') !== 'files/capture-bundle.zip' || !window.__failBinaryReadBody) {
+                        return window.__nativeReadFetch(input, init);
+                    }
+                    // Delegate first so the real request produces the real
+                    // successful status and headers, then replace only the
+                    // final browser response body with a stream that errors
+                    // after its initial byte: consuming the body must reject,
+                    // so HTTP success alone can never certify the bytes.
+                    return window.__nativeReadFetch(input, init).then(response => {
+                        let started = false;
+                        const body = new ReadableStream({
+                            pull(controller) {
+                                if (!started) {
+                                    started = true;
+                                    controller.enqueue(new Uint8Array([0x1f]));
+                                    return;
+                                }
+                                controller.error(new Error('fixture binary body failed after its initial byte'));
+                            },
+                        });
+                        return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+                    });
+                };
+            }""")
+            try:
+                page.evaluate('() => { window.__failBinaryReadBody = true; }')
+                # Hash navigation keeps the SPA mounted, so the wrapper and its
+                # fail flag survive this first read instead of being reloaded.
+                page.evaluate("location.hash = '#/files?" + urlencode({'ws': 'fixture', 'path': 'files/capture-bundle.zip'}) + "'")
+                expect(page.locator('.files-destination .reader')).to_contain_text('File could not be read')
+                expect(disabled_download()).to_be_disabled()
+                assert page.locator('.files-destination a[download]').count() == 0
+                page.evaluate('() => { window.__failBinaryReadBody = false; }')
+                receipt_time = datetime.datetime.now()
+                page.clock.set_fixed_time(receipt_time)
+                retry_file()
+                expect(page.locator('.files-destination .reader .empty')).to_contain_text('2 KiB')
+                expect(enabled_download()).to_be_visible()
+                retained_stamp = retained_receipt()
+                page.clock.set_fixed_time(receipt_time + datetime.timedelta(seconds=5))
+                page.evaluate('() => { window.__failBinaryReadBody = true; }')
+                refresh_file()
+                expect(page.locator('.files-destination .reader')).to_contain_text('File could not be rechecked')
+                expect(page.locator('.files-destination .reader .empty')).to_contain_text('2 KiB')
+                expect(disabled_download()).to_be_disabled()
+                assert page.locator('.files-destination a[download]').count() == 0
+                assert retained_receipt() == retained_stamp, 'failed body advanced the retained receipt'
+                page.evaluate('() => { window.__failBinaryReadBody = false; }')
+                retry_file()
+                expect(page.locator('.files-destination')).not_to_contain_text('File could not be rechecked')
+                expect(enabled_download()).to_be_visible()
+            finally:
+                page.evaluate("""() => {
+                    if (window.__nativeReadFetch) window.fetch = window.__nativeReadFetch;
+                    delete window.__nativeReadFetch;
+                    delete window.__failBinaryReadBody;
+                }""")
+            report['scenarios'].append('A failed binary body cannot certify Download; a retained recheck keeps its bytes, receipt and disabled Download until a complete retry')
+
+            # (4) The request budget bounds a stalled first read and a retained
+            # recheck: only the 30000ms read budget is scaled, so other App
+            # deadlines stay native while the production budget is asserted.
+            receipt_time = datetime.datetime.now()
+            page.clock.set_fixed_time(receipt_time)
+            open_route('files', ws='fixture', path='files/overview.md')
+            files_viewer('files/overview.md', 'Fixture overview')
+            retained_stamp = retained_receipt()
+            page.clock.set_fixed_time(receipt_time + datetime.timedelta(seconds=5))
+            gate['reads']['hold']['files/overview.md'] = None
+            page.evaluate("""() => {
+                window.__nativeReadTimeout = AbortSignal.timeout;
+                window.__readTimeoutBudgets = [];
+                AbortSignal.timeout = milliseconds => {
+                    window.__readTimeoutBudgets.push(milliseconds);
+                    return window.__nativeReadTimeout.call(AbortSignal, milliseconds === 30000 ? 100 : milliseconds);
+                };
+            }""")
+            try:
+                budget_start = page.evaluate('() => window.__readTimeoutBudgets.length')
+                refresh_file()
+                wait_refresh_held('files/overview.md', resource=False)
+                expect(page.locator('.files-destination .reader')).to_contain_text('Rechecking')
+                expect(disabled_download()).to_be_disabled()
+                expect(page.locator('.files-destination .reader')).to_contain_text('File could not be rechecked')
+                expect(page.locator('.files-destination .paper')).to_contain_text('Fixture overview')
+                assert retained_receipt() == retained_stamp, 'timed-out recheck advanced the retained receipt'
+                expect(page.locator('.files-destination .reader').get_by_role('button', name='Retry file', exact=True)).to_be_visible()
+                expect(page.locator('.files-destination .reader-head').get_by_role('button', name='Refresh file', exact=True)).to_be_enabled()
+                read_budgets = page.evaluate('(start) => window.__readTimeoutBudgets.slice(start)', budget_start)
+                assert 30000 in read_budgets, read_budgets
+                gate['reads']['hold']['files/valid.json'] = None
+                page.evaluate("location.hash = '#/files?" + urlencode({'ws': 'fixture', 'path': 'files/valid.json'}) + "'")
+                wait_refresh_held('files/valid.json', resource=False)
+                expect(page.locator('.files-destination .reader')).to_contain_text('File could not be read')
+                expect(page.locator('.files-destination .reader').get_by_role('button', name='Retry file', exact=True)).to_be_visible()
+                expect(page.locator('.files-destination .reader-head').get_by_role('button', name='Refresh file', exact=True)).to_be_enabled()
+                expect(disabled_download()).to_be_disabled()
+                assert page.locator('.files-destination a[download]').count() == 0
+            finally:
+                page.evaluate('() => { AbortSignal.timeout = window.__nativeReadTimeout; }')
+                gate['reads']['hold'].pop('files/overview.md', None)
+                gate['reads']['hold'].pop('files/valid.json', None)
+                release_refresh_reads()
+                gate['reads']['held'] = []
+            report['scenarios'].append('A stalled first read and a retained recheck use the production 30000ms budget (native deadline scaled to 100ms), keep the original bytes/receipt, and offer Retry file plus Refresh file')
+
+            open_route('files', ws='fixture', path='files/overview.md')
+            files_viewer('files/overview.md', 'Fixture overview')
+            report['scenarios'].append('Files reader bodies are fully consumed before publication and Refresh file observes changed HTML/PNG bytes')
+
         if case in (None, 'specs'):
             open_route('specs', ws='fixture')
             tabs = page.get_by_role('navigation', name='Spec sections')
@@ -3152,7 +3456,7 @@ finally:
         fixture.kill()
         fixture.wait()
     report['elapsedSeconds'] = round(time.monotonic() - started, 3)
-    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'files-context.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'sentinel-planned-filter-browser.json' if case == 'filters' else 'specs-list.json' if case == 'specs-list' else 'specs-variants.json' if case == 'specs-variants' else 'specs-overview.json' if case == 'specs-overview' else 'specs-activity.json' if case == 'specs-activity' else 'specs-relaunch.json' if case == 'specs-relaunch' else 'files-workspace.json' if case == 'files-workspace' else 'files-sources.json' if case == 'files-sources' else 'files-continuity.json' if case == 'files-continuity' else 'files-recovery.json' if case == 'files-recovery' else 'step-002-fix-browser.json'
+    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'files-context.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'sentinel-planned-filter-browser.json' if case == 'filters' else 'specs-list.json' if case == 'specs-list' else 'specs-variants.json' if case == 'specs-variants' else 'specs-overview.json' if case == 'specs-overview' else 'specs-activity.json' if case == 'specs-activity' else 'specs-relaunch.json' if case == 'specs-relaunch' else 'files-workspace.json' if case == 'files-workspace' else 'files-sources.json' if case == 'files-sources' else 'files-continuity.json' if case == 'files-continuity' else 'files-recovery.json' if case == 'files-recovery' else 'files-read-refresh.json' if case == 'files-read-refresh' else 'step-002-fix-browser.json'
     target = evidence / filename
     temporary = target.with_name(target.name + '.tmp')
     temporary.write_text(json.dumps(report, indent=2) + '\n')
