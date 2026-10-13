@@ -62,11 +62,16 @@ function StepTimings(props: { record: any; live: boolean }) {
 
 function EpicMembers(props: { epic: any; current?: any; records?: any[]; onSelect?: (key: string) => void; onSelectMember?: (member: any) => void }) {
   const members = () => list(props.epic.members);
-  const matchingRecord = (m: any) => list(props.records).filter(r => base(r.package) === (m.package ?? m.name) && (m.workspace == null || r.workspace === m.workspace)).sort((a, b) => Number(b.is_current_assignment === true) - Number(a.is_current_assignment === true))[0];
+  const memberMatches = (m: any, packagePath: unknown, workspace: unknown) => {
+    const canonical = str(m.package).trim();
+    const matches = canonical ? canonical === str(packagePath).trim() : str(m.name).trim() === base(packagePath);
+    return matches && (m.workspace == null || m.workspace === workspace);
+  };
+  const matchingRecord = (m: any) => list(props.records).filter(r => memberMatches(m, r.package, r.workspace)).sort((a, b) => Number(b.is_current_assignment === true) - Number(a.is_current_assignment === true))[0];
   return <section class="section"><div class="section-head"><h3>Epic members</h3><span class="small muted">{members().length} recorded</span></div>
     <Show when={members().length} fallback={<p class="small muted">No members recorded.</p>}>
       <div class="timing-scroll"><table class="timing-table epic-table"><caption class="sr-only">Members of {props.epic.title}</caption><thead><tr><th scope="col">Member</th><th scope="col">Status</th><th scope="col">Step</th><th scope="col">Waiting on</th><th scope="col">Note</th></tr></thead><tbody><For each={members()}>{m => {
-        const here = props.current && (m.package ?? m.name) === base(props.current.package) && (m.workspace == null || m.workspace === props.current.workspace);
+        const here = props.current && memberMatches(m, props.current.package, props.current.workspace);
         const rec = !here ? matchingRecord(m) : null;
         return <tr aria-current={here ? 'true' : undefined}><th scope="row"><Show when={props.onSelectMember} fallback={<Show when={rec && props.onSelect} fallback={<>{m.name}</>}><button type="button" onClick={() => { if (rec) props.onSelect?.(rec.key); }}>{m.name}</button></Show>}><button type="button" onClick={() => props.onSelectMember?.(m)}>{m.name}</button></Show><Show when={here}><small class="muted">This package</small></Show></th><td><span class={`pill ${epicMemberTone(m)}`}>{str(m.status || 'unknown').replace(/-/g, ' ')}{m.attention === true ? ' · attention' : ''}</span></td><td>{m.step && m.step.position != null ? `${m.step.position} of ${m.step.total ?? 'unknown'}` : '—'}</td><td>{list(m.waiting_on).join(', ') || '—'}</td><td>{m.note || '—'}</td></tr>;
       }}</For></tbody></table></div>

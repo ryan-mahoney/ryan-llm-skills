@@ -120,7 +120,12 @@ export default function SpecOverview(props: SpecOverviewProps) {
     const epic = relatedEpic();
     if (!epic) return null;
     const members = list(epic.members);
-    const index = members.findIndex(member => (member.package ?? member.name) === base(record().package) && (member.workspace == null || member.workspace === record().workspace));
+    const recordPackage = text(record().package);
+    const index = members.findIndex(member => {
+      const canonical = text(member.package);
+      const matches = canonical ? canonical === recordPackage : text(member.name) === base(recordPackage);
+      return matches && (member.workspace == null || member.workspace === record().workspace);
+    });
     return index >= 0 ? { position: index + 1, total: members.length } : null;
   };
   const epicTitle = (epic: WireRecord): string => {

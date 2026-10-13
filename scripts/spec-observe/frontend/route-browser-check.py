@@ -530,7 +530,7 @@ try:
                                    'task_activity': {'state': 'idle', 'reason': 'Waiting for the next instruction.'},
                                    'nextAction': 'Attach to the terminal'}]
             linked_epics = [{'workspace': 'fixture', 'epic': 'demo', 'title': 'Demo epic', 'state': 'active',
-                             'members': [{'name': 'browser', 'package': 'browser', 'workspace': 'fixture', 'status': 'in-progress', 'waiting_on': [], 'attention': False}],
+                             'members': [{'name': 'browser', 'package': package, 'workspace': 'fixture', 'status': 'in-progress', 'waiting_on': [], 'attention': False}],
                              'summary': {'total': 1, 'merged': 0, 'complete': 0, 'attention': 0}, 'next': 'browser',
                              'coverage': {'state': 'complete', 'reasons': []}}]
             state['value'] = envelope([linked_run], assignments=linked_assignments, epics=linked_epics)
@@ -539,6 +539,8 @@ try:
             tabs = page.get_by_role('navigation', name='Spec sections')
             expect(page.locator('.object-head h2')).to_have_text('browser')
             expect(page.locator('.progress-head strong')).to_have_text('Step 2 of 5 · Resolve worker identity')
+            expect(page.locator('.table-wrap tbody tr').nth(1)).to_contain_text('Demo epic \u00b7 member 1 of 1')
+            report['scenarios'].append('Related work names the selected package as member 1 of 1 from the canonical epic package path')
             expect(tabs.get_by_role('button', name='Overview', exact=True)).to_have_attribute('aria-pressed', 'true')
             assert params()['ws'] == ['fixture'] and params()['filter'] == ['active'] and params()['q'] == ['Building'] and params()['id'] == [record_key], page.url
 
