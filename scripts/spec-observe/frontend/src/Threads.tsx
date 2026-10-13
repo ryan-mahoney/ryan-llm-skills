@@ -2,6 +2,7 @@ import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid
 import { getJson, postJson, HttpError } from './api';
 import { str, time, statusMarkdown } from './format';
 import { consumeThreadDraft, seedThreadDraft } from './launch-state';
+import { resolveThreadListSelection } from './threads-selection';
 import type { ThreadDraftSeed } from './launch-state';
 import type { RouteState } from './route';
 
@@ -59,6 +60,11 @@ export default function Threads(props: Props) {
   let createGeneration = 0;
   let listBusy = false;
   let lastWorkspace = props.workspaceId;
+  // Route identity already applied by loadList. The requested thread is
+  // selected once per identity transition; steady refreshes retain whatever
+  // the operator explicitly selected (F1). A new identity invalidates the
+  // previous selection/history/event source before resolving (F2).
+  let appliedRequested = '';
   let stickBottom = true;
   let draftEl: HTMLTextAreaElement | undefined;
   let transcriptEl: HTMLDivElement | undefined;
@@ -92,20 +98,25 @@ export default function Threads(props: Props) {
       const rows = Array.isArray(data) ? data : Array.isArray(data.threads) ? data.threads : [];
       setThreads(rows); setInvalid(Array.isArray(data.invalid) ? data.invalid : []); setListError('');
       const requested = typeof props.requestedThreadId === 'string' && props.requestedThreadId ? props.requestedThreadId : '';
-      if (requested) {
-        const present = rows.some((t: Thread) => t.thread_id === requested);
-        setRequestedMissing(!present);
-        if (present) {
-          if (selected() !== requested) {
-            setSelected(requested); setDraft(''); setSendPending(null); resetSelection(); void loadHistory(); openEvents();
-          }
-          consumeRequestedSeed(requested);
-        }
-      } else if (!rows.some((t: Thread) => t.thread_id === selected())) {
-        const next = rows[0]?.thread_id || '';
-        setSelected(next); setDraft(''); setSendPending(null); resetSelection();
-        if (next) { void loadHistory(); openEvents(); }
+      // Pure selection contract: steady refreshes retain an explicit row /
+      // create selection with its typed draft and send retry identity (F1);
+      // a new requested identity invalidates the old thread first so a
+      // missing UUID leaves no unrelated detail or controls (F2).
+      const decision = resolveThreadListSelection({ rows, requested, appliedRequested, selected: selected() });
+      appliedRequested = decision.appliedRequested;
+      setRequestedMissing(decision.requestedMissing);
+      if (decision.invalidated) { setSelected(''); setDraft(''); setSendPending(null); resetSelection(); }
+      if (decision.shouldSelect && decision.nextSelected) {
+        if (selected() !== decision.nextSelected) setSelected(decision.nextSelected);
+        if (!decision.invalidated) { setDraft(''); setSendPending(null); resetSelection(); }
+        void loadHistory(); openEvents();
+      } else if (selected() !== decision.nextSelected) {
+        setSelected(decision.nextSelected);
+        if (decision.nextSelected) { setDraft(''); setSendPending(null); resetSelection(); void loadHistory(); openEvents(); }
       }
+      // The one-use result seed applies only to the exactly selected
+      // requested thread; a retained explicit selection is never reseeded.
+      if (decision.nextSelected && selected() === requested) consumeRequestedSeed(requested);
     } catch (e) {
       if (request === listGeneration && workspace === props.workspaceId) setListError(routeError(e) || 'Threads could not be loaded.');
     } finally { if (request === listGeneration) listBusy = false; }
@@ -234,7 +245,7 @@ export default function Threads(props: Props) {
     const workspace = props.workspaceId;
     props.live; props.refreshKey; props.requestedThreadId;
     if (workspace !== lastWorkspace) {
-      lastWorkspace = workspace; listGeneration++; createGeneration++; listBusy = false; setThreads(null); setSelected(''); resetSelection(); setRequestedMissing(false); setDraft(''); setSendPending(null); setCreating(false); setCreateError('');
+      lastWorkspace = workspace; listGeneration++; createGeneration++; listBusy = false; appliedRequested = ''; setThreads(null); setSelected(''); resetSelection(); setRequestedMissing(false); setDraft(''); setSendPending(null); setCreating(false); setCreateError('');
     }
     if (active()) void loadList(); else { listGeneration++; createGeneration++; listBusy = false; setThreads(null); setSelected(''); resetSelection(); setCreating(false); setCreateError(''); }
   });
