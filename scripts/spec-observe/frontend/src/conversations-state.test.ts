@@ -559,24 +559,33 @@ test('new thread draft: opening consumes one seed, appends to typed text and sur
   // Close/reopen: the consumed seed cannot replay, only the retained draft remains.
   assert.deepEqual(openNewThreadDraft(ws), { text: 'prepared', target: 'repo-9' });
   assert.deepEqual(getNewThreadDraft(ws), { text: 'prepared', target: 'repo-9' });
-  // The latest seed wins and appends after a blank line; a seed without a
-  // target keeps the retained repository choice.
+  // The latest seed wins and appends after a blank line; a seed with an
+  // omitted target selects Whole workspace instead of inheriting the
+  // retained repository choice.
   seedNewThreadDraft(ws, { text: 'one' });
   seedNewThreadDraft(ws, { text: 'two' });
-  assert.deepEqual(openNewThreadDraft(ws), { text: 'prepared\n\ntwo', target: 'repo-9' });
+  assert.deepEqual(openNewThreadDraft(ws), { text: 'prepared\n\ntwo', target: null });
+  // An empty seed target likewise selects Whole workspace.
+  setNewThreadDraft(ws, { text: 'typed', target: 'repo-9' });
+  seedNewThreadDraft(ws, { text: 'prepared', target: '' });
+  assert.deepEqual(openNewThreadDraft(ws), { text: 'typed\n\nprepared', target: null });
+  // A seed with a repository target replaces the retained choice.
+  seedNewThreadDraft(ws, { text: 'explicit', target: 'repo-3' });
+  assert.deepEqual(openNewThreadDraft(ws), { text: 'typed\n\nprepared\n\nexplicit', target: 'repo-3' });
   // Seeds, writes and reads are copies.
-  const seed = { text: 'three' };
+  const seed = { text: 'copied', target: 'repo-4' };
   seedNewThreadDraft(ws, seed);
   seed.text = 'mutated';
+  seed.target = 'mutated';
   const opened = openNewThreadDraft(ws);
-  assert.deepEqual(opened, { text: 'prepared\n\ntwo\n\nthree', target: 'repo-9' });
+  assert.deepEqual(opened, { text: 'typed\n\nprepared\n\nexplicit\n\ncopied', target: 'repo-4' });
   opened.text = 'mutated read';
-  assert.deepEqual(getNewThreadDraft(ws), { text: 'prepared\n\ntwo\n\nthree', target: 'repo-9' });
+  assert.deepEqual(getNewThreadDraft(ws), { text: 'typed\n\nprepared\n\nexplicit\n\ncopied', target: 'repo-4' });
   // Conditional clear leaves a nonmatching retained draft in place, then an
   // exact match clears it.
   clearNewThreadDraft(ws, { text: 'other', target: null });
-  assert.equal(getNewThreadDraft(ws).text, 'prepared\n\ntwo\n\nthree');
-  clearNewThreadDraft(ws, { text: 'prepared\n\ntwo\n\nthree', target: 'repo-9' });
+  assert.equal(getNewThreadDraft(ws).text, 'typed\n\nprepared\n\nexplicit\n\ncopied');
+  clearNewThreadDraft(ws, { text: 'typed\n\nprepared\n\nexplicit\n\ncopied', target: 'repo-4' });
   assert.deepEqual(getNewThreadDraft(ws), { text: '', target: null });
   const retained = { text: 'set me', target: 'repo-3' };
   setNewThreadDraft(ws, retained);
@@ -589,21 +598,64 @@ test('new thread draft: acknowledgement copies captured text and clears only its
   const createdWs = '/tmp/ws-created-ack';
   setNewThreadDraft(ws, { text: 'captured text', target: 'repo-1' });
   beginNewThreadRequest(ws, 'captured text', 'repo-1', () => Promise.resolve('created'));
-  const captured = getNewThreadDraft(ws);
+  const captured = getNewThreadRequest(ws)!;
   assert.equal(acknowledgeNewThreadRequest(ws, captured, createdWs, ALPHA), true);
   assert.deepEqual(getNewThreadDraft(ws), { text: '', target: null });
   assert.equal(getNewThreadRequest(ws), undefined);
   // The created thread's draft receives the text unsent even though the
   // dialog/request is gone.
   assert.deepEqual(getThreadDraft(createdWs, ALPHA), { draft: 'captured text', retry: null });
-  // A stale acknowledgement cannot clear a newer retained draft or a newer
-  // request; it still delivers its captured text to its own created thread.
+  // Observing the same completion again settles nothing: it reports not
+  // owned and never transfers the text a second time.
+  assert.equal(acknowledgeNewThreadRequest(ws, captured, createdWs, ALPHA), false);
+  assert.deepEqual(getThreadDraft(createdWs, ALPHA), { draft: 'captured text', retry: null });
+  // A settled capture cannot own a newer request, and transfers nothing
+  // further to its own created thread.
   setNewThreadDraft(ws, { text: 'newer text', target: 'repo-2' });
   beginNewThreadRequest(ws, 'newer text', 'repo-2', () => Promise.resolve('created-2'));
   assert.equal(acknowledgeNewThreadRequest(ws, captured, createdWs, BRAVO), false);
   assert.deepEqual(getNewThreadDraft(ws), { text: 'newer text', target: 'repo-2' });
   assert.equal(getNewThreadRequest(ws)?.text, 'newer text');
-  assert.deepEqual(getThreadDraft(createdWs, BRAVO), { draft: 'captured text', retry: null });
+  assert.deepEqual(getThreadDraft(createdWs, BRAVO), { draft: '', retry: null });
+});
+
+test('new thread draft: a settled capture cannot own a same-content replacement request', () => {
+  const ws = '/tmp/ws-new-same-content';
+  const createdWs = '/tmp/ws-created-same-content';
+  setNewThreadDraft(ws, { text: 'same', target: 'repo-1' });
+  beginNewThreadRequest(ws, 'same', 'repo-1', () => Promise.resolve('first'));
+  const first = getNewThreadRequest(ws)!;
+  assert.equal(acknowledgeNewThreadRequest(ws, first, createdWs, ALPHA), true);
+  // A replacement request with identical text and target mints a fresh identity.
+  setNewThreadDraft(ws, { text: 'same', target: 'repo-1' });
+  beginNewThreadRequest(ws, 'same', 'repo-1', () => Promise.resolve('second'));
+  const second = getNewThreadRequest(ws)!;
+  assert.notEqual(second.id, first.id);
+  // Settling the predecessor again owns nothing and preserves the live
+  // request and retained draft.
+  assert.equal(acknowledgeNewThreadRequest(ws, first, createdWs, ALPHA), false);
+  assert.equal(getNewThreadRequest(ws)?.id, second.id);
+  assert.deepEqual(getNewThreadDraft(ws), { text: 'same', target: 'repo-1' });
+  assert.equal(acknowledgeNewThreadRequest(ws, second, createdWs, BRAVO), true);
+  assert.deepEqual(getThreadDraft(createdWs, BRAVO), { draft: 'same', retry: null });
+});
+
+test('new thread draft: a replaced draft still receives its first late transfer', () => {
+  const ws = '/tmp/ws-new-late';
+  const createdWs = '/tmp/ws-created-late';
+  seedNewThreadDraft(ws, { text: 'original', target: 'repo-1' });
+  const opened = openNewThreadDraft(ws);
+  beginNewThreadRequest(ws, opened.text, opened.target, () => Promise.resolve('created'));
+  const capture = getNewThreadRequest(ws)!;
+  // The retained draft moves on while the request is in flight.
+  seedNewThreadDraft(ws, { text: 'newer', target: 'repo-2' });
+  assert.deepEqual(openNewThreadDraft(ws), { text: 'original\n\nnewer', target: 'repo-2' });
+  // The late acknowledgement still owns its request and transfers its own
+  // text once, while the replaced draft survives.
+  assert.equal(acknowledgeNewThreadRequest(ws, capture, createdWs, ALPHA), true);
+  assert.deepEqual(getThreadDraft(createdWs, ALPHA), { draft: 'original', retry: null });
+  assert.deepEqual(getNewThreadDraft(ws), { text: 'original\n\nnewer', target: 'repo-2' });
+  assert.equal(getNewThreadRequest(ws), undefined);
 });
 
 test('new thread draft: a later seed survives an earlier acknowledgement', () => {
@@ -613,9 +665,10 @@ test('new thread draft: a later seed survives an earlier acknowledgement', () =>
   const opened = openNewThreadDraft(ws);
   assert.deepEqual(opened, { text: 'first', target: null });
   beginNewThreadRequest(ws, opened.text, opened.target, () => Promise.resolve('created'));
+  const first = getNewThreadRequest(ws)!;
   // A later seed is still consumable after the earlier acknowledgement.
   seedNewThreadDraft(ws, { text: 'second' });
-  assert.equal(acknowledgeNewThreadRequest(ws, opened, createdWs, ALPHA), true);
+  assert.equal(acknowledgeNewThreadRequest(ws, first, createdWs, ALPHA), true);
   assert.deepEqual(getThreadDraft(createdWs, ALPHA), { draft: 'first', retry: null });
   assert.equal(getNewThreadRequest(ws), undefined);
   assert.deepEqual(openNewThreadDraft(ws), { text: 'second', target: null });
@@ -625,7 +678,8 @@ test('new thread draft: a later seed survives an earlier acknowledgement', () =>
   const merged = openNewThreadDraft(ws);
   assert.deepEqual(merged, { text: 'second\n\nthird', target: null });
   beginNewThreadRequest(ws, merged.text, merged.target, () => Promise.resolve('created-3'));
-  assert.equal(acknowledgeNewThreadRequest(ws, opened, createdWs, BRAVO), false);
+  assert.equal(acknowledgeNewThreadRequest(ws, first, createdWs, BRAVO), false);
+  assert.deepEqual(getThreadDraft(createdWs, BRAVO), { draft: '', retry: null });
   assert.deepEqual(getNewThreadDraft(ws), { text: 'second\n\nthird', target: null });
   assert.equal(getNewThreadRequest(ws)?.text, 'second\n\nthird');
 });
@@ -634,19 +688,23 @@ test('new thread draft: a failed creation retains text and target until an expli
   const ws = '/tmp/ws-new-fail';
   setNewThreadDraft(ws, { text: 'keep me', target: 'repo-7' });
   const first = beginNewThreadRequest(ws, 'keep me', 'repo-7', () => Promise.resolve('created'));
-  failNewThreadRequest(ws, { text: 'keep me', target: 'repo-7' }, 'create failed');
+  const capture = getNewThreadRequest(ws)!;
+  failNewThreadRequest(ws, capture, 'create failed');
   const failed = getNewThreadRequest(ws);
   assert.equal(failed?.status, 'error');
   assert.equal(failed?.error, 'create failed');
   assert.equal(failed?.text, 'keep me');
   assert.equal(failed?.target, 'repo-7');
   assert.deepEqual(getNewThreadDraft(ws), { text: 'keep me', target: 'repo-7' });
-  // A stale failure does not clobber the retained entry.
-  failNewThreadRequest(ws, { text: 'other', target: null }, 'late');
+  // A stale failure for a superseded capture does not clobber the entry.
+  failNewThreadRequest(ws, { id: capture.id + 1000000, text: 'keep me', target: 'repo-7' }, 'late');
   assert.equal(getNewThreadRequest(ws)?.error, 'create failed');
-  // An explicit retry starts a fresh request with a clear error.
+  // An explicit retry starts a fresh request with a clear error, and the
+  // superseded capture can no longer fail it even with identical text.
   const retry = beginNewThreadRequest(ws, 'keep me', 'repo-7', () => Promise.resolve('created-2'));
   assert.notEqual(retry, first);
+  assert.notEqual(getNewThreadRequest(ws)?.id, capture.id);
+  failNewThreadRequest(ws, capture, 'late stale');
   assert.equal(getNewThreadRequest(ws)?.status, 'creating');
   assert.equal(getNewThreadRequest(ws)?.error, null);
 });
@@ -672,7 +730,8 @@ test('new thread draft: one pending request is reused on reopen and released onl
   resolvers[0]('created');
   assert.equal(await first, 'created');
   setNewThreadDraft(ws, { text: 'draft', target: 'repo-5' });
-  assert.equal(acknowledgeNewThreadRequest(ws, { text: 'draft', target: 'repo-5' }, createdWs, ALPHA), true);
+  const capture = getNewThreadRequest(ws)!;
+  assert.equal(acknowledgeNewThreadRequest(ws, capture, createdWs, ALPHA), true);
   // After the entry is released an explicit new creation starts fresh.
   const next = beginNewThreadRequest(ws, 'draft', 'repo-5', create);
   assert.equal(calls, 2);

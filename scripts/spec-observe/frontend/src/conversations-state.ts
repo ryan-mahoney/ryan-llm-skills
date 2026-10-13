@@ -487,7 +487,12 @@ export function openNewThreadDraft(ws: string): NewThreadWorkspaceDraft {
   const seed = consumeNewThreadDraft(ws);
   if (seed && ws) {
     const retained = getNewThreadDraft(ws);
-    const target = seed.target !== undefined && seed.target !== '' ? seed.target : retained.target;
+    // A consumed seed carries an explicit target choice: an omitted or empty
+    // seed target selects Whole workspace (null) rather than inheriting the
+    // retained repository. A reopen without a new seed leaves the retained
+    // choice untouched; repository-membership validation belongs to the
+    // step-005 consumer.
+    const target = seed.target === undefined || seed.target === '' ? null : seed.target;
     const text =
       seed.text === ''
         ? retained.text
@@ -499,10 +504,20 @@ export function openNewThreadDraft(ws: string): NewThreadWorkspaceDraft {
   return getNewThreadDraft(ws);
 }
 
-// Workspace-scoped pending creation. The entry keeps the captured text/target
-// and the in-flight promise; a closed or unmounted dialog can reopen and read
-// the same request instead of starting a duplicate.
+// Workspace-scoped pending creation. The entry keeps an opaque request
+// identity alongside the captured text/target and the in-flight promise; a
+// closed or unmounted dialog can reopen and read the same request instead of
+// starting a duplicate. Identity (not text/target equality) decides
+// ownership, so a same-content replacement request is never settled by its
+// predecessor's capture.
+export type NewThreadRequestCapture = {
+  id: number;
+  text: string;
+  target: string | null;
+};
+
 export type NewThreadPendingRequest = {
+  id: number;
   ws: string;
   text: string;
   target: string | null;
@@ -512,6 +527,13 @@ export type NewThreadPendingRequest = {
 };
 
 const newThreadRequests = new Map<string, NewThreadPendingRequest>();
+
+let nextNewThreadRequestId = 1;
+
+// Request ids whose captured text has already been transferred to its
+// created thread. Settlement is once-only: observing the same completion
+// again neither transfers nor clears.
+const settledNewThreadRequestIds = new Set<number>();
 
 export function getNewThreadRequest(ws: string): NewThreadPendingRequest | undefined {
   const stored = ws ? newThreadRequests.get(ws) : undefined;
@@ -527,37 +549,41 @@ export function beginNewThreadRequest<T>(
   if (!ws) return create();
   const stored = newThreadRequests.get(ws);
   if (stored && stored.status === 'creating') return stored.promise as Promise<T>;
+  const id = nextNewThreadRequestId++;
   const promise = create();
-  newThreadRequests.set(ws, { ws, text, target: target ?? null, status: 'creating', error: null, promise });
+  newThreadRequests.set(ws, { id, ws, text, target: target ?? null, status: 'creating', error: null, promise });
   return promise;
 }
 
 // Failure retains the captured text/target with its error so reopening the
-// dialog restores the operator's input; a stale failure for a different
-// capture cannot clobber a newer request.
-export function failNewThreadRequest(ws: string, captured: NewThreadWorkspaceDraft, error?: string): void {
+// dialog restores the operator's input; only the matching request identity
+// may fail, so a stale failure for a same-content replacement is ignored.
+export function failNewThreadRequest(ws: string, captured: NewThreadRequestCapture, error?: string): void {
   const stored = ws ? newThreadRequests.get(ws) : undefined;
-  if (!stored || stored.text !== captured.text || stored.target !== captured.target) return;
+  if (!stored || stored.id !== captured.id) return;
   stored.status = 'error';
   stored.error = error ?? 'Creating the conversation failed.';
 }
 
-// Late acknowledgement: the captured text always lands on the created
-// thread's own draft even after the dialog unmounted. The pending entry and
-// the retained workspace draft are each cleared only while they still match
-// the captured text/target, so a newer request, seed or draft survives.
-// Returns true when the acknowledged request was still the workspace's
-// current pending entry (the caller may publish/navigate only then).
+// Late acknowledgement: the captured text lands on the created thread's own
+// draft at most once per request identity, even after the dialog unmounted
+// or the retained draft was replaced. The pending entry and the retained
+// workspace draft are each cleared only for the still-current matching
+// request, so a newer request, seed or draft survives. Returns true when the
+// acknowledged request was still the workspace's current pending entry (the
+// caller may publish/navigate only then).
 export function acknowledgeNewThreadRequest(
   ws: string,
-  captured: NewThreadWorkspaceDraft,
+  captured: NewThreadRequestCapture,
   createdWs: string,
   createdThread: string,
 ): boolean {
+  if (settledNewThreadRequestIds.has(captured.id)) return false;
+  settledNewThreadRequestIds.add(captured.id);
   if (createdWs && createdThread) applyThreadPreparedText(createdWs, createdThread, captured.text);
   if (!ws) return false;
   const stored = newThreadRequests.get(ws);
-  const owned = stored !== undefined && stored.text === captured.text && stored.target === captured.target;
+  const owned = stored !== undefined && stored.id === captured.id;
   const retained = newThreadDrafts.get(ws);
   if (owned && retained && retained.text === captured.text && retained.target === captured.target) {
     newThreadDrafts.delete(ws);
