@@ -117,8 +117,9 @@ function sendStatus(response, status, headers) {
 }
 
 // Fixed direct-dispatch and assignment refusal serialization. Only the static
-// reason, its fixed prose and one validated conflict UUID cross the HTTP
-// boundary; exception messages, paths and any other typed extra stay internal.
+// reason, its fixed prose and one validated target-busy assignment UUID cross
+// the HTTP boundary; exception messages, paths and any other typed extra stay
+// internal.
 const REFUSAL_BY_CODE = new Map([
   ["stale-preview", { reason: "stale-preview", error: "The reviewed assignment changed. Review it again." }],
   ["request-conflict", { reason: "request-conflict", error: "This request conflicts with saved state." }],
@@ -135,11 +136,15 @@ const isMappedRefusalPath = (path) =>
 function sendRefusal(response, method, error) {
   const refusal = REFUSAL_BY_CODE.get(error?.code);
   if (refusal === undefined) return false;
-  const conflictKey =
-    error.code === "target-busy" ? "assignment_id" : error.code === "request-conflict" ? "request_id" : null;
   const payload = { error: refusal.error, reason: refusal.reason };
-  if (conflictKey !== null && typeof error[conflictKey] === "string" && UUID_PATTERN.test(error[conflictKey])) {
-    payload[conflictKey] = error[conflictKey];
+  // request-conflict stays fixed error/reason only; its typed request_id is
+  // not part of the allow-list even when well formed.
+  if (
+    error.code === "target-busy"
+    && typeof error.assignment_id === "string"
+    && UUID_PATTERN.test(error.assignment_id)
+  ) {
+    payload.assignment_id = error.assignment_id;
   }
   sendJson(response, method, 409, payload);
   return true;

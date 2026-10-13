@@ -1,7 +1,8 @@
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import { getJson, postJson, HttpError } from './api';
 import { str, time, statusMarkdown } from './format';
-import { consumeThreadDraft, seedThreadDraft } from './launch-state';
+import { consumeThreadDraft, getLaunchDraft, seedLaunchDraft, seedThreadDraft } from './launch-state';
+import { shouldResetAcknowledgedDraft } from './launch-picker-intent';
 import { normalizeRequestedThreadId, resolveThreadListSelection, shouldInvalidateThreadRouteSynchronously } from './threads-selection';
 import type { ThreadDraftSeed } from './launch-state';
 import type { RouteState } from './route';
@@ -245,12 +246,19 @@ export default function Threads(props: Props) {
   // flow. A repository target recorded on the thread rides along as the
   // requested target; worktree threads carry no route target and stay
   // server-bound. The server remains authoritative for binding the target at
-  // review, so no client-side target is invented here.
+  // review, so no client-side target is invented here. An acknowledged thread
+  // launch is cleared by the existing acknowledged-success guard so explicit
+  // Prepare starts an independent empty draft; pending, failed, unconfirmed
+  // and editable entries stay untouched.
   function prepareAssignment() {
     const id = selected();
     if (!id) return;
     const target = thread()?.target;
     const repositoryId = target && target.kind === 'repository' && typeof target.repository_id === 'string' && target.repository_id ? target.repository_id : '';
+    const context = { ws: props.workspaceId, thread: id };
+    if (shouldResetAcknowledgedDraft(getLaunchDraft(context))) {
+      seedLaunchDraft(context, { title: '', content: '' });
+    }
     props.onNavigate?.({ dest: 'launch', ws: props.workspaceId, thread: id, ...(repositoryId ? { target: repositoryId } : {}), tab: 'brief' });
     announce('Opening the launch brief for this thread.');
   }

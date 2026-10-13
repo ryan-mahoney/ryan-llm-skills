@@ -48,6 +48,22 @@ const normalizeReply = (data: WireRecord | null | undefined): LaunchReply => ({
 
 const skillOf = (ctx: LaunchContext): string => ctx.skill || 'general';
 
+// Suggestions follow the identity that owns the target. Thread contexts read
+// the stored thread binding through the thread endpoint and never carry the
+// route target; direct contexts keep the retained draft target so an edit
+// retargets the request and its cancellation signature together.
+export type LaunchSuggestionSource = { path: string; params: Record<string, string> };
+
+export function suggestionSourceFor(context: LaunchContext, target: string | null): LaunchSuggestionSource {
+  if (context.thread) {
+    return { path: '/api/thread/suggestions', params: { workspace_id: context.ws, thread_id: context.thread } };
+  }
+  return {
+    path: '/api/dispatch/suggestions',
+    params: { workspace_id: context.ws, ...(target ? { repository_id: target } : {}) },
+  };
+}
+
 const threadAssignmentBody = (ctx: LaunchContext, ids: LaunchPreviewInput) => ({
   workspace_id: ctx.ws,
   thread_id: ctx.thread,

@@ -4,6 +4,7 @@
 // remains the only transport owner. Resolution is read-only; only the
 // explicit launch control submits the reviewed contract.
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onMount } from 'solid-js';
+import { getJson } from './api';
 import BriefComposer from './BriefComposer';
 import { ActionBar, RegionalSkeleton, StateNotice, StatusText } from './primitives';
 import { str } from './format';
@@ -16,6 +17,7 @@ import type { BriefReference } from './composerTypes';
 import type { WireRecord } from './model';
 import type { RouteState } from './route';
 import { busyAgentsHref } from './route';
+import { suggestionSourceFor } from './launch-client';
 
 export type LaunchProps = {
   route: RouteState;
@@ -29,6 +31,24 @@ export type LaunchProps = {
 };
 
 type ContractFact = { key: string; label: string; value: string };
+type ThreadTarget = { kind: 'repository' | 'worktree' | 'workspace'; label: string };
+
+// Read-only display of the target stored on the exact requested thread. A
+// worktree keeps its stored path and is never collapsed to an inferred
+// repository; only the stored record, never route.target, supplies the value.
+function threadTargetOf(record: WireRecord | null | undefined): ThreadTarget | null {
+  if (!record) return null;
+  const target = record.target;
+  if (target !== null && typeof target === 'object') {
+    if (target.kind === 'repository' && typeof target.repository_id === 'string' && target.repository_id) {
+      return { kind: 'repository', label: target.repository_id };
+    }
+    if (target.kind === 'worktree' && typeof target.path === 'string' && target.path) {
+      return { kind: 'worktree', label: target.path };
+    }
+  }
+  return { kind: 'workspace', label: 'Whole workspace' };
+}
 
 // Resolved assignment facts plus the captured input disclosure. This is a
 // presentation-only contract: operation actions stay with the launch review
@@ -135,6 +155,8 @@ export default function Launch(props: LaunchProps) {
   const [announcer, setAnnouncer] = createSignal('');
   const [editing, setEditing] = createSignal(false);
   const [previousDigest, setPreviousDigest] = createSignal('');
+  const [threadRecord, setThreadRecord] = createSignal<WireRecord | null | undefined>(undefined);
+  let threadGeneration = 0;
 
   const ws = () => props.route.ws ?? '';
   const context = (): LaunchContext => ({
@@ -168,23 +190,30 @@ export default function Launch(props: LaunchProps) {
     return error?.operation === 'save' ? error : undefined;
   };
   const enabled = () => props.live && Boolean(props.token) && Boolean(ws());
-  const locked = () => Boolean(pending()) || !enabled();
+  const threadBound = () => Boolean(context().thread);
+  // pending until the exact UUID is read, bound for a stored record, missing
+  // when the list does not contain it; no fallback record is ever substituted.
+  const threadState = () => !threadBound() ? 'direct' : threadRecord() === undefined ? 'pending' : threadRecord() === null ? 'missing' : 'bound';
+  const threadTarget = () => threadTargetOf(threadRecord());
+  const threadTargetKind = () => threadState() === 'bound' ? threadTarget()?.kind ?? 'workspace' : threadState();
+  const threadUsable = () => !threadBound() || threadState() === 'bound';
+  const locked = () => Boolean(pending()) || !enabled() || !threadUsable();
   const stage = () => resolveLaunchStage(draft(), { tab: props.route.tab, id: props.route.id });
   const repositories = () => {
     const list = props.workspace?.repositories;
     return Array.isArray(list) ? list as Array<{ id?: unknown; status?: unknown }> : [];
   };
-  // Suggestions follow the retained draft target, not the route seed: Runs in
-  // edits move the request params and the full-source cancellation
-  // signature, so a stale old-target response cannot populate the list.
-  const suggestionSource = createMemo(() => ({
-    path: '/api/dispatch/suggestions',
-    params: {
-      workspace_id: ws(),
-      ...(target() ? { repository_id: target()! } : {}),
-    },
-  }));
+  // Suggestions follow the identity that owns the target: thread contexts use
+  // the thread endpoint with the exact UUID (the route target has no authority
+  // there), while direct contexts keep the retained draft target so an edit
+  // moves the request and its full-source cancellation signature together.
+  const suggestionSource = createMemo(() => suggestionSourceFor(context(), target()));
   const targetLabel = (value: string | null | undefined) => value || 'Whole workspace';
+  const requestedTargetLabel = () => !threadBound()
+    ? targetLabel(target())
+    : threadState() === 'pending' ? 'Reading thread target…'
+      : threadState() === 'missing' ? 'Thread unavailable'
+        : threadTarget()?.label ?? 'Whole workspace';
 
   // Review ownership: the review surface resolves one saved handoff and keeps
   // the stage heading meaningful; the brief composition stays available for
@@ -211,11 +240,11 @@ export default function Launch(props: LaunchProps) {
     if (saved()) return 'saved';
     return 'unsaved';
   };
-  const canReview = () => enabled() && !pending() && !draft()?.result && Boolean(saved()) && savedCurrent();
+  const canReview = () => enabled() && !pending() && !draft()?.result && threadUsable() && Boolean(saved()) && savedCurrent();
   const canLaunch = () => {
     const value = previewState();
     const state = draft();
-    return enabled() && !pending() && !state?.result
+    return enabled() && !pending() && !state?.result && threadUsable()
       && Boolean(saved()) && savedCurrent()
       && reviewStatus() === 'current' && Boolean(value)
       && value!.revision === state?.revision && value!.target === target();
@@ -246,6 +275,28 @@ export default function Launch(props: LaunchProps) {
     if (!ctx.ws) return;
     if (!getLaunchDraft(ctx)) seedLaunchDraft(ctx, { title: '', content: '' });
   });
+
+  // Read the exact stored thread record once per requested UUID. The read-only
+  // Runs in display and thread suggestions depend on this record, so a missing
+  // or unreadable thread renders unavailable and never borrows route.target.
+  // The key changes only when the UUID, workspace or liveness changes, so tab
+  // and result-id moves keep the already-read binding.
+  const threadFetchKey = createMemo(() => `${ws()}\u0000${props.route.thread ?? ''}\u0000${props.live ? 'live' : 'inactive'}`);
+  createEffect(on(threadFetchKey, key => {
+    const request = ++threadGeneration;
+    setThreadRecord(undefined);
+    const [workspace, id, live] = key.split('\u0000');
+    if (!workspace || !id || live !== 'live') return;
+    void getJson<unknown>(`/api/threads?${new URLSearchParams({ workspace_id: workspace })}`)
+      .then(data => {
+        if (request !== threadGeneration) return;
+        const rows = Array.isArray(data)
+          ? data
+          : data !== null && typeof data === 'object' && Array.isArray((data as WireRecord).threads) ? (data as WireRecord).threads as WireRecord[] : [];
+        setThreadRecord(rows.find(row => row?.thread_id === id) ?? null);
+      })
+      .catch(() => { if (request === threadGeneration) setThreadRecord(null); });
+  }));
 
   createEffect(on(saving, (isSaving, wasSaving) => {
     if (isSaving && !wasSaving) setAnnouncer('Saving brief… The assignment has not started.');
@@ -303,7 +354,7 @@ export default function Launch(props: LaunchProps) {
   // A saved handoff on the review surface resolves automatically once; failures
   // keep their explicit status until the operator retries Review assignment.
   createEffect(() => {
-    if (!reviewSurface() || !enabled()) return;
+    if (!reviewSurface() || !enabled() || !threadUsable()) return;
     if (!saved() || !savedCurrent()) return;
     if (previewState() || pending() || draft()?.result) return;
     if (reviewStatus() !== 'idle') return;
@@ -356,7 +407,7 @@ export default function Launch(props: LaunchProps) {
   }
 
   function save() {
-    if (!enabled() || pending()) return;
+    if (locked()) return;
     if (savedCurrent()) {
       setAnnouncer('The brief is already saved. Review the saved facts before continuing.');
       return;
@@ -447,17 +498,29 @@ export default function Launch(props: LaunchProps) {
             <Show when={showBrief()}>
               <form id="launch-form" onSubmit={event => { event.preventDefault(); save(); }}>
                 <div class="field">
-                  <label for="launch-target">Runs in</label>
-                  <select id="launch-target" class="ds-input" value={target() ?? ''} disabled={locked()} onChange={event => changeLaunchTarget(context(), event.currentTarget.value || null)}>
-                    <option value="" selected={!target()}>Whole workspace</option>
-                    <For each={repositories()}>{repository => {
-                      const id = String(repository.id ?? '');
-                      return <option value={id} selected={target() === id}>{id}{repository.status && repository.status !== 'ok' ? ` (${String(repository.status)})` : ''}</option>;
-                    }}</For>
-                    <Show when={target() && !repositories().some(repository => String(repository.id ?? '') === target())}>
-                      <option value={target()!} selected>{target()}</option>
+                  <Show when={threadBound()} fallback={<>
+                    <label for="launch-target">Runs in</label>
+                    <select id="launch-target" class="ds-input" value={target() ?? ''} disabled={locked()} onChange={event => changeLaunchTarget(context(), event.currentTarget.value || null)}>
+                      <option value="" selected={!target()}>Whole workspace</option>
+                      <For each={repositories()}>{repository => {
+                        const id = String(repository.id ?? '');
+                        return <option value={id} selected={target() === id}>{id}{repository.status && repository.status !== 'ok' ? ` (${String(repository.status)})` : ''}</option>;
+                      }}</For>
+                      <Show when={target() && !repositories().some(repository => String(repository.id ?? '') === target())}>
+                        <option value={target()!} selected>{target()}</option>
+                      </Show>
+                    </select>
+                  </>}>
+                    <label for="launch-thread-target">Runs in</label>
+                    <output id="launch-thread-target" class="mono" data-thread-target-kind={threadTargetKind()} aria-describedby="launch-thread-binding">{requestedTargetLabel()}</output>
+                    <small id="launch-thread-binding">Bound to the target stored on the originating thread. The server resolves it at review; it cannot be changed on this screen.</small>
+                    <Show when={threadState() === 'pending'}>
+                      <p id="launch-thread-pending" class="small muted" role="status">Reading the stored thread target…</p>
                     </Show>
-                  </select>
+                    <Show when={threadState() === 'missing'}>
+                      <p id="launch-thread-unavailable" class="field-error" role="alert">This thread is unavailable in this workspace. Nothing can be saved, reviewed or launched for it; return to Conversations and choose an available thread.</p>
+                    </Show>
+                  </Show>
                 </div>
                 <div class="field">
                   <label for="launch-brief-title">Brief title</label>
@@ -492,7 +555,7 @@ export default function Launch(props: LaunchProps) {
                       </StateNotice>
                       <dl class="launch-facts" aria-label="Saved brief facts">
                         <div><dt>Title</dt><dd>{value.title}</dd></div>
-                        <div><dt>Runs in</dt><dd>{targetLabel(target())}</dd></div>
+                        <div><dt>Runs in</dt><dd>{requestedTargetLabel()}</dd></div>
                         <div><dt>Brief file</dt><dd class="mono">{value.brief || 'Recorded'}</dd></div>
                         <div><dt>Request</dt><dd class="mono">{value.requestId}</dd></div>
                       </dl>
@@ -500,7 +563,7 @@ export default function Launch(props: LaunchProps) {
                   )}
                 </Show>
                 <ActionBar variant="inline">
-                  <button id="launch-save" class="ds-btn ds-btn--primary" type="button" disabled={!enabled() || Boolean(pending()) || savedCurrent()} aria-busy={saving()} onClick={save}>
+                  <button id="launch-save" class="ds-btn ds-btn--primary" type="button" disabled={locked() || savedCurrent()} aria-busy={saving()} onClick={save}>
                     {saving() ? 'Saving brief…' : 'Save brief'}
                   </button>
                   <button class="ds-btn" type="button" onClick={props.onReturnToAgents}>Return to agents</button>
@@ -527,7 +590,7 @@ export default function Launch(props: LaunchProps) {
                   <Match when={reviewView() === 'resolving'}>
                     <StatusText id="launch-review-status" tone="info">Resolving execution contract…</StatusText>
                     <RegionalSkeleton rows={3} announce={false} label="Resolving execution contract" />
-                    <RequestedFacts workspace={props.workspaceName || ws()} target={targetLabel(target())} brief={saved()?.brief || 'Recorded'} />
+                    <RequestedFacts workspace={props.workspaceName || ws()} target={requestedTargetLabel()} brief={saved()?.brief || 'Recorded'} />
                     <ActionBar variant="inline">
                       <button id="launch-assignment-launch" class="ds-btn ds-btn--primary" type="button" disabled>Launch agent</button>
                     </ActionBar>
@@ -556,7 +619,7 @@ export default function Launch(props: LaunchProps) {
                         The target or saved brief differs from this review. Review again to obtain a current contract; the previous digest does not authorize a launch.
                       </StateNotice>
                     </div>
-                    <RequestedFacts workspace={props.workspaceName || ws()} target={targetLabel(target())} brief={saved()?.brief || 'Recorded'} previousDigest={previousDigest() || undefined} />
+                    <RequestedFacts workspace={props.workspaceName || ws()} target={requestedTargetLabel()} brief={saved()?.brief || 'Recorded'} previousDigest={previousDigest() || undefined} />
                     <Show when={lastReviewed()} keyed>{previous => <PreviousReviewedFacts preview={previous} />}</Show>
                     <ActionBar variant="inline">
                       <button id="launch-assignment-review" class="ds-btn ds-btn--primary" type="button" disabled={!canReview()} onClick={review}>Review assignment</button>
@@ -568,8 +631,8 @@ export default function Launch(props: LaunchProps) {
                       <Switch>
                         <Match when={draft()?.error?.reason === 'target-busy'}>
                           <StateNotice tone="error" title="This directory already has a writer" announce={false} action={<a class="ds-btn" href={agentsHref()}>Open agent</a>}>
-                            <Show when={draft()?.error?.assignmentId} fallback={<span>Another assignment is still live or unconfirmed in {targetLabel(target())}. Inspect it before choosing this execution directory.</span>}>
-                              Assignment <a id="launch-review-busy" class="mono" href={agentsHref()}>{str(draft()?.error?.assignmentId)}</a> is still live or unconfirmed in {targetLabel(target())}. Inspect it before choosing this execution directory.
+                            <Show when={draft()?.error?.assignmentId} fallback={<span>Another assignment is still live or unconfirmed in {requestedTargetLabel()}. Inspect it before choosing this execution directory.</span>}>
+                              Assignment <a id="launch-review-busy" class="mono" href={agentsHref()}>{str(draft()?.error?.assignmentId)}</a> is still live or unconfirmed in {requestedTargetLabel()}. Inspect it before choosing this execution directory.
                             </Show>
                           </StateNotice>
                         </Match>
@@ -590,7 +653,7 @@ export default function Launch(props: LaunchProps) {
                         </Match>
                       </Switch>
                     </div>
-                    <RequestedFacts workspace={props.workspaceName || ws()} target={targetLabel(target())} brief={saved()?.brief || 'Recorded'} />
+                    <RequestedFacts workspace={props.workspaceName || ws()} target={requestedTargetLabel()} brief={saved()?.brief || 'Recorded'} />
                     <Show when={lastReviewed()} keyed>{previous => <PreviousReviewedFacts preview={previous} />}</Show>
                     <ActionBar variant="inline">
                       <button id="launch-assignment-review" class="ds-btn ds-btn--primary" type="button" disabled={!canReview()} onClick={review}>Review assignment</button>
@@ -603,9 +666,9 @@ export default function Launch(props: LaunchProps) {
                         No process has started and no assignment is reserved. The saved brief and target are kept; review again to retry.
                       </StateNotice>
                     </div>
-                    <RequestedFacts workspace={props.workspaceName || ws()} target={targetLabel(target())} brief={saved()?.brief || 'Recorded'} assignment="Not reserved" digest="Unavailable" />
+                    <RequestedFacts workspace={props.workspaceName || ws()} target={requestedTargetLabel()} brief={saved()?.brief || 'Recorded'} assignment="Not reserved" digest="Unavailable" />
                     <ActionBar variant="inline">
-                      <Show when={saved()} fallback={<button id="launch-assignment-save" class="ds-btn ds-btn--primary" type="button" disabled={!enabled() || Boolean(pending()) || !title().trim()} onClick={save}>Save brief</button>}>
+                      <Show when={saved()} fallback={<button id="launch-assignment-save" class="ds-btn ds-btn--primary" type="button" disabled={locked() || !title().trim()} onClick={save}>Save brief</button>}>
                         <button id="launch-assignment-review" class="ds-btn ds-btn--primary" type="button" disabled={!canReview()} onClick={review}>Review assignment</button>
                       </Show>
                       <button id="launch-assignment-edit" class="ds-btn" type="button" onClick={editAssignment}>Edit assignment</button>
@@ -661,7 +724,7 @@ export default function Launch(props: LaunchProps) {
                   </Match>
                   <Match when={reviewView() === 'saved'}>
                     <StatusText id="launch-review-status" tone="info">Saved brief ready to review</StatusText>
-                    <RequestedFacts workspace={props.workspaceName || ws()} target={targetLabel(target())} brief={saved()?.brief || 'Recorded'} />
+                    <RequestedFacts workspace={props.workspaceName || ws()} target={requestedTargetLabel()} brief={saved()?.brief || 'Recorded'} />
                     <ActionBar variant="inline">
                       <button id="launch-assignment-review" class="ds-btn ds-btn--primary" type="button" disabled={!canReview()} onClick={review}>Review assignment</button>
                       <button id="launch-assignment-edit" class="ds-btn" type="button" onClick={editAssignment}>Edit assignment</button>
@@ -674,7 +737,7 @@ export default function Launch(props: LaunchProps) {
                       </StateNotice>
                     </div>
                     <ActionBar variant="inline">
-                      <button id="launch-assignment-save" class="ds-btn ds-btn--primary" type="button" disabled={!enabled() || Boolean(pending()) || !title().trim()} onClick={save}>Save brief</button>
+                      <button id="launch-assignment-save" class="ds-btn ds-btn--primary" type="button" disabled={locked() || !title().trim()} onClick={save}>Save brief</button>
                       <button id="launch-assignment-edit" class="ds-btn" type="button" onClick={editAssignment}>Edit assignment</button>
                     </ActionBar>
                   </Match>

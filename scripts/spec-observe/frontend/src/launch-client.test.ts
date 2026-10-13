@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import { HttpError } from './api';
-import { FIXED_INSTRUCTION, previewLaunchAssignment, saveLaunchBrief, submitLaunchAssignment, type LaunchContext } from './launch-client';
+import { FIXED_INSTRUCTION, previewLaunchAssignment, saveLaunchBrief, submitLaunchAssignment, suggestionSourceFor, type LaunchContext } from './launch-client';
 
 const TOKEN = 'test-action-token';
 const REQUEST_ID = '11111111-1111-4111-8111-111111111111';
@@ -187,4 +187,24 @@ test('missing preview and launch fields degrade to empty records and an empty di
   assert.deepEqual(preview, { record: {}, contractDigest: '' });
   assert.equal('inputPreview' in preview, false);
   assert.deepEqual(reply, { assignment: {}, observation: {} });
+});
+
+// node --import tsx --test --test-name-pattern="suggestion sources" src/launch-client.test.ts
+test('suggestion sources follow the owning binding and never retarget a thread draft', () => {
+  // A thread context reads the stored thread binding with the exact UUID; the
+  // route-carried and retained draft targets stay out of the request.
+  assert.deepEqual(suggestionSourceFor({ ws: 'ws-1', thread: 'thread-1', target: 'route-target' }, 'draft-target'), {
+    path: '/api/thread/suggestions',
+    params: { workspace_id: 'ws-1', thread_id: 'thread-1' },
+  });
+  // Direct contexts keep the retained draft target, and a null target omits
+  // the repository parameter instead of inventing one.
+  assert.deepEqual(suggestionSourceFor({ ws: 'ws-2' }, 'repo-2'), {
+    path: '/api/dispatch/suggestions',
+    params: { workspace_id: 'ws-2', repository_id: 'repo-2' },
+  });
+  assert.deepEqual(suggestionSourceFor({ ws: 'ws-2' }, null), {
+    path: '/api/dispatch/suggestions',
+    params: { workspace_id: 'ws-2' },
+  });
 });

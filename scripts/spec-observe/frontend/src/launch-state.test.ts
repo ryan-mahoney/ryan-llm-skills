@@ -597,6 +597,21 @@ test('the cold stage resolver reads local state without any POST', async t => {
   const launched: LaunchDraft = { ...saved, result: { kind: 'launched', assignmentId: 'assignment-1' } };
   assert.equal(resolveLaunchStage(launched, { tab: 'result', id: 'assignment-1' }), 'result');
   assert.equal(resolveLaunchStage(launched, { tab: 'result', id: 'assignment-2' }), 'inspection');
+  // A recorded outcome owns the result presentation on brief/review re-entry
+  // and on a result URL that omits the local identity; a mismatched result id
+  // stays inspect-only, and saved or pending work without an outcome keeps the
+  // brief so no mounted normalization hides it.
+  assert.equal(resolveLaunchStage(launched, { tab: 'brief' }), 'result');
+  assert.equal(resolveLaunchStage(launched, { tab: 'review' }), 'result');
+  assert.equal(resolveLaunchStage(launched, { tab: 'result' }), 'result');
+  const failed: LaunchDraft = { ...saved, result: { kind: 'failed', assignmentId: 'assignment-1' } };
+  assert.equal(resolveLaunchStage(failed, { tab: 'brief' }), 'result');
+  const unconfirmed: LaunchDraft = { ...saved, result: { kind: 'unconfirmed', assignmentId: 'assignment-1' } };
+  assert.equal(resolveLaunchStage(unconfirmed, { tab: 'review' }), 'result');
+  assert.equal(resolveLaunchStage(saved, { tab: 'brief' }), 'brief');
+  assert.equal(resolveLaunchStage(saved, { tab: 'review' }), 'review');
+  const pending: LaunchDraft = { ...saved, pending: { kind: 'save', revision: 1, requestId: 'request-1', target: null, promise: Promise.resolve() } };
+  assert.equal(resolveLaunchStage(pending, { tab: 'brief' }), 'brief');
   assert.equal(store.getLaunchDraft(ctx), undefined);
   assert.equal(scope.calls.length, 0);
 });

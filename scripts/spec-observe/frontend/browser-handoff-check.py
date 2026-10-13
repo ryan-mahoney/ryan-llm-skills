@@ -5,7 +5,7 @@
 """Regression: saved briefs must visibly guide the operator through preview and launch,
 and the hidden launch flow must save a brief without starting work.
 
-Run: uv run --script scripts/spec-observe/frontend/browser-handoff-check.py [--section handoff|brief|review|result|thread]
+Run: uv run --script scripts/spec-observe/frontend/browser-handoff-check.py [--section handoff|brief|review|result|thread|final-review]
 Uses isolated fixture storage and fake workers; never launches a real assignment.
 The default handoff journey and the brief section share fixture/browser startup.
 """
@@ -21,7 +21,7 @@ section = args[args.index('--section') + 1] if '--section' in args else 'handoff
 evidence_dir = Path(os.environ['SENTINEL_EVIDENCE_DIR']) if os.environ.get('SENTINEL_EVIDENCE_DIR') else None
 shots_dir = (evidence_dir / 'browser') if evidence_dir else Path('/tmp')
 if evidence_dir: shots_dir.mkdir(parents=True, exist_ok=True)
-receipt = (evidence_dir or Path('/tmp')) / ('ev-12-thread.json' if section == 'thread' else 'ev-10-review.json' if section == 'review' else 'ev-11-result.json' if section == 'result' else 'ev-9-brief.json' if section == 'brief' else 'ev-4-handoff.json')
+receipt = (evidence_dir or Path('/tmp')) / ('final-review-browser.json' if section == 'final-review' else 'ev-12-thread.json' if section == 'thread' else 'ev-10-review.json' if section == 'review' else 'ev-11-result.json' if section == 'result' else 'ev-9-brief.json' if section == 'brief' else 'ev-4-handoff.json')
 summary = {'status':'failed','section':section,'cases':[],'page_errors':[],'captures':[],'boundary':'1440x1100 desktop' if section == 'handoff' else '1280x1100 and 1600x1100 desktop'}
 def passed(name): summary['cases'].append(name)
 def shot(locator, name):
@@ -577,8 +577,10 @@ def run_result(browser, url, thread1):
             page.locator('.head-actions .ds-btn', has_text='Refresh state').click()
             expect(page.locator('.run-row', has_text=assignment)).to_have_attribute('aria-pressed', 'true')
             page.locator('#launch-agent-action').click()
-            expect(page.locator('#launch-brief-title')).to_have_value('Keep selected files in view')
-            expect(page.locator('#launch-save')).to_be_disabled()
+            expect(page.locator('#launch-result-facts [data-fact="assignment"] dd')).to_have_text(assignment)
+            expect(page.locator('#launch-result-correct')).to_have_count(0)
+            expect(page.locator('#launch-brief-title')).to_have_count(0)
+            expect(page.locator('#launch-save')).to_have_count(0)
             page.go_back()
             page.go_back()
             expect(page.locator('#launch-heading')).to_have_text('Launch is unconfirmed')
@@ -599,8 +601,9 @@ def run_result(browser, url, thread1):
             page.locator('#launch-result-open-agent').click()
             expect(page.locator('#launch-agent-action')).to_be_visible()
             page.locator('#launch-agent-action').click()
-            expect(page.locator('#launch-brief-title')).to_have_value('Keep selected files in view')
-            expect(page.locator('#launch-save')).to_be_disabled()
+            expect(page.locator('#launch-result-facts [data-fact="assignment"] dd')).to_have_text(assignment)
+            expect(page.locator('#launch-result-correct')).to_be_visible()
+            expect(page.locator('#launch-brief-title')).to_have_count(0)
             page.go_back()
             page.go_back()
             expect(page.locator('#launch-heading')).to_have_text('Agent could not start')
@@ -744,26 +747,36 @@ def run_thread(browser, url, thread1, thread2):
             assert len(posts('send')) == sends_before
             finish(errors, f'Discuss result returns the exact thread and the one-use seed never replays ({width})')
 
-        # Missing requested thread: unavailable feedback, no fallback selection,
-        # and the seeded draft for that id is never misplaced.
+        # Missing requested thread: the conversations surface selects nothing and
+        # the launch surface refuses fallback and mutations, so no draft is
+        # seeded, saved or launched for an unavailable UUID.
         for width in widths:
             reset()
             page, errors = open(width)
             missing = '33333333-3333-4333-8333-333333333333'
             page.goto(url + '/#/conversations?ws=fixture&id=' + thread1, wait_until='domcontentloaded')
             expect(page.locator('#thread-draft')).to_be_visible()
-            page.evaluate("location.hash = '#/launch?ws=fixture&thread=" + missing + "&tab=brief'")
-            save_review_launch(page, 'Missing thread brief', 'Outcome\nSeed a draft for a thread that is not in the list.')
-            sends_before = len(posts('send'))
-            page.locator('#launch-result-discuss').click()
-            expect(page).to_have_url(re.compile(r'#/conversations\?ws=fixture&id=' + re.escape(missing)))
+            page.evaluate("location.hash = '#/conversations?ws=fixture&id=" + missing + "'")
             expect(page.locator('#thread-requested-unavailable')).to_be_visible()
             assert page.locator('[data-thread][aria-pressed="true"]').count() == 0
             assert page.locator('#thread-draft').count() == 0
             assert page.locator('#thread-prepare-assignment').count() == 0
+            saves_before = len(posts('saveBrief'))
+            launches_before = len(posts('launchAssignment'))
+            sends_before = len(posts('send'))
+            page.evaluate("location.hash = '#/launch?ws=fixture&thread=" + missing + "&target=fixture-repo&tab=brief'")
+            expect(page.locator('#launch-thread-unavailable')).to_be_visible()
+            expect(page.locator('#launch-thread-target')).to_have_text('Thread unavailable')
+            assert page.locator('#launch-target').count() == 0
+            expect(page.locator('#launch-brief-title')).to_be_disabled()
+            expect(page.locator('#launch-brief-content')).to_be_disabled()
+            expect(page.locator('#launch-save')).to_be_disabled()
+            page.wait_for_timeout(200)
+            assert len(posts('saveBrief')) == saves_before
+            assert len(posts('launchAssignment')) == launches_before
             assert len(posts('send')) == sends_before
             capture(page, f'thread-missing-{width}.png')
-            finish(errors, f'missing requested thread stays unavailable without fallback seeding ({width})')
+            finish(errors, f'missing requested thread refuses fallback and mutations ({width})')
 
         # Message composer and queue stay message-scoped: sending posts only the
         # thread message, and no thread control launches an assignment.
@@ -806,6 +819,206 @@ def run_thread(browser, url, thread1, thread2):
         except Exception: pass
 
 
+def run_final_review(browser, url, thread1, thread2, thread3, worktree_target):
+    """Focused final-review cases for the three accepted fixes. The fixture
+    provides the stored thread bindings and dispatch outcomes; no new matrix is
+    started beyond the reused fixture and browser private contexts."""
+    widths = (1280, 1600)
+    api = browser.new_context()
+    contexts = []
+
+    def control(action='', value=''):
+        response = api.request.get(url + '/__fixture/control?action=' + action + '&value=' + value)
+        assert response.ok
+        return response.json()
+
+    def posts(name):
+        return [x for x in control()['posts'] if x['name'] == name]
+
+    def capture(page, name):
+        path = shots_dir / name
+        page.screenshot(path=str(path), full_page=True)
+        summary['captures'].append(str(path))
+
+    def open_page(width):
+        context = browser.new_context(viewport={'width': width, 'height': 1100}, device_scale_factor=1)
+        contexts.append(context)
+        page = context.new_page()
+        errors = []
+        page.on('pageerror', lambda e: errors.append(str(e)))
+        return page, errors
+
+    def reset():
+        control('stale-launch', 'false')
+        control('hold-dispatch-preview', 'false')
+        control('hold-dispatch-launch', 'false')
+        control('dispatch-preview-refusal', 'none')
+        control('dispatch-launch-refusal', 'none')
+        control('dispatch-launch-outcome', 'live')
+        control('clear-launch-publications')
+
+    def finish(errors, name):
+        assert not errors, errors
+        summary['page_errors'].extend(errors)
+        passed(name)
+
+    try:
+        # 1. Thread-bound Runs in reads the stored thread record and thread
+        #    suggestions never carry the route target; a missing UUID refuses
+        #    fallback display and every mutation control.
+        for width in widths:
+            reset()
+            page, errors = open_page(width)
+            # 1a. Repository-bound thread with a misleading route target.
+            page.goto(url + '/#/launch?ws=fixture&thread=' + thread1 + '&target=fixture-docs&tab=brief', wait_until='domcontentloaded')
+            expect(page.locator('#launch-brief-title')).to_be_visible()
+            expect(page.locator('#launch-thread-target')).to_have_text('fixture-repo')
+            expect(page.locator('#launch-thread-target')).to_have_attribute('data-thread-target-kind', 'repository')
+            expect(page.locator('#launch-thread-target')).not_to_contain_text('fixture-docs')
+            assert page.locator('#launch-target').count() == 0
+            thread_calls_before = len(posts('suggestions'))
+            dispatch_calls_before = len(posts('dispatchSuggestions'))
+            page.locator('#launch-brief-content').fill('Review @fixture-repo-plan')
+            expect(page.locator('.brief-suggestions')).to_contain_text('fixture-repo-plan')
+            thread_calls = posts('suggestions')[thread_calls_before:]
+            assert thread_calls, 'thread suggestions come from the thread endpoint'
+            assert thread_calls[-1]['input']['workspace_id'] == 'fixture'
+            assert thread_calls[-1]['input']['thread_id'] == thread1
+            assert 'repository_id' not in thread_calls[-1]['input']
+            assert len(posts('dispatchSuggestions')) == dispatch_calls_before
+            capture(page, f'final-review-thread-target-repo-{width}.png')
+            # 1b. Worktree thread keeps its stored path, never an inferred repo.
+            page.evaluate("location.hash = '#/launch?ws=fixture&thread=" + thread3 + "&tab=brief'")
+            expect(page.locator('#launch-thread-target')).to_have_text(worktree_target)
+            expect(page.locator('#launch-thread-target')).to_have_attribute('data-thread-target-kind', 'worktree')
+            expect(page.locator('#launch-thread-target')).not_to_contain_text('fixture-docs')
+            assert page.locator('#launch-target').count() == 0
+            thread_calls_before = len(posts('suggestions'))
+            page.locator('#launch-brief-content').fill('Review @fixture-docs-guide')
+            expect(page.locator('.brief-suggestions')).to_contain_text('fixture-docs-guide')
+            thread_calls = posts('suggestions')[thread_calls_before:]
+            assert thread_calls and thread_calls[-1]['input']['thread_id'] == thread3
+            assert 'repository_id' not in thread_calls[-1]['input']
+            capture(page, f'final-review-thread-target-worktree-{width}.png')
+            # 1c. Missing UUID: unavailable display and no mutation controls.
+            missing = '99999999-9999-4999-8999-999999999999'
+            saves_before = len(posts('saveBrief'))
+            previews_before = len(posts('previewAssignment'))
+            launches_before = len(posts('launchAssignment'))
+            dispatch_calls_before = len(posts('dispatchSuggestions'))
+            page.evaluate("location.hash = '#/launch?ws=fixture&thread=" + missing + "&target=fixture-repo&tab=brief'")
+            expect(page.locator('#launch-thread-unavailable')).to_be_visible()
+            expect(page.locator('#launch-thread-target')).to_have_text('Thread unavailable')
+            assert page.locator('#launch-target').count() == 0
+            expect(page.locator('#launch-brief-title')).to_be_disabled()
+            expect(page.locator('#launch-brief-content')).to_be_disabled()
+            expect(page.locator('#launch-save')).to_be_disabled()
+            page.wait_for_timeout(200)
+            assert len(posts('saveBrief')) == saves_before
+            assert len(posts('previewAssignment')) == previews_before
+            assert len(posts('launchAssignment')) == launches_before
+            assert len(posts('dispatchSuggestions')) == dispatch_calls_before
+            capture(page, f'final-review-thread-missing-{width}.png')
+            finish(errors, f'final-review: stored thread target, thread suggestions and missing-thread refusal ({width})')
+
+        # 2. Retained direct outcomes keep result presentation on explicit
+        #    Agents -> Launch agent re-entry: failed exposes correction, an
+        #    unconfirmed result stays locate-only, and nothing is submitted.
+        for width in widths:
+            for outcome, expectation in (('failed', 'correct'), ('unknown', 'locate')):
+                reset()
+                page, errors = open_page(width)
+                control('dispatch-launch-outcome', outcome)
+                page.goto(url + '/#/launch?ws=fixture&tab=brief', wait_until='domcontentloaded')
+                expect(page.locator('#launch-brief-title')).to_be_visible()
+                page.locator('#launch-brief-title').fill('Retained outcome brief')
+                page.locator('#launch-brief-content').fill('Outcome\nKeep the retained result inspectable.')
+                page.locator('#launch-save').click()
+                expect(page.locator('#launch-assignment-launch')).to_be_enabled()
+                assignment = page.locator('#launch-review [data-fact="assignment"] dd').inner_text()
+                page.locator('#launch-assignment-launch').click()
+                expect(page.locator('#launch-result-facts')).to_be_visible()
+                saves_before = len(posts('dispatchSaveBrief'))
+                previews_before = len(posts('dispatchPreview'))
+                launches_before = len(posts('dispatchLaunch'))
+                page.locator('#launch-result-open-agent').click()
+                expect(page.locator('#launch-agent-action')).to_be_visible()
+                page.locator('#launch-agent-action').click()
+                expect(page.locator('#launch-result-facts [data-fact="assignment"] dd')).to_have_text(assignment)
+                expect(page.locator('#launch-brief-title')).to_have_count(0)
+                expect(page.locator('#launch-save')).to_have_count(0)
+                if expectation == 'correct':
+                    expect(page.locator('#launch-result-correct')).to_be_visible()
+                    capture(page, f'final-review-reentry-failed-{width}.png')
+                    # A mismatched result id still renders inspect-only, never a
+                    # fallback claim for the retained identity.
+                    page.evaluate("location.hash = '#/launch?ws=fixture&tab=result&id=99999999-9999-4999-8999-999999999999'")
+                    expect(page.locator('#launch-result-inspection')).to_be_visible()
+                    assert page.locator('#launch-result-facts').count() == 0
+                    capture(page, f'final-review-result-inspection-{width}.png')
+                else:
+                    expect(page.locator('#launch-result-correct')).to_have_count(0)
+                    href = page.locator('#launch-result-open-agent').get_attribute('href')
+                    assert href is not None and 'q=' in href, href
+                    capture(page, f'final-review-reentry-unconfirmed-{width}.png')
+                page.wait_for_timeout(200)
+                assert len(posts('dispatchSaveBrief')) == saves_before
+                assert len(posts('dispatchPreview')) == previews_before
+                assert len(posts('dispatchLaunch')) == launches_before
+                finish(errors, f'final-review: retained {outcome} re-entry stays in result presentation ({width})')
+
+        # 3. Explicit thread Prepare after an acknowledged result clears only
+        #    that draft and starts independent work with fresh identities; the
+        #    navigation itself never dispatches.
+        for width in widths:
+            reset()
+            page, errors = open_page(width)
+            page.goto(url + '/#/conversations?ws=fixture&id=' + thread1, wait_until='domcontentloaded')
+            expect(page.locator('#thread-prepare-assignment')).to_be_visible()
+            page.locator('#thread-prepare-assignment').click()
+            expect(page).to_have_url(re.compile(r'#/launch\?[^#]*thread=' + re.escape(thread1)))
+            expect(page.locator('#launch-brief-title')).to_be_visible()
+            page.locator('#launch-brief-title').fill('First thread brief')
+            page.locator('#launch-brief-content').fill('Outcome\nFirst thread work.')
+            page.locator('#launch-save').click()
+            expect(page.locator('#launch-assignment-launch')).to_be_enabled()
+            first_request = posts('saveBrief')[-1]['input']['request_id']
+            page.locator('#launch-assignment-launch').click()
+            expect(page.locator('#launch-result-facts')).to_be_visible()
+            first_assignment = posts('launchAssignment')[-1]['input']['assignment_id']
+            sends_before = len(posts('send'))
+            page.locator('#launch-result-discuss').click()
+            expect(page).to_have_url(re.compile(r'#/conversations\?ws=fixture&id=' + re.escape(thread1)))
+            assert len(posts('send')) == sends_before
+            saves_before = len(posts('saveBrief'))
+            previews_before = len(posts('previewAssignment'))
+            launches_before = len(posts('launchAssignment'))
+            page.locator('#thread-prepare-assignment').click()
+            expect(page.locator('#launch-brief-title')).to_have_value('')
+            expect(page.locator('#launch-brief-content')).to_have_value('')
+            assert page.locator('#launch-result-facts').count() == 0
+            assert len(posts('saveBrief')) == saves_before
+            assert len(posts('previewAssignment')) == previews_before
+            assert len(posts('launchAssignment')) == launches_before
+            page.locator('#launch-brief-title').fill('Independent follow-up')
+            page.locator('#launch-brief-content').fill('Outcome\nIndependent follow-up work.')
+            page.locator('#launch-save').click()
+            expect(page.locator('#launch-assignment-launch')).to_be_enabled()
+            fresh_request = posts('saveBrief')[-1]['input']['request_id']
+            assert fresh_request != first_request, 'the saved brief mints a fresh request identity'
+            fresh_assignment = page.locator('#launch-review [data-fact="assignment"] dd').inner_text()
+            assert fresh_assignment != first_assignment, 'the review mints a fresh assignment identity'
+            assert len(posts('launchAssignment')) == launches_before
+            capture(page, f'final-review-thread-independent-{width}.png')
+            finish(errors, f'final-review: explicit thread Prepare after acknowledged success starts independent work ({width})')
+    finally:
+        for context in contexts:
+            try: context.close()
+            except Exception: pass
+        try: api.close()
+        except Exception: pass
+
+
 started = time.monotonic()
 fixture = subprocess.Popen(['node', str(root / 'browser-fixture.mjs')], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 try:
@@ -815,6 +1028,8 @@ try:
     url = fixture_info['url']
     thread1 = fixture_info['thread1']
     thread2 = fixture_info['thread2']
+    thread3 = fixture_info['thread3']
+    worktree_target = fixture_info['worktreeTarget']
     with sync_playwright() as p:
         browser = p.chromium.connect_over_cdp(os.environ.get('SENTINEL_CDP_URL', 'http://127.0.0.1:9222'))
         if section == 'brief':
@@ -847,6 +1062,15 @@ try:
         elif section == 'thread':
             try:
                 run_thread(browser, url, thread1, thread2)
+                assert not summary['page_errors'], summary['page_errors']
+                summary['status']='passed'
+                print(json.dumps({'status': 'passed', 'elapsed_seconds': round(time.monotonic() - started, 2), 'cases': summary['cases'], 'captures': summary['captures'], 'boundary': summary['boundary'], 'receipt': str(receipt)}))
+            except BaseException as exc:
+                summary['error']=repr(exc)
+                raise
+        elif section == 'final-review':
+            try:
+                run_final_review(browser, url, thread1, thread2, thread3, worktree_target)
                 assert not summary['page_errors'], summary['page_errors']
                 summary['status']='passed'
                 print(json.dumps({'status': 'passed', 'elapsed_seconds': round(time.monotonic() - started, 2), 'cases': summary['cases'], 'captures': summary['captures'], 'boundary': summary['boundary'], 'receipt': str(receipt)}))

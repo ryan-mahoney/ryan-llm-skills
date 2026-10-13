@@ -1548,8 +1548,10 @@ test("dispatch refusal mapping fixes 409 bodies, service-unavailable and ordinar
   assert.deepEqual(JSON.parse(closedThread.body), { error: "Dispatch service unavailable.", reason: "service-unavailable" });
 
   // An unrelated unknown preview failure stays an ordinary static 503 with no
-  // reason and no exception prose or path. The fixed 409 request-conflict body
-  // carries the validated request UUID and drops a malformed one.
+  // reason and no exception prose or path. request-conflict stays fixed
+  // error/reason on both dispatch and assignment routes: its typed request_id
+  // is not part of the allow-list even when well formed, and a malformed or
+  // unrelated identifier is never serialized either.
   const secret = "/private/secret/dispatch-record.json";
   const spy = serviceSpy();
   spy.dispatchPreview = () => Promise.reject(Object.assign(new Error(`failed at ${secret}`), { code: "unknown-code" }));
@@ -1572,12 +1574,19 @@ test("dispatch refusal mapping fixes 409 bodies, service-unavailable and ordinar
   spy.dispatchSaveBrief = () => Promise.reject(Object.assign(new Error(`conflict at ${secret}`), { code: "request-conflict", request_id: REQUEST_ID }));
   const conflict = await spyCall("/api/dispatch/save-brief", { workspace_id: "refusals", request_id: REQUEST_ID, title: "Conflict", content: "body" });
   assert.equal(conflict.status, 409, conflict.body);
-  assert.deepEqual(JSON.parse(conflict.body), {
-    error: "This request conflicts with saved state.",
-    reason: "request-conflict",
-    request_id: REQUEST_ID,
-  });
+  const conflictBody = JSON.parse(conflict.body);
+  assert.deepEqual(conflictBody, { error: "This request conflicts with saved state.", reason: "request-conflict" });
+  assert.equal(Object.hasOwn(conflictBody, "request_id"), false, "a well-formed request-conflict identifier is never serialized");
   assert.doesNotMatch(conflict.body, /secret|private|conflict at/);
+
+  // The mapped assignment routes share the fixed refusal serializer, so the
+  // same request-conflict response must drop the identifier there too.
+  spy.previewAssignment = () => Promise.reject(Object.assign(new Error("thread conflict"), { code: "request-conflict", request_id: REQUEST_ID }));
+  const threadConflict = await spyCall("/api/thread/preview-assignment", { workspace_id: "refusals", thread_id: randomUUID(), request_id: REQUEST_ID, assignment_id: randomUUID(), instructions: "Conflict." });
+  assert.equal(threadConflict.status, 409, threadConflict.body);
+  const threadConflictBody = JSON.parse(threadConflict.body);
+  assert.deepEqual(threadConflictBody, { error: "This request conflicts with saved state.", reason: "request-conflict" });
+  assert.equal(Object.hasOwn(threadConflictBody, "request_id"), false, "the assignment route drops the conflict identifier");
 
   spy.dispatchSaveBrief = () => Promise.reject(Object.assign(new Error("malformed conflict id"), { code: "request-conflict", request_id: "not-a-uuid" }));
   const malformed = await spyCall("/api/dispatch/save-brief", { workspace_id: "refusals", request_id: randomUUID(), title: "Conflict", content: "body" });

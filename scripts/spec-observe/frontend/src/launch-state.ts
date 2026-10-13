@@ -437,16 +437,22 @@ export const reviewLaunchDraft = launchStore.reviewLaunchDraft;
 export const launchReviewedDraft = launchStore.launchReviewedDraft;
 export const beginCorrectedAttempt = launchStore.beginCorrectedAttempt;
 
-// Side-effect-free route normalization: a cold review URL falls back to the
-// brief, and a result URL is only honored when it matches the local result ID.
+// Side-effect-free route normalization. A recorded outcome owns the result
+// presentation on brief, review and unidentified result URLs so a retained
+// failure or unconfirmed launch stays inspectable instead of exposing
+// controls the store refuses; a mismatched result id keeps inspect-only
+// behavior, and a cold review URL falls back to the brief.
 export function resolveLaunchStage(draft: LaunchDraft | undefined, request: LaunchStageRequest = {}): LaunchStageView {
-  if (request.tab === 'review') return draft?.saved || draft?.preview ? 'review' : 'brief';
+  if (request.tab === 'review') {
+    if (draft?.result) return 'result';
+    return draft?.saved || draft?.preview ? 'review' : 'brief';
+  }
   if (request.tab === 'result') {
     const id = typeof request.id === 'string' && request.id ? request.id : undefined;
-    if (!id) return 'brief';
+    if (!id) return draft?.result ? 'result' : 'brief';
     return draft?.result && draft.result.assignmentId === id ? 'result' : 'inspection';
   }
-  return 'brief';
+  return draft?.result ? 'result' : 'brief';
 }
 
 // One-use conversation draft seed for the result return journey. Step 10's

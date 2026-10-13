@@ -69,10 +69,12 @@ await writeFile(skillPath,plannedLaunch?'---\nname: spec-end-to-end\ndescription
 const piPath=join(root,'pi');await writeFile(piPath,'#!/bin/sh\nexit 0\n',{mode:0o755});
 const referenceCatalog=createReferenceCatalog({home:root,agentDir:join(root,'agent'),skillLoader:()=>({skills:[{name:plannedLaunch?'spec-end-to-end':'fixture-skill',description:plannedLaunch?'Implement a spec package end to end.':'Plan work from the chosen brief.',filePath:skillPath,baseDir:join(skillPath,'..'),sourceInfo:{scope:'user'}}],diagnostics:[]})});
 const savedBriefs=new Map(),launchResolutions=new Map();let delaySuggestions=false,briefWritesPending=0,completedBriefWrites=0;
-const thread1='11111111-1111-4111-8111-111111111111',thread2='22222222-2222-4222-8222-222222222222';
+const thread1='11111111-1111-4111-8111-111111111111',thread2='22222222-2222-4222-8222-222222222222',thread3='44444444-4444-4444-8444-444444444444';
 // thread1 carries a recorded repository target so Prepare can pass the recorded
-// repository identity; thread2 stays workspace-bound with no route target.
-let threads=[{thread_id:thread1,workspace_id:'fixture',title:'Discussion one',state:'idle',queue:[],attention:null,queue_paused:false,history_only:false,generation:1,updated_at:new Date().toISOString(),target:{kind:'repository',repository_id:'fixture-repo'}},{thread_id:thread2,workspace_id:'fixture',title:'Discussion two',state:'idle',queue:[],attention:null,queue_paused:false,history_only:false,generation:1,target:{kind:'workspace'}}];
+// repository identity; thread2 stays workspace-bound with no route target;
+// thread3 stores a worktree path that maps to the fixture-docs checkout and is
+// displayed as the stored path, never as an inferred repository id.
+let threads=[{thread_id:thread1,workspace_id:'fixture',title:'Discussion one',state:'idle',queue:[],attention:null,queue_paused:false,history_only:false,generation:1,updated_at:new Date().toISOString(),target:{kind:'repository',repository_id:'fixture-repo'}},{thread_id:thread2,workspace_id:'fixture',title:'Discussion two',state:'idle',queue:[],attention:null,queue_paused:false,history_only:false,generation:1,target:{kind:'workspace'}},{thread_id:thread3,workspace_id:'fixture',title:'Discussion worktree',state:'idle',queue:[],attention:null,queue_paused:false,history_only:false,generation:1,target:{kind:'worktree',path:docsCheckout}}];
 let entries=[{id:'entry-1',timestamp:new Date().toISOString(),message:{role:'assistant',content:[{type:'text',text:'Ready to discuss. <script>unsafe()</script>'}]}}];
 let localOperator=false;
 let tick=0,staleLaunch=!plannedLaunch,failSend=false,delaySend=false,delayBrief=false,delayDispatchBrief=false,failDispatchBrief=false,delayDispatchSuggestions=false;
@@ -133,7 +135,7 @@ async function fixtureAssignmentTarget(threadId){
  return matches[0];
 }
 const discussion={
- async suggestions(input){if(delaySuggestions)await new Promise(r=>setTimeout(r,650));return referenceCatalog.suggest({workspace,executionDir:workspace.directory,kind:input.kind,query:input.query});},
+ async suggestions(input){posts.push({name:'suggestions',input});if(delaySuggestions)await new Promise(r=>setTimeout(r,650));const thread=threads.find(item=>item.thread_id===input.thread_id);if(!thread)throw Object.assign(new Error('Thread not found'),{code:'thread-not-found'});const target=thread.target&&typeof thread.target==='object'?thread.target:{};let executionDir=workspace.directory;if(target.kind==='repository'){const match=dispatchRepos.find(repo=>repo.id===target.repository_id);if(match)executionDir=await realpath(match.path);}else if(target.kind==='worktree'&&typeof target.path==='string'){executionDir=await realpath(target.path);}return referenceCatalog.suggest({workspace:{...workspace,repositories:dispatchRepos.map(repo=>({id:repo.id,path:repo.path}))},executionDir,kind:input.kind,query:input.query});},
  async list({workspace_id}){return {threads:workspace_id==='fixture'?copied(threads):[],invalid:[]};},
  async history({before}){if(before)return {entries:[{id:'entry-old',message:{role:'user',content:'Older message'}}],truncated:false,incomplete_tail:false};return {entries:copied(entries),truncated:true,incomplete_tail:false};},
  async create(input){posts.push({name:'create',input});const t={...threads[0],thread_id:randomUUID(),title:input.title||'New thread',target:input.target||{kind:'workspace'},queue:[],attention:null};threads=[t,...threads];return copied(t);},
@@ -238,6 +240,6 @@ const server=createServer(async(req,res)=>{
 });
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
 const timer=setInterval(()=>{tick++;void writeFile(observerFile,JSON.stringify(makeSnapshot()));void writeFile(mismatchObserverFile,JSON.stringify(makeMismatchSnapshot()));},1000);
-console.log(JSON.stringify({url:`http://127.0.0.1:${server.address().port}`,root,checkout,secondCheckout,otherPackage:otherPkg,...packageIdentity,thread1,thread2}));
+console.log(JSON.stringify({url:`http://127.0.0.1:${server.address().port}`,root,checkout,secondCheckout,otherPackage:otherPkg,...packageIdentity,thread1,thread2,thread3,worktreeTarget:docsCheckout}));
 async function close(){clearInterval(timer);server.closeAllConnections();await new Promise(r=>server.close(r));await rm(root,{recursive:true,force:true});process.exit(0);}
 process.on('SIGTERM',()=>void close());process.on('SIGINT',()=>void close());
