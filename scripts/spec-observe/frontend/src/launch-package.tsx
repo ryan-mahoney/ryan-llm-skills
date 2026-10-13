@@ -76,6 +76,32 @@ export const canonicalMemberOf = (
   return null;
 };
 
+// Next independent member after a confirmed planning launch. Observed
+// assignments reach the shared eligibility owner so live owners are never
+// re-offered, and the just-confirmed launch identity is excluded
+// immediately: the observer has not caught up, so no assignment row observes
+// it yet, and without exclusion the result would offer the launched member
+// itself while its own assignment runs.
+export const nextPlannableMember = (
+  epics: WireRecord[] | undefined,
+  record: WireRecord,
+  packageRef: string,
+  records: WireRecord[],
+  assignments: WireRecord[] | undefined,
+): WireRecord | null => {
+  const found = canonicalMemberOf(epics, record, packageRef);
+  if (!found) return null;
+  const launched = new Set<string>();
+  for (const candidate of [str(record.package_ref), str(record.spec_package), str(record.package), packageRef].filter(Boolean)) {
+    launched.add(candidate);
+    const parts = candidate.split('/').filter(Boolean);
+    if (parts.length) launched.add(parts[parts.length - 1]);
+  }
+  const members = Array.isArray(found.epic.members) ? (found.epic.members as WireRecord[]) : [];
+  const remaining = members.filter(member => !launched.has(str(member.package)) && !launched.has(str(member.name)));
+  return nextToPlan({ ...found.epic, members: remaining }, records, assignments ?? []);
+};
+
 // Stage ids come from the shared spec-prompt owner: the resolved planning
 // skill selects its canonical plan, never a locally re-typed stage list. The
 // bound brief selects the proposal-stop variant: an explicit proposal-only
@@ -110,6 +136,25 @@ export const planningStopValue = (record: WireRecord, plan: PackagePlanningPlan)
   if (plan.stop === 'proposal') return 'Proposal';
   if (isConditionalInitial(record, plan)) return 'Prepared, or Proposal if critique is recommended';
   return 'Prepared';
+};
+
+// Confirmed planning result stop: the retained reviewed stop plus an honest
+// planning-only bound. A prepared launch worktree may exist, so the result
+// never promises no branch; the worktree/branch facts disclose it instead.
+export const planningResultStopValue = (record: WireRecord, plan: PackagePlanningPlan): string =>
+  `${planningStopValue(record, plan)}. Planning only \u2014 no commits or pull request.`;
+
+// Honest execution host from recorded facts only. The resolved preview
+// record carries no host field in the workspace/launch observation contract,
+// and neither does the launch reply, so an absent host stays explicitly
+// unrecorded instead of presenting the Host default routing preference as a
+// confirmed execution fact.
+export const hostValueFor = (record: WireRecord, result?: LaunchResult): string => {
+  const reply = result?.assignment ?? {};
+  const observation = result?.observation ?? {};
+  const value = str(record.host) || str(reply.host) || str(reply.execution_host)
+    || str(observation.host) || str(observation.execution_host);
+  return value || 'Host not recorded for this assignment';
 };
 
 // Honest preparation from observed planning facts only. Snapshot lifecycle
@@ -221,7 +266,7 @@ export function PackageContract(props: {
         : { key: 'workflow', label: 'Workflow', value: str(record().skill) || IMPLEMENTATION_SKILL },
       { key: 'stop', label: 'Stops at', value: plan ? planningStopValue(record(), bound) : 'Draft pull request' },
       { key: 'authority', label: 'Publication authority', value: authorityLabel(str(record().publication_authority)) },
-      { key: 'host', label: 'Execution host', value: str(record().host) || 'Host default' },
+      { key: 'host', label: 'Execution host', value: hostValueFor(record()) },
       { key: 'model', label: 'Model', value: modelValue() },
       { key: 'assignment', label: 'Assignment', value: str(record().assignment_id) },
       { key: 'digest', label: 'Contract digest', value: props.preview.contractDigest },
@@ -316,9 +361,11 @@ export function PackageDenied(props: {
 
 // Confirmed bound launch result for the plan and implement hand-offs. Only the
 // store's recorded live outcome reaches this composition: the resolved preview
-// record supplies package, stage, stop, branch and host facts, the launch
+// record supplies package, worktree, stage, stop, branch and host facts, the launch
 // reply supplies only its own recorded time, and snapshots supply member status
-// and return links. It never claims work completion, and a recorded result
+// and return links. Planning discloses its prepared worktree/branch and stops
+// planning-only; the host stays explicitly unrecorded when no recorded fact
+// carries it. It never claims work completion, and a recorded result
 // never offers a second submission.
 export function PackageResult(props: {
   kind: PackageReviewKind;
@@ -330,10 +377,21 @@ export function PackageResult(props: {
   specHref: string;
   records?: WireRecord[];
   epics?: WireRecord[];
+  assignments?: WireRecord[];
 }) {
   const record = () => props.preview.record;
   const plan = () => props.kind === 'plan';
   const planningPlan = () => planningPlanFor(record(), props.preview.inputPreview);
+  // Next-outcome guidance from the same retained reviewed plan as facts:
+  // a proposal stop never promises specification completion, and the fresh
+  // architecture conditional keeps its critique branch instead of assuming
+  // the Prepared stop.
+  const planningCompletes = () => {
+    const bound = planningPlan();
+    if (bound.stop === 'proposal') return <>At the proposal. Critique and specification wait for a later launch.</>;
+    if (isConditionalInitial(record(), bound)) return <>At Prepared, or at Proposal when architecture recommends critique. The member then shows <StatusText tone="info">Ready to implement</StatusText> or <StatusText tone="neutral">Prepared · waiting</StatusText>.</>;
+    return <>When the package reports Prepared. The member then shows <StatusText tone="info">Ready to implement</StatusText> or <StatusText tone="neutral">Prepared · waiting</StatusText>.</>;
+  };
   const startedValue = () => {
     const assignment = props.result.assignment ?? {};
     const observation = props.result.observation ?? {};
@@ -341,24 +399,22 @@ export function PackageResult(props: {
       || str(observation.observed_at) || str(assignment.updated_at) || str(assignment.created_at);
     return value ? time(value) : 'Not recorded';
   };
-  const epicRecord = (): WireRecord | null => canonicalMemberOf(props.epics, record(), props.packageRef)?.epic ?? null;
-  const nextMember = (): WireRecord | null => {
-    const epic = epicRecord();
-    return epic ? nextToPlan(epic, props.records ?? []) : null;
-  };
+  const nextMember = (): WireRecord | null =>
+    nextPlannableMember(props.epics, record(), props.packageRef, props.records ?? [], props.assignments);
   const packageValue = () => str(record().package_ref) || props.packageRef;
-  const hostValue = () => str(record().host) || 'Host default';
+  const hostValue = () => hostValueFor(record(), props.result);
   const facts = (): ContractFact[] => {
     const bound = planningPlan();
     const stages = planningStagesValue(record(), bound);
-    const stop = planningStopValue(record(), bound);
     const branch = str(record().execution_branch);
     return plan()
       ? [
           { key: 'assignment', label: 'Assignment', value: props.result.assignmentId },
           { key: 'package', label: 'Member package', value: packageValue() },
+          { key: 'worktree', label: 'Planning worktree', value: str(record().execution_dir) || 'Unresolved' },
+          ...(branch ? [{ key: 'branch', label: 'Worktree branch', value: branch }] : []),
           { key: 'stages', label: 'Stages', value: stages },
-          { key: 'stop', label: 'Stops at', value: `${stop}. No branch, no implementation, no pull request.` },
+          { key: 'stop', label: 'Stops at', value: planningResultStopValue(record(), bound) },
           { key: 'host', label: 'Execution host', value: hostValue() },
           { key: 'started', label: 'Started', value: startedValue() },
         ]
@@ -417,7 +473,7 @@ export function PackageResult(props: {
             </div>
             <div data-fact="planning-completes">
               <dt>Planning completes</dt>
-              <dd>When the package reports Prepared. The member then shows <StatusText tone="info">Ready to implement</StatusText> or <StatusText tone="neutral">Prepared · waiting</StatusText>.</dd>
+              <dd>{planningCompletes()}</dd>
             </div>
             <div data-fact="planner-question">
               <dt>Planner needs an answer</dt>

@@ -725,6 +725,7 @@ export default function Launch(props: LaunchProps) {
                               specHref={resultSpecHref()}
                               records={props.records}
                               epics={props.epics}
+                              assignments={props.assignments}
                             />
                           )}
                         </Show>

@@ -4,7 +4,10 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   canonicalMemberOf,
+  hostValueFor,
+  nextPlannableMember,
   planningPlanFor,
+  planningResultStopValue,
   planningStagesValue,
   planningStopValue,
   preparationValueFor,
@@ -111,4 +114,64 @@ test('F3: proposal-only briefs stay at Proposal and critics/write keep their res
   assert.deepEqual(critics.stages, ['spec-architect-critics', 'spec-write']);
   const writer = planningPlanFor({ skill: 'spec-write' });
   assert.deepEqual(writer.stages, ['spec-write']);
+});
+
+// Focused unit coverage for the step-010 bound result corrections (F1-F4).
+// Run with: node --import tsx --test src/launch-package.test.ts
+
+test('step-010 F1: confirmed planning stop is planning-only and never promises no branch', () => {
+  const record: WireRecord = { skill: 'spec-architect-initial', execution_dir: '/tmp/checkout-browser', execution_branch: 'plan-branch' };
+  const plan = planningPlanFor(record, { brief: '/spec-architect-initial Plan x.', instruction: '' });
+  const stop = planningResultStopValue(record, plan);
+  assert.match(stop, /Prepared, or Proposal if critique is recommended/);
+  assert.match(stop, /Planning only/);
+  assert.doesNotMatch(stop, /No branch/);
+
+  const proposal = planningPlanFor({ skill: 'spec-architect-initial' }, { brief: 'Stop here. This launch ends at the proposal; critique waits.', instruction: '' });
+  const proposalStop = planningResultStopValue({ skill: 'spec-architect-initial' }, proposal);
+  assert.match(proposalStop, /^Proposal\./);
+  assert.doesNotMatch(proposalStop, /Prepared/);
+});
+
+test('step-010 F2: confirmed launch identity is excluded so the next independent member is offered', () => {
+  const unprepared = (name: string): WireRecord => ({
+    name, package: name, workspace: 'fixture', status: 'proposed', requires: [],
+    planning: { prepared: false, step_count: 0, preparation: { outcome: 'missing' }, decision: null, receipts: [] },
+  });
+  const epic: WireRecord = { workspace: 'fixture', epic: 'demo', title: 'Demo epic', members: [unprepared('first'), unprepared('second')] };
+  const record: WireRecord = { workspace_id: 'fixture', package_ref: 'fixture/first', skill: 'spec-architect-initial' };
+  // Without the exclusion the shared owner would return the launched member
+  // itself while its own assignment runs.
+  const next = nextPlannableMember([epic], record, 'fixture/first', [], []);
+  assert.ok(next);
+  assert.equal(next.name, 'second');
+});
+
+test('step-010 F2: observed live owners pass through the shared eligibility owner', () => {
+  const unprepared = (name: string): WireRecord => ({
+    name, package: name, workspace: 'fixture', status: 'proposed', requires: [],
+    planning: { prepared: false, step_count: 0, preparation: { outcome: 'missing' }, decision: null, receipts: [] },
+  });
+  const epic: WireRecord = { workspace: 'fixture', epic: 'demo', title: 'Demo epic', members: [unprepared('first'), unprepared('second')] };
+  const record: WireRecord = { workspace_id: 'fixture', package_ref: 'fixture/first', skill: 'spec-architect-initial' };
+  const liveSecond: WireRecord = { workspace_id: 'fixture', spec_package: 'second', display: 'live', skill: 'spec-end-to-end' };
+  // The launched first member is excluded by identity and the live second
+  // member by its observed owner: nothing independent remains.
+  assert.equal(nextPlannableMember([epic], record, 'fixture/first', [], [liveSecond]), null);
+  // Without the confirmed launch the first member stays eligible: launching
+  // the second member offers the first instead.
+  const launchedSecond: WireRecord = { workspace_id: 'fixture', package_ref: 'fixture/second', skill: 'spec-architect-initial' };
+  assert.equal(nextPlannableMember([epic], launchedSecond, 'fixture/second', [], [])?.name, 'first');
+});
+
+test('step-010 F4: execution host prefers a recorded fact and never presents the routing default', () => {
+  assert.equal(hostValueFor({}), 'Host not recorded for this assignment');
+  const fallback = hostValueFor({}, { kind: 'launched', assignmentId: 'abc' });
+  assert.equal(fallback, 'Host not recorded for this assignment');
+  assert.doesNotMatch(fallback, /Host default/);
+  assert.equal(hostValueFor({ host: 'restory-box' }), 'restory-box');
+  assert.equal(
+    hostValueFor({}, { kind: 'launched', assignmentId: 'abc', assignment: { execution_host: 'restory-box' } }),
+    'restory-box',
+  );
 });

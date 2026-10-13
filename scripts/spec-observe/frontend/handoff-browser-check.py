@@ -93,6 +93,15 @@ try:
                     screenshot = evidence / f"reference-{name}-{width}.png"
                     reference_page.screenshot(path=str(screenshot), full_page=True)
                     report["captures"].append(str(screenshot))
+                    if arguments.case == "result":
+                        # Scrolled lower-pane evidence: full-page captures clip
+                        # the lower inner content, so scroll to the populated
+                        # lower content and capture the viewport as well.
+                        reference_page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+                        reference_page.wait_for_timeout(300)
+                        scrolled = evidence / f"reference-{name}-{width}-scrolled.png"
+                        reference_page.screenshot(path=str(scrolled), full_page=False)
+                        report["captures"].append(str(scrolled))
             reference.close()
         else:
             report["scenarios"].append("Reference screens unavailable; production captures only")
@@ -378,12 +387,14 @@ try:
             assert launches and launches[-1]["matched"] is True, launches[-1:]
             expect(result_fact("assignment")).to_have_text(planning_assignment)
             expect(result_fact("package")).to_have_text("fixture/browser")
+            expect(result_fact("worktree")).to_contain_text("checkout-browser")
             expect(result_fact("stages")).to_contain_text("spec-architect-initial")
             expect(result_fact("stages")).to_contain_text("spec-write")
             expect(result_fact("stop")).to_contain_text("Prepared")
-            expect(result_fact("stop")).to_contain_text("no implementation, no pull request")
+            expect(result_fact("stop")).to_contain_text("Planning only")
+            expect(result_fact("stop")).not_to_contain_text("No branch")
             expect(result_fact("started")).not_to_have_text("Not recorded")
-            expect(result_fact("host")).not_to_be_empty()
+            expect(result_fact("host")).to_have_text("Host not recorded for this assignment")
             epic_href = page.locator("#launch-result-open-epic").get_attribute("href")
             assert epic_href and epic_href.startswith("#/epics?ws=fixture") and "id=" in epic_href, epic_href
             agent_href = page.locator("#launch-result-open-agent").get_attribute("href")
@@ -394,6 +405,7 @@ try:
             expect(page.locator("#launch-result-package")).to_contain_text("Decision needed")
             report["scenarios"].append("Confirmed planning launch returns to the same epic with Planning, Open agent and the next independent member offered")
             capture("plan-result")
+            capture_scrolled("plan-result")
             # Open epic returns to the same epic that carries the member.
             page.locator("#launch-result-open-epic").click()
             expect(page).to_have_url(re.compile(r"#/epics\?ws=fixture&id="))
@@ -420,6 +432,7 @@ try:
             expect(result_fact("package")).to_have_text("fixture/browser")
             expect(result_fact("stop")).to_have_text("Draft pull request")
             expect(result_fact("branch")).to_have_text("spec-browser")
+            expect(result_fact("host")).to_have_text("Host not recorded for this assignment")
             expect(result_fact("started")).not_to_have_text("Not recorded")
             spec_href = page.locator("#launch-result-open-spec").get_attribute("href")
             assert spec_href and spec_href.startswith("#/specs?ws=fixture") and "id=" in spec_href, spec_href
@@ -427,6 +440,7 @@ try:
             expect(page.locator("#launch-result-package")).to_contain_text("draft pull request")
             report["scenarios"].append("Confirmed implementation launch returns to the same package, leaves Ready for Active starting before receipt and shows the recorded draft-pr stop")
             capture("implement-result")
+            capture_scrolled("implement-result")
             # Publish the launched implementation; the receipt-free package is
             # projected as Active starting before any run receipt exists. The
             # canonical package path mirrors a real observer assignment record.
