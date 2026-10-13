@@ -1,18 +1,19 @@
 import { For, Show, Switch, Match, createSignal, createMemo, createEffect, on, onMount, onCleanup } from 'solid-js';
-import { getJson, postJson } from './api';
+import { getJson } from './api';
 import { str, base, time, packageFilterMatches, setClock, tickClock, serverNow, stale, statusMarkdown } from './format';
 import { normalizeEnvelope, authoritativeObservers, collectRecords, packageSummaries, collectAssignments, collectEpics, type Envelope, type WireRecord } from './model';
 import Shell from './Shell';
 import type { StatusTone } from './primitives';
 import { parseHash, subscribeRoute, navigate, routeHistoryMode, type Destination, type RouteState } from './route';
 import { clearIncompatibleFields, firstUnmatchedTargetId, inWorkspaceScope, needsWorkspacePicker, requiresWorkspace, scopeLabel, withWorkspace, type CatalogEntry } from './scope';
+import { visibleSpecs } from './spec-state';
 import { destinationEntries, type DestinationProps } from './destinations';
 import { WorkspacePicker } from './destinations/workspaces';
 import { catalogRead, type WorkspaceCatalog } from './destinations/workspace-state';
 import { getLaunchDraft, seedLaunchDraft } from './launch-state';
 import { armLaunchPickerIntent, cancelLaunchPickerIntent, createLaunchPickerIntent, shouldApplyPickerReset, shouldResetAcknowledgedDraft } from './launch-picker-intent';
 
-type Filter = 'all' | 'active' | 'attention' | 'completed' | 'planned';
+type Filter = 'active' | 'attention' | 'completed' | 'planned';
 type Catalog = WorkspaceCatalog;
 const liveBrowser = () => location.protocol !== 'file:';
 
@@ -38,11 +39,9 @@ export default function App() {
   const [catalogDelayed, setCatalogDelayed] = createSignal(false);
   const [workspaceDelayed, setWorkspaceDelayed] = createSignal(false);
   const [refreshKey, setRefreshKey] = createSignal(0);
-  const [completion, setCompletion] = createSignal<WireRecord | null>(null);
-  const [completionBusy, setCompletionBusy] = createSignal(false);
-  const [completionError, setCompletionError] = createSignal('');
+  const [expectedCompletionKey, setExpectedCompletionKey] = createSignal<string | null>(null);
+  const [expectedCompletionRoute, setExpectedCompletionRoute] = createSignal<RouteState | null>(null);
   const [endedSessions, setEndedSessions] = createSignal<string[]>([]);
-  let dialog!: HTMLDialogElement;
   let stateGeneration = 0, catalogGeneration = 0, workspaceGeneration = 0;
   let workspaceBusyId: string | null = null;
   let catalogTimer: ReturnType<typeof setTimeout> | undefined;
@@ -68,10 +67,10 @@ export default function App() {
   const query = () => route().q ?? '';
   const filter = (): Filter => {
     const value = route().filter;
-    return value === 'active' || value === 'attention' || value === 'completed' || value === 'planned' ? value : 'all';
+    return value === 'attention' || value === 'completed' || value === 'planned' ? value : 'active';
   };
   const q = () => query().trim().toLowerCase();
-  const visibleRecords = createMemo(() => packageSummaries(scopedRecords(),filter()).filter(record => (!q() || [record.workspace, record.package_ref, record.package, record.activity, record.obligation, record.execution, record.workflow_state].some(value => str(value).toLowerCase().includes(q()))) && packageFilterMatches(record, filter())).sort((a, b) => filter() === 'completed' ? Date.parse(b.completed_at) - Date.parse(a.completed_at) || str(a.package).localeCompare(str(b.package)) : 0));
+  const visibleRecords = createMemo(() => visibleSpecs(scopedRecords(), filter(), query()));
   const visibleAssignments = createMemo(() => scopedAssignments().filter(assignment => !q() || [assignment.assignment_id, assignment.spec_package, assignment.workflow_id, assignment.display, assignment.nextAction, assignment.safeAction].some(value => str(value).toLowerCase().includes(q()))));
   const visibleEpics = createMemo(() => scopedEpics().filter(epic => !q() || [epic.title, epic.epic, epic.workspace, ...(epic.members ?? []).map((member: WireRecord) => member.name)].some(value => str(value).toLowerCase().includes(q()))));
   const record = createMemo(() => scopedRecords().find(item => item.key === route().id) ?? null);
@@ -80,6 +79,7 @@ export default function App() {
   const token = () => live() && !error() ? payload()?.thread_action_token || payload()?.action_token : undefined;
   const completionToken = () => live() && !error() ? payload()?.action_token : undefined;
   const observers = createMemo(() => authoritativeObservers(payload()?.observers ?? []));
+  const scopedObservers = createMemo(() => observers().filter(observer => inWorkspaceScope({ workspace: str(observer.snapshot?.workspace) || str(observer.observer_id) || str(observer.source) || 'unknown' }, 'run', scopeWs(), catalogEntries())));
   const freshObservers = () => observers().filter(observer => observer.state === 'observing' && !stale(observer.published_at));
   const epicSupport = () => !observers().length ? 'No observer snapshots' : !observers().some(observer => Array.isArray(observer.snapshot?.epics)) ? 'Epic data unavailable' : null;
   const connectionLabel = () => imported() ? 'Imported snapshot' : error() ? 'Connection unavailable' : freshObservers().length ? 'Monitor connected' : observers().length ? 'Monitor stale' : 'Waiting for monitor';
@@ -97,7 +97,8 @@ export default function App() {
   const pickerRequired = () => needsWorkspacePicker(route()) && !packageFilesRoute();
   const detailWorkspaceId = createMemo(() => route().dest === 'workspaces' ? route().ws : requiresWorkspace(route().dest) && !packageFilesRoute() ? route().ws : undefined);
 
-  function go(next: RouteState) {
+  function go(next: RouteState, options: { keepExpected?: boolean } = {}) {
+    if (!options.keepExpected) { setExpectedCompletionKey(null); setExpectedCompletionRoute(null); expectedSeen = false; }
     navigate(next, routeHistoryMode(route(), next));
   }
   function goDestination(dest: Destination) {
@@ -129,7 +130,7 @@ export default function App() {
   }
   function setFilter(value: string) {
     const next: RouteState = { ...route() };
-    if (value === 'all') delete next.filter;
+    if (value === 'active') delete next.filter;
     else next.filter = value;
     go(next);
   }
@@ -154,6 +155,11 @@ export default function App() {
       }
       cancelLaunchPickerIntent(launchPickerIntent);
     }
+    // Choosing a workspace also abandons the in-flight completion exception:
+    // the recorded Done route and its one-shot focus guard no longer apply.
+    setExpectedCompletionKey(null);
+    setExpectedCompletionRoute(null);
+    expectedSeen = false;
     navigate(withWorkspace(route(), id), 'push');
   }
   function replaceId(value: string | null) {
@@ -177,34 +183,26 @@ export default function App() {
   function canOpenPackageFiles(item: WireRecord) {
     return Boolean(str(item.package));
   }
-  function openPackageFiles(item: WireRecord) {
+  function openPackageFiles(item: WireRecord, path?: string) {
     const pkg = str(item.package);
     if (!pkg) return;
     const next: RouteState = { dest: 'files', source: 'package', id: pkg };
     if (scopeWs()) next.ws = scopeWs();
+    if (path) next.path = path;
     go(next);
   }
-  function askCompletion() {
-    const current = record();
-    if (!current || !live() || !payload()?.action_token) return;
-    setCompletion(current);
-    setCompletionError('');
-    dialog.showModal();
-  }
-  async function complete() {
-    const current = completion();
-    if (!current || !payload()?.action_token || completionBusy()) return;
-    setCompletionBusy(true);
-    try {
-      await postJson('/api/package-completion', { package: current.package }, payload()!.action_token!);
-      dialog.close();
-      setCompletion(null);
-      await refresh();
-    } catch (e) {
-      setCompletionError(e instanceof Error ? e.message : 'Completion could not be saved. Retry.');
-    } finally {
-      setCompletionBusy(false);
-    }
+  // Completion navigates to the recorded row's own Done key. The expected key
+  // keeps the fallback from selecting an unrelated Done row while the next
+  // observation catches up; explicit navigation releases it, including native
+  // Specs history/hash navigation that bypasses go().
+  function onCompletionRecorded(item: WireRecord) {
+    const key = JSON.stringify([str(item.workspace), str(item.package), 'recent-completion']);
+    const next: RouteState = { dest: 'specs', id: key, filter: 'completed' };
+    if (scopeWs() !== undefined) next.ws = scopeWs();
+    setExpectedCompletionKey(key);
+    setExpectedCompletionRoute(next);
+    expectedSeen = false;
+    go(next, { keepExpected: true });
   }
   function manualRefresh() {
     void refresh(true);
@@ -321,6 +319,9 @@ export default function App() {
       setCatalogError('');
       setWorkspace(undefined);
       setWorkspaceError('');
+      setExpectedCompletionKey(null);
+      setExpectedCompletionRoute(null);
+      expectedSeen = false;
       navigate({ dest: 'specs' }, 'replace');
     } catch {
       setError('Choose a valid Sentinel JSON snapshot smaller than 12 MB.');
@@ -339,25 +340,62 @@ export default function App() {
   }
   function notes() {
     const out: string[] = [];
-    if (error() && route().dest !== 'workspaces' && !pickerRequired()) out.push(error());
+    // Workspaces and Specs own their connection/coverage recovery in the destination.
+    const destinationNotes = ['workspaces', 'specs'].includes(route().dest) || pickerRequired();
+    if (error() && !destinationNotes) out.push(error());
     if (payload()?.truncated) out.push('Snapshot read budget reached; some observations are unavailable.');
     for (const e of payload()?.errors ?? []) out.push(`${e.source ? str(e.source) + ': ' : ''}${str(e.message)}`);
-    if (!imported() && !error() && observers().length && !freshObservers().length && route().dest !== 'workspaces' && !pickerRequired()) out.push('Observer heartbeat is stale; work may have continued since this snapshot.');
+    if (!imported() && !error() && observers().length && !freshObservers().length && !destinationNotes) out.push('Observer heartbeat is stale; work may have continued since this snapshot.');
     for (const observer of observers()) for (const a of observer.snapshot?.attention ?? []) if (a.kind === 'legacy-location') out.push(`Untracked .specs in ${a.repository} (${a.count} entries). Remedy: ${a.remedy}.`);
     return out;
   }
 
   // Follow a package across dispatches without replacing the components that own editors.
   let selectedIdentity: { workspace: string; package: string } | null = null;
+  let expectedSeen = false;
   createEffect(() => {
     const currentRoute = route();
     if (!payload()) return;
     if (scopeWs() && !catalog()) return;
     const currentId = currentRoute.id ?? null;
+    if (currentRoute.dest !== 'specs' && expectedCompletionKey() !== null) { setExpectedCompletionKey(null); setExpectedCompletionRoute(null); expectedSeen = false; }
     if (currentRoute.dest === 'specs') {
       const current = scopedRecords().find(item => item.key === currentId);
       if (current) selectedIdentity = { workspace: str(current.workspace), package: str(current.package) };
       const rows = visibleRecords();
+      const expected = expectedCompletionKey();
+      const expectedRoute = expectedCompletionRoute();
+      if (expected !== null && expectedRoute !== null) {
+        // Native Specs history/hash navigation bypasses go(), so release here
+        // when the Specs context (scope/filter/query/selection/tab) leaves the
+        // recorded completion navigation. Delayed-target no-steal applies only
+        // while the route still matches that navigation.
+        const diverged = currentRoute.ws !== expectedRoute.ws
+          || currentRoute.id !== expectedRoute.id
+          || currentRoute.filter !== expectedRoute.filter
+          || (currentRoute.q ?? '') !== (expectedRoute.q ?? '')
+          || (currentRoute.tab ?? '') !== (expectedRoute.tab ?? '');
+        if (!diverged) expectedSeen = true;
+        if (diverged) {
+          // The route signal can still hold the pre-completion value when this
+          // effect first observes the newly armed exception; wait for the
+          // recorded navigation instead of releasing to an unrelated fallback.
+          if (!expectedSeen) {
+            if (!rows.some(item => item.key === expected)) return;
+          } else {
+            setExpectedCompletionKey(null);
+            setExpectedCompletionRoute(null);
+            expectedSeen = false;
+          }
+        } else if (!rows.some(item => item.key === expected)) {
+          // The recorded completion is not in observed rows yet; keep the pending
+          // key instead of falling back to an unrelated Done row.
+          return;
+        }
+      } else if (expected !== null && !rows.some(item => item.key === expected)) {
+        // Armed without a recorded route; preserve no-steal.
+        return;
+      }
       if (!rows.some(item => item.key === currentId)) {
         const followed = currentId && selectedIdentity ? rows.find(item => !item.recent_completion && item.is_current_assignment === true && item.workspace === selectedIdentity!.workspace && item.package === selectedIdentity!.package) : undefined;
         replaceId(followed?.key ?? rows[0]?.key ?? null);
@@ -369,6 +407,33 @@ export default function App() {
       const rows = visibleEpics();
       if (!rows.some(item => item.key === currentId)) replaceId(rows[0]?.key ?? null);
     }
+  });
+
+  // Move focus to the observed completion row once per appearance and restore it
+  // when snapshot re-renders detach the focused row; focus is never taken from a
+  // live explicit element. The expected key is released by explicit go()
+  // navigation or by native Specs navigation away from the recorded completion
+  // route, so a transient row appearance cannot let the fallback select an
+  // unrelated Done row.
+  let focusedCompletionKey: string | null = null;
+  createEffect(() => {
+    const key = expectedCompletionKey();
+    if (focusedCompletionKey !== key) focusedCompletionKey = null;
+    if (!key) return;
+    if (route().dest !== 'specs' || route().id !== key) return;
+    if (!scopedRecords().some(item => item.key === key)) {
+      // Re-arm once the row leaves observations so its next appearance focuses.
+      focusedCompletionKey = null;
+      return;
+    }
+    const detached = document.activeElement === null || document.activeElement === document.body || document.activeElement === document.documentElement;
+    if (focusedCompletionKey === key && !detached) return;
+    focusedCompletionKey = key;
+    const frame = requestAnimationFrame(() => {
+      const row = Array.from(document.querySelectorAll<HTMLElement>('.records [data-key]')).find(element => element.dataset.key === key);
+      row?.focus({ preventScroll: true });
+    });
+    onCleanup(() => cancelAnimationFrame(frame));
   });
 
   // An armed All-workspaces launch intent survives only inside the launch
@@ -429,6 +494,7 @@ export default function App() {
     get records() { return scopedRecords(); },
     get assignments() { return scopedAssignments(); },
     get epics() { return scopedEpics(); },
+    get scopedObservers() { return scopedObservers(); },
     get epicSupport() { return epicSupport(); },
     get catalog() { return catalogEntries(); },
     get catalogInvalid() { return catalog()?.invalid ?? []; },
@@ -455,7 +521,7 @@ export default function App() {
     onQuery: setQuery,
     onFilter: setFilter,
     onOpenFile: setOpenFile,
-    onComplete: askCompletion,
+    onCompletionRecorded,
     onEnded: id => setEndedSessions(prev => prev.includes(id) ? prev : [...prev, id]),
     onSelectPackage: openPackage,
     onOpenPackageFiles: openPackageFiles,
@@ -511,17 +577,5 @@ export default function App() {
         <WorkspacePicker {...outletProps} />
       </Show>
     </Shell>
-    <dialog ref={dialog} id="completion-dialog" aria-labelledby="completion-title" onCancel={event => { if (completionBusy()) event.preventDefault(); }}>
-      <form onSubmit={event => { event.preventDefault(); void complete(); }}>
-        <h2 id="completion-title">Mark package complete?</h2>
-        <p class="mono">{base(completion()?.package)}</p>
-        <p>This saves a completion record and moves the package to Recently completed. Running workers continue; step evidence and PR status stay as recorded. Only a new dispatch makes the package current again.</p>
-        <Show when={completionError()}><p class="warn" role="alert">{completionError()}</p></Show>
-        <div class="flex justify-end gap-3">
-          <button type="button" disabled={completionBusy()} onClick={() => dialog.close()}>Cancel</button>
-          <button type="submit" disabled={completionBusy()}>{completionBusy() ? 'Saving…' : 'Mark complete'}</button>
-        </div>
-      </form>
-    </dialog>
   </>;
 }

@@ -1,5 +1,6 @@
 import { createEffect, createMemo, createSignal, on, onCleanup, Show } from 'solid-js';
 import { getJson, postJson } from './api';
+import { StatusText } from './primitives';
 
 type Preview = { configured: boolean; state?: 'stopped' | 'starting' | 'running' | 'stopping' | 'error'; url?: string | null; error?: string | null; can_start?: boolean; can_stop?: boolean };
 
@@ -53,18 +54,16 @@ export function PackagePreview(props: { package: string; live: boolean; token?: 
   };
   const status = () => busy() === 'start' ? 'Starting…' : busy() === 'stop' ? 'Stopping…' : ({ stopped: 'Stopped', starting: 'Starting…', running: 'Running', stopping: 'Stopping…', error: 'Needs attention' }[preview()?.state ?? 'error']);
   return <Show when={props.live && (preview()?.configured || error())}>
-    <section class="section" id="package-preview" aria-label="Dev server">
-      <div class="section-head"><h3>Dev server</h3><span class={`pill ${error() || preview()?.error ? 'warn' : preview()?.state === 'running' ? 'good' : 'muted'}`} role="status">{error() ? 'Status unavailable' : status()}</span></div>
-      <div class="preview-actions">
-        <Show when={preview()?.configured}>
-          <Show when={preview()?.can_start || busy() === 'start' || preview()?.state === 'starting'}><button type="button" disabled={!!busy() || !props.token || !preview()?.can_start} onClick={() => void act('start')}>{busy() === 'start' || preview()?.state === 'starting' ? 'Starting dev server…' : 'Start dev server'}</button></Show>
-          <Show when={preview()?.can_stop || busy() === 'stop' || preview()?.state === 'stopping'}><button type="button" disabled={!!busy() || !props.token || !preview()?.can_stop} onClick={() => void act('stop')}>{busy() === 'stop' || preview()?.state === 'stopping' ? 'Stopping dev server…' : 'Stop dev server'}</button></Show>
-          <Show when={safeUrl()}>{url => <a href={url()} target="_blank" rel="noopener noreferrer">Open dev server</a>}</Show>
-        </Show>
-        <Show when={error()}><button type="button" onClick={() => void refresh?.()}>Retry status</button></Show>
-      </div>
-      <Show when={error() || preview()?.error}><p class="small warn" role="alert">{error() || preview()?.error}</p></Show>
-      <Show when={preview()?.configured && !props.token}><p class="small muted">Reconnect to the live dashboard to control the dev server.</p></Show>
-    </section>
+    <div class="preview-group" id="package-preview" role="group" aria-label="Dev server">
+      <StatusText tone={error() || preview()?.error ? 'warning' : preview()?.state === 'running' ? 'success' : 'neutral'}>{error() ? 'Status unavailable' : status()}</StatusText>
+      <Show when={preview()?.configured}>
+        <Show when={preview()?.can_start || busy() === 'start' || preview()?.state === 'starting'}><button type="button" class="ds-btn" disabled={!!busy() || !props.token || !preview()?.can_start} aria-describedby={!props.token ? 'preview-token-reason' : undefined} onClick={() => void act('start')}>{busy() === 'start' || preview()?.state === 'starting' ? 'Starting dev server…' : 'Start dev server'}</button></Show>
+        <Show when={preview()?.can_stop || busy() === 'stop' || preview()?.state === 'stopping'}><button type="button" class="ds-btn" disabled={!!busy() || !props.token || !preview()?.can_stop} aria-describedby={!props.token ? 'preview-token-reason' : undefined} onClick={() => void act('stop')}>{busy() === 'stop' || preview()?.state === 'stopping' ? 'Stopping dev server…' : 'Stop dev server'}</button></Show>
+        <Show when={safeUrl()}>{url => <a class="ds-btn" href={url()} target="_blank" rel="noopener noreferrer">Open dev server</a>}</Show>
+      </Show>
+      <Show when={error()}><button type="button" class="ds-btn" onClick={() => void refresh?.()}>Retry status</button></Show>
+      <Show when={error() || preview()?.error}><span class="preview-note small warn" role="alert">{error() || preview()?.error}</span></Show>
+      <Show when={preview()?.configured && !props.token}><span class="preview-note small muted" id="preview-token-reason">Reconnect to the live dashboard to control the dev server.</span></Show>
+    </div>
   </Show>;
 }

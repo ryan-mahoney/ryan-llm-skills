@@ -1,5 +1,5 @@
 import type { Component } from 'solid-js';
-import type { Envelope, WireRecord } from '../model';
+import type { Envelope, Observer, WireRecord } from '../model';
 import type { Destination, RouteState } from '../route';
 import type { CatalogEntry } from '../scope';
 import SpecsDestination from './specs';
@@ -19,6 +19,7 @@ export type DestinationProps = {
   records: WireRecord[];
   assignments: WireRecord[];
   epics: WireRecord[];
+  scopedObservers: Observer[];
   epicSupport?: string | null;
   catalog: CatalogEntry[];
   catalogInvalid: WireRecord[];
@@ -45,10 +46,10 @@ export type DestinationProps = {
   onQuery: (value: string) => void;
   onFilter: (value: string) => void;
   onOpenFile: (path: string) => void;
-  onComplete: () => void;
+  onCompletionRecorded: (record: WireRecord) => void;
   onEnded: (id: string) => void;
   onSelectPackage: (workspace: string, name: string) => void;
-  onOpenPackageFiles: (record: WireRecord) => void;
+  onOpenPackageFiles: (record: WireRecord, path?: string) => void;
   canOpenPackageFiles: (record: WireRecord) => boolean;
   onRetryWorkspace: (id: string) => void;
   onRetryCatalog: () => void;
