@@ -250,3 +250,12 @@ produced ws/slug/file identity or an explicit retry, without reloading an unchan
 frame; only a workspace, design, screen or retry identity change replaces it. The optional `brief` field links to the workspace Files route from the planned-screen
 and read-error fallbacks; the ideal toolbar carries Open screen.
 Read-only; Sentinel never writes a design record.
+
+## Host-restart deployment handoff
+
+The generated dashboard is served by the existing host process. After this change is merged, an
+authorized operator restarts that existing host process using the normal deployment procedure;
+this step does not restart, deploy or reconfigure the service and it invents no command or
+service authority. After the restart, validate the actual Designs surface, the
+`/api/workspace-designs` API and the workspace-view reader, hard-reload the client, and record
+the results separately. No deployment or broad regression claim is made by this step.

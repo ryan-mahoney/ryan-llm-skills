@@ -50,6 +50,7 @@ export default function Designs(props: DestinationProps) {
   const [indexTransportFailed, setIndexTransportFailed] = createSignal(false);
   const [initialDelayed, setInitialDelayed] = createSignal(false);
   const [headDelayed, setHeadDelayed] = createSignal(false);
+  const [revalidationDelayed, setRevalidationDelayed] = createSignal(false);
 
   let indexGeneration = 0;
   let indexController: AbortController | null = null;
@@ -103,7 +104,8 @@ export default function Designs(props: DestinationProps) {
       .then(result => {
         if (generation !== indexGeneration || controller.signal.aborted) return;
         setIndexResult({ scope: requestScope, body: result });
-        setLoadedAt(new Date(serverNow() ?? Date.now()).toISOString());
+        const observedAt = serverNow();
+        setLoadedAt(observedAt === null ? null : new Date(observedAt).toISOString());
         setIndexError('');
         setIndexTransportFailed(false);
       })
@@ -196,7 +198,7 @@ export default function Designs(props: DestinationProps) {
       : designs();
   };
   const widths = () => design()?.viewport?.widths ?? [];
-  const staleIndex = () => Boolean(data() && loadedAt() !== null && stale(loadedAt()));
+  const staleIndex = () => Boolean(data() && (loadedAt() === null || stale(loadedAt())));
   const successfulEmpty = () => Boolean(data()) && designs().length === 0 && (data()!.errors?.length ?? 0) === 0;
   const allInvalid = () => Boolean(data()) && designs().length === 0 && (data()!.errors?.length ?? 0) > 0;
   const unavailableSelection = () => selection().unavailable && (props.route.id ?? '') !== '';
@@ -404,6 +406,18 @@ export default function Designs(props: DestinationProps) {
     onCleanup(() => clearTimeout(timer));
   }));
 
+  // Retained-index revalidation: only a same-scope in-flight read over retained
+  // data starts this second 300ms delay; q/id/width changes leave the key alone.
+  const retainedReadKey = createMemo(() => (
+    busy() && Boolean(data()) && !indexError() ? scopeKey() : ''
+  ));
+  createEffect(on(retainedReadKey, key => {
+    setRevalidationDelayed(false);
+    if (!key) return;
+    const timer = setTimeout(() => setRevalidationDelayed(true), LOADING_DELAY_MS);
+    onCleanup(() => clearTimeout(timer));
+  }));
+
   // Produced-screen HEAD: reveal the checking footprint only when the current
   // viewer identity is still checking after the same delay.
   createEffect(on(
@@ -451,6 +465,17 @@ export default function Designs(props: DestinationProps) {
         }
       });
   }));
+
+  const revalidationNotice = () => (
+    <StateNotice
+      announce={false}
+      tone="warning"
+      title={loadedAt() === null || serverNow() === null ? 'Last checked time unknown' : `Last checked at ${time(loadedAt())}`}
+      action={<button type="button" class="ds-btn ds-btn--primary" onClick={refreshIndex}>Refresh designs</button>}
+    >
+      Existing content is kept while the host revalidates it.
+    </StateNotice>
+  );
 
   const fitFrame = () => {
     const wrap = frameWrap;
@@ -506,8 +531,10 @@ export default function Designs(props: DestinationProps) {
   const missingText = () => widthList(missingWidths());
   const captureGap = () => Boolean(screen()?.produced) && missingWidths().length > 0;
   const partialEvidence = () => Boolean(design()) && (captureGap() || indexDiagnostics().length > 0);
+  const showRevalidation = () => Boolean(data()) && (staleIndex() || revalidationDelayed())
+    && !blockedSelection() && !offline() && !indexError() && probeState() !== 'failed';
   const showCaptureCallout = () => Boolean(design()) && Boolean(screen()?.produced) && partialEvidence()
-    && !indexError() && !staleIndex() && probeState() !== 'failed' && !offline();
+    && !indexError() && !staleIndex() && probeState() !== 'failed' && !offline() && !showRevalidation();
   const unreadableIndexText = () => {
     const count = indexDiagnostics().length;
     return `${count} design ${count === 1 ? 'index' : 'indexes'} could not be read.`;
@@ -584,6 +611,7 @@ export default function Designs(props: DestinationProps) {
     if (!current.design) return 'Choose a design package.';
     if (!current.screen) return `${current.design.title} has no planned screens.`;
     if (headDelayed() && current.screen.produced && probeState() === 'checking') return 'Checking screen.';
+    if (showRevalidation()) return 'Revalidating designs. Existing content is kept.';
     const base = `Screen ${current.screen.step} of ${current.design.screens.length} · ${current.design.title} · ${current.screen.title}`;
     const evidence = [captureGap() ? `Missing captures: ${widthList(missingWidths())}.` : '', indexDiagnostics().length > 0 ? unreadableIndexText() : ''].filter(Boolean).join(' ');
     return evidence ? `${base} ${evidence}` : base;
@@ -655,15 +683,8 @@ export default function Designs(props: DestinationProps) {
                     </StateNotice>
                   </div>
                 </Show>
-                <Show when={staleIndex() && !indexError() && !offline()}>
-                  <StateNotice
-                    announce={false}
-                    tone="warning"
-                    title={`Last checked at ${time(loadedAt())}`}
-                    action={<button type="button" class="ds-btn" onClick={refreshIndex}>Refresh designs</button>}
-                  >
-                    Existing content is kept while the host revalidates it.
-                  </StateNotice>
+                <Show when={showRevalidation() && !screen()}>
+                  {revalidationNotice()}
                 </Show>
                 <Show when={successfulEmpty() && !indexError()}>
                   <EmptyState
@@ -949,12 +970,13 @@ export default function Designs(props: DestinationProps) {
                     when={screen()?.produced && Boolean(screenUrl()) && probeState() === 'ok'}
                     fallback={<button type="button" class="ds-btn" disabled title={openScreenTitle()}>Open screen</button>}
                   >
-                    <a class={showCaptureCallout() || offline() ? 'ds-btn' : 'ds-btn ds-btn--primary'} href={screenUrl()} target="_blank" rel="noopener">Open screen</a>
+                    <a class={showCaptureCallout() || offline() || showRevalidation() ? 'ds-btn' : 'ds-btn ds-btn--primary'} href={screenUrl()} target="_blank" rel="noopener">Open screen</a>
                   </Show>
                 </div>
               </div>
               <div class="design-canvas">
                 <Show when={screen()} fallback={<EmptyState symbol="◇" title="No screens planned" text="This design package records no screens yet." />}>
+                  <Show when={showRevalidation()}>{revalidationNotice()}</Show>
                   <Show when={offline()}>{offlineNotice()}</Show>
                   <Show when={showCaptureCallout()}>
                     <StateNotice

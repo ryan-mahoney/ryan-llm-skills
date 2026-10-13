@@ -29,6 +29,9 @@ SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 180s uv run --script \
 SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 180s uv run --script \
   scripts/spec-observe/frontend/designs-browser-check.py --case offline \
   --capture-reference /path/to/designs/app-ui/screens/81-designs-offline.html
+SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 180s uv run --script \
+  scripts/spec-observe/frontend/designs-browser-check.py --case stale \
+  --capture-reference /path/to/designs/app-ui/screens/82-designs-stale.html
 
 Only the temporary fixture storage, one final index HTTP delay, and the imported
 snapshot are substituted; App, route, adapters, /api/workspace-designs and the
@@ -49,7 +52,7 @@ import subprocess
 import threading
 import time
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -58,7 +61,7 @@ from urllib.parse import parse_qs, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--case', choices=['journey', 'unproduced', 'empty', 'loading', 'error', 'partial', 'unavailable', 'offline'], default='journey')
+parser.add_argument('--case', choices=['journey', 'unproduced', 'empty', 'loading', 'error', 'partial', 'unavailable', 'offline', 'stale'], default='journey')
 parser.add_argument('--capture-reference', default=None)
 options = parser.parse_args()
 case = options.case
@@ -452,6 +455,290 @@ try:
                     reference_state.append(state)
                 reference_page.close()
                 report['reference'] = {'html': str(reference_html), 'url': reference_url, 'captures': reference_state}
+
+            if case == 'stale':
+                stale_state = {}
+                report['staleState'] = stale_state
+                modes = {'hold_index': False, 'fail_index': False}
+                state_mode = {'kind': 'normal', 'generated_at': None}
+                held_index = []
+
+                def wait_until(condition, label, timeout=5):
+                    deadline = time.monotonic() + timeout
+                    while time.monotonic() < deadline:
+                        if condition():
+                            return
+                        page.wait_for_timeout(25)
+                    raise AssertionError(f'{label} not observed')
+
+                def index_reads():
+                    return len([r for r in requests if '/api/workspace-designs' in r['url']])
+
+                def iso_offset(iso, milliseconds):
+                    base = datetime.fromisoformat(iso.replace('Z', '+00:00'))
+                    return (base + timedelta(milliseconds=milliseconds)).isoformat().replace('+00:00', 'Z')
+
+                def designs_boundary(route):
+                    if '/api/workspace-designs' in route.request.url and 'id=fixture' in route.request.url:
+                        if modes['hold_index']:
+                            held_index.append(route)
+                            return
+                        if modes['fail_index']:
+                            route.fulfill(status=503, content_type='application/json', body=json.dumps({'error': 'Fixture generic 503'}))
+                            return
+                    route.continue_()
+
+                def state_boundary(route):
+                    if state_mode['kind'] == 'normal' or route.request.method != 'GET':
+                        route.continue_()
+                        return
+                    response = route.fetch()
+                    try:
+                        body = response.json()
+                    except Exception:
+                        route.continue_()
+                        return
+                    if state_mode['kind'] == 'offset':
+                        body['generated_at'] = state_mode['generated_at']
+                    elif state_mode['kind'] == 'invalid':
+                        body.pop('generated_at', None)
+                    headers = {key: value for key, value in response.headers.items() if key.lower() != 'content-length'}
+                    route.fulfill(status=response.status, headers=headers, json=body)
+                page.route('**/api/workspace-designs**', designs_boundary)
+                page.route('**/api/state**', state_boundary)
+
+                page.clock.install(time=datetime(2026, 1, 1, 12, 0, 0))
+                page.clock.pause_at(datetime(2026, 1, 1, 12, 0, 0))
+                try:
+                    # Cold confirmed demo.
+                    page.goto(base + '/#/designs?ws=fixture&id=demo&path=screens%2F01-screen-1.html&tab=1280&q=fixture', wait_until='domcontentloaded')
+                    expect(page.locator('#design-detail-heading')).to_have_text('Design fixture')
+                    expect(frame().locator('h1')).to_have_text('Marker screen one')
+                    assert frame().locator('html').get_attribute('data-marker') == '42'
+                    page.evaluate("document.getElementById('design-frame').dataset.viewer = 'stable'")
+                    confirmed_handle = page.locator('#design-frame').element_handle()
+                    confirmed_nonce = frame().locator('html').get_attribute('data-nonce')
+                    confirmed_route = page.url
+                    heads_before = head_count()
+                    initial_state = context.request.get(base + '/api/state').json()['generated_at']
+                    stale_state['confirmed'] = {'stateGeneratedAt': initial_state, 'route': confirmed_route,
+                                                'nonce': confirmed_nonce, 'headReads': heads_before}
+
+                    # 1. Held revalidation on the real state clock: no callout before 300ms, exact copy after.
+                    modes['hold_index'] = True
+                    state_mode['kind'] = 'normal'
+                    with page.expect_response(lambda response: '/api/state' in response.url) as state_refresh:
+                        page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    assert state_refresh.value.status == 200
+                    page.clock.fast_forward(299)
+                    assert page.locator('.design-canvas .ds-callout').count() == 0, 'revalidation appeared before 300ms'
+                    page.clock.fast_forward(1)
+                    wait_until(lambda: page.locator('.design-canvas .ds-callout').count() == 1, 'revalidation callout at 300ms')
+                    notice = page.locator('.design-canvas .ds-callout')
+                    expect(notice).to_contain_text('Last checked at')
+                    expect(notice).to_contain_text('Existing content is kept while the host revalidates it.')
+                    expect(notice.get_by_role('button', name='Refresh designs', exact=True)).to_have_class(re.compile(r'ds-btn--primary'))
+                    assert (page.get_by_role('link', name='Open screen', exact=True).get_attribute('class') or '') == 'ds-btn'
+                    assert page.evaluate("document.getElementById('design-frame').dataset.viewer") == 'stable'
+                    assert frame().locator('html').get_attribute('data-nonce') == confirmed_nonce
+                    assert confirmed_handle.evaluate('(el) => el.isConnected')
+                    assert page.url == confirmed_route
+                    assert head_count() == heads_before
+                    stale_state['delayBoundary'] = {'at299': 'absent', 'at300': notice.text_content(),
+                                                    'clock': 'real-state', 'stale': False}
+
+                    # Captures with fitting widths and the native disclosure activation.
+                    for width in (1280, 1600):
+                        page.set_viewport_size({'width': width, 'height': 900})
+                        page.locator('#design-width').focus()
+                        page.select_option('#design-width', str(width))
+                        page.wait_for_function("(selected) => location.hash.includes('tab=' + selected)", arg=str(width))
+                        expect(page.locator('#design-width')).to_have_value(str(width))
+                        page.clock.fast_forward(16)
+                        assert_frame_geometry(width)
+                        page.evaluate("() => { const canvas = document.querySelector('.design-canvas'); if (canvas) canvas.scrollTop = 0; }")
+                        path = browser_evidence / f'designs-stale@{width}.png'
+                        page.screenshot(path=str(path))
+                        report['captures'].append(str(path))
+                        details = page.locator('.design-canvas details')
+                        if not details.evaluate('element => element.open'):
+                            summary = details.locator('summary')
+                            summary.focus()
+                            summary.click()
+                            page.clock.fast_forward(16)
+                        assert details.evaluate('element => element.open'), 'details disclosure closed before scrolling'
+                        paragraph = details.locator('p').first
+                        expect(paragraph).to_be_visible()
+                        expect(paragraph).to_contain_text('Capture: 1280px and 1600px')
+                        page.evaluate("() => { const canvas = document.querySelector('.design-canvas'); if (canvas) { const target = canvas.querySelector('details'); if (target) target.scrollIntoView({ block: 'start' }); } }")
+                        details = page.locator('.design-canvas details')
+                        assert details.evaluate('element => element.open'), 'details disclosure closed after scrolling'
+                        path = browser_evidence / f'designs-stale-details@{width}.png'
+                        page.screenshot(path=str(path))
+                        report['captures'].append(str(path))
+                    if reference_html:
+                        capture_reference('reference-82', details=True, select_width=True, wait_for_frame=True)
+                    page.locator('#find-record').fill('demo')
+                    assert page.evaluate("document.getElementById('design-frame').dataset.viewer") == 'stable'
+                    assert frame().locator('html').get_attribute('data-nonce') == confirmed_nonce
+                    assert head_count() == heads_before
+
+                    # Repeated refresh while held coalesces a single in-flight read.
+                    held_before = len(held_index)
+                    reads_before = index_reads()
+                    page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    page.clock.fast_forward(50)
+                    assert len(held_index) == held_before, (held_before, len(held_index))
+                    assert index_reads() == reads_before, 'repeated refresh issued another in-flight read'
+                    assert notice.text_content().startswith('Last checked at')
+
+                    # Keyboard, 44px and 200% zoom on the notice action.
+                    notice_refresh = notice.get_by_role('button', name='Refresh designs', exact=True)
+                    box = notice_refresh.bounding_box()
+                    assert box and box['width'] >= 44 and box['height'] >= 44, box
+                    page.evaluate("document.documentElement.style.zoom = '2'")
+                    notice_refresh.scroll_into_view_if_needed()
+                    zoom_box = notice_refresh.bounding_box()
+                    assert zoom_box and zoom_box['x'] >= 0 and zoom_box['y'] >= 0 and zoom_box['y'] < 900, zoom_box
+                    page.evaluate("document.documentElement.style.zoom = ''")
+                    notice_refresh.focus()
+                    assert page.evaluate("document.activeElement && document.activeElement.textContent") == 'Refresh designs'
+                    held_after_keyboard = len(held_index)
+                    reads_after_keyboard = index_reads()
+                    page.keyboard.press('Enter')
+                    page.clock.fast_forward(16)
+                    assert len(held_index) == held_after_keyboard, 'keyboard refresh started another in-flight read'
+                    assert index_reads() == reads_after_keyboard, 'keyboard refresh issued another index request'
+
+                    # Third planned screen + real title change consumed on release.
+                    demo_index = Path(receipt['root']) / 'storage' / 'projects' / 'fixture' / 'designs' / 'demo' / 'design.json'
+                    original_record = json.loads(demo_index.read_text())
+                    third = {'step': 3, 'id': 'screen-3', 'title': 'Screen three', 'person': 'Operator',
+                             'job': 'Confirm the revalidated index', 'kind': 'action', 'state': 'ideal',
+                             'primary_action': 'Review revalidation'}
+                    changed_record = {**original_record, 'title': 'Design fixture revalidated',
+                                      'screens': [*original_record['screens'], third]}
+                    demo_index.write_text(json.dumps(changed_record))
+                    report['fixtureInputsDelta'] = {'fixture/designs/demo/design.json': changed_record}
+                    modes['hold_index'] = False
+                    while held_index:
+                        held_index.pop(0).continue_()
+                    expect(page.locator('#design-detail-heading')).to_have_text('Design fixture revalidated')
+                    expect(page.locator('.list-pane .record.selected')).to_contain_text('2 of 3 screens produced')
+                    expect(page.locator('.design-canvas .ds-callout')).to_have_count(0)
+                    assert page.evaluate("document.getElementById('design-frame').dataset.viewer") == 'stable'
+                    assert frame().locator('html').get_attribute('data-nonce') == confirmed_nonce
+                    assert head_count() == heads_before
+                    stale_state['freshRecovery'] = {'title': 'Design fixture revalidated', 'screens': 3, 'notice': 'cleared'}
+                    passed('a held revalidation on the real clock shows no callout before 300ms, the exact warning at 300ms with primary Refresh and secondary Open screen, coalesces repeats, and clears when the changed real index is consumed')
+
+                    # 2. Stale threshold on a cold entry with a known server clock: the state
+                    #    generated_at is pinned before the initial index read, so the observed
+                    #    loadedAt is exactly that known server ISO and no other read is inferred.
+                    baseline_iso = context.request.get(base + '/api/state').json()['generated_at']
+                    state_mode['kind'] = 'offset'
+                    state_mode['generated_at'] = baseline_iso
+                    modes['hold_index'] = False
+                    page.goto('about:blank')
+                    page.goto(base + '/#/designs?ws=fixture&id=demo&path=screens%2F01-screen-1.html&tab=1280&q=fixture', wait_until='domcontentloaded')
+                    expect(page.locator('#design-detail-heading')).to_have_text('Design fixture revalidated')
+                    expect(frame().locator('h1')).to_have_text('Marker screen one')
+                    assert frame().locator('html').get_attribute('data-marker') == '42'
+                    page.evaluate("document.getElementById('design-frame').dataset.viewer = 'stable'")
+                    age_handle = page.locator('#design-frame').element_handle()
+                    age_nonce = frame().locator('html').get_attribute('data-nonce')
+                    age_route = page.url
+                    age_heads = head_count()
+                    stale_state['ageBaseline'] = {'apiIso': baseline_iso, 'route': age_route, 'nonce': age_nonce, 'headReads': age_heads}
+                    modes['hold_index'] = True
+                    held_index.clear()
+                    state_mode['generated_at'] = iso_offset(baseline_iso, 45000)
+                    with page.expect_response(lambda response: '/api/state' in response.url) as age_state_45000:
+                        page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    assert age_state_45000.value.status == 200
+                    assert page.locator('.design-canvas .ds-callout').count() == 0, '45000ms age was treated as stale'
+                    state_mode['generated_at'] = iso_offset(baseline_iso, 45001)
+                    with page.expect_response(lambda response: '/api/state' in response.url) as age_state_45001:
+                        page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    assert age_state_45001.value.status == 200
+                    wait_until(lambda: page.locator('.design-canvas .ds-callout').count() == 1, 'stale callout at 45001ms')
+                    expect(page.locator('.design-canvas .ds-callout')).to_contain_text('Last checked at')
+                    assert page.evaluate("document.getElementById('design-frame').dataset.viewer") == 'stable'
+                    assert frame().locator('html').get_attribute('data-nonce') == age_nonce
+                    stale_state['ageBoundary'] = {'at45000': 'fresh', 'at45001': page.locator('.design-canvas .ds-callout').text_content(),
+                                                  'baselineIso': baseline_iso,
+                                                  'responseIsos': [age_state_45000.value.json().get('generated_at'),
+                                                                   age_state_45001.value.json().get('generated_at')]}
+                    passed('a cold known server clock keeps 45000ms fresh and shows the stale warning at 45001ms without advancing the page clock')
+
+                    # 3. Invalid/missing generated_at keeps the honest unknown time: consume the
+                    #    real state response, then release a real index read so the unknown
+                    #    observation timestamp is recorded before the title is asserted.
+                    state_mode['kind'] = 'invalid'
+                    with page.expect_response(lambda response: '/api/state' in response.url) as unknown_state:
+                        page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    assert unknown_state.value.status == 200
+                    assert unknown_state.value.json().get('generated_at') is None
+                    modes['hold_index'] = False
+                    while held_index:
+                        held_index.pop(0).continue_()
+                    wait_until(lambda: 'Last checked time unknown' in page.locator('.design-canvas .ds-callout').text_content(), 'unknown time title')
+                    expect(page.locator('.design-canvas .ds-callout')).to_contain_text('Existing content is kept while the host revalidates it.')
+                    stale_state['unknownClock'] = {'title': 'Last checked time unknown', 'stateGeneratedAt': None}
+                    # Restore the real state; the fresh local index read clears the unknown region.
+                    state_mode['kind'] = 'normal'
+                    with page.expect_response(lambda response: '/api/state' in response.url) as restored_state:
+                        page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    assert restored_state.value.status == 200
+                    expect(page.locator('.design-canvas .ds-callout')).to_have_count(0)
+                    passed('a missing generated_at shows the honest unknown-time title and the restored real state with a fresh index clears it')
+
+                    # 4. Held revalidation 503 keeps the frame and becomes the ordinary error.
+                    modes['fail_index'] = True
+                    with page.expect_response(lambda response: '/api/workspace-designs' in response.url) as stale_503:
+                        page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    assert stale_503.value.status == 503
+                    expect(page.locator('.designs-index-error')).to_contain_text('Designs could not be read')
+                    assert page.evaluate("document.getElementById('design-frame').dataset.viewer") == 'stable'
+                    assert frame().locator('html').get_attribute('data-nonce') == age_nonce
+                    assert age_handle.evaluate('(el) => el.isConnected')
+                    stale_state['errorRetained'] = {'nonce': age_nonce, 'frameConnected': True}
+                    modes['fail_index'] = False
+                    page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    expect(page.locator('.designs-index-error')).to_have_count(0)
+                    passed('a held revalidation 503 becomes the ordinary error with the age-entry frame and nonce retained')
+
+                    # 5. A scope change while a revalidation read is pending never inherits the delay.
+                    held_index.clear()
+                    modes['hold_index'] = True
+                    page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    page.evaluate("location.hash = '#/designs?ws=other'")
+                    expect(frame().locator('h1')).to_have_text('Other workspace screen')
+                    assert frame().locator('html').get_attribute('data-marker') == '42'
+                    expect(page.get_by_text('Existing content is kept while the host revalidates it.', exact=True)).to_have_count(0)
+                    modes['hold_index'] = False
+                    stale_state['scopeChange'] = {'route': page.url, 'inherited': False}
+                    passed('a scope change while a revalidation read is pending never inherits the retained delay')
+
+                    assert not report['pageErrors'], report['pageErrors']
+                    allowed_console = [message for message in report['consoleErrors'] if '503' in message]
+                    unexpected_console = [message for message in report['consoleErrors'] if '503' not in message]
+                    assert not unexpected_console, unexpected_console
+                    unexpected = [failure for failure in report['requestFailures'] if 'ERR_ABORTED' not in failure['failure']]
+                    assert not unexpected, unexpected
+                    mutations = [r for r in requests if r['method'] not in ('GET', 'HEAD')]
+                    assert not mutations, f'mutation requests observed: {mutations}'
+                finally:
+                    while held_index:
+                        try:
+                            held_index.pop(0).continue_()
+                        except Exception:
+                            pass
+                    page.unroute('**/api/workspace-designs**', designs_boundary)
+                    page.unroute('**/api/state**', state_boundary)
+                report['status'] = 'passed'
+                raise CaseComplete()
 
             if case == 'offline':
                 offline_state = {}
