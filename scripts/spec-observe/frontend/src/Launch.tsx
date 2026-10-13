@@ -13,12 +13,12 @@ import {
   reviewLaunchDraft, saveLaunchDraft, seedLaunchDraft, seedThreadDraft,
   type LaunchContext, type LaunchDraftError, type LaunchPreview,
 } from './launch-state';
-import { PackageContract, PackageDenied, packageReviewKind } from './launch-package';
+import { PackageContract, PackageDenied, PackageResult, packageReviewKind } from './launch-package';
 import { publicationAuthorityForSkill } from './launch-handoff';
 import type { BriefReference } from './composerTypes';
 import type { WireRecord } from './model';
 import type { RouteState } from './route';
-import { busyAgentsHref } from './route';
+import { busyAgentsHref, packageEpicHref, packageSpecHref } from './route';
 import { suggestionSourceFor } from './launch-client';
 
 export type LaunchProps = {
@@ -284,10 +284,22 @@ export default function Launch(props: LaunchProps) {
   // when this assignment is already observed, otherwise a workspace-scoped
   // UUID filter so App cannot replace the selection with an unrelated row.
   const resultKind = () => draft()?.result?.kind;
-  const resultHeading = () => resultKind() === 'launched' ? 'Agent is live' : resultKind() === 'failed' ? 'Agent could not start' : 'Launch is unconfirmed';
+  const resultHeading = () => resultKind() === 'launched'
+    ? bound() ? (packageKind() === 'plan' ? 'Planning is live' : 'Implementation is live') : 'Agent is live'
+    : resultKind() === 'failed' ? 'Agent could not start' : 'Launch is unconfirmed';
   const resultRecord = () => previewState()?.record ?? lastReviewed()?.record ?? {};
   const resultExecution = () => str(resultRecord().execution_dir) || 'Unresolved';
   const resultAgentsHref = () => busyAgentsHref(ws(), draft()?.result?.assignmentId, props.assignments ?? []);
+  const resultPreview = () => previewState() ?? lastReviewed();
+  // A bound launched outcome owns the package composition; a launched result
+  // without retained package facts, and every unconfirmed/failed outcome,
+  // keeps the generic result treatment.
+  const packageResultPreview = () => bound() && draft()?.result?.kind === 'launched' ? resultPreview() : undefined;
+  // Bound return links: planning returns to the epic that carries the member
+  // and implementation returns to the package's own spec row, so the result
+  // never strands the operator on an unrelated first row.
+  const resultEpicHref = () => packageEpicHref(ws(), packageRef(), props.epics);
+  const resultSpecHref = () => packageSpecHref(ws(), packageRef(), props.records);
   const inspectionHref = () => busyAgentsHref(ws(), props.route.id, props.assignments ?? []);
   const resultObservation = () => resultKind() === 'launched'
     ? 'Live process confirmed'
@@ -717,36 +729,53 @@ export default function Launch(props: LaunchProps) {
                   <Match when={reviewView() === 'result'}>
                     <Show when={draft()?.result} keyed>{value => (
                       <div class="launch-result">
-                        <StateNotice
-                          tone={value.kind === 'launched' ? 'success' : value.kind === 'failed' ? 'error' : 'warning'}
-                          announce={false}
-                          title={value.kind === 'launched' ? 'Assignment started' : value.kind === 'failed' ? 'Process startup failed' : 'The launch acknowledgement was lost'}
-                        >
-                          {value.kind === 'launched'
-                            ? 'The host recorded this assignment as live. Work completion has not been established.'
-                            : value.kind === 'failed'
-                              ? 'The host recorded a confirmed launch failure. The assignment and saved brief are retained for inspection.'
-                              : 'The submitted assignment may already be running; do not launch it again. Locate the submitted identity in Agents before starting another assignment; this dashboard has no confirmed record of it.'}
-                        </StateNotice>
-                        <dl class="launch-facts" id="launch-result-facts" aria-label="Launch result facts">
-                          <div data-fact="request"><dt>Request</dt><dd class="mono">{saved()?.requestId ?? 'Recorded'}</dd></div>
-                          <div data-fact="assignment"><dt>Assignment</dt><dd class="mono">{value.assignmentId}</dd></div>
-                          <div data-fact="execution"><dt>Execution directory</dt><dd class="mono">{resultExecution()}</dd></div>
-                          <div data-fact="brief"><dt>Brief</dt><dd>{saved()?.title || 'Recorded'}</dd></div>
-                          <Show when={props.route.thread}><div data-fact="thread"><dt>Originating thread</dt><dd class="mono">{props.route.thread}</dd></div></Show>
-                          <div data-fact="observation"><dt>Observation</dt><dd>{resultObservation()}</dd></div>
-                        </dl>
-                        <ActionBar variant="inline">
-                          <a id="launch-result-open-agent" class="ds-btn ds-btn--primary" href={resultAgentsHref()}>Open agent</a>
-                          <Show when={value.kind === 'failed'}>
-                            <button id="launch-result-correct" class="ds-btn" type="button" onClick={correct}>Correct assignment</button>
-                          </Show>
+                        <Show when={packageResultPreview()}>
+                          {preview => (
+                            <PackageResult
+                              kind={packageKind()!}
+                              packageRef={packageRef()}
+                              preview={preview()}
+                              result={value}
+                              agentHref={resultAgentsHref()}
+                              epicHref={resultEpicHref()}
+                              specHref={resultSpecHref()}
+                              records={props.records}
+                              epics={props.epics}
+                            />
+                          )}
+                        </Show>
+                        <Show when={!packageResultPreview()}>
+                          <StateNotice
+                            tone={value.kind === 'launched' ? 'success' : value.kind === 'failed' ? 'error' : 'warning'}
+                            announce={false}
+                            title={value.kind === 'launched' ? 'Assignment started' : value.kind === 'failed' ? 'Process startup failed' : 'The launch acknowledgement was lost'}
+                          >
+                            {value.kind === 'launched'
+                              ? 'The host recorded this assignment as live. Work completion has not been established.'
+                              : value.kind === 'failed'
+                                ? 'The host recorded a confirmed launch failure. The assignment and saved brief are retained for inspection.'
+                                : 'The submitted assignment may already be running; do not launch it again. Locate the submitted identity in Agents before starting another assignment; this dashboard has no confirmed record of it.'}
+                          </StateNotice>
+                          <dl class="launch-facts" id="launch-result-facts" aria-label="Launch result facts">
+                            <div data-fact="request"><dt>Request</dt><dd class="mono">{saved()?.requestId ?? 'Recorded'}</dd></div>
+                            <div data-fact="assignment"><dt>Assignment</dt><dd class="mono">{value.assignmentId}</dd></div>
+                            <div data-fact="execution"><dt>Execution directory</dt><dd class="mono">{resultExecution()}</dd></div>
+                            <div data-fact="brief"><dt>Brief</dt><dd>{saved()?.title || 'Recorded'}</dd></div>
+                            <Show when={props.route.thread}><div data-fact="thread"><dt>Originating thread</dt><dd class="mono">{props.route.thread}</dd></div></Show>
+                            <div data-fact="observation"><dt>Observation</dt><dd>{resultObservation()}</dd></div>
+                          </dl>
+                          <ActionBar variant="inline">
+                            <a id="launch-result-open-agent" class="ds-btn ds-btn--primary" href={resultAgentsHref()}>Open agent</a>
+                            <Show when={value.kind === 'failed'}>
+                              <button id="launch-result-correct" class="ds-btn" type="button" onClick={correct}>Correct assignment</button>
+                            </Show>
+                            <Show when={props.route.thread}>
+                              <button id="launch-result-discuss" class="ds-btn" type="button" onClick={discuss}>Discuss result</button>
+                            </Show>
+                          </ActionBar>
                           <Show when={props.route.thread}>
-                            <button id="launch-result-discuss" class="ds-btn" type="button" onClick={discuss}>Discuss result</button>
+                            <p class="contract-note">Discuss result opens the originating conversation with an unsent result draft. Review it before sending.</p>
                           </Show>
-                        </ActionBar>
-                        <Show when={props.route.thread}>
-                          <p class="contract-note">Discuss result opens the originating conversation with an unsent result draft. Review it before sending.</p>
                         </Show>
                       </div>
                     )}</Show>

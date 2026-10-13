@@ -8,10 +8,11 @@
 // the only transport mapping.
 import { For, Match, Show, Switch } from 'solid-js';
 import { ActionBar, StateNotice, StatusText } from './primitives';
-import { str } from './format';
+import { str, time } from './format';
 import { packagePlanningPlan } from '../../../workspaces/spec-prompt.mjs';
+import { nextToPlan } from './readiness';
 import type { PackagePlanningPlan } from './launch-handoff';
-import type { LaunchPreview } from './launch-state';
+import type { LaunchPreview, LaunchResult } from './launch-state';
 import type { WireRecord } from './model';
 
 export type PackageReviewKind = 'plan' | 'implement';
@@ -45,6 +46,15 @@ const packageRecordOf = (records: WireRecord[] | undefined, packageRef: string):
 
 type EpicMember = { title: string; status: string };
 
+// Stage ids come from the shared spec-prompt owner: the resolved planning
+// skill selects its canonical plan, never a locally re-typed stage list.
+const planningPlanFor = (record: WireRecord): PackagePlanningPlan => {
+  const skill = str(record.skill);
+  if (skill === 'spec-architect-critics') return packagePlanningPlan({ proposal: true, critiqueRecommended: true }) as PackagePlanningPlan;
+  if (skill === 'spec-write') return packagePlanningPlan({ proposal: true }) as PackagePlanningPlan;
+  return packagePlanningPlan() as PackagePlanningPlan;
+};
+
 export function PackageContract(props: {
   preview: LaunchPreview;
   packageRef: string;
@@ -63,14 +73,7 @@ export function PackageContract(props: {
     }
     return null;
   };
-  // Stage ids come from the shared spec-prompt owner: the resolved planning
-  // skill selects its canonical plan, never a locally re-typed stage list.
-  const planningPlan = (): PackagePlanningPlan => {
-    const skill = str(record().skill);
-    if (skill === 'spec-architect-critics') return packagePlanningPlan({ proposal: true, critiqueRecommended: true }) as PackagePlanningPlan;
-    if (skill === 'spec-write') return packagePlanningPlan({ proposal: true }) as PackagePlanningPlan;
-    return packagePlanningPlan() as PackagePlanningPlan;
-  };
+  const planningPlan = () => planningPlanFor(record());
   const prerequisiteValue = () => {
     const attention = snapshot()?.attention;
     if (Array.isArray(attention) && attention.length) return attention.filter(Boolean).map(String).join(' · ');
@@ -191,6 +194,135 @@ export function PackageDenied(props: {
           <a id="launch-package-open-spec" class="ds-btn ds-btn--primary" href={specHref()}>Open spec</a>
         </Show>
       </ActionBar>
+    </div>
+  );
+}
+
+// Confirmed bound launch result for the plan and implement hand-offs. Only the
+// store's recorded live outcome reaches this composition: the resolved preview
+// record supplies package, stage, stop, branch and host facts, the launch
+// reply supplies only its own recorded time, and snapshots supply member status
+// and return links. It never claims work completion, and a recorded result
+// never offers a second submission.
+export function PackageResult(props: {
+  kind: PackageReviewKind;
+  packageRef: string;
+  preview: LaunchPreview;
+  result: LaunchResult;
+  agentHref: string;
+  epicHref: string;
+  specHref: string;
+  records?: WireRecord[];
+  epics?: WireRecord[];
+}) {
+  const record = () => props.preview.record;
+  const plan = () => props.kind === 'plan';
+  const planningPlan = () => planningPlanFor(record());
+  const startedValue = () => {
+    const assignment = props.result.assignment ?? {};
+    const observation = props.result.observation ?? {};
+    const value = str(assignment.launch_completed_at) || str(assignment.started_at)
+      || str(observation.observed_at) || str(assignment.updated_at) || str(assignment.created_at);
+    return value ? time(value) : 'Not recorded';
+  };
+  const epicRecord = (): WireRecord | null => {
+    const slug = props.packageRef.split('/').filter(Boolean).pop() ?? props.packageRef;
+    for (const epic of props.epics ?? []) {
+      const members = Array.isArray(epic.members) ? epic.members as WireRecord[] : [];
+      if (members.some(member => [str(member.package), str(member.name)].includes(slug))) return epic;
+    }
+    return null;
+  };
+  const nextMember = (): WireRecord | null => {
+    const epic = epicRecord();
+    return epic ? nextToPlan(epic, props.records ?? []) : null;
+  };
+  const packageValue = () => str(record().package_ref) || props.packageRef;
+  const hostValue = () => str(record().host) || 'Host default';
+  const facts = (): ContractFact[] => {
+    const stages = planningPlan().stages.map((stage, index) => `${index + 1} ${stage}`).join(' → ') || 'No stages recorded';
+    const branch = str(record().execution_branch);
+    return plan()
+      ? [
+          { key: 'assignment', label: 'Assignment', value: props.result.assignmentId },
+          { key: 'package', label: 'Member package', value: packageValue() },
+          { key: 'stages', label: 'Stages', value: stages },
+          { key: 'stop', label: 'Stops at', value: 'Prepared. No branch, no implementation, no pull request.' },
+          { key: 'host', label: 'Execution host', value: hostValue() },
+          { key: 'started', label: 'Started', value: startedValue() },
+        ]
+      : [
+          { key: 'assignment', label: 'Assignment', value: props.result.assignmentId },
+          { key: 'started', label: 'Started', value: startedValue() },
+          { key: 'package', label: 'Spec package', value: packageValue() },
+          ...(branch ? [{ key: 'branch', label: 'Branch', value: branch }] : []),
+          { key: 'host', label: 'Execution host', value: hostValue() },
+          { key: 'stop', label: 'Stops at', value: 'Draft pull request' },
+        ];
+  };
+  return (
+    <div class="launch-result launch-result--package" id="launch-result-package" data-package-kind={props.kind}>
+      <StateNotice
+        tone="success"
+        announce={false}
+        title={`Assignment ${props.result.assignmentId.slice(0, 8)} started`}
+      >
+        {plan()
+          ? 'The host acknowledged this planning assignment as live. Planning has not finished.'
+          : 'The host acknowledged this implementation assignment as live. Work completion has not been established.'}
+      </StateNotice>
+      <dl class="launch-facts" id="launch-result-facts" aria-label={plan() ? 'Planning result facts' : 'Implementation result facts'}>
+        <For each={facts()}>{fact => (
+          <div data-fact={fact.key}>
+            <dt>{fact.label}</dt>
+            <dd class="mono">{fact.value}</dd>
+          </div>
+        )}</For>
+      </dl>
+      <ActionBar variant="inline">
+        <Show when={plan()} fallback={<a id="launch-result-open-spec" class="ds-btn ds-btn--primary" href={props.specHref}>Open spec</a>}>
+          <a id="launch-result-open-epic" class="ds-btn ds-btn--primary" href={props.epicHref}>Open epic</a>
+        </Show>
+        <a id="launch-result-open-agent" class="ds-btn" href={props.agentHref}>Open agent</a>
+      </ActionBar>
+      <section class="section launch-result-next" aria-labelledby="launch-result-next-heading">
+        <div class="section-heading">
+          <h3 id="launch-result-next-heading">What happens next</h3>
+        </div>
+        <Show
+          when={plan()}
+          fallback={
+            <ul class="launch-next-list">
+              <li>The spec leaves Ready and appears under Active.</li>
+              <li>The first observation can take one refresh.</li>
+              <li>The run ends at a draft pull request. Merge stays with the operator.</li>
+            </ul>
+          }
+        >
+          <dl class="launch-facts" aria-label="Planning next steps">
+            <div data-fact="epic-status">
+              <dt>On the epic</dt>
+              <dd><StatusText tone="info">Planning</StatusText><br /><span class="muted">The member shows Planning while the assignment runs.</span></dd>
+            </div>
+            <div data-fact="planning-completes">
+              <dt>Planning completes</dt>
+              <dd>When the package reports Prepared. The member then shows <StatusText tone="info">Ready to implement</StatusText> or <StatusText tone="neutral">Prepared · waiting</StatusText>.</dd>
+            </div>
+            <div data-fact="planner-question">
+              <dt>Planner needs an answer</dt>
+              <dd>The member shows <StatusText tone="warning">Decision needed</StatusText>.</dd>
+            </div>
+            <div data-fact="next-member">
+              <dt>Next member</dt>
+              <dd>
+                <Show when={nextMember()} fallback="No independent member is offered in this observation.">
+                  {member => `${str(member().name)} can be planned from the epic while this assignment runs.`}
+                </Show>
+              </dd>
+            </div>
+          </dl>
+        </Show>
+      </section>
     </div>
   );
 }
