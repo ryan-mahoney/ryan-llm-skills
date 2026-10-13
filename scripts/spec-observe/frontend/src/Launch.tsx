@@ -143,11 +143,14 @@ export default function Launch(props: LaunchProps) {
     const list = props.workspace?.repositories;
     return Array.isArray(list) ? list as Array<{ id?: unknown; status?: unknown }> : [];
   };
+  // Suggestions follow the retained draft target, not the route seed: Runs in
+  // edits move the request params and the full-source cancellation
+  // signature, so a stale old-target response cannot populate the list.
   const suggestionSource = createMemo(() => ({
     path: '/api/dispatch/suggestions',
     params: {
       workspace_id: ws(),
-      ...(props.route.target ? { repository_id: props.route.target } : {}),
+      ...(target() ? { repository_id: target()! } : {}),
     },
   }));
   const targetLabel = (value: string | null | undefined) => value || 'Whole workspace';

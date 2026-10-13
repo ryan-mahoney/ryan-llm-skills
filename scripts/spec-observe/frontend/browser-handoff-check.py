@@ -55,8 +55,12 @@ def run_brief(browser, url):
                 page.screenshot(path=str(path), full_page=True)
                 summary['captures'].append(str(path))
 
-            # A portfolio launch opens the picker; choosing a workspace mounts the brief with Agents current.
-            page.goto(url + '/#/launch', wait_until='domcontentloaded')
+            # The ordinary entry is Agents → Launch agent: portfolio scope opens
+            # the picker, and choosing a workspace mounts the brief with Agents
+            # current in the rail.
+            page.goto(url + '/#/agents', wait_until='domcontentloaded')
+            expect(page.locator('#launch-agent-action')).to_be_visible()
+            page.locator('#launch-agent-action').click()
             expect(page.locator('.workspace-picker')).to_be_visible()
             page.locator('.workspace-picker button[data-workspace="fixture"]').click()
             expect(page).to_have_url(re.compile(r'#/launch\?ws=fixture&tab=brief'))
@@ -128,6 +132,32 @@ def run_brief(browser, url):
             assert not posts('dispatchLaunch')
             passed(f'Enter saves only ({width})')
 
+            # A Runs in change retargets file suggestions with the retained
+            # draft target: the whole-workspace request finds the
+            # second-repository file, and the delayed old-target match is
+            # dropped once the bound request resolves without it.
+            target_select = page.locator('#launch-target')
+            content.press('End')
+            content.type(' @fixture-docs-guide')
+            expect(page.locator('.brief-suggestions')).to_contain_text('fixture-docs-guide')
+            expect(page.locator('.brief-suggestion')).to_contain_text('fixture-docs')
+            whole = [x for x in control()['posts'] if x['name'] == 'dispatchSuggestions']
+            assert whole and not whole[-1]['input'].get('repository_id'), whole[-1] if whole else None
+            passed(f'whole-workspace suggestions span repositories ({width})')
+            control('delay-dispatch-suggestions', 'true')
+            content.press('End')
+            content.press('Backspace')
+            page.wait_for_timeout(250)
+            target_select.select_option('fixture-repo')
+            content.press('End')
+            content.type('e')
+            expect(page.locator('.brief-suggestions')).to_contain_text('No matching text files in this target.')
+            bound = [x for x in control()['posts'] if x['name'] == 'dispatchSuggestions']
+            assert bound[-1]['input'].get('repository_id') == 'fixture-repo', bound[-1]
+            assert any(not x['input'].get('repository_id') for x in bound)
+            control('delay-dispatch-suggestions', 'false')
+            passed(f'target change retargets suggestions and drops the stale match ({width})')
+
             assert not errors, errors
             summary['page_errors'].extend(errors)
         finally:
@@ -152,7 +182,10 @@ def run_review(browser, url):
         page = context.new_page()
         errors = []
         page.on('pageerror', lambda e: errors.append(str(e)))
-        page.goto(url + '/#/launch', wait_until='domcontentloaded')
+        # Ordinary entry, shared with the brief section: Agents → Launch
+        # agent, then the picker mounts the brief in the chosen workspace.
+        page.goto(url + '/#/agents', wait_until='domcontentloaded')
+        page.locator('#launch-agent-action').click()
         expect(page.locator('.workspace-picker')).to_be_visible()
         page.locator('.workspace-picker button[data-workspace="fixture"]').click()
         expect(page).to_have_url(re.compile(r'#/launch\?ws=fixture&tab=brief'))

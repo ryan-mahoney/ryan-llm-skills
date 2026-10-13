@@ -127,6 +127,14 @@
 .skeletons-table .skeleton-bar{height:10px;width:85%;background:var(--ds-chrome-hi);border-radius:2px}
 .skeletons-table .skeleton-bar--secondary{height:8px;width:60%}
 
+/* Launch brief composition reuses the reference textarea.ds-input surface.
+   Scoped to the launch form so the still-mounted thread caller keeps its
+   own thread-handoff textarea treatment. */
+#launch-form .brief-composer textarea{width:100%;max-width:100%;height:auto;min-height:132px;padding:12px;line-height:1.6;color:var(--ds-ink);background:var(--ds-panel-2);border:1px solid var(--ds-input-border);border-radius:3px;resize:vertical;font:inherit}
+#launch-form .brief-composer textarea::placeholder{color:var(--ds-muted)}
+#launch-form .brief-composer textarea:disabled{background:var(--ds-chrome);color:var(--ds-muted)}
+#launch-form .brief-composer textarea:focus-visible{outline:2px solid var(--ds-accent);outline-offset:3px}
+
 /* Launch brief flow: saved/review facts reuse the shared token surfaces and
    do not restyle any non-launch screen. */
 .launch-facts{display:grid;gap:10px;margin:16px 0 0;padding:16px 0 0;border-top:1px solid var(--ds-line-2)}

@@ -434,7 +434,9 @@ export default function App() {
         ? <button class="ds-btn" type="button" onClick={() => goDestination('agents')}>Return to agents</button>
         : route().dest === 'workspaces'
           ? <button class="ds-btn" type="button" aria-busy={catalogPending()} onClick={() => void loadCatalog()}>Refresh workspaces</button>
-          : <button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button>}
+          : route().dest === 'agents'
+            ? <><button id="launch-agent-action" class="ds-btn ds-btn--primary" type="button" onClick={() => goDestination('launch')}>Launch agent</button><button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button></>
+            : <button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button>}
       connection={{ label: connectionLabel(), tone: connectionTone() }}
       observedAt={observedAt()}
       onRefresh={manualRefresh}
