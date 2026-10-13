@@ -1,5 +1,5 @@
-// Operator JSON dispatch and one bounded SSE stream for /api/threads and
-// /api/thread/*.
+// Operator JSON dispatch and one bounded SSE stream for /api/threads,
+// /api/thread/* and the direct dispatch surface /api/dispatch/*.
 //
 // createDashboardServer composes one instance per server and calls it after
 // the dashboard's existing Host/Origin acceptance and after computing
@@ -24,6 +24,14 @@ const LIST_PATH = "/api/threads";
 const HISTORY_PATH = "/api/thread/history";
 const EVENTS_PATH = "/api/thread/events";
 const PREFIX = "/api/thread/";
+const DISPATCH_PREFIX = "/api/dispatch/";
+const DISPATCH_SAVE_BRIEF_PATH = "/api/dispatch/save-brief";
+const DISPATCH_PREVIEW_PATH = "/api/dispatch/preview";
+const DISPATCH_LAUNCH_PATH = "/api/dispatch/launch";
+const DISPATCH_SUGGESTIONS_PATH = "/api/dispatch/suggestions";
+const ASSIGNMENT_PREVIEW_PATH = "/api/thread/preview-assignment";
+const ASSIGNMENT_LAUNCH_PATH = "/api/thread/launch-assignment";
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MESSAGE_BODY_LIMIT = 64 * 1024;
 const DEFAULT_BODY_LIMIT = 8 * 1024;
 const MAX_ACTIVE_STREAMS = 16;
@@ -38,8 +46,9 @@ const SSE_HEADERS = {
 };
 
 // send and save-brief accept a message/brief body; every other write keeps the
-// smaller administrative cap.
-const LARGE_BODY_PATHS = new Set(["/api/thread/send", "/api/thread/save-brief"]);
+// smaller administrative cap. Direct dispatch uses the same split: only
+// save-brief carries a brief.
+const LARGE_BODY_PATHS = new Set(["/api/thread/send", "/api/thread/save-brief", DISPATCH_SAVE_BRIEF_PATH]);
 
 const POST_ROUTES = new Map([
   ["/api/thread/create", "create"],
@@ -50,6 +59,9 @@ const POST_ROUTES = new Map([
   ["/api/thread/save-brief", "saveBrief"],
   ["/api/thread/preview-assignment", "previewAssignment"],
   ["/api/thread/launch-assignment", "launchAssignment"],
+  [DISPATCH_SAVE_BRIEF_PATH, "dispatchSaveBrief"],
+  [DISPATCH_PREVIEW_PATH, "dispatchPreview"],
+  [DISPATCH_LAUNCH_PATH, "dispatchLaunch"],
 ]);
 
 // Static status mapping. Keys are typed service codes; the response body never
@@ -73,6 +85,8 @@ const STATUS_BY_CODE = new Map([
   ["session-mismatch", 409],
   ["stale-generation", 409],
   ["stale-preview", 409],
+  ["target-busy", 409],
+  ["run-active", 409],
   ["live-owner", 409],
   ["history-only", 409],
   ["delivery-uncertain", 409],
@@ -100,6 +114,35 @@ function sendJson(response, method, status, payload) {
 function sendStatus(response, status, headers) {
   response.writeHead(status, { "Content-Type": "application/json; charset=utf-8", ...(headers ?? {}) });
   response.end(JSON.stringify({ error: STATUS_TEXT.get(status) ?? "Discussion service unavailable." }));
+}
+
+// Fixed direct-dispatch and assignment refusal serialization. Only the static
+// reason, its fixed prose and one validated conflict UUID cross the HTTP
+// boundary; exception messages, paths and any other typed extra stay internal.
+const REFUSAL_BY_CODE = new Map([
+  ["stale-preview", { reason: "stale-preview", error: "The reviewed assignment changed. Review it again." }],
+  ["request-conflict", { reason: "request-conflict", error: "This request conflicts with saved state." }],
+  ["target-busy", { reason: "target-busy", error: "This execution directory already has an assignment." }],
+  ["run-active", { reason: "run-active", error: "This spec package has an active run." }],
+]);
+const DISPATCH_UNAVAILABLE_BODY = { error: "Dispatch service unavailable.", reason: "service-unavailable" };
+
+// Dispatch routes and the two assignment routes share the fixed refusals; all
+// other thread routes keep their existing static bodies.
+const isMappedRefusalPath = (path) =>
+  path.startsWith(DISPATCH_PREFIX) || path === ASSIGNMENT_PREVIEW_PATH || path === ASSIGNMENT_LAUNCH_PATH;
+
+function sendRefusal(response, method, error) {
+  const refusal = REFUSAL_BY_CODE.get(error?.code);
+  if (refusal === undefined) return false;
+  const conflictKey =
+    error.code === "target-busy" ? "assignment_id" : error.code === "request-conflict" ? "request_id" : null;
+  const payload = { error: refusal.error, reason: refusal.reason };
+  if (conflictKey !== null && typeof error[conflictKey] === "string" && UUID_PATTERN.test(error[conflictKey])) {
+    payload[conflictKey] = error[conflictKey];
+  }
+  sendJson(response, method, 409, payload);
+  return true;
 }
 
 function queryValue(url, name) {
@@ -391,7 +434,9 @@ export function createDiscussionRoutes({ discussion, actionToken } = {}) {
 
   return async function handleDiscussionRoute(request, response, url, { remote, expectedOrigin } = {}) {
     const path = url.pathname;
-    if (path !== LIST_PATH && !path.startsWith(PREFIX)) return false;
+    const dispatchPath = path.startsWith(DISPATCH_PREFIX);
+    const mappedRefusalPath = isMappedRefusalPath(path);
+    if (path !== LIST_PATH && !path.startsWith(PREFIX) && !dispatchPath) return false;
     // The dashboard authorizes loopback and its configured public host. Other
     // remote requests are refused before route, method or service handling.
     if (remote === true) {
@@ -399,7 +444,11 @@ export function createDiscussionRoutes({ discussion, actionToken } = {}) {
       return true;
     }
     if (!discussion) {
-      sendStatus(response, 503);
+      // The dispatch surface distinguishes a missing launch service from
+      // ordinary thread unavailability; unrelated thread routes keep the
+      // existing static body without a reason.
+      if (mappedRefusalPath) sendJson(response, request.method, 503, DISPATCH_UNAVAILABLE_BODY);
+      else sendStatus(response, 503);
       return true;
     }
     try {
@@ -435,6 +484,18 @@ export function createDiscussionRoutes({ discussion, actionToken } = {}) {
           sendStatus(response, 405, { Allow: 'GET, HEAD' }); return true;
         }
         const result = await discussion.suggestions({ workspace_id: queryValue(url, 'workspace_id'), thread_id: queryValue(url, 'thread_id'), kind: queryValue(url, 'kind'), query: queryValue(url, 'query') ?? '' });
+        sendJson(response, request.method, 200, result); return true;
+      }
+      if (path === DISPATCH_SUGGESTIONS_PATH) {
+        if (request.method !== 'GET' && request.method !== 'HEAD') {
+          sendStatus(response, 405, { Allow: 'GET, HEAD' }); return true;
+        }
+        const result = await discussion.dispatchSuggestions({
+          workspace_id: queryValue(url, 'workspace_id'),
+          repository_id: queryValue(url, 'repository_id'),
+          kind: queryValue(url, 'kind'),
+          query: queryValue(url, 'query') ?? '',
+        });
         sendJson(response, request.method, 200, result); return true;
       }
       const method = POST_ROUTES.get(path);
@@ -481,6 +542,13 @@ export function createDiscussionRoutes({ discussion, actionToken } = {}) {
       sendJson(response, "POST", 200, result);
       return true;
     } catch (error) {
+      if (mappedRefusalPath) {
+        if (error?.code === 'service-closed') {
+          sendJson(response, request.method, 503, DISPATCH_UNAVAILABLE_BODY);
+          return true;
+        }
+        if (sendRefusal(response, request.method, error)) return true;
+      }
       const status = STATUS_BY_CODE.get(error?.code) ?? error?.status ?? 503;
       if (error?.code === 'spec-package-unavailable') {
         sendJson(response, request.method, status, { error: 'Spec package paths are unavailable on the execution host. Run spec-location materialize for this package on that host, then refresh and preview again.' });

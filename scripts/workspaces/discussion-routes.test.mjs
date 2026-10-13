@@ -1,6 +1,8 @@
 // Step 7 focused tests: HTTP authorization, mapping, the real service
 // boundary and the bounded SSE stream for the local /api/threads and
-// /api/thread/* routes.
+// /api/thread/* routes. Step 4 EV-6 adds the direct /api/dispatch/* surface:
+// real save/preview/launch over local and operator HTTP, dispatch
+// authorization and the fixed dispatch refusal serialization.
 //
 // Every fixture root is realpath(mkdtemp(tmpdir())) with the canonical
 // setupStorage/createWorkspace owners. The TCP peer stays loopback while the
@@ -14,18 +16,22 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { chmod, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { hostname, tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
+import { newPackage } from "../spec-location/index.mjs";
 import { createDashboardServer } from "../spec-observe/dashboard.mjs";
 import { createDiscussionService } from "./discussion.mjs";
 import { createDiscussionRoutes } from "./discussion-routes.mjs";
 import { createWorkspace, setupStorage } from "./store.mjs";
 
 const PUBLIC_HOST = "host.example.ts.net";
+const DISPATCH_SKILL = "spec-architect-initial";
 const THREAD_ID = "3f1c9a6e-2b1d-4f5a-8c7e-9d0b1a2c3d4e";
 const MESSAGE_ID = "7b2e4d08-1a3c-4e6f-9b5d-8c0a2e4f6d1b";
 const REQUEST_ID = "5c8f0a2e-4d6b-4a1c-9e3f-7d5b0a2c4e6f";
@@ -66,7 +72,7 @@ async function fixtureStorage(t) {
 function serviceSpy() {
   const calls = [];
   const spy = { calls };
-  for (const name of ["create", "list", "history", "suggestions", "send", "stop", "resume", "discard", "saveBrief", "previewAssignment", "launchAssignment", "subscribe"]) {
+  for (const name of ["create", "list", "history", "suggestions", "send", "stop", "resume", "discard", "saveBrief", "previewAssignment", "launchAssignment", "subscribe", "dispatchSaveBrief", "dispatchPreview", "dispatchLaunch", "dispatchSuggestions"]) {
     spy[name] = (...args) => {
       calls.push({ name, args });
       return name === "subscribe" ? () => {} : Promise.resolve([]);
@@ -1041,4 +1047,541 @@ test("a normal request close during initialization still initializes while respo
   response.emit("close");
   await until(() => controlled.unsubscribes() === 1, "response close cleans up the stream");
   assert.equal(controlled.listeners.size, 0);
+});
+
+// Direct dispatch HTTP acceptance (step 4, EV-6). Run alone:
+//   node --test --test-name-pattern='direct dispatch HTTP|dispatch authorization|dispatch refusal mapping' scripts/workspaces/discussion-routes.test.mjs
+
+function git(cwd, args) {
+  return new Promise((resolvePromise, reject) => {
+    execFile(
+      "git",
+      ["-c", "user.email=fixture@example.com", "-c", "user.name=Fixture", ...args],
+      {
+        cwd,
+        timeout: 10000,
+        killSignal: "SIGKILL",
+        encoding: "utf8",
+        env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" },
+      },
+      (error, stdout, stderr) => {
+        if (error) {
+          reject(new Error(`git ${args.join(" ")} failed: ${stderr || error.message}`));
+          return;
+        }
+        resolvePromise(stdout);
+      },
+    );
+  });
+}
+
+async function makeRepo(directory) {
+  await mkdir(directory, { recursive: true });
+  await git(directory, ["init", "--quiet"]);
+  await git(directory, ["commit", "--allow-empty", "-m", "init"]);
+  return realpathSync(directory);
+}
+
+async function setupDispatchedWorkspace(storageRoot, id, repositories) {
+  await createWorkspace(storageRoot, { id, name: id });
+  const directory = join(storageRoot, "projects", id);
+  const lines = [
+    "version: 1",
+    `id: ${JSON.stringify(id)}`,
+    `name: ${JSON.stringify(id)}`,
+    `execution_host: ${JSON.stringify(hostname())}`,
+    "repositories:",
+  ];
+  for (const repository of repositories) {
+    lines.push(`  - id: ${JSON.stringify(repository.id)}`);
+    lines.push(`    path: ${JSON.stringify(repository.path)}`);
+  }
+  lines.push("context: []");
+  await writeFile(join(directory, "kit.yaml"), `${lines.join("\n")}\n`);
+  return directory;
+}
+
+// Case-owned fake `pi` executable for resolution; PATH is restored after the
+// case even on failure.
+async function withFakePi(t, root) {
+  const binDirectory = join(root, "bin");
+  await mkdir(binDirectory, { recursive: true });
+  const piPath = join(binDirectory, "pi");
+  await writeFile(piPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await chmod(piPath, 0o755);
+  const savedPath = process.env.PATH;
+  process.env.PATH = `${binDirectory}${delimiter}${savedPath ?? ""}`;
+  t.after(() => {
+    if (savedPath === undefined) delete process.env.PATH;
+    else process.env.PATH = savedPath;
+  });
+  return piPath;
+}
+
+// Owned inert process used as the fake tmux pane PID: processIdentity observes
+// it through a real OS probe and cleanup kills exactly this child.
+function dummyProcess(t) {
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  t.after(() => {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // Already gone.
+    }
+  });
+  return child;
+}
+
+// Final tmux transport boundary for direct launches: sessions are fake and
+// tracked by name, the pane PID answers with the owned dummy process, and
+// show-options returns the assignment id captured at new-session. No real
+// tmux server is touched.
+function tmuxHarness({ dummyPid = null } = {}) {
+  const calls = [];
+  const sessions = new Map();
+  const targetOf = (args) => {
+    const index = args.indexOf("-t");
+    return index === -1 ? null : args[index + 1].replace(/^=/, "").replace(/:$/, "");
+  };
+  const run = (socketPath, args) => {
+    calls.push({ socketPath, args: [...args] });
+    if (args.includes("new-session")) {
+      // The bootstrap queue sets `-s extended-keys` before new-session, so the
+      // session name and assignment marker are read from the new-session
+      // command alone, bounded by the queue separator.
+      const newSessionIndex = args.indexOf("new-session");
+      const queueEnd = args.indexOf(";", newSessionIndex);
+      const newSessionArgs = args.slice(newSessionIndex, queueEnd === -1 ? args.length : queueEnd);
+      const marker = newSessionArgs.find((arg) => typeof arg === "string" && arg.startsWith("ADJACENT_ASSIGNMENT_ID="));
+      const nameIndex = newSessionArgs.indexOf("-s");
+      sessions.set(
+        nameIndex === -1 ? null : newSessionArgs[nameIndex + 1],
+        marker ? marker.slice("ADJACENT_ASSIGNMENT_ID=".length) : null,
+      );
+      return Promise.resolve({ ok: true, code: 0, stdout: "", stderr: "" });
+    }
+    if (args.includes("has-session")) {
+      const target = targetOf(args);
+      return Promise.resolve(sessions.has(target)
+        ? { ok: true, code: 0, stdout: "", stderr: "" }
+        : { ok: false, code: 1, stdout: "", stderr: "can't find session" });
+    }
+    if (args.includes("list-clients")) return Promise.resolve({ ok: true, code: 0, stdout: "", stderr: "" });
+    if (args.includes("display-message")) {
+      return Promise.resolve({ ok: true, code: 0, stdout: `%1 ${dummyPid}\n`, stderr: "" });
+    }
+    if (args.includes("show-options")) {
+      const target = targetOf(args);
+      return Promise.resolve(sessions.has(target)
+        ? { ok: true, code: 0, stdout: `${sessions.get(target)}\n`, stderr: "" }
+        : { ok: false, code: 1, stdout: "", stderr: "can't find session" });
+    }
+    return Promise.reject(new Error(`unexpected tmux command: ${args.join(" ")}`));
+  };
+  return {
+    calls,
+    run,
+    newSessionCount: () => calls.filter((call) => call.args.includes("new-session")).length,
+    destructiveCount: () => calls.filter((call) => call.args.some((arg) => ["kill-session", "kill-server", "kill-pane", "kill-window"].includes(arg))).length,
+  };
+}
+
+// Run alone: node --test --test-name-pattern="direct dispatch HTTP" scripts/workspaces/discussion-routes.test.mjs
+test("direct dispatch HTTP saves, reviews and launches bound skill/package contracts over local and public hosts", { timeout: 60000 }, async (t) => {
+  const f = fixture(t);
+  await setupStorage(f.storageRoot);
+  const localRepo = await makeRepo(join(f.dir, "repos", "app-local"));
+  const publicRepo = await makeRepo(join(f.dir, "repos", "app-public"));
+  const workspaceDirectory = await setupDispatchedWorkspace(f.storageRoot, "shipped", [
+    { id: "app-local", path: localRepo },
+    { id: "app-public", path: publicRepo },
+  ]);
+  for (const repository of [localRepo, publicRepo]) {
+    await mkdir(join(repository, "docs"), { recursive: true });
+    await writeFile(join(repository, "docs", "context.md"), "# Bound context\nExact selected source.\n");
+  }
+  const localPackage = await newPackage({ workspace: "shipped", slug: "local", targets: [{ id: "app-local" }], root: f.storageRoot });
+  assert.equal(localPackage.ok, true, JSON.stringify(localPackage));
+  const publicPackage = await newPackage({ workspace: "shipped", slug: "public", targets: [{ id: "app-public" }], root: f.storageRoot });
+  assert.equal(publicPackage.ok, true, JSON.stringify(publicPackage));
+
+  await withFakePi(t, f.dir);
+  const dummy = dummyProcess(t);
+  const tmux = tmuxHarness({ dummyPid: dummy.pid });
+  const service = createDiscussionService({
+    root: f.storageRoot,
+    agentDir: join(f.dir, "agent"),
+    assignmentAdapters: {
+      tmuxRun: tmux.run,
+      observationProbes: { tmuxRun: tmux.run, psRun: () => ({ stdout: "", complete: true }) },
+    },
+  });
+  t.after(() => service.close());
+  const server = createDashboardServer({ agentDir: f.dir, storageRoot: f.storageRoot, discussion: service, publicHost: PUBLIC_HOST });
+  const port = await listen(t, server);
+  const localHost = `127.0.0.1:${port}`;
+  const localToken = await actionToken(port);
+  const operatorToken = JSON.parse((await httpCall(port, "/api/state", { host: PUBLIC_HOST })).body).thread_action_token;
+  assert.match(operatorToken, /^[a-f0-9]{64}$/, "the configured public host exposes the operator token");
+  const endpoints = [
+    { label: "local", host: localHost, origin: `http://${localHost}`, token: localToken, repository: localRepo, repositoryId: "app-local", packageRef: localPackage.locations.package_dir },
+    { label: "tailnet", host: `${PUBLIC_HOST}:443`, origin: `https://${PUBLIC_HOST}`, token: operatorToken, repository: publicRepo, repositoryId: "app-public", packageRef: publicPackage.locations.package_dir },
+  ];
+
+  let launches = 0;
+  for (const endpoint of endpoints) {
+    const tmuxBaseline = tmux.calls.length;
+    const sourcePath = join(endpoint.repository, "docs", "context.md");
+    const requestId = randomUUID();
+    const assignmentId = randomUUID();
+    const write = (path, payload) => httpCall(port, path, {
+      method: "POST",
+      host: endpoint.host,
+      origin: endpoint.origin,
+      headers: { "x-sentinel-token": endpoint.token, "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    const savedResponse = await write("/api/dispatch/save-brief", {
+      workspace_id: "shipped",
+      request_id: requestId,
+      title: `${endpoint.label} contract`,
+      content: "Bound body\n",
+    });
+    assert.equal(savedResponse.status, 200, `${endpoint.label} save: ${savedResponse.body}`);
+    const saved = JSON.parse(savedResponse.body);
+    assert.match(saved.brief, /^briefs\/brief-[0-9a-f]{64}\.md$/);
+
+    const suggestionsResponse = await httpCall(
+      port,
+      `/api/dispatch/suggestions?${new URLSearchParams({ workspace_id: "shipped", repository_id: endpoint.repositoryId, kind: "file", query: "context.md" })}`,
+      { host: endpoint.host },
+    );
+    assert.equal(suggestionsResponse.status, 200, `${endpoint.label} suggestions: ${suggestionsResponse.body}`);
+    const suggestion = JSON.parse(suggestionsResponse.body).items.find((item) => item.label === "docs/context.md");
+    assert.ok(suggestion, `${endpoint.label}: the repository file is suggested`);
+    assert.match(suggestion.id, /^file:[0-9a-f]{64}$/);
+
+    const input = {
+      workspace_id: "shipped",
+      request_id: requestId,
+      assignment_id: assignmentId,
+      instructions: "Deliver the bound contract.",
+      repository_id: endpoint.repositoryId,
+      references: [{ kind: "file", id: suggestion.id }],
+      skill: DISPATCH_SKILL,
+      spec_package: endpoint.packageRef,
+    };
+
+    const previewResponse = await write("/api/dispatch/preview", input);
+    assert.equal(previewResponse.status, 200, `${endpoint.label} preview: ${previewResponse.body}`);
+    const preview = JSON.parse(previewResponse.body);
+    assert.equal(preview.record.assignment_id, assignmentId);
+    assert.equal(preview.record.workspace_id, "shipped");
+    assert.equal(preview.record.brief, saved.brief);
+    assert.equal(preview.record.execution_dir, endpoint.repository);
+    assert.equal(preview.record.repository_id, endpoint.repositoryId);
+    assert.equal(preview.record.skill, DISPATCH_SKILL);
+    assert.match(preview.record.skill_path, new RegExp(`${DISPATCH_SKILL}/SKILL\\.md$`));
+    assert.equal(realpathSync(preview.record.spec_package), realpathSync(endpoint.packageRef));
+    assert.equal(preview.record.publication_authority, "none");
+    assert.equal(preview.record.attempt_kind, "initial");
+    assert.match(preview.contractDigest, /^[0-9a-f]{64}$/);
+    const previewBytes = Buffer.from(preview.briefBytes.data);
+    assert.match(previewBytes.toString("utf8"), /Bound context/);
+    assert.match(previewBytes.toString("utf8"), /Bound body/);
+    assert.equal(existsSync(join(workspaceDirectory, "threads")), false, `${endpoint.label}: preview creates no thread`);
+    assert.equal(tmux.calls.length, tmuxBaseline, `${endpoint.label}: preview launches nothing`);
+
+    if (endpoint.label === "local") {
+      // A captured-source change after review refuses the reviewed digest with
+      // the fixed stale-preview body and leaves no reservation behind.
+      await writeFile(sourcePath, "# Changed context\nDifferent bytes.\n");
+      const staleResponse = await write("/api/dispatch/launch", { ...input, expectedDigest: preview.contractDigest });
+      assert.equal(staleResponse.status, 409, `stale launch: ${staleResponse.body}`);
+      assert.deepEqual(JSON.parse(staleResponse.body), {
+        error: "The reviewed assignment changed. Review it again.",
+        reason: "stale-preview",
+      });
+      assert.equal(existsSync(join(workspaceDirectory, "assignments", `${assignmentId}.json`)), false, "stale launch publishes no record");
+      assert.equal(existsSync(join(f.storageRoot, ".sentinel")), false, "stale launch publishes no reservation");
+      assert.equal(tmux.calls.length, tmuxBaseline, "stale launch reaches no tmux boundary");
+    }
+
+    const freshResponse = await write("/api/dispatch/preview", input);
+    assert.equal(freshResponse.status, 200, `${endpoint.label} fresh preview: ${freshResponse.body}`);
+    const fresh = JSON.parse(freshResponse.body);
+    if (endpoint.label === "local") assert.notEqual(fresh.contractDigest, preview.contractDigest);
+
+    const launchResponse = await write("/api/dispatch/launch", { ...input, expectedDigest: fresh.contractDigest });
+    assert.equal(launchResponse.status, 200, `${endpoint.label} launch: ${launchResponse.body}`);
+    const launched = JSON.parse(launchResponse.body);
+    assert.equal(launched.assignment.assignment_id, assignmentId);
+    assert.equal(launched.assignment.state, "live");
+    assert.equal(launched.assignment.execution_dir, endpoint.repository);
+    assert.equal(launched.assignment.skill, DISPATCH_SKILL);
+    assert.equal(launched.assignment.contract_digest, fresh.contractDigest);
+    assert.equal(launched.observation.state, "live");
+    launches += 1;
+    assert.equal(tmux.newSessionCount(), launches, `${endpoint.label}: one fake session per launched contract`);
+
+    const stored = JSON.parse(await readFile(join(workspaceDirectory, "assignments", `${assignmentId}.json`), "utf8"));
+    assert.equal(stored.repository_id, endpoint.repositoryId);
+    assert.equal(stored.skill, DISPATCH_SKILL);
+    assert.equal(stored.contract_digest, fresh.contractDigest);
+    assert.equal(stored.state, "live");
+    assert.deepEqual(
+      await readFile(join(workspaceDirectory, "assignments", `${assignmentId}.brief.md`)),
+      Buffer.from(fresh.briefBytes.data),
+      "the persisted brief snapshot is the reviewed bytes",
+    );
+  }
+  assert.equal(existsSync(join(workspaceDirectory, "threads")), false, "direct dispatch never creates a threads directory");
+
+  // Unknown direct fields and absolute-authority overrides are refused before
+  // resolution: no record, reservation or tmux work can follow.
+  const overrides = [
+    ["/api/dispatch/save-brief", { workspace_id: "shipped", request_id: randomUUID(), title: "Override", content: "body", path: "briefs/x.md" }],
+    ["/api/dispatch/preview", { workspace_id: "shipped", request_id: randomUUID(), assignment_id: randomUUID(), instructions: "Do it.", execution_dir: localRepo }],
+    ["/api/dispatch/preview", { workspace_id: "shipped", request_id: randomUUID(), assignment_id: randomUUID(), instructions: "Do it.", pi_path: "/tmp/pi", home: "/tmp" }],
+    ["/api/dispatch/launch", { workspace_id: "shipped", request_id: randomUUID(), assignment_id: randomUUID(), instructions: "Do it.", expectedDigest: "0".repeat(64), publication_authority: "pr" }],
+  ];
+  for (const [path, payload] of overrides) {
+    const response = await httpCall(port, path, {
+      method: "POST",
+      host: localHost,
+      origin: `http://${localHost}`,
+      headers: { "x-sentinel-token": localToken, "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    assert.equal(response.status, 400, `${path} ${JSON.stringify(payload)}: ${response.body}`);
+    assert.deepEqual(JSON.parse(response.body), { error: "Discussion request is invalid." });
+    assert.equal(existsSync(join(workspaceDirectory, "assignments", `${payload.assignment_id}.json`)), false);
+  }
+  assert.equal(tmux.newSessionCount(), launches, "no override refusal reaches the tmux boundary");
+  assert.equal(tmux.destructiveCount(), 0);
+});
+
+// Run alone: node --test --test-name-pattern="dispatch authorization" scripts/workspaces/discussion-routes.test.mjs
+test("dispatch authorization refuses wrong Origin, missing token, non-JSON and nonoperator remote before any dispatch body or service call", async (t) => {
+  const f = await fixtureStorage(t);
+  const spy = serviceSpy();
+  const server = createDashboardServer({ agentDir: f.dir, publicHost: PUBLIC_HOST, storageRoot: f.storageRoot, discussion: spy });
+  const port = await listen(t, server);
+  const localHost = `127.0.0.1:${port}`;
+  const localOrigin = `http://${localHost}`;
+  const localToken = await actionToken(port);
+  const operatorToken = JSON.parse((await httpCall(port, "/api/state", { host: PUBLIC_HOST })).body).thread_action_token;
+  assert.match(operatorToken, /^[a-f0-9]{64}$/);
+
+  // Every refusal answers from declared headers alone: headersOnly never
+  // uploads the declared 64 KiB body, so a route that reads first times out.
+  const refusals = [
+    { label: "wrong Origin", host: localHost, origin: "https://evil.example", token: localToken, contentType: "application/json" },
+    { label: "loopback alias Origin", host: localHost, origin: `http://localhost:${port}`, token: localToken, contentType: "application/json" },
+    { label: "missing token", host: localHost, origin: localOrigin, token: undefined, contentType: "application/json" },
+    { label: "wrong token", host: localHost, origin: localOrigin, token: "0".repeat(64), contentType: "application/json" },
+    { label: "non-JSON content type", host: localHost, origin: localOrigin, token: localToken, contentType: "text/plain" },
+    { label: "nonoperator remote Host", host: "other.example.ts.net", origin: "https://other.example.ts.net", token: localToken, contentType: "application/json" },
+    { label: "forwarded identity on loopback", host: localHost, origin: localOrigin, token: localToken, contentType: "application/json", forwarded: true },
+  ];
+
+  for (const refusal of refusals) {
+    for (const path of ["/api/dispatch/save-brief", "/api/dispatch/preview", "/api/dispatch/launch"]) {
+      const response = await httpCall(port, path, {
+        method: "POST",
+        host: refusal.host,
+        origin: refusal.origin,
+        headersOnly: true,
+        headers: {
+          "content-type": refusal.contentType,
+          "content-length": String(MESSAGE_BODY_LIMIT + 1),
+          ...(refusal.token === undefined ? {} : { "x-sentinel-token": refusal.token }),
+          ...(refusal.forwarded ? { "x-forwarded-for": "100.64.0.1" } : {}),
+        },
+      });
+      assert.equal(response.status, 403, `${refusal.label} ${path}`);
+      assert.equal(response.uploaded, 0, `${refusal.label} ${path}: no body byte is uploaded`);
+    }
+  }
+  assert.deepEqual(spy.calls.map((call) => call.name), [], "no refused dispatch request reaches the service");
+
+  const payload = { workspace_id: "fixture", request_id: REQUEST_ID, assignment_id: ASSIGNMENT_ID, instructions: "Review it." };
+  const alternates = [
+    { label: "local", host: localHost, origin: localOrigin, token: localToken },
+    { label: "operator public host", host: `${PUBLIC_HOST}:443`, origin: `https://${PUBLIC_HOST}`, token: operatorToken },
+  ];
+  for (const alternate of alternates) {
+    const preview = await httpCall(port, "/api/dispatch/preview", {
+      method: "POST",
+      host: alternate.host,
+      origin: alternate.origin,
+      headers: { "x-sentinel-token": alternate.token, "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    assert.equal(preview.status, 200, `${alternate.label}: ${preview.body}`);
+    const suggestions = await httpCall(
+      port,
+      `/api/dispatch/suggestions?${new URLSearchParams({ workspace_id: "fixture", kind: "skill", query: "spec" })}`,
+      { host: alternate.host },
+    );
+    assert.equal(suggestions.status, 200, `${alternate.label}: ${suggestions.body}`);
+  }
+  assert.deepEqual(
+    spy.calls.map((call) => call.name),
+    ["dispatchPreview", "dispatchSuggestions", "dispatchPreview", "dispatchSuggestions"],
+    "both authorizations map one-to-one onto the dispatch service methods",
+  );
+  assert.deepEqual(spy.calls[0].args, [payload]);
+  assert.deepEqual(spy.calls[2].args, [payload]);
+});
+
+// Run alone: node --test --test-name-pattern="dispatch refusal mapping" scripts/workspaces/discussion-routes.test.mjs
+test("dispatch refusal mapping fixes 409 bodies, service-unavailable and ordinary 503s without leaking internals", { timeout: 60000 }, async (t) => {
+  const f = fixture(t);
+  await setupStorage(f.storageRoot);
+  const busyRepo = await makeRepo(join(f.dir, "repos", "busy"));
+  const packagedRepo = await makeRepo(join(f.dir, "repos", "packaged"));
+  const workspaceDirectory = await setupDispatchedWorkspace(f.storageRoot, "refusals", [
+    { id: "busy", path: busyRepo },
+    { id: "packaged", path: packagedRepo },
+  ]);
+  await withFakePi(t, f.dir);
+  const dummy = dummyProcess(t);
+  const tmux = tmuxHarness({ dummyPid: dummy.pid });
+  const service = createDiscussionService({
+    root: f.storageRoot,
+    agentDir: join(f.dir, "agent"),
+    assignmentAdapters: {
+      tmuxRun: tmux.run,
+      observationProbes: { tmuxRun: tmux.run, psRun: () => ({ stdout: "", complete: true }) },
+    },
+  });
+  t.after(() => service.close());
+  const server = createDashboardServer({ agentDir: f.dir, storageRoot: f.storageRoot, discussion: service });
+  const port = await listen(t, server);
+  const token = await actionToken(port);
+  const origin = `http://127.0.0.1:${port}`;
+  const write = (path, payload) => httpCall(port, path, {
+    method: "POST",
+    origin,
+    headers: { "x-sentinel-token": token, "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  // Writer conflict: the second launch into the same execution directory
+  // refuses with the fixed target-busy body naming the conflicting writer.
+  const firstRequest = randomUUID();
+  const firstAssignment = randomUUID();
+  await write("/api/dispatch/save-brief", { workspace_id: "refusals", request_id: firstRequest, title: "First", content: "body\n" });
+  const firstPreview = JSON.parse((await write("/api/dispatch/preview", { workspace_id: "refusals", request_id: firstRequest, assignment_id: firstAssignment, instructions: "First.", repository_id: "busy" })).body);
+  assert.equal((await write("/api/dispatch/launch", { workspace_id: "refusals", request_id: firstRequest, assignment_id: firstAssignment, instructions: "First.", repository_id: "busy", expectedDigest: firstPreview.contractDigest })).status, 200);
+
+  const secondRequest = randomUUID();
+  const secondAssignment = randomUUID();
+  await write("/api/dispatch/save-brief", { workspace_id: "refusals", request_id: secondRequest, title: "Second", content: "body\n" });
+  const secondPreview = JSON.parse((await write("/api/dispatch/preview", { workspace_id: "refusals", request_id: secondRequest, assignment_id: secondAssignment, instructions: "Second.", repository_id: "busy" })).body);
+  const busyResponse = await write("/api/dispatch/launch", { workspace_id: "refusals", request_id: secondRequest, assignment_id: secondAssignment, instructions: "Second.", repository_id: "busy", expectedDigest: secondPreview.contractDigest });
+  assert.equal(busyResponse.status, 409, busyResponse.body);
+  const busyBody = JSON.parse(busyResponse.body);
+  assert.deepEqual(busyBody, {
+    error: "This execution directory already has an assignment.",
+    reason: "target-busy",
+    assignment_id: firstAssignment,
+  });
+  assert.deepEqual(Object.keys(busyBody).sort(), ["assignment_id", "error", "reason"]);
+  assert.doesNotMatch(busyResponse.body, /\//);
+  assert.doesNotMatch(busyResponse.body, /reserves|another|pid/i);
+  assert.equal(existsSync(join(workspaceDirectory, "assignments", `${secondAssignment}.json`)), false, "the refused writer publishes no record");
+  const records = (await readdir(join(workspaceDirectory, "assignments"))).filter((name) => name.endsWith(".json"));
+  assert.deepEqual(records, [`${firstAssignment}.json`], "only the first writer remains recorded");
+
+  // Active package run: the canonical owner refuses before any publication.
+  const createdPackage = await newPackage({ workspace: "refusals", slug: "run", targets: [{ id: "packaged" }], root: f.storageRoot });
+  assert.equal(createdPackage.ok, true, JSON.stringify(createdPackage));
+  const packageDirectory = createdPackage.locations.package_dir;
+  await mkdir(join(packageDirectory, "runtime"), { recursive: true });
+  const runPath = join(packageDirectory, "runtime", "run.json");
+  await writeFile(runPath, JSON.stringify({ id: "run-refusal", state: "running", coordinator_pid: process.pid }));
+  const runBytes = await readFile(runPath);
+
+  const runRequest = randomUUID();
+  const runAssignment = randomUUID();
+  await write("/api/dispatch/save-brief", { workspace_id: "refusals", request_id: runRequest, title: "Packaged", content: "body\n" });
+  const runPreview = JSON.parse((await write("/api/dispatch/preview", { workspace_id: "refusals", request_id: runRequest, assignment_id: runAssignment, instructions: "Packaged.", repository_id: "packaged", spec_package: packageDirectory })).body);
+  assert.equal(runPreview.record.execution_dir, packagedRepo);
+  const runActive = await write("/api/dispatch/launch", { workspace_id: "refusals", request_id: runRequest, assignment_id: runAssignment, instructions: "Packaged.", repository_id: "packaged", spec_package: packageDirectory, expectedDigest: runPreview.contractDigest });
+  assert.equal(runActive.status, 409, runActive.body);
+  assert.deepEqual(JSON.parse(runActive.body), { error: "This spec package has an active run.", reason: "run-active" });
+  assert.doesNotMatch(runActive.body, /\//);
+  assert.deepEqual(await readFile(runPath), runBytes, "the active run record is untouched");
+  assert.equal(existsSync(join(workspaceDirectory, "assignments", `${runAssignment}.json`)), false, "an active run publishes no assignment record");
+
+  // Missing service: dispatch and assignment paths are distinguishable from
+  // ordinary thread unavailability. The refusal precedes any body read.
+  const bareServer = createDashboardServer({ agentDir: f.dir, storageRoot: f.storageRoot });
+  const barePort = await listen(t, bareServer);
+  const bareOrigin = `http://127.0.0.1:${barePort}`;
+  const bareCall = (path) => httpCall(barePort, path, {
+    method: "POST",
+    origin: bareOrigin,
+    headersOnly: true,
+    headers: { "content-type": "application/json", "content-length": "2" },
+  });
+  for (const path of ["/api/dispatch/preview", "/api/thread/preview-assignment", "/api/thread/launch-assignment"]) {
+    const response = await bareCall(path);
+    assert.equal(response.status, 503, path);
+    assert.deepEqual(JSON.parse(response.body), { error: "Dispatch service unavailable.", reason: "service-unavailable" }, path);
+  }
+  const bareSend = await bareCall("/api/thread/send");
+  const bareSendBody = JSON.parse(bareSend.body);
+  assert.deepEqual(bareSendBody, { error: "Discussion service unavailable." }, "an unrelated thread route keeps the static body");
+  assert.equal(Object.hasOwn(bareSendBody, "reason"), false);
+
+  // Closed service: the same fixed service-unavailable body for dispatch and
+  // assignment paths, still without a reason on unrelated thread routes.
+  await service.close();
+  const closed = await write("/api/dispatch/preview", { workspace_id: "refusals", request_id: randomUUID(), assignment_id: randomUUID(), instructions: "Closed." });
+  assert.equal(closed.status, 503, closed.body);
+  assert.deepEqual(JSON.parse(closed.body), { error: "Dispatch service unavailable.", reason: "service-unavailable" });
+  const closedThread = await write("/api/thread/launch-assignment", { workspace_id: "refusals", request_id: randomUUID(), assignment_id: randomUUID(), instructions: "Closed.", expectedDigest: "0".repeat(64) });
+  assert.deepEqual(JSON.parse(closedThread.body), { error: "Dispatch service unavailable.", reason: "service-unavailable" });
+
+  // An unrelated unknown preview failure stays an ordinary static 503 with no
+  // reason and no exception prose or path. The fixed 409 request-conflict body
+  // carries the validated request UUID and drops a malformed one.
+  const secret = "/private/secret/dispatch-record.json";
+  const spy = serviceSpy();
+  spy.dispatchPreview = () => Promise.reject(Object.assign(new Error(`failed at ${secret}`), { code: "unknown-code" }));
+  const spyServer = createDashboardServer({ agentDir: f.dir, storageRoot: f.storageRoot, discussion: spy });
+  const spyPort = await listen(t, spyServer);
+  const spyToken = await actionToken(spyPort);
+  const spyCall = (path, payload) => httpCall(spyPort, path, {
+    method: "POST",
+    origin: `http://127.0.0.1:${spyPort}`,
+    headers: { "x-sentinel-token": spyToken, "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const unknown = await spyCall("/api/dispatch/preview", { workspace_id: "refusals", request_id: randomUUID(), assignment_id: randomUUID(), instructions: "Unknown." });
+  assert.equal(unknown.status, 503);
+  const unknownBody = JSON.parse(unknown.body);
+  assert.deepEqual(unknownBody, { error: "Discussion service unavailable." });
+  assert.equal(Object.hasOwn(unknownBody, "reason"), false);
+  assert.doesNotMatch(unknown.body, /secret|private|failed at/);
+
+  spy.dispatchSaveBrief = () => Promise.reject(Object.assign(new Error(`conflict at ${secret}`), { code: "request-conflict", request_id: REQUEST_ID }));
+  const conflict = await spyCall("/api/dispatch/save-brief", { workspace_id: "refusals", request_id: REQUEST_ID, title: "Conflict", content: "body" });
+  assert.equal(conflict.status, 409, conflict.body);
+  assert.deepEqual(JSON.parse(conflict.body), {
+    error: "This request conflicts with saved state.",
+    reason: "request-conflict",
+    request_id: REQUEST_ID,
+  });
+  assert.doesNotMatch(conflict.body, /secret|private|conflict at/);
+
+  spy.dispatchSaveBrief = () => Promise.reject(Object.assign(new Error("malformed conflict id"), { code: "request-conflict", request_id: "not-a-uuid" }));
+  const malformed = await spyCall("/api/dispatch/save-brief", { workspace_id: "refusals", request_id: randomUUID(), title: "Conflict", content: "body" });
+  const malformedBody = JSON.parse(malformed.body);
+  assert.deepEqual(malformedBody, { error: "This request conflicts with saved state.", reason: "request-conflict" });
+  assert.equal(Object.hasOwn(malformedBody, "request_id"), false, "a malformed conflict UUID is never serialized");
 });
