@@ -161,7 +161,9 @@ export default function FilesDestination(props: DestinationProps) {
   // against the loaded workspace context detail; every other source uses the
   // listing facts. A complete listing can establish absence; partial pages,
   // errors and null listings stay unknown so the file remains eligible for a
-  // direct read.
+  // direct read. A retained complete listing is not currently valid absence
+  // proof while a refresh is pending or has failed: only its rows classify,
+  // an unseen path stays eligible for a direct read.
   const unavailableReason = (): string | null => {
     const path = requestedPath();
     if (!path) return null;
@@ -171,8 +173,14 @@ export default function FilesDestination(props: DestinationProps) {
     }
     // During a source transition the outgoing complete listing may still be
     // published until its reset effect runs. It cannot prove absence in the
-    // incoming source.
-    return fileUnavailableReason(path, renderedListKey === scopeId() ? listing() : null);
+    // incoming source. A pending or failed refresh over a retained complete
+    // listing likewise cannot prove absence for an unseen path: the retained
+    // rows still classify, but a path absent from them stays eligible for a
+    // direct read.
+    const current = renderedListKey === scopeId() ? listing() : null;
+    if (!current) return null;
+    if ((loadingList() || listError()) && !(current.files ?? []).some(entry => entry?.name === path)) return null;
+    return fileUnavailableReason(path, current);
   };
 
   // Scroll is saved under the identity whose content is actually rendered: an
@@ -374,6 +382,23 @@ export default function FilesDestination(props: DestinationProps) {
     // eligible for the direct read below.
     const knownReason = untrack(unavailableReason);
     if (!url || knownReason) {
+      if (sameIdentity && prior) {
+        // A refresh that newly marks a readable file unavailable must not
+        // erase its retained bytes. Keep the document with a localized
+        // refusal so Retry file/Refresh file can recheck without losing the
+        // last received copy or timestamp; Download stays disabled via the
+        // recheck notice until a successful retry.
+        renderedReaderKey = requestedKey;
+        renderedReaderPath = requested;
+        setReadError('');
+        setRecheckError(knownReason
+          ? `The file is no longer available (${knownReason}). The last received copy is still shown.`
+          : 'The file could not be rechecked. The last received copy is still shown.');
+        setResourceError('');
+        setPendingRead(false);
+        setResourceReady(false);
+        return;
+      }
       setLoaded(null);
       renderedReaderKey = '';
       renderedReaderPath = '';
@@ -585,15 +610,18 @@ export default function FilesDestination(props: DestinationProps) {
     if (underlyingFiles().length > 0 || filterActive()) return 'no-match';
     return listingComplete() ? 'empty-source' : 'empty-partial';
   };
-  // A filter that matches none of the loaded rows hides the selected document
-  // behind a recovery prompt: the route keeps the explicit path and the
-  // remembered scroll, while no filtered-out document is rendered.
-  const filteredReaderHidden = (): boolean =>
-    props.live
-    && listingReady()
-    && filterActive()
-    && visible().length === 0
-    && underlyingFiles().length > 0;
+  // A filter hides the selected document when the requested path is not in
+  // the filtered rows: the route keeps the explicit path and the remembered
+  // scroll, while no filtered-out document is rendered. An empty visible set
+  // hides even without a selection; a nonempty set hides only a selection
+  // that the filter excludes.
+  const filteredReaderHidden = (): boolean => {
+    if (!props.live || !listingReady() || !filterActive() || underlyingFiles().length === 0) return false;
+    if (visible().length === 0) return true;
+    const path = requestedPath();
+    if (!path) return false;
+    return !visible().some(entry => entry.name === path);
+  };
   const partialText = (): string => {
     const value = listing();
     const entries = underlyingFiles().length;

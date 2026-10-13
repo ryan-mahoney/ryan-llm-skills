@@ -1218,13 +1218,29 @@ try:
                     if mode == 'fail':
                         route.fulfill(status=503, content_type='application/json', body='{"error":"fixture-recovery-listing-failure"}')
                         return
-                    if mode in ('empty', 'partial', 'unavailable', 'hold'):
+                    if mode in ('empty', 'partial', 'unavailable', 'hold', 'omit-valid', 'refuse-overview'):
                         response = route.fetch()
                         if mode == 'hold':
                             recovery['reads']['held'].append(('listing', route, response))
                             return
                         payload = response.json()
-                        if mode == 'empty':
+                        if mode == 'omit-valid':
+                            payload['files'] = [entry for entry in payload.get('files', []) if entry.get('name') != 'files/valid.json']
+                            payload['truncated'] = False
+                            payload['errors'] = []
+                            payload['next_cursor'] = None
+                        elif mode == 'refuse-overview':
+                            refused = []
+                            for entry in payload.get('files', []):
+                                if entry.get('name') == 'files/overview.md':
+                                    refused.append({**entry, 'available': False, 'reason': 'Exceeds 8 MiB'})
+                                else:
+                                    refused.append(entry)
+                            payload['files'] = refused
+                            payload['truncated'] = False
+                            payload['errors'] = []
+                            payload['next_cursor'] = None
+                        elif mode == 'empty':
                             payload['files'] = []
                             payload['truncated'] = False
                             payload['errors'] = []
@@ -1462,6 +1478,81 @@ try:
             assert 'path' not in files_params() and 'q' not in files_params(), page.url
             expect(page.locator('.files-destination .reader')).to_contain_text('Select a file')
             report['scenarios'].append('A trailing-slash prefix no-match clears q and prefix while the reader returns to the chooser')
+
+            # F1: a failed refresh over a retained complete listing must not
+            # prove absence for a newly readable path missing from it.
+            recovery['listing']['mode'] = 'omit-valid'
+            open_route('files', ws='fixture', path='files/overview.md')
+            page.locator('.files-destination .list-pane .detail-foot .ds-btn').click()
+            expect(files_row('files/overview.md')).to_be_visible()
+            expect(page.locator('.files-destination button.file-record', has_text='files/valid.json')).to_have_count(0)
+            files_viewer('files/overview.md', 'Fixture overview')
+            valid_before = recovery['reads']['counts'].get('files/valid.json', 0)
+            recovery['listing']['mode'] = 'fail'
+            page.locator('.files-destination .list-pane .detail-foot .ds-btn').click()
+            expect(page.locator('.files-destination .records')).to_contain_text('Files could not be listed')
+            files_viewer('files/overview.md', 'Fixture overview')
+            page.evaluate("location.hash = '#/files?" + urlencode({'ws': 'fixture', 'path': 'files/valid.json'}) + "'")
+            expect(page.locator('.files-destination .reader-head h2')).to_have_text('files/valid.json')
+            expect(page.locator('.files-destination .reader')).to_contain_text('"schema_version": 1')
+            assert files_params().get('path') == ['files/valid.json'], page.url
+            assert recovery['reads']['counts'].get('files/valid.json', 0) > valid_before, recovery['reads']['counts']
+            expect(page.locator('.files-destination .reader').get_by_role('heading', name='Not found', exact=True)).to_have_count(0)
+            expect(page.locator('.files-destination .reader-head').get_by_role('button', name='Refresh file', exact=True)).to_be_enabled()
+            report['scenarios'].append('A failed refresh over a retained complete listing leaves a newly readable unseen path eligible for a direct read')
+            recovery['listing']['mode'] = ''
+            open_route('files', ws='fixture', path='files/overview.md')
+            page.locator('.files-destination .list-pane .detail-foot .ds-btn').click()
+            files_viewer('files/overview.md', 'Fixture overview')
+
+            # F2: a nonempty filter excluding the selection hides its reader
+            # while keeping route/cache; clearing restores it.
+            open_route('files', ws='fixture', path='files/overview.md')
+            files_viewer('files/overview.md', 'Fixture overview')
+            page.locator('#find-record').fill('valid')
+            expect(page.locator('.files-destination button.file-record', has_text='files/valid.json')).to_have_count(1)
+            expect(files_row('files/overview.md')).to_have_count(0)
+            expect(page.locator('.files-destination .reader .paper')).to_have_count(0)
+            expect(page.locator('.files-destination .reader')).not_to_contain_text('Fixture overview')
+            expect(page.locator('.files-destination .reader .empty')).to_be_visible()
+            assert files_params().get('path') == ['files/overview.md'], page.url
+            page.locator('#find-record').fill('')
+            files_viewer('files/overview.md', 'Fixture overview')
+            report['scenarios'].append('A nonempty filter excluding the selection hides its reader while keeping route/cache; clearing restores it')
+
+            # F3: a refresh that newly marks a readable file unavailable must
+            # preserve its retained bytes/timestamp with a localized refusal.
+            open_route('files', ws='fixture', path='files/overview.md')
+            files_viewer('files/overview.md', 'Fixture overview')
+            retained_stamp = page.locator('.files-destination').get_by_text(re.compile(r'last (received|checked)', re.I)).first.inner_text()
+            retained_token = re.search(r'\d{1,2}:\d{2}(?::\d{2})?', retained_stamp)
+            assert retained_token, retained_stamp
+            recovery['listing']['mode'] = 'refuse-overview'
+            page.locator('.files-destination .list-pane .detail-foot .ds-btn').click()
+            expect(page.locator('.files-destination button.file-record', has_text='files/overview.md')).to_be_visible()
+            page.locator('.files-destination .reader-head').get_by_role('button', name='Refresh file', exact=True).click()
+            expect(page.locator('.files-destination .reader')).to_contain_text('Fixture overview')
+            expect(page.locator('.files-destination .reader')).to_contain_text('no longer available')
+            expect(page.locator('.files-destination .reader .paper')).to_have_count(1)
+            expect(page.locator('.files-destination .reader .empty')).to_have_count(0)
+            expect(page.locator('.files-destination .reader').get_by_role('button', name='Retry file', exact=True)).to_be_visible()
+            expect(page.locator('.files-destination .reader-head').get_by_role('button', name='Download file', exact=True)).to_be_disabled()
+            assert retained_token.group(0) in page.locator('.files-destination').inner_text(), 'retained timestamp lost'
+            page.locator('.files-destination .reader').get_by_role('button', name='Retry file', exact=True).click()
+            expect(page.locator('.files-destination .reader')).to_contain_text('Fixture overview')
+            expect(page.locator('.files-destination .reader .paper')).to_have_count(1)
+            expect(page.locator('.files-destination .reader .empty')).to_have_count(0)
+            assert retained_token.group(0) in page.locator('.files-destination').inner_text(), 'retry lost retained timestamp'
+            report['scenarios'].append('A refresh that newly marks a readable file unavailable preserves its bytes/timestamp with a localized refusal and disabled Download across retry')
+            recovery['listing']['mode'] = ''
+            page.locator('.files-destination .list-pane .detail-foot .ds-btn').click()
+            expect(files_row('files/overview.md')).to_be_visible()
+            # The listing is healthy again but the retained refusal still
+            # blocks Download; a localized retry re-reads and clears it.
+            page.locator('.files-destination .reader').get_by_role('button', name='Retry file', exact=True).click()
+            files_viewer('files/overview.md', 'Fixture overview')
+            expect(page.locator('.files-destination .reader')).not_to_contain_text('no longer available')
+            expect(page.locator('.files-destination').get_by_role('link', name='Download file', exact=True).first).to_be_visible()
 
             # (5) Offline disables Download; a real snapshot import is the
             # no-live transition and must abandon held work without new calls.
