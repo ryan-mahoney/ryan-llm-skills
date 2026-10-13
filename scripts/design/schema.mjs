@@ -5,7 +5,7 @@
 // produced or captured. That status is derived from file presence by screenStatus.
 
 export const DESIGN_LIMITS = Object.freeze({ screens: 100, widths: 4, recordBytes: 65536, screenBytes: 200 * 1024, designs: 50 });
-export const DESIGN_SLUG = /^[a-z][a-z0-9-]{0,47}$/;
+export const DESIGN_SLUG = /^(?:[a-z][a-z0-9-]{0,47}|[0-9]{2}-[a-z][a-z0-9-]{0,44})$/;
 export const SCREEN_ID = /^[a-z][a-z0-9-]{0,47}$/;
 export const POSTURES = ['desktop-only', 'responsive'];
 export const KINDS = ['decision', 'action', 'flow-step'];
