@@ -7,7 +7,8 @@
 // and never writes tmux configuration. Only endSession closes a verified
 // assignment terminal after an explicit operator request.
 //
-// `startSession` bootstraps a fresh server in one command queue, runs the
+// On Linux, `startSession` ensures an independent user-service server and
+// forbids client auto-start. Other platforms retain the detached bootstrap. It runs the
 // direct Pi argv in the new pane and records the full assignment UUID as an
 // exact session user option. Adoption of an existing session happens only
 // when that recorded UUID equals the requested assignment AND the caller
@@ -26,6 +27,7 @@
 // format option: quiet set-option skips that optional setting so it cannot
 // abort the command queue before Pi is started.
 
+import { ensureTerminalHost, terminalSocketAbsent } from "./tmux-host.mjs";
 import { execFile } from "node:child_process";
 import { isAbsolute } from "node:path";
 import { inspectProcess, processIdentity, sameProcess } from "../spec-observe/process-identity.mjs";
@@ -251,7 +253,9 @@ async function adoptExisting(socketPath, sessionName, assignmentId, expectedPane
 /**
  * Start the assignment's isolated tmux session and run the direct Pi argv.
  *
- * One `-S socketPath` command queue bootstraps the server, enables extended
+ * Linux first ensures the independent user service; its client queue uses
+ * `-N` to prohibit accidental server creation. Other platforms bootstrap in
+ * the same command queue. The `-S socketPath` queue enables extended
  * keys with the CSI-u reporting format, creates the detached session (200x50)
  * in `cwd` with `ADJACENT_ASSIGNMENT_ID`, executes `piPath` + `piArgs`
  * without a shell, and records the exact assignment UUID as
@@ -300,7 +304,16 @@ export async function startSession({
     "-e", `ADJACENT_ASSIGNMENT_ID=${assignmentId}`, "--", escapeTmuxArg(piPath), ...piArgs.map(escapeTmuxArg), ";",
     "set-option", "-t", `=${sessionName}:`, "@adjacent_assignment_id", assignmentId,
   ];
-  const created = await run(socketPath, commands);
+  const managed = process.platform === "linux" && run === runTmux;
+  const serverIdentity = managed ? await ensureTerminalHost(socketPath) : null;
+  // tmux copies these values from this client's environment when creating
+  // the session. Only names enter argv, including provider credentials; the
+  // independent server's older environment must not replace launch settings.
+  const environmentNames = [...new Set(["PATH", "PI_SUBAGENTS_TEMP_ROOT", "PI_AGENT_DIR", "PI_CODING_AGENT_DIR", "TMPDIR",
+    ...Object.keys(process.env).filter(name => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)
+      && !["INVOCATION_ID", "SYSTEMD_EXEC_PID", "NOTIFY_SOCKET", "LISTEN_PID", "LISTEN_FDS"].includes(name))])];
+  const managedCommands = ["-N", "set-option", "-g", "update-environment", environmentNames.join(" "), ";", ...commands.slice(2)];
+  const created = await run(socketPath, managed ? managedCommands : commands);
   if (!created.ok) {
     // A duplicate-session race is the only expected failure to retry through
     // adoption; other failures refuse with the original create error.
@@ -313,7 +326,18 @@ export async function startSession({
     if (exists) return adoptExisting(socketPath, sessionName, assignmentId, expectedPane, run);
     throw tmuxFailure("start-session", created);
   }
-  return resolveOwnedSession(socketPath, sessionName, run);
+  const owned = await resolveOwnedSession(socketPath, sessionName, run);
+  if (serverIdentity) {
+    const verified = await ensureTerminalHost(socketPath);
+    if (verified.pid !== serverIdentity.pid || verified.started_at !== serverIdentity.started_at) {
+      throw new Error("Terminal server changed during launch; inspect the reserved assignment before retrying.");
+    }
+    const { readFile } = await import("node:fs/promises");
+    const paneGroup = await readFile(`/proc/${owned.panePid}/cgroup`, "utf8");
+    const launcherGroup = await readFile("/proc/self/cgroup", "utf8");
+    if (paneGroup === launcherGroup) throw new Error("Terminal pane still belongs to the launcher service.");
+  }
+  return { ...owned, ...(serverIdentity ? { serverIdentity } : {}) };
 }
 
 /**
@@ -361,7 +385,9 @@ async function probeCommand(run, socketPath, args) {
  * The saved explicit socket and exact `=name` session are probed with
  * `has-session`; exit 1 is confirmed absence only while another read-only
  * `list-clients` shows the server is reachable, so an unreachable server or
- * any transport failure is `unknown`. A reachable session proves ownership
+ * any transport failure is `unknown`. On Linux, a refused socket connection
+ * plus absence from the kernel socket inventory (and a dead saved server,
+ * when recorded) can establish terminal absence. A reachable session proves ownership
  * only through the exact full assignment UUID in the
  * `@adjacent_assignment_id` user option; a missing or mismatched option is
  * `unknown` (never safe foreign adoption). The live pane must then resolve
@@ -406,6 +432,8 @@ export async function probeSession(record, { run = runTmux, includeAttached = fa
   try {
     exists = await hasSession({ socketPath, sessionName }, { run });
   } catch (error) {
+    if (run === runTmux && String(error?.message).startsWith("tmux server is unreachable:")
+      && await terminalSocketAbsent(record, { inspect: inspectProcess })) return { status: "absent" };
     return terminalUnknown(error && error.message ? String(error.message) : "session-probe-failed");
   }
   if (!exists) return { status: "absent" };

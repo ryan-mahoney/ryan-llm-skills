@@ -282,3 +282,41 @@ Run these on the host after setup and after changes:
 - **`path-missing` after a sync:** the package carries another machine's paths. Run
   `$SL materialize <workspace>/<slug>` on the host.
 - **Repositories show `missing`:** the clone is absent or not at `~/Documents/<repository>`.
+
+## Assignment terminals and Sentinel updates
+
+Background assignments use a separate user service named
+`adjacent-tmux-<socket-hash>.service`. The launcher starts it on demand with
+`systemd-run --user`; it runs `tmux -D` on the workspace's dedicated socket.
+The user systemd manager must be available (keep lingering enabled as above).
+The service is independent of `spec-sentinel`: restarting Sentinel reconnects
+observation without stopping the terminal server or its agents. Keep Sentinel's
+normal `KillMode=control-group`. Do not add `PartOf=spec-sentinel.service` to
+terminal services or include them in a Sentinel restart command.
+
+Client session creation forbids automatic server startup. If the independent
+server fails during launch, the assignment retains an uncertain outcome for
+inspection instead of creating a server inside Sentinel. A failed terminal
+service does not automatically restart an agent or repeat its prompt.
+
+Before the first update from the older launcher, inspect the **server** PID
+(`tmux -S <socket> display-message -p '#{pid}'`) and `/proc/<pid>/cgroup`, as well
+as the pane PID. A pane in `tmux-spawn.scope` can still depend on a server inside
+`spec-sentinel.service`. Existing servers are not moved or killed automatically:
+let their sessions finish before migrating. An existing unmanaged server causes
+new managed launches to refuse with a migration message. Start the independent
+service on the next launch after the old server has exited. Never delete a live
+server's socket to force migration.
+
+For an already-started spec, open its detail and choose **Relaunch agent** after
+the previous agent and its workers have stopped. This generates the standard package prompt for
+`spec-end-to-end` in a new conversation, preserving
+the previous target, model settings and publication authority. The earlier prompt
+does not need to have been saved. The skill inspects
+existing progress and continues unfinished work. Earlier conversations and files
+remain available. Specs without a saved assignment use the normal package-bound
+launch form under **Run spec again**. Uncertain ownership prevents a second launch.
+
+On macOS, assignment terminals keep the existing detached tmux transport. The
+Linux user-service isolation does not claim protection from a macOS service
+manager stopping an entire process group.

@@ -14,6 +14,7 @@
 // snapshot publication (assignments/<id>.brief.md), session directory
 // creation and record persistence.
 
+import { assertNoAssignmentWorkers, subagentRoot } from "./worker-guard.mjs";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
@@ -1419,10 +1420,12 @@ async function assertNoActiveRun(record) {
   }
   if (!["running", "cancelling", "blocked"].includes(run.state)) return;
   const pid = run.coordinator_pid ?? run.pid;
+  if (!Number.isSafeInteger(pid) || pid <= 1) throw new Error("Spec coordinator identity is unavailable.");
   try {
     process.kill(pid, 0);
-  } catch {
-    return;
+  } catch (error) {
+    if (error.code === "ESRCH") return;
+    throw new Error("Spec coordinator status is unavailable.");
   }
   throw Object.assign(
     new Error(`run-active: spec run ${run.id} is ${run.state} and its coordinator (pid ${pid}) is alive; refusing launch`),
@@ -1455,6 +1458,7 @@ async function publishLaunchReservation({ workspace, record, briefBytes, self })
     ...record,
     state: "launching",
     launcher_identity: { pid: self.pid, started_at: self.started_at },
+    subagent_async_root: subagentRoot(),
     updated_at: new Date().toISOString(),
   };
   await createFileExclusive(recordPath, JSON.stringify(launching));
@@ -1582,6 +1586,8 @@ export async function launchAssignment(input = {}, options = {}) {
     let supersededId = null;
     if (record.attempt_kind === "launch-retry") {
       supersededId = record.supersedes;
+      const successor = records.find(entry => entry.supersedes === supersededId);
+      if (successor) throw new Error(`Assignment already relaunched as ${successor.assignment_id}; inspect that attempt.`);
       const old = records.find((entry) => entry.assignment_id === supersededId);
       if (!old) throw new Error(`launch-retry supersedes an unknown assignment: ${supersededId}`);
       if (old.execution_dir !== record.execution_dir) {
@@ -1589,6 +1595,7 @@ export async function launchAssignment(input = {}, options = {}) {
           "launch-retry must supersede an assignment in the same execution directory",
         );
       }
+      await assertNoAssignmentWorkers(old);
       const observation = await observeAssignment(old, probes);
       if (observation.gone !== true) {
         throw new Error(
@@ -1616,6 +1623,7 @@ export async function launchAssignment(input = {}, options = {}) {
     // Runs under the held claim, after the identical-repeat return and
     // exclusion checks, immediately before publication.
     await assertNoActiveRun(record);
+    await assertNoAssignmentWorkers(record);
 
     plan = await publishLaunchReservation({
       workspace,
@@ -1660,6 +1668,8 @@ export async function launchAssignment(input = {}, options = {}) {
         state: "live",
         pane_id: spawned.paneId,
         pi_identity: spawned.piIdentity,
+        tmux_server_identity: spawned.serverIdentity ?? null,
+        launch_completed_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
       const observation = await observeAssignment(updated, probes);
