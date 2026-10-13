@@ -684,6 +684,50 @@ test("agentCoverage: invalid observed_at values stay null, not fresh", () => {
   assert.equal(coverage.listObservedAt, null);
 });
 
+test("agentCoverage: present assignment coverage with an unusable timestamp never falls back to fresh workspace coverage", () => {
+  setClock(T);
+  const payload = {
+    observers: [
+      {
+        observer_id: "obs-a",
+        state: "observing",
+        published_at: T_FRESH,
+        snapshot: {
+          workspace: "alpha",
+          runs: [],
+          assignment_coverage: { state: "complete", observed_at: "not-a-date" },
+          coverage: { state: "complete", observed_at: T_FRESH },
+        },
+      },
+      {
+        observer_id: "obs-b",
+        state: "observing",
+        published_at: T_FRESH,
+        snapshot: {
+          workspace: "beta",
+          runs: [],
+          assignment_coverage: { state: "complete" },
+          coverage: { state: "complete", observed_at: T_FRESH },
+        },
+      },
+    ],
+  };
+  const selected = {
+    key: "k-alpha",
+    workspace: "alpha",
+    assignment_id: "a-1",
+    display: "live",
+  };
+  const coverage = agentCoverage(
+    payload,
+    [{ workspace: "alpha" }, { workspace: "beta" }],
+    selected,
+  );
+  assert.equal(coverage.selectedObservedAt, null);
+  assert.equal(coverage.listObservedAt, null);
+  assert.equal(stale(coverage.selectedObservedAt), true);
+});
+
 test("agentCoverage: partial coverage is independent of a ready view state", () => {
   const payload = {
     observers: [
@@ -776,10 +820,11 @@ test("retainSelectedAgent: complete absence clears retained facts", () => {
   assert.equal(retainSelectedAgent(null, previous, true, true), null);
 });
 
-test("retainSelectedAgent: a context change clears even a present current row", () => {
+test("retainSelectedAgent: a context change keeps the new current row but drops previous-only facts", () => {
   const current = { key: "k-current", workspace: "beta" };
   const previous = { key: "k-previous", workspace: "alpha" };
-  assert.equal(retainSelectedAgent(current, previous, false, false), null);
+  assert.equal(retainSelectedAgent(current, previous, false, false), current);
+  assert.equal(retainSelectedAgent(current, previous, false, true), current);
   assert.equal(retainSelectedAgent(null, previous, false, false), null);
 });
 

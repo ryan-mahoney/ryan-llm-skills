@@ -182,7 +182,7 @@ export function agentCoverage(
     !selectedCoverage ||
     selectedCoverage.state === "unavailable";
   let selectedObservedAt = coverageObservedAt(selectedCoverage);
-  if (selectedObservedAt === null && selectedOwner)
+  if (selectedObservedAt === null && selectedOwner && selectedCoverage == null)
     selectedObservedAt = coverageObservedAt(selectedOwner.snapshot?.coverage);
   if (selectedObservedAt === null)
     selectedObservedAt = coverageObservedAt(selected?.assignment_coverage);
@@ -210,7 +210,9 @@ export function agentCoverage(
     if (coverage?.state === "partial") partial = true;
     const candidate =
       coverageObservedAt(coverage) ??
-      coverageObservedAt(owner.snapshot?.coverage);
+      (coverage == null
+        ? coverageObservedAt(owner.snapshot?.coverage)
+        : null);
     const time = candidate === null ? null : parsedTime(candidate);
     if (time !== null && time > newest) {
       newest = time;
@@ -236,8 +238,8 @@ export function retainSelectedAgent(
   sameContext: boolean,
   sourceComplete: boolean,
 ): WireRecord | null {
-  if (!sameContext) return null;
   if (current != null) return current;
+  if (!sameContext) return null;
   if (previous != null && !sourceComplete) return previous;
   return null;
 }
