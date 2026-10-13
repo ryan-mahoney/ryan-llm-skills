@@ -1,11 +1,11 @@
 import { For, Show } from 'solid-js';
-import { attention, base, runningUnconfirmed, statusMarkdown, str, time } from '../format';
-import { assignmentLabel, assignmentTone, completionLabel, duration, epicStats, runState, specProgress } from '../observation-format';
-import { linkedAssignmentKey, observationEnd, type ObservationContext } from '../spec-state';
-import { targetRepositoryId } from '../scope';
-import { StateNotice, StatusText, type StatusTone } from '../primitives';
-import { formatHash } from '../route';
-import type { WireRecord } from '../model';
+import { attention, base, runningUnconfirmed, statusMarkdown, str, time } from './format';
+import { assignmentLabel, assignmentTone, completionLabel, duration, epicStats, runState, specProgress } from './observation-format';
+import { linkedAssignmentKey, observationEnd, type ObservationContext } from './spec-state';
+import { targetRepositoryId } from './scope';
+import { StateNotice, StatusText, type StatusTone } from './primitives';
+import { formatHash } from './route';
+import type { WireRecord } from './model';
 
 export type SpecOverviewProps = {
   record: WireRecord;

@@ -765,6 +765,44 @@ try:
             capture_both('stale')
             report['scenarios'].append('Old coverage with a fresh heartbeat is stale and its row age stays fixed as the clock advances')
 
+            # Complete coverage does not imply fresh (or available) observation times.
+            open_route('specs')
+            for label, observation_time, reason in [
+                ('mixed-stale', stale_coverage, 'observation stale'),
+                ('mixed-missing', None, 'observation unavailable'),
+                ('mixed-invalid', 'invalid-time', 'observation unavailable'),
+            ]:
+                for has_rows in (True, False):
+                    state['value'] = fixture_snapshot(
+                        [active_healthy] if has_rows else [],
+                        extra_observers=[observer('old-observer', 'old-scope',
+                                                  [record('old-scope', 'old-b')] if has_rows else [],
+                                                  observed_at=observation_time)])
+                    page.reload()
+                    expect(rows).to_have_count(2 if has_rows else 0)
+                    diagnostics = page.locator('.records .ds-callout').filter(has_text='Observation diagnostics')
+                    expect(diagnostics).to_be_visible()
+                    expect(diagnostics).to_contain_text(f'old-scope {reason}')
+                    expect(page.locator('.records .ds-callout').filter(has_text='Observation incomplete')).to_have_count(0)
+                    expect(diagnostics.get_by_role('button', name='Refresh state', exact=True)).to_be_visible()
+                    if not has_rows:
+                        expect(page.get_by_role('heading', name='No observed specs', exact=True)).to_be_visible()
+                    capture_both(f'{label}-{"rows" if has_rows else "empty"}')
+
+            state['value'] = fixture_snapshot([], observed_at=None)
+            page.reload()
+            diagnostics = page.locator('.records .ds-callout').filter(has_text='Observation diagnostics')
+            expect(diagnostics).to_contain_text('fixture observation unavailable')
+            expect(rows).to_have_count(0)
+            expect(page.locator('.records .ds-callout').filter(has_text='Observation incomplete')).to_have_count(0)
+            capture_both('missing-time-empty')
+            state['value'] = fixture_snapshot([active_healthy])
+            diagnostics.get_by_role('button', name='Refresh state', exact=True).click()
+            expect(rows).to_have_count(1)
+            expect(diagnostics).to_have_count(0)
+            report['scenarios'].append('Complete mixed fresh/stale and missing/invalid observation times expose scope-labelled reasons with rows or zero rows; no valid timestamp still shows diagnostics and Refresh state recovers without claiming incomplete coverage')
+            open_route('specs', ws='fixture')
+
             state['value'] = fixture_snapshot([record('fixture', 'offline-f', observed_at='2026-10-12T11:58:00.000Z')])
             page.reload()
             expect(rows).to_have_count(1)

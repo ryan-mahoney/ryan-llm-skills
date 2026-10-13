@@ -142,8 +142,8 @@ function SpecsList(props: DestinationProps) {
                 : `This imported snapshot contains retained records last observed at ${time(view().observedAt ?? undefined)}.`}
             </StateNotice>
           </Show>
-          <Show when={view().partial}>
-            <StateNotice announce={false} tone="warning" title="Observation incomplete">
+          <Show when={view().partial || view().reasons.length}>
+            <StateNotice announce={false} tone="warning" title={view().partial ? 'Observation incomplete' : 'Observation diagnostics'} action={!view().partial ? <button type="button" class="ds-btn" onClick={() => void props.refresh()}>Refresh state</button> : undefined}>
               <Show when={view().reasons.length} fallback="Coverage is incomplete; valid rows stay visible.">
                 <For each={view().reasons}>{(reason, index) => <>{index() ? <br /> : null}{reason}</>}</For>
               </Show>
