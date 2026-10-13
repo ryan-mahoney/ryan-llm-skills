@@ -1,14 +1,16 @@
 // Isolated integration fixture: real dashboard HTTP/file routes, fake discussion workers.
 import {createServer} from 'node:http';
 import {mkdtemp,realpath,mkdir,writeFile,rm,rename,access} from 'node:fs/promises';
-import {tmpdir} from 'node:os';
+import {tmpdir,hostname} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {createDashboardServer} from '../dashboard.mjs';
 import {createReferenceCatalog} from '../../workspaces/references.mjs';
 import {resolveAssignment} from '../../workspaces/assignments.mjs';
-import {setupStorage,createWorkspace} from '../../workspaces/store.mjs';
+import {setupStorage,createWorkspace,fetchWorkspace,resolveRepositoryPath} from '../../workspaces/store.mjs';
+import {newPackage} from '../../spec-location/index.mjs';
+const plannedLaunch=process.env.SENTINEL_PLANNED_LAUNCH==='1';
 const root=await realpath(await mkdtemp(join(tmpdir(),'sentinel-solid-browser-')));
 const storage=join(root,'storage');await setupStorage(storage);
 const workspace=await createWorkspace(storage,{id:'fixture',name:'Browser fixture'});
@@ -18,6 +20,7 @@ const neighborDirectory=await createWorkspace(storage,{id:'alpha',name:'Neighbor
 await writeFile(join(mismatchDirectory.directory,'kit.yaml'),'version: 1\nid: alpha\nname: Alpha kit\nrepositories: []\n');
 await writeFile(join(neighborDirectory.directory,'kit.yaml'),'version: 1\nid: physical\nname: Physical neighbor\nrepositories: []\n');
 const checkout=join(root,'checkout');await mkdir(checkout,{recursive:true});execFileSync('git',['init','--quiet',checkout],{stdio:'ignore'});
+const secondCheckout=join(root,'checkout-two');if(plannedLaunch){await mkdir(secondCheckout,{recursive:true});execFileSync('git',['init','--quiet',secondCheckout],{stdio:'ignore'});}
 await mkdir(join(workspace.directory,'context'),{recursive:true});
 await mkdir(join(workspace.directory,'briefs'),{recursive:true});
 await writeFile(join(workspace.directory,'context','project-context.md'),'# Project context\nBrowser context note.\n');
@@ -25,12 +28,16 @@ await writeFile(join(workspace.directory,'briefs','browser.md'),'# Browser brief
 const contextPath=process.env.SENTINEL_NONCANONICAL_CONTEXT==='1'
  ? `${workspace.directory}/../fixture//context/./unused/../project-context.md`
  : 'context/project-context.md';
-const healthyKit=`version: 1\nid: fixture\nname: Browser fixture\nrepositories:\n  - id: fixture-repo\n    path: ${checkout}\n    role: Browser verification\ncontext:\n  - ${contextPath}\n`;
+const healthyKit=`version: 1\nid: fixture\nname: Browser fixture\nexecution_host: ${hostname()}\nrepositories:\n  - id: fixture-repo\n    path: ${checkout}\n    role: Browser verification\n${plannedLaunch?`  - id: fixture-repo-two\n    path: ${secondCheckout}\n    role: Browser alternate\n`:''}context:\n  - ${contextPath}\n`;
 await writeFile(join(workspace.directory,'kit.yaml'),healthyKit);
+if(plannedLaunch){const created=await newPackage({root:storage,workspace:'fixture',slug:'browser',targets:[{id:'fixture-repo'},{id:'fixture-repo-two'}]});if(!created.ok)throw new Error(`Planned fixture package setup failed: ${created.code} ${created.message}`);}
+if(plannedLaunch){const created=await newPackage({root:storage,workspace:'fixture',slug:'other-browser',targets:[{id:'fixture-repo'},{id:'fixture-repo-two'}]});if(!created.ok)throw new Error(`Planned fixture package setup failed: ${created.code} ${created.message}`);}
 const pkg=join(workspace.directory,'specs','browser');await mkdir(pkg,{recursive:true});
+const otherPkg=join(workspace.directory,'specs','other-browser');if(plannedLaunch){await mkdir(otherPkg,{recursive:true});await writeFile(join(otherPkg,'spec.md'),'# Other planned browser specification\n');}
 await writeFile(join(pkg,'work-tour.html'),'<html><body><h1>Isolated work tour</h1></body></html>');
 await writeFile(join(pkg,'linked.md'),'# Linked evidence\n');
 await writeFile(join(pkg,'spec.md'),'# Browser specification\n[Evidence](linked.md)\n<script>unsafe()</script>\n');
+if(plannedLaunch)await writeFile(join(pkg,'spec.md'),'# Browser specification\n\nPR 42 plans this package for the fixture repository.\n');
 const alphaKitPackage=join(mismatchDirectory.directory,'specs','alpha-kit');await mkdir(alphaKitPackage,{recursive:true});
 await writeFile(join(alphaKitPackage,'spec.md'),'# Alpha kit specification\n');
 await writeFile(join(alphaKitPackage,'work-tour.html'),'<html><body><h1>Alpha kit tour</h1></body></html>');
@@ -48,16 +55,16 @@ await writeFile(join(designDir,'design.json'),JSON.stringify({schema_version:1,d
 const observerDir=join(root,'agent','spec-sentinel','a'.repeat(64),'observers');await mkdir(observerDir,{recursive:true});
 const observerFile=join(observerDir,'a.json');
 const mismatchObserverFile=join(observerDir,'b.json');
-const skillPath=join(root,'skills','fixture-skill','SKILL.md');await mkdir(join(root,'skills','fixture-skill'),{recursive:true});
-await writeFile(skillPath,'---\nname: fixture-skill\ndescription: Plan work from the chosen brief.\n---\n# Fixture skill\nApply the selected workflow and read references relative to this skill directory.\n');
+const skillPath=plannedLaunch?join(root,'.agents','skills','spec-end-to-end','SKILL.md'):join(root,'skills','fixture-skill','SKILL.md');await mkdir(join(skillPath,'..'),{recursive:true});
+await writeFile(skillPath,plannedLaunch?'---\nname: spec-end-to-end\ndescription: Implement a spec package end to end.\n---\n# Spec end to end fixture\nUse the attached brief and the referenced package.\n':'---\nname: fixture-skill\ndescription: Plan work from the chosen brief.\n---\n# Fixture skill\nApply the selected workflow and read references relative to this skill directory.\n');
 const piPath=join(root,'pi');await writeFile(piPath,'#!/bin/sh\nexit 0\n',{mode:0o755});
-const referenceCatalog=createReferenceCatalog({agentDir:join(root,'agent'),skillLoader:()=>({skills:[{name:'fixture-skill',description:'Plan work from the chosen brief.',filePath:skillPath,baseDir:join(root,'skills','fixture-skill'),sourceInfo:{scope:'user'}}],diagnostics:[]})});
-const savedBriefs=new Map();let delaySuggestions=false;
+const referenceCatalog=createReferenceCatalog({home:root,agentDir:join(root,'agent'),skillLoader:()=>({skills:[{name:plannedLaunch?'spec-end-to-end':'fixture-skill',description:plannedLaunch?'Implement a spec package end to end.':'Plan work from the chosen brief.',filePath:skillPath,baseDir:join(skillPath,'..'),sourceInfo:{scope:'user'}}],diagnostics:[]})});
+const savedBriefs=new Map(),launchResolutions=new Map();let delaySuggestions=false,briefWritesPending=0,completedBriefWrites=0;
 const thread1='11111111-1111-4111-8111-111111111111',thread2='22222222-2222-4222-8222-222222222222';
 let threads=[{thread_id:thread1,workspace_id:'fixture',title:'Discussion one',state:'idle',queue:[],attention:null,queue_paused:false,history_only:false,generation:1,updated_at:new Date().toISOString()},{thread_id:thread2,workspace_id:'fixture',title:'Discussion two',state:'idle',queue:[],attention:null,queue_paused:false,history_only:false,generation:1}];
 let entries=[{id:'entry-1',timestamp:new Date().toISOString(),message:{role:'assistant',content:[{type:'text',text:'Ready to discuss. <script>unsafe()</script>'}]}}];
 let localOperator=false;
-let tick=0,staleLaunch=true,failSend=false,delaySend=false,delayBrief=false;
+let tick=0,staleLaunch=!plannedLaunch,failSend=false,delaySend=false,delayBrief=false;
 const posts=[];
 const boundary={catalogFail:false,detailFail:false,stateFail:false,catalogDelayMs:0,detailDelayMs:0,detailDelayId:'',stateClockOffsetMs:0,catalogMode:'healthy'};
 const boundaryLog=[];
@@ -77,22 +84,38 @@ async function restoreHealthyWorkspace(){if(await exists(projectsBackup)){await 
 async function applyCatalogMode(mode){if(mode==='empty'){await restoreHealthyWorkspace();await moveProjectsToBackup();await mkdir(projectsDir,{recursive:true});}else if(mode==='missing_projects'){await restoreHealthyWorkspace();await moveProjectsToBackup();}else if(mode==='partial'){await restoreHealthyWorkspace();await mkdir(invalidKitDir,{recursive:true});await writeFile(join(invalidKitDir,'kit.yaml'),'id: [broken\n');await writeFile(join(workspace.directory,'kit.yaml'),partialKit);}else{await restoreHealthyWorkspace();}boundary.catalogMode=mode;}
 const subscribers=new Set();
 const copied=value=>JSON.parse(JSON.stringify(value));
+async function fixtureAssignmentTarget(threadId){
+ const thread=threads.find(item=>item.thread_id===threadId);
+ if(!thread||!thread.target||thread.target.kind==='workspace')return null;
+ if(thread.target.kind==='repository')return thread.target.repository_id;
+ if(thread.target.kind!=='worktree')throw new Error('Fixture assignment target kind is unsupported.');
+ const requested=await realpath(thread.target.path);
+ const detail=await fetchWorkspace(storage,'fixture');
+ const matches=[];
+ for(const repository of detail.repositories||[]){
+  if(typeof repository.path!=='string'||!repository.path)continue;
+  const declared=resolveRepositoryPath(detail.directory,repository.path);
+  if(await realpath(declared).catch(()=>null)===requested)matches.push(repository.id);
+ }
+ if(matches.length!==1)throw new Error('Fixture worktree target has no unique canonical repository binding.');
+ return matches[0];
+}
 const discussion={
  async suggestions(input){if(delaySuggestions)await new Promise(r=>setTimeout(r,650));return referenceCatalog.suggest({workspace,executionDir:workspace.directory,kind:input.kind,query:input.query});},
  async list({workspace_id}){return {threads:workspace_id==='fixture'?copied(threads):[],invalid:[]};},
  async history({before}){if(before)return {entries:[{id:'entry-old',message:{role:'user',content:'Older message'}}],truncated:false,incomplete_tail:false};return {entries:copied(entries),truncated:true,incomplete_tail:false};},
- async create(input){posts.push({name:'create',input});const t={...threads[0],thread_id:randomUUID(),title:'New thread',queue:[]};threads=[t,...threads];return copied(t);},
+ async create(input){posts.push({name:'create',input});const t={...threads[0],thread_id:randomUUID(),title:input.title||'New thread',target:input.target||{kind:'workspace'},queue:[],attention:null};threads=[t,...threads];return copied(t);},
  async send(input){posts.push({name:'send',input});if(delaySend)await new Promise(r=>setTimeout(r,700));if(failSend)throw Object.assign(new Error('Temporary fixture failure'),{code:'service-closed'});entries.push({id:randomUUID(),message:{role:'user',content:input.text}});return {state:'accepted'};},
  async stop(input){posts.push({name:'stop',input});threads=threads.map(t=>t.thread_id===input.thread_id?{...t,queue_paused:true,owns_response:false}:t);return {};},
  async resume(input){posts.push({name:'resume',input});threads=threads.map(t=>t.thread_id===input.thread_id?{...t,queue_paused:false,attention:null}:t);return {};},
  async discard(input){posts.push({name:'discard',input});threads=threads.map(t=>t.thread_id===input.thread_id?{...t,queue:[]}:t);return {};},
- async saveBrief(input){posts.push({name:'saveBrief',input});if(delayBrief)await new Promise(r=>setTimeout(r,700));await mkdir(join(workspace.directory,'briefs'),{recursive:true});const path=`briefs/${input.request_id}.md`;await writeFile(join(workspace.directory,path),input.content);savedBriefs.set(input.request_id,{path,references:input.references || []});return {brief:path,handoff:{request_id:input.request_id},duplicate:false};},
- async previewAssignment(input){posts.push({name:'previewAssignment',input});const saved=savedBriefs.get(input.request_id);return resolveAssignment({workspace_id:'fixture',assignment_id:input.assignment_id,storageRoot:storage,brief:saved.path,instructions:input.instructions,pi_path:piPath,context_references:saved.references},{referenceCatalog});},
- async launchAssignment(input){posts.push({name:'launchAssignment',input});const saved=savedBriefs.get(input.request_id);const fresh=await resolveAssignment({workspace_id:'fixture',assignment_id:input.assignment_id,storageRoot:storage,brief:saved.path,instructions:input.instructions,pi_path:piPath,context_references:saved.references},{referenceCatalog});if(fresh.contractDigest!==input.expectedDigest)throw Object.assign(new Error('Changed source'),{code:'stale-preview'});if(staleLaunch)throw Object.assign(new Error('Stale fixture preview'),{code:'stale-preview'});return {assignment:{assignment_id:input.assignment_id,state:'live',tmux_session:'fixture'},observation:{state:'live'}};},
+ async saveBrief(input){posts.push({name:'saveBrief',input});briefWritesPending++;try{if(delayBrief)await new Promise(r=>setTimeout(r,700));await mkdir(join(workspace.directory,'briefs'),{recursive:true});const path=`briefs/${input.request_id}.md`;await writeFile(join(workspace.directory,path),input.content);savedBriefs.set(input.request_id,{path,references:input.references || [],thread_id:input.thread_id,title:input.title,content:input.content});completedBriefWrites++;return {brief:path,handoff:{request_id:input.request_id},duplicate:false};}finally{briefWritesPending--; }},
+ async previewAssignment(input){posts.push({name:'previewAssignment',input});const saved=savedBriefs.get(input.request_id);const resolved=await resolveAssignment({workspace_id:'fixture',assignment_id:input.assignment_id,storageRoot:storage,brief:saved.path,instructions:input.instructions,context_references:saved.references,target:await fixtureAssignmentTarget(input.thread_id),specPackage:input.specPackage,skill:input.skill,provider:input.provider,model:input.model,thinking:input.thinking,harness:input.harness,publication_authority:input.publication_authority,home:root,pi_path:piPath},{referenceCatalog});launchResolutions.set(input.request_id,{record:resolved.record,piArgs:resolved.piArgs,inputPreview:resolved.inputPreview,contractDigest:resolved.contractDigest});return resolved;},
+ async launchAssignment(input){posts.push({name:'launchAssignment',input});const saved=savedBriefs.get(input.request_id);const fresh=await resolveAssignment({workspace_id:'fixture',assignment_id:input.assignment_id,storageRoot:storage,brief:saved.path,instructions:input.instructions,context_references:saved.references,target:await fixtureAssignmentTarget(input.thread_id),specPackage:input.specPackage,skill:input.skill,provider:input.provider,model:input.model,thinking:input.thinking,harness:input.harness,publication_authority:input.publication_authority,home:root,pi_path:piPath},{referenceCatalog});if(fresh.contractDigest!==input.expectedDigest)throw Object.assign(new Error('Changed source'),{code:'stale-preview'});if(staleLaunch)throw Object.assign(new Error('Stale fixture preview'),{code:'stale-preview'});return {assignment:{assignment_id:input.assignment_id,state:'live',tmux_session:'fixture'},observation:{state:'live'}};},
  subscribe({thread_id},callback){subscribers.add({thread_id,callback});const current=()=>threads.find(t=>t.thread_id===thread_id);const timer=setInterval(()=>callback({type:'state',event:copied(current()??{}),workspace_id:'fixture',thread_id,generation:1}),700);return ()=>{clearInterval(timer);for(const item of subscribers)if(item.callback===callback)subscribers.delete(item);};},
 };
 const makeSnapshot=()=>{const now=new Date().toISOString();const run={workspace:'fixture',package:pkg,package_ref:'fixture/browser',assignment_id:'run-1',workflow_id:'workflow-1',execution:'running',workflow_state:'waiting-worker',is_current_assignment:true,activity:'Building the dashboard',obligation:'Keep editors stable',observed_at:now,coverage:{state:'complete',reasons:[]},spec_progress:{current_position:(tick%3)+1,total_steps:3,current_name:'Migrate view'},timing:{started_at:now,attempts:[]},evidence:{state:'recorded',verdict:'ready',scope:'declared-artifact',source:'work-tour.html',commit:'abc123',observed_at:now},epic:{epic:'demo',workspace:'fixture'}};
-return {schema_version:1,observer_id:'fixture',state:'observing',published_at:now,snapshot:{workspace:'fixture',coverage:{state:'complete',observed_at:now,reasons:[]},runs:[run],recently_completed:[{...run,assignment_id:'landed',package:pkg,completion_basis:'merged-pr',completed_at:now,is_current_assignment:false}],assignments:[{assignment_id:'run-1',task_activity:{state:'idle',reason:'The last response finished. The session is waiting for input.',finished_at:now,last_reply:'Architecture proposal complete.'},spec_package:'fixture/browser',workflow_id:'workflow-1',display:'live',state:'live',executionDir:root,terminal:'fixture',coverage:{state:'complete',reasons:[]},nextAction:'Attach to the terminal'}],assignment_coverage:{state:'complete',reasons:[]},epics:[{workspace:'fixture',epic:'demo',title:'Demo epic',state:'active',members:[{name:'browser',package:'browser',workspace:'fixture',status:'in-progress',waiting_on:[],attention:false}],summary:{total:1,merged:0,complete:0,attention:0},next:'browser',coverage:{state:'complete',reasons:[]}}]}};};
+const snapshot={workspace:'fixture',coverage:{state:'complete',observed_at:now,reasons:[]},runs:plannedLaunch?[]:[run],recently_completed:plannedLaunch?[]:[{...run,assignment_id:'landed',package:pkg,completion_basis:'merged-pr',completed_at:now,is_current_assignment:false}],assignments:plannedLaunch?[]:[{assignment_id:'run-1',task_activity:{state:'idle',reason:'The last response finished. The session is waiting for input.',finished_at:now,last_reply:'Architecture proposal complete.'},spec_package:'fixture/browser',workflow_id:'workflow-1',display:'live',state:'live',executionDir:root,terminal:'fixture',coverage:{state:'complete',reasons:[]},nextAction:'Attach to the terminal'}],assignment_coverage:{state:'complete',reasons:[]},epics:plannedLaunch?[]:[{workspace:'fixture',epic:'demo',title:'Demo epic',state:'active',members:[{name:'browser',package:'browser',workspace:'fixture',status:'in-progress',waiting_on:[],attention:false}],summary:{total:1,merged:0,complete:0,attention:0},next:'browser',coverage:{state:'complete',reasons:[]}}]};if(plannedLaunch)snapshot.planned_packages=[{workspace:'fixture',package:pkg,package_ref:'fixture/browser',targets:[{id:'main',primary:checkout},{id:'alternate',primary:secondCheckout}],source_paths:['spec.md']},{workspace:'fixture',package:otherPkg,package_ref:'fixture/other-browser',targets:[{id:'main',primary:checkout},{id:'alternate',primary:secondCheckout}],source_paths:['spec.md']}];return {schema_version:1,observer_id:'fixture',state:'observing',published_at:now,snapshot};};
 await writeFile(observerFile,JSON.stringify(makeSnapshot()));
 const makeMismatchSnapshot=()=>{const now=new Date().toISOString();const run=(workspaceName,packagePath,packageRef,activity)=>({workspace:workspaceName,package:packagePath,package_ref:packageRef,assignment_id:'mismatch-run',workflow_id:'mismatch-workflow',execution:'running',workflow_state:'waiting-external',is_current_assignment:true,activity,obligation:activity,observed_at:now,coverage:{state:'complete',reasons:[]},spec_progress:{current_position:1,total_steps:2,current_name:'Mismatch step'},timing:{started_at:now,attempts:[]}});return {schema_version:1,observer_id:'mismatch-fixture',state:'observing',published_at:now,snapshot:{workspace:'physical',coverage:{state:'complete',observed_at:now,reasons:[]},runs:[run('physical',alphaKitPackage,'alpha/alpha-kit','Alpha kit run'),run('alpha',physicalKitPackage,'physical/physical-kit','Neighbor physical run')],recently_completed:[],assignments:[{assignment_id:'alpha-assignment',workspace_id:'alpha',workspace:'physical',spec_package:'alpha/alpha-kit',workflow_id:'mismatch-workflow',display:'live',state:'live',executionDir:root,coverage:{state:'complete',reasons:[]},task_activity:{state:'idle',reason:'Waiting for mismatch review.'},nextAction:'Review mismatch assignment'},{assignment_id:'physical-assignment',workspace_id:'physical',workspace:'alpha',spec_package:'physical/physical-kit',workflow_id:'mismatch-workflow',display:'live',state:'live',executionDir:root,coverage:{state:'complete',reasons:[]},task_activity:{state:'idle',reason:'Waiting for mismatch review.'},nextAction:'Review mismatch assignment'}],assignment_coverage:{state:'complete',reasons:[]},epics:[{workspace:'physical',epic:'alpha-kit-epic',title:'Alpha kit epic',state:'active',members:[{name:'alpha-kit',package:'alpha-kit',workspace:'physical',status:'in-progress',waiting_on:[],attention:false}],summary:{total:1,merged:0,complete:0,attention:0},next:'alpha-kit',coverage:{state:'complete',reasons:[]}},{workspace:'alpha',epic:'physical-neighbor-epic',title:'Neighbor physical epic',state:'active',members:[{name:'physical-kit',package:'physical-kit',workspace:'alpha',status:'in-progress',waiting_on:[],attention:false}],summary:{total:1,merged:0,complete:0,attention:0},next:'physical-kit',coverage:{state:'complete',reasons:[]}}]}};}; 
 await writeFile(mismatchObserverFile,JSON.stringify(makeMismatchSnapshot()));
@@ -128,7 +151,7 @@ const server=createServer(async(req,res)=>{
   if(action==='detail-delay-id')boundary.detailDelayId=url.searchParams.get('value')??'';
   if(action==='state-clock-offset-ms')boundary.stateClockOffsetMs=numberValue(url.searchParams.get('value'),-120000,120000);
   if(action==='catalog-mode')await applyCatalogMode(url.searchParams.get('value')||'healthy');
-  res.setHeader('Content-Type','application/json');res.end(JSON.stringify({...packageIdentity,posts,threads,tick,boundary,boundaryLog:boundaryLog.slice(-60),active:[...activeBoundary.values()]}));return;
+  res.setHeader('Content-Type','application/json');res.end(JSON.stringify({...packageIdentity,posts,threads,tick,boundary,boundaryLog:boundaryLog.slice(-60),active:[...activeBoundary.values()],launchResolutions:Object.fromEntries(launchResolutions),briefWritesPending,completedBriefWrites}));return;
  }
  // Emulate the trusted Serve endpoint so the browser exercises thread-only tokens.
  if(!localOperator){req.headers.host='dashboard.example';if(req.headers.origin)req.headers.origin='https://dashboard.example';}
@@ -164,6 +187,6 @@ const server=createServer(async(req,res)=>{
 });
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
 const timer=setInterval(()=>{tick++;void writeFile(observerFile,JSON.stringify(makeSnapshot()));void writeFile(mismatchObserverFile,JSON.stringify(makeMismatchSnapshot()));},1000);
-console.log(JSON.stringify({url:`http://127.0.0.1:${server.address().port}`,...packageIdentity,thread1,thread2}));
+console.log(JSON.stringify({url:`http://127.0.0.1:${server.address().port}`,root,checkout,secondCheckout,otherPackage:otherPkg,...packageIdentity,thread1,thread2}));
 async function close(){clearInterval(timer);server.closeAllConnections();await new Promise(r=>server.close(r));await rm(root,{recursive:true,force:true});process.exit(0);}
 process.on('SIGTERM',()=>void close());process.on('SIGINT',()=>void close());

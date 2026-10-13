@@ -175,9 +175,9 @@ and planned folders can open their package files.
 
 On a planned spec's live detail page, **Start implementation** provides an editable
 brief prefilled with `/spec-end-to-end Resume after spec-write` and the package's
-reference. The initial model roles are hardcoded in the brief. **Preview agent**
+reference. The initial model roles are hardcoded in the brief. **Preview settings**
 saves the brief and shows the package, execution target, model, publication
-authority, and assignment instructions. **Launch agent** starts an independent
+authority, and assignment instructions. **Start agent** starts an independent
 Pi agent in tmux using that reviewed contract. The launch receives the package
 context and the `spec-end-to-end` skill, with authority to publish a ready PR.
 Editing the brief or target requires a new preview.

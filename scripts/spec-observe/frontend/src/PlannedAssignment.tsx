@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from 'solid-js';
+import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, untrack } from 'solid-js';
 import { getJson, postJson, HttpError } from './api';
 import { str } from './format';
 import { plannedBriefContent, plannedBriefTitle, plannedTargetChoices, plannedTargetLabel, type PlannedTargetChoice } from './planned-assignment';
@@ -43,8 +43,11 @@ export default function PlannedAssignment(props: Props) {
   const targetTopologyKey = createMemo(() => JSON.stringify((Array.isArray(props.record?.targets) ? props.record.targets : [])
     .map((item: any) => [item?.id, item?.primary])
     .sort((a: unknown[], b: unknown[]) => JSON.stringify(a).localeCompare(JSON.stringify(b)))));
-  const contextKey = () => `${packageKey()}\n${targetTopologyKey()}`;
-  const choices = (): PlannedTargetChoice[] => plannedTargetChoices(props.record?.targets);
+  const contextKey = createMemo(() => `${packageKey()}\n${targetTopologyKey()}`);
+  const choices = createMemo<PlannedTargetChoice[]>(() => {
+    targetTopologyKey();
+    return plannedTargetChoices(untrack(() => props.record?.targets));
+  });
   const target = () => choices().find(item => item.key === targetId()) ?? null;
   const actionable = () => props.live && Boolean(props.token);
   const signature = () => JSON.stringify([contextKey(), targetId(), title().trim(), brief(), PROVIDER, MODEL, THINKING, SKILL, AUTHORITY, HARNESS, BRIEF_INSTRUCTION]);
@@ -54,10 +57,10 @@ export default function PlannedAssignment(props: Props) {
   };
   const changed = () => Boolean(preview() && !currentPreview());
   const targetProblem = () => {
-    if (!Array.isArray(props.record?.targets) || !props.record.targets.length) return 'No canonical execution target is recorded for this spec.';
-    if (!choices().length) return 'No usable canonical primary target is available for this spec.';
-    if (choices().length > 1 && !target()) return 'Choose the package target where the assignment will run.';
-    if (!target()) return 'The selected canonical target changed. Choose an available package target.';
+    if (!Array.isArray(props.record?.targets) || !props.record.targets.length) return 'No target is available for this spec.';
+    if (!choices().length) return 'No usable target is available for this spec.';
+    if (choices().length > 1 && !target()) return 'Choose where the agent should work.';
+    if (!target()) return 'The selected target changed. Choose an available target.';
     return '';
   };
   const gateMessage = () => !props.live ? 'Connect to the live workspace service to preview and launch.' : !props.token ? 'The workspace action token is unavailable.' : '';
@@ -71,16 +74,12 @@ export default function PlannedAssignment(props: Props) {
     setTitle(packageRef() ? plannedBriefTitle(packageRef()) : '');
     setBrief(packageRef() ? plannedBriefContent(packageRef()) : '');
     clearHandoff();
-    const candidates = plannedTargetChoices(props.record?.targets);
-    setTargetId(candidates.length === 1 ? candidates[0].key : '');
-    if (candidates.length === 1) setStatus(`Using ${candidates[0].id} from this package's canonical targets.`);
   }));
-  createEffect(on(targetTopologyKey, () => {
-    operation++;
-    const candidates = plannedTargetChoices(props.record?.targets);
+  createEffect(on(contextKey, () => {
+    const candidates = choices();
     setTargetId(candidates.length === 1 ? candidates[0].key : '');
     clearHandoff();
-    if (candidates.length === 1) setStatus(`Using ${candidates[0].id} from this package's canonical targets.`);
+    if (candidates.length === 1) setStatus(`Using ${candidates[0].id} from this spec's targets.`);
   }));
   onCleanup(() => { operation++; });
 
@@ -149,7 +148,7 @@ export default function PlannedAssignment(props: Props) {
       if (!requestIsCurrent(request, key, expectedSignature)) return;
       const value = { requestId: save.id, assignmentId: assignment.id, digest: str(data?.contractDigest), record: data?.record ?? null, input: data?.inputPreview ?? null, signature: expectedSignature };
       if (!value.digest) throw new Error('The preview did not return a contract digest.');
-      setPreview(value); setStatus('Preview ready. Review the resolved target and input before launching.');
+      setPreview(value); setStatus('Preview ready. Review the brief and agent settings before starting.');
     } catch (e) {
       if (request === operation && key === contextKey()) { setError(errorText(e)); setStatus('Preview failed. Your brief and settings are still available to retry.'); }
     } finally {
@@ -186,12 +185,12 @@ export default function PlannedAssignment(props: Props) {
   }
 
   return <section class="thread-handoff planned-assignment" id="planned-assignment" data-testid="planned-assignment" aria-labelledby="planned-assignment-heading">
-    <div class="section-head"><div><h3 id="planned-assignment-heading">Launch this planned spec</h3><p class="small muted">{packageRef()} · {SKILL} · {AUTHORITY} · {HARNESS} · {PROVIDER} / {MODEL}:{THINKING}</p></div></div>
+    <div class="section-head"><div><h3 id="planned-assignment-heading">Start implementation</h3><p class="small muted">{packageRef()} · {SKILL} · PR access · {PROVIDER} / {MODEL}:{THINKING}</p></div></div>
     <div class="planned-assignment-fields">
-      <div class="thread-field"><label for="planned-assignment-target">Execution target</label>
-        <Show when={choices().length > 1} fallback={<p id="planned-assignment-target-summary" data-testid="planned-assignment-target-summary" class="small mono">{target() ? plannedTargetLabel(target()!) : targetProblem() || 'Resolving package target…'}</p>}>
+      <div class="thread-field"><label for="planned-assignment-target">Target</label>
+        <Show when={choices().length > 1} fallback={<p id="planned-assignment-target-summary" data-testid="planned-assignment-target-summary" class="small mono">{target() ? plannedTargetLabel(target()!) : targetProblem() || 'Loading targets…'}</p>}>
           <select id="planned-assignment-target" data-testid="planned-assignment-target" value={targetId()} onChange={event => changeTarget(event.currentTarget.value)}>
-            <option value="">Choose a canonical package target</option>
+            <option value="">Choose target</option>
             <For each={choices()}>{choice => <option value={choice.key}>{plannedTargetLabel(choice)}</option>}</For>
           </select>
         </Show>
@@ -204,24 +203,22 @@ export default function PlannedAssignment(props: Props) {
     <Show when={status()}><p id="planned-assignment-status" data-testid="planned-assignment-status" class="thread-state" role="status">{status()}</p></Show>
     <Show when={error()}><p class="thread-state bad" role="alert">{error()}</p></Show>
     <div class="thread-actions">
-      <Show when={!currentPreview()}><button id="planned-assignment-preview" data-testid="planned-assignment-preview" class="primary" type="button" disabled={!actionable() || !!pending() || !!targetProblem() || !target() || !packageRef() || !title().trim() || !brief().trim()} onClick={() => void previewAgent()}>{pending() === 'preview' ? 'Preparing preview…' : changed() ? 'Preview changes' : 'Preview agent'}</button></Show>
-      <Show when={currentPreview()}>{value => <button id="planned-assignment-launch" data-testid="planned-assignment-launch" class="primary" type="button" disabled={!actionable() || !!pending() || !!result()} onClick={() => void launchAgent()}>{pending() === 'launch' ? 'Launching…' : 'Launch agent'}</button>}</Show>
+      <Show when={!currentPreview()}><button id="planned-assignment-preview" data-testid="planned-assignment-preview" class="primary" type="button" disabled={!actionable() || !!pending() || !!targetProblem() || !target() || !packageRef() || !title().trim() || !brief().trim()} onClick={() => void previewAgent()}>{pending() === 'preview' ? 'Preparing preview…' : changed() ? 'Preview changes' : 'Preview settings'}</button></Show>
+      <Show when={currentPreview()}>{value => <button id="planned-assignment-launch" data-testid="planned-assignment-launch" class="primary" type="button" disabled={!actionable() || !!pending() || !!result()} onClick={() => void launchAgent()}>{pending() === 'launch' ? 'Starting…' : 'Start agent'}</button>}</Show>
     </div>
     <Show when={currentPreview()}>{value => <div class="thread-preview" id="planned-assignment-preview-result" data-testid="planned-assignment-preview-result">
-      <div class="section-head"><h4>Assignment preview</h4><span class="pill good">Reviewed</span></div>
+      <div class="section-head"><h4>Review before start</h4><span class="pill good">Ready</span></div>
       <dl class="thread-facts">
-      <div><dt>Target</dt><dd class="mono">{str(value().record?.repository_id || target()?.id)} · {str(value().record?.execution_dir || target()?.path)}</dd></div>
-        <div><dt>Execution directory</dt><dd class="mono">{str(value().record?.execution_dir || '')}</dd></div>
-        <div><dt>Spec package</dt><dd class="mono">{packageRef()}</dd></div>
-        <div><dt>Skill · authority</dt><dd class="mono">{SKILL} · {AUTHORITY}</dd></div>
-        <div><dt>Provider · model · thinking</dt><dd class="mono">{PROVIDER} · {MODEL} · {THINKING}</dd></div>
+        <div><dt>Target</dt><dd class="mono">{str(value().record?.repository_id || target()?.id)} · {str(value().record?.execution_dir || target()?.path)}</dd></div>
+        <div><dt>Package</dt><dd class="mono">{packageRef()}</dd></div>
+        <div><dt>Agent settings</dt><dd class="mono">{HARNESS} · {PROVIDER} / {MODEL}:{THINKING}</dd></div>
+        <div><dt>Skill · PR access</dt><dd class="mono">{SKILL} · {AUTHORITY}</dd></div>
         <div><dt>Assignment id</dt><dd class="mono">{value().assignmentId}</dd></div>
-        <div><dt>Contract digest</dt><dd class="mono">{value().digest}</dd></div>
       </dl>
-      <Show when={value().input}><details><summary>Complete assignment input</summary><pre>{value().input.brief}</pre><pre>{value().input.instruction}</pre></details></Show>
+      <Show when={value().input}><details><summary>Full input</summary><pre>{value().input.brief}</pre><pre>{value().input.instruction}</pre></details></Show>
     </div>}</Show>
     <Show when={result()}>{value => <div id="planned-assignment-result" data-testid="planned-assignment-result" class="thread-result" aria-live="polite">
-      <div class="section-head"><h4>Launch result</h4><span class={`pill ${value().assignment?.state === 'live' ? 'good' : 'warn'}`}>{str(value().assignment?.state || 'unknown')}</span></div>
+      <div class="section-head"><h4>Agent status</h4><span class={`pill ${value().assignment?.state === 'live' ? 'good' : 'warn'}`}>{str(value().assignment?.state || 'unknown')}</span></div>
       <p>Assignment <span class="mono">{str(value().assignment?.assignment_id || currentPreview()?.assignmentId)}</span></p>
       <Show when={Array.isArray(value().assignment?.attention) && value().assignment.attention.length}><p class="small warn">Attention: {value().assignment.attention.join(' · ')}</p></Show>
       <Show when={value().observation}><p class="small muted">Observed state: {str(value().observation?.state || 'unknown')}</p></Show>

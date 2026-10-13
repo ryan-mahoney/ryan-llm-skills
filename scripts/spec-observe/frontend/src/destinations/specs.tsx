@@ -68,7 +68,7 @@ export default function SpecsDestination(props: DestinationProps) {
               <div class="eyebrow">{str(item().workspace)} / Planned spec</div>
               <div class="detail-title"><div><h2>{base(item().package)}</h2><p class="subtitle mono">{str(item().package_ref)}</p></div><span class="pill muted">Planned</span></div>
               <p class="section">{str(item().activity || item().obligation || 'Resume this spec package.')}</p>
-              <p class="small muted">Choose a canonical package target, review the saved brief and launch contract, then start the independent agent session.</p>
+              <p class="small muted">Review the brief and agent settings, then launch.</p>
             </article>
             <PlannedAssignment record={item()} live={props.live && props.specsLive} token={props.token} />
           </>}
