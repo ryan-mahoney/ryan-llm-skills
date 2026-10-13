@@ -619,6 +619,15 @@ test('workspace designs route lists valid indexes with derived status, reports i
   writeFileSync(join(demo, 'screens', '01-overview.html'), '<!doctype html><html><body><h1>Routes</h1></body></html>');
   writeFileSync(join(demo, 'captures', '01-overview@1280.png'), 'png');
   writeFileSync(join(workspace, 'designs', 'broken', 'design.json'), JSON.stringify({ schema_version: 1, design: 'broken', title: 'Broken', viewport: { posture: 'desktop-only', widths: [1280] }, screens: [] }));
+  writeFileSync(join(base, 'outside.txt'), 'OUTSIDE-SECRET');
+  mkdirSync(join(workspace, 'threads'), { recursive: true });
+  writeFileSync(join(workspace, 'threads', 'discussion.txt'), 'THREAD-SECRET');
+  writeFileSync(join(workspace, '.env.local'), 'ENV-SECRET');
+  writeFileSync(join(workspace, 'marker.html'), '<link rel="stylesheet" href="marker.css"><script src="marker.js"></script>');
+  writeFileSync(join(workspace, 'marker.js'), 'document.body.dataset.marker="1"');
+  writeFileSync(join(workspace, 'marker.css'), 'body{color:red}');
+  writeFileSync(join(workspace, 'big.bin'), Buffer.alloc(8 * 1024 * 1024 + 1));
+  symlinkSync(join(base, 'outside.txt'), join(workspace, 'escape.txt'));
   const server = createDashboardServer({ agentDir: f.dir, storageRoot });
   const listing = await request(server, `/api/workspace-designs?${new URLSearchParams({ id: 'studio' })}`);
   assert.equal(listing.status, 200);
@@ -637,4 +646,31 @@ test('workspace designs route lists valid indexes with derived status, reports i
   assert.match(screen.headers['Content-Security-Policy'], /font-src 'self'/);
   assert.match(screen.headers['Content-Security-Policy'], /connect-src 'none'/);
   assert.doesNotMatch(screen.headers['Content-Security-Policy'], /allow-same-origin/);
+  const view = `/workspace-view/${Buffer.from('studio').toString('base64url')}/`;
+  const marker = await request(server, `${view}marker.html`);
+  assert.equal(marker.status, 200);
+  assert.match(marker.headers['Content-Security-Policy'], /sandbox allow-scripts;/);
+  assert.match(marker.headers['Content-Security-Policy'], /font-src 'self'/);
+  assert.match(marker.headers['Content-Security-Policy'], /connect-src 'none'/);
+  assert.doesNotMatch(marker.headers['Content-Security-Policy'], /allow-same-origin/);
+  assert.equal(marker.headers['X-Frame-Options'], 'SAMEORIGIN');
+  assert.equal(marker.headers['X-Content-Type-Options'], 'nosniff');
+  assert.equal(marker.headers['Cache-Control'], 'no-store');
+  assert.match((await request(server, `${view}marker.js`)).headers['Content-Type'], /javascript/);
+  assert.match((await request(server, `${view}marker.css`)).headers['Content-Type'], /text\/css/);
+  const markerHead = await request(server, `${view}marker.html`, { method: 'HEAD' });
+  assert.equal(markerHead.status, 200);
+  assert.equal(markerHead.body, '');
+  assert.equal((await request(server, `${view}marker.html`, { method: 'POST' })).status, 405);
+  const kit = await request(server, `${view}kit.yaml`);
+  assert.equal(kit.status, 200);
+  assert.match(kit.body, /studio/);
+  assert.notEqual((await request(server, `/workspace-view/${Buffer.from('ghost').toString('base64url')}/kit.yaml`)).status, 200);
+  assert.notEqual((await request(server, '/workspace-view//kit.yaml')).status, 200);
+  for (const refusedPath of [`${view}threads/discussion.txt`, `${view}.env.local`, `${view}escape.txt`, `${view}big.bin`,
+    `${view}%2e%2e%2foutside.txt`, `${view}%2e%2e%5coutside.txt`, `${view}outside%00.txt`]) {
+    const refused = await request(server, refusedPath);
+    assert.notEqual(refused.status, 200, refusedPath);
+    assert.doesNotMatch(refused.body, /OUTSIDE-SECRET|THREAD-SECRET|ENV-SECRET/, refusedPath);
+  }
 });
