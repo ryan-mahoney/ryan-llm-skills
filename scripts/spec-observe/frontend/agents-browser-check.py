@@ -28,8 +28,326 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--case', choices=['selection'], required=True)
+parser.add_argument('--case', choices=['selection', 'list'], required=True)
 case = parser.parse_args().case
+
+if case == 'list':
+    root = Path(__file__).resolve().parent
+    evidence = Path(os.environ.get('SENTINEL_EVIDENCE_DIR', '/tmp/sentinel-agents-evidence'))
+    evidence.mkdir(parents=True, exist_ok=True)
+    shots = evidence / 'agents' / 'list'
+    shots.mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
+    report = {'status': 'failed', 'case': case, 'scenarios': [], 'pageErrors': [], 'urls': {}, 'snapshots': [], 'requests': {}}
+    fixture = subprocess.Popen(['node', str(root / 'browser-fixture.mjs')], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        if not select.select([fixture.stdout], [], [], 10)[0]:
+            raise RuntimeError('Fixture readiness exceeded 10 seconds')
+        receipt = json.loads(fixture.stdout.readline())
+        report['fixture'] = receipt
+        report['observedCommit'] = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
+        report['dirty'] = bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=root, text=True).strip())
+
+        generated_at = '2026-10-12T12:00:00.000Z'
+        old_at = '2026-10-12T11:00:00.000Z'
+
+        def record_key(assignment_id, workspace='fixture'):
+            return json.dumps([workspace, assignment_id], separators=(',', ':'))
+
+        def assignment(assignment_id, display='live', workspace_id='fixture', **extra):
+            value = {
+                'assignment_id': assignment_id,
+                'workspace_id': workspace_id,
+                'spec_package': 'fixture/' + assignment_id,
+                'workflow_id': 'workflow-1',
+                'display': display,
+                'state': display,
+                'execution': 'running' if display == 'live' else 'completed',
+                'task_activity': {'state': 'idle', 'reason': 'Fixture assignment is waiting for input.'},
+                'nextAction': 'Attach to ' + assignment_id,
+                'coverage': {'state': 'complete', 'reasons': []},
+                'executionDir': '/fixture/checkout',
+            }
+            value.update(extra)
+            return value
+
+        def observer(assignments, coverage='complete', observed_at=generated_at, workspace='fixture', observer_id='fixture', published_at=generated_at):
+            return {
+                'observer_id': observer_id,
+                'state': 'observing',
+                'published_at': published_at,
+                'snapshot': {
+                    'workspace': workspace,
+                    'coverage': {'state': 'complete', 'observed_at': observed_at, 'reasons': []},
+                    'runs': [],
+                    'recently_completed': [],
+                    'planned_packages': [],
+                    'epics': [],
+                    'assignments': assignments,
+                    'assignment_coverage': {
+                        'state': coverage,
+                        'observed_at': observed_at,
+                        'reasons': [] if coverage == 'complete' else ['assignment-read-' + coverage],
+                    },
+                },
+            }
+
+        def envelope(observers, generated=generated_at):
+            return {'schema_version': 1, 'generated_at': generated, 'observers': observers}
+
+        def healthy():
+            return envelope([observer([
+                assignment('active-one', nextAction='Attach to active-one'),
+                assignment('active-two', nextAction='Attach to active-two'),
+                assignment('ended-one', display='ended', nextAction='History'),
+            ])])
+
+        key_a = record_key('active-one')
+        key_e = record_key('ended-one')
+        key_b = record_key('b-row')
+
+        request_log = []
+        with sync_playwright() as p:
+            browser = p.chromium.launch(executable_path=shutil.which('google-chrome'), headless=True, args=['--no-sandbox'])
+            for width in (1280, 1600):
+                context = browser.new_context(viewport={'width': width, 'height': 860})
+                scenario_name = {'value': ''}
+
+                def note(name, value, width=width):
+                    report['snapshots'].append({
+                        'name': f'{name}@{width}',
+                        'assignment_coverage': [o['snapshot']['assignment_coverage']['state'] for o in value['observers']] if isinstance(value, dict) else ['request-failed'],
+                        'assignment_ids': [row['assignment_id'] for o in value['observers'] for row in o['snapshot']['assignments']] if isinstance(value, dict) else [],
+                        'observers': [o['snapshot']['workspace'] for o in value['observers']] if isinstance(value, dict) else [],
+                    })
+
+                def serve(route, state):
+                    if state['fail']:
+                        route.fulfill(status=503, content_type='application/json', body=json.dumps({'error': 'fixture-state-failure'}))
+                        return
+                    if state.get('hold'):
+                        state['pending'] = route
+                        return
+                    route.fulfill(json=state['value'])
+
+                def open_page(state):
+                    page = context.new_page()
+                    page.set_default_timeout(10000)
+                    page.set_default_navigation_timeout(10000)
+                    page.on('pageerror', lambda error: report['pageErrors'].append(str(error)))
+                    page.on('request', lambda request: request_log.append({'method': request.method, 'url': request.url, 'scenario': scenario_name['value']}))
+                    page.route('**/api/state**', lambda route, _request=None, _state=state: serve(route, _state))
+                    return page
+
+                def open_list(page, state, **route_params):
+                    page.goto(receipt['url'] + '/#/agents?' + urlencode({'ws': 'fixture', **route_params}), wait_until='domcontentloaded')
+                    expect(page.locator('h1')).to_have_text('Agents')
+
+                def params(page):
+                    return parse_qs(urlsplit(page.url).fragment.partition('?')[2])
+
+                def row(page, key_value):
+                    return page.locator("[data-assignment-key='" + key_value + "']")
+
+                def capture(page, state_name, width=width):
+                    page.screenshot(path=str(shots / f'{state_name}@{width}.png'))
+                    report['urls'][f'{state_name}@{width}'] = urlsplit(page.url).fragment
+
+                # ideal: Active/Ended tabs write the explicit filter and keep q/ws.
+                live_state = {'value': healthy(), 'fail': False, 'delay': 0.0}
+                scenario_name['value'] = 'ideal'
+                note('ideal', live_state['value'])
+                page = open_page(live_state)
+                open_list(page, live_state)
+                expect(row(page, key_a)).to_have_count(1)
+                expect(row(page, key_e)).to_have_count(0)
+                expect(page.locator('.list-caption')).to_contain_text('Active · 2 observed agents')
+                capture(page, 'ideal')
+                page.locator('#find-record').fill('one')
+                expect(row(page, key_a)).to_have_count(1)
+                page.get_by_role('button', name='Ended', exact=True).click()
+                expect(row(page, key_e)).to_have_count(1)
+                expect(row(page, key_a)).to_have_count(0)
+                assert params(page)['q'] == ['one'] and params(page)['filter'] == ['ended'] and params(page)['ws'] == ['fixture'], page.url
+                page.get_by_role('button', name='Active', exact=True).click()
+                expect(row(page, key_a)).to_have_count(1)
+                assert params(page)['q'] == ['one'] and params(page)['ws'] == ['fixture'], page.url
+                report['scenarios'].append(f'ideal@{width}: Active/Ended tabs write the explicit filter while q and ws survive; rows follow the tab')
+                page.close()
+
+                # empty: a complete zero-total read owns the only empty copy.
+                live_state = {'value': envelope([observer([])]), 'fail': False, 'delay': 0.0}
+                scenario_name['value'] = 'empty'
+                note('empty', live_state['value'])
+                page = open_page(live_state)
+                open_list(page, live_state)
+                expect(page.get_by_role('heading', name='No agents observed', exact=True)).to_be_visible()
+                expect(page.locator('.list-pane').get_by_role('button', name='Refresh state', exact=True)).to_be_visible()
+                expect(page.locator('[data-assignment-key]')).to_have_count(0)
+                capture(page, 'empty')
+                report['scenarios'].append(f'empty@{width}: a complete empty read shows No agents observed with one Refresh state action')
+                page.close()
+
+                # no-matches: Clear filters removes q, restores rows and keeps ws.
+                live_state = {'value': healthy(), 'fail': False, 'delay': 0.0}
+                scenario_name['value'] = 'no-matches'
+                note('no-matches', live_state['value'])
+                page = open_page(live_state)
+                open_list(page, live_state, q='zzz-no-match')
+                expect(page.get_by_role('heading', name='No matching agents', exact=True)).to_be_visible()
+                expect(page.locator('[data-assignment-key]')).to_have_count(0)
+                capture(page, 'no-matches')
+                page.get_by_role('button', name='Clear filters', exact=True).click()
+                expect(row(page, key_a)).to_have_count(1)
+                expect(page.get_by_role('heading', name='No matching agents', exact=True)).to_have_count(0)
+                assert 'q' not in params(page) and params(page)['ws'] == ['fixture'], page.url
+                report['scenarios'].append(f'no-matches@{width}: Clear filters removes q, keeps ws and restores available rows')
+                page.close()
+
+                # loading: skeleton only after the 300ms delay; refresh keeps content+query.
+                # The first /api/state response is held (never blocking the loop)
+                # so the delayed skeleton is observable, then released in-flow.
+                live_state = {'value': healthy(), 'fail': False, 'hold': True}
+                scenario_name['value'] = 'loading'
+                note('loading', live_state['value'])
+                page = open_page(live_state)
+                began = time.monotonic()
+                open_list(page, live_state)
+                page.wait_for_selector('.records .skeleton', state='visible', timeout=5000)
+                elapsed = time.monotonic() - began
+                assert elapsed >= 0.25, elapsed
+                capture(page, 'loading')
+                live_state['pending'].fulfill(json=live_state['value'])
+                live_state['pending'] = None
+                expect(row(page, key_a)).to_have_count(1)
+                page.locator('#find-record').fill('one')
+                page.locator('#refresh-button').click()
+                expect(row(page, key_a)).to_have_count(1)
+                expect(page.locator('#find-record')).to_have_value('one')
+                assert params(page)['q'] == ['one'] and params(page)['ws'] == ['fixture'], page.url
+                page.wait_for_timeout(1800)
+                expect(row(page, key_a)).to_have_count(1)
+                expect(page.locator('#find-record')).to_have_value('one')
+                if live_state.get('pending'):
+                    live_state['pending'].fulfill(json=live_state['value'])
+                    live_state['pending'] = None
+                report['scenarios'].append(f'loading@{width}: skeleton appears only after the 300ms delay; an ordinary refresh keeps content and query')
+                page.close()
+
+                # error: one retry primary and no empty copy before recovery.
+                live_state = {'value': healthy(), 'fail': True, 'delay': 0.0}
+                scenario_name['value'] = 'error'
+                note('error', 'fail')
+                page = open_page(live_state)
+                open_list(page, live_state)
+                expect(page.locator('.records .ds-callout')).to_contain_text('Agents could not be read')
+                expect(page.locator('.list-caption')).not_to_contain_text('0 observed')
+                expect(page.locator('main')).not_to_contain_text('No agents observed')
+                expect(page.locator('[data-assignment-key]')).to_have_count(0)
+                capture(page, 'error')
+                live_state['fail'] = False
+                page.locator('.records .ds-callout .ds-btn--primary').click()
+                expect(row(page, key_a)).to_have_count(1)
+                report['scenarios'].append(f'error@{width}: an initial failed read shows one Retry state action and no empty copy; retry resolves the rows')
+                page.close()
+
+                # partial: rows stay and the observer coverage reason is readable.
+                live_state = {'value': envelope([observer([assignment('active-one'), assignment('ended-one', display='ended')], coverage='partial')]), 'fail': False, 'delay': 0.0}
+                scenario_name['value'] = 'partial'
+                note('partial', live_state['value'])
+                page = open_page(live_state)
+                open_list(page, live_state)
+                expect(row(page, key_a)).to_have_count(1)
+                expect(page.locator('.records .ds-callout')).to_contain_text('Assignment coverage incomplete')
+                expect(page.locator('.records .ds-callout')).to_contain_text('assignment-read-partial')
+                capture(page, 'partial')
+                report['scenarios'].append(f'partial@{width}: rows stay and the observer assignment-coverage reason is readable')
+                page.close()
+
+                # offline: a failed refresh keeps the known rows and qualifies the time.
+                live_state = {'value': healthy(), 'fail': False, 'delay': 0.0}
+                scenario_name['value'] = 'offline'
+                note('offline', live_state['value'])
+                page = open_page(live_state)
+                open_list(page, live_state)
+                expect(row(page, key_a)).to_have_count(1)
+                live_state['fail'] = True
+                page.locator('#refresh-button').click()
+                expect(page.locator('.records .ds-callout')).to_contain_text('Connection unavailable')
+                expect(row(page, key_a)).to_have_count(1)
+                expect(page.locator('main')).not_to_contain_text('No agents observed')
+                capture(page, 'offline')
+                report['scenarios'].append(f'offline@{width}: a failed refresh keeps the known rows and qualifies the last received time')
+                page.close()
+
+                # stale: a connected old observation keeps rows and qualifies the time.
+                live_state = {'value': envelope([observer([assignment('active-one')], observed_at=old_at, published_at=old_at)]), 'fail': False, 'delay': 0.0}
+                scenario_name['value'] = 'stale'
+                note('stale', live_state['value'])
+                page = open_page(live_state)
+                open_list(page, live_state)
+                stale_callout = page.locator('.records .ds-callout')
+                expect(stale_callout).to_contain_text('Last checked at')
+                expect(stale_callout).to_contain_text(page.evaluate('new Date(' + json.dumps(old_at) + ').toLocaleString()'))
+                expect(row(page, key_a)).to_have_count(1)
+                capture(page, 'stale')
+                report['scenarios'].append(f'stale@{width}: a connected old observation keeps rows and shows the qualified time')
+                page.close()
+
+                # unavailable: retained rows and selected identity survive with no empty copy or zero counts.
+                live_state = {'value': healthy(), 'fail': False, 'delay': 0.0}
+                scenario_name['value'] = 'unavailable'
+                note('unavailable-live', live_state['value'])
+                page = open_page(live_state)
+                open_list(page, live_state, id=key_a)
+                expect(page.locator('article.detail .detail-title h2')).to_have_text('active-one')
+                retained_label = page.evaluate('new Date(' + json.dumps(generated_at) + ').toLocaleString()')
+                omitted_label = page.evaluate('new Date(' + json.dumps(old_at) + ').toLocaleString()')
+                assert retained_label != omitted_label
+                unavailable = envelope([observer([assignment('b-row', nextAction='Attach to b-row unavailable-read')], coverage='unavailable', observed_at=old_at, published_at=old_at)])
+                live_state['value'] = unavailable
+                note('unavailable', unavailable)
+                page.locator('#refresh-button').click()
+                expect(page.locator('.records .ds-callout')).to_contain_text('Source unavailable')
+                expect(page.locator('.list-caption')).not_to_contain_text('0 observed')
+                expect(page.locator('main')).not_to_contain_text('No agents observed')
+                expect(row(page, key_b)).to_contain_text('unavailable-read')
+                expect(page.locator('article.detail .detail-title h2')).to_have_text('active-one')
+                expect(page.locator('article.detail .footer')).to_contain_text(retained_label)
+                expect(page.locator('article.detail .footer')).not_to_contain_text(omitted_label)
+                assert params(page)['id'] == [key_a], page.url
+                capture(page, 'unavailable')
+                report['scenarios'].append(f'unavailable@{width}: retained rows and selected identity survive, with no empty copy or zero counts')
+                page.close()
+                context.close()
+            browser.close()
+
+        assert not report['pageErrors'], report['pageErrors']
+        posts = [entry for entry in request_log if entry['method'] == 'POST']
+        assert not posts, posts
+        report['requests'] = {
+            'total': len(request_log),
+            'stateGets': sum(1 for entry in request_log if '/api/state' in entry['url']),
+            'posts': posts,
+            'byScenario': {name: sum(1 for entry in request_log if entry['scenario'] == name) for name in sorted({entry['scenario'] for entry in request_log})},
+        }
+        report['scenarios'].append('Viewing, refresh, search and filter interactions issued no POST and no page error')
+        report['status'] = 'passed'
+    except BaseException:
+        report['error'] = traceback.format_exc()
+        raise
+    finally:
+        fixture.terminate()
+        try:
+            fixture.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            fixture.kill()
+            fixture.wait()
+        report['elapsedSeconds'] = round(time.monotonic() - started, 3)
+        (evidence / 'agents-list.json').write_text(json.dumps(report, indent=2) + '\n')
+        print(json.dumps(report, indent=2))
+    raise SystemExit(0)
+
 root = Path(__file__).resolve().parent
 evidence = Path(os.environ.get('SENTINEL_EVIDENCE_DIR', '/tmp/sentinel-agents-evidence'))
 evidence.mkdir(parents=True, exist_ok=True)

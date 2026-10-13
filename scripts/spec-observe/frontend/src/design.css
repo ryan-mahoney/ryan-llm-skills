@@ -223,3 +223,17 @@
 :where(.files-destination) .paper .status-markdown pre code{background:none;color:inherit}
 :where(.files-destination) .reader pre{white-space:pre;overflow:auto;margin:0;font-size:13px;line-height:1.7}
 :where(.files-destination) .html-frame{display:block;width:100%;height:100%;min-height:570px;border:1px solid var(--ds-line-2);border-radius:3px;background:var(--ds-paper)}
+
+/* Agents list: the destination wrapper is layout-neutral so the scrolled
+   .records column keeps the same children, and the scoped button reset
+   trims legacy run-row chrome to the shared record geometry without
+   outranking hover/selected states. */
+.agents-list{display:contents}
+:where(.agents-list) .run-row{width:100%;min-height:90px;padding:18px 16px;border:0;border-bottom:1px solid var(--ds-line);border-radius:0;background:none;color:var(--ds-ink-2);font:inherit;text-align:left}
+:where(.agents-list) .run-row:hover{background:var(--ds-chrome-hi);text-decoration:none}
+:where(.agents-list) .run-row[aria-pressed="true"]{background:color-mix(in srgb,var(--ds-accent) 10%,var(--ds-panel));box-shadow:inset 3px 0 var(--ds-accent)}
+
+/* Agents loading keeps the four-row record rhythm: each bounded placeholder
+   row matches .record's 90px min-height using only shared tokens. */
+.agents-skeleton .skeletons{padding:0}
+.agents-skeleton .skeleton{min-height:90px;padding:18px 16px;border-bottom:1px solid var(--ds-line)}
