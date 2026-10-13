@@ -19,6 +19,9 @@ conversations-*.png captures, conversations-visual-inspection.md and
 conversations-browser-journey.json. new-thread runs only the EV-7 creation
 scenarios against the built App plus an isolated Vite source-app seed proof,
 writing conversations-browser-new-thread.json; it never runs route-drafts.
+view-states runs the screens 54-60 list/read/connection states against the
+built App and the owned fixture, writing conversations-browser-view-states.json,
+state captures at 1280 (plus an ideal 1600 capture) and reference captures.
 
 The App, route owner, API transport and adapter are real; browser-fixture.mjs
 fakes only the final discussion service/process boundary. The checker owns its
@@ -43,11 +46,13 @@ from pathlib import Path
 from playwright.sync_api import expect, sync_playwright
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--case', choices=['route-drafts', 'journey', 'new-thread'], default='route-drafts')
+parser.add_argument('--case', choices=['route-drafts', 'journey', 'new-thread', 'view-states'], default='route-drafts')
 parser.add_argument('--capture-reference', default=None)
+parser.add_argument('--reference-dir', default=None)
 options = parser.parse_args()
 case = options.case
 reference_html = Path(options.capture_reference).resolve() if options.capture_reference else None
+reference_dir = Path(options.reference_dir).resolve() if options.reference_dir else None
 
 root = Path(__file__).resolve().parent
 checkout = root.parents[2]
@@ -70,9 +75,10 @@ report = {
     'fixture': {},
     'observedCommit': None,
     'dirty': None,
-    'reference': str(reference_html) if reference_html else None,
+    'reference': str(reference_html) if reference_html else (str(reference_dir) if reference_dir else None),
     'visualParity': ('not claimed (route/draft regression only)' if case == 'route-drafts'
                      else 'not claimed (EV-7 creation coverage; captures recorded, owner inspects images)' if case == 'new-thread'
+                     else 'not claimed (view-state coverage; captures recorded, owner inspects images)' if case == 'view-states'
                      else 'observed (production and reference captures at 1280x900 and 1600x900; see conversations-visual-inspection.md)'),
     'cleanup': {},
 }
@@ -381,6 +387,364 @@ def run(url, thread1, thread2):
                 context.request.get(url + '/__fixture/control?action=' + action + '&value=false')
             except Exception:
                 pass
+
+
+def run_view_states(url, thread1, thread2):
+    """Screens 54-60: list/read/connection states on the production surface.
+
+    The owned fixture serves exact list/history HTTP statuses, scoped holds,
+    incomplete-tail and invalid-record facts; the offline stream is an
+    aborted Playwright route and the stale check uses a page-local Date.now
+    offset (never a server timestamp). The built App, route owner, adapter
+    and API transport stay real.
+    """
+    global reference_server
+
+    def control(action='', value=''):
+        response = context.request.get(url + '/__fixture/control?action=' + action + '&value=' + str(value))
+        assert response.ok
+        return response.json()
+
+    def posts(name):
+        return [item for item in control()['posts'] if item['name'] == name]
+
+    def send_count():
+        return len(posts('send'))
+
+    def passed(name):
+        report['scenarios'].append(name)
+        report['scenarioTimings'].append({'scenario': name, 'atSeconds': round(time.monotonic() - started, 3)})
+
+    def capture(name):
+        path = browser_evidence / name
+        page.screenshot(path=str(path), full_page=True)
+        report['captures'].append(str(path))
+        return str(path)
+
+    imported_envelope = {
+        'schema_version': 1,
+        'generated_at': '2026-01-01T00:00:00.000Z',
+        'observers': [{
+            'observer_id': 'imported',
+            'state': 'observing',
+            'published_at': '2026-01-01T00:00:00.000Z',
+            'snapshot': {'workspace': 'fixture', 'runs': [], 'coverage': {'state': 'complete', 'observed_at': '2026-01-01T00:00:00.000Z'}},
+        }],
+    }
+    try:
+        page.set_viewport_size({'width': 1280, 'height': 900})
+
+        # 1. Loading: a held fixture list leaves the regional skeleton with no
+        #    invented selection or composer.
+        control('hold-threads', 'true')
+        control('hold-threads-workspace', 'fixture')
+        page.goto(url + '/#/conversations?ws=fixture&id=' + thread1, wait_until='domcontentloaded')
+        expect(page.locator('.list-pane .skeletons').first).to_be_visible()
+        expect(page.locator('#thread-draft')).to_have_count(0)
+        expect(page.locator('#thread-send')).to_have_count(0)
+        expect(page.locator('[data-thread]')).to_have_count(0)
+        capture('conversations-state-loading@1280.png')
+        control('release-threads')
+        control('hold-threads', 'false')
+        control('hold-threads-workspace', '')
+        expect(page.locator('#thread-draft')).to_be_visible()
+        passed('view-states loading: regional skeleton with no invented selection or composer')
+
+        # 2. Empty: a loaded empty workspace exposes no fabricated thread or
+        #    composer, and Create thread enters tab=new.
+        page.goto(url + '/#/conversations?ws=other', wait_until='domcontentloaded')
+        expect(page.locator('.list-pane').get_by_text('No conversations yet')).to_be_visible()
+        expect(page.locator('#thread-draft')).to_have_count(0)
+        expect(page.locator('[data-thread]')).to_have_count(0)
+        capture('conversations-state-empty@1280.png')
+        page.locator('#thread-empty-create').click()
+        expect(page).to_have_url(re.compile(r'tab=new'))
+        expect(page.locator('#thread-new-dialog')).to_be_visible()
+        page.keyboard.press('Escape')
+        passed('view-states empty: EmptyState with no composer or fabricated thread; Create thread enters tab=new')
+
+        # 3. Denied: list 503, list 403 and history 403 suppress every private
+        #    region and offer Open workspaces preserving the current ws.
+        control('list-fail-status', '503')
+        page.goto(url + '/#/conversations?ws=fixture&id=' + thread1, wait_until='domcontentloaded')
+        expect(page.locator('#thread-open-workspaces')).to_be_visible()
+        expect(page.locator('[data-thread]')).to_have_count(0)
+        expect(page.locator('#thread-draft')).to_have_count(0)
+        expect(page.locator('.thread-transcript')).to_have_count(0)
+        assert 'Discussion one' not in page.content()
+        capture('conversations-state-denied-list503@1280.png')
+        page.locator('#thread-open-workspaces').click()
+        expect(page).to_have_url(re.compile(r'#/workspaces\?ws=fixture'))
+        passed('view-states denied: list 503 suppresses the private projection and Open workspaces keeps the ws')
+
+        control('list-fail-status', '403')
+        page.goto(url + '/#/conversations?ws=fixture&id=' + thread1, wait_until='domcontentloaded')
+        expect(page.locator('#thread-open-workspaces')).to_be_visible()
+        expect(page.locator('.thread-transcript')).to_have_count(0)
+        expect(page.locator('#thread-draft')).to_have_count(0)
+        assert 'Discussion one' not in page.content()
+        capture('conversations-state-denied-list403@1280.png')
+        passed('view-states denied: list 403 exposes no private content with Open workspaces')
+
+        control('list-fail-status', '0')
+        page.goto(url + '/#/conversations?ws=fixture&id=' + thread1, wait_until='domcontentloaded')
+        page.locator('#thread-draft').wait_for()
+        control('history-fail-status', '403')
+        page.locator('[data-thread-refresh]').click()
+        expect(page.locator('#thread-open-workspaces')).to_be_visible()
+        expect(page.locator('.thread-transcript')).to_have_count(0)
+        expect(page.locator('#thread-draft')).to_have_count(0)
+        assert 'Discussion one' not in page.content()
+        capture('conversations-state-denied-history403@1280.png')
+        control('history-fail-status', '0')
+        passed('view-states denied: history 403 suppresses the prior projection and offers Open workspaces')
+
+        # A successful list never clears a failed history read (production
+        # contract), so a same-URL hash goto would keep the mounted denied
+        # view over the retained historyError. Reload so 3b starts from a
+        # fresh Conversations mount; no app-side clearing is introduced.
+        page.reload(wait_until='domcontentloaded')
+
+        # 3b. Imported/file page: the non-live source shares the denied
+        #     composition and preserves the workspace on exit.
+        page.goto(url + '/#/conversations?ws=fixture&id=' + thread1, wait_until='domcontentloaded')
+        page.locator('#thread-draft').wait_for()
+        page.set_input_files('#import-file', {'name': 'snapshot.json', 'mimeType': 'application/json', 'buffer': json.dumps(imported_envelope).encode('utf-8')})
+        expect(page).to_have_url(re.compile(r'#/specs'))
+        page.evaluate("location.hash = '#/conversations?ws=fixture&id=" + thread1 + "'")
+        expect(page.locator('#thread-open-workspaces')).to_be_visible()
+        expect(page.locator('.thread-transcript')).to_have_count(0)
+        expect(page.locator('#thread-draft')).to_have_count(0)
+        assert 'Discussion one' not in page.content()
+        capture('conversations-state-imported@1280.png')
+        page.locator('#thread-open-workspaces').click()
+        expect(page).to_have_url(re.compile(r'#/workspaces\?ws=fixture'))
+        passed('view-states denied: an imported/file page suppresses private content and keeps the ws on Open workspaces')
+
+        # Imported snapshot mode persists until an explicit Refresh state or a
+        # document reload, so the hash navigation above leaves App live()
+        # false and the step-4 mount would stay denied. Reload to start
+        # step 4 from a fresh live mount.
+        page.reload(wait_until='domcontentloaded')
+
+        # 4. Error: history 503 keeps the retained transcript and draft with
+        #    Send disabled; a successful list poll never clears the read
+        #    error; Retry clears it only after history succeeds. A failed
+        #    send keeps its retry identity until an explicit recovery.
+        page.goto(url + '/#/conversations?ws=fixture&id=' + thread1, wait_until='domcontentloaded')
+        draft = page.locator('#thread-draft')
+        draft.wait_for()
+        draft.fill('Retained read draft')
+        sends_before = send_count()
+        control('history-fail-status', '503')
+        page.locator('[data-thread-refresh]').click()
+        expect(page.locator('.detail-pane')).to_contain_text('Thread state could not be read')
+        expect(page.locator('.thread-transcript')).to_contain_text('Ready to discuss.')
+        expect(draft).to_have_value('Retained read draft')
+        expect(page.locator('#thread-send')).to_be_disabled()
+        page.wait_for_timeout(5500)
+        expect(page.locator('.detail-pane')).to_contain_text('Thread state could not be read')
+        capture('conversations-state-error@1280.png')
+        control('history-fail-status', '0')
+        page.locator('#thread-error-retry').click()
+        expect(page.locator('.detail-pane')).not_to_contain_text('Thread state could not be read')
+        assert send_count() == sends_before, 'Retry thread posted a send'
+        expect(page.locator('#thread-send')).to_be_enabled()
+        passed('view-states error: history 503 keeps transcript/draft and disables Send; list poll alone never clears it; Retry clears only after history succeeds with no send')
+
+        control('fail-send', 'true')
+        draft.fill('Failing view-state message')
+        page.locator('#thread-send').click()
+        expect(page.locator('#thread-mutation-error')).to_contain_text('Discussion service unavailable')
+        first_id = posts('send')[-1]['input']['id']
+        control('fail-send', 'false')
+        page.locator('#thread-send').click()
+        expect(draft).to_have_value('')
+        retried = posts('send')[-1]['input']
+        assert retried['id'] == first_id and retried['thread_id'] == thread1, (first_id, retried)
+        passed('view-states error: a failed send keeps the retry id and error until an explicit successful recovery')
+
+        # 5. Partial: incomplete-tail and invalid-record warnings name reasons
+        #    without raw dumps; transcript, older page and composer stay usable.
+        control('incomplete-tail', 'true')
+        control('invalid-records', 'true')
+        # Step 4 ends on the same URL, so a same-URL hash goto would reuse the
+        # mounted instance: the 5s list poll picks up invalid records, but the
+        # retained history (incomplete_tail false) is never refetched because
+        # history loads only on materialize/refresh/retry. Reload to start the
+        # partial case from a fresh mount with both flags set.
+        page.reload(wait_until='domcontentloaded')
+        page.goto(url + '/#/conversations?ws=fixture&id=' + thread1, wait_until='domcontentloaded')
+        draft = page.locator('#thread-draft')
+        draft.wait_for()
+        expect(page.locator('.list-pane')).to_contain_text('One record is not valid JSON.')
+        expect(page.locator('.detail-pane')).to_contain_text('Some history could not be read')
+        assert 'fixture-secret-token' not in page.content()
+        expect(page.locator('.thread-transcript')).to_contain_text('Ready to discuss.')
+        draft.fill('Partial state draft')
+        expect(page.locator('#thread-send')).to_be_enabled()
+        page.locator('[data-thread-older]').click()
+        expect(page.locator('.thread-transcript .thread-entry').first).to_contain_text('Older message')
+        capture('conversations-state-partial@1280.png')
+        control('incomplete-tail', 'false')
+        control('invalid-records', 'false')
+        passed('view-states partial: incomplete-tail and invalid-record warnings name reasons without dumps; transcript, older page and composer stay usable')
+
+        # 6. Offline: an aborted SSE keeps the response and draft with
+        #    Reconnect thread; reconnecting opens a fresh stream and reloads
+        #    the list without auto-send.
+        page.goto(url + '/#/conversations?ws=fixture&id=' + thread1, wait_until='domcontentloaded')
+        draft = page.locator('#thread-draft')
+        draft.wait_for()
+        draft.fill('Offline retained draft')
+        expect(page.locator('.detail-actions .status')).to_have_text('Live')
+        page.route('**/api/thread/events*', lambda route: route.abort())
+        # The already-open EventSource survives a route abort (only new
+        # requests are intercepted), so the stream would stay Live. Remount
+        # Conversations with the abort installed: the retained per-thread
+        # draft owner survives the destination change, and the fresh mount's
+        # openEvents() opens an aborted SSE that reaches reconnecting. A full
+        # document reload would instead clear the in-memory draft owner, so
+        # the destination remount keeps the retained-value proof.
+        page.goto(url + '/#/workspaces?ws=fixture', wait_until='domcontentloaded')
+        expect(page.locator('#thread-draft')).to_have_count(0)
+        page.goto(url + '/#/conversations?ws=fixture&id=' + thread1, wait_until='domcontentloaded')
+        draft = page.locator('#thread-draft')
+        draft.wait_for()
+        expect(page.locator('#thread-reconnect')).to_be_visible()
+        expect(page.locator('.thread-transcript')).to_contain_text('Ready to discuss.')
+        expect(draft).to_have_value('Offline retained draft')
+        expect(page.locator('#thread-send')).to_be_disabled()
+        capture('conversations-state-offline@1280.png')
+        sends_before = send_count()
+        with page.expect_request(lambda request: '/api/thread/events' in request.url):
+            page.locator('#thread-reconnect').click()
+        page.unroute('**/api/thread/events*')
+        expect(page.locator('#thread-reconnect')).to_have_count(0, timeout=10000)
+        expect(page.locator('.detail-actions .status')).to_have_text('Live')
+        assert send_count() == sends_before, 'Reconnect posted a send'
+        passed('view-states offline: aborted SSE retains content and draft; Reconnect opens a fresh stream and reloads without auto-send')
+
+        # 7. Stale: browser-local elapsed observation only; a server clock
+        #    offset never manufactures staleness, and a successful list
+        #    refresh restores ready.
+        page.goto(url + '/#/conversations?ws=fixture&id=' + thread1, wait_until='domcontentloaded')
+        draft = page.locator('#thread-draft')
+        draft.wait_for()
+        draft.fill('Stale retained draft')
+        control('hold-threads', 'true')
+        control('hold-threads-workspace', 'fixture')
+        control('state-clock-offset-ms', '120000')
+        page.wait_for_timeout(5400)
+        expect(page.locator('#thread-stale-refresh')).to_have_count(0)
+        control('state-clock-offset-ms', '0')
+        page.evaluate("""() => {
+          if (window.__vsRealNow) return;
+          window.__vsRealNow = Date.now.bind(Date);
+          window.__vsOffset = 0;
+          Date.now = () => window.__vsRealNow() + window.__vsOffset;
+        }""")
+        page.evaluate('() => { window.__vsOffset = 50000; }')
+        page.locator('#thread-stale-refresh').wait_for(timeout=8000)
+        expect(page.locator('.thread-transcript')).to_contain_text('Ready to discuss.')
+        expect(draft).to_have_value('Stale retained draft')
+        capture('conversations-state-stale@1280.png')
+        page.locator('#thread-stale-refresh').click()
+        page.wait_for_timeout(200)
+        expect(page.locator('#thread-stale-refresh')).to_be_visible()
+        control('release-threads')
+        control('hold-threads', 'false')
+        expect(page.locator('#thread-stale-refresh')).to_have_count(0, timeout=10000)
+        page.evaluate('() => { window.__vsOffset = 0; }')
+        passed('view-states stale: local elapsed >45s (server offset irrelevant) retains data; a successful list refresh restores ready')
+
+        # 8. Isolation: a held old-workspace list response cannot leak rows,
+        #    draft or controls under the new workspace.
+        page.goto(url + '/#/conversations?ws=fixture&id=' + thread1, wait_until='domcontentloaded')
+        draft = page.locator('#thread-draft')
+        draft.wait_for()
+        draft.fill('Workspace A leak candidate')
+        control('hold-threads', 'true')
+        control('hold-threads-workspace', 'fixture')
+        with page.expect_request(lambda request: '/api/threads' in request.url):
+            page.locator('[data-thread-refresh]').click()
+        page.wait_for_timeout(150)
+        page.evaluate("location.hash = '#/conversations?ws=other'")
+        expect(page.locator('.list-pane').get_by_text('No conversations yet')).to_be_visible()
+        expect(page.locator('[data-thread]')).to_have_count(0)
+        expect(page.locator('#thread-draft')).to_have_count(0)
+        control('release-threads')
+        control('hold-threads', 'false')
+        control('hold-threads-workspace', '')
+        page.wait_for_timeout(400)
+        expect(page.locator('.list-pane').get_by_text('No conversations yet')).to_be_visible()
+        expect(page.locator('[data-thread]')).to_have_count(0)
+        expect(page.locator('#thread-draft')).to_have_count(0)
+        assert 'Discussion one' not in page.content()
+        passed('view-states isolation: a held old-workspace list cannot leak rows/draft/controls under another workspace')
+
+        # 9. Ideal production precedent at 1600 for the state set.
+        page.set_viewport_size({'width': 1600, 'height': 900})
+        page.goto(url + '/#/conversations?ws=fixture&id=' + thread1, wait_until='domcontentloaded')
+        page.locator('#thread-draft').wait_for()
+        capture('conversations-state-ideal@1600.png')
+        passed('view-states ideal: production capture at 1600')
+    finally:
+        for action, value in (('release-threads', 'false'), ('hold-threads', 'false'), ('hold-threads-workspace', ''),
+                              ('list-fail-status', '0'), ('history-fail-status', '0'), ('fail-send', 'false'),
+                              ('incomplete-tail', 'false'), ('invalid-records', 'false')):
+            try:
+                context.request.get(url + '/__fixture/control?action=' + action + '&value=' + value)
+            except Exception:
+                pass
+        try:
+            page.unroute('**/api/thread/events*')
+        except Exception:
+            pass
+
+    # Reference captures 54-60 at 1280 from the owned loopback static server.
+    if reference_dir:
+        reference_root = reference_dir.parent
+        assert (reference_root / 'vendor' / 'tailwind.js').is_file(), reference_root
+        reference_server = ThreadingHTTPServer(('127.0.0.1', 0), partial(QuietRequestHandler, directory=str(reference_root)))
+        threading.Thread(target=reference_server.serve_forever, daemon=True).start()
+        base_url = f'http://127.0.0.1:{reference_server.server_address[1]}/'
+        reference_page = context.new_page()
+        reference_page.on('pageerror', lambda error: report['pageErrors'].append(f'reference: {error}'))
+        reference_captures = []
+        for index in range(54, 61):
+            screen = next(path for path in sorted(reference_dir.glob(f'{index}-*.html')))
+            reference_page.goto(base_url + screen.relative_to(reference_root).as_posix(), wait_until='load')
+            reference_page.wait_for_timeout(250)
+            reference_page.set_viewport_size({'width': 1280, 'height': 900})
+            reference_page.wait_for_timeout(120)
+            path = browser_evidence / f'conversations-state-reference-{index}@1280.png'
+            reference_page.screenshot(path=str(path), full_page=True)
+            report['captures'].append(str(path))
+            reference_captures.append(str(path))
+        reference_page.close()
+        report['reference'] = {'dir': str(reference_dir), 'screens': [Path(path).name for path in reference_captures]}
+        passed('view-states reference: screens 54-60 captured from the owned loopback server at 1280')
+
+    inspection = evidence / 'conversations-view-states-inspection.md'
+    inspection.write_text('\n'.join([
+        '# Conversations view-state inspection (step 6)',
+        '',
+        '- Case: view-states at 1280x900 plus an ideal production capture at 1600x900.',
+        '- Observed: loading shows RegionalSkeleton only (no selection/composer); empty shows EmptyState and Create thread enters tab=new.',
+        '- Observed: list 503/403, history 403 and an imported snapshot suppress rows/title/transcript/composer and offer Open workspaces preserving ws.',
+        '- Observed: history 503 keeps transcript/draft and disables Send; a successful list poll never clears it; Retry thread clears only after history succeeds with no send; a failed send keeps its retry id until explicit recovery.',
+        '- Observed: incomplete-tail and invalid-record notices name reasons without raw dumps; parsed transcript, older page and composer stay usable.',
+        '- Observed: aborted SSE retains content/draft with Reconnect thread; reconnecting opens a fresh stream and reloads the list without auto-send.',
+        '- Observed: >45s browser-local elapsed observation yields stale with retained data; a server clock offset does not; a successful list refresh restores ready.',
+        '- Observed: a held old-workspace list cannot leak rows/draft/controls under another workspace.',
+        '- Recorded deviation: Prepare assignment stays in the detail ActionBar; the reference has no detail action bar.',
+        '',
+        'Captures:',
+    ] + [f'- `{path}`' for path in report['captures']] + [
+        f'- Receipt: `{receipt_path}`',
+    ]) + '\n')
+    report['viewStates'] = {'inspection': str(inspection)}
 
 
 def run_new_thread(url, thread1, thread2):
@@ -1123,12 +1487,14 @@ try:
                 {'method': request.method, 'url': request.url, 'failure': str(request.failure)}))
             startup_seconds = round(time.monotonic() - started, 3)
             check_started = time.monotonic()
-            if case != 'new-thread':
+            if case in ('route-drafts', 'journey'):
                 run(fixture_info['url'], fixture_info['thread1'], fixture_info['thread2'])
             if case == 'journey':
                 capture_visual(fixture_info['url'], fixture_info['thread1'], fixture_info['thread2'])
             if case == 'new-thread':
                 run_new_thread(fixture_info['url'], fixture_info['thread1'], fixture_info['thread2'])
+            if case == 'view-states':
+                run_view_states(fixture_info['url'], fixture_info['thread1'], fixture_info['thread2'])
             assert not report['pageErrors'], report['pageErrors']
             if case == 'new-thread':
                 unexpected_console = [text for text in report['consoleErrors'] if 'Failed to load resource' not in text]

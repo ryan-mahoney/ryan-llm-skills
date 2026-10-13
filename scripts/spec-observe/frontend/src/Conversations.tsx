@@ -1,6 +1,6 @@
 import { For, Show, createEffect, createSignal, onCleanup, onMount, untrack } from 'solid-js';
 import { getJson, postJson, HttpError } from './api';
-import { str, time, statusMarkdown } from './format';
+import { str, time, stale, statusMarkdown } from './format';
 import { consumeThreadDraft, getLaunchDraft, seedLaunchDraft, seedThreadDraft } from './launch-state';
 import { shouldResetAcknowledgedDraft } from './launch-picker-intent';
 import {
@@ -9,22 +9,27 @@ import {
   applyThreadPreparedText,
   beginNewThreadRequest,
   captureThreadSend,
+  composerAvailability,
+  conversationsViewState,
   failNewThreadRequest,
   getNewThreadDraft,
   getNewThreadRequest,
   getThreadDraft,
   getThreadScroll,
   openNewThreadDraft,
+  queueSummary,
   rememberConversationId,
   resolveSelection,
   setNewThreadDraft,
   setThreadDraft,
   setThreadScroll,
   subscribeThreadDraft,
+  threadState,
   type NewThreadRequestCapture,
+  type ReadError,
 } from './conversations-state';
 import { navigate } from './route';
-import { ActionBar, EmptyState, MasterDetail, StateNotice, StatusText, type StatusTone } from './primitives';
+import { ActionBar, EmptyState, MasterDetail, RegionalSkeleton, StateNotice, StatusText, type StatusTone } from './primitives';
 import { scopeLabel } from './scope';
 import type { DestinationProps } from './destinations';
 
@@ -45,13 +50,6 @@ const uuid = () => typeof crypto !== 'undefined' && typeof crypto.randomUUID ===
 const contentText = (content: any): string => typeof content === 'string' ? content : Array.isArray(content) ? content.map((p: any) => typeof p === 'string' ? p : p?.text || (['toolCall', 'tool_use'].includes(p?.type) ? `[tool ${p.name || p.toolName || 'call'}]` : p?.type === 'image' ? '[image]' : '')).filter(Boolean).join('\n') : content == null ? '' : str(content);
 const roleOf = (e: Entry) => { const m = e?.message && typeof e.message === 'object' ? e.message : e; return str(m?.role || e?.role || ''); };
 const textOf = (e: Entry) => { const m = e?.message && typeof e.message === 'object' ? e.message : e; return contentText(m?.content ?? m?.text ?? e?.content ?? ''); };
-const derived = (t?: Thread) => {
-  if (!t) return 'unknown';
-  if (t.history_only) return 'history-only';
-  if (t.queue_paused) return 'paused';
-  const attention = typeof t.attention === 'string' ? t.attention : t.attention && typeof t.attention === 'object' ? str(t.attention.kind || '') : '';
-  return attention || (t.state === 'active' ? 'active' : 'idle');
-};
 const label = (s: string) => labels[s] || (s && s !== 'unknown' ? str(s) : 'Unknown');
 const tone = (s: string) => tones[s] || 'muted';
 
@@ -66,11 +64,16 @@ export default function Conversations(props: Props) {
   const [toolNote, setToolNote] = createSignal('');
   const [notice, setNotice] = createSignal('');
   const [stream, setStream] = createSignal('unavailable');
-  const [listError, setListError] = createSignal('');
+  const [listError, setListError] = createSignal<ReadError | null>(null);
   // Read errors (list/history) and mutation errors (send/stop/resume/discard/
   // create) are separate: a history refresh can never clear a failed send.
-  const [historyError, setHistoryError] = createSignal('');
+  const [historyError, setHistoryError] = createSignal<ReadError | null>(null);
   const [mutationError, setMutationError] = createSignal('');
+  // Successful /api/threads observation and the elapsed comparison share one
+  // browser-local clock. nowTick advances on the existing 5s poll so the
+  // stale view appears without a second timer or server-time comparison.
+  const [listObservedAt, setListObservedAt] = createSignal<number | null>(null);
+  const [nowTick, setNowTick] = createSignal(0);
   const [pending, setPending] = createSignal('');
   const [draft, setDraft] = createSignal('');
   const [newText, setNewText] = createSignal('');
@@ -127,6 +130,36 @@ export default function Conversations(props: Props) {
   const active = () => props.live && Boolean(wsId());
   const actionable = () => active() && Boolean(props.token);
   const thread = () => threads()?.find(t => t.thread_id === routeId());
+  // Both sides of the elapsed comparison come from the same browser-local
+  // clock: the recorded local instant and Date.now(). Server timestamps and
+  // their clock offset never participate.
+  const observationStale = () => {
+    nowTick();
+    const observed = listObservedAt();
+    return observed !== null && stale(new Date(observed).toISOString(), Date.now());
+  };
+  // Connection/read view: list, history and mutation failures stay separate
+  // inputs and the state owner keeps its established priority.
+  const view = () => conversationsViewState({
+    live: active(),
+    listLoaded: threads() !== null,
+    rows: threads() ?? [],
+    listError: listError(),
+    historyError: historyError(),
+    mutationError: Boolean(mutationError()),
+    streamState: stream(),
+    observationStale: observationStale(),
+  });
+  // A mutation-only failure keeps the composer's own explicit retry control:
+  // the read view it gates stays ready while the retained callout remains.
+  const readView = () => view() === 'error' && mutationError() && !listError() && !historyError() ? 'ready' : view();
+  const composer = () => composerAvailability({
+    view: readView(),
+    thread: thread() ?? null,
+    actionable: actionable(),
+    draft: draft(),
+    pending: Boolean(pending()),
+  });
   const announce = (value: string) => setAnnouncer(value);
   const unsubscribeDraft = subscribeThreadDraft((ws, id) => {
     if (ws !== projectedWs || id !== projectedId || ws !== wsId() || id !== routeId()) return;
@@ -134,9 +167,18 @@ export default function Conversations(props: Props) {
     setDraft(stored.draft); setSendPending(stored.retry);
   });
   onCleanup(unsubscribeDraft);
+  // Denial hides every private projection and closes the live stream; the
+  // retained draft owner survives so access recovery restores it.
+  createEffect(() => { if (view() === 'denied') closeSource(); });
   function closeSource() { source?.close(); source = undefined; setStream('unavailable'); }
   function params(extra: Record<string, string> = {}) { return new URLSearchParams({ workspace_id: wsId(), ...extra }); }
   const routeError = (e: unknown) => e instanceof HttpError ? e.message : e instanceof Error ? e.message : 'The thread request could not be completed.';
+  // Structured read failures keep the exact HTTP status so the denied/error
+  // split trusts the response rather than message text.
+  const readErrorOf = (e: unknown): ReadError => {
+    const message = routeError(e);
+    return e instanceof HttpError && Number.isFinite(e.status) ? { status: e.status, message } : { message, network: true };
+  };
   function persistScroll() {
     if (!projectedWs || !projectedId || !transcriptEl) return;
     setThreadScroll(projectedWs, projectedId, { scrollTop: transcriptEl.scrollTop, stickBottom });
@@ -154,7 +196,7 @@ export default function Conversations(props: Props) {
     closeSource();
     setEntries([]); setOlder(false); setLoadingHistory(false); setIncompleteTail(false);
     setPartial(''); setToolNote(''); setNotice(''); setPending('');
-    setHistoryError('');
+    setHistoryError(null);
   }
   // Route/projection transition: persist the outgoing reading position, then
   // drop every projection-scoped display immediately. Stored drafts survive.
@@ -242,28 +284,32 @@ export default function Conversations(props: Props) {
       const data: any = await getJson(`/api/threads?${params()}`);
       if (request !== listGeneration || workspace !== wsId()) return;
       const rows: Thread[] = Array.isArray(data) ? data : Array.isArray(data.threads) ? data.threads : [];
-      setThreads(rows); setInvalid(Array.isArray(data.invalid) ? data.invalid : []); setListError('');
+      // Rows, selection and the observation ledger are written only by the
+      // workspace-matching response; a held old-workspace list is dropped by
+      // the generation/workspace guards before it can leak any of them.
+      setThreads(rows); setInvalid(Array.isArray(data.invalid) ? data.invalid : []); setListError(null);
+      setListObservedAt(Date.now()); setNowTick(value => value + 1);
       reconcile(true);
     } catch (e) {
-      if (request === listGeneration && workspace === wsId()) setListError(routeError(e) || 'Threads could not be loaded.');
+      if (request === listGeneration && workspace === wsId()) setListError(readErrorOf(e));
     } finally { if (request === listGeneration) listBusy = false; }
   }
   async function loadHistory(before?: string, prepend = false) {
     if (!active() || !projectedId || projectedId !== routeId()) return;
     const request = ++historyGeneration, epoch = projectionEpoch, id = projectedId, workspace = projectedWs;
     const oldTop = transcriptEl?.scrollTop || 0, oldHeight = transcriptEl?.scrollHeight || 0;
-    setLoadingHistory(true); if (!prepend) setHistoryError('');
+    setLoadingHistory(true);
     try {
       const q: Record<string, string> = { thread_id: id, limit: String(LIMIT) }; if (before) q.before = before;
       const data: any = await getJson(`/api/thread/history?${params(q)}`);
       if (request !== historyGeneration || epoch !== projectionEpoch || id !== projectedId || workspace !== projectedWs || wsId() !== workspace) return;
       const page = Array.isArray(data.entries) ? data.entries : [];
       setEntries(prev => prepend ? [...page, ...prev] : page);
-      setOlder(data.truncated === true); setIncompleteTail(data.incomplete_tail === true); setLoadingHistory(false); setHistoryError('');
+      setOlder(data.truncated === true); setIncompleteTail(data.incomplete_tail === true); setLoadingHistory(false); setHistoryError(null);
       if (prepend) queueMicrotask(() => { if (transcriptEl) transcriptEl.scrollTop = oldTop + transcriptEl.scrollHeight - oldHeight; });
       else queueMicrotask(() => restoreScroll(id, workspace));
     } catch (e) {
-      if (request === historyGeneration && epoch === projectionEpoch && id === projectedId && wsId() === workspace) { setLoadingHistory(false); setHistoryError(routeError(e) || 'The transcript could not be loaded.'); }
+      if (request === historyGeneration && epoch === projectionEpoch && id === projectedId && wsId() === workspace) { setLoadingHistory(false); setHistoryError(readErrorOf(e)); }
     }
   }
   async function refreshTail() {
@@ -319,17 +365,29 @@ export default function Conversations(props: Props) {
     if (!id || id === routeId()) return;
     props.onNavigate({ ...props.route, dest: 'conversations', id });
   }
+  // Refresh keeps the retained transcript and draft on the panel while the
+  // reads run: a failed history read clears only on a later success, and the
+  // stale state clears only when a matching list observation lands.
   function refreshThread() {
     if (!projectedId) return;
     historyGeneration++;
-    resetDetail();
+    setNotice('');
+    setToolNote('');
     void loadHistory();
     openEvents();
     void loadList();
   }
+  // Offline recovery reopens the live stream and reloads the list; the
+  // retained draft is never sent automatically.
+  function reconnectThread() {
+    if (!projectedId) return;
+    openEvents();
+    void loadList();
+    announce('Reconnecting live updates. Your draft is kept.');
+  }
   async function action<T>(path: string, body: unknown, op: string): Promise<T> {
     const workspace = wsId(), id = routeId(), epoch = projectionEpoch, generation = ++opGeneration;
-    setPending(op); setMutationError('');
+    setPending(op);
     try { return await postJson<T>(path, body, props.token || '', undefined); }
     finally { if (generation === opGeneration && workspace === wsId() && id === routeId() && epoch === projectionEpoch) setPending(''); }
   }
@@ -534,6 +592,7 @@ export default function Conversations(props: Props) {
     try {
       await action(path, { workspace_id: workspace, thread_id: id, ...body }, op);
       if (id === projectedId && workspace === projectedWs && epoch === projectionEpoch) {
+        setMutationError('');
         announce(op === 'stop' ? 'Stop requested. The thread queue is paused.' : op === 'resume' ? 'Thread resumed.' : body.resend ? 'Message queued again. A duplicate response is possible.' : 'Uncertain message discarded.');
         void loadList();
         if (op === 'resume') void refreshTail();
@@ -564,7 +623,7 @@ export default function Conversations(props: Props) {
   }
   onMount(() => {
     void loadList();
-    const timer = window.setInterval(() => { void loadList(); }, 5000);
+    const timer = window.setInterval(() => { setNowTick(value => value + 1); void loadList(); }, 5000);
     onCleanup(() => {
       clearInterval(timer);
       listGeneration++; projectionEpoch++; historyGeneration++;
@@ -579,7 +638,7 @@ export default function Conversations(props: Props) {
       lastWorkspace = ws; lastProjectionKey = '';
       listGeneration++; listBusy = false;
       clearProjection();
-      setThreads(null); setInvalid([]); setListError(''); setRequestedMissing(false);
+      setThreads(null); setInvalid([]); setListError(null); setListObservedAt(null); setRequestedMissing(false);
       return;
     }
     if (ws !== lastWorkspace) {
@@ -589,7 +648,7 @@ export default function Conversations(props: Props) {
       lastWorkspace = ws; lastProjectionKey = '';
       listGeneration++; listBusy = false;
       clearProjection();
-      setThreads(null); setInvalid([]); setListError(''); setRequestedMissing(false);
+      setThreads(null); setInvalid([]); setListError(null); setListObservedAt(null); setRequestedMissing(false);
     } else {
       const key = ws && id ? JSON.stringify([ws, id]) : '';
       if (key !== lastProjectionKey) {
@@ -648,7 +707,7 @@ export default function Conversations(props: Props) {
     }
   });
 
-  const state = () => derived(thread());
+  const state = () => threadState(thread() ?? null);
   const help = () => ({ active: ['Responding', 'A response is being delivered to the head message. Stop pauses this queue first; the response slot is released only after confirmed idle or process death.', 'good'], paused: ['Queue paused', 'Pending messages wait until Resume. Resume unpauses after identity and context checks; delivery continues in FIFO order.', 'warn'], 'history-only': ['History only', 'This record was imported without an owned process. Browsing works; send and resume are unavailable.', 'muted'], uncertain: ['Delivery uncertain', 'A message was persisted before its acknowledgement was lost, so it may or may not have been delivered. Discard or retry under Pending messages; a retry may duplicate the response.', 'bad'], stalled: ['Stalled', 'No child events for ten minutes. The response may still be running; nothing is released automatically. Refresh to check again, or Stop if the thread still owns the slot.', 'warn'], 'start-failed': ['Start failed', 'The discussion process failed before startup completed. Send a new message or Resume to retry the owned session.', 'bad'], 'session-mismatch': ['Session mismatch', 'The stored session file does not match this thread record. Inspect the workspace session copy, then retry.', 'bad'], 'missing-directory': ['Execution directory missing', 'The recorded execution directory is gone. Restore it or update the workspace record, then retry.', 'bad'], 'live-owner': ['Owner not confirmed dead', 'A prior discussion process is still recorded or observed. A second writer fails closed until the owner exits or Stop confirms it idle.', 'bad'], 'missing-context': ['Context missing', 'Threads no longer read earlier kit context files. Resume or send again to start.', 'bad'], 'policy-refusal': ['Policy refusal', 'The installed Pi read-tool policy refused the last request. Review the policy or context, then retry.', 'bad'] } as Record<string, [string, string, string]>)[state()] || ['Ready', '', 'good'] as [string, string, string];
 
   // Render-only derivations for the migrated surface: the workspace label is
@@ -666,9 +725,29 @@ export default function Conversations(props: Props) {
     return `${str(target.kind)} discussion`;
   };
   const countLabel = () => {
+    if (view() === 'denied') return listError()?.status === 503 ? 'Service unavailable' : 'Local access required';
     const rows = threads();
     if (rows === null) return 'Reading conversations…';
     return `${rows.length} conversation${rows.length === 1 ? '' : 's'}`;
+  };
+  // Denied copy follows screen 58 for the private-source refusal; the 503
+  // list failure keeps the same suppressed composition with service copy.
+  const deniedTitle = () => !active() || listError()?.status === 403 || historyError()?.status === 403 ? 'Local discussions unavailable' : 'Conversations are unavailable';
+  const deniedText = () => !active() || listError()?.status === 403 || historyError()?.status === 403
+    ? "Private threads can be read only on the host's local dashboard. This connection cannot read or send private discussions. Workspace and status documents remain available."
+    : 'The discussion service is not running. Workspace and status documents remain available.';
+  // Invalid-record warnings name recognized reasons and never echo arbitrary
+  // server text into the list.
+  const invalidReason = (raw: unknown): string => {
+    const value = raw && typeof raw === 'object' ? (raw as any).reason ?? (raw as any).code : raw;
+    const code = typeof value === 'string' ? value : '';
+    const known: Record<string, string> = {
+      'invalid-json': 'One record is not valid JSON.',
+      'missing-thread-id': 'One record has no thread id.',
+      'unreadable-session': 'One session file could not be read.',
+      'invalid-record': 'One record is not a valid thread.',
+    };
+    return known[code] || 'One unreadable record is excluded from the list.';
   };
 
   return (
@@ -683,38 +762,70 @@ export default function Conversations(props: Props) {
           </div>
           <div class="list-caption">{countLabel()}</div>
           <div class="records">
-            <Show when={active()} fallback={null}>
-              <Show when={listError() && threads()}>
-                <StateNotice
-                  tone="warning"
-                  title="Threads could not be refreshed"
-                  action={<button type="button" class="ds-btn" onClick={() => void loadList()}>Retry threads</button>}
-                >
-                  {listError()}
-                </StateNotice>
-              </Show>
-              <Show when={!listError() || threads() !== null} fallback={<StateNotice tone="error" title="Threads are unavailable" action={<button type="button" class="ds-btn ds-btn--primary" onClick={() => void loadList()}>Retry</button>}>{listError()}</StateNotice>}>
-                <Show when={threads()} fallback={<p class="empty">Loading threads…</p>}>
-                  <Show when={(threads() || []).length} fallback={<EmptyState title="No threads yet" text="Use New thread to start a conversation in this workspace." />}>
-                    <For each={threads()}>{t => { const s = derived(t); const q = t.queue || []; const waiting = q.filter((m: any) => m.state === 'queued').length; return <button class={`record thread-row${t.thread_id === routeId() ? ' selected' : ''}`} data-thread={t.thread_id} aria-pressed={t.thread_id === routeId()} onClick={() => selectRow(t.thread_id)}><span class="row-heading"><strong>{t.title || `Thread ${t.thread_id.slice(0, 8)}`}</strong><StatusText tone={statusTone(s)}>{label(s)}</StatusText></span><p>{workspaceName()} · {targetDescription(t)}</p><small>{q.length ? `${waiting ? `${waiting} waiting` : `${q.length} pending`}${t.queue_paused ? ' · paused queue' : ''}` : 'No pending messages'}</small></button>; }}</For>
-                  </Show>
+            <Show when={view() === 'denied'}>
+              <p class="empty muted">{listError()?.status === 503 ? 'The discussion service is unavailable.' : 'Local access required.'}</p>
+            </Show>
+            <Show when={view() !== 'denied'}>
+              <Show when={readView() === 'loading'}><RegionalSkeleton rows={4} label="Reading conversations" /></Show>
+              <Show when={readView() !== 'loading'}>
+                <Show when={listError() && threads() !== null}>
+                  <StateNotice
+                    tone="warning"
+                    title="Threads could not be read"
+                    action={<button type="button" class="ds-btn" onClick={() => void loadList()}>Retry threads</button>}
+                  >
+                    Your selected thread and draft are kept.
+                  </StateNotice>
                 </Show>
-                <Show when={invalid().length}><div class="info-row"><p><strong>Invalid thread records ({invalid().length})</strong></p><For each={invalid()}>{x => <small class="warn">{x.reason || x.error || x.message || 'Invalid record'}</small>}</For></div></Show>
+                <Show when={listError() && threads() === null}>
+                  <StateNotice tone="error" title="Threads are unavailable" action={<button type="button" class="ds-btn ds-btn--primary" onClick={() => void loadList()}>Retry</button>}>
+                    {listError()?.message || 'Threads could not be loaded.'}
+                  </StateNotice>
+                </Show>
+                <Show when={threads() !== null}>
+                  <Show when={(threads() || []).length} fallback={<EmptyState title="No conversations yet" text={`Create a thread to discuss work in ${workspaceName()}.`} action={<button id="thread-empty-create" type="button" class="ds-btn ds-btn--primary" onClick={() => props.onNavigate({ ...props.route, tab: 'new' })}>Create thread</button>} />}>
+                    <For each={threads()}>{t => { const s = threadState(t); const q = queueSummary(threads() ?? [], t); return <button class={`record thread-row${t.thread_id === routeId() ? ' selected' : ''}`} data-thread={t.thread_id} aria-pressed={t.thread_id === routeId()} onClick={() => selectRow(t.thread_id)}><span class="row-heading"><strong>{t.title || `Thread ${t.thread_id.slice(0, 8)}`}</strong><StatusText tone={statusTone(s)}>{label(s)}</StatusText></span><p>{workspaceName()} · {targetDescription(t)}</p><small>{q.items.length ? `${q.waiting ? `${q.waiting} waiting` : `${q.items.length} pending`}${q.paused ? ' · paused queue' : ''}` : 'No pending messages'}</small></button>; }}</For>
+                  </Show>
+                  <Show when={invalid().length}><StateNotice tone="warning" title={`Invalid thread records (${invalid().length})`}>{invalid().map(invalidReason).join(' ')}</StateNotice></Show>
+                </Show>
               </Show>
             </Show>
           </div>
         </>
       }
     >
-      <Show when={active()} fallback={<EmptyState title="Threads require the live dashboard" text="Open the host dashboard to browse discussions. Imported snapshots and file pages cannot reach discussions." />}>
+      <Show when={view() === 'denied'}>
+        <EmptyState title={deniedTitle()} text={deniedText()} action={<button id="thread-open-workspaces" type="button" class="ds-btn ds-btn--primary" onClick={() => props.onNavigate({ dest: 'workspaces', ws: wsId() })}>Open workspaces</button>} />
+      </Show>
+      <Show when={view() !== 'denied'}>
+        <Show when={readView() === 'loading'}><RegionalSkeleton rows={5} label="Reading the conversation" /></Show>
+        <Show when={readView() === 'empty'}><EmptyState title="Start a conversation" text="Choose New thread, select where it runs, then send your first message." /></Show>
+        <Show when={readView() !== 'loading' && readView() !== 'empty'}>
         <Show when={thread()} fallback={<Show when={requestedMissing()} fallback={<EmptyState title="No thread selected" text="Select a thread to read its transcript and compose a message." />}><div class="ds-callout error" id="thread-requested-unavailable" role="status"><div><p>Requested thread {routeId()} is unavailable.</p><p class="small muted">It is not in this workspace's thread list, so nothing was selected, seeded or launched.</p></div></div></Show>}>
           <div class="object-head">
             <div class="object-top detail-title"><h2 tabindex="-1" ref={el => (titleEl = el)}>{thread()?.title || `Thread ${routeId().slice(0, 8)}`}</h2><StatusText tone={statusTone(state())}>{label(state())}</StatusText></div>
             <p class="small muted mono thread-meta">Runs in {targetDescription(thread())} · {workspaceName()} · Thread {routeId()}{thread()?.generation != null ? ` · generation ${thread()?.generation}` : ''}{thread()?.updated_at ? ` · updated ${time(thread()?.updated_at)} ` : ''}</p>
           </div>
           <Show when={help()[1]}><StateNotice tone={noticeTone(help()[2])} title={help()[0]}>{help()[1]}</StateNotice></Show>
-          <Show when={historyError()}><div class="ds-callout error" role="alert"><div><p>{historyError()}</p></div><button id="thread-error-retry" type="button" class="ds-btn" onClick={() => { setHistoryError(''); void loadHistory(); }}>Retry</button></div></Show>
-          <Show when={mutationError()}><div class="ds-callout error" role="alert"><div><p>{mutationError()}</p></div></div></Show>
+          <Show when={readView() === 'error'}>
+            <StateNotice tone="error" title="Thread state could not be read" action={<button id="thread-error-retry" type="button" class="ds-btn" onClick={() => { void loadHistory(); void loadList(); }}>Retry thread</button>}>
+              Your draft and earlier messages are kept. Refresh the thread before sending.
+            </StateNotice>
+          </Show>
+          <Show when={readView() === 'offline'}>
+            <StateNotice tone="warning" title={stream() === 'stopped' ? 'Live updates stopped' : 'Live updates reconnecting'} action={<button id="thread-reconnect" type="button" class="ds-btn ds-btn--primary" onClick={reconnectThread}>Reconnect thread</button>}>
+              The partial answer and your unsent draft are kept. No message will be resent automatically.
+            </StateNotice>
+          </Show>
+          <Show when={readView() === 'stale'}>
+            <StateNotice tone="warning" title="Thread state needs checking" action={<button id="thread-stale-refresh" type="button" class="ds-btn ds-btn--primary" onClick={refreshThread}>Refresh thread</button>}>
+              The transcript is retained, but response ownership was last checked {listObservedAt() ? time(new Date(listObservedAt()!).toISOString()) : 'recently'}. Refresh before sending.
+            </StateNotice>
+          </Show>
+          <Show when={incompleteTail()}>
+            <StateNotice tone="warning" title="Some history could not be read">The final session line is incomplete. Parsed messages remain available.</StateNotice>
+          </Show>
+          <Show when={mutationError()}><div id="thread-mutation-error" class="ds-callout error" role="alert"><div><p>{mutationError()}</p></div></div></Show>
           <div class="ds-transcript thread-transcript" role="log" aria-label="Thread transcript" tabindex="0" ref={transcriptEl} onScroll={e => { const el = e.currentTarget; stickBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40; }}>
             <Show when={older() && entries().length}><p><button type="button" data-thread-older disabled={!!pending()} onClick={() => { const first = entries()[0]?.id; if (first) void loadHistory(first, true); }}>Load older messages</button></p></Show>
             <Show when={loadingHistory()}><p class="small muted">Loading transcript…</p></Show>
@@ -722,10 +833,9 @@ export default function Conversations(props: Props) {
             <Show when={partial()}><div class="ds-turn ds-turn--bot thread-entry assistant"><div class="ds-turn__meta"><strong>Pi</strong><span>responding</span></div><div class="status-markdown ds-turn__body thread-partial" innerHTML={statusMarkdown(partial())} /></div></Show>
             <Show when={toolNote()}><p class="small muted ds-toolrail">{toolNote()}</p></Show>
             <Show when={!entries().length && !partial() && !toolNote() && !loadingHistory()}><p class="small muted">No messages recorded for this thread yet.</p></Show>
-            <Show when={incompleteTail()}><p class="small warn">The session file ends with an incomplete line; it is excluded from parsed history.</p></Show>
           </div>
           <div id="thread-queue" class="rows queue" aria-label="Pending messages"><For each={thread()?.queue || []}>{item => { const uncertain = item.state === 'uncertain'; return <div class="info-row"><p><strong>{uncertain ? 'Delivery uncertain' : item.state === 'delivering' ? 'Delivering' : 'Queued'}</strong>{item.queue_position != null ? ` · queue position ${item.queue_position}` : ''}</p><p class="small thread-text">{item.text || ''}</p><Show when={uncertain}><small class="warn">The prompt may or may not have been delivered. Discard removes it; retrying sends it again and may duplicate the response.</small><p class="thread-actions"><button type="button" data-thread-discard={item.id} disabled={!actionable() || ['discard', 'resend'].includes(pending())} onClick={() => void simpleAction('/api/thread/discard', 'discard', { id: item.id, resend: false })}>Discard message</button><button type="button" data-thread-resend={item.id} disabled={!actionable() || ['discard', 'resend'].includes(pending())} onClick={() => void simpleAction('/api/thread/discard', 'resend', { id: item.id, resend: true })}>Retry as new message</button></p></Show></div>; }}</For></div>
-          <Show when={state() === 'history-only'} fallback={<div class="composer thread-composer"><label for="thread-draft">Message thread</label><textarea id="thread-draft" class="ds-input" rows="4" placeholder="Write a message. Enter sends; Shift+Enter adds a newline." ref={draftEl} onInput={e => { const value = e.currentTarget.value; setDraft(value); if (projectedWs && projectedId) setThreadDraft(projectedWs, projectedId, { draft: value, retry: sendPending() }); }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }} /><div class="composer-foot"><p class="small muted">Enter sends · Shift+Enter newline. Messages queue in order over the single local response slot.</p><ActionBar variant="inline"><button id="thread-send" type="button" class="ds-btn ds-btn--primary" data-thread-send disabled={!actionable() || !!pending() || !draft().trim()} onClick={() => void send()}>{pending() === 'send' ? 'Sending…' : 'Send'}</button><Show when={state() === 'active' || thread()?.owns_response}><button id="thread-stop" type="button" class="ds-btn" data-thread-stop disabled={!actionable() || pending() === 'stop'} onClick={() => void simpleAction('/api/thread/stop', 'stop')}>{pending() === 'stop' ? 'Stopping…' : 'Stop'}</button></Show><Show when={state() === 'paused'}><button id="thread-resume" type="button" class="ds-btn" data-thread-resume disabled={!actionable() || pending() === 'resume'} onClick={() => void simpleAction('/api/thread/resume', 'resume')}>{pending() === 'resume' ? 'Resuming…' : 'Resume'}</button></Show><button type="button" class="ds-btn" data-thread-refresh onClick={refreshThread}>Refresh thread</button></ActionBar></div></div>}>
+          <Show when={state() === 'history-only'} fallback={<div class="composer thread-composer"><label for="thread-draft">Message thread</label><textarea id="thread-draft" class="ds-input" rows="4" placeholder="Write a message. Enter sends; Shift+Enter adds a newline." ref={draftEl} onInput={e => { const value = e.currentTarget.value; setDraft(value); if (projectedWs && projectedId) setThreadDraft(projectedWs, projectedId, { draft: value, retry: sendPending() }); }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }} /><div class="composer-foot"><Show when={!composer().sendEnabled && composer().reason}><p class="small warn">{composer().reason}</p></Show><p class="small muted">Enter sends · Shift+Enter newline. Messages queue in order over the single local response slot.</p><ActionBar variant="inline"><button id="thread-send" type="button" class="ds-btn ds-btn--primary" data-thread-send disabled={!composer().sendEnabled} onClick={() => void send()}>{pending() === 'send' ? 'Sending…' : 'Send'}</button><Show when={state() === 'active' || thread()?.owns_response}><button id="thread-stop" type="button" class="ds-btn" data-thread-stop disabled={!actionable() || pending() === 'stop'} onClick={() => void simpleAction('/api/thread/stop', 'stop')}>{pending() === 'stop' ? 'Stopping…' : 'Stop'}</button></Show><Show when={state() === 'paused'}><button id="thread-resume" type="button" class="ds-btn" data-thread-resume disabled={!actionable() || pending() === 'resume'} onClick={() => void simpleAction('/api/thread/resume', 'resume')}>{pending() === 'resume' ? 'Resuming…' : 'Resume'}</button></Show><button type="button" class="ds-btn" data-thread-refresh onClick={refreshThread}>Refresh thread</button></ActionBar></div></div>}>
             <StateNotice tone="neutral">{state() === 'history-only' ? 'This thread is history only: browsing and reading work, but sending and resuming are unavailable. Source sessions are never modified.' : "Message controls are available on the host's live dashboard."}</StateNotice>
           </Show>
           <ActionBar>
@@ -734,6 +844,7 @@ export default function Conversations(props: Props) {
             <p class="small muted">The local stream may stay silent for 15 seconds between keepalives.</p>
             <Show when={notice()}><p class="small muted">{notice()}</p></Show>
           </ActionBar>
+        </Show>
         </Show>
       </Show>
       <span class="sr-only" aria-live="polite">{announcer()}</span>

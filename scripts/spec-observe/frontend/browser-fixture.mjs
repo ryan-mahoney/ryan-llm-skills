@@ -112,7 +112,7 @@ let localOperator=false;
 let tick=0,staleLaunch=!plannedLaunch,failSend=false,delaySend=false,delayBrief=false,delayDispatchBrief=false,failDispatchBrief=false,delayDispatchSuggestions=false;
 // Route-drafts only additive controls: deliberate held/rejected /api/threads
 // reads and an opt-in long transcript. Every default stays unchanged.
-let holdThreads=false,failThreads=false,longHistory=false,holdSend=false;
+let holdThreads=false,holdThreadsWorkspace='',failThreads=false,longHistory=false,holdSend=false,incompleteTail=false,invalidRecords=false,listFailStatus=0,historyFailStatus=0;
 // EV-7 new-thread creation controls: delay-create holds the next create until
 // release-create; fail-create rejects it. Both default off, so the ordinary
 // immediate create path is unchanged.
@@ -154,7 +154,7 @@ const projectsBackup=join(root,'projects-backup');
 const invalidKitDir=join(projectsDir,'broken');
 const partialKit=`version: 1\nid: fixture\nname: Browser fixture\nrepositories:\n  - id: fixture-repo\n    path: ${checkout}\n    role: Browser verification\n  - id: fixture-missing\n    path: ${join(root,'checkout-missing')}\n    role: Missing checkout\ncontext:\n  - ${contextPath}\n  - ${join(root,'outside-context.md')}\n`;
 const exists=async path=>{try{await access(path);return true;}catch{return false;}};
-const resetBoundaryControls=()=>{boundary.catalogFail=false;boundary.detailFail=false;boundary.stateFail=false;boundary.catalogDelayMs=0;boundary.detailDelayMs=0;boundary.detailDelayId='';boundary.stateDelayMs=0;boundary.stateClockOffsetMs=0;boundary.catalogMode='healthy';delayDispatchBrief=false;failDispatchBrief=false;delayDispatchSuggestions=false;holdDispatchPreview=false;holdDispatchLaunch=false;dispatchPreviewRefusal='none';dispatchLaunchRefusal='none';dispatchLaunchOutcome='live';launchedAssignments.clear();delayCreate=false;failCreate=false;releaseWaiters(dispatchPreviewWaiters);releaseWaiters(dispatchLaunchWaiters);releaseWaiters(createWaiters);if(activeBoundary.size===0){boundaryLog.length=0;boundaryAttempt=0;}};
+const resetBoundaryControls=()=>{boundary.catalogFail=false;boundary.detailFail=false;boundary.stateFail=false;boundary.catalogDelayMs=0;boundary.detailDelayMs=0;boundary.detailDelayId='';boundary.stateDelayMs=0;boundary.stateClockOffsetMs=0;boundary.catalogMode='healthy';delayDispatchBrief=false;failDispatchBrief=false;delayDispatchSuggestions=false;holdDispatchPreview=false;holdDispatchLaunch=false;dispatchPreviewRefusal='none';dispatchLaunchRefusal='none';dispatchLaunchOutcome='live';launchedAssignments.clear();delayCreate=false;failCreate=false;holdThreadsWorkspace='';incompleteTail=false;invalidRecords=false;listFailStatus=0;historyFailStatus=0;releaseWaiters(dispatchPreviewWaiters);releaseWaiters(dispatchLaunchWaiters);releaseWaiters(createWaiters);if(activeBoundary.size===0){boundaryLog.length=0;boundaryAttempt=0;}};
 async function moveProjectsToBackup(){await rm(projectsBackup,{recursive:true,force:true});await rename(projectsDir,projectsBackup);}
 async function restoreHealthyWorkspace(){if(await exists(projectsBackup)){await rm(projectsDir,{recursive:true,force:true});await rename(projectsBackup,projectsDir);}await rm(invalidKitDir,{recursive:true,force:true});await writeFile(join(workspace.directory,'kit.yaml'),healthyKit);}
 async function applyCatalogMode(mode){if(mode==='empty'){await restoreHealthyWorkspace();await moveProjectsToBackup();await mkdir(projectsDir,{recursive:true});}else if(mode==='missing_projects'){await restoreHealthyWorkspace();await moveProjectsToBackup();}else if(mode==='partial'){await restoreHealthyWorkspace();await mkdir(invalidKitDir,{recursive:true});await writeFile(join(invalidKitDir,'kit.yaml'),'id: [broken\n');await writeFile(join(workspace.directory,'kit.yaml'),partialKit);}else{await restoreHealthyWorkspace();}boundary.catalogMode=mode;}
@@ -179,8 +179,8 @@ async function fixtureAssignmentTarget(threadId){
 const discussion={
  async prepareSpecTarget(input){posts.push({name:'prepareSpecTarget',input});return prepareAssignmentSpecTarget({storageRoot:storage,workspace_id:input.workspace_id,target:await fixtureAssignmentTarget(input.thread_id),specPackage:input.spec_package});},
  async suggestions(input){posts.push({name:'suggestions',input});if(delaySuggestions)await new Promise(r=>setTimeout(r,650));const thread=threads.find(item=>item.thread_id===input.thread_id);if(!thread)throw Object.assign(new Error('Thread not found'),{code:'thread-not-found'});const target=thread.target&&typeof thread.target==='object'?thread.target:{};let executionDir=workspace.directory;if(target.kind==='repository'){const match=dispatchRepos.find(repo=>repo.id===target.repository_id);if(match)executionDir=await realpath(match.path);}else if(target.kind==='worktree'&&typeof target.path==='string'){executionDir=await realpath(target.path);}return referenceCatalog.suggest({workspace:{...workspace,repositories:dispatchRepos.map(repo=>({id:repo.id,path:repo.path}))},executionDir,kind:input.kind,query:input.query});},
- async list({workspace_id}){if(holdThreads)await waitForRelease(threadWaiters);if(failThreads)throw Object.assign(new Error('Fixture thread list unavailable'),{code:'service-closed'});return {threads:workspace_id==='fixture'?copied(threads):[],invalid:[]};},
- async history({before}){if(before)return {entries:[{id:'entry-old',message:{role:'user',content:'Older message'}}],truncated:false,incomplete_tail:false};if(longHistory)return {entries:Array.from({length:48},(_,index)=>({id:`entry-long-${index+1}`,timestamp:new Date(Date.now()-index*60000).toISOString(),message:{role:index%2?'assistant':'user',content:`Long history message ${index+1}. Fixture transcript line for the retained reading position. A second sentence keeps each row tall enough to scroll.`}})),truncated:true,incomplete_tail:false};return {entries:copied(entries),truncated:true,incomplete_tail:false};},
+ async list({workspace_id}){if(holdThreads&&(!holdThreadsWorkspace||workspace_id===holdThreadsWorkspace))await waitForRelease(threadWaiters);if(failThreads)throw Object.assign(new Error('Fixture thread list unavailable'),{code:'service-closed'});return {threads:workspace_id==='fixture'?copied(threads):[],invalid:workspace_id==='fixture'&&invalidRecords?[{reason:'invalid-json'},{reason:'fixture-secret-token'}]:[]};},
+ async history({before}){if(before)return {entries:[{id:'entry-old',message:{role:'user',content:'Older message'}}],truncated:false,incomplete_tail:false};if(longHistory)return {entries:Array.from({length:48},(_,index)=>({id:`entry-long-${index+1}`,timestamp:new Date(Date.now()-index*60000).toISOString(),message:{role:index%2?'assistant':'user',content:`Long history message ${index+1}. Fixture transcript line for the retained reading position. A second sentence keeps each row tall enough to scroll.`}})),truncated:true,incomplete_tail:false};return {entries:copied(entries),truncated:true,incomplete_tail:incompleteTail};},
  async create(input){const entry={name:'create',input};posts.push(entry);if(delayCreate)await waitForRelease(createWaiters);if(failCreate)throw Object.assign(new Error('Fixture conversation creation failed'),{code:'service-closed'});const t={...threads[0],thread_id:randomUUID(),title:input.title||'New thread',target:input.target||{kind:'workspace'},queue:[],attention:null};threads=[t,...threads];createdThreads.push({thread_id:t.thread_id,workspace_id:t.workspace_id,target:copied(t.target)});entry.result={thread_id:t.thread_id};return copied(t);},
  async send(input){posts.push({name:'send',input});if(holdSend)await waitForRelease(sendWaiters);if(delaySend)await new Promise(r=>setTimeout(r,700));if(failSend)throw Object.assign(new Error('Temporary fixture failure'),{code:'service-closed'});entries.push({id:randomUUID(),message:{role:'user',content:input.text}});return {state:'accepted'};},
  async stop(input){posts.push({name:'stop',input});threads=threads.map(t=>t.thread_id===input.thread_id?{...t,queue_paused:true,owns_response:false}:t);return {};},
@@ -225,6 +225,11 @@ const server=createServer(async(req,res)=>{
   if(action==='release-create'){delayCreate=false;releaseWaiters(createWaiters);}
   if(action==='fail-create')failCreate=url.searchParams.get('value')==='true';
   if(action==='hold-threads')holdThreads=url.searchParams.get('value')==='true';
+  if(action==='hold-threads-workspace')holdThreadsWorkspace=url.searchParams.get('value')??'';
+  if(action==='incomplete-tail')incompleteTail=url.searchParams.get('value')==='true';
+  if(action==='invalid-records')invalidRecords=url.searchParams.get('value')==='true';
+  if(action==='list-fail-status')listFailStatus=numberValue(url.searchParams.get('value'),0,599);
+  if(action==='history-fail-status')historyFailStatus=numberValue(url.searchParams.get('value'),0,599);
   if(action==='release-threads'){holdThreads=false;releaseWaiters(threadWaiters);}
   if(action==='fail-threads')failThreads=url.searchParams.get('value')==='true';
   if(action==='long-history')longHistory=url.searchParams.get('value')==='true';
@@ -258,11 +263,18 @@ const server=createServer(async(req,res)=>{
   if(action==='state-delay-ms')boundary.stateDelayMs=numberValue(url.searchParams.get('value'),0,5000);
   if(action==='state-clock-offset-ms')boundary.stateClockOffsetMs=numberValue(url.searchParams.get('value'),-120000,120000);
   if(action==='catalog-mode')await applyCatalogMode(url.searchParams.get('value')||'healthy');
-  res.setHeader('Content-Type','application/json');res.end(JSON.stringify({...packageIdentity,posts,threads,createdThreads,tick,boundary,threadControls:{holdThreads,failThreads,longHistory},createControls:{delayCreate,failCreate},session:{identity:sessionIdentity,ended:sessionEnded},review:{holdDispatchPreview,holdDispatchLaunch,dispatchPreviewRefusal,dispatchLaunchRefusal,staleLaunch},launch:{outcome:dispatchLaunchOutcome,published:[...launchedAssignments.keys()]},diagnostics:{resolvers:resolverDiagnostics},boundaryLog:boundaryLog.slice(-60),active:[...activeBoundary.values()],launchResolutions:Object.fromEntries(launchResolutions),briefWritesPending,completedBriefWrites}));return;
+  res.setHeader('Content-Type','application/json');res.end(JSON.stringify({...packageIdentity,posts,threads,createdThreads,tick,boundary,threadControls:{holdThreads,holdThreadsWorkspace,failThreads,longHistory,incompleteTail,invalidRecords,listFailStatus,historyFailStatus},createControls:{delayCreate,failCreate},session:{identity:sessionIdentity,ended:sessionEnded},review:{holdDispatchPreview,holdDispatchLaunch,dispatchPreviewRefusal,dispatchLaunchRefusal,staleLaunch},launch:{outcome:dispatchLaunchOutcome,published:[...launchedAssignments.keys()]},diagnostics:{resolvers:resolverDiagnostics},boundaryLog:boundaryLog.slice(-60),active:[...activeBoundary.values()],launchResolutions:Object.fromEntries(launchResolutions),briefWritesPending,completedBriefWrites}));return;
  }
  // Emulate the trusted Serve endpoint so the browser exercises thread-only tokens.
  if(!localOperator){req.headers.host='dashboard.example';if(req.headers.origin)req.headers.origin='https://dashboard.example';}
  const readKind=url.pathname==='/api/workspaces'?'catalog':url.pathname==='/api/workspace'?'detail':url.pathname==='/api/state'?'state':null;
+ // View-state reads: exact list/history HTTP statuses for the denied/error
+ // split, served before the real discussion route.
+ const threadRead=url.pathname==='/api/threads'?'threads':url.pathname==='/api/thread/history'?'history':null;
+ if(threadRead){
+  const status=threadRead==='threads'?listFailStatus:historyFailStatus;
+  if(status){res.writeHead(status,{'Content-Type':'application/json'});res.end(JSON.stringify({error:threadRead==='threads'?'Fixture thread list unavailable':'Fixture transcript read unavailable'}));return;}
+ }
  if(!readKind){dashboard.emit('request',req,res);return;}
  const id=url.searchParams.get('id')??'';
  const attempt={
