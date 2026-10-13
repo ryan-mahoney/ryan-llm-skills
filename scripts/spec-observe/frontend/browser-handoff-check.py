@@ -5,7 +5,7 @@
 """Regression: saved briefs must visibly guide the operator through preview and launch,
 and the hidden launch flow must save a brief without starting work.
 
-Run: uv run --script scripts/spec-observe/frontend/browser-handoff-check.py [--section handoff|brief|review|result]
+Run: uv run --script scripts/spec-observe/frontend/browser-handoff-check.py [--section handoff|brief|review|result|thread]
 Uses isolated fixture storage and fake workers; never launches a real assignment.
 The default handoff journey and the brief section share fixture/browser startup.
 """
@@ -21,7 +21,7 @@ section = args[args.index('--section') + 1] if '--section' in args else 'handoff
 evidence_dir = Path(os.environ['SENTINEL_EVIDENCE_DIR']) if os.environ.get('SENTINEL_EVIDENCE_DIR') else None
 shots_dir = (evidence_dir / 'browser') if evidence_dir else Path('/tmp')
 if evidence_dir: shots_dir.mkdir(parents=True, exist_ok=True)
-receipt = (evidence_dir or Path('/tmp')) / ('ev-10-review.json' if section == 'review' else 'ev-11-result.json' if section == 'result' else 'ev-9-brief.json' if section == 'brief' else 'ev-4-handoff.json')
+receipt = (evidence_dir or Path('/tmp')) / ('ev-12-thread.json' if section == 'thread' else 'ev-10-review.json' if section == 'review' else 'ev-11-result.json' if section == 'result' else 'ev-9-brief.json' if section == 'brief' else 'ev-4-handoff.json')
 summary = {'status':'failed','section':section,'cases':[],'page_errors':[],'captures':[],'boundary':'1440x1100 desktop' if section == 'handoff' else '1280x1100 and 1600x1100 desktop'}
 def passed(name): summary['cases'].append(name)
 def shot(locator, name):
@@ -598,6 +598,172 @@ def run_result(browser, url, thread1):
         try: api.close()
         except Exception: pass
 
+def run_thread(browser, url, thread1, thread2):
+    widths = (1280, 1600)
+    api = browser.new_context()
+    contexts = []
+
+    def control(action='', value=''):
+        response = api.request.get(url + '/__fixture/control?action=' + action + '&value=' + value)
+        assert response.ok
+        return response.json()
+
+    def posts(name):
+        return [x for x in control()['posts'] if x['name'] == name]
+
+    def capture(page, name):
+        path = shots_dir / name
+        page.screenshot(path=str(path), full_page=True)
+        summary['captures'].append(str(path))
+
+    def reset():
+        control('stale-launch', 'false')
+        control('hold-dispatch-preview', 'false')
+        control('hold-dispatch-launch', 'false')
+        control('dispatch-preview-refusal', 'none')
+        control('dispatch-launch-refusal', 'none')
+        control('dispatch-launch-outcome', 'live')
+        control('clear-launch-publications')
+
+    def open(width):
+        context = browser.new_context(viewport={'width': width, 'height': 1100}, device_scale_factor=1)
+        contexts.append(context)
+        page = context.new_page()
+        errors = []
+        page.on('pageerror', lambda e: errors.append(str(e)))
+        return page, errors
+
+    def save_review_launch(page, title, content):
+        expect(page.locator('#launch-brief-title')).to_be_visible()
+        page.locator('#launch-brief-title').fill(title)
+        page.locator('#launch-brief-content').fill(content)
+        page.locator('#launch-save').click()
+        expect(page.locator('#launch-assignment-launch')).to_be_enabled()
+        page.locator('#launch-assignment-launch').click()
+        expect(page.locator('#launch-result-facts')).to_be_visible()
+        expect(page.locator('#launch-result-discuss')).to_be_visible()
+
+    def finish(errors, name):
+        assert not errors, errors
+        summary['page_errors'].extend(errors)
+        passed(name)
+
+    try:
+        # Entry: thread Prepare opens the same launch identity and the old
+        # in-thread handoff composer is gone; the server binds the target.
+        for width in widths:
+            reset()
+            page, errors = open(width)
+            page.goto(url + '/#/conversations?ws=fixture&id=' + thread1, wait_until='domcontentloaded')
+            expect(page.locator('#thread-draft')).to_be_visible()
+            for selector in ('#thread-brief-title', '#thread-brief-content', '#thread-handoff-status', '[data-thread-preview]', '[data-thread-launch]', '#thread-preview', '#thread-result'):
+                assert page.locator(selector).count() == 0, selector
+            expect(page.locator('#thread-prepare-assignment')).to_be_visible()
+            capture(page, f'thread-entry-{width}.png')
+            page.locator('#thread-prepare-assignment').click()
+            expect(page).to_have_url(re.compile(r'#/launch\?[^#]*thread=' + re.escape(thread1)))
+            hash_value = page.evaluate('location.hash')
+            assert 'target=fixture-repo' in hash_value, hash_value
+            assert 'tab=brief' in hash_value, hash_value
+            page.locator('#launch-brief-title').fill('Thread entry brief')
+            page.locator('#launch-brief-content').fill('Outcome\nPrepare the launch brief from the thread entry.')
+            page.locator('#launch-save').click()
+            # Requested facts render the route-carried repository identity while
+            # the contract resolves; the resolved contract facts stay
+            # server-bound and are never invented from the client route.
+            expect(page.locator('#launch-review-requested [data-fact="target"] dd')).to_have_text('fixture-repo')
+            expect(page.locator('.launch-contract [data-fact="target"] dd')).to_have_text('Whole workspace')
+            assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+            finish(errors, f'thread Prepare opens the same launch identity with the server-bound target ({width})')
+
+        # Return: Discuss seeds the exact thread once without sending; a thread
+        # switch or remount cannot replay the seed.
+        for width in widths:
+            reset()
+            page, errors = open(width)
+            page.goto(url + '/#/conversations?ws=fixture&id=' + thread1, wait_until='domcontentloaded')
+            page.locator('#thread-prepare-assignment').click()
+            save_review_launch(page, 'Thread result brief', 'Outcome\nReturn the result draft to this thread.')
+            sends_before = len(posts('send'))
+            page.locator('#launch-result-discuss').click()
+            expect(page).to_have_url(re.compile(r'#/conversations\?ws=fixture&id=' + re.escape(thread1)))
+            draft = page.locator('#thread-draft')
+            expect(draft).not_to_have_value('')
+            seeded = draft.input_value()
+            assert seeded.startswith('Assignment '), seeded
+            assert len(posts('send')) == sends_before
+            capture(page, f'thread-return-{width}.png')
+            page.locator('[data-thread="' + thread2 + '"]').click()
+            expect(draft).to_have_value('')
+            page.locator('[data-thread="' + thread1 + '"]').click()
+            expect(draft).to_have_value('')
+            page.goto(url + '/#/conversations?ws=fixture&id=' + thread1, wait_until='domcontentloaded')
+            expect(page.locator('#thread-draft')).to_have_value('')
+            assert len(posts('send')) == sends_before
+            finish(errors, f'Discuss result returns the exact thread and the one-use seed never replays ({width})')
+
+        # Missing requested thread: unavailable feedback, no fallback selection,
+        # and the seeded draft for that id is never misplaced.
+        for width in widths:
+            reset()
+            page, errors = open(width)
+            missing = '33333333-3333-4333-8333-333333333333'
+            page.goto(url + '/#/conversations?ws=fixture&id=' + thread1, wait_until='domcontentloaded')
+            expect(page.locator('#thread-draft')).to_be_visible()
+            page.evaluate("location.hash = '#/launch?ws=fixture&thread=" + missing + "&tab=brief'")
+            save_review_launch(page, 'Missing thread brief', 'Outcome\nSeed a draft for a thread that is not in the list.')
+            sends_before = len(posts('send'))
+            page.locator('#launch-result-discuss').click()
+            expect(page).to_have_url(re.compile(r'#/conversations\?ws=fixture&id=' + re.escape(missing)))
+            expect(page.locator('#thread-requested-unavailable')).to_be_visible()
+            assert page.locator('[data-thread][aria-pressed="true"]').count() == 0
+            assert page.locator('#thread-draft').count() == 0
+            assert page.locator('#thread-prepare-assignment').count() == 0
+            assert len(posts('send')) == sends_before
+            capture(page, f'thread-missing-{width}.png')
+            finish(errors, f'missing requested thread stays unavailable without fallback seeding ({width})')
+
+        # Message composer and queue stay message-scoped: sending posts only the
+        # thread message, and no thread control launches an assignment.
+        for width in widths:
+            reset()
+            page, errors = open(width)
+            page.goto(url + '/#/conversations?ws=fixture&id=' + thread1, wait_until='domcontentloaded')
+            expect(page.locator('#thread-draft')).to_be_visible()
+            expect(page.locator('#thread-queue')).to_have_attribute('aria-label', 'Pending messages')
+            expect(page.locator('[data-thread-refresh]')).to_be_visible()
+            assert page.locator('[data-thread-prepare]').count() == 1
+            launches_before = len(posts('launchAssignment'))
+            dispatches_before = len(posts('dispatchLaunch'))
+            sends_before = len(posts('send'))
+            page.locator('#thread-draft').fill('A normal thread message from the composer.')
+            expect(page.locator('#thread-send')).to_be_enabled()
+            page.locator('#thread-send').click()
+            expect(page.locator('#thread-draft')).to_have_value('')
+            assert len(posts('send')) == sends_before + 1
+            assert posts('send')[-1]['input']['thread_id'] == thread1
+            assert posts('send')[-1]['input']['text'] == 'A normal thread message from the composer.'
+            page.locator('[data-thread-refresh]').click()
+            page.wait_for_timeout(200)
+            assert len(posts('launchAssignment')) == launches_before
+            assert len(posts('dispatchLaunch')) == dispatches_before
+            capture(page, f'thread-composer-{width}.png')
+            # A workspace-bound thread carries no repository route target.
+            page.locator('[data-thread="' + thread2 + '"]').click()
+            expect(page.locator('#thread-prepare-assignment')).to_be_visible()
+            page.locator('#thread-prepare-assignment').click()
+            expect(page).to_have_url(re.compile(r'#/launch\?[^#]*thread=' + re.escape(thread2)))
+            hash_value = page.evaluate('location.hash')
+            assert 'target=' not in hash_value, hash_value
+            finish(errors, f'message composer and queue remain usable and never launch ({width})')
+    finally:
+        for context in contexts:
+            try: context.close()
+            except Exception: pass
+        try: api.close()
+        except Exception: pass
+
+
 started = time.monotonic()
 fixture = subprocess.Popen(['node', str(root / 'browser-fixture.mjs')], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 try:
@@ -606,6 +772,7 @@ try:
     fixture_info = json.loads(fixture.stdout.readline())
     url = fixture_info['url']
     thread1 = fixture_info['thread1']
+    thread2 = fixture_info['thread2']
     with sync_playwright() as p:
         browser = p.chromium.connect_over_cdp(os.environ.get('SENTINEL_CDP_URL', 'http://127.0.0.1:9222'))
         if section == 'brief':
@@ -629,6 +796,15 @@ try:
         elif section == 'result':
             try:
                 run_result(browser, url, thread1)
+                assert not summary['page_errors'], summary['page_errors']
+                summary['status']='passed'
+                print(json.dumps({'status': 'passed', 'elapsed_seconds': round(time.monotonic() - started, 2), 'cases': summary['cases'], 'captures': summary['captures'], 'boundary': summary['boundary'], 'receipt': str(receipt)}))
+            except BaseException as exc:
+                summary['error']=repr(exc)
+                raise
+        elif section == 'thread':
+            try:
+                run_thread(browser, url, thread1, thread2)
                 assert not summary['page_errors'], summary['page_errors']
                 summary['status']='passed'
                 print(json.dumps({'status': 'passed', 'elapsed_seconds': round(time.monotonic() - started, 2), 'cases': summary['cases'], 'captures': summary['captures'], 'boundary': summary['boundary'], 'receipt': str(receipt)}))

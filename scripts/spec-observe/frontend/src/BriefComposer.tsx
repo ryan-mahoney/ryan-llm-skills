@@ -4,7 +4,7 @@ import type { BriefReference, TriggerItem } from './composerTypes';
 
 type Query = { kind: 'skill' | 'file'; text: string; start: number; end: number };
 export type SuggestionSource = { path: string; params: Record<string, string> };
-type Props = { id: string; value: string; references: BriefReference[]; workspaceId: string; suggestionSource?: SuggestionSource; threadId?: string; enabled: boolean; disabled?: boolean;
+type Props = { id: string; value: string; references: BriefReference[]; workspaceId: string; suggestionSource?: SuggestionSource; enabled: boolean; disabled?: boolean;
   onChange(value: string): void; onReferencesChange(refs: BriefReference[]): void; onSave(): void };
 const tokenPresent = (text: string, token: string) => text.split(token).some((part, i, parts) => i < parts.length - 1 && (part === '' || /\s$/.test(part)) && (parts[i + 1] === '' || /^[\s.,;!?)]/.test(parts[i + 1])));
 
@@ -23,11 +23,7 @@ export default function BriefComposer(props: Props) {
   const listId = `${props.id}-suggestions`;
   // Suggestions are keyed by the full source so a caller can move its target
   // without sharing another surface's request or cancellation identity.
-  const requestSource = (): SuggestionSource | null => {
-    if (props.suggestionSource) return props.suggestionSource;
-    if (!props.threadId) return null;
-    return { path: '/api/thread/suggestions', params: { workspace_id: props.workspaceId, thread_id: props.threadId } };
-  };
+  const requestSource = (): SuggestionSource | null => props.suggestionSource ?? null;
   const signature = () => {
     const source = requestSource();
     return source ? `${source.path}\0${JSON.stringify(source.params)}` : '';
