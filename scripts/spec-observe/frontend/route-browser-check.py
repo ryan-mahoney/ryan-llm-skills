@@ -6,7 +6,7 @@
 
 After npm run build --prefix scripts/spec-observe/frontend:
 SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 120s uv run --script \
-  scripts/spec-observe/frontend/route-browser-check.py [--case rail|files|specs|context|catalog|member|search|filters|specs-list|specs-overview|specs-variants]
+  scripts/spec-observe/frontend/route-browser-check.py [--case rail|files|specs|context|catalog|member|search|filters|specs-list|specs-overview|specs-variants|specs-activity]
 Only the fixture substitutes workers; App, adapters and file APIs are real.
 """
 import argparse
@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 args = argparse.ArgumentParser()
-args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog', 'member', 'search', 'filters', 'specs-list', 'specs-overview', 'specs-variants'])
+args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog', 'member', 'search', 'filters', 'specs-list', 'specs-overview', 'specs-variants', 'specs-activity'])
 case = args.parse_args().case
 root = Path(__file__).resolve().parent
 evidence = Path(os.environ.get('SENTINEL_EVIDENCE_DIR', '/tmp/sentinel-route-evidence'))
@@ -546,7 +546,8 @@ try:
 
             open_route('specs', ws='fixture', id=record_key, tab='activity')
             expect(tabs.get_by_role('button', name='Activity', exact=True)).to_have_attribute('aria-pressed', 'true')
-            expect(page.locator('article.detail h2')).to_have_text('browser')
+            expect(page.locator('.object-head h2')).to_have_text('browser')
+            expect(page.locator('.detail-body')).to_contain_text('Step attempts')
             capture_both('activity')
             open_route('specs', ws='fixture', id=record_key, tab='unrecognized')
             expect(tabs.get_by_role('button', name='Overview', exact=True)).to_have_attribute('aria-pressed', 'true')
@@ -767,6 +768,276 @@ try:
                     reference.goto(source.as_uri(), wait_until='domcontentloaded')
                     reference.wait_for_timeout(200)
                     path = evidence / 'reference' / f'13-spec-completed-{width}.png'
+                    reference.screenshot(path=str(path), full_page=True)
+                    reference.close()
+                    report.setdefault('referenceCaptures', []).append(str(path))
+
+        if case == 'specs-activity':
+            (evidence / 'screens').mkdir(parents=True, exist_ok=True)
+            (evidence / 'reference').mkdir(parents=True, exist_ok=True)
+            now = '2026-10-12T12:00:00.000Z'
+            observed = '2026-10-12T11:59:00.000Z'
+            package = receipt['package']
+            record_key = json.dumps(['fixture', package, 'run-1'], separators=(',', ':'))
+            state = {'value': None, 'active': False, 'fail': False}
+
+            def on_state(route):
+                if state['fail']:
+                    route.fulfill(status=503, json={'error': 'fixture-state-failure'})
+                elif state['active']:
+                    route.fulfill(json=state['value'])
+                else:
+                    route.continue_()
+
+            page.route('**/api/state**', on_state)
+
+            def capture(name, width):
+                page.set_viewport_size({'width': width, 'height': 800})
+                path = evidence / 'screens' / f'specs-activity-{name}-{width}.png'
+                page.screenshot(path=str(path), full_page=True)
+                report.setdefault('captures', []).append(str(path))
+
+            def capture_both(name):
+                capture(name, 1280)
+                capture(name, 1600)
+
+            def envelope(runs, coverage_at=observed, published_at=now, coverage_state='complete', coverage_reasons=None,
+                         omitted=None, completion_history=None):
+                coverage = {'state': coverage_state, 'observed_at': coverage_at, 'reasons': coverage_reasons or []}
+                if omitted is not None:
+                    coverage['omitted'] = omitted
+                snapshot = {'workspace': 'fixture', 'coverage': coverage, 'runs': list(runs),
+                            'recently_completed': [], 'planned_packages': [],
+                            'assignments': [], 'assignment_coverage': {'state': 'complete', 'reasons': []}, 'epics': []}
+                if completion_history is not None:
+                    snapshot['completion_history'] = completion_history
+                return {'schema_version': 1, 'generated_at': now,
+                        'observers': [{'observer_id': 'activity-fixture', 'state': 'observing',
+                                       'published_at': published_at, 'snapshot': snapshot}]}
+
+            def activity_run(**extra):
+                value = {
+                    'workspace': 'fixture', 'package': package, 'package_ref': 'fixture/browser',
+                    'assignment_id': 'run-1', 'workflow_id': 'workflow-1', 'execution': 'running',
+                    'workflow_state': 'working', 'is_current_assignment': True,
+                    'activity': 'Building the dashboard', 'obligation': 'Keep editors stable',
+                    'observed_at': observed, 'coverage': {'state': 'complete', 'reasons': []},
+                    'spec_progress': {'current_position': 2, 'total_steps': 5, 'current_name': 'Resolve worker identity'},
+                    'timing': {'started_at': '2026-10-12T11:00:00.000Z', 'attempts': [
+                        {'step': 2, 'name': 'Resolve worker identity', 'state': 'failed', 'attempt_kind': 'implementation',
+                         'started_at': '2026-10-12T11:30:00.000Z'},
+                        {'step': 2, 'name': 'Resolve worker identity', 'state': 'running', 'attempt_kind': 'launch-retry',
+                         'started_at': '2026-10-12T11:58:00.000Z'},
+                        {'step': 1, 'name': 'Bound catalog reads', 'state': 'completed', 'attempt_kind': 'implementation',
+                         'started_at': '2026-10-12T11:00:00.000Z', 'finished_at': '2026-10-12T11:02:00.000Z'},
+                    ]},
+                    'workflow_workers': [{'kind': 'Owner', 'id': 'a71d0c82', 'state': 'running'}],
+                    'workflow_observed_at': observed,
+                    'evidence': {'state': 'recorded', 'verdict': 'ready', 'commit': 'abc123', 'source': 'work-tour.html'},
+                    'conditions': [{'kind': 'worker-lease', 'state': 'open', 'severity': 'attention', 'summary': 'Worker lease unavailable'}],
+                    'incidents': [{'kind': 'focused-verification', 'state': 'open', 'summary': 'Focused verification retained'}],
+                    'actions': [{'action': 'inspect-assignment', 'summary': 'Inspect the exact assignment identity before dispatch'}],
+                    'source_paths': [package + '/spec.md', '/other/source.md'],
+                }
+                value.update(extra)
+                return value
+
+            attempt_rows = lambda: page.locator('section').filter(has=page.get_by_role('heading', name='Step attempts', exact=True)).locator('tbody tr')
+            worker_section = lambda: page.locator('section').filter(has=page.get_by_role('heading', name='Unfinished worker', exact=True))
+
+            # Cold Activity: the delayed shared read shows the table skeleton, not a worker failure.
+            control('state-delay-ms', 1200)
+            cold_started = time.monotonic()
+            open_route('specs', ws='fixture', id=record_key, tab='activity')
+            page.wait_for_timeout(150)
+            assert page.locator('.detail-body .skeletons').count() == 0, 'Activity skeleton rendered before 300ms'
+            expect(page.locator('.object-head h2')).to_have_text('browser')
+            page.locator('.detail-body .skeletons').first.wait_for(timeout=5000)
+            cold_elapsed = time.monotonic() - cold_started
+            assert cold_elapsed >= 0.3, f'Activity skeleton appeared after {cold_elapsed:.2f}s'
+            capture_both('loading')
+            control('state-delay-ms', 0)
+            expect(page.locator('.detail-body')).to_contain_text('Evidence')
+            report['scenarios'].append('Cold Activity link shows the delayed table skeleton and the shared-snapshot Activity body')
+
+            # Primary recorded activity from the controlled snapshot.
+            primary = envelope([activity_run()], coverage_at=now, published_at=now)
+            state['value'] = primary
+            state['active'] = True
+            page.reload()
+            rows = attempt_rows()
+            expect(rows).to_have_count(3)
+            expect(rows.nth(0)).to_contain_text('Attempt 1 · implementation')
+            expect(rows.nth(0)).to_contain_text('Unknown')
+            expect(rows.nth(1)).to_contain_text('Attempt 2 · launch-retry')
+            expect(rows.nth(1)).to_contain_text('2m 0s elapsed')
+            expect(rows.nth(2)).to_contain_text('Step 1 · Bound catalog reads')
+            expect(rows.nth(2)).to_contain_text('2m 0s')
+            expect(worker_section()).to_contain_text('Owner')
+            expect(worker_section()).to_contain_text('a71d0c82')
+            expect(worker_section()).to_contain_text('Checkpoint')
+            detail = page.locator('.detail-body')
+            expect(detail).to_contain_text('Declared ready at commit abc123')
+            expect(detail).to_contain_text('Acceptance not established')
+            expect(detail).to_contain_text('Accepted-step completion was not observed.')
+            expect(detail).to_contain_text('Worker lease unavailable')
+            expect(detail).to_contain_text('Focused verification retained')
+            expect(detail).to_contain_text('inspect-assignment')
+            expect(page.locator('.detail-actions').get_by_role('button', name='Open work tour', exact=True)).to_be_enabled()
+            report['scenarios'].append('Recorded attempts show per-step reasons, numeric durations, terminal-missing Unknown, worker checkpoint and declared evidence with the acceptance caveat')
+            capture_both('primary')
+            worker_section().first.evaluate('(el) => el.scrollIntoView({ block: "start" })')
+            capture_both('primary-middle')
+            page.locator('.detail-body').evaluate('(el) => { el.scrollTop = el.scrollHeight; }')
+            capture_both('primary-lower')
+
+            # Stale observation with a fresh heartbeat: retained durations stay fixed.
+            state['value'] = envelope([activity_run()], coverage_at=observed, published_at=now)
+            page.reload()
+            expect(rows.nth(1)).to_contain_text('1m 0s elapsed')
+            stale_duration = rows.nth(1).locator('td.numeric').inner_text()
+            assert stale_duration == '1m 0s elapsed', stale_duration
+            page.locator('.detail-body').evaluate('(el) => { el.scrollTop = 0; }')
+            capture_both('stale')
+            page.wait_for_timeout(1100)
+            assert rows.nth(1).locator('td.numeric').inner_text() == stale_duration, 'retained Activity duration advanced with the clock'
+            report['scenarios'].append('Stale observation with a fresh heartbeat keeps ongoing attempt durations fixed as the clock advances')
+
+            state['value'] = envelope([activity_run()], coverage_at='2026-10-12T12:00:30.000Z', published_at='2026-10-12T12:00:30.000Z')
+            page.reload()
+            resumed = rows.nth(1).locator('td.numeric').inner_text()
+            assert resumed != stale_duration and 'elapsed' in resumed, resumed
+            expect(rows.nth(1).locator('td.numeric')).not_to_have_text(resumed, timeout=3000)
+            report['scenarios'].append('A fresh subsequent observation resumes and ticks the ongoing attempt duration')
+
+            # In-package source path opens the real Files reader; external path stays text.
+            state['value'] = primary
+            page.reload()
+            coverage = page.locator('#spec-coverage')
+            expect(coverage).to_have_js_property('open', True)
+            expect(coverage).to_contain_text('Run coverage')
+            expect(coverage).to_contain_text('omitted unknown')
+            packaged = coverage.get_by_role('button').filter(has_text=package + '/spec.md')
+            expect(packaged).to_have_count(1)
+            expect(coverage.get_by_role('button').filter(has_text='/other/source.md')).to_have_count(0)
+            expect(coverage).to_contain_text('/other/source.md')
+            packaged.click()
+            expect(page.locator('h1')).to_have_text('Files')
+            assert params()['source'] == ['package'] and params()['id'] == [package] and params()['path'] == ['spec.md'], page.url
+            viewer('spec.md', 'Browser specification')
+            page.go_back()
+            expect(page.locator('h1')).to_have_text('Specs')
+            expect(page.get_by_role('navigation', name='Spec sections').get_by_role('button', name='Activity', exact=True)).to_have_attribute('aria-pressed', 'true')
+            expect(page.locator('#spec-coverage')).to_have_js_property('open', True)
+            report['scenarios'].append('In-package source path opens the real package Files reader and Back restores open Activity coverage; an external path stays plain text')
+
+            # Retained offline failure keeps attempts and durations and recovers through Retry connection.
+            state['fail'] = True
+            page.locator('button:has-text("Refresh state")').first.click()
+            expect(page.locator('.detail-body').get_by_text('Connection unavailable')).to_be_visible()
+            expect(rows).to_have_count(3)
+            offline_duration = rows.nth(1).locator('td.numeric').inner_text()
+            assert offline_duration == '2m 0s elapsed', offline_duration
+            page.wait_for_timeout(1100)
+            assert rows.nth(1).locator('td.numeric').inner_text() == offline_duration, 'offline duration advanced with the clock'
+            expect(rows.nth(2)).to_contain_text('2m 0s')
+            expect(page.locator('.detail-actions').get_by_role('button', name='Retry connection', exact=True)).to_be_visible()
+            capture_both('offline')
+            state['fail'] = False
+            page.locator('.detail-actions').get_by_role('button', name='Retry connection', exact=True).click()
+            expect(page.locator('.detail-body').get_by_text('Connection unavailable')).to_have_count(0)
+            report['scenarios'].append('Retained offline failure keeps attempts and durations visible and recovers through Retry connection')
+
+            # Empty receipt keeps the obligation and the canonical spec action without acceptance.
+            empty_run = {'workspace': 'fixture', 'package': package, 'package_ref': 'fixture/browser',
+                         'assignment_id': 'run-1', 'execution': 'running', 'workflow_state': 'working',
+                         'is_current_assignment': True, 'activity': 'Building the dashboard',
+                         'obligation': 'Keep editors stable', 'observed_at': observed,
+                         'coverage': {'state': 'complete', 'reasons': []},
+                         'timing': {'started_at': '2026-10-12T11:00:00.000Z', 'attempts': []}}
+            state['value'] = envelope([empty_run], coverage_at=now, published_at=now)
+            open_route('specs', ws='fixture', id=record_key, tab='activity')
+            detail = page.locator('.detail-body')
+            expect(detail.get_by_role('heading', name='No attempts recorded', exact=True)).to_be_visible()
+            expect(detail).to_contain_text('Keep editors stable')
+            expect(detail).not_to_contain_text('Acceptance not established')
+            spec_action = detail.get_by_role('button', name='Open spec file', exact=True)
+            expect(spec_action).to_be_visible()
+            capture_both('empty')
+            page.locator('.detail-body').evaluate('(el) => { el.scrollTop = el.scrollHeight; }')
+            capture_both('empty-lower')
+            spec_action.click()
+            expect(page.locator('h1')).to_have_text('Files')
+            viewer('spec.md', 'Browser specification')
+            page.go_back()
+            expect(page.get_by_role('navigation', name='Spec sections').get_by_role('button', name='Activity', exact=True)).to_have_attribute('aria-pressed', 'true')
+            report['scenarios'].append('Empty activity retains the obligation and opens the canonical spec file without asserting acceptance')
+
+            # Partial run and scope coverage: Inspect coverage from Overview switches and focuses.
+            partial_run = activity_run(coverage={'state': 'partial', 'reasons': ['checkout unavailable']})
+            state['value'] = envelope([partial_run], coverage_at=now, coverage_state='partial', coverage_reasons=['scan limit'],
+                                      omitted=3, completion_history={'omitted': 2, 'reasons': ['history cap']})
+            open_route('specs', ws='fixture', id=record_key)
+            inspect = page.locator('.detail-actions').get_by_role('button', name='Inspect coverage', exact=True)
+            expect(inspect).to_be_visible()
+            assert 'ds-btn--primary' in (inspect.get_attribute('class') or ''), inspect.get_attribute('class')
+            inspect.click()
+            assert params()['tab'] == ['activity'], page.url
+            page.wait_for_function("() => document.activeElement && document.activeElement.id === 'spec-coverage'")
+            coverage = page.locator('#spec-coverage')
+            expect(coverage).to_have_js_property('open', True)
+            detail = page.locator('.detail-body')
+            expect(detail).to_contain_text('Evidence coverage incomplete')
+            expect(detail).to_contain_text('scan limit')
+            expect(detail).to_contain_text('checkout unavailable')
+            expect(coverage).to_contain_text('omitted 3')
+            expect(coverage).to_contain_text('omitted 2')
+            expect(coverage).to_contain_text('history cap')
+            capture_both('partial')
+            page.locator('.detail-body').evaluate('(el) => { el.scrollTop = 0; }')
+            capture_both('partial-top')
+            report['scenarios'].append('Partial run and scope reasons plus omission counts stay visible; Inspect coverage switches to Activity and focuses the open disclosure')
+
+            # Cold read failure names the read, not a worker failure, and retries the shared read.
+            state['fail'] = True
+            page.reload()
+            detail = page.locator('.detail-body')
+            expect(detail.get_by_role('heading', name='Activity could not be read', exact=True)).to_be_visible()
+            expect(detail).to_contain_text('does not establish that the worker failed')
+            capture_both('error')
+            state['fail'] = False
+            detail.get_by_role('button', name='Retry activity', exact=True).click()
+            expect(detail.get_by_role('heading', name='Activity could not be read', exact=True)).to_have_count(0)
+            report['scenarios'].append('Cold Activity read failure never claims worker failure and retries from the shared read')
+
+            # Imported snapshot: retained attempt durations stay fixed.
+            imported = envelope([activity_run()], coverage_at=observed, published_at=now)
+            page.locator('#import-file').set_input_files({'name': 'specs-activity-import.json', 'mimeType': 'application/json', 'buffer': json.dumps(imported).encode()})
+            imported_row = page.locator('.records button.record[data-key]').first
+            expect(imported_row).to_have_attribute('aria-pressed', 'true')
+            page.get_by_role('navigation', name='Spec sections').get_by_role('button', name='Activity', exact=True).click()
+            imported_rows = attempt_rows()
+            expect(imported_rows).to_have_count(3)
+            imported_duration = imported_rows.nth(1).locator('td.numeric').inner_text()
+            assert '1m 0s' in imported_duration, imported_duration
+            page.wait_for_timeout(1100)
+            assert imported_rows.nth(1).locator('td.numeric').inner_text() == imported_duration, 'imported duration advanced with the clock'
+            capture_both('imported')
+            report['scenarios'].append('Imported snapshot waits for the selected row, opens Activity and keeps attempt durations fixed')
+
+            design_screens = Path(os.environ['SENTINEL_DESIGN_SCREENS']) if os.environ.get('SENTINEL_DESIGN_SCREENS') else evidence.resolve().parent.parent.parent / 'designs' / 'app-ui' / 'screens'
+            for screen in ('02-spec-activity', '34-spec-activity-empty', '35-spec-activity-loading', '36-spec-activity-error',
+                           '37-spec-activity-partial', '38-spec-activity-offline', '39-spec-activity-stale'):
+                source = design_screens / f'{screen}.html'
+                if not source.exists():
+                    report.setdefault('referenceMissing', []).append(screen)
+                    continue
+                for width in (1280, 1600):
+                    reference = context.new_page()
+                    reference.set_viewport_size({'width': width, 'height': 800})
+                    reference.goto(source.as_uri(), wait_until='domcontentloaded')
+                    reference.evaluate('document.fonts.ready')
+                    path = evidence / 'reference' / f'{screen}-{width}.png'
                     reference.screenshot(path=str(path), full_page=True)
                     reference.close()
                     report.setdefault('referenceCaptures', []).append(str(path))
@@ -1033,6 +1304,9 @@ finally:
         fixture.kill()
         fixture.wait()
     report['elapsedSeconds'] = round(time.monotonic() - started, 3)
-    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'step-003-fix-browser.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'sentinel-planned-filter-browser.json' if case == 'filters' else 'specs-list.json' if case == 'specs-list' else 'specs-variants.json' if case == 'specs-variants' else 'specs-overview.json' if case == 'specs-overview' else 'step-002-fix-browser.json'
-    (evidence / filename).write_text(json.dumps(report, indent=2) + '\n')
+    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'step-003-fix-browser.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'sentinel-planned-filter-browser.json' if case == 'filters' else 'specs-list.json' if case == 'specs-list' else 'specs-variants.json' if case == 'specs-variants' else 'specs-overview.json' if case == 'specs-overview' else 'specs-activity.json' if case == 'specs-activity' else 'step-002-fix-browser.json'
+    target = evidence / filename
+    temporary = target.with_name(target.name + '.tmp')
+    temporary.write_text(json.dumps(report, indent=2) + '\n')
+    os.replace(temporary, target)
     print(json.dumps(report, indent=2))

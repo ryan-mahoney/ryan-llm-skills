@@ -2,7 +2,7 @@ import { For, Show, createEffect, createSignal, onCleanup } from 'solid-js';
 import { activeRun, attention, base, esc, inlineMarkdown, runningUnconfirmed, serverNow, str, time } from '../format';
 import { completionLabel, duration as observationDuration, runState, specProgress } from '../observation-format';
 import { linkedAssignmentKey, observationEnd, packageFromKey, packageRelative, specViewState, visibleSpecs, type ObservationContext } from '../spec-state';
-import { PackageDetail } from '../Observations';
+import SpecActivity, { hasActivityFacts } from '../SpecActivity';
 import { ActionBar, EmptyState, MasterDetail, RegionalSkeleton, SectionTabs, StateNotice, StatusText, type SectionTab, type StatusTone } from '../primitives';
 import PlannedAssignment from '../PlannedAssignment';
 import SpecOverview from '../SpecOverview';
@@ -182,6 +182,57 @@ const headTone = (record: WireRecord): StatusTone =>
 export default function SpecsDestination(props: DestinationProps) {
   const record = () => props.records.find(item => item.key === props.route.id) ?? null;
   const context = (): ObservationContext => ({ live: props.live, connectionFailed: props.connectionFailed, now: serverNow() });
+  const view = () => specViewState(props.payload, record(), props.scopedObservers, context());
+  const activityTab = () => tabOf(props.route) === 'activity';
+  const [coverageIntent, setCoverageIntent] = createSignal(false);
+  const [activityLoadingDelayed, setActivityLoadingDelayed] = createSignal(false);
+  let activityLoadingTimer: ReturnType<typeof setTimeout> | undefined;
+  createEffect(() => {
+    if (!activityTab() || view().read !== 'loading') {
+      if (activityLoadingTimer !== undefined) {
+        clearTimeout(activityLoadingTimer);
+        activityLoadingTimer = undefined;
+      }
+      setActivityLoadingDelayed(false);
+      return;
+    }
+    if (activityLoadingTimer === undefined) activityLoadingTimer = setTimeout(() => setActivityLoadingDelayed(true), 300);
+  });
+  onCleanup(() => {
+    if (activityLoadingTimer !== undefined) clearTimeout(activityLoadingTimer);
+  });
+  const recovery = (): 'offline' | 'stale' | 'partial' | null => {
+    const state = view();
+    if (state.offline) return 'offline';
+    if (state.stale && state.observedAt !== null) return 'stale';
+    if (state.partial || state.reasons.length) return 'partial';
+    return null;
+  };
+  const inspectCoverage = () => {
+    if (!activityTab()) {
+      const next: RouteState = { ...props.route };
+      delete next.path;
+      delete next.source;
+      next.tab = 'activity';
+      props.onNavigate(next);
+    }
+    setCoverageIntent(true);
+  };
+  createEffect(() => {
+    if (!coverageIntent()) return;
+    const active = activityTab();
+    const frame = requestAnimationFrame(() => {
+      if (!active) return;
+      const target = document.getElementById('spec-coverage');
+      if (!(target instanceof HTMLDetailsElement)) return;
+      target.open = true;
+      target.tabIndex = -1;
+      target.scrollIntoView({ block: 'start' });
+      target.focus({ preventScroll: true });
+      setCoverageIntent(false);
+    });
+    onCleanup(() => cancelAnimationFrame(frame));
+  });
   const headTitle = () => {
     const item = record();
     if (item) return base(item.package);
@@ -241,6 +292,17 @@ export default function SpecsDestination(props: DestinationProps) {
     if (props.route.ws !== undefined) next.ws = props.route.ws;
     props.onNavigate(next);
   };
+  const recoveryActions = () => <>
+    <Show when={recovery() === 'offline'}>
+      <button class="ds-btn ds-btn--primary" type="button" onClick={props.onRetryConnection}>Retry connection</button>
+    </Show>
+    <Show when={recovery() === 'stale'}>
+      <button class="ds-btn ds-btn--primary" type="button" onClick={() => void props.refresh()}>{activityTab() ? 'Refresh activity' : 'Refresh state'}</button>
+    </Show>
+    <Show when={recovery() === 'partial'}>
+      <button class="ds-btn ds-btn--primary" type="button" onClick={inspectCoverage}>Inspect coverage</button>
+    </Show>
+  </>;
   return (
     <div class="specs-destination">
       <MasterDetail
@@ -259,7 +321,7 @@ export default function SpecsDestination(props: DestinationProps) {
           <Show when={record()}>
             {item => <>
               <Show when={item().planned}>
-                <Show when={tabOf(props.route) === 'overview'}>
+                <Show when={!activityTab()}>
                   <article class="detail planned-spec-summary">
                     <div class="eyebrow">{str(item().workspace)} / Planned spec</div>
                     <div class="detail-title"><div><h2>{base(item().package)}</h2><p class="subtitle mono">{str(item().package_ref)}</p></div><span class="pill muted">Planned</span></div>
@@ -269,32 +331,67 @@ export default function SpecsDestination(props: DestinationProps) {
                   <SpecOverview record={item()} assignments={props.assignments} context={context()} onOpenAgent={openAgent} onOpenEpic={openEpic} />
                   <PlannedAssignment record={item()} live={props.live && props.specsLive} token={props.token} />
                 </Show>
-                <Show when={tabOf(props.route) === 'activity'}>
-                  <EmptyState symbol="◇" title="No run recorded" text="This package is planned. Implementation activity appears after the first run is observed." />
-                </Show>
               </Show>
               <Show when={!item().planned}>
-                <Show when={tabOf(props.route) === 'activity'}>
-                  <PackageDetail
-                    record={item()}
-                    records={props.records}
-                    live={props.specsLive}
-                    previewToken={props.token}
-                    completionToken={props.completionToken}
-                    completionLocalOnly={props.completionLocalOnly}
-                    onComplete={props.onComplete}
-                    onOpenFile={openFile}
-                    onSelect={props.onSelect}
-                  />
-                </Show>
-                <Show when={tabOf(props.route) === 'overview'}>
+                <Show when={!activityTab()}>
                   <SpecOverview record={item()} assignments={props.assignments} context={context()} onOpenAgent={openAgent} onOpenEpic={openEpic} />
                 </Show>
+              </Show>
+              <Show when={activityTab()}>
+                <Show when={view().offline}>
+                  <StateNotice announce={false} tone="warning" title="Connection unavailable">
+                    Last received at {time(view().observedAt ?? undefined)}. These records may have changed on the host; existing activity is retained.
+                  </StateNotice>
+                </Show>
+                <Show when={view().stale && view().observedAt !== null}>
+                  <StateNotice announce={false} tone="warning" title={`Last checked at ${time(view().observedAt ?? undefined)}`}>
+                    {props.live
+                      ? 'Existing content is retained until a fresh observation is received.'
+                      : 'This imported snapshot contains records retained at observation; Refresh activity reconnects to read observations.'}
+                  </StateNotice>
+                </Show>
+                <Show when={view().partial || view().reasons.length}>
+                  <StateNotice announce={false} tone="warning" title={view().partial ? 'Evidence coverage incomplete' : 'Observation diagnostics'}>
+                    <Show when={view().reasons.length} fallback="Coverage is incomplete; recorded activity stays visible.">
+                      <For each={view().reasons}>{(reason, index) => <>{index() ? <br /> : null}{reason}</>}</For>
+                    </Show>
+                  </StateNotice>
+                </Show>
+                <SpecActivity record={item()} context={context()} onOpenFile={openFile} recoveryPrimary={recovery() !== null} />
               </Show>
             </>}
           </Show>
           <Show when={!record()}>
-            <EmptyState symbol="◇" title="Select an observed spec" text="Choose a package to inspect its obligation, activity and files." />
+            <Show when={activityTab()}>
+              <Show when={view().read === 'loading' && activityLoadingDelayed()}>
+                <section class="section">
+                  <div class="section-heading"><h3>Step attempts</h3></div>
+                  <RegionalSkeleton variant="table" rows={3} label="Reading step attempts" />
+                </section>
+                <section class="section">
+                  <div class="section-heading"><h3>Unfinished worker</h3></div>
+                  <RegionalSkeleton rows={1} label="Reading unfinished worker" />
+                </section>
+                <section class="section">
+                  <div class="section-heading"><h3>Evidence</h3></div>
+                  <RegionalSkeleton rows={1} label="Reading evidence" />
+                </section>
+              </Show>
+              <Show when={view().read === 'error'}>
+                <EmptyState
+                  symbol="◇"
+                  title="Activity could not be read"
+                  text="This read failed. It does not establish that the worker failed."
+                  action={<button type="button" class="ds-btn ds-btn--primary" onClick={() => void props.refresh()}>Retry activity</button>}
+                />
+              </Show>
+              <Show when={view().read === 'ready'}>
+                <EmptyState symbol="◇" title="Select an observed spec" text="Choose a package to inspect its obligation, activity and files." />
+              </Show>
+            </Show>
+            <Show when={!activityTab()}>
+              <EmptyState symbol="◇" title="Select an observed spec" text="Choose a package to inspect its obligation, activity and files." />
+            </Show>
           </Show>
         </div>
         <Show when={record()}>
@@ -302,28 +399,69 @@ export default function SpecsDestination(props: DestinationProps) {
             <ActionBar>
               <Show when={item().recent_completion} fallback={
                 <Show when={item().planned} fallback={<>
-                  <button class="ds-btn ds-btn--primary" type="button" onClick={() => selectTab('activity')}>Open spec</button>
+                  {recoveryActions()}
+                  <Show when={activityTab()} fallback={
+                    <button class={recovery() === null ? 'ds-btn ds-btn--primary' : 'ds-btn'} type="button" onClick={() => selectTab('activity')}>Open spec</button>
+                  }>
+                    <Show when={workTourPath(item())} fallback={<>
+                      <Show when={!props.canOpenPackageFiles(item())}>
+                        <span class="sr-only" id="activity-file-reason">Package files are unavailable for this selection.</span>
+                      </Show>
+                      <button
+                        class={recovery() === null && hasActivityFacts(item()) ? 'ds-btn ds-btn--primary' : 'ds-btn'}
+                        type="button"
+                        disabled={!props.canOpenPackageFiles(item())}
+                        aria-describedby={!props.canOpenPackageFiles(item()) ? 'activity-file-reason' : undefined}
+                        onClick={() => props.onOpenPackageFiles(item(), 'spec.md')}
+                      >Open spec file</button>
+                    </>}>
+                      {path => <button class={recovery() === null ? 'ds-btn ds-btn--primary' : 'ds-btn'} type="button" onClick={() => props.onOpenPackageFiles(item(), path())}>Open work tour</button>}
+                    </Show>
+                  </Show>
                   <Show when={assignmentKey()}>
                     <button class="ds-btn" type="button" onClick={openAgent}>Open agent</button>
                   </Show>
                 </>}>
-                  <button class="ds-btn" type="button" disabled={!props.canOpenPackageFiles(item())} onClick={() => props.onOpenPackageFiles(item())}>Open files</button>
+                  <Show when={activityTab()} fallback={
+                    <button class="ds-btn" type="button" disabled={!props.canOpenPackageFiles(item())} onClick={() => props.onOpenPackageFiles(item())}>Open files</button>
+                  }>
+                    {recoveryActions()}
+                    <button class="ds-btn" type="button" disabled={!props.canOpenPackageFiles(item())} onClick={() => props.onOpenPackageFiles(item())}>Open files</button>
+                  </Show>
                 </Show>
               }>
-                <Show when={!workTourPath(item())}>
-                  <span class="sr-only" id="work-tour-reason">{workTourReason(item())}</span>
+                <Show when={activityTab()} fallback={<>
+                  <Show when={!workTourPath(item())}>
+                    <span class="sr-only" id="work-tour-reason">{workTourReason(item())}</span>
+                  </Show>
+                  <button
+                    class="ds-btn ds-btn--primary"
+                    type="button"
+                    disabled={!workTourPath(item())}
+                    aria-describedby={!workTourPath(item()) ? 'work-tour-reason' : undefined}
+                    onClick={() => {
+                      const path = workTourPath(item());
+                      if (path) props.onOpenPackageFiles(item(), path);
+                    }}
+                  >Open work tour</button>
+                  <button class="ds-btn" type="button" disabled={!props.canOpenPackageFiles(item())} onClick={() => props.onOpenPackageFiles(item())}>Open package files</button>
+                </>}>
+                  {recoveryActions()}
+                  <Show when={!workTourPath(item())}>
+                    <span class="sr-only" id="work-tour-reason">{workTourReason(item())}</span>
+                  </Show>
+                  <button
+                    class={recovery() === null ? 'ds-btn ds-btn--primary' : 'ds-btn'}
+                    type="button"
+                    disabled={!workTourPath(item())}
+                    aria-describedby={!workTourPath(item()) ? 'work-tour-reason' : undefined}
+                    onClick={() => {
+                      const path = workTourPath(item());
+                      if (path) props.onOpenPackageFiles(item(), path);
+                    }}
+                  >Open work tour</button>
+                  <button class="ds-btn" type="button" disabled={!props.canOpenPackageFiles(item())} onClick={() => props.onOpenPackageFiles(item())}>Open package files</button>
                 </Show>
-                <button
-                  class="ds-btn ds-btn--primary"
-                  type="button"
-                  disabled={!workTourPath(item())}
-                  aria-describedby={!workTourPath(item()) ? 'work-tour-reason' : undefined}
-                  onClick={() => {
-                    const path = workTourPath(item());
-                    if (path) props.onOpenPackageFiles(item(), path);
-                  }}
-                >Open work tour</button>
-                <button class="ds-btn" type="button" disabled={!props.canOpenPackageFiles(item())} onClick={() => props.onOpenPackageFiles(item())}>Open package files</button>
               </Show>
             </ActionBar>
           )}
