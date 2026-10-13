@@ -3,6 +3,7 @@ import { afterEach, test } from 'node:test';
 import { activeRun, attention, packageFilterMatches, setClock, statusMarkdown } from './format';
 import { collectAssignments, collectEpics, collectRecords, normalizeEnvelope, type Envelope, type Observer } from './model';
 import { completionLabel, epicMemberTone, epicStats, runState, specProgress } from './observation-format';
+import { specReadiness } from './readiness';
 
 const now = '2026-10-10T12:00:00.000Z';
 const observer = (id: string, workspace: string, snapshot: Record<string, any>, overrides: Record<string, any> = {}):Observer => ({
@@ -205,4 +206,69 @@ test('status markdown escapes raw HTML, rejects javascript links and keeps HTTP 
   assert.doesNotMatch(html, /<img\b/);
   assert.doesNotMatch(html, /href="javascript:/i);
   assert.match(html, /<a href="https:\/\/example\.com\/path"/);
+});
+
+// Run from scripts/spec-observe/frontend: node --import tsx --test --test-name-pattern='starting assignment' src/model.test.ts
+test('collectRecords projects a live starting assignment without receipts and a real receipt replaces it', () => {
+  const planned = {
+    workspace: 'w', package_ref: 'w/browser', package: '/store/w/specs/browser', planned_at: now,
+    step_count: 7, prepared: true,
+    preparation: { outcome: 'prepared', reported_at: now, source: '/store/w/specs/browser/spec-prepare.md', read: 'ok', bytes: 10 },
+    decision: null, receipts: [], worktree_recorded: null,
+    targets: [{ id: 'main', primary: '/store/w' }], source_paths: ['spec.md'],
+  };
+  const start = { assignment_id: 'start-1', workspace: 'w', spec_package: '/store/w/specs/browser', display: 'live', skill: 'spec-end-to-end' };
+  const inventory = (snapshot: Record<string, any> = {}) => observer('inventory', 'w', { planned_packages: [planned], assignments: [start], assignment_coverage: { state: 'complete' }, ...snapshot });
+
+  const projected = collectRecords(normalizeEnvelope(envelope(inventory())));
+  assert.equal(projected.length, 1);
+  assert.equal(projected[0].implementation_starting, true);
+  assert.equal(projected[0].planned, undefined);
+  assert.equal(projected[0].assignment_id, 'start-1');
+  assert.equal(projected[0].key, JSON.stringify(['w', '/store/w/specs/browser', 'planned-package', null]));
+  assert.equal(projected[0].source_paths[0], 'spec.md');
+  assert.equal(packageFilterMatches(projected[0], 'active'), true);
+  assert.equal(packageFilterMatches(projected[0], 'ready'), false);
+  assert.equal(packageFilterMatches(projected[0], 'planned'), false);
+  assert.equal(packageFilterMatches(projected[0], 'attention'), false);
+  assert.deepEqual(projected.filter(record => packageFilterMatches(record, 'ready')), []);
+  assert.equal(specReadiness(projected[0]).state, 'starting');
+
+  const planning = collectRecords(normalizeEnvelope(envelope(inventory({ assignments: [{ ...start, assignment_id: 'plan-1', skill: 'spec-architect-initial' }] }))));
+  assert.equal(planning.length, 1);
+  assert.equal(planning[0].planned, true);
+  assert.equal(planning[0].implementation_starting, undefined);
+  assert.equal(packageFilterMatches(planning[0], 'ready'), true);
+  assert.equal(packageFilterMatches(planning[0], 'active'), false);
+  assert.equal(specReadiness(planning[0], { assignments: planning[0].observer.snapshot.assignments }).state, 'planning');
+
+  const receipt = { workspace: 'w', package: '/store/w/specs/browser', assignment_id: 'start-1', execution: 'running', is_current_assignment: true };
+  const withReceipt = collectRecords(normalizeEnvelope(envelope(inventory({ runs: [receipt] }))));
+  assert.equal(withReceipt.filter(record => record.package === '/store/w/specs/browser').length, 1);
+  assert.equal(withReceipt[0].implementation_starting, undefined);
+  assert.equal(withReceipt[0].assignment_id, 'start-1');
+  assert.equal(packageFilterMatches(withReceipt[0], 'active'), true);
+});
+
+// Run from scripts/spec-observe/frontend: node --import tsx --test --test-name-pattern='planned alias matches Ready' src/model.test.ts
+test('planned alias matches Ready and absent facts or incomplete coverage offer no launch', () => {
+  const legacy = { workspace: 'w', package_ref: 'w/legacy', package: '/store/w/specs/legacy' };
+  const records = collectRecords(normalizeEnvelope(envelope(observer('inventory', 'w', { planned_packages: [legacy] }))));
+  const record = records.find(item => item.planned);
+  assert.ok(record);
+  assert.equal(packageFilterMatches(record, 'ready'), true);
+  assert.equal(packageFilterMatches(record, 'ready'), packageFilterMatches(record, 'planned'));
+  const unknown = specReadiness(record);
+  assert.equal(unknown.state, 'unknown');
+  assert.equal(unknown.launchable, false);
+
+  const prepared = {
+    workspace: 'w', package: '/store/w/specs/prepared', package_ref: 'w/prepared', planned: true,
+    step_count: 4, prepared: true, preparation: { outcome: 'prepared' }, decision: null, receipts: [],
+  };
+  const gated = specReadiness(prepared, { coverage: { state: 'partial' } });
+  assert.equal(gated.state, 'ready');
+  assert.equal(gated.launchable, false);
+  assert.match(String(gated.reason), /partial/);
+  assert.equal(specReadiness(prepared, { coverage: { state: 'complete' } }).launchable, true);
 });

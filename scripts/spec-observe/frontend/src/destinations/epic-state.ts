@@ -3,6 +3,10 @@ import type { StatusTone } from '../primitives';
 import type { RouteState } from '../route';
 import type { CatalogEntry } from '../scope';
 import { base, str, stale } from '../format';
+import { epicPlanningIncomplete, memberPlanning, nextToPlan } from '../readiness';
+
+// Destinations read readiness facts from their owning state module.
+export { epicPlanningIncomplete, memberPlanning, nextToPlan };
 import { epicStats } from '../observation-format';
 import { catalogEntryForRecord, workspaceRelativePath } from '../scope';
 

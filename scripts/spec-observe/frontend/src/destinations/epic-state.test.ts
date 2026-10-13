@@ -9,10 +9,13 @@ import {
   epicDocumentLinks,
   epicMemberRequires,
   epicMemberStatus,
+  epicPlanningIncomplete,
   epicRecordedState,
   epicViewState,
   focusMember,
+  memberPlanning,
   memberRecords,
+  nextToPlan,
   visibleEpics,
 } from './epic-state';
 
@@ -238,4 +241,21 @@ test('prototype-name vocabulary stays literal with neutral tone', () => {
     assert.deepEqual(epicRecordedState({ state: key }), { label: key, tone: 'neutral', conflict: false });
     assert.deepEqual(epicMemberStatus({ status: key }), { label: key, tone: 'neutral' });
   }
+});
+
+test('epic planning readiness uses positive preparation instead of legacy statuses', () => {
+  assert.equal(memberPlanning({ name: 'a', status: 'prepared' }), null);
+  assert.equal(epicPlanningIncomplete({ members: [{ name: 'a', status: 'prepared' }] }), true);
+  const positive = { name: 'a', status: 'proposed', planning: { prepared: true, decision: null, step_count: 2, preparation: { outcome: 'prepared' } } };
+  assert.equal(epicPlanningIncomplete({ members: [positive] }), false);
+  assert.equal(epicPlanningIncomplete({ members: [{ name: 'b', status: 'merged' }, positive] }), false);
+  const facts = memberPlanning(positive);
+  assert.equal(facts?.prepared, true);
+  assert.equal(facts?.steps, 2);
+  assert.equal(nextToPlan({ workspace: 'w', members: [positive] }), null);
+  const proposed = {
+    name: 'c', status: 'proposed', package: 'c', workspace: 'w', requires: [],
+    planning: { prepared: false, decision: null, step_count: null, preparation: { outcome: 'missing' }, receipts: [], worktree_recorded: null },
+  };
+  assert.equal(nextToPlan({ workspace: 'w', members: [proposed] })?.name, 'c');
 });

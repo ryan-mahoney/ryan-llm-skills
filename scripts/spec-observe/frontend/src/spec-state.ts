@@ -1,8 +1,8 @@
 import { HttpError } from './api';
-import { attention, packageFilterMatches, stale, str } from './format';
+import { attention, compareReadiness, packageFilterMatches, stale, str } from './format';
 import type { Envelope, Observer, WireRecord } from './model';
 
-export type SpecFilter = 'active' | 'attention' | 'completed' | 'planned';
+export type SpecFilter = 'active' | 'attention' | 'completed' | 'planned' | 'ready';
 export type ObservationContext = { live: boolean; connectionFailed: boolean; now: number | null };
 export type SpecViewState = {
   read: 'loading' | 'error' | 'ready';
@@ -50,6 +50,8 @@ export function visibleSpecs(records: WireRecord[], filter: SpecFilter, query: s
       const aValid = Number.isFinite(aAt), bValid = Number.isFinite(bAt);
       if (aValid && bValid && aAt !== bAt) return bAt - aAt;
       if (aValid !== bValid) return aValid ? -1 : 1;
+    } else if (filter === 'planned' || filter === 'ready') {
+      return compareReadiness(a, b);
     }
     return str(a.workspace).localeCompare(str(b.workspace)) || str(a.package).localeCompare(str(b.package));
   });
