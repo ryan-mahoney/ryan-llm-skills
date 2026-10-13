@@ -283,6 +283,10 @@ try:
                 'workspace': workspace, 'package': package, 'package_ref': 'fixture/browser',
                 'source_paths': ['spec.md', 'linked.md'],
             }
+            planned_history = {
+                **planned, 'assignment_id': 'planned-history', 'execution': 'cancelled',
+                'is_current_assignment': False,
+            }
             foreign_planned = {
                 'workspace': 'other', 'package': '/other/specs/other-planned',
                 'package_ref': 'other/other-planned', 'source_paths': ['spec.md'],
@@ -294,11 +298,14 @@ try:
                     'snapshot': {
                         'workspace': workspace,
                         'coverage': {'state': 'complete', 'observed_at': now, 'reasons': []},
-                        'runs': [active, blocked, active_history],
+                        'runs': [active, blocked, active_history, planned_history],
                         'recently_completed': [done],
                         'planned_packages': [planned, foreign_planned],
                         'assignments': [], 'assignment_coverage': {'state': 'complete', 'reasons': []},
-                        'epics': [],
+                        'epics': [{
+                            'workspace': workspace, 'epic': 'planned-roadmap', 'title': 'Planned roadmap',
+                            'members': [{'name': 'browser', 'package': 'browser', 'workspace': workspace, 'status': 'ready'}],
+                        }],
                     },
                 }],
             }
@@ -378,6 +385,16 @@ try:
             expect(page.locator('.observation-rows button.run-row .run-title')).to_have_text('done-browser')
             expect(page.locator('.list-caption')).to_contain_text('1')
             report['scenarios'].append('Legacy attention and completed deep links select Blocked and Done with one matching row each')
+
+            open_route('epics', ws='fixture')
+            page.get_by_role('button', name='browser', exact=True).click()
+            expect(page.locator('h1')).to_have_text('Specs')
+            assert params()['filter'] == ['planned'], page.url
+            expect(filters.get_by_role('button', name='Planned', exact=True)).to_have_attribute('aria-pressed', 'true')
+            expect(rows).to_have_count(1)
+            expect(rows.first).to_have_attribute('aria-pressed', 'true')
+            expect(page.locator('article.detail h2')).to_have_text('browser')
+            report['scenarios'].append('Epic member navigation selects Planned inventory over an inactive historical run')
 
             open_route('specs', ws='fixture', filter='planned')
             expect(rows).to_have_count(1)

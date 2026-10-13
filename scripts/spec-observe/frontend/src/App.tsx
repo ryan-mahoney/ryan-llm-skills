@@ -126,7 +126,9 @@ export default function App() {
   }
   function openPackage(workspaceName: string, name: string) {
     const matches = scopedRecords().filter(item => item.workspace === workspaceName && base(item.package) === name);
-    const target = matches.find(item => !item.recent_completion) ?? matches[0];
+    const target = matches.find(item => packageFilterMatches(item, 'active'))
+      ?? matches.find(item => item.planned)
+      ?? matches.find(item => !item.recent_completion) ?? matches[0];
     if (!target) return;
     const next: RouteState = { dest: 'specs', id: target.key };
     if (scopeWs() !== undefined) next.ws = scopeWs();
