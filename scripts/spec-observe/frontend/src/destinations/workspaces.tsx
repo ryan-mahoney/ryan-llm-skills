@@ -317,7 +317,17 @@ function WorkspacePane(props: DestinationProps) {
   const itemName = (item: unknown): string => (typeof item === 'string' ? item : text((item as any)?.name) || text((item as any)?.path));
   const openFiles = () => props.onNavigate({ dest: 'files', ws: ws() });
   const openPath = (path: string) => props.onNavigate({ dest: 'files', ws: ws(), source: 'workspace', path });
+  const openContext = (path: string) => props.onNavigate({ dest: 'files', ws: ws(), source: 'context', path });
+  const openRepositoryArtifact = (owner: string, path: string) => props.onNavigate({ dest: 'files', ws: ws(), source: 'repository', id: owner, path });
   const contextPath = (entry: any): string | null => contextRoutePath(text(data()?.directory), text(entry.path));
+  // Only a complete, available repository target can ground a Files route; the
+  // record's own top-level path is the artifact JSON location, not a target path.
+  const repositoryArtifact = (item: any): { owner: string; path: string } | null => {
+    if (item?.status !== 'ok') return null;
+    const owner = text(item?.target?.repository_id);
+    const path = text(item?.target?.path);
+    return owner && path ? { owner, path } : null;
+  };
   const retryWorkspace = () => {
     if (boundaryError(props)) { props.onRetryCatalog(); return; }
     props.onRetryWorkspace(String(ws() ?? ''));
@@ -496,7 +506,7 @@ function WorkspacePane(props: DestinationProps) {
                                 when={entry.status === 'ok' ? contextPath(entry) : null}
                                 fallback={<span class="muted mono path">{text(entry.path) || text(entry.label) || 'Context'}</span>}
                               >
-                                {path => <button type="button" class="text-link" onClick={() => openPath(path())}>{path()}</button>}
+                                {path => <button type="button" class="text-link" onClick={() => openContext(path())}>{path()}</button>}
                               </Show>
                             </td>
                             <td><StatusText tone={statusTone(entry.status)}>{statusLabel(entry.status)}</StatusText></td>
@@ -572,8 +582,15 @@ function WorkspacePane(props: DestinationProps) {
                     {item => (
                       <div class="info-row">
                         <p><strong>{text(item.title) || 'Artifact'}</strong> · {text(item.kind) || 'unknown'} · {text(item.status) || 'unknown'}</p>
-                        <Show when={item.kind === 'url' ? text(typeof item.target === 'string' ? item.target : item.target?.url) : [text(item.target?.repository_id), text(item.target?.path)].filter(Boolean).join(' · ')}>
-                          {detail => <small class="mono">{detail()}</small>}
+                        <Show
+                          when={repositoryArtifact(item)}
+                          fallback={
+                            <Show when={item.kind === 'url' ? text(typeof item.target === 'string' ? item.target : item.target?.url) : [text(item.target?.repository_id), text(item.target?.path)].filter(Boolean).join(' · ')}>
+                              {detail => <small class="mono">{detail()}</small>}
+                            </Show>
+                          }
+                        >
+                          {target => <button type="button" class="text-link mono" onClick={() => openRepositoryArtifact(target().owner, target().path)}>{`${target().owner} · ${target().path}`}</button>}
                         </Show>
                         <Show when={text(item.note)}>{note => <small>{note()}</small>}</Show>
                         <Show when={text(item.reason)}>{reason => <small class="warn">{reason()}</small>}</Show>

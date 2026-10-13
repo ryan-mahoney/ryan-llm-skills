@@ -34,6 +34,53 @@ evidence = Path(os.environ.get('SENTINEL_EVIDENCE_DIR', '/tmp/sentinel-route-evi
 evidence.mkdir(parents=True, exist_ok=True)
 started = time.monotonic()
 report = {'status': 'failed', 'scenarios': [], 'pageErrors': []}
+# Deterministic EV-8 QA tour text: fixed setup, entrypoints, expected outcomes
+# and owned gate/capture links; no timings, host paths or live state.
+QA_FILES_TOUR = """# Files QA tour
+
+Deterministic output of `scripts/spec-observe/frontend/route-browser-check.py --case context`
+(EV-8). Only the owned port-0 browser fixture and its temporary storage are controlled;
+the App, route/scope/registry, files-model and the server file APIs are real.
+
+## Setup
+
+- Build the served bundle first: `npm run build --prefix scripts/spec-observe/frontend`
+  checks TypeScript and writes `scripts/spec-observe/dashboard.html`.
+- The gate starts `browser-fixture.mjs` with temporary storage, registers the gated
+  noncanonical absolute context reference, seeds one available `fixture-repo` repository
+  artifact (`fixture-repo-plan.md` in the checkout), then drives headless Chrome.
+- No `.env`, operator storage or live service is read; the fixture closes its own
+  server, browser and temporary root.
+
+## Files source entrypoints
+
+- Workspace: `#/files?ws=fixture`
+- Context: `#/files?ws=fixture&source=context&path=context/project-context.md`
+- Repository: `#/files?ws=fixture&source=repository&id=fixture-repo&path=fixture-repo-plan.md`
+- Package: `#/files?ws=fixture&source=package&id=<package path>&path=spec.md`
+
+## Expected scenario outcomes
+
+1. The registered noncanonical absolute context reference shows Available and opens
+   Files `source=context` with the normalized relative path `context/project-context.md`;
+   real workspace-file bytes render and stay readable on reload.
+2. An available repository artifact opens Files `source=repository` with the kit
+   repository id `fixture-repo` and checkout-relative path `fixture-repo-plan.md`;
+   real Git checkout bytes render and stay readable on reload.
+3. Briefs and Notes collections and their file rows keep Files `source=workspace`
+   with `briefs/` and `notes/` paths through selection and reload.
+4. The context/artifact journey records zero page errors and captures representative
+   1280 and 1600 states.
+
+## Owned gate and capture links
+
+- EV-4 workspace reader: report `files-workspace.json`; captures `files-6-*`, `files-18-*`, `files-19-*`.
+- EV-5 four-source journeys: report `files-sources.json`; captures `files-15-*`, `files-16-*`, `files-17-*`.
+- EV-6 selection/revalidation continuity: report `files-continuity.json`; captures `files-62-*`, `files-66-*`, `files-67-*`.
+- EV-7 regional recovery and coverage: report `files-recovery.json`; captures `files-61-*` through `files-68-*`.
+- EV-8 context/artifact links and this QA tour: report `files-context.json`; captures `files-15-*`, `files-16-*`.
+- EV-9 host deployment read is a pending operator-authorized restory-box restart/read; merge verification does not restart a live host.
+"""
 fixture_env = dict(os.environ)
 if case == 'context':
     fixture_env['SENTINEL_NONCANONICAL_CONTEXT'] = '1'
@@ -187,15 +234,68 @@ try:
         if case == 'context':
             open_route('workspaces', ws='fixture')
             # The real contextRecord reports this absolute ./, ../ and // reference
-            # Available. Its Files link must use the reader's canonical relative path.
+            # Available. Its Files link must carry the Files context source and the
+            # reader's canonical relative path, not a workspace-source route.
             table = page.locator('section').filter(has=page.get_by_role('heading', name='Registered context', exact=True))
             expect(table).to_contain_text('Available')
             table.get_by_role('button').click()
             files_viewer('context/project-context.md', 'Browser context note.')
-            assert params()['source'] == ['workspace']
+            assert params()['source'] == ['context'], page.url
+            assert params()['ws'] == ['fixture'], page.url
+            assert params()['path'] == ['context/project-context.md'], page.url
+            context_bytes = context.request.get(receipt['url'] + '/api/workspace-file?' + urlencode({'id': 'fixture', 'file': 'context/project-context.md'}))
+            assert context_bytes.ok and context_bytes.text() == '# Project context\nBrowser context note.\n', context_bytes.text()
+            page.screenshot(path=str(evidence / 'files-15-1280.png'))
             page.reload()
             files_viewer('context/project-context.md', 'Browser context note.')
-            report['scenarios'].append('Available noncanonical absolute context -> canonical workspace Files route, readable document and reload')
+            assert params()['source'] == ['context'], page.url
+            report['scenarios'].append('Available noncanonical absolute context opens Files source=context with the normalized relative path, real bytes and reload readability')
+
+            # An available repository artifact carries the kit repository identity
+            # and its checkout-relative path into the Files repository source; the
+            # gated fixture record resolves to ok bytes through the real store.
+            open_route('workspaces', ws='fixture')
+            artifact = page.locator('section').filter(has=page.get_by_role('heading', name='Artifacts', exact=True))
+            expect(artifact).to_contain_text('Browser repository plan')
+            artifact.get_by_role('button', name='fixture-repo · fixture-repo-plan.md', exact=True).click()
+            files_viewer('fixture-repo-plan.md', 'Checkout-scoped suggestion target.')
+            assert params()['source'] == ['repository'], page.url
+            assert params()['id'] == ['fixture-repo'], page.url
+            assert params()['path'] == ['fixture-repo-plan.md'], page.url
+            repository_bytes = context.request.get(receipt['url'] + '/api/repository-file?' + urlencode({'id': 'fixture', 'repository': 'fixture-repo', 'file': 'fixture-repo-plan.md'}))
+            assert repository_bytes.ok and repository_bytes.text() == '# Fixture repository plan\nCheckout-scoped suggestion target.\n', repository_bytes.text()
+            page.screenshot(path=str(evidence / 'files-16-1280.png'))
+            page.reload()
+            files_viewer('fixture-repo-plan.md', 'Checkout-scoped suggestion target.')
+            assert params()['source'] == ['repository'], page.url
+            report['scenarios'].append('Available Workspaces repository artifact opens Files source=repository with kit repository id and relative path, real checkout bytes and reload readability')
+
+            # Briefs and Notes keep the workspace source through collection and row.
+            open_route('workspaces', ws='fixture')
+            material = page.locator('section').filter(has=page.get_by_role('heading', name='Workspace material', exact=True))
+            material.get_by_role('button', name='Briefs', exact=True).click()
+            assert params()['source'] == ['workspace'] and params()['path'] == ['briefs/'], page.url
+            files_row('briefs/browser.md').click()
+            files_viewer('briefs/browser.md', 'A recorded brief.')
+            assert params()['source'] == ['workspace'], page.url
+            page.reload()
+            files_viewer('briefs/browser.md', 'A recorded brief.')
+            open_route('workspaces', ws='fixture')
+            material.get_by_role('button', name='Notes', exact=True).click()
+            assert params()['source'] == ['workspace'] and params()['path'] == ['notes/'], page.url
+            files_row('notes/browser.md').click()
+            files_viewer('notes/browser.md', 'A recorded note.')
+            assert params()['source'] == ['workspace'], page.url
+            report['scenarios'].append('Briefs and Notes collections and file rows keep the workspace Files source through selection and reload')
+
+            # Representative context/artifact captures at both supported widths.
+            page.set_viewport_size({'width': 1600, 'height': 900})
+            open_route('files', ws='fixture', source='context', path='context/project-context.md')
+            files_viewer('context/project-context.md', 'Browser context note.')
+            page.screenshot(path=str(evidence / 'files-15-1600.png'))
+            open_route('files', ws='fixture', source='repository', id='fixture-repo', path='fixture-repo-plan.md')
+            files_viewer('fixture-repo-plan.md', 'Checkout-scoped suggestion target.')
+            page.screenshot(path=str(evidence / 'files-16-1600.png'))
 
         if case in (None, 'rail'):
             open_route('specs', ws='fixture', tab='overview', filter='active')
@@ -2934,9 +3034,14 @@ finally:
         fixture.kill()
         fixture.wait()
     report['elapsedSeconds'] = round(time.monotonic() - started, 3)
-    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'step-003-fix-browser.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'sentinel-planned-filter-browser.json' if case == 'filters' else 'specs-list.json' if case == 'specs-list' else 'specs-variants.json' if case == 'specs-variants' else 'specs-overview.json' if case == 'specs-overview' else 'specs-activity.json' if case == 'specs-activity' else 'specs-relaunch.json' if case == 'specs-relaunch' else 'files-workspace.json' if case == 'files-workspace' else 'files-sources.json' if case == 'files-sources' else 'files-continuity.json' if case == 'files-continuity' else 'files-recovery.json' if case == 'files-recovery' else 'step-002-fix-browser.json'
+    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'files-context.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'sentinel-planned-filter-browser.json' if case == 'filters' else 'specs-list.json' if case == 'specs-list' else 'specs-variants.json' if case == 'specs-variants' else 'specs-overview.json' if case == 'specs-overview' else 'specs-activity.json' if case == 'specs-activity' else 'specs-relaunch.json' if case == 'specs-relaunch' else 'files-workspace.json' if case == 'files-workspace' else 'files-sources.json' if case == 'files-sources' else 'files-continuity.json' if case == 'files-continuity' else 'files-recovery.json' if case == 'files-recovery' else 'step-002-fix-browser.json'
     target = evidence / filename
     temporary = target.with_name(target.name + '.tmp')
     temporary.write_text(json.dumps(report, indent=2) + '\n')
     os.replace(temporary, target)
+    if case == 'context':
+        qa_target = evidence / 'qa-files.md'
+        qa_temporary = qa_target.with_name(qa_target.name + '.tmp')
+        qa_temporary.write_text(QA_FILES_TOUR)
+        os.replace(qa_temporary, qa_target)
     print(json.dumps(report, indent=2))

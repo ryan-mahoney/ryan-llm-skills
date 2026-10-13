@@ -94,6 +94,19 @@ no picker. Changing the scope clears incompatible object selections, and
 Back/Forward as well as query history are honored: deliberate fields (`dest`, `ws`,
 `id`, `tab`, `source`, `path`) push, while `q` and `filter` changes replace.
 
+The Files destination addresses four sources with `ws`, `source`, `id` and `path`:
+workspace `#/files?ws=<workspace>` (optionally with a selected `path=`),
+registered context `#/files?ws=<workspace>&source=context&path=<workspace-relative>`,
+repository `#/files?ws=<workspace>&source=repository&id=<repository-id>&path=<checkout-relative>`,
+and package `#/files?source=package&id=<package>&path=<package-relative>` (the
+portfolio exception that needs no `ws`). Workspaces routes available registered
+context and repository artifacts here, while briefs and notes stay workspace-source
+paths. Listings page up to 500 entries within a 10,000-entry/12-level enumeration
+limit and report truncation and read errors; each read serves one regular file up
+to 8 MiB. Package-relative Markdown links and images resolve through the
+package-view address (`packageViewUrl`) so they serve the authorized file bytes and
+stay inside the package.
+
 `frontend/src/route.ts` is the single hash-route owner for `dest`, `ws`, `id`, `tab`,
 `source`, `path`, `filter` and `q`, encoded with `URLSearchParams`; an empty or
 unknown destination canonicalizes to the Specs landing route. Examples: `#/specs`,
@@ -321,7 +334,8 @@ truncation and read errors are visible. Reads accept regular files up to 8 MiB.
 Links, traversal, unpublished packages and worktree copies are rejected. Images,
 Markdown (including tables and fenced code), formatted JSON, YAML and text render
 in the viewer; unsupported binaries download. Package-relative Markdown links
-and images remain within the authorized package. Standalone HTML uses an opaque
+and images resolve through the package-view address (`packageViewUrl`) so they serve
+the authorized package bytes and remain within the package. Standalone HTML uses an opaque
 sandboxed iframe with package-relative scripts/styles/images, no external resources, fetch requests,
 forms or parent-page access. The selected viewer stays mounted across refreshes.
 Missing tours are reported, and offline imports have no filesystem access.
@@ -355,7 +369,15 @@ server with Ctrl+C; sentinel does not own or stop independently launched viewers
 
 `dashboard.html` contains its compiled Tailwind CSS and JavaScript, with no CDN or
 build step. It can also open directly from disk: use **Import snapshot** to inspect
-a saved observer JSON file offline. Live refresh requires the local service.
+a saved observer JSON file offline. Live refresh requires the local service. Because
+the committed HTML is a generated asset, it reflects only the checkout it was built
+from; the host reads the updated file on its next request. Deploying the repository
+file route to an installed host is a separate, operator-authorized step: after
+installing the merged checkout and module set, the operator restarts the host (for
+example `systemctl --user restart spec-sentinel`) and reads
+`/api/repository-files?id=<workspace>&repository=<repository>` on loopback. The
+pending restory-box restart/read procedure is not run by merge verification and
+never restarts a live host without explicit operator authority.
 
 ### Designs
 

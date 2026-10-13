@@ -40,6 +40,15 @@ await writeFile(join(workspace.directory,'briefs','browser.md'),'# Browser brief
 const contextPath=process.env.SENTINEL_NONCANONICAL_CONTEXT==='1'
  ? `${workspace.directory}/../fixture//context/./unused/../project-context.md`
  : 'context/project-context.md';
+const contextArtifactFixture=process.env.SENTINEL_NONCANONICAL_CONTEXT==='1';
+// Gated repository artifact fixture for the Files context/artifact journey: the
+// real store resolves this record against the healthy kit's fixture-repo checkout
+// and the existing fixture-repo-plan.md bytes. The default fixture is unchanged
+// when neither gated flag is set.
+if(filesFixture||contextArtifactFixture){
+ await mkdir(join(workspace.directory,'artifacts'),{recursive:true});
+ await writeFile(join(workspace.directory,'artifacts','browser-plan.json'),JSON.stringify({schema_version:1,artifact_id:'browser-plan',title:'Browser repository plan',kind:'repository',target:{repository_id:'fixture-repo',path:'fixture-repo-plan.md'}},null,2));
+}
 const healthyKit=`version: 1\nid: fixture\nname: Browser fixture\nexecution_host: ${hostname()}\nrepositories:\n  - id: fixture-repo\n    path: ${checkout}\n    role: Browser verification\n  - id: fixture-docs\n    path: ${docsCheckout}\n    role: Second suggestion target\n${plannedLaunch?`  - id: fixture-repo-two\n    path: ${secondCheckout}\n    role: Browser alternate\n`:''}context:\n  - ${contextPath}\n`;
 await writeFile(join(workspace.directory,'kit.yaml'),healthyKit);
 if(plannedLaunch){const created=await newPackage({root:storage,workspace:'fixture',slug:'browser',targets:[{id:'fixture-repo'},{id:'fixture-repo-two'}]});if(!created.ok)throw new Error(`Planned fixture package setup failed: ${created.code} ${created.message}`);}
