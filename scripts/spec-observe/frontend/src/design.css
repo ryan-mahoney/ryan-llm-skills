@@ -244,3 +244,13 @@
 .agent-detail>.object-head{flex-shrink:0}
 .agent-detail .path{overflow-wrap:anywhere;word-break:break-word}
 .agent-detail .locate-command{width:100%;white-space:pre-wrap;overflow-wrap:anywhere}
+
+/* Terminal session controls: the production session extension borrows the
+   shared button/input surfaces. Scoped to .session-controls and its
+   end-session dialog so no other screen is restyled; the destructive End
+   keeps its semantic red while sharing the 44px button geometry and focus. */
+.session-controls textarea.ds-input{background:var(--ds-panel-2);border:1px solid var(--ds-input-border);border-radius:3px;color:var(--ds-ink)}
+.session-controls dialog{background:var(--ds-panel);color:var(--ds-ink);border:1px solid var(--ds-line-2);border-radius:4px}
+.session-controls .ds-btn.danger{min-height:44px;border-radius:3px}
+.session-controls .ds-btn.danger:focus-visible{outline:2px solid var(--ds-accent);outline-offset:3px}
+.session-controls dialog .actions{justify-content:flex-end}

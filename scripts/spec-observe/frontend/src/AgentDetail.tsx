@@ -31,6 +31,7 @@ export type AgentDetailProps = {
   onEnded: (id: string) => void;
   onNavigate: (next: RouteState) => void;
   ws?: string;
+  routeQuery?: string;
   view: AgentViewState;
   sourceUnavailable: boolean;
   listPartial: boolean;
@@ -166,6 +167,18 @@ function AgentDetailBody(props: AgentDetailProps) {
     setCopyStatus(result === 'copied' ? 'Locate command copied.' : 'Select and copy the command, then paste it into your terminal.');
   }
 
+  // Confirmed end: record the ended session first, then select the same
+  // observed key under the Ended filter. Filter and query are not history
+  // fields, so App replaces the current entry; ws and q are preserved and
+  // no reload occurs.
+  function showEndedSession(id: string) {
+    props.onEnded(id);
+    const next: RouteState = { dest: 'agents', filter: 'ended', id: a().key };
+    if (props.ws !== undefined) next.ws = props.ws;
+    if (props.routeQuery) next.q = props.routeQuery;
+    props.onNavigate(next);
+  }
+
   return (
     <article class="detail agent-detail" data-key={a().key}>
       <div class="object-head">
@@ -229,7 +242,7 @@ function AgentDetailBody(props: AgentDetailProps) {
           <p class="small muted">Coverage {text(a().coverage?.state, 'unknown')} · read-only observation; the record is never rewritten here.</p>
         </section>
         <Show when={a().key} keyed={true}>
-          {(key: string) => <SessionPanel assignment={a()} token={props.token} live={props.live} refresh={props.refresh} onEnded={props.onEnded} />}
+          {(key: string) => <SessionPanel assignment={a()} token={props.token} live={props.live} refresh={props.refresh} onEnded={showEndedSession} />}
         </Show>
         <Show when={a().task_activity?.state && a().task_activity.state !== 'unknown'}>
           <section class="section">

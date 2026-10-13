@@ -43,19 +43,19 @@ export default function SessionPanel(props:{assignment:any;token?:string;live:bo
         <p role="status">{session()?.reason}</p>
         <Show when={session()?.attach_command&&!ended()}>
           <label class="small" for="session-attach-command">Run this command in your computer’s terminal</label>
-          <textarea id="session-attach-command" class="mono" rows="4" readonly value={session()?.attach_command??''} ref={command} style={{width:'100%','overflow-wrap':'anywhere'}} />
-          <button type="button" onClick={()=>void copy()}>Copy attach command</button>
+          <textarea id="session-attach-command" class="ds-input mono" rows="4" readonly value={session()?.attach_command??''} ref={command} style={{'overflow-wrap':'anywhere'}} />
+          <div class="actions"><button type="button" class="ds-btn" onClick={()=>void copy()}>Copy attach command</button></div>
           <p class="small" role="status">{copied()}</p>
           <details><summary>Already on the host?</summary><pre style={{'white-space':'pre-wrap','overflow-wrap':'anywhere'}}>{session()?.local_command}</pre></details>
           <p class="small">To detach and leave the session open, press <kbd>Ctrl+B</kbd>, release both keys, then press <kbd>D</kbd>.</p>
         </Show>
         <Show when={session()?.can_end&&!ended()}>
-          <button type="button" class="danger" disabled={!props.token||busy()} onClick={ask}>End session…</button>
+          <div class="actions"><button type="button" class="ds-btn danger" disabled={!props.token||busy()} onClick={ask}>End session…</button></div>
           <p class="small muted">Ends this terminal and its agent, including any work still in progress. Saved files and the transcript are kept.</p>
         </Show>
       </Show>
       <Show when={error()&&!review()}><p class="warn" role="alert">{error()}</p></Show>
-      <button type="button" disabled={busy()} onClick={()=>void load()}>Refresh session</button>
+      <div class="actions"><button type="button" class="ds-btn" disabled={busy()} onClick={()=>void load()}>Refresh session</button></div>
     </Show>
     <dialog ref={dialog} aria-labelledby="end-session-heading" onCancel={e=>{if(busy())e.preventDefault();else setReview(undefined);}}>
       <form onSubmit={e=>{e.preventDefault();void end();}}>
@@ -64,7 +64,7 @@ export default function SessionPanel(props:{assignment:any;token?:string;live:bo
         <p class="mono" style={{'overflow-wrap':'anywhere'}}>{review()?.assignment_id}</p>
         <p>You cannot reattach after ending it. To leave it running, choose Cancel and detach with Ctrl+B, then D.</p>
         <Show when={error()}><p class="warn" role="alert">{error()}</p></Show>
-        <div class="thread-actions"><button type="button" disabled={busy()} onClick={()=>{dialog.close();setReview(undefined);}}>Cancel</button><button type="submit" class="danger" disabled={busy()}>{busy()?'Ending session…':'End session'}</button></div>
+        <div class="actions"><button type="button" class="ds-btn" disabled={busy()} onClick={()=>{dialog.close();setReview(undefined);}}>Cancel</button><button type="submit" class="ds-btn danger" disabled={busy()}>{busy()?'Ending session…':'End session'}</button></div>
       </form>
     </dialog>
   </section>;

@@ -414,6 +414,7 @@ export default function AgentsDestination(props: DestinationProps) {
             detailEl = el;
           }}
           ws={props.route.ws}
+          routeQuery={props.route.q}
           view={view()}
           sourceUnavailable={sourceUnavailable()}
           listPartial={listPartial()}
