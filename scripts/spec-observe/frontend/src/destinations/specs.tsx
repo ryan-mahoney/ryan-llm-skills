@@ -1,11 +1,11 @@
 import { For, Show, createEffect, createSignal, onCleanup } from 'solid-js';
 import { activeRun, attention, base, esc, inlineMarkdown, runningUnconfirmed, serverNow, str, time } from '../format';
 import { completionLabel, duration as observationDuration, runState, specProgress } from '../observation-format';
-import { observationEnd, specViewState, visibleSpecs, type ObservationContext } from '../spec-state';
-import Files from '../Files';
+import { linkedAssignmentKey, observationEnd, packageFromKey, packageRelative, specViewState, visibleSpecs, type ObservationContext } from '../spec-state';
 import { PackageDetail } from '../Observations';
 import { ActionBar, EmptyState, MasterDetail, RegionalSkeleton, SectionTabs, StateNotice, StatusText, type SectionTab, type StatusTone } from '../primitives';
 import PlannedAssignment from '../PlannedAssignment';
+import SpecOverview from '../SpecOverview';
 import type { WireRecord } from '../model';
 import type { RouteState } from '../route';
 import type { DestinationProps } from './index';
@@ -168,64 +168,134 @@ function SpecsList(props: DestinationProps) {
   );
 }
 
+const SPEC_TABS: SectionTab[] = [
+  { key: 'overview', label: 'Overview' },
+  { key: 'activity', label: 'Activity' },
+  { key: 'files', label: 'Files' },
+];
+
+const tabOf = (route: RouteState): 'overview' | 'activity' => route.tab === 'activity' ? 'activity' : 'overview';
+
+const headTone = (record: WireRecord): StatusTone =>
+  record.recent_completion ? 'success' : record.planned ? 'neutral' : attention(record) ? 'warning' : activeRun(record) && str(record.execution) && record.execution !== 'unknown' ? 'info' : 'neutral';
+
 export default function SpecsDestination(props: DestinationProps) {
   const record = () => props.records.find(item => item.key === props.route.id) ?? null;
+  const context = (): ObservationContext => ({ live: props.live, connectionFailed: props.connectionFailed, now: serverNow() });
+  const headTitle = () => {
+    const item = record();
+    if (item) return base(item.package);
+    const fromKey = packageFromKey(props.route.id);
+    return fromKey ? base(fromKey) : 'Spec overview';
+  };
+  const assignmentKey = () => {
+    const item = record();
+    return item ? linkedAssignmentKey(item, props.assignments) : null;
+  };
+  const openFile = (path: string) => {
+    const item = record();
+    if (!item || !path) return;
+    const relative = packageRelative(item, path);
+    if (relative) {
+      props.onOpenPackageFiles(item, relative);
+      return;
+    }
+    if (!path.startsWith('/') && !path.split('/').includes('..')) props.onOpenPackageFiles(item, path);
+  };
+  const selectTab = (key: string) => {
+    const item = record();
+    if (key === 'files') {
+      if (item) props.onOpenPackageFiles(item);
+      return;
+    }
+    const next: RouteState = { ...props.route };
+    delete next.path;
+    delete next.source;
+    if (key === 'activity') next.tab = 'activity';
+    else delete next.tab;
+    props.onNavigate(next);
+  };
+  const openAgent = () => {
+    const key = assignmentKey();
+    if (!key) return;
+    const next: RouteState = { dest: 'agents', id: key };
+    if (props.route.ws !== undefined) next.ws = props.route.ws;
+    props.onNavigate(next);
+  };
+  const openEpic = (key: string) => {
+    const next: RouteState = { dest: 'epics', id: key };
+    if (props.route.ws !== undefined) next.ws = props.route.ws;
+    props.onNavigate(next);
+  };
   return (
     <div class="specs-destination">
       <MasterDetail
         listLabel="Specs"
         list={<SpecsList {...props} />}
       >
+        <div class="object-head">
+          <div class="object-top">
+            <h2>{headTitle()}</h2>
+            <Show when={record()}>{item => <StatusText tone={headTone(item())}>{runState(item(), runningUnconfirmed)}</StatusText>}</Show>
+          </div>
+          <p>{record() ? `${str(record()!.workspace)} / ${str(record()!.package_ref)}` : 'No observed record for this selection'}</p>
+        </div>
+        <SectionTabs label="Spec sections" tabs={SPEC_TABS} active={tabOf(props.route)} onSelect={selectTab} />
         <div class="detail-body">
-          <Show when={record()?.planned ? record() : null}>
+          <Show when={record()}>
             {item => <>
-              <article class="detail planned-spec-summary">
-                <div class="eyebrow">{str(item().workspace)} / Planned spec</div>
-                <div class="detail-title"><div><h2>{base(item().package)}</h2><p class="subtitle mono">{str(item().package_ref)}</p></div><span class="pill muted">Planned</span></div>
-                <p class="section">{str(item().activity || item().obligation || 'Resume this spec package.')}</p>
-                <p class="small muted">Review the brief and agent settings, then launch.</p>
-              </article>
-              <PlannedAssignment record={item()} live={props.live && props.specsLive} token={props.token} />
+              <Show when={item().planned}>
+                <article class="detail planned-spec-summary">
+                  <div class="eyebrow">{str(item().workspace)} / Planned spec</div>
+                  <div class="detail-title"><div><h2>{base(item().package)}</h2><p class="subtitle mono">{str(item().package_ref)}</p></div><span class="pill muted">Planned</span></div>
+                  <p class="section">{str(item().activity || item().obligation || 'Resume this spec package.')}</p>
+                  <p class="small muted">Review the brief and agent settings, then launch.</p>
+                </article>
+                <PlannedAssignment record={item()} live={props.live && props.specsLive} token={props.token} />
+              </Show>
+              <Show when={!item().planned}>
+                <Show when={tabOf(props.route) === 'activity'}>
+                  <PackageDetail
+                    record={item()}
+                    records={props.records}
+                    live={props.specsLive}
+                    previewToken={props.token}
+                    completionToken={props.completionToken}
+                    completionLocalOnly={props.completionLocalOnly}
+                    onComplete={props.onComplete}
+                    onOpenFile={openFile}
+                    onSelect={props.onSelect}
+                  />
+                </Show>
+                <Show when={tabOf(props.route) === 'overview'}>
+                  <SpecOverview record={item()} assignments={props.assignments} context={context()} onOpenAgent={openAgent} onOpenEpic={openEpic} />
+                </Show>
+              </Show>
             </>}
           </Show>
-          <Show when={record()?.planned !== true}>
-            <PackageDetail
-              record={record()}
-              records={props.records}
-              live={props.specsLive}
-              previewToken={props.token}
-              completionToken={props.completionToken}
-              completionLocalOnly={props.completionLocalOnly}
-              onComplete={props.onComplete}
-              onOpenFile={props.onOpenFile}
-              onSelect={props.onSelect}
-            />
-          </Show>
-          <Show when={record()?.package} keyed>
-            {owner => (
-              <Files
-                source="package"
-                owner={owner}
-                live={props.live}
-                initialFile={props.route.path ?? null}
-                onOpen={props.onOpenFile}
-                recentCompletion={record()?.recent_completion}
-              />
-            )}
+          <Show when={!record()}>
+            <EmptyState symbol="◇" title="Select an observed spec" text="Choose a package to inspect its obligation, activity and files." />
           </Show>
         </div>
         <Show when={record()}>
           {item => (
             <ActionBar>
-              <button
-                class={`ds-btn ${item().planned ? '' : 'ds-btn--primary'}`}
-                type="button"
-                disabled={!props.canOpenPackageFiles(item())}
-                onClick={() => props.onOpenPackageFiles(item())}
-              >
-                Open files
-              </button>
+              <Show when={item().planned} fallback={<>
+                <button class="ds-btn ds-btn--primary" type="button" onClick={() => selectTab('activity')}>Open spec</button>
+                <Show when={assignmentKey()}>
+                  <button class="ds-btn" type="button" onClick={openAgent}>Open agent</button>
+                </Show>
+              </>}>
+                <button class="ds-btn" type="button" disabled={!props.canOpenPackageFiles(item())} onClick={() => props.onOpenPackageFiles(item())}>Open files</button>
+              </Show>
             </ActionBar>
+          )}
+        </Show>
+        <Show when={record()}>
+          {item => (
+            <footer class="detail-foot">
+              Snapshot observed {time(item().observer?.snapshot?.coverage?.observed_at)} · Activity observed {time(item().observed_at)} · {str(item().workspace)}
+            </footer>
           )}
         </Show>
       </MasterDetail>

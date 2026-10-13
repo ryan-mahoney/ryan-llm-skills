@@ -6,7 +6,7 @@
 
 After npm run build --prefix scripts/spec-observe/frontend:
 SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 120s uv run --script \
-  scripts/spec-observe/frontend/route-browser-check.py [--case rail|files|specs|context|catalog|member|search|filters|specs-list]
+  scripts/spec-observe/frontend/route-browser-check.py [--case rail|files|specs|context|catalog|member|search|filters|specs-list|specs-overview]
 Only the fixture substitutes workers; App, adapters and file APIs are real.
 """
 import argparse
@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 args = argparse.ArgumentParser()
-args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog', 'member', 'search', 'filters', 'specs-list'])
+args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog', 'member', 'search', 'filters', 'specs-list', 'specs-overview'])
 case = args.parse_args().case
 root = Path(__file__).resolve().parent
 evidence = Path(os.environ.get('SENTINEL_EVIDENCE_DIR', '/tmp/sentinel-route-evidence'))
@@ -188,6 +188,13 @@ try:
 
         if case in (None, 'specs'):
             open_route('specs', ws='fixture')
+            tabs = page.get_by_role('navigation', name='Spec sections')
+            expect(page.locator('.object-head h2')).to_have_text('browser')
+            tabs.get_by_role('button', name='Activity', exact=True).click()
+            assert params()['tab'] == ['activity'], page.url
+            tabs.get_by_role('button', name='Files', exact=True).click()
+            expect(page.locator('h1')).to_have_text('Files')
+            assert params()['source'] == ['package'] and params()['id'] == [receipt['package']] and params()['ws'] == ['fixture'], page.url
             page.get_by_role('button', name='spec.md', exact=True).click()
             viewer('spec.md', 'Browser specification')
             page.get_by_role('button', name='linked.md', exact=True).click()
@@ -200,7 +207,12 @@ try:
             expect(page.locator('.file-viewer')).to_have_count(0)
             page.go_forward()
             viewer('spec.md', 'Browser specification')
-            report['scenarios'].append('embedded Specs reader selection/reload/history, including absent path')
+            page.go_back()
+            page.go_back()
+            expect(page.locator('h1')).to_have_text('Specs')
+            expect(tabs.get_by_role('button', name='Activity', exact=True)).to_have_attribute('aria-pressed', 'true')
+            assert params()['tab'] == ['activity'] and params().get('id') and params()['ws'] == ['fixture'], page.url
+            report['scenarios'].append('Specs Files tab hands off to the shared Files destination with real package files; Back restores the selected Activity tab')
 
         if case == 'member':
             # A searched epic's member must open a fresh Specs route that selects
@@ -215,7 +227,7 @@ try:
             assert not {'q', 'filter', 'tab', 'path', 'source'} & params().keys(), page.url
             assert 'recent-completion' not in params()['id'][0], 'epic member navigation selected completion history'
             expect(page.locator('#find-record')).to_have_value('')
-            expect(page.locator('article.detail h2')).to_have_text('browser')
+            expect(page.locator('.object-head h2')).to_have_text('browser')
             page.go_back()
             expect(page.locator('h1')).to_have_text('Epics')
             expect(page.locator('#find-record')).to_have_value('Demo epic')
@@ -223,7 +235,7 @@ try:
             assert params()['q'] == ['Demo epic'], page.url
             page.go_forward()
             expect(page.locator('h1')).to_have_text('Specs')
-            expect(page.locator('article.detail h2')).to_have_text('browser')
+            expect(page.locator('.object-head h2')).to_have_text('browser')
             assert params().get('id'), page.url
             assert not {'q', 'filter', 'tab', 'path', 'source'} & params().keys(), page.url
             report['scenarios'].append('searched epic member opens a fresh Specs route selecting the current record; Back/Forward keeps the epic search and spec detail synchronized')
@@ -241,14 +253,14 @@ try:
             selected_id = params().get('id')
             assert selected_id, page.url
             expect(row).to_have_attribute('aria-pressed', 'true')
-            expect(page.locator('article.detail h2')).to_have_text('browser')
-            expect(page.locator('article.detail')).to_contain_text('Building the dashboard')
+            expect(page.locator('.object-head h2')).to_have_text('browser')
+            expect(page.locator('.obligation')).to_contain_text('Keep editors stable')
             page.evaluate("location.hash = location.hash + '&unknown=ignored'")
             page.wait_for_function("() => !location.hash.includes('unknown')")
             assert 'unknown' not in params(), page.url
             assert params().get('id') == selected_id, page.url
             expect(row).to_have_attribute('aria-pressed', 'true')
-            expect(page.locator('article.detail h2')).to_have_text('browser')
+            expect(page.locator('.object-head h2')).to_have_text('browser')
             report['scenarios'].append('workflow_state search row keeps its selected Spec detail, and a native hash with an unsupported parameter canonicalizes without losing selection')
 
         if case == 'filters':
@@ -375,10 +387,17 @@ try:
             expect(page.locator('article.detail h2')).to_have_text('browser')
             assert params()['filter'] == ['planned'] and params().get('id'), page.url
             page.get_by_role('button', name='Open files', exact=True).click()
+            expect(page.locator('h1')).to_have_text('Files')
+            assert params()['source'] == ['package'] and params()['id'] == [package] and params()['ws'] == ['fixture'], page.url
             page.get_by_role('button', name='spec.md', exact=True).click()
             viewer('spec.md', 'Browser specification')
-            assert params()['source'] == ['package'] and params()['id'] == [package], page.url
-            report['scenarios'].append('Planned row retains its deep link and opens the real fixture package file reader')
+            page.go_back()
+            expect(page.locator('.file-viewer')).to_have_count(0)
+            page.go_back()
+            expect(page.locator('h1')).to_have_text('Specs')
+            expect(filters.get_by_role('button', name='Planned', exact=True)).to_have_attribute('aria-pressed', 'true')
+            assert params()['filter'] == ['planned'] and params().get('id'), page.url
+            report['scenarios'].append('Planned row deep link hands off to the real package Files destination; Back restores the selected Planned tab')
 
             # Legacy query keys continue to select the renamed tabs and their
             # existing predicates, so saved links keep working.
@@ -408,6 +427,180 @@ try:
             page.set_viewport_size({'width': 390, 'height': 844})
             page.screenshot(path=str(evidence / 'sentinel-planned-filter-mobile.png'), full_page=True)
             expect(filters.get_by_role('button', name='Planned', exact=True)).to_have_attribute('aria-pressed', 'true')
+
+        if case == 'specs-overview':
+            (evidence / 'screens').mkdir(parents=True, exist_ok=True)
+            (evidence / 'reference').mkdir(parents=True, exist_ok=True)
+            now = '2026-10-12T12:00:00.000Z'
+            stale_coverage = '2026-10-12T10:00:00.000Z'
+            package = receipt['package']
+            record_key = json.dumps(['fixture', package, 'run-1'], separators=(',', ':'))
+            assignment_key = json.dumps(['fixture', 'run-1'], separators=(',', ':'))
+
+            def capture(name, width):
+                page.set_viewport_size({'width': width, 'height': 800})
+                path = evidence / 'screens' / f'specs-overview-{name}-{width}.png'
+                page.screenshot(path=str(path), full_page=True)
+                report.setdefault('captures', []).append(str(path))
+
+            def capture_both(name):
+                capture(name, 1280)
+                capture(name, 1600)
+
+            design_screens = Path(os.environ['SENTINEL_DESIGN_SCREENS']) if os.environ.get('SENTINEL_DESIGN_SCREENS') else evidence.resolve().parent.parent.parent / 'designs' / 'app-ui' / 'screens'
+            for screen in ('01-specs', '31-specs-partial', '32-specs-offline', '33-specs-stale'):
+                source = design_screens / f'{screen}.html'
+                if not source.exists():
+                    report.setdefault('referenceMissing', []).append(screen)
+                    continue
+                for width in (1280, 1600):
+                    reference = context.new_page()
+                    reference.set_viewport_size({'width': width, 'height': 800})
+                    reference.goto(source.as_uri(), wait_until='domcontentloaded')
+                    reference.wait_for_timeout(200)
+                    path = evidence / 'reference' / f'{screen}-{width}.png'
+                    reference.screenshot(path=str(path), full_page=True)
+                    reference.close()
+                    report.setdefault('referenceCaptures', []).append(str(path))
+
+            state = {'value': None}
+
+            def on_state(route):
+                route.fulfill(json=state['value'])
+
+            page.route('**/api/state**', on_state)
+
+            def envelope(runs, assignments=(), epics=(), coverage_at=now):
+                return {'schema_version': 1, 'generated_at': now,
+                        'observers': [{'observer_id': 'overview-fixture', 'state': 'observing', 'published_at': now,
+                                       'snapshot': {'workspace': 'fixture',
+                                                    'coverage': {'state': 'complete', 'observed_at': coverage_at, 'reasons': []},
+                                                    'runs': list(runs), 'recently_completed': [], 'planned_packages': [],
+                                                    'assignments': list(assignments),
+                                                    'assignment_coverage': {'state': 'complete', 'reasons': []},
+                                                    'epics': list(epics)}}]}
+
+            missing_run = {
+                'workspace': 'fixture', 'package': package, 'package_ref': 'fixture/browser',
+                'execution': 'running', 'workflow_state': 'working', 'is_current_assignment': True,
+                'activity': 'Building the dashboard', 'observed_at': '2026-10-12T09:58:00.000Z',
+                'coverage': {'state': 'complete', 'reasons': []},
+                'timing': {'started_at': '2026-10-12T08:00:00.000Z', 'attempts': []},
+            }
+            state['value'] = envelope([missing_run], coverage_at=stale_coverage)
+            open_route('specs', ws='fixture')
+            expect(page.locator('.progress-head strong')).to_have_text('Spec size unknown')
+            expect(page.locator('.progress-track .progress-value')).to_have_count(0)
+            expect(page.locator('.obligation')).to_contain_text('No obligation summary was observed.')
+            facts = page.locator('.facts .fact')
+            expect(facts).to_have_count(3)
+            expect(facts.nth(0).locator('label')).to_have_text('Elapsed at observation')
+            expect(facts.nth(0).locator('strong')).to_have_text('2h 0m 0s')
+            expect(facts.nth(1).locator('label')).to_have_text('Last activity')
+            expect(facts.nth(1).locator('strong')).to_have_text('2m 0s before observation')
+            related = page.locator('.table-wrap tbody tr')
+            expect(related).to_have_count(3)
+            expect(related.nth(0)).to_contain_text('Assignment')
+            expect(related.nth(0)).to_contain_text('Not recorded')
+            expect(related.nth(1)).to_contain_text('Epic')
+            expect(related.nth(1)).to_contain_text('Not recorded')
+            expect(related.nth(2)).to_contain_text('Accepted steps not observed')
+            expect(page.locator('.detail-actions').get_by_role('button', name='Open agent', exact=True)).to_have_count(0)
+            capture_both('missing')
+            retained = [facts.nth(index).locator('strong').inner_text() for index in range(3)]
+            page.wait_for_timeout(1200)
+            assert [facts.nth(index).locator('strong').inner_text() for index in range(3)] == retained, 'retained Overview facts advanced with the clock'
+            capture_both('retained')
+            report['scenarios'].append('Missing obligation/progress/assignment/epic facts show specified absence without invented status; stale elapsed and activity stay fixed')
+
+            linked_run = {
+                'workspace': 'fixture', 'package': package, 'package_ref': 'fixture/browser',
+                'assignment_id': 'run-1', 'workflow_id': 'workflow-1', 'execution': 'running',
+                'workflow_state': 'working', 'is_current_assignment': True,
+                'activity': 'Building the dashboard', 'obligation': 'Keep editors stable',
+                'observed_at': now, 'coverage': {'state': 'complete', 'reasons': []},
+                'spec_progress': {'current_position': 2, 'total_steps': 5, 'current_name': 'Resolve worker identity'},
+                'timing': {'started_at': now, 'attempts': []},
+                'evidence': {'state': 'recorded', 'verdict': 'ready', 'commit': 'abc123', 'source': 'work-tour.html'},
+                'epic': {'epic': 'demo', 'workspace': 'fixture'},
+            }
+            linked_assignments = [{'assignment_id': 'run-1', 'workspace_id': 'fixture', 'spec_package': 'fixture/browser',
+                                   'workflow_id': 'workflow-1', 'display': 'live', 'state': 'live',
+                                   'coverage': {'state': 'complete', 'reasons': []},
+                                   'task_activity': {'state': 'idle', 'reason': 'Waiting for the next instruction.'},
+                                   'nextAction': 'Attach to the terminal'}]
+            linked_epics = [{'workspace': 'fixture', 'epic': 'demo', 'title': 'Demo epic', 'state': 'active',
+                             'members': [{'name': 'browser', 'package': 'browser', 'workspace': 'fixture', 'status': 'in-progress', 'waiting_on': [], 'attention': False}],
+                             'summary': {'total': 1, 'merged': 0, 'complete': 0, 'attention': 0}, 'next': 'browser',
+                             'coverage': {'state': 'complete', 'reasons': []}}]
+            state['value'] = envelope([linked_run], assignments=linked_assignments, epics=linked_epics)
+            page.reload()
+            open_route('specs', ws='fixture', id=record_key, filter='active', q='Building')
+            tabs = page.get_by_role('navigation', name='Spec sections')
+            expect(page.locator('.object-head h2')).to_have_text('browser')
+            expect(page.locator('.progress-head strong')).to_have_text('Step 2 of 5 · Resolve worker identity')
+            expect(tabs.get_by_role('button', name='Overview', exact=True)).to_have_attribute('aria-pressed', 'true')
+            assert params()['ws'] == ['fixture'] and params()['filter'] == ['active'] and params()['q'] == ['Building'] and params()['id'] == [record_key], page.url
+
+            open_route('specs', ws='fixture', id=record_key, tab='activity')
+            expect(tabs.get_by_role('button', name='Activity', exact=True)).to_have_attribute('aria-pressed', 'true')
+            expect(page.locator('article.detail h2')).to_have_text('browser')
+            capture_both('activity')
+            open_route('specs', ws='fixture', id=record_key, tab='unrecognized')
+            expect(tabs.get_by_role('button', name='Overview', exact=True)).to_have_attribute('aria-pressed', 'true')
+            expect(page.locator('.progress-head')).to_be_visible()
+            report['scenarios'].append('Cold Activity link renders the Activity body and an unknown tab renders Overview')
+
+            open_route('specs', ws='fixture', id=record_key, filter='active', q='Building')
+            page.locator('.detail-actions').get_by_role('button', name='Open spec', exact=True).click()
+            assert params()['tab'] == ['activity'] and params()['filter'] == ['active'] and params()['q'] == ['Building'] and params()['id'] == [record_key], page.url
+            page.locator('.detail-actions').get_by_role('button', name='Open agent', exact=True).click()
+            expect(page.locator('h1')).to_have_text('Agents')
+            assert params()['id'] == [assignment_key] and params()['ws'] == ['fixture'], page.url
+            capture_both('agent')
+            page.go_back()
+            expect(page.locator('h1')).to_have_text('Specs')
+            expect(tabs.get_by_role('button', name='Activity', exact=True)).to_have_attribute('aria-pressed', 'true')
+            assert params()['tab'] == ['activity'] and params()['filter'] == ['active'] and params()['q'] == ['Building'] and params()['id'] == [record_key] and params()['ws'] == ['fixture'], page.url
+            page.go_back()
+            expect(tabs.get_by_role('button', name='Overview', exact=True)).to_have_attribute('aria-pressed', 'true')
+            expect(page.locator('.progress-head')).to_be_visible()
+            assert 'tab' not in params() and params()['filter'] == ['active'] and params()['q'] == ['Building'] and params()['id'] == [record_key] and params()['ws'] == ['fixture'], page.url
+            report['scenarios'].append('Overview -> Activity -> linked Agent -> Back twice restores Activity then Overview with ws/filter/q/id preserved')
+
+            tabs.get_by_role('button', name='Activity', exact=True).click()
+            assert params()['tab'] == ['activity'], page.url
+            tabs.get_by_role('button', name='Files', exact=True).click()
+            expect(page.locator('h1')).to_have_text('Files')
+            assert params()['source'] == ['package'] and params()['id'] == [package] and params()['ws'] == ['fixture'], page.url
+            expect(page.get_by_role('button', name='spec.md', exact=True)).to_be_visible()
+            expect(page.get_by_role('button', name='work-tour.html', exact=True)).to_be_visible()
+            capture_both('files')
+            page.get_by_role('button', name='spec.md', exact=True).click()
+            viewer('spec.md', 'Browser specification')
+            page.get_by_role('button', name='work-tour.html', exact=True).click()
+            expect(page.locator('.file-viewer h4')).to_have_text('work-tour.html')
+            expect(page.locator('.file-viewer iframe')).to_have_attribute('title', 'work-tour.html')
+            capture_both('files-tour')
+            page.go_back()
+            viewer('spec.md', 'Browser specification')
+            page.go_back()
+            expect(page.locator('.file-viewer')).to_have_count(0)
+            page.go_back()
+            expect(page.locator('h1')).to_have_text('Specs')
+            expect(tabs.get_by_role('button', name='Activity', exact=True)).to_have_attribute('aria-pressed', 'true')
+            assert params()['tab'] == ['activity'] and params()['filter'] == ['active'] and params()['q'] == ['Building'] and params()['id'] == [record_key] and params()['ws'] == ['fixture'], page.url
+            report['scenarios'].append('Files tab, spec.md and work-tour.html use the real package Files destination; Back restores the selected Activity tab')
+
+            imported = envelope([linked_run], assignments=linked_assignments, epics=linked_epics)
+            page.locator('#import-file').set_input_files({'name': 'specs-overview-import.json', 'mimeType': 'application/json', 'buffer': json.dumps(imported).encode()})
+            expect(page.locator('.records button.record[data-key]')).to_have_count(1)
+            open_route('files', source='package', id=package)
+            expect(page.locator('h1')).to_have_text('Files')
+            expect(page.locator('main')).to_contain_text('Package files require a live published package on the local dashboard server.')
+            expect(page.locator('.files-list')).to_have_count(0)
+            capture_both('files-offline')
+            report['scenarios'].append('Imported/offline Files reports the existing unavailable boundary')
 
         if case == 'specs-list':
             (evidence / 'screens').mkdir(parents=True, exist_ok=True)
@@ -487,7 +680,7 @@ try:
             expect(rows.first.locator('.run-title')).to_have_text('blocked-z')
             expect(rows.nth(1).locator('.run-title')).to_have_text('healthy-a')
             expect(page.locator('.list-caption')).to_have_text('Active · 2 observed specs')
-            expect(page.locator('article.detail h2')).to_have_text('blocked-z')
+            expect(page.locator('.object-head h2')).to_have_text('blocked-z')
             capture_both('list')
             report['scenarios'].append('Active rows, caption and App selection fallback share the attention-first order')
 
@@ -495,7 +688,7 @@ try:
             expect(rows).to_have_count(1)
             expect(rows.first.locator('.run-title')).to_have_text('healthy-a')
             expect(page.locator('.list-caption')).to_have_text('Active · 1 observed specs')
-            expect(page.locator('article.detail h2')).to_have_text('healthy-a')
+            expect(page.locator('.object-head h2')).to_have_text('healthy-a')
             assert params()['q'] == ['healthy'], page.url
             page.locator('#find-record').fill('')
 
@@ -579,7 +772,9 @@ try:
             page.locator('button:has-text("Refresh state")').first.click()
             expect(page.locator('.records .ds-callout').filter(has_text='Connection lost')).to_be_visible()
             expect(rows).to_have_count(1)
+            page.get_by_role('navigation', name='Spec sections').get_by_role('button', name='Activity', exact=True).click()
             expect(page.locator('.completion-control').get_by_role('button', name='Mark complete', exact=True)).to_be_disabled()
+            page.get_by_role('navigation', name='Spec sections').get_by_role('button', name='Overview', exact=True).click()
             offline_age = rows.first.locator('small').inner_text()
             assert '2m 0s before observation' in offline_age, offline_age
             page.wait_for_timeout(1500)
@@ -610,7 +805,9 @@ try:
             assert '10m 0s before observation' in imported_age, imported_age
             page.wait_for_timeout(1500)
             assert rows.first.locator('small').inner_text() == imported_age, 'imported age advanced'
+            page.get_by_role('navigation', name='Spec sections').get_by_role('button', name='Activity', exact=True).click()
             expect(page.locator('.completion-control').get_by_role('button', name='Mark complete', exact=True)).to_be_disabled()
+            page.get_by_role('navigation', name='Spec sections').get_by_role('button', name='Overview', exact=True).click()
             capture_both('imported')
             report['scenarios'].append('Imported rows render fixed before-observation ages and keep mutation controls unavailable')
 
@@ -629,6 +826,6 @@ finally:
         fixture.kill()
         fixture.wait()
     report['elapsedSeconds'] = round(time.monotonic() - started, 3)
-    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'step-003-fix-browser.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'sentinel-planned-filter-browser.json' if case == 'filters' else 'specs-list.json' if case == 'specs-list' else 'step-002-fix-browser.json'
+    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'step-003-fix-browser.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'sentinel-planned-filter-browser.json' if case == 'filters' else 'specs-list.json' if case == 'specs-list' else 'specs-overview.json' if case == 'specs-overview' else 'step-002-fix-browser.json'
     (evidence / filename).write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))

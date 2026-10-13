@@ -141,11 +141,12 @@ export default function App() {
   function canOpenPackageFiles(item: WireRecord) {
     return Boolean(str(item.package));
   }
-  function openPackageFiles(item: WireRecord) {
+  function openPackageFiles(item: WireRecord, path?: string) {
     const pkg = str(item.package);
     if (!pkg) return;
     const next: RouteState = { dest: 'files', source: 'package', id: pkg };
     if (scopeWs()) next.ws = scopeWs();
+    if (path) next.path = path;
     go(next);
   }
   function askCompletion() {
