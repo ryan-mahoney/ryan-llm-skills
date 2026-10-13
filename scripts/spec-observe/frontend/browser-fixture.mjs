@@ -214,8 +214,8 @@ const discussion={
  subscribe({thread_id},callback){subscribers.add({thread_id,callback});const current=()=>threads.find(t=>t.thread_id===thread_id);const timer=setInterval(()=>callback({type:'state',event:copied(current()??{}),workspace_id:'fixture',thread_id,generation:1}),700);return ()=>{clearInterval(timer);for(const item of subscribers)if(item.callback===callback)subscribers.delete(item);};},
 };
 const makeSnapshot=()=>{const now=new Date().toISOString();const run={workspace:'fixture',package:pkg,package_ref:'fixture/browser',assignment_id:'run-1',workflow_id:'workflow-1',execution:'running',workflow_state:'waiting-worker',is_current_assignment:true,activity:'Building the dashboard',obligation:'Keep editors stable',observed_at:now,coverage:{state:'complete',reasons:[]},spec_progress:{current_position:(tick%3)+1,total_steps:3,current_name:'Migrate view'},timing:{started_at:now,attempts:[]},evidence:{state:'recorded',verdict:'ready',scope:'declared-artifact',source:'work-tour.html',commit:'abc123',observed_at:now},epic:{epic:'demo',workspace:'fixture'}};
-const snapshot={workspace:'fixture',coverage:{state:'complete',observed_at:now,reasons:[]},runs:plannedLaunch?[]:[run],recently_completed:plannedLaunch?[]:[{...run,assignment_id:'landed',package:pkg,completion_basis:'merged-pr',completed_at:now,is_current_assignment:false}],assignments:plannedLaunch?[]:[{assignment_id:'run-1',workspace_id:'fixture',task_activity:{state:'idle',reason:'The last response finished. The session is waiting for input.',finished_at:now,last_reply:'Architecture proposal complete.'},spec_package:'fixture/browser',workflow_id:'workflow-1',display:'live',state:'live',executionDir:root,terminal:'fixture',coverage:{state:'complete',reasons:[]},nextAction:'Attach to the terminal'},...[...launchedAssignments.values()].map(copied)],assignment_coverage:{state:'complete',reasons:[]},epics:plannedLaunch?[]:[{workspace:'fixture',epic:'demo',title:'Demo epic',state:'active',members:[{name:'browser',package:'browser',workspace:'fixture',status:'in-progress',waiting_on:[],attention:false}],summary:{total:1,merged:0,complete:0,attention:0},next:'browser',coverage:{state:'complete',reasons:[]}}]};if(plannedLaunch)snapshot.planned_packages=[{workspace:'fixture',package:pkg,package_ref:'fixture/browser',planned_at:'2026-10-10T12:00:00Z',targets:[{id:'main',primary:checkout},{id:'alternate',primary:secondCheckout}],source_paths:['spec.md']},{workspace:'fixture',package:otherPkg,package_ref:'fixture/other-browser',planned_at:'2026-10-11T12:00:00Z',targets:[{id:'main',primary:checkout},{id:'alternate',primary:secondCheckout}],source_paths:['spec.md']}];return {schema_version:1,observer_id:'fixture',state:'observing',published_at:now,snapshot};};
-await writeFile(observerFile,JSON.stringify(makeSnapshot()));
+const runAssignment={assignment_id:'run-1',workspace_id:'fixture',task_activity:{state:'idle',reason:'The last response finished. The session is waiting for input.',finished_at:now,last_reply:'Architecture proposal complete.'},spec_package:'fixture/browser',workflow_id:'workflow-1',display:terminalAssignment==='ended'?'ended':'live',state:'live',executionDir:root,terminal:'fixture',coverage:{state:'complete',reasons:[]},nextAction:'Attach to the terminal'};
+const snapshot={workspace:'fixture',coverage:{state:'complete',observed_at:now,reasons:[]},runs:plannedLaunch?[]:[run],recently_completed:plannedLaunch?[]:[{...run,assignment_id:'landed',package:pkg,completion_basis:'merged-pr',completed_at:now,is_current_assignment:false}],assignments:plannedLaunch?[]:[...(terminalAssignment==='absent'?[]:[runAssignment]),...[...launchedAssignments.values()].map(copied)],assignment_coverage:{state:'complete',reasons:[]},epics:plannedLaunch?[]:[{workspace:'fixture',epic:'demo',title:'Demo epic',state:'active',members:[{name:'browser',package:'browser',workspace:'fixture',status:'in-progress',waiting_on:[],attention:false}],summary:{total:1,merged:0,complete:0,attention:0},next:'browser',coverage:{state:'complete',reasons:[]}}]};if(plannedLaunch)snapshot.planned_packages=[{workspace:'fixture',package:pkg,package_ref:'fixture/browser',planned_at:'2026-10-10T12:00:00Z',targets:[{id:'main',primary:checkout},{id:'alternate',primary:secondCheckout}],source_paths:['spec.md']},{workspace:'fixture',package:otherPkg,package_ref:'fixture/other-browser',planned_at:'2026-10-11T12:00:00Z',targets:[{id:'main',primary:checkout},{id:'alternate',primary:secondCheckout}],source_paths:['spec.md']}];return {schema_version:1,observer_id:'fixture',state:'observing',published_at:now,snapshot};};
 const makeMismatchSnapshot=()=>{const now=new Date().toISOString();const run=(workspaceName,packagePath,packageRef,activity)=>({workspace:workspaceName,package:packagePath,package_ref:packageRef,assignment_id:'mismatch-run',workflow_id:'mismatch-workflow',execution:'running',workflow_state:'waiting-external',is_current_assignment:true,activity,obligation:activity,observed_at:now,coverage:{state:'complete',reasons:[]},spec_progress:{current_position:1,total_steps:2,current_name:'Mismatch step'},timing:{started_at:now,attempts:[]}});return {schema_version:1,observer_id:'mismatch-fixture',state:'observing',published_at:now,snapshot:{workspace:'physical',coverage:{state:'complete',observed_at:now,reasons:[]},runs:[run('physical',alphaKitPackage,'alpha/alpha-kit','Alpha kit run'),run('alpha',physicalKitPackage,'physical/physical-kit','Neighbor physical run')],recently_completed:[],assignments:[{assignment_id:'alpha-assignment',workspace_id:'alpha',workspace:'physical',spec_package:'alpha/alpha-kit',workflow_id:'mismatch-workflow',display:'live',state:'live',executionDir:root,coverage:{state:'complete',reasons:[]},task_activity:{state:'idle',reason:'Waiting for mismatch review.'},nextAction:'Review mismatch assignment'},{assignment_id:'physical-assignment',workspace_id:'physical',workspace:'alpha',spec_package:'physical/physical-kit',workflow_id:'mismatch-workflow',display:'live',state:'live',executionDir:root,coverage:{state:'complete',reasons:[]},task_activity:{state:'idle',reason:'Waiting for mismatch review.'},nextAction:'Review mismatch assignment'}],assignment_coverage:{state:'complete',reasons:[]},epics:[{workspace:'physical',epic:'alpha-kit-epic',title:'Alpha kit epic',state:'active',members:[{name:'alpha-kit',package:'alpha-kit',workspace:'physical',status:'in-progress',waiting_on:[],attention:false}],summary:{total:1,merged:0,complete:0,attention:0},next:'alpha-kit',coverage:{state:'complete',reasons:[]}},{workspace:'alpha',epic:'physical-neighbor-epic',title:'Neighbor physical epic',state:'active',members:[{name:'physical-kit',package:'physical-kit',workspace:'alpha',status:'in-progress',waiting_on:[],attention:false}],summary:{total:1,merged:0,complete:0,attention:0},next:'physical-kit',coverage:{state:'complete',reasons:[]}}]}};};
 await writeFile(mismatchObserverFile,JSON.stringify(makeMismatchSnapshot()));
 let sessionEnded=false,sessionEndFails=false,sessionIdentity='fixture-identity';
@@ -223,6 +223,66 @@ const sessionControl={
  async describe(id){return {assignment_id:id,identity:sessionIdentity,state:sessionEnded?'ended':'open',can_end:!sessionEnded,reason:sessionEnded?'Session has ended. Saved files and transcript remain available.':'Terminal session is open.',attach_command:sessionEnded?null:"ssh -t operator@host 'tmux -S /tmp/fixture.sock attach-session -t =fixture'",local_command:sessionEnded?null:'tmux -S /tmp/fixture.sock attach-session -t =fixture'};},
  async end(input){posts.push({name:'endSession',input});if(sessionEndFails)throw new Error('Session identity changed. Refresh and review it again.');if(input.confirm!==true||input.expected_identity!==sessionIdentity)throw new Error('Session identity changed. Refresh and review it again.');sessionEnded=true;return {state:'ended'};},
 };
+// Terminal-only verification stub. The player asset, the open action and the
+// state matrix are fake and only counted; no tmux, asciinema or WebSocket
+// stream is started. Existing public/local Host/Origin mapping and the
+// dashboard upgrade forwarding stay untouched, and the teardown drain hook
+// still closes the injected dashboard through closeTerminalViews.
+let terminalState='none',terminalDelayMs=0,terminalOpenDelayMs=0,terminalFailAsset='none',terminalAssignment='live';
+const terminalCounts={open:0,openById:{},assets:{styles:0,script:0},assetById:{}};
+const terminalStateStatus={'not-live':404,changed:409,'not-installed':503,busy:503,failed:503,'not-running':503};
+const terminalStateMessage={'not-live':'The assignment terminal is not live.',changed:'The assignment terminal identity changed. Reconcile it before viewing.','not-installed':'asciinema is not installed on the dashboard host.',busy:'Terminal streams are unavailable. Try again shortly.',failed:'The terminal stream could not be started.','not-running':'The terminal stream is not running.'};
+const TERMINAL_STUB_STYLES='.terminal-frame{background:#050505;color:#b6f7b6;font-family:monospace;font-size:12px;height:100%;padding:8px;white-space:pre-wrap;overflow:hidden}';
+const TERMINAL_STUB_SCRIPT=`(function(){
+  window.__fixturePlayerCreates=window.__fixturePlayerCreates||{};
+  window.__fixturePlayerDisposals=window.__fixturePlayerDisposals||0;
+  window.AsciinemaPlayer={create:function(source,element){
+    var url=String(source&&source.url||'');
+    var parts=url.split('/api/assignment-terminal/');
+    var id=parts.length>1?decodeURIComponent(parts[1].split('/')[0]):'unknown';
+    window.__fixturePlayerCreates[id]=(window.__fixturePlayerCreates[id]||0)+1;
+    var listeners={},disposed=false;
+    function emit(name){var fns=listeners[name]||[];for(var i=0;i<fns.length;i++){try{fns[i]();}catch(error){}}}
+    element.setAttribute('data-fixture-player','stub');
+    element.textContent='fixture terminal output';
+    setTimeout(function(){if(!disposed){element.textContent='fixture terminal output\\n$ ready';emit('loading');}},20);
+    setTimeout(function(){if(!disposed)emit('playing');},80);
+    return {
+      addEventListener:function(name,fn){if(!listeners[name])listeners[name]=[];listeners[name].push(fn);},
+      removeEventListener:function(name,fn){var fns=listeners[name]||[];var index=fns.indexOf(fn);if(index>=0)fns.splice(index,1);},
+      dispose:function(){if(disposed)return;disposed=true;window.__fixturePlayerDisposals++;element.textContent='';element.removeAttribute('data-fixture-player');}
+    };
+  }};
+})();`;
+async function readTerminalRequest(req,limit){
+ let bytes=0;const chunks=[];
+ for await(const chunk of req){bytes+=chunk.length;if(bytes>limit)return null;chunks.push(Buffer.from(chunk));}
+ try{return JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{return null;}
+}
+async function handleTerminalRequest(req,res,url,assetMatch){
+ const send=(status,body,type='application/json; charset=utf-8')=>{res.writeHead(status,{'Content-Type':type,'Cache-Control':'no-store'});res.end(typeof body==='string'?body:JSON.stringify(body));};
+ if(url.pathname==='/api/assignment-terminal/open'){
+  if(req.method!=='POST'){send(405,{error:'Use POST.'});return;}
+  const input=await readTerminalRequest(req,4096);
+  const id=typeof input?.assignment_id==='string'?input.assignment_id:'';
+  if(!id){send(400,{error:'Assignment ID must be a UUID.'});return;}
+  terminalCounts.open+=1;terminalCounts.openById[id]=(terminalCounts.openById[id]||0)+1;
+  if(terminalOpenDelayMs>0)await new Promise(resolve=>setTimeout(resolve,terminalOpenDelayMs));
+  if(terminalState!=='none'){const state=terminalState;send(terminalStateStatus[state]??503,{state,error:terminalStateMessage[state]??'The terminal stream could not be started.'});return;}
+  send(200,{assignment_id:id,state:'live'});
+  return;
+ }
+ const id=assetMatch[1],assetFile=assetMatch[2];
+ if(assetFile!=='asciinema-player.css'&&assetFile!=='asciinema-player.min.js'){send(404,{error:'Not found'});return;}
+ const kind=assetFile==='asciinema-player.css'?'styles':'script';
+ terminalCounts.assets[kind]+=1;
+ const perAssignment=terminalCounts.assetById[id]??(terminalCounts.assetById[id]={styles:0,script:0});
+ perAssignment[kind]+=1;
+ if(terminalDelayMs>0)await new Promise(resolve=>setTimeout(resolve,terminalDelayMs));
+ if(terminalFailAsset===kind||terminalFailAsset==='both'){send(503,{error:'Fixture player asset failure.'});return;}
+ send(200,kind==='styles'?TERMINAL_STUB_STYLES:TERMINAL_STUB_SCRIPT,kind==='styles'?'text/css; charset=utf-8':'text/javascript; charset=utf-8');
+}
+await writeFile(observerFile,JSON.stringify(makeSnapshot()));
 const dashboard=createDashboardServer({agentDir:join(root,'agent'),storageRoot:storage,publicHost:'dashboard.example',discussion,sessionControl});
 const server=createServer(async(req,res)=>{
  const url=new URL(req.url,'http://fixture');
@@ -230,6 +290,12 @@ const server=createServer(async(req,res)=>{
   const action=url.searchParams.get('action');
   if(action==='session-end-fails')sessionEndFails=url.searchParams.get('value')==='true';
   if(action==='session-identity'){const next=url.searchParams.get('value');sessionIdentity=next?next:'fixture-identity';}
+  if(action==='terminal-state')terminalState=url.searchParams.get('value')||'none';
+  if(action==='terminal-delay-ms')terminalDelayMs=numberValue(url.searchParams.get('value'),0,15000);
+  if(action==='terminal-open-delay-ms')terminalOpenDelayMs=numberValue(url.searchParams.get('value'),0,15000);
+  if(action==='terminal-fail-asset')terminalFailAsset=url.searchParams.get('value')||'none';
+  if(action==='terminal-assignment'){terminalAssignment=url.searchParams.get('value')||'live';await writeFile(observerFile,JSON.stringify(makeSnapshot()));}
+  if(action==='terminal-reset'){terminalState='none';terminalDelayMs=0;terminalOpenDelayMs=0;terminalFailAsset='none';terminalAssignment='live';}
   if(action==='delay-suggestions')delaySuggestions=url.searchParams.get('value')==='true';
   if(action==='edit-context')await writeFile(join(workspace.directory,'notes','browser.md'),'# Updated browser note\nChanged source after preview.\n');
   if(action==='fail-send')failSend=url.searchParams.get('value')==='true';
@@ -260,7 +326,7 @@ const server=createServer(async(req,res)=>{
   if(action==='dispatch-preview-refusal')dispatchPreviewRefusal=url.searchParams.get('value')||'none';
   if(action==='dispatch-launch-refusal')dispatchLaunchRefusal=url.searchParams.get('value')||'none';
   if(action==='dispatch-launch-outcome')dispatchLaunchOutcome=url.searchParams.get('value')||'live';
-  if(action==='publish-assignment'){const id=url.searchParams.get('value')||'';if(id)launchedAssignments.set(id,{assignment_id:id,workspace_id:'fixture',spec_package:'fixture/browser',workflow_id:'workflow-1',display:'live',state:'live',executionDir:root,terminal:'fixture',coverage:{state:'complete',reasons:[]},task_activity:{state:'idle',reason:'Fixture assignment is waiting for input.'},nextAction:'Attach to the terminal'});}
+  if(action==='publish-assignment'){const id=url.searchParams.get('value')||'';if(id){launchedAssignments.set(id,{assignment_id:id,workspace_id:'fixture',spec_package:'fixture/browser',workflow_id:'workflow-1',display:'live',state:'live',executionDir:root,terminal:'fixture',coverage:{state:'complete',reasons:[]},task_activity:{state:'idle',reason:'Fixture assignment is waiting for input.'},nextAction:'Attach to the terminal'});await writeFile(observerFile,JSON.stringify(makeSnapshot()));}}
   if(action==='clear-launch-publications')launchedAssignments.clear();
   if(action==='attention')threads=threads.map((t,i)=>i===0?{...t,attention:'stalled',owns_response:true}:t);
   if(action==='queue')threads=threads.map((t,i)=>i===0?{...t,attention:'uncertain',queue:[{id:'uncertain-1',text:'Uncertain message',state:'uncertain'}]}:t);
@@ -284,8 +350,10 @@ const server=createServer(async(req,res)=>{
   if(action==='state-delay-ms')boundary.stateDelayMs=numberValue(url.searchParams.get('value'),0,5000);
   if(action==='state-clock-offset-ms')boundary.stateClockOffsetMs=numberValue(url.searchParams.get('value'),-120000,120000);
   if(action==='catalog-mode')await applyCatalogMode(url.searchParams.get('value')||'healthy');
-  res.setHeader('Content-Type','application/json');res.end(JSON.stringify({...packageIdentity,posts,threads,createdThreads,tick,boundary,threadControls:{holdThreads,holdThreadsWorkspace,failThreads,longHistory,incompleteTail,invalidRecords,listFailStatus,historyFailStatus,responseState},subscribedThreadIds:[...new Set([...subscribers].map(item=>item.thread_id))],createControls:{delayCreate,failCreate},session:{identity:sessionIdentity,ended:sessionEnded},review:{holdDispatchPreview,holdDispatchLaunch,dispatchPreviewRefusal,dispatchLaunchRefusal,staleLaunch},launch:{outcome:dispatchLaunchOutcome,published:[...launchedAssignments.keys()]},diagnostics:{resolvers:resolverDiagnostics},boundaryLog:boundaryLog.slice(-60),active:[...activeBoundary.values()],launchResolutions:Object.fromEntries(launchResolutions),briefWritesPending,completedBriefWrites}));return;
+  res.setHeader('Content-Type','application/json');res.end(JSON.stringify({...packageIdentity,posts,threads,createdThreads,tick,boundary,threadControls:{holdThreads,holdThreadsWorkspace,failThreads,longHistory,incompleteTail,invalidRecords,listFailStatus,historyFailStatus,responseState},subscribedThreadIds:[...new Set([...subscribers].map(item=>item.thread_id))],createControls:{delayCreate,failCreate},session:{identity:sessionIdentity,ended:sessionEnded},terminal:{state:terminalState,delayMs:terminalDelayMs,openDelayMs:terminalOpenDelayMs,failAsset:terminalFailAsset,assignment:terminalAssignment,counts:terminalCounts},review:{holdDispatchPreview,holdDispatchLaunch,dispatchPreviewRefusal,dispatchLaunchRefusal,staleLaunch},launch:{outcome:dispatchLaunchOutcome,published:[...launchedAssignments.keys()]},diagnostics:{resolvers:resolverDiagnostics},boundaryLog:boundaryLog.slice(-60),active:[...activeBoundary.values()],launchResolutions:Object.fromEntries(launchResolutions),briefWritesPending,completedBriefWrites}));return;
  }
+ const terminalAsset=/^\/api\/assignment-terminal\/([^/]+)\/([^/]+)$/.exec(url.pathname);
+ if(url.pathname==='/api/assignment-terminal/open'||terminalAsset){await handleTerminalRequest(req,res,url,terminalAsset);return;}
  // Emulate the trusted Serve endpoint so the browser exercises thread-only tokens.
  if(!localOperator){req.headers.host='dashboard.example';if(req.headers.origin)req.headers.origin='https://dashboard.example';}
  const readKind=url.pathname==='/api/workspaces'?'catalog':url.pathname==='/api/workspace'?'detail':url.pathname==='/api/state'?'state':null;
