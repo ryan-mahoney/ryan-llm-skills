@@ -234,11 +234,26 @@ application state with a bounded assertion before full interaction. Diagnose the
 failing boundary; do not repeat an unchanged full journey for the same setup failure.
 This is targeted verification scheduling, not a prerequisite for every simple test.
 
+If the same failure persists after a repair, produce one bounded diagnostic packet before
+another structural edit: name the first unproven prerequisite, expected and actual
+observation, reproduction command and diagnostic paths. Inspect the real production
+fixture lifecycle/configuration and seeded prerequisites when implicated. Observe the
+identity shape where consumed for identity failures, and the initiating event, state
+transition and destination for navigation failures. Select only relevant boundaries;
+do not add a mandatory agent, blanket test matrix, or unchanged full-journey rerun.
+
 Routine completion stays in this assignment: have the editor format affected files
 before the final focused gate, then execute every applicable required gate, including
 browser work that is ready to run. A gate that has not been attempted is remaining
 work, not itself a reason to return a checkpoint. Return early for a concrete blocker,
 unresolved consequential decision, deadline, or owner transfer; record that reason.
+An interruption can also require a durable partial handoff. Supply `checkpoint_reason`
+as `blocker`, `deadline`, `decision`, `owner-transfer`, or `interruption`, and
+`remaining_work` as concrete actions with affected gate IDs, prerequisites and expected
+observations. Use `decision` for a `decision-required` handoff. A ready unattempted gate
+stays in the current assignment. Legacy checkpoints without these optional fields remain
+useful evidence; reconcile their gaps instead of discarding their receipts. Route the
+remaining action before asking for an updated handoff; do not repeat completion alone.
 
 Stop when the assigned checks pass and known relevant gaps are resolved. Do not rerun
 passing checks without an affected change or named uncertainty, or add another harness
@@ -316,6 +331,8 @@ learning:
   kind: step
   step: <number>
   outcome: <as-specified | adapted | checkpoint | no-artifact | decision-required | needs-spec-correction>
+  checkpoint_reason: <blocker | deadline | decision | owner-transfer | interruption> # incomplete outcomes only; omit for completion
+  remaining_work: [<concrete remaining action>] # optional legacy metadata; required with a reason
   commit: <sha | none>
   verification:
     commit: <same sha or none>

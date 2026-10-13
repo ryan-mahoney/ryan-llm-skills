@@ -7,6 +7,7 @@ import { homedir, hostname, tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
 
 import { createSentinelObserver, createVerificationRecorder, SENTINEL_COALESCE_MS, SENTINEL_RECONCILE_MS, SENTINEL_WIDGET_KEY, readCheckpointRecord, recordCheckpoint, createSentinelAuthority, activatePolicy, createDiagnosisController, readDiagnosisAttempt, disablePolicy, reserveIntent, finishIntent, considerCancellation, writeVerificationIncidents, buildDiagnosisPacket, readPolicyGuard, readInboxGuard, checkpointPath } from './sentinel.mjs';
 import { collectFacts } from '../../../scripts/jev/core.mjs';
@@ -25,10 +26,11 @@ const cliPath = join(here, '../../../scripts/spec-observe/cli.mjs');
 let sdk;
 try {
   const bin = execFileSync('which', ['pi'], { encoding: 'utf8' }).trim();
-  const sdkRoot = dirname(dirname(dirname(realpathSync(bin))));
+  const sdkRoot = process.env.SPEC_PI_SDK || dirname(dirname(dirname(realpathSync(bin))));
   const entry = join(sdkRoot, 'dist', 'index.js');
-  const aiEntry = join(sdkRoot, 'node_modules', '@earendil-works', 'pi-ai', 'dist', 'index.js');
-  if (existsSync(entry) && existsSync(aiEntry)) {
+  const aiEntry = createRequire(join(sdkRoot, 'package.json')).resolve.paths('@earendil-works/pi-ai')
+    .map(root => join(root, '@earendil-works/pi-ai/dist/index.js')).find(existsSync);
+  if (existsSync(entry) && aiEntry) {
     sdk = {
       ...(await import(pathToFileURL(entry).href)),
       ai: await import(pathToFileURL(aiEntry).href),
@@ -950,6 +952,50 @@ test('sentinel checkpoint: registered sentinel dispatch binds the receipt checko
   // The dispatch update retains the reconciled revision; it does not adopt a live one.
   assert.equal(stored.input_revision, 0);
   assert.deepEqual(stored.workers.find(worker => worker.id === 'assign-dispatch-int'), { id: 'assign-dispatch-int', kind: 'owner', state: 'complete' });
+});
+
+// Run alone with --test-name-pattern='dispatch preserves the run receipt'.
+test('sentinel checkpoint: dispatch preserves the run receipt when bookkeeping fails', { skip: sdkSkip, timeout: 60000 }, async t => {
+  const dir = sandbox(t);
+  const { repo } = primary(dir, 'dispatch-warning-repo');
+  commit(repo);
+  const packagePath = pack(repo);
+  const checkout = join(dir, 'dispatch-checkout');
+  mkdirSync(checkout, { recursive: true });
+  const runRecord = { schema_version: 1, id: 'run-warning', assignment_id: 'assign-warning',
+    package: packagePath, step: join(packagePath, 'step-001-subspec.md'), checkout,
+    state: 'running', started_at: new Date().toISOString() };
+  mkdirSync(join(packagePath, 'runtime', 'runs'), { recursive: true });
+  writeFileSync(join(packagePath, 'runtime', 'runs', 'run-warning.json'), JSON.stringify(runRecord));
+  writeFileSync(join(packagePath, 'runtime', 'run.json'), JSON.stringify(runRecord));
+  const { loader } = await loadExtension(t, { dir });
+  const tools = new Map(loader.getExtensions().extensions.flatMap(extension => [...extension.tools.entries()]));
+  const ctx = { sessionManager: { getSessionFile: () => join(dir, 'sessions', 'coord.jsonl'), getSessionId: () => 'coord-session' } };
+  const artifact = join(packagePath, 'handoff.md');
+  writeFileSync(artifact, 'Current work');
+  const registered = await tools.get('spec_sentinel_checkpoint').definition.execute('register', {
+    package: packagePath, workflow_id: 'wf-warning', expected_revision: 0, state: 'ready',
+    obligation: { key: 'impl:step-001', stage: 'implementation', summary: 'work', artifacts: [{ path: 'handoff.md' }] },
+    workers: [], inbox: { items: [] }, reconciles_input_revision: 0,
+  }, undefined, undefined, ctx);
+  assert.equal(registered.isError, false);
+  // A missing referenced file makes checkpoint binding fail after runtime has
+  // returned the existing worker. This must not be reported as a refused launch.
+  unlinkSync(artifact);
+  const args = { action: 'startup', package: packagePath, workflow_id: 'wf-warning', assignment_id: 'assign-warning' };
+  const warning = await tools.get('spec_dispatch').definition.execute('dispatch', args, undefined, undefined, ctx);
+  assert.equal(warning.isError, false);
+  assert.equal(warning.details.run_id, 'run-warning');
+  assert.equal(warning.details.state, 'running');
+  assert.match(warning.details.bookkeeping_error, /unreadable/);
+  assert.match(warning.details.next, /never launch a replacement/);
+  writeFileSync(artifact, 'Intentionally updated work');
+  const retry = await tools.get('spec_dispatch').definition.execute('reconcile', args, undefined, undefined, ctx);
+  assert.equal(retry.isError, false);
+  assert.equal(retry.details.run_id, warning.details.run_id);
+  assert.equal(retry.details.bookkeeping_error, undefined);
+  assert.equal(readCheckpointRecord(packagePath, 'wf-warning').state, 'waiting-worker');
+  assert.deepEqual(readdirSync(join(packagePath, 'runtime', 'runs')).filter(name => name.endsWith('.json')), ['run-warning.json']);
 });
 
 test('sentinel checkpoint: successive dispatches under one workflow bind sequential assignments', { skip: sdkSkip, timeout: 60000 }, async t => {

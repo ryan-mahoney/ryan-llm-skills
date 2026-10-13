@@ -27,10 +27,20 @@ editor defaults to `openrouter/inception/mercury-2.5:high`. Preserve exact selec
 explicit overrides. Diagnose actual launch failures on this route; do not silently
 substitute models or providers. Non-Pi harnesses retain the direct worker route.
 
-For an explicitly selected context experiment, `session_scope: step` retains the pair
-within one canonical step and its retries, while separating it from other steps.
-The default `package` preserves current session reuse. Supply a concise handoff of
-dependency contracts, settled decisions, relevant evidence and unresolved obligations.
+New dispatches default to `session_scope: step`: retain the owner/editor pair within
+one canonical step and its retries, and start separate sessions for other steps.
+Explicit `session_scope: package` retains reuse across steps. Existing assignment IDs
+resume their recorded scope and sessions when scope is omitted; a new retry ID on
+the same step inherits its latest recorded scope. New steps default to step scope.
+The runtime does not rewrite active runs.
+The owner launch includes a bounded CURRENT handoff with the exact step and checkout
+revision, latest attempt results for card-referenced steps, decisions, evidence revisions
+and unresolved obligations. Bounded earlier-step observations supplement card links,
+labelled as context without inferring dependencies. Unreadable optional observations
+appear as coverage gaps. Canonical handoff, progress and history paths remain
+available when excerpts are truncated or additional prerequisites need inspection.
+Treat these as observations: compare old gaps with latest source/review/fix evidence,
+and never infer acceptance from a worker exit or completion outcome.
 Do not switch scope mid-step or discard a live session. Compare comparable completed
 steps using elapsed time, reported context/cost, repairs and independent review findings.
 Change one variable at a time; lower thinking effort is a separate explicitly selected
@@ -172,8 +182,8 @@ The runtime sends the coordinator a native completion event. Wait for that event
 do not poll status, tail transcripts, or infer completion from quiet output. Use `spec_dispatch(action: status, package: <package_dir>, run_id: <known ID>)`
 only to recover after interruption or diagnose an actual failure.
 
-Owner and editor disk sessions stay attached to their exact model assignments across
-turns and steps. Refresh affected source after intervening commits; reuse valid evidence
+Owner and editor disk sessions stay attached to their exact model assignments within
+the recorded session scope. Refresh affected source after intervening commits; reuse valid evidence
 with its original revision. A changed model uses a distinct session. Context compaction
 must preserve requirements and unresolved work; it never authorizes a Git reset.
 
