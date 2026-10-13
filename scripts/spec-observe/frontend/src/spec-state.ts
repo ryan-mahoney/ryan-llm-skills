@@ -66,9 +66,15 @@ export function specViewState(payload: Envelope | null, record: WireRecord | nul
   for (const observer of scoped) {
     const coverage = observer?.snapshot?.coverage;
     const state = coverageState(coverage);
-    if (state === 'complete') continue;
-    reasons.push(`${scopeName(observer)} coverage ${state}.`);
-    reasons.push(...coverageReasons(coverage));
+    if (state !== 'complete') {
+      reasons.push(`${scopeName(observer)} coverage ${state}.`);
+      reasons.push(...coverageReasons(coverage));
+    }
+    // Freshness is per contributing scope: a fresh complete snapshot must not
+    // mask another scope whose observation is stale or unavailable.
+    const scopedAt = validTime(coverage?.observed_at);
+    if (!scopedAt) reasons.push(`${scopeName(observer)} observation unavailable.`);
+    else if (stale(scopedAt, context.now)) reasons.push(`${scopeName(observer)} observation stale.`);
   }
   if (record) {
     const coverage = record.coverage;

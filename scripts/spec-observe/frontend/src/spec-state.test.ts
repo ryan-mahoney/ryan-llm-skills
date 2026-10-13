@@ -96,6 +96,50 @@ test('fresh heartbeat and generated_at cannot freshen an old workspace observati
   assert.equal(fresh.observedAt, '2026-10-12T11:59:30Z');
 });
 
+test('fresh complete scope does not mask a stale contributing scope', () => {
+  const context = { live: true, connectionFailed: false, now: at('2026-10-12T12:00:00Z') };
+  const payload = { generated_at: '2026-10-12T12:00:00Z', observers: [] };
+  const scope = (workspace: string, observed_at?: unknown) => ({ observer_id: `observer-${workspace}`, state: 'observing', published_at: '2026-10-12T12:00:00Z', snapshot: { workspace, runs: [], coverage: { state: 'complete', observed_at, reasons: [] } } });
+  const scoped = [scope('old-scope', '2026-10-12T10:00:00Z'), scope('fresh-scope', '2026-10-12T11:59:30Z')];
+  const state = specViewState(payload, null, scoped, context);
+  assert.equal(state.read, 'ready');
+  assert.equal(state.observedAt, '2026-10-12T11:59:30Z');
+  assert.equal(state.stale, false);
+  assert.equal(state.partial, false);
+  assert.ok(state.reasons.some(reason => reason.includes('old-scope') && reason.includes('stale')), JSON.stringify(state.reasons));
+  assert.ok(!state.reasons.some(reason => reason.includes('fresh-scope')), JSON.stringify(state.reasons));
+});
+
+test('complete scope with an unavailable observation time keeps its own diagnostic', () => {
+  const context = { live: true, connectionFailed: false, now: at('2026-10-12T12:00:00Z') };
+  const payload = { generated_at: '2026-10-12T12:00:00Z', observers: [] };
+  const fresh = { observer_id: 'observer-fresh', state: 'observing', published_at: '2026-10-12T12:00:00Z', snapshot: { workspace: 'fresh-scope', runs: [], coverage: { state: 'complete', observed_at: '2026-10-12T11:59:30Z', reasons: [] } } };
+  const silent = { observer_id: 'observer-silent', state: 'observing', published_at: '2026-10-12T12:00:00Z', snapshot: { workspace: 'silent-scope', runs: [], coverage: { state: 'complete', reasons: [] } } };
+  const state = specViewState(payload, null, [fresh, silent], context);
+  assert.equal(state.observedAt, '2026-10-12T11:59:30Z');
+  assert.equal(state.stale, false);
+  assert.equal(state.partial, false);
+  assert.ok(state.reasons.some(reason => reason.includes('silent-scope') && reason.includes('unavailable')), JSON.stringify(state.reasons));
+  assert.ok(!state.reasons.some(reason => reason.includes('fresh-scope')), JSON.stringify(state.reasons));
+});
+
+test('fresh selected record does not mask a stale contributing scope', () => {
+  const context = { live: true, connectionFailed: false, now: at('2026-10-12T12:00:00Z') };
+  const payload = { generated_at: '2026-10-12T12:00:00Z', observers: [] };
+  const selectedObserver = { observer_id: 'observer-selected', state: 'observing', published_at: '2026-10-12T12:00:00Z', snapshot: { workspace: 'selected-scope', runs: [], coverage: { state: 'complete', observed_at: '2026-10-12T11:59:30Z', reasons: [] } } };
+  const record = { workspace: 'selected-scope', package: '/repo/pkg', observer: selectedObserver, coverage: { state: 'complete', reasons: [] } };
+  const scoped = [
+    { observer_id: 'observer-selected', state: 'observing', published_at: '2026-10-12T12:00:00Z', snapshot: { workspace: 'selected-scope', runs: [], coverage: { state: 'complete', observed_at: '2026-10-12T11:59:30Z', reasons: [] } } },
+    { observer_id: 'observer-old', state: 'observing', published_at: '2026-10-12T12:00:00Z', snapshot: { workspace: 'old-scope', runs: [], coverage: { state: 'complete', observed_at: '2026-10-12T10:00:00Z', reasons: [] } } },
+  ];
+  const state = specViewState(payload, record, scoped, context);
+  assert.equal(state.observedAt, '2026-10-12T11:59:30Z');
+  assert.equal(state.stale, false);
+  assert.equal(state.partial, false);
+  assert.ok(state.reasons.some(reason => reason.includes('old-scope') && reason.includes('stale')), JSON.stringify(state.reasons));
+  assert.ok(!state.reasons.some(reason => reason.includes('selected-scope')), JSON.stringify(state.reasons));
+});
+
 test('observation endpoints keep live freshness but retain fixed imported, offline and stale ends', () => {
   const observer = { observer_id: 'observer-1', state: 'observing', published_at: '2026-10-12T12:00:00Z', snapshot: { coverage: { observed_at: '2026-10-12T12:00:00Z' } } };
   const record = { workspace: 'fixture', package: '/repo/pkg', observer, timing: { observed_at: '2026-10-12T11:00:00Z' } };
