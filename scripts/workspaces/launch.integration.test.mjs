@@ -1193,7 +1193,7 @@ test('launch reservation: failed spawn from a live host is unknown, not still la
 
 // node --test --test-name-pattern='session controls end only' scripts/workspaces/launch.integration.test.mjs
 test('session controls end only the confirmed assignment and preserve saved evidence',async t=>{
-  const {createSessionControl}=await import('./session-control.mjs');
+  const {createSessionControl,verifyTerminal}=await import('./session-control.mjs');
   const {probeSession}=await import('./tmux.mjs');
   const {storageRoot,home,piPath,logPath,socket}=await launchScenario(t,2);
   const records=[];
@@ -1218,6 +1218,28 @@ test('session controls end only the confirmed assignment and preserve saved evid
   assert.equal(preview.can_end,true);
   assert.match(preview.attach_command,/ssh/);assert.match(preview.attach_command,/host.example/);
   assert.ok(preview.attach_command.includes(records[0].tmux_session));
+  // A mismatched saved pane or PID describes as unverifiable, with no control
+  // or attach command, and verification never rewrites durable bytes.
+  const assignmentPath=join(records[0].workspace_directory,'assignments',`${records[0].assignment_id}.json`);
+  const originalBytes=await readFile(assignmentPath);
+  for(const mismatched of [
+    {...records[0],pane_id:'%999999'},
+    {...records[0],pi_identity:{...records[0].pi_identity,pid:records[1].pi_identity.pid}},
+  ]){
+    await writeFile(assignmentPath,JSON.stringify(mismatched));
+    const bytesBefore=await readFile(assignmentPath);
+    const verdict=await verifyTerminal(mismatched);
+    assert.equal(verdict.exact,false);
+    assert.equal(verdict.ended,false);
+    const mismatchedPreview=await service.describe(records[0].assignment_id);
+    assert.equal(mismatchedPreview.can_end,false);
+    assert.equal(mismatchedPreview.local_command,null);
+    assert.equal(mismatchedPreview.attach_command,null);
+    assert.equal(mismatchedPreview.state,'unknown');
+    assert.equal(mismatchedPreview.identity,verdict.identity);
+    assert.deepEqual(await readFile(assignmentPath),bytesBefore,'terminal verification must not mutate the durable assignment record');
+  }
+  await writeFile(assignmentPath,originalBytes);
   await assert.rejects(service.end({assignment_id:records[0].assignment_id,expected_identity:'stale',confirm:true}),/changed/);
   await assert.rejects(service.end({assignment_id:records[0].assignment_id,expected_identity:preview.identity}),/Confirm/);
   assert.equal((await probeSession(records[0])).status,'present');
@@ -1235,6 +1257,18 @@ test('session controls end only the confirmed assignment and preserve saved evid
   assert.equal((await probeSession(records[1])).status,'present','other assignment remains running');
   assert.equal(await readFile(records[0].brief_snapshot,'utf8'),snapshot);
   assert.equal((await service.end({assignment_id:records[0].assignment_id,expected_identity:preview.identity,confirm:true})).duplicate,true);
+  // An ended-state record never exposes control of the live terminal, and the
+  // ended describe shares its result with verifyTerminal.
+  const endedBytes=await readFile(assignmentPath);
+  const endedVerdict=await verifyTerminal({...records[0],state:'ended'});
+  assert.equal(endedVerdict.ended,true);
+  assert.equal(endedVerdict.exact,false);
+  const endedPreview=await service.describe(records[0].assignment_id);
+  assert.equal(endedPreview.can_end,false);
+  assert.equal(endedPreview.local_command,null);
+  assert.equal(endedPreview.attach_command,null);
+  assert.equal(endedPreview.state,'ended');
+  assert.deepEqual(await readFile(assignmentPath),endedBytes,'terminal verification must not mutate the durable assignment record');
 });
 
 test("store preservation: harness records", async (t) => {
