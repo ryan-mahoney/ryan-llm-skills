@@ -332,8 +332,8 @@ export default function FilesDestination(props: DestinationProps) {
               <div class="source-choice">
                 <label for="file-owner">{source() === 'repository' ? 'Repository' : 'Package'}</label>
                 <select id="file-owner" class="ds-input" value={owner()} onChange={changeOwner}>
-                  <option value="">{source() === 'repository' ? 'Choose repository' : 'Choose package'}</option>
-                  <For each={ownerValues()}>{value => <option value={value}>{value}</option>}</For>
+                  <option value="" selected={owner() === ''}>{source() === 'repository' ? 'Choose repository' : 'Choose package'}</option>
+                  <For each={ownerValues()}>{value => <option value={value} selected={value === owner()}>{value}</option>}</For>
                 </select>
               </div>
             </Show>

@@ -542,9 +542,18 @@ try:
             files_viewer('context/project-context.md', 'Browser context note.')
             page.screenshot(path=str(evidence / 'files-15-1600.png'))
             open_route('files', ws='fixture', source='repository', id='fixture-repo', path='fixture-repo-plan.md')
+            expect(page.locator('#file-source')).to_have_value('repository')
+            expect(page.locator('#file-owner')).to_have_value('fixture-repo')
+            expect(page.locator('#file-owner option:checked')).to_have_text('fixture-repo')
+            assert files_params()['source'] == ['repository'] and files_params()['id'] == ['fixture-repo'] and files_params()['path'] == ['fixture-repo-plan.md'], page.url
             files_viewer('fixture-repo-plan.md', 'Checkout-scoped suggestion target.')
             page.screenshot(path=str(evidence / 'files-16-1600.png'))
             open_route('files', ws='fixture', source='package', id=package, path='spec.md')
+            expect(page.locator('#file-source')).to_have_value('package')
+            expect(page.locator('#file-owner')).to_have_value(package)
+            expect(page.locator('#file-owner option:checked')).to_have_text(package)
+            assert files_params()['source'] == ['package'] and files_params()['id'] == [package] and files_params()['path'] == ['spec.md'], page.url
+            expect(page.locator('.files-destination .reader-head p')).to_contain_text(package)
             files_viewer('spec.md', 'Browser specification')
             page.screenshot(path=str(evidence / 'files-17-1600.png'))
             report['scenarios'].append('Context, Repository and package sources keep row/reader agreement at 1600x900')
