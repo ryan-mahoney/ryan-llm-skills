@@ -865,65 +865,130 @@ try:
                     return response.json()
                 def posts(name):
                     return [x for x in control()['posts'] if x['name'] == name]
-                page.goto(url+'/#/conversations?ws=fixture', wait_until='domcontentloaded')
-                assert page.evaluate('location.hash')=='#/conversations?ws=fixture', page.evaluate('location.hash')
-                expect(page.locator('#thread-draft')).to_be_visible()
-                title, brief = page.locator('#thread-brief-title'), page.locator('#thread-brief-content')
-                status = page.locator('#thread-handoff-status')
+                # Direct journey: Agents -> Launch agent -> picker -> brief.
+                # The retired thread composer is replaced by the direct launch
+                # flow while every named save/review/dispatch protection remains.
+                page.goto(url+'/#/agents', wait_until='domcontentloaded')
+                expect(page.locator('#launch-agent-action')).to_be_visible()
+                page.locator('#launch-agent-action').click()
+                expect(page.locator('.workspace-picker')).to_be_visible()
+                page.locator('.workspace-picker button[data-workspace="fixture"]').click()
+                expect(page).to_have_url(re.compile(r'#/launch\?ws=fixture&tab=brief'))
+                title, brief = page.locator('#launch-brief-title'), page.locator('#launch-brief-content')
+                save = page.locator('#launch-save')
                 title.fill('Preferred models settings')
                 brief.fill('/spec-architect-initial add a settings area for preferred models')
-                brief.press('Enter')
-                expect(status).to_contain_text('Brief saved. Assignment has not started.')
-                expect(page.locator('[data-thread-preview]')).to_be_focused()
-                assert len(posts('saveBrief')) == 1
-                assert not posts('launchAssignment')
+                brief.press('End'); brief.press_sequentially(' See @browser')
+                expect(page.get_by_role('option', name='@notes/browser.md', exact=False)).to_be_visible()
+                brief.press('Tab')
+                expect(page.locator('.brief-references')).to_contain_text('@workspace/notes/browser.md')
+
+                # Screen 85 locked saving: a pending save disables the submitted
+                # fields. The retired in-flight edit/focus assertion is replaced
+                # by leaving mid-save: one request and the typed content survive.
+                control('delay-dispatch-brief', 'true')
+                save.click()
+                expect(save).to_contain_text('Saving brief…')
+                expect(title).to_be_disabled()
+                expect(brief).to_be_disabled()
+                expect(page.locator('#launch-target')).to_be_disabled()
+                page.locator('.head-actions .ds-btn').click()
+                expect(page).to_have_url(re.compile(r'#/agents'))
+                control('delay-dispatch-brief', 'false')
+                page.wait_for_timeout(900)
+                assert len(posts('dispatchSaveBrief')) == 1
+                page.go_back()
+                expect(page.locator('#launch-brief-title')).to_have_value('Preferred models settings')
+                expect(page.locator('#launch-brief-content')).to_have_value('/spec-architect-initial add a settings area for preferred models See @workspace/notes/browser.md ')
+                expect(page.locator('#launch-saved')).to_be_visible()
+                passed('locked saving restores pending work')
+
+                # Save-only confirmation: the restored handoff is saved once and
+                # nothing previews or launches until an explicit action.
+                expect(page.locator('#launch-saved')).to_contain_text('Saving does not start an agent')
+                saved_input = posts('dispatchSaveBrief')[-1]['input']
+                assert saved_input['title'] == 'Preferred models settings'
+                assert saved_input['content'].startswith('/spec-architect-initial add a settings area for preferred models')
+                assert not posts('dispatchPreview')
+                assert not posts('dispatchLaunch')
                 passed('save-only confirmation')
+
                 # Repeated Enter on unchanged content must not create another handoff.
+                before = len(posts('dispatchSaveBrief'))
+                expect(save).to_be_disabled()
                 brief.press('Enter')
-                expect(page.locator('[data-thread-preview]')).to_be_focused()
-                assert len(posts('saveBrief')) == 1
+                expect(save).to_be_disabled()
+                assert len(posts('dispatchSaveBrief')) == before
                 passed('unchanged Enter preserves handoff')
-                page.locator('[data-thread-preview]').click()
-                expect(page.locator('[data-thread-launch]')).to_be_focused()
-                expect(status).to_contain_text('Review the details below')
-                brief.press('Enter')
-                expect(page.locator('[data-thread-launch]')).to_be_focused()
-                assert len(posts('saveBrief')) == 1
-                assert len(posts('previewAssignment')) == 1
-                passed('preview then explicit launch')
-                page.locator('[data-thread-launch]').click()
-                expect(page.locator('[data-thread-launch]')).to_be_disabled()
-                expect(status).to_contain_text('Preview again')
-                control('stale-launch', 'false')
-                page.locator('[data-thread-preview]').click()
-                expect(page.locator('.thread-handoff [role="alert"]')).to_have_count(0)
-                passed('stale preview recovery')
-                brief.fill('Changed request')
-                expect(status).to_contain_text('unsaved changes')
-                expect(page.locator('[data-thread-launch]')).to_be_disabled()
-                expect(page.locator('[data-thread-preview]')).to_be_disabled()
-                # An edit made during saving must survive and still require another save.
-                control('delay-brief', 'true')
-                brief.press('Enter')
-                expect(status).to_contain_text('Saving brief')
-                brief.fill('Final request edited while saving')
-                expect(status).to_contain_text('unsaved changes')
-                expect(brief).to_have_value('Final request edited while saving')
-                expect(brief).to_be_focused()
-                control('delay-brief', 'false')
-                brief.press('Enter')
-                expect(status).to_contain_text('Brief saved. Assignment has not started.')
-                passed('dirty and in-flight edits')
-                shot(page.locator('.thread-handoff'), 'ev-4-handoff-saved.png')
-                page.locator('#thread-handoff-status').scroll_into_view_if_needed()
+
+                shot(page.locator('.flow'), 'ev-4-handoff-saved.png')
                 full_shot('ev-4-handoff-desktop.png')
                 passed('desktop boundary capture')
-                page.locator('[data-thread-preview]').click()
-                page.locator('[data-thread-launch]').click()
-                expect(status).to_contain_text('Assignment started.')
-                expect(page.locator('#thread-result')).to_be_focused()
-                assert len(posts('launchAssignment')) == 2  # one stale refusal, one launch
-                assert len(posts('saveBrief')) == 3
+
+                # Review resolves the saved handoff once; dispatch stays explicit.
+                page.evaluate("location.hash = '#/launch?ws=fixture&tab=review'")
+                expect(page.locator('#launch-review')).to_be_visible()
+                expect(page.locator('#launch-assignment-launch')).to_be_enabled()
+                expect(page.locator('#launch-heading')).to_be_focused()
+                assert len(posts('dispatchPreview')) == 1
+                assert not posts('dispatchLaunch')
+                page.evaluate("[...document.querySelectorAll('#launch-what-pi details')].forEach(d=>d.open=true)")
+                expect(page.locator('#launch-what-pi')).to_contain_text('add a settings area for preferred models')
+                expect(page.locator('#launch-what-pi')).to_contain_text('Perform the attached assignment brief.')
+                expect(page.locator('#launch-what-pi')).to_contain_text('A recorded note.')
+                passed('preview then explicit launch')
+
+                # Changed source: the launch refuses the stale digest until a
+                # fresh review captures the new file contents.
+                control('edit-context')
+                page.locator('#launch-assignment-launch').click()
+                expect(page.locator('#launch-review-error')).to_contain_text('The reviewed contract changed')
+                expect(page.locator('#launch-assignment-launch')).to_have_count(0)
+                page.locator('#launch-assignment-review').click()
+                expect(page.locator('#launch-assignment-launch')).to_be_enabled()
+                page.evaluate("[...document.querySelectorAll('#launch-what-pi details')].forEach(d=>d.open=true)")
+                expect(page.locator('#launch-what-pi')).to_contain_text('Changed source after preview.')
+                passed('stale source-change recovery')
+
+                # Dirty edits withdraw review until the revised brief is saved.
+                page.locator('#launch-assignment-edit').click()
+                brief.fill('Changed request')
+                expect(page.locator('#launch-review-unsaved')).to_contain_text('Unsaved changes are not reviewed')
+                expect(page.locator('#launch-assignment-launch')).to_have_count(0)
+                save.click()
+                expect(page.locator('#launch-assignment-launch')).to_be_enabled()
+                assert posts('dispatchSaveBrief')[-1]['input']['content'] == 'Changed request'
+                page.evaluate("[...document.querySelectorAll('#launch-what-pi details')].forEach(d=>d.open=true)")
+                expect(page.locator('#launch-what-pi')).to_contain_text('Changed request')
+                passed('dirty edits require a fresh save')
+
+                # Single submission: a held dispatch rejects a second click and
+                # pending navigation retains the reviewed facts.
+                control('hold-dispatch-launch', 'true')
+                launches_before = len(posts('dispatchLaunch'))
+                assignment = page.locator('#launch-review [data-fact="assignment"] dd').inner_text()
+                digest = page.locator('#launch-review [data-fact="digest"] dd').inner_text()
+                page.evaluate("() => { const b = document.getElementById('launch-assignment-launch'); b.click(); b.click(); }")
+                expect(page.locator('#launch-assignment-launch')).to_be_disabled()
+                expect(page.locator('#launch-assignment-launch')).to_contain_text('Starting agent')
+                assert len(posts('dispatchLaunch')) == launches_before + 1
+                submitted = posts('dispatchLaunch')[-1]['input']
+                assert submitted['assignment_id'] == assignment
+                assert submitted['expectedDigest'] == digest
+                page.locator('.head-actions .ds-btn').click()
+                expect(page).to_have_url(re.compile(r'#/agents'))
+                page.evaluate("location.hash = '#/launch?ws=fixture&tab=review'")
+                expect(page.locator('#launch-assignment-launch')).to_contain_text('Starting agent')
+                assert len(posts('dispatchLaunch')) == launches_before + 1
+                passed('single submit retains reviewed facts')
+                control('release-dispatch-launch', 'true')
+                expect(page.locator('#launch-result-facts')).to_be_visible()
+                expect(page).to_have_url(re.compile(r'#/launch\?ws=fixture&id=' + re.escape(assignment) + '&tab=result'))
+                expect(page.locator('#launch-heading')).to_have_text('Agent is live')
+                expect(page.locator('#launch-heading')).to_be_focused()
+                expect(page.locator('#launch-result-facts [data-fact="observation"] dd')).to_contain_text('Live process confirmed')
+                assert len(posts('dispatchLaunch')) == 2  # one stale refusal, one launch
+                assert len(posts('dispatchSaveBrief')) == 2
                 passed('launch confirmation')
                 assert not errors, errors
                 summary['status']='passed'; summary['page_errors']=errors
