@@ -387,16 +387,17 @@ export default function FilesDestination(props: DestinationProps) {
         // erase its retained bytes. Keep the document with a localized
         // refusal so Retry file/Refresh file can recheck without losing the
         // last received copy or timestamp; Download stays disabled via the
-        // recheck notice until a successful retry.
+        // recheck notice until a successful retry. The mounted image/frame
+        // keeps its actual readiness and display error: revalidateRead
+        // needs resourceError to mint its retry nonce, and a healthy
+        // same-kind recheck retains the node without a new load event.
         renderedReaderKey = requestedKey;
         renderedReaderPath = requested;
         setReadError('');
         setRecheckError(knownReason
           ? `The file is no longer available (${knownReason}). The last received copy is still shown.`
           : 'The file could not be rechecked. The last received copy is still shown.');
-        setResourceError('');
         setPendingRead(false);
-        setResourceReady(false);
         return;
       }
       setLoaded(null);

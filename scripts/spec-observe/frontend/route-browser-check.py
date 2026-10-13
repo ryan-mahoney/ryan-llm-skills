@@ -1287,7 +1287,7 @@ try:
             recovery = {
                 'listing': {'mode': '', 'append': False, 'first_page': []},
                 'detail': None,
-                'reads': {'fail': set(), 'hold': set(), 'held': [], 'counts': {}},
+                'reads': {'fail': set(), 'hold': set(), 'held': [], 'counts': {}, 'corrupt': set()},
                 'requests': [],
             }
             file_endpoints = (
@@ -1318,7 +1318,7 @@ try:
                     if mode == 'fail':
                         route.fulfill(status=503, content_type='application/json', body='{"error":"fixture-recovery-listing-failure"}')
                         return
-                    if mode in ('empty', 'partial', 'unavailable', 'hold', 'omit-valid', 'refuse-overview'):
+                    if mode in ('empty', 'partial', 'unavailable', 'hold', 'omit-valid', 'refuse-overview', 'refuse-media'):
                         response = route.fetch()
                         if mode == 'hold':
                             recovery['reads']['held'].append(('listing', route, response))
@@ -1333,6 +1333,17 @@ try:
                             refused = []
                             for entry in payload.get('files', []):
                                 if entry.get('name') == 'files/overview.md':
+                                    refused.append({**entry, 'available': False, 'reason': 'Exceeds 8 MiB'})
+                                else:
+                                    refused.append(entry)
+                            payload['files'] = refused
+                            payload['truncated'] = False
+                            payload['errors'] = []
+                            payload['next_cursor'] = None
+                        elif mode == 'refuse-media':
+                            refused = []
+                            for entry in payload.get('files', []):
+                                if entry.get('name') in ('files/pixel.png', 'files/sandbox.html'):
                                     refused.append({**entry, 'available': False, 'reason': 'Exceeds 8 MiB'})
                                 else:
                                     refused.append(entry)
@@ -1360,6 +1371,9 @@ try:
                 if path == '/api/workspace-file':
                     file = (parsed.get('file') or [''])[0]
                     recovery['reads']['counts'][file] = recovery['reads']['counts'].get(file, 0) + 1
+                    if file in recovery['reads']['corrupt']:
+                        route.fulfill(status=200, content_type='image/png', headers={'X-Package-File-Kind': 'image'}, body='not an image')
+                        return
                     if file in recovery['reads']['fail']:
                         route.fulfill(status=503, content_type='application/json', body='{"error":"fixture-recovery-read-failure"}')
                         return
@@ -1653,6 +1667,110 @@ try:
             files_viewer('files/overview.md', 'Fixture overview')
             expect(page.locator('.files-destination .reader')).not_to_contain_text('no longer available')
             expect(page.locator('.files-destination').get_by_role('link', name='Download file', exact=True).first).to_be_visible()
+
+            # F1 (resource): an image available-to-unavailable-to-available
+            # journey retains the mounted node/src through the refusal and
+            # recovers visible content with an enabled Download.
+            open_route('files', ws='fixture', path='files/pixel.png')
+            expect(page.locator('.files-destination img.image-preview')).to_be_visible()
+            page.wait_for_function("() => document.querySelector('.files-destination img.image-preview')?.naturalWidth === 1")
+            expect(page.locator('.files-destination').get_by_role('link', name='Download file', exact=True).first).to_be_visible()
+            recovery_image_src = page.evaluate("""() => {
+                const el = document.querySelector('.files-destination img.image-preview');
+                window.__recoveryImage = el;
+                return el.getAttribute('src');
+            }""")
+            assert recovery_image_src and 'file=files%2Fpixel.png' in recovery_image_src, recovery_image_src
+            recovery['listing']['mode'] = 'refuse-media'
+            page.locator('.files-destination .list-pane .detail-foot .ds-btn').click()
+            expect(page.locator('.files-destination button.file-record', has_text='files/pixel.png')).to_be_visible()
+            page.locator('.files-destination .reader-head').get_by_role('button', name='Refresh file', exact=True).click()
+            expect(page.locator('.files-destination .reader')).to_contain_text('no longer available')
+            assert page.evaluate("() => window.__recoveryImage === document.querySelector('.files-destination img.image-preview')") is True, 'refusal replaced the image node'
+            assert page.evaluate("() => document.querySelector('.files-destination img.image-preview').getAttribute('src')") == recovery_image_src, 'refusal changed the image src'
+            page.wait_for_function("() => document.querySelector('.files-destination img.image-preview')?.naturalWidth === 1")
+            expect(page.locator('.files-destination .reader').get_by_role('button', name='Retry file', exact=True)).to_be_visible()
+            expect(page.locator('.files-destination .reader-head').get_by_role('button', name='Download file', exact=True)).to_be_disabled()
+            recovery['listing']['mode'] = ''
+            page.locator('.files-destination .list-pane .detail-foot .ds-btn').click()
+            page.locator('.files-destination .reader').get_by_role('button', name='Retry file', exact=True).click()
+            expect(page.locator('.files-destination .reader')).not_to_contain_text('no longer available')
+            page.wait_for_function("() => document.querySelector('.files-destination img.image-preview')?.naturalWidth === 1")
+            expect(page.locator('.files-destination').get_by_role('link', name='Download file', exact=True).first).to_be_visible()
+            assert page.evaluate("() => window.__recoveryImage === document.querySelector('.files-destination img.image-preview')") is True, 'successful recovery replaced the image node'
+            assert page.evaluate("() => document.querySelector('.files-destination img.image-preview').getAttribute('src')") == recovery_image_src, 'successful recovery changed the image src'
+            report['scenarios'].append('An image available-to-unavailable-to-available journey retains the mounted node/src through refusal and recovers visible content with enabled Download')
+
+            # F1 (resource): a frame available-to-unavailable-to-available
+            # journey retains the mounted document through the refusal and
+            # recovers with an enabled Download.
+            open_route('files', ws='fixture', path='files/sandbox.html')
+            expect(page.locator('.files-destination iframe.html-frame')).to_be_visible()
+            expect(page.frame_locator('.files-destination iframe.html-frame').locator('h1')).to_have_text('Sandbox fixture')
+            expect(page.locator('.files-destination').get_by_role('link', name='Download file', exact=True).first).to_be_visible()
+            recovery_frame_src = page.evaluate("""() => {
+                const el = document.querySelector('.files-destination iframe.html-frame');
+                window.__recoveryFrame = el;
+                return el.getAttribute('srcdoc');
+            }""")
+            assert recovery_frame_src and '/api/workspace-file' in recovery_frame_src, recovery_frame_src
+            recovery['listing']['mode'] = 'refuse-media'
+            page.locator('.files-destination .list-pane .detail-foot .ds-btn').click()
+            expect(page.locator('.files-destination button.file-record', has_text='files/sandbox.html')).to_be_visible()
+            page.locator('.files-destination .reader-head').get_by_role('button', name='Refresh file', exact=True).click()
+            expect(page.locator('.files-destination .reader')).to_contain_text('no longer available')
+            expect(page.frame_locator('.files-destination iframe.html-frame').locator('h1')).to_have_text('Sandbox fixture')
+            assert page.evaluate("() => window.__recoveryFrame === document.querySelector('.files-destination iframe.html-frame')") is True, 'refusal replaced the frame node'
+            assert page.evaluate("() => document.querySelector('.files-destination iframe.html-frame').getAttribute('srcdoc')") == recovery_frame_src, 'refusal changed the frame document'
+            expect(page.locator('.files-destination .reader').get_by_role('button', name='Retry file', exact=True)).to_be_visible()
+            expect(page.locator('.files-destination .reader-head').get_by_role('button', name='Download file', exact=True)).to_be_disabled()
+            recovery['listing']['mode'] = ''
+            page.locator('.files-destination .list-pane .detail-foot .ds-btn').click()
+            page.locator('.files-destination .reader').get_by_role('button', name='Retry file', exact=True).click()
+            expect(page.locator('.files-destination .reader')).not_to_contain_text('no longer available')
+            expect(page.frame_locator('.files-destination iframe.html-frame').locator('h1')).to_have_text('Sandbox fixture')
+            expect(page.locator('.files-destination').get_by_role('link', name='Download file', exact=True).first).to_be_visible()
+            assert page.evaluate("() => window.__recoveryFrame === document.querySelector('.files-destination iframe.html-frame')") is True, 'successful recovery replaced the frame node'
+            assert page.evaluate("() => document.querySelector('.files-destination iframe.html-frame').getAttribute('srcdoc')") == recovery_frame_src, 'successful recovery changed the frame document'
+            report['scenarios'].append('A frame available-to-unavailable-to-available journey retains the mounted document through refusal and recovers with enabled Download')
+
+            # F1 (resource): a failed image keeps its display error through
+            # the refusal; the recovery retry mints an observable retry
+            # nonce, decodes the real bytes and re-enables Download.
+            recovery['reads']['corrupt'].add('files/pixel.png')
+            open_route('files', ws='fixture', path='files/overview.md')
+            files_viewer('files/overview.md', 'Fixture overview')
+            open_route('files', ws='fixture', path='files/pixel.png')
+            expect(page.locator('.files-destination .reader')).to_contain_text('File could not be displayed')
+            expect(page.locator('.files-destination .reader').get_by_role('button', name='Retry file', exact=True)).to_be_visible()
+            expect(page.locator('.files-destination .reader-head').get_by_role('button', name='Download file', exact=True)).to_be_disabled()
+            failed_image_src = page.evaluate("""() => {
+                const el = document.querySelector('.files-destination img.image-preview');
+                window.__recoveryFailedImage = el;
+                return el.getAttribute('src');
+            }""")
+            assert failed_image_src and 'file=files%2Fpixel.png' in failed_image_src, failed_image_src
+            recovery['listing']['mode'] = 'refuse-media'
+            page.locator('.files-destination .list-pane .detail-foot .ds-btn').click()
+            expect(page.locator('.files-destination button.file-record', has_text='files/pixel.png')).to_be_visible()
+            page.locator('.files-destination .reader-head').get_by_role('button', name='Refresh file', exact=True).click()
+            expect(page.locator('.files-destination .reader')).to_contain_text('no longer available')
+            assert page.evaluate("() => window.__recoveryFailedImage === document.querySelector('.files-destination img.image-preview')") is True, 'refusal replaced the failed image node'
+            refused_failed_src = page.evaluate("() => document.querySelector('.files-destination img.image-preview').getAttribute('src')")
+            assert refused_failed_src and 'resource_retry=' in refused_failed_src, refused_failed_src
+            expect(page.locator('.files-destination .reader').get_by_role('button', name='Retry file', exact=True)).to_be_visible()
+            expect(page.locator('.files-destination .reader-head').get_by_role('button', name='Download file', exact=True)).to_be_disabled()
+            recovery['listing']['mode'] = ''
+            recovery['reads']['corrupt'].discard('files/pixel.png')
+            page.locator('.files-destination .list-pane .detail-foot .ds-btn').click()
+            page.locator('.files-destination .reader').get_by_role('button', name='Retry file', exact=True).click()
+            expect(page.locator('.files-destination .reader')).not_to_contain_text('no longer available')
+            expect(page.locator('.files-destination .reader')).not_to_contain_text('File could not be displayed')
+            page.wait_for_function("() => document.querySelector('.files-destination img.image-preview')?.naturalWidth === 1")
+            expect(page.locator('.files-destination').get_by_role('link', name='Download file', exact=True).first).to_be_visible()
+            recovered_image_src = page.evaluate("() => document.querySelector('.files-destination img.image-preview').getAttribute('src')")
+            assert recovered_image_src and 'resource_retry=' in recovered_image_src, recovered_image_src
+            report['scenarios'].append('A failed image keeps its display error through refusal; the recovery retry mints an observable retry nonce, decodes real bytes and re-enables Download')
 
             # (5) Offline disables Download; a real snapshot import is the
             # no-live transition and must abandon held work without new calls.
