@@ -316,6 +316,7 @@ export default function Launch(props: LaunchProps) {
     // fire after the operator leaves.
     const current = props.route;
     if (current.dest !== 'launch' || !ws()) return;
+    if (current.tab === 'result' && current.id) return;
     props.onNavigate?.({
       dest: 'launch',
       ws: ws(),
@@ -332,7 +333,7 @@ export default function Launch(props: LaunchProps) {
   createEffect(on(() => draft()?.result?.assignmentId, (id, previous) => {
     if (!id || id === previous) return;
     if (props.route.dest !== 'launch') return;
-    if (props.route.tab === 'result' && props.route.id === id) return;
+    if (props.route.tab === 'result' && props.route.id) return;
     const current = props.route;
     props.onNavigate?.({
       dest: 'launch',
