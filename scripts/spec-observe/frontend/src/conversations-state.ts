@@ -350,6 +350,18 @@ const copyThreadDraft = (value: ThreadDraft): ThreadDraft => ({
 });
 
 const threadDrafts = new Map<string, ThreadDraft>();
+const threadDraftListeners = new Set<(ws: string, thread: string) => void>();
+
+// Mounted projections subscribe to owner changes, not transport epochs:
+// acknowledgements from an unmounted sender still reach the current composer.
+export function subscribeThreadDraft(listener: (ws: string, thread: string) => void): () => void {
+  threadDraftListeners.add(listener);
+  return () => { threadDraftListeners.delete(listener); };
+}
+
+function publishThreadDraft(ws: string, thread: string): void {
+  for (const listener of threadDraftListeners) listener(ws, thread);
+}
 
 // A fresh absent entry is the empty draft; reading never inserts it.
 export function getThreadDraft(ws: string, thread: string): ThreadDraft {
@@ -360,11 +372,13 @@ export function getThreadDraft(ws: string, thread: string): ThreadDraft {
 export function setThreadDraft(ws: string, thread: string, value: ThreadDraft): void {
   if (!ws || !thread) return;
   threadDrafts.set(threadKey(ws, thread), copyThreadDraft(value));
+  publishThreadDraft(ws, thread);
 }
 
 export function clearThreadDraft(ws: string, thread: string): void {
   if (!ws || !thread) return;
   threadDrafts.delete(threadKey(ws, thread));
+  publishThreadDraft(ws, thread);
 }
 
 // The failed-send retry identity travels with the captured draft so a late
@@ -386,7 +400,7 @@ export function acknowledgeThreadSend(ws: string, thread: string, captured: Thre
         stored.retry.id === captured.retry.id &&
         stored.retry.draft === captured.retry.draft;
   if (stored.draft !== captured.draft || !sameRetry) return false;
-  threadDrafts.delete(threadKey(ws, thread));
+  clearThreadDraft(ws, thread);
   return true;
 }
 
@@ -526,7 +540,9 @@ export type NewThreadPendingRequest = {
   promise: Promise<unknown>;
 };
 
-const newThreadRequests = new Map<string, NewThreadPendingRequest>();
+const newThreadRequests = new Map<string, NewThreadPendingRequest & {
+  draftEntry: NewThreadWorkspaceDraft | undefined;
+}>();
 
 let nextNewThreadRequestId = 1;
 
@@ -537,7 +553,9 @@ const settledNewThreadRequestIds = new Set<number>();
 
 export function getNewThreadRequest(ws: string): NewThreadPendingRequest | undefined {
   const stored = ws ? newThreadRequests.get(ws) : undefined;
-  return stored ? { ...stored } : undefined;
+  if (!stored) return undefined;
+  const { draftEntry, ...request } = stored;
+  return request;
 }
 
 export function beginNewThreadRequest<T>(
@@ -550,8 +568,9 @@ export function beginNewThreadRequest<T>(
   const stored = newThreadRequests.get(ws);
   if (stored && stored.status === 'creating') return stored.promise as Promise<T>;
   const id = nextNewThreadRequestId++;
+  const draftEntry = newThreadDrafts.get(ws);
   const promise = create();
-  newThreadRequests.set(ws, { id, ws, text, target: target ?? null, status: 'creating', error: null, promise });
+  newThreadRequests.set(ws, { id, ws, text, target: target ?? null, status: 'creating', error: null, promise, draftEntry });
   return promise;
 }
 
@@ -568,8 +587,9 @@ export function failNewThreadRequest(ws: string, captured: NewThreadRequestCaptu
 // Late acknowledgement: the captured text lands on the created thread's own
 // draft at most once per request identity, even after the dialog unmounted
 // or the retained draft was replaced. The pending entry and the retained
-// workspace draft are each cleared only for the still-current matching
-// request, so a newer request, seed or draft survives. Returns true when the
+// workspace draft are cleared independently: the request must still match,
+// and the draft must be the exact retained object captured at begin (even
+// identical replacement text is newer intent). Returns true when the
 // acknowledged request was still the workspace's current pending entry (the
 // caller may publish/navigate only then).
 export function acknowledgeNewThreadRequest(
@@ -585,10 +605,9 @@ export function acknowledgeNewThreadRequest(
   const stored = newThreadRequests.get(ws);
   const owned = stored !== undefined && stored.id === captured.id;
   const retained = newThreadDrafts.get(ws);
-  if (owned && retained && retained.text === captured.text && retained.target === captured.target) {
+  if (owned && retained && retained === stored.draftEntry) {
     newThreadDrafts.delete(ws);
   }
   if (owned) newThreadRequests.delete(ws);
   return owned;
 }
-

@@ -112,7 +112,7 @@ let localOperator=false;
 let tick=0,staleLaunch=!plannedLaunch,failSend=false,delaySend=false,delayBrief=false,delayDispatchBrief=false,failDispatchBrief=false,delayDispatchSuggestions=false;
 // Route-drafts only additive controls: deliberate held/rejected /api/threads
 // reads and an opt-in long transcript. Every default stays unchanged.
-let holdThreads=false,failThreads=false,longHistory=false;
+let holdThreads=false,failThreads=false,longHistory=false,holdSend=false;
 // Review/dispatch controls: hold pending responses until both widths are
 // captured, then release; typed refusals drive each presentation state.
 let holdDispatchPreview=false,holdDispatchLaunch=false,dispatchPreviewRefusal='none',dispatchLaunchRefusal='none';
@@ -120,7 +120,7 @@ let holdDispatchPreview=false,holdDispatchLaunch=false,dispatchPreviewRefusal='n
 // observer snapshot exposes a published assignment as an observed row.
 let dispatchLaunchOutcome='live';
 const launchedAssignments=new Map();
-const dispatchPreviewWaiters=[],dispatchLaunchWaiters=[],threadWaiters=[];
+const dispatchPreviewWaiters=[],dispatchLaunchWaiters=[],threadWaiters=[],sendWaiters=[];
 const busyAssignmentId='b42f1903-9508-46c1-a4aa-a0842dbce617';
 const waitForRelease=waiters=>new Promise(resolve=>waiters.push(resolve));
 const releaseWaiters=waiters=>{const pending=waiters.splice(0);for(const resolve of pending)resolve();};
@@ -175,7 +175,7 @@ const discussion={
  async list({workspace_id}){if(holdThreads)await waitForRelease(threadWaiters);if(failThreads)throw Object.assign(new Error('Fixture thread list unavailable'),{code:'service-closed'});return {threads:workspace_id==='fixture'?copied(threads):[],invalid:[]};},
  async history({before}){if(before)return {entries:[{id:'entry-old',message:{role:'user',content:'Older message'}}],truncated:false,incomplete_tail:false};if(longHistory)return {entries:Array.from({length:48},(_,index)=>({id:`entry-long-${index+1}`,timestamp:new Date(Date.now()-index*60000).toISOString(),message:{role:index%2?'assistant':'user',content:`Long history message ${index+1}. Fixture transcript line for the retained reading position. A second sentence keeps each row tall enough to scroll.`}})),truncated:true,incomplete_tail:false};return {entries:copied(entries),truncated:true,incomplete_tail:false};},
  async create(input){posts.push({name:'create',input});const t={...threads[0],thread_id:randomUUID(),title:input.title||'New thread',target:input.target||{kind:'workspace'},queue:[],attention:null};threads=[t,...threads];return copied(t);},
- async send(input){posts.push({name:'send',input});if(delaySend)await new Promise(r=>setTimeout(r,700));if(failSend)throw Object.assign(new Error('Temporary fixture failure'),{code:'service-closed'});entries.push({id:randomUUID(),message:{role:'user',content:input.text}});return {state:'accepted'};},
+ async send(input){posts.push({name:'send',input});if(holdSend)await waitForRelease(sendWaiters);if(delaySend)await new Promise(r=>setTimeout(r,700));if(failSend)throw Object.assign(new Error('Temporary fixture failure'),{code:'service-closed'});entries.push({id:randomUUID(),message:{role:'user',content:input.text}});return {state:'accepted'};},
  async stop(input){posts.push({name:'stop',input});threads=threads.map(t=>t.thread_id===input.thread_id?{...t,queue_paused:true,owns_response:false}:t);return {};},
  async resume(input){posts.push({name:'resume',input});threads=threads.map(t=>t.thread_id===input.thread_id?{...t,queue_paused:false,attention:null}:t);return {};},
  async discard(input){posts.push({name:'discard',input});threads=threads.map(t=>t.thread_id===input.thread_id?{...t,queue:[]}:t);return {};},
@@ -212,6 +212,8 @@ const server=createServer(async(req,res)=>{
   if(action==='edit-context')await writeFile(join(workspace.directory,'notes','browser.md'),'# Updated browser note\nChanged source after preview.\n');
   if(action==='fail-send')failSend=url.searchParams.get('value')==='true';
   if(action==='delay-send')delaySend=url.searchParams.get('value')==='true';
+  if(action==='hold-send')holdSend=url.searchParams.get('value')==='true';
+  if(action==='release-send'){holdSend=false;releaseWaiters(sendWaiters);}
   if(action==='hold-threads')holdThreads=url.searchParams.get('value')==='true';
   if(action==='release-threads'){holdThreads=false;releaseWaiters(threadWaiters);}
   if(action==='fail-threads')failThreads=url.searchParams.get('value')==='true';

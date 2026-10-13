@@ -276,59 +276,77 @@ def run(url, thread1, thread2):
         page.goto(url + '/#/conversations?ws=fixture&id=' + thread1, wait_until='domcontentloaded')
         draft = page.locator('#thread-draft')
         draft.wait_for()
-        control('delay-send', 'true')
+        control('hold-send', 'true')
         draft.fill('Delayed A text')
-        page.locator('#thread-send').click()
+        with page.expect_request('**/api/thread/send'):
+            page.locator('#thread-send').click()
         page.locator('[data-thread="' + thread2 + '"]').click()
         draft.fill('B stays')
-        page.wait_for_timeout(1000)
         expect(draft).to_have_value('B stays')
         page.locator('[data-thread="' + thread1 + '"]').click()
+        expect(draft).to_have_value('Delayed A text')
+        sends_before_ack = send_count()
+        with page.expect_response('**/api/thread/send'):
+            control('release-send')
         expect(page.locator('#thread-draft')).to_have_value('')
-        control('delay-send', 'false')
+        expect(page.locator('#thread-send')).to_be_disabled()
+        assert send_count() == sends_before_ack, 'settlement submitted a duplicate'
+        page.locator('[data-thread="' + thread2 + '"]').click()
+        expect(draft).to_have_value('B stays')
+        page.locator('[data-thread="' + thread1 + '"]').click()
+        expect(draft).to_have_value('')
         sent = posts('send')[-1]['input']
         assert sent['thread_id'] == thread1 and sent['text'] == 'Delayed A text'
         assert all(item['input']['thread_id'] == thread1 for item in posts('send'))
-        passed('delayed A send leaves B untouched and the late ack clears A only')
+        passed('held send: A -> B -> A before acknowledgement clears mounted A and leaves B untouched, no duplicate')
 
         # 10. A delayed acknowledgement after destination unmount still clears
         #     the retained A draft on the Files rail return.
         page.goto(url + '/#/conversations?ws=fixture&id=' + thread1, wait_until='domcontentloaded')
         draft = page.locator('#thread-draft')
         draft.wait_for()
-        control('delay-send', 'true')
+        control('hold-send', 'true')
         draft.fill('Unmount ack text')
-        page.locator('#thread-send').click()
+        with page.expect_request('**/api/thread/send'):
+            page.locator('#thread-send').click()
         page.locator('.nav-item[data-area="files"]').click()
         expect(page).to_have_url(re.compile(r'#/files'))
-        page.wait_for_timeout(1000)
         page.locator('.nav-item[data-area="conversations"]').click()
         expect(page).to_have_url(re.compile(r'#/conversations\?ws=fixture&id=' + re.escape(thread1)))
+        expect(page.locator('#thread-draft')).to_have_value('Unmount ack text')
+        sends_before_ack = send_count()
+        with page.expect_response('**/api/thread/send'):
+            control('release-send')
         expect(page.locator('#thread-draft')).to_have_value('')
+        expect(page.locator('#thread-send')).to_be_disabled()
+        assert send_count() == sends_before_ack, 'remount settlement submitted a duplicate'
         assert posts('send')[-1]['input']['text'] == 'Unmount ack text'
-        control('delay-send', 'false')
-        passed('late acknowledgement clears the retained A draft after destination unmount')
+        passed('held send: Files -> Conversations before acknowledgement clears the remounted composer, no duplicate')
 
         # 11. Newer text typed during a delayed send survives the late
         #     acknowledgement of the earlier submitted text.
         page.goto(url + '/#/conversations?ws=fixture&id=' + thread1, wait_until='domcontentloaded')
         draft = page.locator('#thread-draft')
         draft.wait_for()
-        control('delay-send', 'true')
+        control('hold-send', 'true')
         draft.fill('Sent before edit')
-        page.locator('#thread-send').click()
+        with page.expect_request('**/api/thread/send'):
+            page.locator('#thread-send').click()
+        page.locator('.nav-item[data-area="files"]').click()
+        page.locator('.nav-item[data-area="conversations"]').click()
+        expect(draft).to_have_value('Sent before edit')
         draft.fill('Newer A text')
-        page.wait_for_timeout(1000)
+        with page.expect_response('**/api/thread/send'):
+            control('release-send')
         expect(draft).to_have_value('Newer A text')
-        control('delay-send', 'false')
         page.locator('[data-thread="' + thread2 + '"]').click()
         page.locator('[data-thread="' + thread1 + '"]').click()
         expect(page.locator('#thread-draft')).to_have_value('Newer A text')
-        passed('newer A text survives the late acknowledgement of the earlier send')
+        passed('newer A text typed after remount survives held send acknowledgement')
     finally:
         # Release any deliberate held/rejected read and delayed send controls so
         # a failed scenario cannot block teardown.
-        for action in ('release-threads', 'hold-threads', 'fail-threads', 'long-history', 'delay-send', 'fail-send'):
+        for action in ('release-send', 'release-threads', 'hold-threads', 'fail-threads', 'long-history', 'delay-send', 'fail-send'):
             try:
                 context.request.get(url + '/__fixture/control?action=' + action + '&value=false')
             except Exception:

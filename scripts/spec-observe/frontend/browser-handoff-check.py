@@ -719,12 +719,17 @@ def run_thread(browser, url, thread1, thread2):
             assert 'tab=brief' in hash_value, hash_value
             page.locator('#launch-brief-title').fill('Thread entry brief')
             page.locator('#launch-brief-content').fill('Outcome\nPrepare the launch brief from the thread entry.')
+            # Requested facts are a pending-review view. Hold the final
+            # preview boundary so the assertion cannot race its replacement
+            # by the reviewed contract.
+            control('hold-dispatch-preview', 'true')
             page.locator('#launch-save').click()
             # Requested facts render the route-carried repository identity while
             # the contract resolves; the resolved contract binds the thread's
             # stored repository target server-side (fixture-repo) and is never
             # invented from the client route.
             expect(page.locator('#launch-review-requested [data-fact="target"] dd')).to_have_text('fixture-repo')
+            control('release-dispatch-preview')
             expect(page.locator('.launch-contract [data-fact="target"] dd')).to_have_text('fixture-repo')
             assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
             finish(errors, f'thread Prepare opens the same launch identity with the server-bound target ({width})')

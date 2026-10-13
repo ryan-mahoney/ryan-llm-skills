@@ -640,6 +640,26 @@ test('new thread draft: a settled capture cannot own a same-content replacement 
   assert.deepEqual(getThreadDraft(createdWs, BRAVO), { draft: 'same', retry: null });
 });
 
+for (const replacement of ['same-content', 'away-and-back']) {
+  test(`new thread draft: current request preserves a ${replacement} replacement entry`, () => {
+    const ws = `/tmp/ws-new-entry-${replacement}`;
+    const createdWs = `/tmp/ws-created-entry-${replacement}`;
+    setNewThreadDraft(ws, { text: 'same', target: 'repo-1' });
+    beginNewThreadRequest(ws, 'same', 'repo-1', () => Promise.resolve('created'));
+    const captured = getNewThreadRequest(ws)!;
+    if (replacement === 'away-and-back') setNewThreadDraft(ws, { text: 'other', target: null });
+    setNewThreadDraft(ws, { text: 'same', target: 'repo-1' });
+    assert.equal(getNewThreadRequest(ws)?.id, captured.id);
+    assert.equal(acknowledgeNewThreadRequest(ws, captured, createdWs, ALPHA), true);
+    assert.deepEqual(getNewThreadDraft(ws), { text: 'same', target: 'repo-1' });
+    assert.equal(getNewThreadRequest(ws), undefined);
+    assert.deepEqual(getThreadDraft(createdWs, ALPHA), { draft: 'same', retry: null });
+    assert.equal(acknowledgeNewThreadRequest(ws, captured, createdWs, ALPHA), false);
+    assert.deepEqual(getThreadDraft(createdWs, ALPHA), { draft: 'same', retry: null });
+    assert.deepEqual(getNewThreadDraft(ws), { text: 'same', target: 'repo-1' });
+  });
+}
+
 test('new thread draft: a replaced draft still receives its first late transfer', () => {
   const ws = '/tmp/ws-new-late';
   const createdWs = '/tmp/ws-created-late';

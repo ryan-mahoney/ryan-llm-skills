@@ -13,6 +13,7 @@ import {
   resolveSelection,
   setThreadDraft,
   setThreadScroll,
+  subscribeThreadDraft,
 } from './conversations-state';
 import { navigate } from './route';
 import { ActionBar, EmptyState, MasterDetail, StateNotice, StatusText, type StatusTone } from './primitives';
@@ -98,6 +99,12 @@ export default function Conversations(props: Props) {
   const actionable = () => active() && Boolean(props.token);
   const thread = () => threads()?.find(t => t.thread_id === routeId());
   const announce = (value: string) => setAnnouncer(value);
+  const unsubscribeDraft = subscribeThreadDraft((ws, id) => {
+    if (ws !== projectedWs || id !== projectedId || ws !== wsId() || id !== routeId()) return;
+    const stored = getThreadDraft(ws, id);
+    setDraft(stored.draft); setSendPending(stored.retry);
+  });
+  onCleanup(unsubscribeDraft);
   function closeSource() { source?.close(); source = undefined; setStream('unavailable'); }
   function params(extra: Record<string, string> = {}) { return new URLSearchParams({ workspace_id: wsId(), ...extra }); }
   const routeError = (e: unknown) => e instanceof HttpError ? e.message : e instanceof Error ? e.message : 'The thread request could not be completed.';
@@ -310,20 +317,11 @@ export default function Conversations(props: Props) {
     try {
       const data: any = await action('/api/thread/send', { workspace_id: workspace, thread_id: id, id: req.id, text: submitted.trim() }, 'send');
       // The retained owner is acknowledged even after a thread switch or an
-      // unmount, and a late response never navigates. The projected draft and
-      // retry clear only when the retained capture matched; otherwise the
-      // projection resyncs from the retained owner so a newer draft or a
-      // replaced retry cannot be erased by the earlier acknowledgement.
-      const acknowledged = acknowledgeThreadSend(workspace, id, { draft: submitted, retry: req });
+      // unmount, and a late response never navigates. The owner publishes
+      // matching settlement to the currently mounted key, independent of the
+      // sender's epoch. Newer text/retry survives the owner's matching guard.
+      acknowledgeThreadSend(workspace, id, { draft: submitted, retry: req });
       if (workspace === wsId() && id === routeId() && projectedWs === workspace && projectedId === id && epoch === projectionEpoch) {
-        if (acknowledged) {
-          setSendPending(null);
-          setDraft('');
-        } else {
-          const stored = getThreadDraft(workspace, id);
-          setDraft(stored.draft);
-          setSendPending(stored.retry);
-        }
         setMutationError(data.state === 'uncertain' ? 'The message may already have been delivered. Discard it or retry under Pending messages; a retry can duplicate the response.' : '');
         announce(data.duplicate ? 'Message was already queued.' : data.state === 'accepted' ? 'Message accepted.' : data.state === 'uncertain' ? 'Message delivery is uncertain.' : 'Message queued.');
         setTimeout(() => { if (id === projectedId && epoch === projectionEpoch) void refreshTail(); }, 0);
