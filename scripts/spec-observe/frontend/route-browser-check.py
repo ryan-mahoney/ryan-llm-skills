@@ -183,10 +183,10 @@ try:
             table = page.locator('section').filter(has=page.get_by_role('heading', name='Registered context', exact=True))
             expect(table).to_contain_text('Available')
             table.get_by_role('button').click()
-            viewer('context/project-context.md', 'Browser context note.')
+            files_viewer('context/project-context.md', 'Browser context note.')
             assert params()['source'] == ['workspace']
             page.reload()
-            viewer('context/project-context.md', 'Browser context note.')
+            files_viewer('context/project-context.md', 'Browser context note.')
             report['scenarios'].append('Available noncanonical absolute context -> canonical workspace Files route, readable document and reload')
 
         if case in (None, 'rail'):
@@ -209,40 +209,41 @@ try:
 
         if case in (None, 'files'):
             open_route('files', ws='fixture', path='context/project-context.md')
-            viewer('context/project-context.md', 'Browser context note.')
-            page.get_by_role('button', name='notes/browser.md', exact=True).click()
-            viewer('notes/browser.md', 'A recorded note.')
+            files_viewer('context/project-context.md', 'Browser context note.')
+            files_row('notes/browser.md').click()
+            files_viewer('notes/browser.md', 'A recorded note.')
             page.reload()
-            viewer('notes/browser.md', 'A recorded note.')
+            files_viewer('notes/browser.md', 'A recorded note.')
             page.go_back()
-            viewer('context/project-context.md', 'Browser context note.')
+            files_viewer('context/project-context.md', 'Browser context note.')
             page.go_forward()
-            viewer('notes/browser.md', 'A recorded note.')
+            files_viewer('notes/browser.md', 'A recorded note.')
             # Native hash navigation is also an authoritative route input.
             page.evaluate("location.hash = '#/files?ws=fixture'")
-            expect(page.locator('.file-viewer')).to_have_count(0)
+            expect(page.locator('.files-destination .reader-head h2')).to_have_text('Files')
+            expect(page.locator('.files-destination .reader')).to_contain_text('Select a file')
             page.go_back()
-            viewer('notes/browser.md', 'A recorded note.')
+            files_viewer('notes/browser.md', 'A recorded note.')
             # Step-3 collection prefix remains a listing, not a file selection.
             open_route('files', ws='fixture', path='notes/')
-            expect(page.locator('.file-viewer')).to_have_count(0)
-            expect(page.get_by_role('button', name='context/project-context.md', exact=True)).to_have_count(0)
-            page.get_by_role('button', name='notes/browser.md', exact=True).click()
-            viewer('notes/browser.md', 'A recorded note.')
+            expect(page.locator('.files-destination .reader')).to_contain_text('Directory listing')
+            expect(page.locator('.files-destination button.file-record').filter(has=page.get_by_text('context/project-context.md', exact=True))).to_have_count(0)
+            files_row('notes/browser.md').click()
+            files_viewer('notes/browser.md', 'A recorded note.')
             page.go_back()
-            expect(page.locator('.file-viewer')).to_have_count(0)
+            expect(page.locator('.files-destination .reader')).to_contain_text('Directory listing')
             assert params()['path'] == ['notes/']
             report['scenarios'].append('workspace Files selection agrees with URL; reload, Back/Forward, path clearing and collection restoration')
             open_route('files', source='package', id=receipt['package'], path='spec.md')
-            viewer('spec.md', 'Browser specification')
-            page.get_by_role('button', name='linked.md', exact=True).click()
-            viewer('linked.md', 'Linked evidence')
+            files_viewer('spec.md', 'Browser specification')
+            files_row('linked.md').click()
+            files_viewer('linked.md', 'Linked evidence')
             page.reload()
-            viewer('linked.md', 'Linked evidence')
+            files_viewer('linked.md', 'Linked evidence')
             page.go_back()
-            viewer('spec.md', 'Browser specification')
+            files_viewer('spec.md', 'Browser specification')
             page.go_forward()
-            viewer('linked.md', 'Linked evidence')
+            files_viewer('linked.md', 'Linked evidence')
             report['scenarios'].append('package Files selection/reload/history uses the same retained reader')
 
         if case == 'files-workspace':
@@ -280,6 +281,7 @@ try:
 
             open_route('files', ws='fixture', path='files/sandbox.html')
             expect(page.locator('.files-destination iframe.html-frame')).to_be_visible()
+            expect(page.frame_locator('.files-destination iframe.html-frame').locator('h1')).to_have_text('Sandbox fixture')
             sandbox = page.get_attribute('.files-destination iframe.html-frame', 'sandbox')
             frame_src = page.get_attribute('.files-destination iframe.html-frame', 'src')
             assert sandbox == 'allow-scripts' and 'allow-same-origin' not in sandbox, sandbox
@@ -356,6 +358,7 @@ try:
 
             open_route('files', ws='fixture', source='package', id=package, path='assets/sandbox.html')
             expect(page.locator('.files-destination iframe.html-frame')).to_be_visible()
+            expect(page.frame_locator('.files-destination iframe.html-frame').locator('h1')).to_have_text('Package sandbox')
             sandbox = page.get_attribute('.files-destination iframe.html-frame', 'sandbox')
             frame_src = page.get_attribute('.files-destination iframe.html-frame', 'src')
             assert sandbox == 'allow-scripts' and 'allow-same-origin' not in sandbox, sandbox
@@ -386,6 +389,7 @@ try:
             page.screenshot(path=str(evidence / 'files-6-1600.png'))
             open_route('files', ws='fixture', path='files/sandbox.html')
             expect(page.locator('.files-destination iframe.html-frame')).to_be_visible()
+            expect(page.frame_locator('.files-destination iframe.html-frame').locator('h1')).to_have_text('Sandbox fixture')
             page.screenshot(path=str(evidence / 'files-18-1600.png'))
             open_route('files', ws='fixture', path='files/capture-bundle.zip')
             expect(page.locator('.files-destination .reader .empty')).to_be_visible()
@@ -751,15 +755,15 @@ try:
             page.get_by_role('button', name='Open files', exact=True).click()
             expect(page.locator('h1')).to_have_text('Files')
             assert params()['source'] == ['package'] and params()['id'] == [package] and params()['ws'] == ['fixture'], page.url
-            page.get_by_role('button', name='spec.md', exact=True).click()
-            viewer('spec.md', 'Browser specification')
+            files_row('spec.md').click()
+            files_viewer('spec.md', 'Browser specification')
             page.go_back()
-            expect(page.locator('.file-viewer')).to_have_count(0)
+            assert 'path' not in files_params(), page.url
             page.go_back()
             expect(page.locator('h1')).to_have_text('Specs')
             expect(filters.get_by_role('button', name='Planned', exact=True)).to_have_attribute('aria-pressed', 'true')
             assert params()['filter'] == ['planned'] and params().get('id'), page.url
-            report['scenarios'].append('Planned row deep link hands off to the real package Files destination; Back restores the selected Planned tab')
+            report['scenarios'].append('Planned row deep link hands off to the real package Files destination and opens the fixture package file reader; Back restores the selected Planned tab')
 
             # Legacy query keys continue to select the renamed tabs and their
             # existing predicates, so saved links keep working.
