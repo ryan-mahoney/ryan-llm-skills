@@ -54,6 +54,21 @@ export type ThreadListSelection = {
 const inRows = (rows: readonly ThreadListRow[], id: string): boolean =>
   Boolean(id) && rows.some(row => row.thread_id === id);
 
+// Requested route identity normalization shared by the synchronous guard
+// and the post-response contract: '' means the route carries no thread.
+export function normalizeRequestedThreadId(value: unknown): string {
+  return typeof value === 'string' && value ? value : '';
+}
+
+// Synchronous route-identity guard. Returns true when the requested identity
+// changed since the last synchronously observed value. The caller must drop
+// the previous selection, history, event source, typed draft and send retry
+// identity immediately, before awaiting the list. Steady refreshes with an
+// unchanged identity return false and preserve the explicit selection.
+export function shouldInvalidateThreadRouteSynchronously(requested: string, lastSeenRequested: string): boolean {
+  return requested !== lastSeenRequested;
+}
+
 export function resolveThreadListSelection(input: ThreadListSelectionInput): ThreadListSelection {
   const { rows, requested, appliedRequested, selected } = input;
   const routeChanged = requested !== appliedRequested;

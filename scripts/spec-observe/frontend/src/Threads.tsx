@@ -2,7 +2,7 @@ import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid
 import { getJson, postJson, HttpError } from './api';
 import { str, time, statusMarkdown } from './format';
 import { consumeThreadDraft, seedThreadDraft } from './launch-state';
-import { resolveThreadListSelection } from './threads-selection';
+import { normalizeRequestedThreadId, resolveThreadListSelection, shouldInvalidateThreadRouteSynchronously } from './threads-selection';
 import type { ThreadDraftSeed } from './launch-state';
 import type { RouteState } from './route';
 
@@ -60,11 +60,13 @@ export default function Threads(props: Props) {
   let createGeneration = 0;
   let listBusy = false;
   let lastWorkspace = props.workspaceId;
-  // Route identity already applied by loadList. The requested thread is
-  // selected once per identity transition; steady refreshes retain whatever
-  // the operator explicitly selected (F1). A new identity invalidates the
-  // previous selection/history/event source before resolving (F2).
+  // appliedRequested records the route identity resolved by the last
+  // successful list response. lastSeenRequested records the identity
+  // observed synchronously on every route change, before awaiting the
+  // list, so a valid->missing navigation cannot keep the previous
+  // thread's detail/controls alive during a held or failing list.
   let appliedRequested = '';
+  let lastSeenRequested = '';
   let stickBottom = true;
   let draftEl: HTMLTextAreaElement | undefined;
   let transcriptEl: HTMLDivElement | undefined;
@@ -89,6 +91,18 @@ export default function Threads(props: Props) {
   function params(extra: Record<string, string> = {}) { return new URLSearchParams({ workspace_id: props.workspaceId, ...extra }); }
   const routeError = (e: unknown) => e instanceof HttpError ? e.message : e instanceof Error ? e.message : 'The thread request could not be completed.';
   async function loadList() {
+    // Synchronous route-identity invalidation before any await: a mounted
+    // valid->missing navigation must drop the previous selection,
+    // history, event source, typed draft and send retry identity
+    // immediately, so no previous-thread Send/Prepare controls survive a
+    // delayed or rejected list under the new URL. Steady refreshes with an
+    // unchanged identity preserve the explicit selection. This runs before
+    // the busy guard so a held list cannot suppress the invalidation.
+    const syncRequested = normalizeRequestedThreadId(props.requestedThreadId);
+    if (shouldInvalidateThreadRouteSynchronously(syncRequested, lastSeenRequested)) {
+      lastSeenRequested = syncRequested;
+      setSelected(''); setDraft(''); setSendPending(null); resetSelection(); setRequestedMissing(false);
+    }
     if (!active() || listBusy) return;
     listBusy = true;
     const request = ++listGeneration, workspace = props.workspaceId;
@@ -245,7 +259,13 @@ export default function Threads(props: Props) {
     const workspace = props.workspaceId;
     props.live; props.refreshKey; props.requestedThreadId;
     if (workspace !== lastWorkspace) {
-      lastWorkspace = workspace; listGeneration++; createGeneration++; listBusy = false; appliedRequested = ''; setThreads(null); setSelected(''); resetSelection(); setRequestedMissing(false); setDraft(''); setSendPending(null); setCreating(false); setCreateError('');
+      lastWorkspace = workspace; listGeneration++; createGeneration++; listBusy = false; appliedRequested = ''; lastSeenRequested = normalizeRequestedThreadId(props.requestedThreadId); setThreads(null); setSelected(''); resetSelection(); setRequestedMissing(false); setDraft(''); setSendPending(null); setCreating(false); setCreateError('');
+    } else if (shouldInvalidateThreadRouteSynchronously(normalizeRequestedThreadId(props.requestedThreadId), lastSeenRequested)) {
+      // Mounted route-identity change with the same workspace: invalidate
+      // synchronously before the list fetch so the previous thread cannot
+      // survive a held or failing list. Steady polls keep the selection.
+      lastSeenRequested = normalizeRequestedThreadId(props.requestedThreadId);
+      setSelected(''); setDraft(''); setSendPending(null); resetSelection(); setRequestedMissing(false);
     }
     if (active()) void loadList(); else { listGeneration++; createGeneration++; listBusy = false; setThreads(null); setSelected(''); resetSelection(); setCreating(false); setCreateError(''); }
   });

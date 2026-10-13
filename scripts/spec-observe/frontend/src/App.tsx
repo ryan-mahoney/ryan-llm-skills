@@ -10,6 +10,7 @@ import { destinationEntries, type DestinationProps } from './destinations';
 import { WorkspacePicker } from './destinations/workspaces';
 import { catalogRead, type WorkspaceCatalog } from './destinations/workspace-state';
 import { getLaunchDraft, seedLaunchDraft } from './launch-state';
+import { armLaunchPickerIntent, cancelLaunchPickerIntent, createLaunchPickerIntent, shouldApplyPickerReset, shouldResetAcknowledgedDraft } from './launch-picker-intent';
 
 type Filter = 'active' | 'attention' | 'completed' | 'planned';
 type Catalog = WorkspaceCatalog;
@@ -46,6 +47,12 @@ export default function App() {
   let workspaceBusyId: string | null = null;
   let catalogTimer: ReturnType<typeof setTimeout> | undefined;
   let workspaceTimer: ReturnType<typeof setTimeout> | undefined;
+  // Explicit new-assignment intent for Agents -> All workspaces -> Launch
+  // agent -> picker choice. Armed only by prepareAgentAssignment without a
+  // concrete workspace; consumed only by the picker choice that completes
+  // that entry. Generic scope/history navigation abandons it without
+  // resetting any draft.
+  const launchPickerIntent = createLaunchPickerIntent();
 
   const live = () => liveBrowser() && !imported();
   const scopeWs = () => route().ws;
@@ -100,10 +107,14 @@ export default function App() {
     const ws = scopeWs();
     if (ws) {
       const context = { ws };
-      const retained = getLaunchDraft(context);
-      if (!retained?.pending && retained?.result?.kind === 'launched') {
+      if (shouldResetAcknowledgedDraft(getLaunchDraft(context))) {
         seedLaunchDraft(context, { title: '', content: '' });
       }
+    } else {
+      // All workspaces: no concrete draft exists yet. Arm the explicit
+      // new-assignment intent so the picker choice can apply the
+      // acknowledged-success reset once the workspace is known.
+      armLaunchPickerIntent(launchPickerIntent);
     }
     goDestination('launch');
   }
@@ -126,9 +137,23 @@ export default function App() {
     go({ ...route(), path });
   }
   function chooseScope(ws: string | undefined) {
+    // Generic scope navigation never applies the acknowledged-success
+    // reset; abandon any armed picker intent without touching drafts.
+    cancelLaunchPickerIntent(launchPickerIntent);
     go(withWorkspace(route(), ws));
   }
   function chooseWorkspace(id: string) {
+    // Explicit picker completion of an armed All-workspaces entry: apply
+    // the acknowledged-success reset for the concrete workspace, then
+    // disarm. Generic picker visits without an armed intent navigate
+    // unchanged, and pending/failed/unconfirmed entries are preserved.
+    if (shouldApplyPickerReset(launchPickerIntent, route().dest)) {
+      const context = { ws: id };
+      if (shouldResetAcknowledgedDraft(getLaunchDraft(context))) {
+        seedLaunchDraft(context, { title: '', content: '' });
+      }
+      cancelLaunchPickerIntent(launchPickerIntent);
+    }
     navigate(withWorkspace(route(), id), 'push');
   }
   function replaceId(value: string | null) {
@@ -343,6 +368,17 @@ export default function App() {
     } else if (currentRoute.dest === 'epics') {
       const rows = visibleEpics();
       if (!rows.some(item => item.key === currentId)) replaceId(rows[0]?.key ?? null);
+    }
+  });
+
+  // An armed All-workspaces launch intent survives only inside the launch
+  // picker (launch without a workspace). Any other arrival abandons it
+  // without resetting drafts. The picker choice consumes synchronously
+  // before navigating, so this branch runs only for non-picker arrivals.
+  createEffect(() => {
+    const current = route();
+    if (launchPickerIntent.armed && (current.dest !== 'launch' || current.ws !== undefined)) {
+      cancelLaunchPickerIntent(launchPickerIntent);
     }
   });
 
