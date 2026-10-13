@@ -13,6 +13,7 @@ brief, skill lookup, context construction, and Pi argv come from production code
 import json
 import os
 import select
+import shutil
 import subprocess
 import time
 import traceback
@@ -47,7 +48,7 @@ try:
     report["dirty"] = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=root, text=True).strip())
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+        browser = p.chromium.launch(executable_path=shutil.which("google-chrome"), headless=True, args=["--no-sandbox"])
         context = browser.new_context(viewport={"width": 1360, "height": 980}, device_scale_factor=1)
         page = context.new_page()
         single_target_mode = {"enabled": False, "filtered": 0}
@@ -74,10 +75,10 @@ try:
         page.on("request", lambda request: post_urls.append(request.url) if request.method == "POST" else None)
         page.goto(receipt["url"] + "/#/specs?ws=fixture&filter=planned", wait_until="domcontentloaded")
         expect(page.locator("h1")).to_have_text("Specs")
-        rows = page.locator(".observation-rows button.run-row")
+        rows = page.locator(".records button.record[data-key]")
         expect(rows).to_have_count(2)
-        expect(rows.first.locator(".run-title")).to_have_text("other-browser")
-        report["scenarios"].append("Planned packages sort newest first even when alphabetical order differs")
+        expect(rows.first.locator(".run-title")).to_have_text("browser")
+        report["scenarios"].append("Planned packages sort by workspace/package")
         main_row = rows.filter(has=page.get_by_text("browser", exact=True))
         expect(main_row.locator(".run-title")).to_have_text("browser")
         expect(page.locator("main")).not_to_contain_text("Building the dashboard")
@@ -139,8 +140,8 @@ try:
         assert single_target_mode["filtered"] >= 2, single_target_mode
         expect(page.locator("#planned-assignment-target-summary")).to_contain_text(receipt["checkout"])
         expect(page.locator("#planned-assignment-preview")).to_be_enabled()
-        page.locator(".observation-rows button.run-row").filter(has_text="other-browser").click()
-        expect(page.locator("article.detail h2")).to_have_text("other-browser")
+        page.locator(".records button.record[data-key]").filter(has_text="other-browser").click()
+        expect(page.locator(".object-head h2")).to_have_text("other-browser")
         expect(page.locator("#planned-assignment-target-summary")).to_contain_text(receipt["checkout"])
         expect(page.locator("#planned-assignment-preview")).to_be_enabled()
         refresh_state()
@@ -154,8 +155,8 @@ try:
         target.select_option(label=f"main · {receipt['checkout']}")
         selected_target_key = target.input_value()
         expect(page.locator("#planned-assignment-preview")).to_be_enabled()
-        page.locator(".observation-rows button.run-row").filter(has=page.get_by_text("browser", exact=True)).click()
-        expect(page.locator("article.detail h2")).to_have_text("browser")
+        page.locator(".records button.record[data-key]").filter(has=page.get_by_text("browser", exact=True)).click()
+        expect(page.locator(".object-head h2")).to_have_text("browser")
         target = page.locator("#planned-assignment-target")
         target.select_option(label=f"main · {receipt['checkout']}")
         selected_target_key = target.input_value()
@@ -167,8 +168,8 @@ try:
         page.locator("#planned-assignment-brief").fill(brief + "\nWait for target switch.")
         page.locator("#planned-assignment-preview").click()
         expect(page.locator("#planned-assignment-status")).to_contain_text("Preparing")
-        page.locator(".observation-rows button.run-row").filter(has_text="other-browser").click()
-        expect(page.locator("article.detail h2")).to_have_text("other-browser")
+        page.locator(".records button.record[data-key]").filter(has_text="other-browser").click()
+        expect(page.locator(".object-head h2")).to_have_text("other-browser")
         expect(page.locator("#planned-assignment-title")).to_have_value("Resume fixture/other-browser through PR publication")
         page.locator("#planned-assignment-target").select_option(label=f"main · {receipt['checkout']}")
         expect(page.locator("#planned-assignment-preview")).to_be_enabled()
@@ -183,8 +184,8 @@ try:
         assert len(posts("previewAssignment")) == 0
         assert len(posts("send")) == 0
         control("delay-brief", False)
-        page.locator(".observation-rows button.run-row").filter(has=page.get_by_text("browser", exact=True)).click()
-        expect(page.locator("article.detail h2")).to_have_text("browser")
+        page.locator(".records button.record[data-key]").filter(has=page.get_by_text("browser", exact=True)).click()
+        expect(page.locator(".object-head h2")).to_have_text("browser")
         expect(page.locator("#planned-assignment-brief")).to_have_value(brief)
         target = page.locator("#planned-assignment-target")
         target.select_option(label=f"main · {receipt['checkout']}")
@@ -225,7 +226,14 @@ try:
         record = resolved["record"]
         assert record["spec_package"] == receipt["package"]
         assert record["package_ref"] == "fixture/browser"
-        assert record["execution_dir"] == receipt["checkout"]
+        prepared = posts("prepareSpecTarget")[-1]["input"]
+        assert prepared["spec_package"] == "fixture/browser"
+        assert prepared["thread_id"] == preview_input["thread_id"]
+        expected_worktree = str(Path(receipt["checkout"]).with_name("checkout-browser"))
+        assert record["execution_dir"] == expected_worktree
+        assert record["execution_branch"] == "spec-browser"
+        assert subprocess.check_output(["git", "-C", expected_worktree, "branch", "--show-current"], text=True).strip() == record["execution_branch"]
+        assert subprocess.check_output(["git", "-C", expected_worktree, "rev-parse", "--path-format=absolute", "--git-common-dir"], text=True).strip() == str(Path(receipt["checkout"]) / ".git")
         assert record["repository_id"] == "fixture-repo"
         assert record["publication_authority"] == "pr"
         assert record["skill"] == "spec-end-to-end"
@@ -254,12 +262,14 @@ try:
         expect(page.locator("#planned-assignment-launch")).to_be_enabled()
         report["scenarios"].append("Refreshing the planned inventory preserves the reviewed assignment id and explicit Launch control; launch later must match the captured resolver digest")
         report["scenarios"].append(
-            "Planned inventory resolves to its canonical package, selected repo checkout, fake-home skill, exact resume brief, PR-authority prompt and Pi argv"
+            "Planned inventory prepares and resolves its separate canonical spec worktree and branch, fake-home skill, exact resume brief, PR-authority prompt and Pi argv"
         )
 
-        screenshot = evidence / "planned-launch-ready-before-explicit-launch.png"
-        page.screenshot(path=str(screenshot), full_page=True)
-        report.setdefault("captures", []).append(str(screenshot))
+        for capture_width in (1280, 1600):
+            page.set_viewport_size({"width": capture_width, "height": 800})
+            screenshot = evidence / f"planned-launch-ready-before-explicit-launch-{capture_width}.png"
+            page.screenshot(path=str(screenshot), full_page=True)
+            report.setdefault("captures", []).append(str(screenshot))
 
         # Editing the brief invalidates the reviewed contract. Only a new
         # preview of the current saved draft can expose Launch again.
@@ -306,7 +316,7 @@ try:
             route.fulfill(response=upstream, json=payload)
         readonly_page.route("**/api/state**", strip_action_token)
         readonly_page.goto(receipt["url"] + "/#/specs?ws=fixture&filter=planned", wait_until="domcontentloaded")
-        readonly_page.locator(".observation-rows button.run-row").first.click()
+        readonly_page.locator(".records button.record[data-key]").first.click()
         readonly_form = readonly_page.locator("#planned-assignment")
         expect(readonly_form).to_be_visible()
         readonly_page.locator("#planned-assignment-target").select_option(label=f"main · {receipt['checkout']}")

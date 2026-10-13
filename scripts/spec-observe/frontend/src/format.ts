@@ -12,7 +12,7 @@ export function setClock(value:string|undefined){const at=Date.parse(value??'');
 export function tickClock(){setTime(anchor?anchor.at+performance.now()-anchor.perf:null);}
 export const serverNow=()=>clock();
 export function age(value:unknown){const t=Date.parse(str(value)),n=clock();if(!Number.isFinite(t)||n===null)return 'Age unknown';const s=Math.max(0,Math.floor((n-t)/1000));return s<60?`${s}s ago`:s<3600?`${Math.floor(s/60)}m ago`:s<86400?`${Math.floor(s/3600)}h ago`:`${Math.floor(s/86400)}d ago`;}
-export function stale(value:unknown){const n=clock(),t=Date.parse(str(value));return n===null||!Number.isFinite(t)||n-t>45000;}
+export function stale(value:unknown,now:number|null=clock()){const t=Date.parse(str(value));return now===null||!Number.isFinite(t)||now-t>45000;}
 export const terminal=new Set(['completed','complete','failed','cancelled','stale','stopped','closed','aborted','done']);
 export const key=(r:any)=>JSON.stringify([r.workspace,r.package,r.assignment_id]);
 export const pendingWorkflow=(r:any)=>r.is_current_assignment===true&&['ready','waiting-worker','waiting-external','decision-required','blocked','user-held'].includes(r.workflow_state);

@@ -1,6 +1,6 @@
 # Package dev server previews
 
-A configured workspace lets an operator start a dev server from a package detail in the live Sentinel dashboard. Each package uses its recorded Git worktree, a separate Docker Compose project, and a port on the existing Tailscale host. Package creation does not start a dev server.
+A configured workspace lets an operator start a dev server from the Specs Overview action bar in the live Sentinel dashboard. Each package uses its recorded Git worktree, a separate Docker Compose project, and a port on the existing Tailscale host. Package creation does not start a dev server.
 
 ## Configure a workspace
 
@@ -41,7 +41,7 @@ The preview URL must use the canonical Tailscale DNS name. The container derives
 
 The UI is built from the selected package branch each time the preview image is built. Frontend changes in that branch appear in the preview after restart. Dashboard API reads and actions still run against the existing host Sentinel service; remote access keeps its existing local-only restrictions, including **Mark complete**.
 
-Without a `preview` block, package details hide the dev server controls. Imported snapshots do not expose these controls.
+Without a `preview` block, the Specs Overview action bar hides the dev server controls. Imported snapshots do not expose these controls.
 
 ## Compose contract
 
@@ -77,7 +77,11 @@ The application must listen on a container interface reachable through the publi
 
 ## Start and stop
 
-Select a package in the live dashboard, then select **Start dev server**. The dashboard requires its same-origin action token for this operation. The package must also pass the dashboard package authorization gate.
+In the live dashboard, select a spec and open its **Overview** tab. The Specs
+action bar carries the preview controls after the spec actions: the current
+preview status plus secondary **Start dev server**, **Stop dev server** and
+**Open dev server** actions as applicable, with failure and token guidance beside
+them. The dashboard requires its same-origin action token for this operation. The package must also pass the dashboard package authorization gate.
 
 A detached worker claims the package operation and allocates an unused port. It resolves and saves the Compose configuration, then runs `up --build --detach --wait`. After the HTTP readiness check, it publishes a Tailscale HTTPS route on the same port:
 

@@ -111,12 +111,12 @@
 .list-controls input.ds-input[type=search]{background:var(--ds-panel-2);border:1px solid var(--ds-input-border);border-radius:3px;color:var(--ds-ink);height:44px}
 .filter-strip button{border-radius:0}
 
-/* Workspace-owned directory and picker: keep the record row chrome from the
+/* Workspace- and Specs-owned lists: keep the record row chrome from the
    legacy button reset without outranking .record:hover/.record.selected, and
    render route actions as reference links. The destination wrapper is
    layout-neutral so the shell grid keeps the same children. */
-.workspace-destination{display:contents}
-:where(.workspace-destination, .workspace-picker) .record{width:100%;border:0;border-bottom:1px solid var(--ds-line);border-radius:0;background:none;text-align:left;font:inherit}
+.workspace-destination,.specs-destination{display:contents}
+:where(.workspace-destination, .workspace-picker, .specs-destination) .record{width:100%;border:0;border-bottom:1px solid var(--ds-line);border-radius:0;background:none;text-align:left;font:inherit}
 :where(.workspace-destination, .workspace-picker) .text-link{background:none;border:0;border-radius:0;padding:0;color:var(--ds-accent-text);min-height:44px}
 
 /* Epics master and cold regions: keep the record row chrome from the legacy
@@ -150,6 +150,10 @@
 .epic-documents .text-link{display:inline-flex;align-items:center;justify-content:center;min-height:44px;min-width:44px;max-width:100%;white-space:normal;overflow-wrap:anywhere;text-align:left}
 .epic-documents .text-link:focus-visible{outline:2px solid var(--ds-accent);outline-offset:-2px}
 
+/* Specs list notices stack in the narrow list pane so the copy keeps the full
+   pane width and the recovery action sits below the text. */
+.specs-destination .list-pane .ds-callout{flex-direction:column;align-items:stretch}
+
 /* Production compatibility: table-shaped regional skeletons keep the screen-71
    row geometry instead of the directory-sized stacked skeleton. */
 .skeletons-table{padding:0}
@@ -157,6 +161,17 @@
 .skeletons-table .skeleton-cell{display:grid;gap:8px}
 .skeletons-table .skeleton-bar{height:10px;width:85%;background:var(--ds-chrome-hi);border-radius:2px}
 .skeletons-table .skeleton-bar--secondary{height:8px;width:60%}
+
+/* Dev-server preview controls sit in the Overview ActionBar as one wrapping
+   group so long status and recovery copy never clip the fixed action bar. */
+.detail-actions #package-preview{display:inline-flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0;max-width:100%}
+.detail-actions #package-preview .status,.detail-actions #package-preview .preview-note{white-space:normal;overflow-wrap:anywhere;max-width:100%}
+.detail-actions #package-preview .ds-btn{flex-shrink:0}
+
+/* Completion dialog: the captured request keeps one right-aligned action row
+   and dialog buttons retain the design focus ring over the legacy reset. */
+#completion-dialog .actions{justify-content:flex-end}
+#completion-dialog button:focus-visible{outline:2px solid var(--ds-accent);outline-offset:3px;border-radius:3px}
 
 /* Launch brief composition reuses the reference textarea.ds-input surface.
    Scoped to the launch form so the still-mounted thread caller keeps its
