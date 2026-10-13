@@ -862,6 +862,47 @@ test('planned inventory never publishes prepared for blocked, pending, malformed
   assert.equal(row(noIndex).step_count, null);
 });
 
+// Run alone: node --test --test-name-pattern='epic planning' scripts/spec-observe/sentinel.test.mjs
+test('epic planning facts match planned inventory truth and blocked, missing members stay unlaunchable', async t => {
+  const f = sandbox(t), repo = primary(f.dir, 'epic-planning');
+  const prepared = pack(repo, 'prepared-member');
+  writeFileSync(join(prepared, 'spec-steps.json'), JSON.stringify({ steps: [{ step: 1, name: 'One' }, { step: 2, name: 'Two' }] }));
+  writeFileSync(join(prepared, 'spec-prepare.md'), 'Outcome: prepared\nPrepared: 2026-10-06\n');
+  writeFileSync(join(prepared, 'proposal.md'), '---\ncritique_recommended: true\n---\n# Proposal\n');
+  writeFileSync(join(prepared, 'critique.md'), '# Critique\n');
+  const blocked = pack(repo, 'blocked-member');
+  writeFileSync(join(blocked, 'spec-steps.json'), JSON.stringify({ steps: [{ step: 1, name: 'One' }] }));
+  writeFileSync(join(blocked, 'spec-prepare.md'), 'Outcome: blocked\n');
+  const epicDir = join(STORAGE, 'projects', basename(repo), 'epics', 'planning');
+  mkdirSync(epicDir, { recursive: true });
+  writeFileSync(join(epicDir, 'epic.json'), JSON.stringify({ schema_version: 1, epic: 'planning', title: 'Planning epic', state: 'active',
+    packages: [{ package: 'prepared-member' }, { package: 'blocked-member' }, { package: 'missing-member' }] }));
+
+  const snapshot = await collect({ roots: [repo], indexDir: f.indexDir, now });
+  const epic = snapshot.epics.find(item => item.epic === 'planning');
+  const member = name => epic.members.find(item => item.name === name);
+  const planningFields = ['proposal', 'critique', 'critique_recommended', 'prepared', 'step_count', 'preparation', 'decision'];
+  const projected = row => Object.fromEntries(planningFields.map(field => [field, row[field] ?? null]));
+
+  const preparedRow = snapshot.planned_packages.find(item => item.package === prepared);
+  assert.ok(preparedRow, 'the prepared member is planned inventory');
+  assert.deepEqual(member('prepared-member').planning, projected(preparedRow), 'member planning equals the planned inventory truth');
+  assert.equal(member('prepared-member').planning.step_count, 2);
+  assert.equal(member('prepared-member').planning.preparation.outcome, 'prepared');
+
+  assert.ok(snapshot.planned_packages.some(item => item.package === blocked), 'the blocked member is still planned inventory');
+  assert.equal(member('blocked-member').status, 'prepared', 'the legacy index-only lifecycle stays prepared');
+  assert.equal(member('blocked-member').planning.prepared, false, 'a blocked report is not launchable preparation');
+  assert.equal(member('blocked-member').planning.preparation.outcome, 'blocked');
+
+  assert.equal(member('missing-member').status, 'missing');
+  assert.equal(member('missing-member').planning, null, 'a missing member publishes no planning facts');
+  assert.equal(epic.summary.merged, 0);
+  assert.equal(epic.summary.complete, 0, 'landed counts are unchanged by planning observations');
+  assert.equal(epic.summary.prepared, 2, 'legacy prepared lifecycle counting is unchanged');
+  assert.equal(epic.summary.missing, 1);
+});
+
 // Run alone: node --test --test-name-pattern='planned inventory keeps cancelled receipts' scripts/spec-observe/sentinel.test.mjs
 test('planned inventory keeps cancelled receipts as history and a recorded worktree as a non-disqualifying fact', async t => {
   const f = sandbox(t), repo = primary(f.dir, 'planned-history-facts');

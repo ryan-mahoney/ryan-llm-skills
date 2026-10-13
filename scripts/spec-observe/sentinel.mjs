@@ -645,6 +645,9 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
     hidden_completed_packages: 0,
   };
   const scan = { entries: 0 };
+  // Planned readiness facts are observations, not acceptance; epic membership
+  // reuses the exact same truth from this cache instead of reading again.
+  const planningCache = new Map();
   const collected = [];
   const completed = [];
   const planned = [];
@@ -743,7 +746,7 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
         planned_at: await packagePlanTime(fact.packagePath),
         targets: fact.targets.map(({ id, primary }) => ({ id, primary })),
         source_paths: [...fact.sources.values()].map(source => source.file),
-        ...await plannedRowFacts(fact, budget) });
+        ...await plannedRowFacts(fact, budget, planningCache) });
     }
     if (fact.staleReceipts) staleReceipts = true;
   };
@@ -788,7 +791,8 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
   }
 
   // Epic membership is read for every observed workspace, outside the activity and completion windows.
-  const epicState = await collectEpics({ entries: epicEntries, facts, runs, recentlyCompleted, runConditions, readTime });
+  const epicState = await collectEpics({ entries: epicEntries, facts, runs, recentlyCompleted, runConditions, readTime,
+    budget, readBounded, planningCache });
   for (const row of [...runs, ...recentlyCompleted, ...plannedPackages]) {
     const epic = epicState.memberships.get(row.package);
     if (epic) row.epic = epic;
@@ -843,9 +847,10 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
 
 // Planned inventory facts are observations, not acceptance: planning files are
 // read once per package through the same bounded reader, shared memo and byte
-// budget. A recorded worktree never disqualifies a package, cancelled-only
-// receipts stay history, and unknown reads stay explicit instead of guessed.
-async function plannedRowFacts(fact, budget) {
+// budget, and the result is cached for epic membership. A recorded worktree
+// never disqualifies a package, cancelled-only receipts stay history, and
+// unknown reads stay explicit instead of guessed.
+async function plannedRowFacts(fact, budget, planningCache = null) {
   const steps = await readStepIndex(fact, budget);
   const preparation = await readPreparation(fact.packagePath, budget, { readBounded, memo: fact.reads });
   const decision = await readDecision(fact.packagePath, budget, { readBounded, memo: fact.reads });
@@ -857,7 +862,7 @@ async function plannedRowFacts(fact, budget) {
   const prepared = steps.readiness_valid === null || preparation.outcome === 'unavailable' || decision?.outcome === 'unavailable'
     ? null
     : steps.readiness_valid === true && preparation.outcome === 'prepared' && decision === null;
-  return {
+  const facts = {
     step_count: steps.source ? steps.steps.length : null,
     prepared,
     preparation,
@@ -868,6 +873,10 @@ async function plannedRowFacts(fact, budget) {
     critique: planning.critique,
     critique_recommended: planning.critique_recommended,
   };
+  // Epic membership reuses these exact readiness facts; a later read must not
+  // disagree with the planned row for the same snapshot.
+  planningCache?.set(fact.packagePath, facts);
+  return facts;
 }
 
 // A scoped PR record permits lifecycle lookup even when planning and receipts
