@@ -202,10 +202,11 @@ const kindOf = async path => {
 
 // Joins the records with collected package facts. Beyond the sentinel's own
 // package reads it performs only lstat calls on a member directory and its
-// spec-steps.json, plus bounded planning reads through the injected reader for
-// observed members that lack cached planned-row readiness facts.
+// spec-steps.json, plus bounded planning reads through the injected reader and
+// the shared step-index owner for observed members that lack cached
+// planned-row readiness facts.
 export async function collectEpics({ entries, facts, runs, recentlyCompleted, runConditions, readTime,
-  budget = null, readBounded = null, planningCache = null }) {
+  budget = null, readBounded = null, planningCache = null, readStepIndex = null }) {
   const currentRun = path => {
     const row = runs.find(item => item.package === path && item.is_current_assignment === true);
     return row ? { ...row, conditions: runConditions(row, readTime) } : recentlyCompleted.find(item => item.package === path) ?? null;
@@ -215,7 +216,13 @@ export async function collectEpics({ entries, facts, runs, recentlyCompleted, ru
   // more than one epic.
   const planningMemo = new Map();
   const planningFacts = async fact => {
-    const steps = fact.stepIndex ?? { readiness_valid: null, steps: [], source: null };
+    // Members excluded from planned inventory never had their step index read.
+    // Obtain it through the shared bounded owner so the fallback publishes the
+    // same preparation truth as a planned row; the owner's fact.stepIndex cache
+    // keeps one read per package.
+    const steps = fact.stepIndex
+      ?? (typeof readStepIndex === 'function' ? await readStepIndex(fact, budget) : null)
+      ?? { readiness_valid: null, steps: [], source: null };
     const preparation = await readPreparation(fact.packagePath, budget, { readBounded, memo: planningMemo });
     const decision = await readDecision(fact.packagePath, budget, { readBounded, memo: planningMemo });
     const artifacts = await readPlanningArtifacts(fact.packagePath, budget, { readBounded, memo: planningMemo });

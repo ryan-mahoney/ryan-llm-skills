@@ -951,6 +951,34 @@ test('epic planning facts match planned inventory truth and blocked, missing mem
   assert.equal(epic.summary.missing, 1);
 });
 
+// Run alone: node --test --test-name-pattern='epic planning' scripts/spec-observe/sentinel.test.mjs
+test('epic planning observes an uncached member index outside planned inventory', async t => {
+  const f = sandbox(t), repo = primary(f.dir, 'epic-uncached');
+  const member = pack(repo, 'uncached-member');
+  writeFileSync(join(member, 'spec-steps.json'), JSON.stringify({ steps: [
+    { step: 1, name: 'One', description: 'Prepare bounded inputs.', difficulty: 'medium', visualDesign: false, evidence: [] }] }));
+  writeFileSync(join(member, 'spec-prepare.md'), 'Outcome: prepared\nPrepared: 2026-10-06\n');
+  writeFileSync(join(member, 'proposal.md'), '---\ncritique_recommended: true\n---\n\n# Proposal\n');
+  writeFileSync(join(member, 'critique.md'), '# Critique\n');
+  // Step learning excludes the receipt-free member from planned inventory, so
+  // its index was never read there; the epic fallback must still observe it.
+  writeFileSync(join(member, 'step-1-learning.md'), '# Learning\n');
+  const epicDir = join(STORAGE, 'projects', basename(repo), 'epics', 'planning');
+  mkdirSync(epicDir, { recursive: true });
+  writeFileSync(join(epicDir, 'epic.json'), JSON.stringify({ schema_version: 1, epic: 'planning', title: 'Planning epic', state: 'active',
+    packages: [{ package: 'uncached-member' }] }));
+
+  const snapshot = await collect({ roots: [repo], indexDir: f.indexDir, now });
+  assert.ok(!snapshot.planned_packages.some(item => item.package === member), 'implementation evidence keeps the member outside planned inventory');
+  const epic = snapshot.epics.find(item => item.epic === 'planning');
+  const row = epic.members.find(item => item.name === 'uncached-member');
+  assert.equal(row.status, 'prepared', 'the legacy index-only lifecycle stays prepared');
+  assert.equal(row.planning.prepared, true, 'fallback preparation reflects the actual prepared report');
+  assert.equal(row.planning.step_count, 1, 'fallback step count reflects the uncached index');
+  assert.equal(row.planning.preparation.outcome, 'prepared');
+  assert.equal(epic.summary.prepared, 1, 'epic preparation counts include the uncached member');
+});
+
 // Run alone: node --test --test-name-pattern='planned inventory keeps cancelled receipts' scripts/spec-observe/sentinel.test.mjs
 test('planned inventory keeps cancelled receipts as history and a recorded worktree as a non-disqualifying fact', async t => {
   const f = sandbox(t), repo = primary(f.dir, 'planned-history-facts');

@@ -792,7 +792,7 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
 
   // Epic membership is read for every observed workspace, outside the activity and completion windows.
   const epicState = await collectEpics({ entries: epicEntries, facts, runs, recentlyCompleted, runConditions, readTime,
-    budget, readBounded, planningCache });
+    budget, readBounded, planningCache, readStepIndex });
   for (const row of [...runs, ...recentlyCompleted, ...plannedPackages]) {
     const epic = epicState.memberships.get(row.package);
     if (epic) row.epic = epic;

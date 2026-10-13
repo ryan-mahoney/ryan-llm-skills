@@ -223,3 +223,47 @@ test('collectEpics publishes planning facts while legacy prepared lifecycle and 
     assert.equal(buildEpics([bare]).epics[0].members[0].planning, null, 'buildEpics projects null planning when collectEpics published none');
   } finally { fx.cleanup(); }
 });
+
+// Run alone: node --test --test-name-pattern='planning facts' scripts/spec-observe/epics.test.mjs
+test('collectEpics planning facts obtain an uncached member index through the shared owner', async () => {
+  const fx = makeFixture();
+  try {
+    const specDir = join(fx.tmp, 'uncached-specs');
+    const memberDir = join(specDir, 'uncached');
+    const indexFile = join(memberDir, 'spec-steps.json');
+    put(indexFile, JSON.stringify({ steps: [{ step: 1, name: 'One' }, { step: 2, name: 'Two' }] }));
+    const docs = new Map([
+      ['spec-prepare.md', 'Outcome: prepared\nPrepared: 2026-10-06\n'],
+      ['proposal.md', '# Proposal\n'],
+      ['critique.md', '# Critique\n'],
+    ]);
+    const readBounded = async file => docs.has(basename(file))
+      ? { outcome: 'ok', text: docs.get(basename(file)), bytes: docs.get(basename(file)).length }
+      : { outcome: 'missing', bytes: 0 };
+    const budget = { bytes: 0, fits: () => true };
+    // No stepIndex on the fact: the member was excluded from planned inventory,
+    // so the fallback must obtain the index instead of publishing unknown.
+    const facts = new Map([[memberDir, { packagePath: memberDir, stepIndex: null }]]);
+    let calls = 0;
+    const readStepIndex = async fact => {
+      calls++;
+      fact.stepIndex = { steps: [{ step: 1, name: 'One' }, { step: 2, name: 'Two' }],
+        readiness_valid: true, source: indexFile };
+      return fact.stepIndex;
+    };
+    const entry = {
+      slug: 'uncached', dir: join(fx.tmp, 'epics', 'uncached'), file: join(fx.tmp, 'epics', 'uncached', 'epic.json'),
+      workspace: 'demo', plan: null,
+      epic: { epic: 'uncached', title: 'Uncached', state: 'active', note: null, plan: null, designs: [],
+        packages: [{ package: 'uncached', requires: [], note: null }] },
+      packageDirs: [{ dir: memberDir }],
+    };
+    const { epics } = await collectEpics({ entries: [entry], facts, runs: [], recentlyCompleted: [], runConditions: () => [],
+      readTime: '2026-10-06T12:00:00.000Z', budget, readBounded, readStepIndex });
+    const [member] = epics[0].members;
+    assert.equal(calls, 1, 'the shared index owner is consulted once for the uncached member');
+    assert.equal(member.planning.prepared, true, 'fallback preparation reflects the actual prepared report');
+    assert.equal(member.planning.step_count, 2, 'fallback step count reflects the obtained index');
+    assert.equal(member.planning.preparation.outcome, 'prepared');
+  } finally { fx.cleanup(); }
+});
