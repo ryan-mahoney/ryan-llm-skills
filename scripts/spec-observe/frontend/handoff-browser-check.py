@@ -13,6 +13,9 @@ SENTINEL_EVIDENCE_DIR=/tmp/sentinel-handoff-evidence uv run --script \
 SENTINEL_EVIDENCE_DIR=/tmp/sentinel-handoff-evidence uv run --script \
   scripts/spec-observe/frontend/handoff-browser-check.py --case specs
 
+SENTINEL_EVIDENCE_DIR=/tmp/sentinel-handoff-evidence uv run --script \
+  scripts/spec-observe/frontend/handoff-browser-check.py --case epic
+
 The fixture runs with SENTINEL_PLANNED_LAUNCH=1 so the real package resolver,
 saved brief, skill lookup and contract digest drive the bound review and result
 while the final worker process boundary stays fake. Reference captures load the
@@ -39,11 +42,11 @@ HOLDING_RUN = "7c2a91d4-3e58-4b06-a1f7-95d0e6b83c12"
 parser = argparse.ArgumentParser()
 parser.add_argument("--case", default="review")
 arguments = parser.parse_args()
-if arguments.case not in ("review", "result", "specs"):
+if arguments.case not in ("review", "result", "specs", "epic"):
     raise SystemExit(f"unsupported case: {arguments.case}")
 
 root = Path(__file__).resolve().parent
-evidence = Path(os.environ.get("SENTINEL_EVIDENCE_DIR", "/tmp/sentinel-handoff-evidence")) / ("07-states" if arguments.case == "specs" else "06-states" if arguments.case == "result" else "04-states")
+evidence = Path(os.environ.get("SENTINEL_EVIDENCE_DIR", "/tmp/sentinel-handoff-evidence")) / ("07-states" if arguments.case == "specs" else "06-states" if arguments.case == "result" else "01-states" if arguments.case == "epic" else "04-states")
 evidence.mkdir(parents=True, exist_ok=True)
 started = time.monotonic()
 report = {"status": "failed", "case": arguments.case, "scenarios": [], "pageErrors": [], "captures": []}
@@ -65,6 +68,8 @@ fixture_env = dict(os.environ)
 fixture_env["SENTINEL_PLANNED_LAUNCH"] = "1"
 if arguments.case == "specs":
     fixture_env["SENTINEL_SPECS_READINESS"] = "1"
+if arguments.case == "epic":
+    fixture_env["SENTINEL_EPIC_PLANNING"] = "1"
 fixture = subprocess.Popen(
     ["node", str(root / "browser-fixture.mjs")],
     stdout=subprocess.PIPE,
@@ -90,7 +95,7 @@ try:
         if screens:
             reference = browser.new_context(viewport={"width": 1280, "height": 900}, device_scale_factor=1)
             reference_page = reference.new_page()
-            reference_screens = ("06-plan-result", "13-implement-result") if arguments.case == "result" else ("07-specs-ready", "08-spec-ready-waiting", "09-spec-ready-unverified", "10-specs-ready-empty") if arguments.case == "specs" else ("04-plan-review", "05-plan-review-denied", "11-implement-review", "12-implement-review-denied")
+            reference_screens = ("06-plan-result", "13-implement-result") if arguments.case == "result" else ("07-specs-ready", "08-spec-ready-waiting", "09-spec-ready-unverified", "10-specs-ready-empty") if arguments.case == "specs" else ("01-epic-planning-incomplete", "02-epic-planning-active") if arguments.case == "epic" else ("04-plan-review", "05-plan-review-denied", "11-implement-review", "12-implement-review-denied")
             for name in reference_screens:
                 for width in (1280, 1600):
                     reference_page.set_viewport_size({"width": width, "height": 900})
@@ -98,7 +103,7 @@ try:
                     screenshot = evidence / f"reference-{name}-{width}.png"
                     reference_page.screenshot(path=str(screenshot), full_page=True)
                     report["captures"].append(str(screenshot))
-                    if arguments.case in ("result", "specs"):
+                    if arguments.case in ("result", "specs", "epic"):
                         # Scrolled lower-pane evidence: full-page captures clip
                         # the lower inner content, so scroll to the populated
                         # lower content and capture the viewport as well.
@@ -688,10 +693,160 @@ try:
             control("clear-launch-publications")
             check_deadline("end")
 
+        def run_epic():
+            # Epic planning actions through the real route and fixture: record
+            # order and prepared-prerequisite truth, live-planning Open agent,
+            # missing-directory honesty and no POST without a commitment.
+            deadline = started + 180
+
+            def check_deadline(label):
+                if time.monotonic() > deadline:
+                    raise RuntimeError(f"epic case exceeded the 180 second deadline at {label}")
+
+            def member_row(slug):
+                return page.locator("table.epic-members tbody tr").filter(has=page.get_by_role("button", name=slug, exact=True))
+
+            def member_row_text(slug):
+                return page.locator("table.epic-members tbody tr").filter(has_text=slug)
+
+            def epic_facts():
+                return page.locator(".facts .fact")
+
+            def capture_epic_scrolled(name):
+                for width in (1280, 1600):
+                    page.set_viewport_size({"width": width, "height": 900})
+                    page.evaluate("""() => {
+                        const pane = document.querySelector('.detail-pane .detail-body');
+                        if (pane) pane.scrollTo(0, pane.scrollHeight);
+                        window.scrollTo(0, document.body.scrollHeight);
+                    }""")
+                    page.wait_for_timeout(300)
+                    path = evidence / f"production-{name}-scrolled-{width}.png"
+                    page.screenshot(path=str(path), full_page=False)
+                    report["captures"].append(str(path))
+                page.set_viewport_size({"width": 1280, "height": 900})
+
+            def capture_epic_table(name):
+                # Dependency-order evidence: scroll the real detail pane so the
+                # table heading and the browser row with Open agent are visible
+                # without clipping the action column.
+                for width in (1280, 1600):
+                    page.set_viewport_size({"width": width, "height": 900})
+                    page.evaluate("""() => {
+                        const pane = document.querySelector('.detail-pane .detail-body');
+                        const heading = [...document.querySelectorAll('.detail-pane .section-heading h3')]
+                          .find(el => el.textContent.trim() === 'Dependency order');
+                        if (pane && heading) {
+                          const paneRect = pane.getBoundingClientRect();
+                          const headingRect = heading.getBoundingClientRect();
+                          pane.scrollTop += headingRect.top - paneRect.top - 12;
+                        }
+                    }""")
+                    page.wait_for_timeout(300)
+                    path = evidence / f"production-{name}-table-{width}.png"
+                    page.screenshot(path=str(path), full_page=False)
+                    report["captures"].append(str(path))
+                page.set_viewport_size({"width": 1280, "height": 900})
+
+            check_deadline("start")
+            page.goto(receipt["url"] + "/#/epics?ws=fixture", wait_until="domcontentloaded")
+            expect(page.locator(".list-caption")).to_contain_text("epic record")
+            # Opening an epic is read-only: rendering and the disabled action
+            # below must create no POST before an explicit commitment.
+            assert posts("dispatchSaveBrief") == [], posts("dispatchSaveBrief")
+            assert posts("dispatchLaunch") == []
+            page.locator(".records a.record").filter(has_text="Demo epic").click()
+            expect(page.locator(".object-head h2")).to_have_text("Demo epic")
+            expect(page.locator(".object-head")).to_contain_text("Planning incomplete")
+            epic_url = page.url
+            expect(epic_facts()).to_have_count(4)
+            expect(epic_facts().nth(0)).to_contain_text("Recorded epic state")
+            expect(epic_facts().nth(1)).to_contain_text("Members prepared")
+            expect(epic_facts().nth(1)).to_contain_text("2 of 7")
+            expect(epic_facts().nth(2)).to_contain_text("Members landed")
+            expect(epic_facts().nth(2)).to_contain_text("0 of 7")
+            expect(epic_facts().nth(3)).to_contain_text("Next to plan")
+            expect(epic_facts().nth(3)).to_contain_text("other-browser")
+
+            # First eligible in record order, an independent member behind a
+            # positively prepared (not landed) prerequisite stays plannable,
+            # and an index-only prerequisite keeps its Plan disabled.
+            other = member_row("other-browser")
+            expect(other.locator('[data-action="plan"]')).to_be_enabled()
+            prepared_prereq = member_row("prepared-prereq-browser")
+            expect(prepared_prereq.locator("td").first).to_have_text("base")
+            expect(prepared_prereq.locator('[data-action="plan"]')).to_be_enabled()
+            blocked = member_row("blocked-browser")
+            expect(blocked.locator('[data-action="plan"]')).to_be_disabled()
+            expect(blocked.locator(".action-note")).to_contain_text("Waiting on index-browser")
+            index = member_row("index-browser")
+            expect(index).to_contain_text("In progress")
+            expect(index.locator('[data-action="plan"]')).to_have_count(0)
+            report["scenarios"].append("Epic first eligible member follows record order with prepared-prerequisite truth enabled and an index-only blocked prerequisite without a Plan commitment")
+            capture("epic-planning-incomplete")
+            capture_epic_scrolled("epic-planning-incomplete")
+
+            # Plan member seeds the step-8 planning review for the first
+            # eligible member and dispatches nothing.
+            expect(page.locator('[data-action-note="plan-target"]')).to_contain_text("Plans other-browser")
+            page.locator('[data-action="plan-member"]').click()
+            expect(page.locator("#launch-heading")).to_have_text("Review planning assignment")
+            expect(page.locator("#launch-review .launch-contract")).to_be_visible()
+            assert len(posts("dispatchSaveBrief")) == 1, posts("dispatchSaveBrief")
+            assert posts("dispatchLaunch") == []
+            assert worker_starts() == []
+            report["scenarios"].append("Plan member opens the bound planning review for the first eligible member and starts no worker")
+            page.goto(epic_url, wait_until="domcontentloaded")
+            expect(page.locator(".object-head h2")).to_have_text("Demo epic")
+            check_deadline("plan-member")
+
+            # Live planning changes its row to Open agent without blocking the
+            # independent member, and prepared members never count as landed.
+            control("publish-assignment", "f00dfeed-0000-4000-8000-000000000012", skill="spec-architect-initial", package=receipt["package"])
+            time.sleep(1.3)
+            with page.expect_response(lambda response: "/api/state" in response.url) as response:
+                page.locator("header").get_by_role("button", name="Refresh state", exact=True).click()
+            assert response.value.status == 200
+            expect(page.locator(".object-head h2")).to_have_text("Demo epic")
+            browser_row = member_row("browser")
+            expect(browser_row).to_contain_text("Planning")
+            agent_link = browser_row.locator('a[data-action="open-agent"]')
+            expect(agent_link).to_be_visible()
+            agent_href = agent_link.get_attribute("href") or ""
+            assert "f00dfeed-0000-4000-8000-000000000012" in agent_href, agent_href
+            expect(member_row("other-browser").locator('[data-action="plan"]')).to_be_enabled()
+            expect(page.locator('[data-action="plan-member"]')).to_be_enabled()
+            expect(page.locator('[data-action-note="plan-target"]')).to_contain_text("Plans other-browser")
+            expect(epic_facts().nth(2)).to_contain_text("0 of 7")
+            report["scenarios"].append("Live planning row becomes Open agent without blocking the independent member and prepared members keep the landed count at zero")
+            capture("epic-planning-active")
+            capture_epic_scrolled("epic-planning-active")
+            capture_epic_table("epic-planning-active")
+
+            # Missing directory explains why Plan cannot launch and produces
+            # no POST even when the disabled control is activated directly.
+            missing = member_row_text("missing-browser")
+            missing_plan = missing.locator('[data-action="plan"]')
+            expect(missing).to_contain_text("No package")
+            expect(missing).to_contain_text("Listed in the record; no package directory")
+            expect(missing_plan).to_be_disabled()
+            expect(missing.locator(".action-note")).to_contain_text("package directory is missing")
+            saves = len(posts("dispatchSaveBrief"))
+            launches = len(posts("dispatchLaunch"))
+            missing_plan.dispatch_event("click")
+            time.sleep(0.2)
+            assert len(posts("dispatchSaveBrief")) == saves
+            assert len(posts("dispatchLaunch")) == launches
+            assert posts("dispatchLaunch") == []
+            report["scenarios"].append("Missing directory disables Plan with its create-package reason and never posts")
+            check_deadline("end")
+
         if arguments.case == "review":
             run_review()
         elif arguments.case == "result":
             run_result()
+        elif arguments.case == "epic":
+            run_epic()
         else:
             run_specs()
 

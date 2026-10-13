@@ -2,8 +2,11 @@ import type { Envelope, WireRecord } from '../model';
 import type { StatusTone } from '../primitives';
 import type { RouteState } from '../route';
 import type { CatalogEntry } from '../scope';
-import { base, str, stale } from '../format';
-import { epicPlanningIncomplete, memberPlanning, nextToPlan } from '../readiness';
+import { base, str, stale, time } from '../format';
+import {
+  epicPlanningIncomplete, landedStatus, memberPlanning, nextToPlan, planningAssignmentFor, positivelyPrepared,
+} from '../readiness';
+import type { PrerequisiteFact } from '../readiness';
 
 // Destinations read readiness facts from their owning state module.
 export { epicPlanningIncomplete, memberPlanning, nextToPlan };
@@ -76,6 +79,193 @@ export function epicMemberRequires(member: WireRecord): { names: string[]; waiti
 
 export function memberRecords(records: WireRecord[], workspace: string, slug: string): WireRecord[] {
   return (records ?? []).filter(record => record?.workspace === workspace && base(record?.package) === slug);
+}
+
+export type EpicMemberActionKind = 'plan' | 'open-agent' | 'implement' | 'none';
+
+export type EpicMemberAction = {
+  kind: EpicMemberActionKind;
+  label: string;
+  disabled: boolean;
+  reason: string | null;
+  owner: WireRecord | null;
+};
+
+export type EpicMemberPlanning = {
+  name: string;
+  workspace: string;
+  record: WireRecord | null;
+  status: { label: string; tone: StatusTone };
+  note: string;
+  action: EpicMemberAction;
+};
+
+export type EpicPlanningSummary = {
+  prepared: number;
+  total: number;
+  landed: number;
+  planning: number;
+  next: WireRecord | null;
+  incomplete: boolean;
+};
+
+const epicMembers = (epic: WireRecord | null | undefined): WireRecord[] =>
+  (Array.isArray(epic?.members) ? epic.members : [])
+    .filter((member): member is WireRecord => Boolean(member) && typeof member.name === 'string' && Boolean(member.name));
+
+// One observed record per member: exact workspace plus the member's canonical
+// package identity (the base slug of a recorded package path), matching the
+// dependency table's member-name/workspace contract for absolute paths.
+export function epicMemberRecord(epic: WireRecord, member: WireRecord, records: WireRecord[]): WireRecord | null {
+  const workspace = text(member?.workspace) || text(epic?.workspace) || '';
+  const declared = text(member?.package);
+  const slug = (declared ? base(declared) : '') || text(member?.name) || '';
+  if (!workspace || !slug) return null;
+  return memberRecords(records, workspace, slug)[0] ?? null;
+}
+
+export const memberIsMissing = (member: WireRecord): boolean => member?.status === 'missing' || member?.exists === false;
+
+// Declared prerequisites resolved against sibling planning facts: a landed
+// sibling is landed, positive preparation is available-when-merged, and
+// anything else keeps the declaration visible without authorizing a plan.
+export function epicMemberPrerequisites(epic: WireRecord, member: WireRecord): PrerequisiteFact[] {
+  const names = epicMemberRequires(member).names;
+  if (!names.length) return [];
+  const byName = new Map(epicMembers(epic).map(item => [text(item.name) as string, item] as const));
+  return names.map(name => {
+    const sibling = byName.get(name);
+    if (!sibling) return { name, state: 'unknown' as const };
+    if (landedStatus(sibling.status)) return { name, state: 'landed' as const };
+    if (positivelyPrepared(memberPlanning(sibling))) return { name, state: 'prepared' as const };
+    return { name, state: 'unresolved' as const };
+  });
+}
+
+const prerequisiteReason = (fact: PrerequisiteFact): string => fact.state === 'prepared'
+  ? `Available when ${fact.name} is merged`
+  : fact.state === 'unresolved' ? `Waiting on ${fact.name}` : `${fact.name} is not observed`;
+
+const noPackageReason = 'The package directory is missing; create the package before planning.';
+const unobservedReason = 'No observed package matches this member in this observation.';
+
+// Planning display for one member: readiness tone/label from observed facts,
+// a compact status subline, and exactly one action kind. Positive preparation
+// derives Implement, proposed/incomplete derives Plan, a live owner derives
+// Open agent, and missing packages or recorded decisions never offer a Plan
+// commitment. No action is inferred from the legacy `status` field.
+export function epicMemberPlanningRow(
+  epic: WireRecord,
+  member: WireRecord,
+  records: WireRecord[],
+  assignments: WireRecord[] = [],
+): EpicMemberPlanning {
+  const name = text(member?.name) || '';
+  const workspace = text(member?.workspace) || text(epic?.workspace) || '';
+  const record = epicMemberRecord(epic, member, records);
+  const owner = planningAssignmentFor(record ?? member, assignments);
+  const facts = memberPlanning(member);
+  const lifecycle = text(member?.status);
+  const declared = epicMemberRequires(member).names;
+  const prerequisites = epicMemberPrerequisites(epic, member);
+  const none: EpicMemberAction = { kind: 'none', label: '', disabled: false, reason: null, owner: null };
+
+  if (owner) {
+    const implementing = text(owner.skill) === 'spec-end-to-end' || member?.implementation_starting === true;
+    const started = text(owner.created_at) ? `started ${time(text(owner.created_at))}` : '';
+    return {
+      name, workspace, record,
+      status: { label: implementing ? 'Implementation starting' : 'Planning', tone: 'info' },
+      note: [text(owner.skill) || text(owner.display), started].filter(Boolean).join(' · '),
+      action: { kind: 'open-agent', label: 'Open agent', disabled: false, reason: null, owner },
+    };
+  }
+  if (landedStatus(lifecycle)) {
+    return { name, workspace, record, status: epicMemberStatus(member), note: '', action: none };
+  }
+  if (lifecycle === 'in-progress' || lifecycle === 'published') {
+    return { name, workspace, record, status: epicMemberStatus(member), note: '', action: none };
+  }
+  if (memberIsMissing(member)) {
+    return {
+      name, workspace, record,
+      status: { label: 'No package', tone: 'warning' },
+      note: 'Listed in the record; no package directory',
+      action: { kind: 'plan', label: 'Plan', disabled: true, reason: noPackageReason, owner: null },
+    };
+  }
+  if (!record) {
+    return {
+      name, workspace, record,
+      status: { label: 'Package not observed', tone: 'warning' },
+      note: 'No observed package matches this member in scope.',
+      action: { kind: 'plan', label: 'Plan', disabled: true, reason: unobservedReason, owner: null },
+    };
+  }
+  if (facts?.decision) {
+    return {
+      name, workspace, record,
+      status: { label: 'Decision needed', tone: 'warning' },
+      note: text(facts.decision.question) || 'A recorded decision needs discussion.',
+      action: none,
+    };
+  }
+  if (facts?.prepared === true) {
+    const unmet = prerequisites.filter(fact => fact.state !== 'landed');
+    const reason = unmet.length ? prerequisiteReason(unmet[0]) : null;
+    return {
+      name, workspace, record,
+      status: unmet.length ? { label: 'Prepared \u00b7 waiting', tone: 'neutral' } : { label: 'Ready to implement', tone: 'info' },
+      note: reason ?? (facts.steps === null ? 'Prepared' : `${facts.steps} prepared steps`),
+      action: { kind: 'implement', label: 'Implement spec', disabled: Boolean(reason), reason, owner: null },
+    };
+  }
+  if (facts) {
+    // Index-only preparation (steps recorded without a positive preparation
+    // report) resumes planning; an unresolved prerequisite keeps Plan
+    // visible but disabled with its observed reason.
+    const waiting = prerequisites.filter(fact => fact.state !== 'prepared' && fact.state !== 'landed');
+    const reason = waiting.length ? prerequisiteReason(waiting[0]) : null;
+    const notPlanned = facts.steps === null && (!facts.preparation || facts.preparation.outcome === 'missing');
+    return {
+      name, workspace, record,
+      status: notPlanned ? { label: 'Not planned', tone: 'neutral' } : { label: 'Preparation incomplete', tone: 'warning' },
+      note: notPlanned ? 'Context only' : 'Resume planning to complete the preparation report and index.',
+      action: { kind: 'plan', label: 'Plan', disabled: Boolean(reason), reason, owner: null },
+    };
+  }
+  return {
+    name, workspace, record,
+    status: { label: 'Readiness unknown', tone: 'warning' },
+    note: 'New preparation facts are unavailable in this observation; planning is not confirmed.',
+    action: {
+      kind: 'plan', label: 'Plan', disabled: true,
+      reason: 'New preparation facts are unavailable in this observation.', owner: null,
+    },
+  };
+}
+
+// List-row and fact summary: prepared comes only from positive preparation
+// facts, landed stays epicStats, planning counts live owners, and next is the
+// first member the step-7 eligibility rule can plan.
+export function epicPlanningSummary(
+  epic: WireRecord,
+  records: WireRecord[] = [],
+  assignments: WireRecord[] = [],
+): EpicPlanningSummary {
+  const stats = epicStats(epic);
+  const members = epicMembers(epic);
+  const prepared = members.filter(member => positivelyPrepared(memberPlanning(member))).length;
+  const planning = members.filter(member =>
+    Boolean(planningAssignmentFor(epicMemberRecord(epic, member, records) ?? member, assignments))).length;
+  return {
+    prepared,
+    total: stats.total,
+    landed: stats.landed,
+    planning,
+    next: nextToPlan(epic, records, assignments),
+    incomplete: epicPlanningIncomplete(epic),
+  };
 }
 
 export function focusMember(epic: WireRecord): { name: string; reason: 'attention' | 'evidence' | 'next' | 'in-progress' | 'published' } | null {
