@@ -99,6 +99,7 @@ export default function Conversations(props: Props) {
   let projectedId = '';
   let stickBottom = true;
   let draftEl: HTMLTextAreaElement | undefined;
+  let queueDetailsEl: HTMLDetailsElement | undefined;
   let transcriptEl: HTMLDivElement | undefined;
   let titleEl: HTMLHeadingElement | undefined;
   // Detail focus ownership: the first successful materialization (initial page
@@ -601,6 +602,17 @@ export default function Conversations(props: Props) {
       if (id === projectedId && workspace === projectedWs && epoch === projectionEpoch && workspace === wsId()) setMutationError(routeError(e));
     }
   }
+  // Discard is confirm-gated: cancelling the native dialog records no server
+  // mutation, and the exact confirmation copy states that earlier delivery is
+  // not undone. Retry crosses the same endpoint with resend:true only when the
+  // operator clicks it.
+  function discardMessage(item: any) {
+    if (!(typeof window !== 'undefined' && window.confirm('Discard this pending message? It will be removed from the queue. This does not undo any earlier delivery.'))) return;
+    void simpleAction('/api/thread/discard', 'discard', { id: item.id, resend: false });
+  }
+  function retryMessage(item: any) {
+    void simpleAction('/api/thread/discard', 'resend', { id: item.id, resend: true });
+  }
   // Prepare assignment hands the exact thread identity to the hidden launch
   // flow. A repository target recorded on the thread rides along as the
   // requested target; worktree threads carry no route target and stay
@@ -659,7 +671,14 @@ export default function Conversations(props: Props) {
     untrack(() => reconcile(false));
     void loadList();
   });
-  createEffect(() => { const value = draft(); if (draftEl && draftEl.value !== value) draftEl.value = value; });
+  // The uncertain view shows the persisted pending text: the retained draft
+  // owner still survives underneath, but the composer displays the item the
+  // server persisted so Discard/Retry decisions read the exact payload.
+  createEffect(() => {
+    const uncertain = state() === 'uncertain' ? (thread()?.queue || []).find(item => item.state === 'uncertain') : undefined;
+    const value = uncertain && typeof uncertain.text === 'string' && uncertain.text ? uncertain.text : draft();
+    if (draftEl && draftEl.value !== value) draftEl.value = value;
+  });
   createEffect(() => {
     entries(); partial(); toolNote();
     if (stickBottom && transcriptEl) queueMicrotask(() => { if (stickBottom && transcriptEl) transcriptEl.scrollTop = transcriptEl.scrollHeight; });
@@ -708,6 +727,23 @@ export default function Conversations(props: Props) {
   });
 
   const state = () => threadState(thread() ?? null);
+  const queue = () => queueSummary(threads() ?? [], thread() ?? null);
+  const queuedItems = () => queue().items.filter(item => item.state === 'queued');
+  const minimumQueuePosition = () => {
+    const positions = queuedItems().map(item => Number(item.queue_position)).filter(value => Number.isFinite(value));
+    return positions.length ? Math.min(...positions) : null;
+  };
+  // Composer-foot context copy from the reference screens: responding points
+  // at the pause (never termination), paused points at Resume, and uncertain
+  // names the blocked control instead of an immediate action.
+  const composerHelp = () => state() === 'active'
+    ? 'Response in progress · Stop response to pause delivery'
+    : state() === 'paused'
+      ? 'Draft retained · Resume queue to continue delivery'
+      : state() === 'uncertain'
+        ? 'Message controls unavailable until the thread can act.'
+        : 'Enter sends · Shift+Enter adds a newline. Messages queue in order over the single local response slot.';
+  const contextualHelp = () => ['active', 'paused', 'uncertain'].includes(state());
   const help = () => ({ active: ['Responding', 'A response is being delivered to the head message. Stop pauses this queue first; the response slot is released only after confirmed idle or process death.', 'good'], paused: ['Queue paused', 'Pending messages wait until Resume. Resume unpauses after identity and context checks; delivery continues in FIFO order.', 'warn'], 'history-only': ['History only', 'This record was imported without an owned process. Browsing works; send and resume are unavailable.', 'muted'], uncertain: ['Delivery uncertain', 'A message was persisted before its acknowledgement was lost, so it may or may not have been delivered. Discard or retry under Pending messages; a retry may duplicate the response.', 'bad'], stalled: ['Stalled', 'No child events for ten minutes. The response may still be running; nothing is released automatically. Refresh to check again, or Stop if the thread still owns the slot.', 'warn'], 'start-failed': ['Start failed', 'The discussion process failed before startup completed. Send a new message or Resume to retry the owned session.', 'bad'], 'session-mismatch': ['Session mismatch', 'The stored session file does not match this thread record. Inspect the workspace session copy, then retry.', 'bad'], 'missing-directory': ['Execution directory missing', 'The recorded execution directory is gone. Restore it or update the workspace record, then retry.', 'bad'], 'live-owner': ['Owner not confirmed dead', 'A prior discussion process is still recorded or observed. A second writer fails closed until the owner exits or Stop confirms it idle.', 'bad'], 'missing-context': ['Context missing', 'Threads no longer read earlier kit context files. Resume or send again to start.', 'bad'], 'policy-refusal': ['Policy refusal', 'The installed Pi read-tool policy refused the last request. Review the policy or context, then retry.', 'bad'] } as Record<string, [string, string, string]>)[state()] || ['Ready', '', 'good'] as [string, string, string];
 
   // Render-only derivations for the migrated surface: the workspace label is
@@ -834,12 +870,29 @@ export default function Conversations(props: Props) {
             <Show when={toolNote()}><p class="small muted ds-toolrail">{toolNote()}</p></Show>
             <Show when={!entries().length && !partial() && !toolNote() && !loadingHistory()}><p class="small muted">No messages recorded for this thread yet.</p></Show>
           </div>
-          <div id="thread-queue" class="rows queue" aria-label="Pending messages"><For each={thread()?.queue || []}>{item => { const uncertain = item.state === 'uncertain'; return <div class="info-row"><p><strong>{uncertain ? 'Delivery uncertain' : item.state === 'delivering' ? 'Delivering' : 'Queued'}</strong>{item.queue_position != null ? ` · queue position ${item.queue_position}` : ''}</p><p class="small thread-text">{item.text || ''}</p><Show when={uncertain}><small class="warn">The prompt may or may not have been delivered. Discard removes it; retrying sends it again and may duplicate the response.</small><p class="thread-actions"><button type="button" data-thread-discard={item.id} disabled={!actionable() || ['discard', 'resend'].includes(pending())} onClick={() => void simpleAction('/api/thread/discard', 'discard', { id: item.id, resend: false })}>Discard message</button><button type="button" data-thread-resend={item.id} disabled={!actionable() || ['discard', 'resend'].includes(pending())} onClick={() => void simpleAction('/api/thread/discard', 'resend', { id: item.id, resend: true })}>Retry as new message</button></p></Show></div>; }}</For></div>
-          <Show when={state() === 'history-only'} fallback={<div class="composer thread-composer"><label for="thread-draft">Message thread</label><textarea id="thread-draft" class="ds-input" rows="4" placeholder="Write a message. Enter sends; Shift+Enter adds a newline." ref={draftEl} onInput={e => { const value = e.currentTarget.value; setDraft(value); if (projectedWs && projectedId) setThreadDraft(projectedWs, projectedId, { draft: value, retry: sendPending() }); }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }} /><div class="composer-foot"><Show when={!composer().sendEnabled && composer().reason}><p class="small warn">{composer().reason}</p></Show><p class="small muted">Enter sends · Shift+Enter newline. Messages queue in order over the single local response slot.</p><ActionBar variant="inline"><button id="thread-send" type="button" class="ds-btn ds-btn--primary" data-thread-send disabled={!composer().sendEnabled} onClick={() => void send()}>{pending() === 'send' ? 'Sending…' : 'Send'}</button><Show when={state() === 'active' || thread()?.owns_response}><button id="thread-stop" type="button" class="ds-btn" data-thread-stop disabled={!actionable() || pending() === 'stop'} onClick={() => void simpleAction('/api/thread/stop', 'stop')}>{pending() === 'stop' ? 'Stopping…' : 'Stop'}</button></Show><Show when={state() === 'paused'}><button id="thread-resume" type="button" class="ds-btn" data-thread-resume disabled={!actionable() || pending() === 'resume'} onClick={() => void simpleAction('/api/thread/resume', 'resume')}>{pending() === 'resume' ? 'Resuming…' : 'Resume'}</button></Show><button type="button" class="ds-btn" data-thread-refresh onClick={refreshThread}>Refresh thread</button></ActionBar></div></div>}>
-            <StateNotice tone="neutral">{state() === 'history-only' ? 'This thread is history only: browsing and reading work, but sending and resuming are unavailable. Source sessions are never modified.' : "Message controls are available on the host's live dashboard."}</StateNotice>
+          <Show when={(thread()?.queue || []).length || state() === 'active' || state() === 'stalled'}>
+            <div id="thread-queue" class="rows queue" aria-label="Pending messages">
+              <Show when={state() === 'active'}>
+                <p>{thread()?.owns_response === true ? 'One host response slot in use · This thread owns the response' : 'One host response slot in use · Ownership is not confirmed for this thread'}</p>
+              </Show>
+              <Show when={state() === 'stalled'}>
+                <p>{thread()?.owns_response === true ? 'Last observed ownership: this thread retains the response slot.' : 'Last observed ownership: no confirmed response owner in this workspace; silence is not proof the response stopped.'}</p>
+              </Show>
+              <Show when={queue().waiting}>
+                <p>{queue().ownerTitle ? `Your message is saved; ${queue().ownerTitle} owns the response slot.` : 'Your message is saved. Another thread currently owns the host response slot.'}</p>
+                <details id="thread-queue-details" ref={el => (queueDetailsEl = el)}>
+                  <summary>{`${queue().waiting} queued message${queue().waiting === 1 ? '' : 's'}${minimumQueuePosition() !== null ? ` · position ${minimumQueuePosition()}` : ''}`}</summary>
+                  <For each={queuedItems()}>{item => <p class="small thread-text">{item.queue_position != null ? `Position ${item.queue_position} · ` : ''}{item.text || ''}</p>}</For>
+                </details>
+              </Show>
+              <For each={queue().items.filter(item => item.state === 'uncertain')}>{item => <div class="info-row"><p><strong>{item.text || 'Delivery uncertain'}</strong>{item.queue_position != null ? ` · queue position ${item.queue_position}` : ''}</p><small class="warn">Retry sends a new message and may duplicate the response.</small><p class="thread-actions"><button type="button" class={`ds-btn${composer().primary === 'discard' ? ' ds-btn--primary' : ''}`} data-thread-discard={item.id} disabled={!actionable() || readView() !== 'ready' || ['discard', 'resend'].includes(pending())} onClick={() => discardMessage(item)}>Discard message</button><button type="button" class="ds-btn" data-thread-resend={item.id} disabled={!actionable() || readView() !== 'ready' || ['discard', 'resend'].includes(pending())} onClick={() => retryMessage(item)}>Retry message</button></p></div>}</For>
+            </div>
+          </Show>
+          <Show when={state() === 'history-only'} fallback={<div class="composer thread-composer"><label for="thread-draft">Message thread</label><textarea id="thread-draft" class="ds-input" rows="4" readonly={state() === 'uncertain'} placeholder={state() === 'uncertain' ? 'The uncertain message is retained until you discard or retry it.' : 'Write a message. Enter sends; Shift+Enter adds a newline.'} ref={draftEl} onInput={e => { const value = e.currentTarget.value; setDraft(value); if (projectedWs && projectedId) setThreadDraft(projectedWs, projectedId, { draft: value, retry: sendPending() }); }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }} /><div class="composer-foot"><p class="small muted">{composerHelp()}</p><Show when={!composer().sendEnabled && composer().reason && !contextualHelp()}><p class="small warn">{composer().reason}</p></Show><ActionBar variant="inline"><Show when={composer().primary === 'queue' && queue().waiting}><button id="thread-open-queue" type="button" class="ds-btn ds-btn--primary" onClick={() => { if (queueDetailsEl) queueDetailsEl.open = true; }}>Open queue</button></Show><button id="thread-send" type="button" class={`ds-btn${composer().primary === 'send' ? ' ds-btn--primary' : ''}`} data-thread-send disabled={!composer().sendEnabled} onClick={() => void send()}>{pending() === 'send' ? 'Sending…' : 'Send message'}</button><Show when={state() === 'active' || thread()?.owns_response === true}><button id="thread-stop" type="button" class={`ds-btn${composer().primary === 'stop' ? ' ds-btn--primary' : ''}`} data-thread-stop disabled={!actionable() || readView() !== 'ready' || pending() === 'stop'} onClick={() => void simpleAction('/api/thread/stop', 'stop')}>{pending() === 'stop' ? 'Stopping…' : 'Stop response'}</button></Show><Show when={state() === 'paused'}><button id="thread-resume" type="button" class={`ds-btn${composer().primary === 'resume' ? ' ds-btn--primary' : ''}`} data-thread-resume disabled={!actionable() || readView() !== 'ready' || pending() === 'resume'} onClick={() => void simpleAction('/api/thread/resume', 'resume')}>{pending() === 'resume' ? 'Resuming…' : 'Resume queue'}</button></Show><button type="button" class={`ds-btn${composer().primary === 'refresh' ? ' ds-btn--primary' : ''}`} data-thread-refresh onClick={refreshThread}>Refresh thread</button></ActionBar></div></div>}>
+            <StateNotice tone="neutral">This thread is history only: browsing and reading work, but sending and resuming are unavailable. Source sessions are never modified.</StateNotice>
           </Show>
           <ActionBar>
-            <Show when={active()}><button id="thread-prepare-assignment" type="button" class="ds-btn" data-thread-prepare disabled={!actionable()} onClick={() => prepareAssignment()}>Prepare assignment</button><p class="small muted">Opens the launch brief for this thread. The server binds the worktree target at review; nothing is launched from here.</p></Show>
+            <Show when={active() && state() !== 'history-only'}><button id="thread-prepare-assignment" type="button" class="ds-btn" data-thread-prepare disabled={!actionable()} onClick={() => prepareAssignment()}>Prepare assignment</button><p class="small muted">Opens the launch brief for this thread. The server binds the worktree target at review; nothing is launched from here.</p></Show>
             <StatusText tone={stream() === 'live' ? 'success' : stream() === 'reconnecting' ? 'warning' : 'neutral'}>{stream() === 'live' ? 'Live' : stream() === 'connecting' ? 'Connecting live updates…' : stream() === 'reconnecting' ? 'Live updates reconnecting…' : stream() === 'stopped' ? 'Live updates stopped' : 'Live updates unavailable'}</StatusText>
             <p class="small muted">The local stream may stay silent for 15 seconds between keepalives.</p>
             <Show when={notice()}><p class="small muted">{notice()}</p></Show>

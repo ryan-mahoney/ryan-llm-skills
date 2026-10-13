@@ -22,6 +22,10 @@ writing conversations-browser-new-thread.json; it never runs route-drafts.
 view-states runs the screens 54-60 list/read/connection states against the
 built App and the owned fixture, writing conversations-browser-view-states.json,
 state captures at 1280 (plus an ideal 1600 capture) and reference captures.
+response-states runs the screens 20-25 server-owned responding/queued/paused/
+uncertain/stalled/history-only presentation against the built App and the owned
+fixture, writing conversations-browser-response-states.json, response captures
+at 1280 and reference captures 20-25.
 
 The App, route owner, API transport and adapter are real; browser-fixture.mjs
 fakes only the final discussion service/process boundary. The checker owns its
@@ -46,7 +50,7 @@ from pathlib import Path
 from playwright.sync_api import expect, sync_playwright
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--case', choices=['route-drafts', 'journey', 'new-thread', 'view-states'], default='route-drafts')
+parser.add_argument('--case', choices=['route-drafts', 'journey', 'new-thread', 'view-states', 'response-states'], default='route-drafts')
 parser.add_argument('--capture-reference', default=None)
 parser.add_argument('--reference-dir', default=None)
 options = parser.parse_args()
@@ -79,6 +83,7 @@ report = {
     'visualParity': ('not claimed (route/draft regression only)' if case == 'route-drafts'
                      else 'not claimed (EV-7 creation coverage; captures recorded, owner inspects images)' if case == 'new-thread'
                      else 'not claimed (view-state coverage; captures recorded, owner inspects images)' if case == 'view-states'
+                     else 'not claimed (response-state coverage; captures recorded, owner inspects images)' if case == 'response-states'
                      else 'observed (production and reference captures at 1280x900 and 1600x900; see conversations-visual-inspection.md)'),
     'cleanup': {},
 }
@@ -745,6 +750,275 @@ def run_view_states(url, thread1, thread2):
         f'- Receipt: `{receipt_path}`',
     ]) + '\n')
     report['viewStates'] = {'inspection': str(inspection)}
+
+
+def run_response_states(url, thread1, thread2):
+    """Screens 20-25: server-owned response/queue presentation states.
+
+    The owned fixture supplies one persisted queue position and both owner
+    shapes (named in-scope row and workspace-filtered absence); the built App,
+    route owner, adapter and API transport stay real. Stop/Resume/Discard/Retry
+    cross the existing server mutation endpoints, and the Discard confirm gate
+    is exercised with native dialog cancellation and acceptance.
+    """
+    global reference_server
+
+    discard_confirm = ('Discard this pending message? It will be removed from the queue. '
+                       'This does not undo any earlier delivery.')
+
+    def control(action='', value=''):
+        response = context.request.get(url + '/__fixture/control?action=' + action + '&value=' + str(value))
+        assert response.ok
+        return response.json()
+
+    def posts(name):
+        return [item for item in control()['posts'] if item['name'] == name]
+
+    def send_count():
+        return len(posts('send'))
+
+    def passed(name):
+        report['scenarios'].append(name)
+        report['scenarioTimings'].append({'scenario': name, 'atSeconds': round(time.monotonic() - started, 3)})
+
+    def capture(name):
+        path = browser_evidence / name
+        page.screenshot(path=str(path), full_page=True)
+        report['captures'].append(str(path))
+        return str(path)
+
+    def open_state(state, thread=thread1):
+        control('response-state', state)
+        page.goto(url + '/#/conversations?ws=fixture&id=' + thread, wait_until='domcontentloaded')
+        page.reload(wait_until='domcontentloaded')
+
+    primary = re.compile(r'ds-btn--primary')
+    try:
+        page.set_viewport_size({'width': 1280, 'height': 900})
+
+        # 1. Responding: partial answer and tool note retain the transcript and
+        #    draft; Stop response is the primary action and posts exactly one
+        #    pause for the selected thread with no send and no termination copy.
+        open_state('responding')
+        draft = page.locator('#thread-draft')
+        draft.wait_for()
+        draft.fill('Responding retained draft')
+        control('delta')
+        expect(page.locator('.thread-transcript')).to_contain_text('Streamed reply')
+        control('tool')
+        expect(page.locator('.ds-toolrail')).to_contain_text('Running tool: Reading package-files.mjs')
+        expect(page.locator('.thread-transcript')).to_contain_text('Ready to discuss.')
+        expect(draft).to_have_value('Responding retained draft')
+        assert 'terminated' not in page.locator('.composer').inner_text().lower()
+        expect(page.locator('#thread-stop')).to_have_class(primary)
+        sends_before = send_count()
+        with page.expect_response('**/api/thread/stop') as stop_response:
+            page.locator('#thread-stop').click()
+        assert stop_response.value.ok, stop_response.value
+        assert send_count() == sends_before, 'Stop posted a send'
+        stop_posts = posts('stop')
+        assert stop_posts[-1]['input'] == {'workspace_id': 'fixture', 'thread_id': thread1}, stop_posts[-1]['input']
+        expect(page.locator('#thread-resume')).to_have_class(primary)
+        expect(page.locator('#thread-resume')).to_be_enabled()
+        capture('conversations-response-stop-paused@1280.png')
+        passed('response-states responding: partial/tool note retain the transcript and draft; Stop response posts one exact pause with no send or termination copy')
+
+        # 2. Paused: draft and transcript retained, Resume queue primary, Send
+        #    disabled; Resume posts the exact thread and restores ready.
+        open_state('paused')
+        draft = page.locator('#thread-draft')
+        draft.wait_for()
+        draft.fill('Paused retained draft')
+        expect(page.locator('.thread-transcript')).to_contain_text('Ready to discuss.')
+        expect(page.locator('#thread-send')).to_be_disabled()
+        expect(page.locator('#thread-resume')).to_have_class(primary)
+        capture('conversations-response-paused@1280.png')
+        with page.expect_response('**/api/thread/resume') as resume_response:
+            page.locator('#thread-resume').click()
+        assert resume_response.value.ok, resume_response.value
+        resume_posts = posts('resume')
+        assert resume_posts[-1]['input'] == {'workspace_id': 'fixture', 'thread_id': thread1}, resume_posts[-1]['input']
+        expect(page.locator('#thread-resume')).to_have_count(0)
+        expect(page.locator('#thread-send')).to_be_enabled()
+        expect(draft).to_have_value('Paused retained draft')
+        passed('response-states paused: draft/transcript retained with Resume queue primary; the exact resume restores ready')
+
+        # 3. Queued: saved message names the scoped owner; Open queue is
+        #    primary and the disclosure exposes the persisted position; Send
+        #    stays secondary.
+        open_state('queued')
+        page.locator('#thread-draft').wait_for()
+        expect(page.locator('#thread-queue')).to_contain_text('Your message is saved; Discussion two owns the response slot.')
+        expect(page.locator('#thread-queue')).to_contain_text('position 2')
+        expect(page.locator('#thread-open-queue')).to_have_class(primary)
+        assert 'ds-btn--primary' not in (page.locator('#thread-send').get_attribute('class') or '')
+        assert page.locator('#thread-queue-details').get_attribute('open') is None
+        page.locator('#thread-open-queue').click()
+        expect(page.locator('#thread-queue-details')).to_have_attribute('open', '')
+        expect(page.locator('#thread-queue-details')).to_contain_text('Position 2 · Use the existing file reader contract')
+        capture('conversations-response-queued@1280.png')
+        passed('response-states queued: saved message names the scoped owner; Open queue is primary and exposes persisted queue_position values')
+
+        # 4. Queued absent-owner (workspace-filtered shape): the generic
+        #    another-thread fallback replaces the absent owner row.
+        open_state('queued-absent')
+        page.locator('#thread-draft').wait_for()
+        expect(page.locator('#thread-queue')).to_contain_text('Your message is saved. Another thread currently owns the host response slot.')
+        expect(page.locator('#thread-queue')).to_contain_text('position 2')
+        expect(page.locator('#thread-open-queue')).to_have_class(primary)
+        assert 'Discussion two' not in page.locator('#thread-queue').inner_text()
+        capture('conversations-response-queued-absent@1280.png')
+        passed('response-states queued absent-owner: generic another-thread fallback with persisted positions')
+
+        # 5. Uncertain: persisted item with duplicate-risk copy; Discard is
+        #    primary, cancelling posts zero mutations, confirming removes
+        #    exactly the persisted item.
+        control('queue')
+        page.reload(wait_until='domcontentloaded')
+        page.locator('#thread-draft').wait_for()
+        expect(page.locator('#thread-queue')).to_contain_text('Uncertain message')
+        expect(page.locator('#thread-queue')).to_contain_text('Retry sends a new message and may duplicate the response.')
+        expect(page.locator('[data-thread-discard="uncertain-1"]')).to_have_class(primary)
+        expect(page.locator('[data-thread-resend="uncertain-1"]')).not_to_have_class(primary)
+        expect(page.locator('#thread-send')).to_be_disabled()
+        assert page.locator('#thread-draft').input_value() == 'Uncertain message', page.locator('#thread-draft').input_value()
+        capture('conversations-response-uncertain@1280.png')
+        dismissed = []
+        page.once('dialog', lambda dialog: (dismissed.append(dialog.message), dialog.dismiss()))
+        before = len(posts('discard'))
+        page.locator('[data-thread-discard="uncertain-1"]').click()
+        page.wait_for_timeout(150)
+        assert dismissed == [discard_confirm], dismissed
+        assert len(posts('discard')) == before, 'cancelled Discard posted a mutation'
+        expect(page.locator('[data-thread-discard="uncertain-1"]')).to_be_visible()
+        accepted = []
+        page.once('dialog', lambda dialog: (accepted.append(dialog.message), dialog.accept()))
+        with page.expect_response('**/api/thread/discard') as discard_response:
+            page.locator('[data-thread-discard="uncertain-1"]').click()
+        assert discard_response.value.ok, discard_response.value
+        assert accepted == [discard_confirm], accepted
+        removed = posts('discard')[-1]['input']
+        assert removed == {'workspace_id': 'fixture', 'thread_id': thread1, 'id': 'uncertain-1', 'resend': False}, removed
+        expect(page.locator('[data-thread-discard="uncertain-1"]')).to_have_count(0)
+        expect(page.locator('#thread-mutation-error')).to_have_count(0)
+        passed('response-states uncertain: duplicate-risk copy, Discard cancel posts zero mutations, confirm removes the exact persisted item')
+
+        # 6. Retry: explicit resend:true only on the click, no mutation before.
+        control('queue')
+        page.reload(wait_until='domcontentloaded')
+        page.locator('[data-thread-resend="uncertain-1"]').wait_for()
+        before = len(posts('discard'))
+        with page.expect_response('**/api/thread/discard') as retry_response:
+            page.locator('[data-thread-resend="uncertain-1"]').click()
+        assert retry_response.value.ok, retry_response.value
+        assert len(posts('discard')) == before + 1, posts('discard')
+        retried = posts('discard')[-1]['input']
+        assert retried == {'workspace_id': 'fixture', 'thread_id': thread1, 'id': 'uncertain-1', 'resend': True}, retried
+        passed('response-states uncertain: Retry posts resend:true only on the explicit click')
+
+        # 7. Stalled: last-observed ownership facts with Refresh thread
+        #    primary; Stop only for a confirmed owner; refreshing never infers
+        #    death from silence.
+        open_state('stalled')
+        page.locator('#thread-draft').wait_for()
+        expect(page.locator('#thread-queue')).to_contain_text('Last observed ownership: this thread retains the response slot.')
+        expect(page.locator('[data-thread-refresh]')).to_have_class(primary)
+        expect(page.locator('#thread-stop')).to_be_visible()
+        expect(page.locator('#thread-stop')).not_to_have_class(primary)
+        capture('conversations-response-stalled@1280.png')
+        page.locator('[data-thread-refresh]').click()
+        expect(page.locator('#thread-stop')).to_be_visible()
+        expect(page.locator('#thread-queue')).to_contain_text('this thread retains the response slot.')
+        expect(page.locator('#thread-stop')).to_be_enabled()
+        assert send_count() == sends_before
+        open_state('stalled-unowned')
+        page.locator('#thread-draft').wait_for()
+        expect(page.locator('#thread-queue')).to_contain_text('silence is not proof the response stopped')
+        expect(page.locator('#thread-stop')).to_have_count(0)
+        expect(page.locator('[data-thread-refresh]')).to_have_class(primary)
+        capture('conversations-response-stalled-unowned@1280.png')
+        passed('response-states stalled: refresh keeps ownership server-authoritative with conditional Stop and no death inference')
+
+        # 8. History-only: history and Load older retained with zero
+        #    composer/Stop/Resume/Prepare controls.
+        open_state('history-only')
+        expect(page.locator('.thread-transcript')).to_contain_text('Ready to discuss.')
+        expect(page.locator('[data-thread-older]')).to_be_visible()
+        expect(page.locator('#thread-draft')).to_have_count(0)
+        expect(page.locator('#thread-send')).to_have_count(0)
+        expect(page.locator('#thread-stop')).to_have_count(0)
+        expect(page.locator('#thread-resume')).to_have_count(0)
+        expect(page.locator('#thread-prepare-assignment')).to_have_count(0)
+        expect(page.locator('.detail-pane')).to_contain_text('History only')
+        capture('conversations-response-history-only@1280.png')
+        passed('response-states history-only: history and Load older retained with zero composer/Stop/Resume/Prepare')
+
+        # 9. Other attention kinds keep the existing help with Send disabled
+        #    and no response controls.
+        open_state('start-failed')
+        page.locator('#thread-draft').wait_for()
+        expect(page.locator('.detail-pane')).to_contain_text('The discussion process failed before startup completed.')
+        expect(page.locator('#thread-send')).to_be_disabled()
+        expect(page.locator('#thread-stop')).to_have_count(0)
+        expect(page.locator('#thread-resume')).to_have_count(0)
+        expect(page.locator('[data-thread-discard]')).to_have_count(0)
+        capture('conversations-response-attention@1280.png')
+        passed('response-states attention variant: existing help text with Send disabled and no response controls')
+    finally:
+        for action, value in (('response-state', 'default'), ('clear-attention', '')):
+            try:
+                context.request.get(url + '/__fixture/control?action=' + action + '&value=' + value)
+            except Exception:
+                pass
+        try:
+            page.unroute('**/api/thread/events*')
+        except Exception:
+            pass
+
+    # Reference captures 20-25 at 1280 from the owned loopback static server.
+    if reference_dir:
+        reference_root = reference_dir.parent
+        assert (reference_root / 'vendor' / 'tailwind.js').is_file(), reference_root
+        reference_server = ThreadingHTTPServer(('127.0.0.1', 0), partial(QuietRequestHandler, directory=str(reference_root)))
+        threading.Thread(target=reference_server.serve_forever, daemon=True).start()
+        base_url = f'http://127.0.0.1:{reference_server.server_address[1]}/'
+        reference_page = context.new_page()
+        reference_page.on('pageerror', lambda error: report['pageErrors'].append(f'reference: {error}'))
+        reference_captures = []
+        for index in range(20, 26):
+            screen = next(path for path in sorted(reference_dir.glob(f'{index}-*.html')))
+            reference_page.goto(base_url + screen.relative_to(reference_root).as_posix(), wait_until='load')
+            reference_page.wait_for_timeout(250)
+            reference_page.set_viewport_size({'width': 1280, 'height': 900})
+            reference_page.wait_for_timeout(120)
+            path = browser_evidence / f'conversations-response-reference-{index}@1280.png'
+            reference_page.screenshot(path=str(path), full_page=True)
+            report['captures'].append(str(path))
+            reference_captures.append(str(path))
+        reference_page.close()
+        report['reference'] = {'dir': str(reference_dir), 'screens': [Path(path).name for path in reference_captures]}
+        passed('response-states reference: screens 20-25 captured from the owned loopback server at 1280')
+
+    inspection = evidence / 'conversations-visual-inspection.md'
+    previous = inspection.read_text().rstrip() + '\n\n' if inspection.is_file() else ''
+    inspection.write_text(previous + '\n'.join([
+        '# Conversations response-state inspection (step 7)',
+        '',
+        '- Case: response-states at 1280x900; production captures plus reference screens 20-25 at 1280.',
+        '- Observed: responding shows the partial answer and tool rail with the latest transcript retained; Stop response is primary and posts one exact pause with no send or termination copy.',
+        '- Observed: queued shows the saved message naming the in-scope owner (or the generic another-thread fallback) with Open queue primary; the disclosure exposes persisted queue_position values and Send stays secondary.',
+        '- Observed: paused retains the draft/transcript with Resume queue primary and Send disabled; Resume posts the exact thread and restores ready.',
+        '- Observed: uncertain shows the persisted item with duplicate-risk copy; cancelling Discard posts zero mutations and confirming removes exactly that item; Retry posts resend:true only on click.',
+        '- Observed: stalled keeps last-observed ownership facts with Refresh thread primary and Stop only for a confirmed owner; refreshing never infers death from silence.',
+        '- Observed: history-only retains history and Load older with zero composer/Stop/Resume/Prepare controls; other attention kinds keep existing help with Send disabled.',
+        '- Recorded deviation: Prepare assignment stays in the detail ActionBar; the reference has no detail action bar.',
+        '',
+        'Captures:',
+    ] + [f'- `{path}`' for path in report['captures'] if 'response' in Path(path).name] + [
+        f'- Receipt: `{receipt_path}`',
+        '',
+    ]))
+    report['responseStates'] = {'inspection': str(inspection)}
 
 
 def run_new_thread(url, thread1, thread2):
@@ -1495,6 +1769,8 @@ try:
                 run_new_thread(fixture_info['url'], fixture_info['thread1'], fixture_info['thread2'])
             if case == 'view-states':
                 run_view_states(fixture_info['url'], fixture_info['thread1'], fixture_info['thread2'])
+            if case == 'response-states':
+                run_response_states(fixture_info['url'], fixture_info['thread1'], fixture_info['thread2'])
             assert not report['pageErrors'], report['pageErrors']
             if case == 'new-thread':
                 unexpected_console = [text for text in report['consoleErrors'] if 'Failed to load resource' not in text]
