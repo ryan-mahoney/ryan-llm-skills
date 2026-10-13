@@ -1,4 +1,5 @@
 import { Show } from 'solid-js';
+import { packageSummaries } from '../model';
 import { base, packageFilterMatches, str } from '../format';
 import Files from '../Files';
 import { PackageDetail, PackageList } from '../Observations';
@@ -28,7 +29,7 @@ export default function SpecsDestination(props: DestinationProps) {
   ).sort((a,b) => (Date.parse(b.created_at || '') || 0) - (Date.parse(a.created_at || '') || 0))[0];
   const visibleCount = () => {
     const query = (props.route.q ?? '').trim().toLowerCase();
-    return props.records.filter(item =>
+    return packageSummaries(props.records,filter()).filter(item =>
       (!query || [item.workspace, item.package_ref, item.package, item.activity, item.obligation, item.execution, item.workflow_state].some(value => str(value).toLowerCase().includes(query))) &&
       packageFilterMatches(item, filter())
     ).length;
