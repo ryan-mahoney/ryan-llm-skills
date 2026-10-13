@@ -153,3 +153,12 @@
 .launch-input details{margin-top:12px;padding:0 0 10px}
 .launch-input summary{min-height:44px;font-weight:600}
 .launch-input pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto;font-size:12px;line-height:1.7;background:var(--ds-panel-2);border:1px solid var(--ds-line-2);border-radius:3px;padding:12px;margin:8px 0 0;color:var(--ds-ink-2)}
+
+/* Launch result stage: identity-preserving facts and actions reuse the shared
+   callout/status/fact surfaces; nothing outside the result stage is restyled. */
+.launch-result{margin-top:4px}
+.launch-result .launch-facts{margin-top:0;padding-top:16px}
+.launch-result .actions{margin-top:20px}
+.launch-result .contract-note{margin-top:16px;padding-top:14px}
+.launch-result-inspection{outline:none;border-radius:3px}
+.launch-result-inspection:focus-visible{outline:2px solid var(--ds-accent)}

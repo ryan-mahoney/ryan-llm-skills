@@ -8,8 +8,8 @@ import BriefComposer from './BriefComposer';
 import { ActionBar, RegionalSkeleton, StateNotice, StatusText } from './primitives';
 import { str } from './format';
 import {
-  changeLaunchTarget, editLaunchDraft, getLaunchDraft, launchReviewedDraft, resolveLaunchStage,
-  reviewLaunchDraft, saveLaunchDraft, seedLaunchDraft,
+  beginCorrectedAttempt, changeLaunchTarget, editLaunchDraft, getLaunchDraft, launchReviewedDraft, resolveLaunchStage,
+  reviewLaunchDraft, saveLaunchDraft, seedLaunchDraft, seedThreadDraft,
   type LaunchContext, type LaunchDraftError, type LaunchPreview,
 } from './launch-state';
 import type { BriefReference } from './composerTypes';
@@ -124,7 +124,7 @@ function PreviousReviewedFacts(props: { preview: LaunchPreview }) {
   );
 }
 
-type ReviewView = 'resolving' | 'dispatching' | 'current' | 'stale' | 'denied' | 'error' | 'result' | 'saved' | 'unsaved';
+type ReviewView = 'resolving' | 'dispatching' | 'current' | 'stale' | 'denied' | 'error' | 'result' | 'inspection' | 'saved' | 'unsaved';
 
 export default function Launch(props: LaunchProps) {
   let heading: HTMLHeadingElement | undefined;
@@ -190,12 +190,18 @@ export default function Launch(props: LaunchProps) {
   // the stage heading meaningful; the brief composition stays available for
   // corrections.
   const reviewSurface = () => props.route.tab === 'review';
-  const showBrief = () => !reviewSurface() || stage() === 'brief' || editing();
-  const reviewContext = () => stage() === 'review' || Boolean(saved()) || Boolean(previewState())
+  // A matched result URL renders the full result stage; an id that does not
+  // match the local result keeps retained inspection guidance and never claims
+  // local confirmation.
+  const resultSurface = () => stage() === 'result' || stage() === 'inspection';
+  const showBrief = () => !(reviewSurface() || resultSurface()) || stage() === 'brief' || editing();
+  const reviewContext = () => stage() === 'review' || stage() === 'result' || stage() === 'inspection'
+    || Boolean(saved()) || Boolean(previewState())
     || reviewing() || starting() || reviewStatus() !== 'idle' || Boolean(draft()?.result) || editing();
   const reviewView = (): ReviewView => {
     if (starting()) return 'dispatching';
     if (reviewing()) return 'resolving';
+    if (stage() === 'inspection') return 'inspection';
     if (draft()?.result) return 'result';
     const status = reviewStatus();
     if (status === 'stale') return 'stale';
@@ -221,6 +227,18 @@ export default function Launch(props: LaunchProps) {
   // workspace-scoped q=conflictingUUID route so an unrelated first row is
   // never selected and an absent conflict filters instead of misdirecting.
   const agentsHref = () => busyAgentsHref(ws(), draft()?.error?.assignmentId, props.assignments ?? []);
+  // Result identity and navigation. Open agent uses the exact observed row key
+  // when this assignment is already observed, otherwise a workspace-scoped
+  // UUID filter so App cannot replace the selection with an unrelated row.
+  const resultKind = () => draft()?.result?.kind;
+  const resultHeading = () => resultKind() === 'launched' ? 'Agent is live' : resultKind() === 'failed' ? 'Agent could not start' : 'Launch is unconfirmed';
+  const resultRecord = () => previewState()?.record ?? lastReviewed()?.record ?? {};
+  const resultExecution = () => str(resultRecord().execution_dir) || 'Unresolved';
+  const resultAgentsHref = () => busyAgentsHref(ws(), draft()?.result?.assignmentId, props.assignments ?? []);
+  const inspectionHref = () => busyAgentsHref(ws(), props.route.id, props.assignments ?? []);
+  const resultObservation = () => resultKind() === 'launched'
+    ? 'Live process confirmed'
+    : resultKind() === 'failed' ? 'launch_failed · process confirmed gone' : 'Unknown identity · not observed';
 
   // Seed one draft per launch context; retained typed work is never clobbered.
   createEffect(() => {
@@ -257,6 +275,25 @@ export default function Launch(props: LaunchProps) {
       ...(current.skill ? { skill: current.skill } : {}),
     });
   }, { defer: true }));
+  // A recorded result opens its own result route so the URL carries the
+  // submitted assignment identity. This runs only while the launch surface is
+  // still mounted for this draft; leaving the surface stops the redirect.
+  createEffect(on(() => draft()?.result?.assignmentId, (id, previous) => {
+    if (!id || id === previous) return;
+    if (props.route.dest !== 'launch') return;
+    if (props.route.tab === 'result' && props.route.id === id) return;
+    const current = props.route;
+    props.onNavigate?.({
+      dest: 'launch',
+      ws: ws(),
+      tab: 'result',
+      id,
+      ...(current.thread ? { thread: current.thread } : {}),
+      ...(current.target ? { target: current.target } : {}),
+      ...(current.package ? { package: current.package } : {}),
+      ...(current.skill ? { skill: current.skill } : {}),
+    });
+  }, { defer: true }));
   createEffect(on(saveFailure, failure => {
     if (!failure) return;
     setAnnouncer('Brief could not be saved. Your title, content and selected target are kept. Retry the same brief.');
@@ -280,7 +317,9 @@ export default function Launch(props: LaunchProps) {
   });
 
   createEffect(on(stage, (value, previous) => {
-    if (value === 'review' && previous !== 'review') queueMicrotask(() => heading?.focus({ preventScroll: true }));
+    if ((value === 'review' || value === 'result' || value === 'inspection') && previous !== value) {
+      queueMicrotask(() => heading?.focus({ preventScroll: true }));
+    }
   }, { defer: true }));
   createEffect(on(() => {
     const error = draft()?.error;
@@ -301,6 +340,12 @@ export default function Launch(props: LaunchProps) {
   }, { defer: true }));
   createEffect(on(starting, (value, previous) => {
     if (value && !previous) setAnnouncer('Starting the reviewed assignment. A second launch is unavailable.');
+  }, { defer: true }));
+  createEffect(on(() => draft()?.result?.kind, (kind, previous) => {
+    if (!kind || kind === previous) return;
+    if (kind === 'launched') setAnnouncer('The assignment started. Work completion has not been established.');
+    else if (kind === 'failed') setAnnouncer('The host confirmed the assignment could not start. Correct the assignment before another review.');
+    else setAnnouncer('The launch outcome is unconfirmed. Locate the submitted assignment before launching again.');
   }, { defer: true }));
 
   onMount(() => queueMicrotask(() => heading?.focus({ preventScroll: true })));
@@ -340,6 +385,46 @@ export default function Launch(props: LaunchProps) {
     queueMicrotask(() => titleInput?.focus({ preventScroll: true }));
   }
 
+  // Confirmed failure correction: mint both fresh identities, keep the typed
+  // text and return to the brief; the operator must save and review again.
+  function correct() {
+    const previous = beginCorrectedAttempt(context());
+    if (!previous) return;
+    setAnnouncer('Corrected assignment prepared. Save the retained brief and review it before another launch.');
+    props.onNavigate?.({
+      dest: 'launch',
+      ws: ws(),
+      tab: 'brief',
+      ...(props.route.thread ? { thread: props.route.thread } : {}),
+      ...(props.route.target ? { target: props.route.target } : {}),
+      ...(props.route.package ? { package: props.route.package } : {}),
+      ...(props.route.skill ? { skill: props.route.skill } : {}),
+    });
+  }
+
+  // Discuss result is bound-thread only: seed the exact thread's unsent draft
+  // for step 10 and navigate. No thread is mutated and nothing is sent.
+  function discuss() {
+    const value = draft()?.result;
+    const thread = props.route.thread;
+    if (!value || !thread) return;
+    seedThreadDraft(ws(), thread, {
+      assignmentId: value.assignmentId,
+      requestId: saved()?.requestId ?? '',
+      outcome: value.kind,
+      title: saved()?.title ?? '',
+      brief: saved()?.brief ?? '',
+      executionDir: resultExecution(),
+      draft: value.kind === 'launched'
+        ? `Assignment ${value.assignmentId} started.`
+        : value.kind === 'failed'
+          ? `Assignment ${value.assignmentId} could not start.`
+          : `Assignment ${value.assignmentId} is unconfirmed; locate it before launching again.`,
+    });
+    setAnnouncer('Opening the originating conversation with an unsent result draft.');
+    props.onNavigate?.({ dest: 'conversations', ws: ws(), id: thread });
+  }
+
   return (
     <div class="full-page">
       <div class="flow">
@@ -349,8 +434,15 @@ export default function Launch(props: LaunchProps) {
             <span class={stage() === 'review' ? 'current' : ''}><b>2</b>Review</span>
             <span class={stage() === 'result' || stage() === 'inspection' ? 'current' : ''}><b>3</b>Result</span>
           </nav>
-          <h2 id="launch-heading" tabindex="-1" ref={heading}>{stage() === 'review' ? 'Review assignment' : 'Prepare assignment'}</h2>
-          <p class="muted">{stage() === 'review' ? 'Check the resolved contract before starting the agent.' : `${props.workspaceName} · New background agent`}</p>
+          <h2 id="launch-heading" tabindex="-1" ref={heading}>
+            {stage() === 'review' ? 'Review assignment'
+              : stage() === 'result' ? resultHeading()
+                : stage() === 'inspection' ? 'Launch result unavailable'
+                  : 'Prepare assignment'}
+          </h2>
+          <p class="muted">{stage() === 'review'
+            ? 'Check the resolved contract before starting the agent.'
+            : stage() === 'result' || stage() === 'inspection' ? props.workspaceName : `${props.workspaceName} · New background agent`}</p>
           <Show when={props.live} fallback={<StateNotice tone="info" title="Launch requires the live dashboard">Open the host dashboard to prepare and save an assignment brief. Imported snapshots cannot reach the launch service.</StateNotice>}>
             <Show when={showBrief()}>
               <form id="launch-form" onSubmit={event => { event.preventDefault(); save(); }}>
@@ -416,10 +508,10 @@ export default function Launch(props: LaunchProps) {
               </form>
               <p class="contract-note">Saving the brief does not start an agent or send a thread message.</p>
             </Show>
-            <Show when={reviewSurface() && reviewContext()}>
+            <Show when={(reviewSurface() || resultSurface()) && reviewContext()}>
               <section id="launch-review" class="launch-review" aria-labelledby="launch-review-heading">
                 <div class="section-heading">
-                  <h3 id="launch-review-heading">Assignment review</h3>
+                  <h3 id="launch-review-heading">{reviewView() === 'result' || reviewView() === 'inspection' ? 'Launch result' : 'Assignment review'}</h3>
                   <Switch>
                     <Match when={reviewView() === 'current'}><StatusText tone="success">Reviewed</StatusText></Match>
                     <Match when={reviewView() === 'resolving'}><StatusText tone="info">Resolving</StatusText></Match>
@@ -427,7 +519,8 @@ export default function Launch(props: LaunchProps) {
                     <Match when={reviewView() === 'stale'}><StatusText tone="warning">Expired</StatusText></Match>
                     <Match when={reviewView() === 'denied'}><StatusText tone="error">Unavailable</StatusText></Match>
                     <Match when={reviewView() === 'error'}><StatusText tone="error">Failed</StatusText></Match>
-                    <Match when={reviewView() === 'result'}><StatusText tone={draft()?.result?.kind === 'launched' ? 'success' : 'warning'}>{draft()?.result?.kind === 'launched' ? 'Started' : 'Unconfirmed'}</StatusText></Match>
+                    <Match when={reviewView() === 'result'}><StatusText tone={resultKind() === 'launched' ? 'success' : resultKind() === 'failed' ? 'error' : 'warning'}>{resultKind() === 'launched' ? 'Live' : resultKind() === 'failed' ? 'Failed' : 'Unconfirmed'}</StatusText></Match>
+                    <Match when={reviewView() === 'inspection'}><StatusText tone="info">Unavailable</StatusText></Match>
                   </Switch>
                 </div>
                 <Switch>
@@ -519,15 +612,52 @@ export default function Launch(props: LaunchProps) {
                     </ActionBar>
                   </Match>
                   <Match when={reviewView() === 'result'}>
-                    <StateNotice tone={draft()?.result?.kind === 'launched' ? 'success' : 'warning'} announce={false}
-                      title={draft()?.result?.kind === 'launched' ? 'Assignment started' : draft()?.result?.kind === 'failed' ? 'Assignment could not start' : 'Launch outcome unconfirmed'}>
-                      {draft()?.result?.kind === 'launched'
-                        ? 'The host recorded this assignment; starting another from this review is unavailable.'
-                        : draft()?.result?.kind === 'failed'
-                          ? 'The host confirmed the failure. Correct the assignment before another review.'
-                          : 'The acknowledgement was lost after submission. Inspect the recorded result before starting another assignment.'}
-                    </StateNotice>
-                    <Show when={previewState()} keyed>{preview => <AssignmentContract preview={preview} />}</Show>
+                    <Show when={draft()?.result} keyed>{value => (
+                      <div class="launch-result">
+                        <StateNotice
+                          tone={value.kind === 'launched' ? 'success' : value.kind === 'failed' ? 'error' : 'warning'}
+                          announce={false}
+                          title={value.kind === 'launched' ? 'Assignment started' : value.kind === 'failed' ? 'Process startup failed' : 'The launch acknowledgement was lost'}
+                        >
+                          {value.kind === 'launched'
+                            ? 'The host recorded this assignment as live. Work completion has not been established.'
+                            : value.kind === 'failed'
+                              ? 'The host recorded a confirmed launch failure. The assignment and saved brief are retained for inspection.'
+                              : 'The submitted assignment may already be running; do not launch it again. Locate the submitted identity in Agents before starting another assignment; this dashboard has no confirmed record of it.'}
+                        </StateNotice>
+                        <dl class="launch-facts" id="launch-result-facts" aria-label="Launch result facts">
+                          <div data-fact="request"><dt>Request</dt><dd class="mono">{saved()?.requestId ?? 'Recorded'}</dd></div>
+                          <div data-fact="assignment"><dt>Assignment</dt><dd class="mono">{value.assignmentId}</dd></div>
+                          <div data-fact="execution"><dt>Execution directory</dt><dd class="mono">{resultExecution()}</dd></div>
+                          <div data-fact="brief"><dt>Brief</dt><dd>{saved()?.title || 'Recorded'}</dd></div>
+                          <Show when={props.route.thread}><div data-fact="thread"><dt>Originating thread</dt><dd class="mono">{props.route.thread}</dd></div></Show>
+                          <div data-fact="observation"><dt>Observation</dt><dd>{resultObservation()}</dd></div>
+                        </dl>
+                        <ActionBar variant="inline">
+                          <a id="launch-result-open-agent" class="ds-btn ds-btn--primary" href={resultAgentsHref()}>Open agent</a>
+                          <Show when={value.kind === 'failed'}>
+                            <button id="launch-result-correct" class="ds-btn" type="button" onClick={correct}>Correct assignment</button>
+                          </Show>
+                          <Show when={props.route.thread}>
+                            <button id="launch-result-discuss" class="ds-btn" type="button" onClick={discuss}>Discuss result</button>
+                          </Show>
+                        </ActionBar>
+                        <Show when={props.route.thread}>
+                          <p class="contract-note">Discuss result opens the originating conversation with an unsent result draft. Review it before sending.</p>
+                        </Show>
+                      </div>
+                    )}</Show>
+                  </Match>
+                  <Match when={reviewView() === 'inspection'}>
+                    <div id="launch-result-inspection" class="launch-result-inspection" tabindex="-1">
+                      <StateNotice tone="info" title="This result link has no local record" announce={false} action={<a class="ds-btn" href={inspectionHref()}>Open agents</a>}>
+                        The dashboard has not confirmed an assignment for this result link and has started nothing. Locate the submitted identity in Agents before acting on it.
+                      </StateNotice>
+                    </div>
+                    <dl class="launch-facts" aria-label="Requested result facts">
+                      <div data-fact="requested-result"><dt>Requested result</dt><dd class="mono">{props.route.id}</dd></div>
+                      <div data-fact="local-result"><dt>Local result</dt><dd class="mono">{draft()?.result?.assignmentId ?? 'Not recorded'}</dd></div>
+                    </dl>
                   </Match>
                   <Match when={reviewView() === 'saved'}>
                     <StatusText id="launch-review-status" tone="info">Saved brief ready to review</StatusText>

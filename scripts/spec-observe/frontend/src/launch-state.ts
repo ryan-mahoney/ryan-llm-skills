@@ -448,3 +448,32 @@ export function resolveLaunchStage(draft: LaunchDraft | undefined, request: Laun
   }
   return 'brief';
 }
+
+// One-use conversation draft seed for the result return journey. Step 10's
+// Threads surface consumes this for the exact requested thread and fills an
+// unsent composer draft; seeding never mutates a thread or sends a message.
+export type ThreadDraftSeed = {
+  assignmentId: string;
+  requestId: string;
+  outcome: LaunchResult['kind'];
+  title: string;
+  brief: string;
+  executionDir: string;
+  draft: string;
+};
+
+const threadDraftSeeds = new Map<string, ThreadDraftSeed>();
+const threadDraftKey = (ws: string, thread: string): string => JSON.stringify([ws, thread]);
+
+export function seedThreadDraft(ws: string, thread: string, seed: ThreadDraftSeed): void {
+  if (!ws || !thread) return;
+  threadDraftSeeds.set(threadDraftKey(ws, thread), { ...seed });
+}
+
+// Consuming clears the seed so a thread switch or remount cannot replay it.
+export function consumeThreadDraft(ws: string, thread: string): ThreadDraftSeed | undefined {
+  const key = threadDraftKey(ws, thread);
+  const seed = threadDraftSeeds.get(key);
+  if (seed) threadDraftSeeds.delete(key);
+  return seed;
+}

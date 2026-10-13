@@ -5,7 +5,7 @@
 """Regression: saved briefs must visibly guide the operator through preview and launch,
 and the hidden launch flow must save a brief without starting work.
 
-Run: uv run --script scripts/spec-observe/frontend/browser-handoff-check.py [--section handoff|brief]
+Run: uv run --script scripts/spec-observe/frontend/browser-handoff-check.py [--section handoff|brief|review|result]
 Uses isolated fixture storage and fake workers; never launches a real assignment.
 The default handoff journey and the brief section share fixture/browser startup.
 """
@@ -21,7 +21,7 @@ section = args[args.index('--section') + 1] if '--section' in args else 'handoff
 evidence_dir = Path(os.environ['SENTINEL_EVIDENCE_DIR']) if os.environ.get('SENTINEL_EVIDENCE_DIR') else None
 shots_dir = (evidence_dir / 'browser') if evidence_dir else Path('/tmp')
 if evidence_dir: shots_dir.mkdir(parents=True, exist_ok=True)
-receipt = (evidence_dir or Path('/tmp')) / ('ev-10-review.json' if section == 'review' else 'ev-9-brief.json' if section == 'brief' else 'ev-4-handoff.json')
+receipt = (evidence_dir or Path('/tmp')) / ('ev-10-review.json' if section == 'review' else 'ev-11-result.json' if section == 'result' else 'ev-9-brief.json' if section == 'brief' else 'ev-4-handoff.json')
 summary = {'status':'failed','section':section,'cases':[],'page_errors':[],'captures':[],'boundary':'1440x1100 desktop' if section == 'handoff' else '1280x1100 and 1600x1100 desktop'}
 def passed(name): summary['cases'].append(name)
 def shot(locator, name):
@@ -367,14 +367,247 @@ def run_review(browser, url):
         try: api.close()
         except Exception: pass
 
+def run_result(browser, url, thread1):
+    widths = (1280, 1600)
+    api = browser.new_context()
+    contexts = []
+
+    def control(action='', value=''):
+        response = api.request.get(url + '/__fixture/control?action=' + action + '&value=' + value)
+        assert response.ok
+        return response.json()
+
+    def posts(name):
+        return [x for x in control()['posts'] if x['name'] == name]
+
+    def capture(page, name):
+        page.locator('#launch-review').scroll_into_view_if_needed()
+        page.locator('#launch-review').screenshot(path=str(shots_dir / name))
+        summary['captures'].append(str(shots_dir / name))
+        page_name = name[:-4] + '-page.png' if name.endswith('.png') else name + '-page.png'
+        page.screenshot(path=str(shots_dir / page_name), full_page=True)
+        summary['captures'].append(str(shots_dir / page_name))
+
+    def reset():
+        control('stale-launch', 'false')
+        control('hold-dispatch-preview', 'false')
+        control('hold-dispatch-launch', 'false')
+        control('dispatch-preview-refusal', 'none')
+        control('dispatch-launch-refusal', 'none')
+        control('dispatch-launch-outcome', 'live')
+        control('clear-launch-publications')
+
+    def open_brief(width, thread=''):
+        context = browser.new_context(viewport={'width': width, 'height': 1100}, device_scale_factor=1)
+        contexts.append(context)
+        page = context.new_page()
+        errors = []
+        page.on('pageerror', lambda e: errors.append(str(e)))
+        page.goto(url + '/#/agents', wait_until='domcontentloaded')
+        page.locator('#launch-agent-action').click()
+        expect(page.locator('.workspace-picker')).to_be_visible()
+        page.locator('.workspace-picker button[data-workspace="fixture"]').click()
+        expect(page).to_have_url(re.compile(r'#/launch\?ws=fixture&tab=brief'))
+        if thread:
+            page.evaluate("location.hash = '#/launch?ws=fixture&thread=" + thread + "&tab=brief'")
+        expect(page.locator('#launch-brief-title')).to_be_visible()
+        page.locator('#launch-brief-title').fill('Keep selected files in view')
+        page.locator('#launch-brief-content').fill('Outcome\nOpen selected files beside the listing, with the source and filename visible.')
+        page.locator('#launch-save').click()
+        expect(page.locator('#launch-assignment-launch')).to_be_enabled()
+        return context, page, errors
+
+    def last_resolver(snapshot, name, assignment):
+        entries = (snapshot.get('diagnostics') or {}).get('resolvers') or []
+        return next((x for x in reversed(entries) if x['name'] == name and x.get('record') and (x.get('input') or {}).get('assignment_id') == assignment), None)
+
+    def resolver_names(page):
+        on_thread = 'thread=' in page.url
+        return ('previewAssignment', 'launchAssignment') if on_thread else ('dispatchPreview', 'dispatchLaunch')
+
+    def digest_evidence(pre_click, post_click, preview_name, launch_name, assignment, displayed_digest):
+        preview_entry = last_resolver(pre_click, preview_name, assignment)
+        launch_entry = last_resolver(post_click, launch_name, assignment)
+        preview_digest = (preview_entry or {}).get('contract_digest') or ((preview_entry or {}).get('record') or {}).get('contract_digest')
+        expected_digest = ((launch_entry or {}).get('input') or {}).get('expected_digest')
+        fresh_digest = (launch_entry or {}).get('fresh_digest') or ((launch_entry or {}).get('record') or {}).get('contract_digest')
+        evidence = {
+            'assignment': assignment,
+            'displayed_digest': displayed_digest,
+            'preview_digest': preview_digest,
+            'expected_digest': expected_digest,
+            'fresh_digest': fresh_digest,
+        }
+        return evidence, preview_entry, launch_entry
+
+    def launch(page, outcome):
+        control('dispatch-launch-outcome', outcome)
+        assignment = page.locator('#launch-review [data-fact="assignment"] dd').inner_text()
+        preview_name, launch_name = resolver_names(page)
+        # Diagnostics only: retain the digest currently displayed on the review
+        # and the fixture's resolver evidence from before the click. Neither
+        # value replaces the submitted identity or relaxes any assertion below.
+        digest_fact = page.locator('#launch-review [data-fact="digest"] dd')
+        displayed_digest = digest_fact.inner_text() if digest_fact.count() else None
+        pre_click = control()
+        try:
+            page.locator('#launch-assignment-launch').click()
+            expect(page.locator('#launch-result-facts')).to_be_visible()
+            expect(page).to_have_url(re.compile(r'#/launch\?ws=fixture&id=' + re.escape(assignment) + '&tab=result'))
+        except BaseException:
+            # A failed result assertion keeps both fixture snapshots so
+            # ev-11-result.json identifies the first preview/launch mismatch.
+            post_click = control()
+            evidence, preview_entry, launch_entry = digest_evidence(pre_click, post_click, preview_name, launch_name, assignment, displayed_digest)
+            preview_record = (preview_entry or {}).get('record') or {}
+            launch_record = (launch_entry or {}).get('record') or {}
+            mismatch_key = next((key for key in sorted(set(preview_record) | set(launch_record)) if preview_record.get(key) != launch_record.get(key)), None)
+            summary['launch_diagnostics'] = {
+                'outcome': outcome,
+                'submitted_assignment': assignment,
+                'resolvers': {'preview': preview_name, 'launch': launch_name},
+                'displayed_digest': displayed_digest,
+                'launch_expected_digest': evidence['expected_digest'],
+                'launch_fresh_digest': evidence['fresh_digest'],
+                'launch_matched': (launch_entry or {}).get('matched'),
+                'first_record_mismatch': {'field': mismatch_key, 'preview': preview_record.get(mismatch_key), 'launch': launch_record.get(mismatch_key)} if mismatch_key else None,
+                'preview_record': preview_record,
+                'launch_record': launch_record,
+                'pre_click_resolvers': (pre_click.get('diagnostics') or {}).get('resolvers', [])[-4:],
+                'post_click_resolvers': (post_click.get('diagnostics') or {}).get('resolvers', [])[-4:],
+            }
+            raise
+        # Proved boundary: displayed, reviewed, submitted and freshly
+        # recomputed digests agree for the submitted assignment identity.
+        post_click = control()
+        evidence, _, _ = digest_evidence(pre_click, post_click, preview_name, launch_name, assignment, displayed_digest)
+        summary.setdefault('result_digests', []).append(evidence)
+        assert displayed_digest == evidence['preview_digest'], evidence
+        assert evidence['expected_digest'] == evidence['preview_digest'], evidence
+        assert evidence['fresh_digest'] == evidence['expected_digest'], evidence
+        return assignment
+
+    def finish(errors, name):
+        assert not errors, errors
+        summary['page_errors'].extend(errors)
+        passed(name)
+
+    try:
+        # Live: started work with the submitted identity, never a completion claim.
+        for width in widths:
+            reset()
+            _, page, errors = open_brief(width)
+            assignment = launch(page, 'live')
+            expect(page.locator('#launch-heading')).to_have_text('Agent is live')
+            expect(page.locator('#launch-heading')).to_be_focused()
+            expect(page.locator('#launch-review .section-heading')).to_contain_text('Live')
+            callout = page.locator('#launch-review .ds-callout')
+            expect(callout).to_contain_text('Assignment started')
+            expect(callout).to_contain_text('Work completion has not been established')
+            assert UUID_RE.fullmatch(page.locator('#launch-result-facts [data-fact="request"] dd').inner_text())
+            expect(page.locator('#launch-result-facts [data-fact="assignment"] dd')).to_have_text(assignment)
+            expect(page.locator('#launch-result-facts [data-fact="execution"] dd')).not_to_be_empty()
+            expect(page.locator('#launch-result-facts [data-fact="brief"] dd')).to_contain_text('Keep selected files in view')
+            expect(page.locator('#launch-result-discuss')).to_have_count(0)
+            href = page.locator('#launch-result-open-agent').get_attribute('href')
+            assert href and ('q=' + assignment) in href and '&id=' not in href, href
+            assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+            capture(page, f'launch-result-live-{width}.png')
+            # Publication exposes the exact observer key for this assignment.
+            control('publish-assignment', assignment)
+            expect(page.locator('#launch-result-open-agent')).to_have_attribute('href', re.compile(r'id='), timeout=12000)
+            href = page.locator('#launch-result-open-agent').get_attribute('href')
+            assert href and 'q=' not in href, href
+            page.locator('#launch-result-open-agent').click()
+            expect(page).to_have_url(re.compile(r'#/agents\?ws=fixture&id='))
+            expect(page.locator('.run-row', has_text=assignment)).to_have_attribute('aria-pressed', 'true')
+            finish(errors, f'live result keeps started identity and open agent reaches the exact assignment ({width})')
+        # Unconfirmed: locate only, no retry/reset, delayed observation.
+        for width in widths:
+            reset()
+            _, page, errors = open_brief(width)
+            assignment = launch(page, 'unknown')
+            expect(page.locator('#launch-heading')).to_have_text('Launch is unconfirmed')
+            expect(page.locator('#launch-review .section-heading')).to_contain_text('Unconfirmed')
+            callout = page.locator('#launch-review .ds-callout')
+            expect(callout).to_contain_text('The launch acknowledgement was lost')
+            expect(callout).not_to_contain_text('is reserved')
+            expect(callout).not_to_contain_text('reservation retained')
+            expect(page.locator('#launch-result-facts [data-fact="observation"] dd')).to_contain_text('Unknown identity')
+            expect(page.locator('#launch-assignment-launch')).to_have_count(0)
+            expect(page.locator('#launch-assignment-review')).to_have_count(0)
+            expect(page.locator('#launch-result-correct')).to_have_count(0)
+            capture(page, f'launch-result-unconfirmed-{width}.png')
+            # Before publication the UUID filter lists nothing, never an unrelated row.
+            page.locator('#launch-result-open-agent').click()
+            expect(page).to_have_url(re.compile(r'#/agents\?ws=fixture&q=' + re.escape(assignment)))
+            expect(page.locator('.observation-rows')).to_contain_text('No matching agents')
+            empty_shot = shots_dir / f'launch-result-open-agent-empty-{width}.png'
+            page.screenshot(path=str(empty_shot))
+            summary['captures'].append(str(empty_shot))
+            # Publication then selects the matching observed row.
+            control('publish-assignment', assignment)
+            page.wait_for_timeout(1200)
+            page.locator('.head-actions .ds-btn', has_text='Refresh state').click()
+            expect(page.locator('.run-row', has_text=assignment)).to_have_attribute('aria-pressed', 'true')
+            finish(errors, f'unconfirmed locates without retry and observes after publication ({width})')
+        # Confirmed failure: correction preserves the text and mints both identities.
+        for width in widths:
+            reset()
+            _, page, errors = open_brief(width)
+            assignment = launch(page, 'failed')
+            old_request = page.locator('#launch-result-facts [data-fact="request"] dd').inner_text()
+            assert UUID_RE.fullmatch(old_request), old_request
+            expect(page.locator('#launch-heading')).to_have_text('Agent could not start')
+            expect(page.locator('#launch-review .section-heading')).to_contain_text('Failed')
+            expect(page.locator('#launch-review .ds-callout')).to_contain_text('Process startup failed')
+            expect(page.locator('#launch-result-facts [data-fact="observation"] dd')).to_contain_text('process confirmed gone')
+            capture(page, f'launch-result-failed-{width}.png')
+            saves_before = len(posts('dispatchSaveBrief'))
+            page.locator('#launch-result-correct').click()
+            expect(page).to_have_url(re.compile(r'#/launch\?ws=fixture&tab=brief'))
+            expect(page.locator('#launch-brief-title')).to_have_value('Keep selected files in view')
+            expect(page.locator('#launch-brief-content')).to_have_value(re.compile(r'Open selected files beside the listing'))
+            expect(page.locator('#launch-saved')).to_have_count(0)
+            expect(page.locator('#launch-result-facts')).to_have_count(0)
+            page.locator('#launch-save').click()
+            expect(page.locator('#launch-assignment-launch')).to_be_enabled()
+            assert len(posts('dispatchSaveBrief')) == saves_before + 1
+            fresh_request = posts('dispatchSaveBrief')[-1]['input']['request_id']
+            assert fresh_request != old_request
+            fresh_assignment = page.locator('#launch-review [data-fact="assignment"] dd').inner_text()
+            assert fresh_assignment != assignment
+            finish(errors, f'failed correction keeps text and changes both identities ({width})')
+        # Bound result keeps the originating thread and seeds one unsent draft.
+        reset()
+        _, page, errors = open_brief(1280, thread1)
+        launch(page, 'live')
+        expect(page.locator('#launch-result-facts [data-fact="thread"] dd')).to_contain_text(thread1)
+        expect(page.locator('#launch-result-discuss')).to_be_visible()
+        capture(page, 'launch-result-thread-1280.png')
+        sends_before = len(posts('send'))
+        page.locator('#launch-result-discuss').click()
+        expect(page).to_have_url(re.compile(r'#/conversations\?ws=fixture&id=' + re.escape(thread1)))
+        expect(page.locator('#thread-draft')).to_be_visible()
+        assert len(posts('send')) == sends_before
+        finish(errors, 'bound result retains the originating thread and seeds without sending')
+    finally:
+        for context in contexts:
+            try: context.close()
+            except Exception: pass
+        try: api.close()
+        except Exception: pass
+
 started = time.monotonic()
 fixture = subprocess.Popen(['node', str(root / 'browser-fixture.mjs')], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 try:
     if not select.select([fixture.stdout], [], [], 10)[0]:
         raise RuntimeError('Fixture startup timed out')
-    url = json.loads(fixture.stdout.readline())['url']
+    fixture_info = json.loads(fixture.stdout.readline())
+    url = fixture_info['url']
+    thread1 = fixture_info['thread1']
     with sync_playwright() as p:
-        browser = p.chromium.connect_over_cdp('http://127.0.0.1:9222')
+        browser = p.chromium.connect_over_cdp(os.environ.get('SENTINEL_CDP_URL', 'http://127.0.0.1:9222'))
         if section == 'brief':
             try:
                 run_brief(browser, url)
@@ -387,6 +620,15 @@ try:
         elif section == 'review':
             try:
                 run_review(browser, url)
+                assert not summary['page_errors'], summary['page_errors']
+                summary['status']='passed'
+                print(json.dumps({'status': 'passed', 'elapsed_seconds': round(time.monotonic() - started, 2), 'cases': summary['cases'], 'captures': summary['captures'], 'boundary': summary['boundary'], 'receipt': str(receipt)}))
+            except BaseException as exc:
+                summary['error']=repr(exc)
+                raise
+        elif section == 'result':
+            try:
+                run_result(browser, url, thread1)
                 assert not summary['page_errors'], summary['page_errors']
                 summary['status']='passed'
                 print(json.dumps({'status': 'passed', 'elapsed_seconds': round(time.monotonic() - started, 2), 'cases': summary['cases'], 'captures': summary['captures'], 'boundary': summary['boundary'], 'receipt': str(receipt)}))
