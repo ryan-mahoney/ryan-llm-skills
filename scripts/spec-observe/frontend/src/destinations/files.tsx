@@ -9,6 +9,7 @@ import {
   fileKindLabel,
   fileSizeLabel,
   fileSource,
+  fileUnavailableReason,
   filterLoadedFiles,
   listFileUrl,
   readFileUrl,
@@ -156,12 +157,29 @@ export default function FilesDestination(props: DestinationProps) {
   let readerRestoreToken = 0;
   let restoreReaderOnPublish = false;
 
+  // Known unavailable reason for the requested path. Context rows classify
+  // against the loaded workspace context detail; every other source uses the
+  // listing facts. A complete listing can establish absence; partial pages,
+  // errors and null listings stay unknown so the file remains eligible for a
+  // direct read.
+  const unavailableReason = (): string | null => {
+    const path = requestedPath();
+    if (!path) return null;
+    if (source() === 'context') {
+      if (!props.workspace) return null;
+      return fileUnavailableReason(path, { files: contextFiles() });
+    }
+    return fileUnavailableReason(path, listing());
+  };
+
   // Scroll is saved under the identity whose content is actually rendered: an
   // in-flight route change must never write its clamped scroll into the
   // incoming scope or path entry.
   function saveScroll(key: string, path: string) {
     if (renderedListKey === key && recordsRef) memoryFor(key).listScroll = recordsRef.scrollTop;
-    if (path && renderedReaderKey === key && renderedReaderPath === path && readerRef) {
+    // A filtered-out document is not rendered, so its clamped geometry must
+    // never overwrite the remembered reader position.
+    if (path && renderedReaderKey === key && renderedReaderPath === path && readerRef && !filteredReaderHidden()) {
       memoryFor(key).readerScroll[path] = readerRef.scrollTop;
     }
   }
@@ -169,7 +187,7 @@ export default function FilesDestination(props: DestinationProps) {
     // Unmount safety net: only the identity whose content belongs to the
     // current route is written, never clamped post-route geometry.
     if (renderedListKey && renderedListKey === scopeId() && recordsRef) memoryFor(renderedListKey).listScroll = recordsRef.scrollTop;
-    if (renderedReaderKey && renderedReaderKey === scopeId() && renderedReaderPath === requestedPath() && readerRef) {
+    if (renderedReaderKey && renderedReaderKey === scopeId() && renderedReaderPath === requestedPath() && readerRef && !filteredReaderHidden()) {
       memoryFor(renderedReaderKey).readerScroll[renderedReaderPath] = readerRef.scrollTop;
     }
   }
@@ -179,6 +197,7 @@ export default function FilesDestination(props: DestinationProps) {
   };
   const onReaderScroll = () => {
     if (suppressScrollSave > 0 || !renderedReaderKey || !renderedReaderPath || !readerRef) return;
+    if (filteredReaderHidden()) return;
     memoryFor(renderedReaderKey).readerScroll[renderedReaderPath] = readerRef.scrollTop;
   };
 
@@ -207,9 +226,22 @@ export default function FilesDestination(props: DestinationProps) {
     try {
       const data = await getJson<FileListing>(url, controller.signal);
       if (token !== listGeneration || key !== scopeId()) return;
-      const prior = next !== undefined && !refresh ? listing()?.files ?? [] : [];
+      const appending = next !== undefined && !refresh;
+      const previous = appending ? listing() : null;
+      const prior = previous?.files ?? [];
+      // Appending a page never duplicates a name that is already published,
+      // and a page that reported truncation or errors keeps the loaded-only
+      // coverage honest for the whole merged listing: a missing path must not
+      // become known-missing while any reported page was incomplete.
+      const seen = new Set(prior.map(entry => entry.name));
+      const merged = [...prior, ...(data.files ?? []).filter(entry => !seen.has(entry.name))];
+      const priorErrors = previous?.errors ?? [];
+      const errorSeen = new Set(priorErrors.map(error => `${error.name}\u0000${error.message}`));
+      const errors = [...priorErrors, ...(data.errors ?? []).filter(error => !errorSeen.has(`${error.name}\u0000${error.message}`))];
       renderedListKey = key;
-      setListing({ ...data, files: [...prior, ...(data.files ?? [])] });
+      setListing(appending
+        ? { ...data, files: merged, truncated: Boolean(previous?.truncated || data.truncated), errors }
+        : { ...data, files: merged });
       setCursor(data.next_cursor ?? undefined);
     } catch {
       // A failed listing keeps the published rows (including prior append
@@ -249,6 +281,29 @@ export default function FilesDestination(props: DestinationProps) {
     setListError('');
     renderedListKey = '';
     untrack(() => { void fetchListing(); });
+  }));
+  createEffect(on(() => props.live, live => {
+    if (live) return;
+    // A no-live transition invalidates every in-flight request before the
+    // regions switch to their unavailable composition; nothing new is sent
+    // while the dashboard server is unavailable.
+    listController?.abort();
+    listController = null;
+    listGeneration++;
+    readController?.abort();
+    readController = null;
+    fileGeneration++;
+    if (skeletonTimer !== undefined) {
+      clearTimeout(skeletonTimer);
+      skeletonTimer = undefined;
+    }
+    setLoadingList(false);
+    setPendingRead(false);
+    setSlowRead(false);
+    setListError('');
+    setReadError('');
+    setRecheckError('');
+    setResourceError('');
   }));
   createEffect(on(listVersion, version => {
     if (version > 0) untrack(() => { void fetchListing(undefined, true); });
@@ -312,11 +367,15 @@ export default function FilesDestination(props: DestinationProps) {
       return;
     }
     const url = readFileUrl(requestedScope, requested);
-    if (!url) {
+    // A complete listing (or a URL this scope cannot build) already
+    // establishes unavailability; only unknown or partial listings remain
+    // eligible for the direct read below.
+    const knownReason = untrack(unavailableReason);
+    if (!url || knownReason) {
       setLoaded(null);
       renderedReaderKey = '';
       renderedReaderPath = '';
-      setReadError('File unavailable. Choose another file.');
+      setReadError('');
       setRecheckError('');
       setResourceError('');
       setPendingRead(false);
@@ -489,7 +548,49 @@ export default function FilesDestination(props: DestinationProps) {
   const noticeText = () => (recheckError()
     ? `${recheckError()} Last received at ${currentLoaded() ? time(loaded()!.receivedAt) : 'an earlier read'}.`
     : readError() || resourceError());
-  const visible = () => filterLoadedFiles(source() === 'context' ? contextFiles() : listing()?.files ?? [], query(), pathPrefix());
+  const underlyingFiles = (): FileEntry[] => (source() === 'context' ? contextFiles() : listing()?.files ?? []);
+  const filterActive = (): boolean => query().trim() !== '' || Boolean(pathPrefix());
+  const listingComplete = (): boolean => {
+    if (source() === 'context') return Boolean(props.workspace);
+    const value = listing();
+    return Boolean(value) && value!.next_cursor == null && value!.truncated !== true && (value!.errors?.length ?? 0) === 0;
+  };
+  const listingPartial = (): boolean => props.live && source() !== 'context' && Boolean(listing()) && !listingComplete();
+  const visible = () => filterLoadedFiles(underlyingFiles(), query(), pathPrefix());
+  const listState = (): 'rows' | 'no-match' | 'empty-source' | 'empty-partial' => {
+    if (visible().length > 0) return 'rows';
+    if (underlyingFiles().length > 0 || filterActive()) return 'no-match';
+    return listingComplete() ? 'empty-source' : 'empty-partial';
+  };
+  // A filter that matches none of the loaded rows hides the selected document
+  // behind a recovery prompt: the route keeps the explicit path and the
+  // remembered scroll, while no filtered-out document is rendered.
+  const filteredReaderHidden = (): boolean =>
+    props.live
+    && listingReady()
+    && filterActive()
+    && visible().length === 0
+    && underlyingFiles().length > 0;
+  const partialText = (): string => {
+    const value = listing();
+    const entries = underlyingFiles().length;
+    const errors = value?.errors?.length ?? 0;
+    const pieces = [`${entries} ${entries === 1 ? 'entry' : 'entries'} loaded.`];
+    if (errors > 0) pieces.push(`${errors} ${errors === 1 ? 'directory' : 'directories'} could not be read.`);
+    if (value?.truncated) pieces.push('The listing reached the server entry or directory depth limit.');
+    if (value?.next_cursor != null) pieces.push('More files are available.');
+    pieces.push('Only loaded filenames are shown.');
+    return pieces.join(' ');
+  };
+  const noMatchText = (): string => {
+    const loaded = underlyingFiles().length;
+    const noun = loaded === 1 ? 'filename' : 'filenames';
+    const needle = query().trim();
+    if (needle && loaded > 0) return `"${needle}" does not match the ${loaded} loaded ${noun}.`;
+    if (needle) return `"${needle}" does not match any loaded ${noun}.`;
+    if (pathPrefix()) return `No loaded filenames under ${pathPrefix()}.`;
+    return `No loaded ${noun} match the active filter.`;
+  };
   const selected = (name: string) => requestedPath() === name;
   const selectFile = (name: string) => {
     if (name === requestedPath()) return;
@@ -500,8 +601,28 @@ export default function FilesDestination(props: DestinationProps) {
   const readUrl = () => (requestedPath() ? readFileUrl(scope(), requestedPath()) : null);
   const downloadUrl = () => (requestedPath() ? readFileUrl(scope(), requestedPath(), true) : null);
   const viewUrl = () => (source() === 'package' && requestedPath() && owner() ? packageViewUrl(owner(), requestedPath()) : '');
+  // Known unavailable classification and recovery controls. A successfully
+  // retained copy stays visible through a recheck; only an unread selection
+  // becomes the regional unavailable empty state.
+  const showUnavailable = () => Boolean(unavailableReason()) && !currentLoaded();
+  const unavailableTitle = () => (unavailableReason() === 'Not found' ? 'Not found' : 'File unavailable');
+  const unavailableText = (): string => {
+    const path = requestedPath();
+    const reason = unavailableReason();
+    if (reason === 'Not found') return `${path} is not in the current complete listing. The reader limit is 8 MiB.`;
+    const detail = reason && reason !== 'Unavailable' ? ` ${reason}.` : '';
+    return `${path} could not be read.${detail} The reader limit is 8 MiB.`;
+  };
+  const focusFileList = () => {
+    const row = document.querySelector<HTMLButtonElement>('.files-destination .records button.file-record:not([disabled])');
+    const target = row ?? document.querySelector<HTMLInputElement>('.files-destination #find-record');
+    target?.focus({ preventScroll: true });
+  };
+  const focusSourceSelect = () => document.querySelector<HTMLSelectElement>('.files-destination #file-source')?.focus();
   const downloadEnabled = () => Boolean(downloadUrl())
+    && props.live
     && currentLoaded()
+    && !showUnavailable()
     && !pendingRead()
     && !readError()
     && !recheckError()
@@ -588,6 +709,21 @@ export default function FilesDestination(props: DestinationProps) {
     if (nextPath) route.path = nextPath;
     props.onNavigate(route);
   };
+  const clearFilters = () => {
+    // Clearing q and a trailing-slash prefix is a route transition: the
+    // explicit selected file path and the scroll memory are retained.
+    saveScroll(scopeId(), requestedPath());
+    const route: DestinationProps['route'] = { dest: 'files' };
+    if (props.route.ws !== undefined) route.ws = props.route.ws;
+    if (props.route.source !== undefined) route.source = props.route.source;
+    if (props.route.id !== undefined) route.id = props.route.id;
+    const path = props.route.path ?? '';
+    if (path && !path.endsWith('/')) route.path = path;
+    props.onNavigate(route);
+    // The cleared listing is what the operator inspects next; return focus to
+    // the list without disturbing the retained scroll.
+    requestAnimationFrame(() => focusFileList());
+  };
 
   const emptyTitle = (): string => {
     if (source() === 'context') return 'No registered context';
@@ -613,10 +749,13 @@ export default function FilesDestination(props: DestinationProps) {
     if (!props.live) return '';
     if (source() === 'context' ? contextLoading() : !listing() && loadingList()) return 'Reading files…';
     if (source() === 'context' ? !props.workspace : !listing() && !loadingList()) return '';
-    const count = visible().length;
+    const count = underlyingFiles().length;
     const noun = count === 1 ? 'filename' : 'filenames';
     const identity = source() === 'repository' && checkoutIdentity() ? ` · ${checkoutIdentity()}` : '';
-    return pathPrefix() ? `${count} loaded ${noun} under ${pathPrefix()}${identity} · read only` : `${count} loaded ${noun}${identity} · read only`;
+    const more = listingPartial() && cursor() !== undefined ? ' · more available' : '';
+    return pathPrefix()
+      ? `${count} loaded ${noun} under ${pathPrefix()}${identity}${more} · read only`
+      : `${count} loaded ${noun}${identity}${more} · read only`;
   };
 
   return (
@@ -666,7 +805,7 @@ export default function FilesDestination(props: DestinationProps) {
                   announce={false}
                   tone="error"
                   title="Files could not be listed"
-                  action={<button type="button" class="ds-btn" onClick={revalidateFiles}>Retry listing</button>}
+                  action={<button type="button" class="ds-btn" onClick={revalidateFiles}>Refresh files</button>}
                 >
                   {listMessage()}
                 </StateNotice>
@@ -675,16 +814,33 @@ export default function FilesDestination(props: DestinationProps) {
                 <RegionalSkeleton announce={false} rows={5} label="Loading files" />
               </Show>
               <Show when={listingReady()}>
-                <Show
-                  when={visible().length > 0}
-                  fallback={<EmptyState
+                <Show when={listingPartial()}>
+                  <StateNotice announce={false} tone="warning" title="Listing incomplete">
+                    {partialText()}
+                  </StateNotice>
+                </Show>
+                <Show when={listState() === 'no-match'}>
+                  <EmptyState
                     symbol="▤"
-                    title={pathPrefix() ? 'No loaded files in this selection' : emptyTitle()}
-                    text={pathPrefix()
-                      ? `The listing has no loaded filenames under ${pathPrefix()} yet.`
-                      : emptyText()}
-                  />}
-                >
+                    title="No matching filenames"
+                    text={noMatchText()}
+                    action={<button type="button" class="ds-btn" onClick={clearFilters}>Clear filters</button>}
+                  />
+                </Show>
+                <Show when={listState() === 'empty-source'}>
+                  <EmptyState
+                    symbol="▤"
+                    title={source() === 'context' ? 'No registered context' : 'No files in this source'}
+                    text={source() === 'context'
+                      ? 'The workspace kit registers no context entries.'
+                      : 'Choose another source to find a supporting document.'}
+                    action={<button type="button" class="ds-btn" onClick={focusSourceSelect}>Choose source</button>}
+                  />
+                </Show>
+                <Show when={listState() === 'empty-partial'}>
+                  <EmptyState symbol="▤" title="No files loaded yet" text="The listing is incomplete. Load more or refresh to see the rest." />
+                </Show>
+                <Show when={listState() === 'rows'}>
                   <For each={visible()}>{file => (
                     <button
                       type="button"
@@ -748,7 +904,7 @@ export default function FilesDestination(props: DestinationProps) {
               </Show>
             </Show>
             <Show when={Boolean(requestedPath())}>
-              <button type="button" class="ds-btn" disabled={!props.live || pendingRead()} onClick={revalidateRead}>Refresh file</button>
+              <button type="button" class="ds-btn" disabled={!props.live || pendingRead() || showUnavailable()} onClick={revalidateRead}>Refresh file</button>
             </Show>
             <Show when={openSpecTarget()}>
               <button type="button" class="ds-btn" onClick={openSpec}>Open spec</button>
@@ -763,6 +919,14 @@ export default function FilesDestination(props: DestinationProps) {
             </StateNotice>
           </Show>
           <Show when={props.live}>
+            <Show when={filteredReaderHidden()}>
+              <EmptyState
+                symbol="◇"
+                title="Choose a file"
+                text="Clear the filename filter to restore this source's available documents."
+              />
+            </Show>
+            <Show when={!filteredReaderHidden()}>
             <Show
               when={requestedPath()}
               fallback={
@@ -785,9 +949,18 @@ export default function FilesDestination(props: DestinationProps) {
                     : 'The dashboard connection failed. Retry the connection to read this file.'}
                 </StateNotice>
               </Show>
-              <Show when={firstLoading()}>
-                <p class="muted" role="status">Reading {requestedPath()}…</p>
+              <Show when={showUnavailable()}>
+                <EmptyState
+                  symbol="▤"
+                  title={unavailableTitle()}
+                  text={unavailableText()}
+                  action={<button type="button" class="ds-btn" onClick={focusFileList}>Choose file</button>}
+                />
               </Show>
+              <Show when={!showUnavailable()}>
+                <Show when={firstLoading()}>
+                  <p class="muted" role="status">Reading {requestedPath()}…</p>
+                </Show>
               <Show when={rechecking()}>
                 <StateNotice
                   tone="info"
@@ -832,6 +1005,8 @@ export default function FilesDestination(props: DestinationProps) {
                   />
                 );
               }}</Show>
+              </Show>
+            </Show>
             </Show>
           </Show>
         </div>

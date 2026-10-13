@@ -6,7 +6,7 @@
 
 After npm run build --prefix scripts/spec-observe/frontend:
 SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 120s uv run --script \
-  scripts/spec-observe/frontend/route-browser-check.py [--case rail|files|specs|context|catalog|member|search|filters|specs-list|specs-overview|specs-variants|specs-activity|specs-relaunch|files-workspace|files-sources|files-continuity]
+  scripts/spec-observe/frontend/route-browser-check.py [--case rail|files|specs|context|catalog|member|search|filters|specs-list|specs-overview|specs-variants|specs-activity|specs-relaunch|files-workspace|files-sources|files-continuity|files-recovery]
 Only the fixture substitutes workers; App, adapters and file APIs are real.
 """
 import argparse
@@ -18,6 +18,7 @@ import re
 import select
 import shutil
 import subprocess
+import tempfile
 import time
 import traceback
 from pathlib import Path
@@ -26,7 +27,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 args = argparse.ArgumentParser()
-args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog', 'member', 'search', 'filters', 'specs-list', 'specs-overview', 'specs-variants', 'specs-activity', 'specs-relaunch', 'files-workspace', 'files-sources', 'files-continuity'])
+args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog', 'member', 'search', 'filters', 'specs-list', 'specs-overview', 'specs-variants', 'specs-activity', 'specs-relaunch', 'files-workspace', 'files-sources', 'files-continuity', 'files-recovery'])
 case = args.parse_args().case
 root = Path(__file__).resolve().parent
 evidence = Path(os.environ.get('SENTINEL_EVIDENCE_DIR', '/tmp/sentinel-route-evidence'))
@@ -36,7 +37,7 @@ report = {'status': 'failed', 'scenarios': [], 'pageErrors': []}
 fixture_env = dict(os.environ)
 if case == 'context':
     fixture_env['SENTINEL_NONCANONICAL_CONTEXT'] = '1'
-if case in ('files-workspace', 'files-sources', 'files-continuity'):
+if case in ('files-workspace', 'files-sources', 'files-continuity', 'files-recovery'):
     fixture_env['SENTINEL_REPOSITORY_FILES'] = '1'
 fixture = subprocess.Popen(['node', str(root / 'browser-fixture.mjs')], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=fixture_env)
 try:
@@ -1100,6 +1101,375 @@ try:
                 reference_page.close()
             report['references'] = references
             report['scenarios'].append('Bound reference screens 62/66/67 match their card sha256 digests and render at 1280/1600')
+
+        if case == 'files-recovery':
+            # Real built Files destination and real file APIs; only final HTTP
+            # responses are controlled at the browser boundary, plus the exact
+            # workspace detail needed for the zero-owner/context labels and the
+            # real Shell snapshot import for the no-live transition. Recovery
+            # state and page.route register before the first Files navigation so
+            # the first workspace listing already crosses the controlled seam.
+            healthy_detail = context.request.get(receipt['url'] + '/api/workspace?' + urlencode({'id': 'fixture'})).json()
+
+            recovery = {
+                'listing': {'mode': '', 'append': False, 'first_page': []},
+                'detail': None,
+                'reads': {'fail': set(), 'hold': set(), 'held': [], 'counts': {}},
+                'requests': [],
+            }
+            file_endpoints = (
+                '/api/workspace-files', '/api/workspace-file',
+                '/api/package-files', '/api/package-file',
+                '/api/repository-files', '/api/repository-file',
+            )
+
+            def recovery_http(route):
+                split = urlsplit(route.request.url)
+                parsed = parse_qs(split.query)
+                path = split.path
+                if path in file_endpoints:
+                    recovery['requests'].append(path)
+                if path == '/api/workspace':
+                    if recovery['detail'] is not None:
+                        route.fulfill(json=recovery['detail'])
+                        return
+                    route.continue_()
+                    return
+                if path == '/api/workspace-files':
+                    cursor = (parsed.get('cursor') or [''])[0]
+                    if cursor and recovery['listing']['append']:
+                        duplicate = (recovery['listing']['first_page'] or [{'name': 'files/overview.md', 'available': True, 'size': 12}])[0]
+                        route.fulfill(json={'files': [duplicate, {'name': 'files/recovery-appended.md', 'available': True, 'size': 24}], 'next_cursor': None, 'truncated': False, 'errors': []})
+                        return
+                    mode = recovery['listing']['mode']
+                    if mode == 'fail':
+                        route.fulfill(status=503, content_type='application/json', body='{"error":"fixture-recovery-listing-failure"}')
+                        return
+                    if mode in ('empty', 'partial', 'unavailable', 'hold'):
+                        response = route.fetch()
+                        if mode == 'hold':
+                            recovery['reads']['held'].append(('listing', route, response))
+                            return
+                        payload = response.json()
+                        if mode == 'empty':
+                            payload['files'] = []
+                            payload['truncated'] = False
+                            payload['errors'] = []
+                            payload['next_cursor'] = None
+                        elif mode == 'partial':
+                            payload['files'] = payload['files'][:2]
+                            recovery['listing']['first_page'] = payload['files']
+                            payload['truncated'] = True
+                            payload['errors'] = [{'name': 'docs', 'message': 'Unreadable directory'}]
+                            payload['next_cursor'] = 2
+                        else:
+                            payload['files'] = payload['files'] + [{'name': 'files/refused.bin', 'available': False, 'reason': 'Exceeds 8 MiB'}]
+                        route.fulfill(response=response, json=payload)
+                        return
+                    route.continue_()
+                    return
+                if path == '/api/workspace-file':
+                    file = (parsed.get('file') or [''])[0]
+                    recovery['reads']['counts'][file] = recovery['reads']['counts'].get(file, 0) + 1
+                    if file in recovery['reads']['fail']:
+                        route.fulfill(status=503, content_type='application/json', body='{"error":"fixture-recovery-read-failure"}')
+                        return
+                    if file in recovery['reads']['hold']:
+                        response = route.fetch()
+                        recovery['reads']['held'].append((file, route, response))
+                        return
+                    route.continue_()
+                    return
+                route.continue_()
+
+            page.route('**/api/**', recovery_http)
+
+            def release_recovery():
+                for _, route, response in recovery['reads']['held']:
+                    try:
+                        route.fulfill(response=response)
+                    except Exception:
+                        pass
+                recovery['reads']['held'] = []
+
+            def wait_recovery_held(count):
+                deadline = time.monotonic() + 5
+                while len(recovery['reads']['held']) < count and time.monotonic() < deadline:
+                    page.wait_for_timeout(20)
+                assert len(recovery['reads']['held']) >= count, 'recovery held requests did not arrive'
+
+            def recovery_capture(screen):
+                page.set_viewport_size({'width': 1280, 'height': 860})
+                page.screenshot(path=str(evidence / f'files-{screen}-1280.png'))
+                page.set_viewport_size({'width': 1600, 'height': 900})
+                page.screenshot(path=str(evidence / f'files-{screen}-1600.png'))
+                page.set_viewport_size({'width': 1280, 'height': 860})
+
+            # (1) Complete empty source, precise chooser labels and release.
+            recovery['listing']['mode'] = 'empty'
+            open_route('files', ws='fixture')
+            empty_records = page.locator('.files-destination .records .empty')
+            expect(empty_records.get_by_role('heading', name='No files in this source', exact=True)).to_be_visible()
+            expect(page.locator('.files-destination .list-caption')).to_contain_text('0 loaded filenames')
+            recovery_capture('61')
+            empty_records.get_by_role('button', name='Choose source', exact=True).click()
+            focused_id = page.evaluate("() => document.activeElement ? document.activeElement.id : ''")
+            assert focused_id == 'file-source', focused_id
+            report['scenarios'].append('A complete empty source shows No files in this source/Choose source and focuses #file-source at 1280/1600')
+
+            # The App workspace-detail effect is keyed by workspace id, so a
+            # source-only route change retains the earlier detail; reload after
+            # each override to force the controlled detail through a fresh
+            # App mount.
+            recovery['detail'] = {**healthy_detail, 'context': []}
+            open_route('files', ws='fixture', source='context')
+            page.reload()
+            expect(page.locator('.files-destination .records .empty').get_by_role('heading', name='No registered context', exact=True)).to_be_visible()
+            recovery['detail'] = {**healthy_detail, 'repositories': []}
+            open_route('files', ws='fixture', source='repository')
+            page.reload()
+            expect(page.locator('.files-destination .records .empty').get_by_role('heading', name='No repositories registered', exact=True)).to_be_visible()
+            recovery['detail'] = None
+            report['scenarios'].append('Zero registered context and zero repositories keep their precise regional labels')
+
+            recovery['listing']['mode'] = ''
+            open_route('files', ws='fixture', path='files/overview.md')
+            files_viewer('files/overview.md', 'Fixture overview')
+            expect(page.locator('.files-destination button.file-record', has_text='files/overview.md')).to_have_count(1)
+            expect(page.locator('.files-destination .records .empty')).to_have_count(0)
+            report['scenarios'].append('Releasing the controlled listing restores the real healthy workspace listing and selected bytes')
+
+            # (2) List failure stays local; read failure stays local; an
+            # anonymous 503 is an error and a complete unavailable entry is a
+            # known refusal.
+            open_route('files', ws='fixture', q='overview', path='files/overview.md')
+            files_viewer('files/overview.md', 'Fixture overview')
+            assert page.locator('.files-destination button.file-record').count() == 1
+            recovery['listing']['mode'] = 'fail'
+            page.locator('.files-destination .list-pane .detail-foot .ds-btn').click()
+            list_error = page.locator('.files-destination .records .ds-callout.error')
+            expect(list_error).to_contain_text('Files could not be listed')
+            refresh_listing = list_error.get_by_role('button', name='Refresh files', exact=True)
+            expect(refresh_listing).to_be_visible()
+            assert page.locator('.files-destination button.file-record').count() == 1
+            files_viewer('files/overview.md', 'Fixture overview')
+            assert files_params()['q'] == ['overview'] and files_params()['path'] == ['files/overview.md'], page.url
+            recovery['listing']['mode'] = ''
+            refresh_listing.click()
+            expect(page.locator('.files-destination .records .ds-callout.error')).to_have_count(0)
+            files_viewer('files/overview.md', 'Fixture overview')
+            report['scenarios'].append('A failed workspace listing keeps published rows and path/q locally, then recovers through Refresh files')
+
+            recovery['reads']['fail'].add('files/valid.json')
+            open_route('files', ws='fixture', q='valid', path='files/valid.json')
+            read_error = page.locator('.files-destination .reader .ds-callout.error')
+            expect(read_error).to_contain_text('File could not be read')
+            retry_file = read_error.get_by_role('button', name='Retry file', exact=True)
+            expect(retry_file).to_be_visible()
+            expect(page.locator('.files-destination .reader .empty')).to_have_count(0)
+            assert files_params()['q'] == ['valid'] and files_params()['path'] == ['files/valid.json'], page.url
+            expect(page.locator('.files-destination .reader-head').get_by_role('button', name='Download file', exact=True)).to_be_disabled()
+            assert page.locator('.files-destination .reader-head a[download]').count() == 0
+            recovery_capture('63')
+            recovery['reads']['fail'].discard('files/valid.json')
+            retry_file.click()
+            files_viewer('files/valid.json', '"schema_version": 1')
+            expect(page.locator('.files-destination .reader .ds-callout.error')).to_have_count(0)
+            report['scenarios'].append('An anonymous 503 read is a local Retry file error that keeps path/q, disables Download and recovers over real bytes')
+
+            recovery['listing']['mode'] = 'unavailable'
+            open_route('files', ws='fixture')
+            # The route is already in the workspace scope, so clearing q/path
+            # does not refetch the listing; force the controlled mode through
+            # the existing Refresh files control before asserting the entry.
+            page.locator('.files-destination .list-pane .detail-foot .ds-btn').click()
+            expect(page.locator('.files-destination button.file-record', has_text='files/refused.bin')).to_have_count(1)
+            refused_before = recovery['reads']['counts'].get('files/refused.bin', 0)
+            page.evaluate("location.hash = '#/files?" + urlencode({'ws': 'fixture', 'path': 'files/refused.bin'}) + "'")
+            unavailable_empty = page.locator('.files-destination .reader .empty')
+            expect(unavailable_empty.get_by_role('heading', name='File unavailable', exact=True)).to_be_visible()
+            expect(unavailable_empty).to_contain_text('files/refused.bin')
+            expect(unavailable_empty).to_contain_text('8 MiB')
+            choose_file = unavailable_empty.get_by_role('button', name='Choose file', exact=True)
+            expect(choose_file).to_be_visible()
+            expect(page.locator('.files-destination .reader-head').get_by_role('button', name='Download file', exact=True)).to_be_disabled()
+            assert recovery['reads']['counts'].get('files/refused.bin', 0) == refused_before, recovery['reads']['counts']
+            recovery_capture('65')
+            choose_file.click()
+            focused_row = page.evaluate("""() => ({ cls: String(document.activeElement.className), name: document.activeElement.querySelector('strong') ? document.activeElement.querySelector('strong').textContent : '' })""")
+            assert 'file-record' in focused_row['cls'], focused_row
+            report['scenarios'].append('A complete listing entry marked unavailable shows name/8 MiB/Choose file without a read request, disables Download and focuses the list at 1280/1600')
+            recovery['listing']['mode'] = ''
+            open_route('files', ws='fixture', path='files/overview.md')
+            files_viewer('files/overview.md', 'Fixture overview')
+
+            # (3) Partial coverage, distinct append and incomplete-missing path.
+            recovery['listing']['mode'] = 'partial'
+            recovery['listing']['append'] = True
+            open_route('files', ws='fixture')
+            # Same-scope route change retains the previous listing; refresh so
+            # the partial coverage payload is actually fetched.
+            page.locator('.files-destination .list-pane .detail-foot .ds-btn').click()
+            partial_notice = page.locator('.files-destination .records .ds-callout.warning')
+            expect(partial_notice).to_contain_text('Listing incomplete')
+            expect(partial_notice).to_contain_text('2 entries loaded')
+            expect(page.locator('.files-destination .records')).to_contain_text('docs: Unreadable directory')
+            expect(page.locator('.files-destination .list-caption')).to_contain_text('more available')
+            rows = page.locator('.files-destination button.file-record')
+            expect(rows).to_have_count(2)
+            first_name = rows.first.locator('strong').inner_text()
+            rows.first.click()
+            expect(page.locator('.files-destination .reader-head h2')).to_have_text(first_name)
+            recovery_capture('64')
+            page.get_by_role('button', name='Load more files', exact=True).click()
+            expect(rows).to_have_count(3)
+            expect(page.locator('.files-destination button.file-record', has_text='files/recovery-appended.md')).to_have_count(1)
+            assert page.locator('.files-destination button.file-record').filter(has=page.get_by_text(first_name, exact=True)).count() == 1
+            expect(page.locator('.files-destination .reader-head h2')).to_have_text(first_name)
+            expect(rows.filter(has_text=first_name)).to_have_attribute('aria-pressed', 'true')
+            # Coverage stays honestly incomplete after the append: the first
+            # page's truncation/errors survive the merge, so the notice and
+            # errors list persist beside the selected reader.
+            retained_warning = page.locator('.files-destination .records .ds-callout.warning')
+            expect(retained_warning).to_have_count(1)
+            expect(retained_warning).to_contain_text('Listing incomplete')
+            expect(page.locator('.files-destination .records')).to_contain_text('docs: Unreadable directory')
+            report['scenarios'].append('A partial listing discloses loaded-only coverage; Load more appends distinct names and keeps the selected reader at 1280/1600')
+
+            page.evaluate("location.hash = '#/files?" + urlencode({'ws': 'fixture', 'path': 'files/missing-recovery.md'}) + "'")
+            missing_error = page.locator('.files-destination .reader .ds-callout.error')
+            expect(missing_error).to_contain_text('File could not be read')
+            expect(missing_error.get_by_role('button', name='Retry file', exact=True)).to_be_visible()
+            # Scope the known-refusal guard to the EmptyState instead of the
+            # whole reader: the generic retry copy legitimately contains the
+            # substring 'File unavailable', so only empty-state headings prove
+            # the path did not become a known-missing refusal.
+            reader_empty = page.locator('.files-destination .reader .empty')
+            expect(reader_empty).to_have_count(0)
+            expect(reader_empty.get_by_role('heading', name='Not found', exact=True)).to_have_count(0)
+            expect(reader_empty.get_by_role('heading', name='File unavailable', exact=True)).to_have_count(0)
+            report['scenarios'].append('A missing path under an incomplete listing stays a Retry file error instead of a known-missing refusal')
+
+            recovery['listing']['mode'] = ''
+            recovery['listing']['append'] = False
+            open_route('files', ws='fixture', path='files/overview.md')
+            # Releasing the partial mode is the same-scope switch again; refresh
+            # so the real full listing (including the selected overview) returns
+            # before the no-match scenarios.
+            page.locator('.files-destination .list-pane .detail-foot .ds-btn').click()
+            files_viewer('files/overview.md', 'Fixture overview')
+
+            # (4) Filename/prefix no-match keeps route memory and hides the
+            # filtered document behind the recovery prompt.
+            open_route('files', ws='fixture', q='nothing-found', path='files/overview.md')
+            no_match = page.locator('.files-destination .records .empty')
+            expect(no_match.get_by_role('heading', name='No matching filenames', exact=True)).to_be_visible()
+            clear_filters = no_match.get_by_role('button', name='Clear filters', exact=True)
+            assert files_params()['q'] == ['nothing-found'] and files_params()['path'] == ['files/overview.md'], page.url
+            reader_empty = page.locator('.files-destination .reader .empty')
+            expect(reader_empty).to_be_visible()
+            expect(page.locator('.files-destination .reader .paper')).to_have_count(0)
+            expect(page.locator('.files-destination .reader')).not_to_contain_text('Fixture overview')
+            prompt = reader_empty.inner_text()
+            assert re.search(r'choose a file|select a file|clear filters', prompt, re.I), prompt
+            recovery_capture('68')
+            clear_filters.click()
+            expect(page.locator('#find-record')).to_have_value('')
+            assert 'q' not in files_params() and files_params()['path'] == ['files/overview.md'], page.url
+            files_viewer('files/overview.md', 'Fixture overview')
+            report['scenarios'].append('A filtered-out explicit file is hidden behind the no-match prompt; Clear filters restores it while keeping the route path')
+
+            open_route('files', ws='fixture', path='no-such-directory/')
+            prefix_no_match = page.locator('.files-destination .records .empty')
+            expect(prefix_no_match.get_by_role('heading', name='No matching filenames', exact=True)).to_be_visible()
+            expect(page.locator('.files-destination .reader .empty')).to_be_visible()
+            expect(page.locator('.files-destination .reader .paper')).to_have_count(0)
+            assert files_params()['path'] == ['no-such-directory/'], page.url
+            prefix_no_match.get_by_role('button', name='Clear filters', exact=True).click()
+            assert 'path' not in files_params() and 'q' not in files_params(), page.url
+            expect(page.locator('.files-destination .reader')).to_contain_text('Select a file')
+            report['scenarios'].append('A trailing-slash prefix no-match clears q and prefix while the reader returns to the chooser')
+
+            # (5) Offline disables Download; a real snapshot import is the
+            # no-live transition and must abandon held work without new calls.
+            open_route('files', ws='fixture', path='files/overview.md')
+            files_viewer('files/overview.md', 'Fixture overview')
+            context.request.get(receipt['url'] + '/__fixture/control?' + urlencode({'action': 'state-fail', 'value': 'true'}))
+            page.get_by_role('button', name='Refresh state', exact=True).click()
+            expect(page.locator('.files-destination .reader')).to_contain_text('Reading a retained copy')
+            expect(page.locator('.files-destination .reader-head').get_by_role('button', name='Download file', exact=True)).to_be_disabled()
+            context.request.get(receipt['url'] + '/__fixture/control?' + urlencode({'action': 'state-fail', 'value': 'false'}))
+            page.locator('.files-destination .reader').get_by_role('button', name='Retry connection', exact=True).click()
+            expect(page.locator('.files-destination .reader')).not_to_contain_text('Reading a retained copy')
+            expect(page.locator('.files-destination .reader-head').get_by_role('link', name='Download file', exact=True)).to_be_visible()
+            report['scenarios'].append('A failed /api/state keeps the retained reader but disables Download until Retry connection')
+
+            recovery['listing']['mode'] = 'hold'
+            recovery['reads']['hold'].add('files/overview.md')
+            page.locator('.files-destination .list-pane .detail-foot .ds-btn').click()
+            expect(page.locator('.files-destination .reader')).to_contain_text('Rechecking')
+            wait_recovery_held(2)
+            expect(page.locator('.files-destination .list-pane .detail-foot .ds-btn')).to_be_disabled()
+
+            snapshot_path = None
+            try:
+                state_payload = context.request.get(receipt['url'] + '/api/state').json()
+                handle = tempfile.NamedTemporaryFile('w', suffix='.json', delete=False)
+                handle.write(json.dumps(state_payload))
+                handle.close()
+                snapshot_path = handle.name
+                recovery['requests'].clear()
+                page.set_input_files('#import-file', snapshot_path)
+                expect(page.locator('h1')).to_have_text('Specs')
+                page.evaluate("location.hash = '#/files?" + urlencode({'ws': 'fixture', 'path': 'files/overview.md'}) + "'")
+                expect(page.locator('h1')).to_have_text('Files')
+                expect(page.locator('.files-destination .records')).to_contain_text('A live dashboard is required')
+                expect(page.locator('.files-destination .reader')).to_contain_text('Files require a live dashboard server')
+                expect(page.locator('.files-destination .list-pane .detail-foot .ds-btn')).to_be_disabled()
+                expect(page.locator('.files-destination .reader .paper')).to_have_count(0)
+                release_recovery()
+                page.wait_for_timeout(200)
+                expect(page.locator('.files-destination .records')).to_contain_text('A live dashboard is required')
+                expect(page.locator('.files-destination .reader')).to_contain_text('Files require a live dashboard server')
+                assert recovery['requests'] == [], recovery['requests']
+                report['scenarios'].append('A real snapshot import abandons held list/read work, shows the no-live regional UI and sends no new file/list request')
+            finally:
+                if snapshot_path:
+                    Path(snapshot_path).unlink(missing_ok=True)
+                release_recovery()
+                recovery['listing']['mode'] = ''
+
+            # (6) Bound reference screens: verify card sha256 before render.
+            design_candidates = [
+                Path('/Users/ryanmahoney/Documents/adjacent-storage/projects/agent-tooling/designs/app-ui/screens'),
+                Path('/home/ryanmahoney/Documents/adjacent-storage/projects/agent-tooling/designs/app-ui/screens'),
+            ]
+            design_root = next((candidate for candidate in design_candidates if candidate.is_dir()), None)
+            assert design_root is not None, 'Bound app-ui design screens were not found'
+            references = {}
+            reference_page = context.new_page()
+            try:
+                for screen, filename, digest in [
+                    ('61', '61-files-empty.html', 'c2e475e72239743a415eb314bead2754264d82b6227ecce205c9fb66c404058a'),
+                    ('63', '63-files-error.html', 'dcc8d99d1269ba1a21d564099b175158c7fc3fe859dd8fde9acbf41aca48f7a2'),
+                    ('64', '64-files-partial.html', 'a459c2a23a352950f6000b9015f42b741029d83f08b6d4b2ca8fcb746d8c9664'),
+                    ('65', '65-files-unavailable.html', 'c419e7b85e76bb9965b5519995ea55d94c3f09546d6980b86fbe18a46d0b1b32'),
+                    ('68', '68-files-no-matches.html', '67200f0ee3582ab1fee76c23bab1c731677a5249e0610aad385ab4d94de89b8a'),
+                ]:
+                    asset = design_root / filename
+                    assert asset.is_file(), asset
+                    actual = hashlib.sha256(asset.read_bytes()).hexdigest()
+                    references[screen] = {'file': str(asset), 'sha256': actual, 'bound': digest}
+                    assert actual == digest, (screen, actual, digest)
+                    for width, height in [(1280, 860), (1600, 900)]:
+                        reference_page.set_viewport_size({'width': width, 'height': height})
+                        reference_page.goto(asset.as_uri(), wait_until='load')
+                        reference_page.wait_for_timeout(150)
+                        reference_page.screenshot(path=str(evidence / f'reference-{screen}-{width}.png'))
+            finally:
+                reference_page.close()
+            report['references'] = references
+            report['scenarios'].append('Bound reference screens 61/63/64/65/68 match their card sha256 digests and render at 1280/1600')
 
         if case in (None, 'specs'):
             open_route('specs', ws='fixture')
@@ -2400,7 +2770,7 @@ finally:
         fixture.kill()
         fixture.wait()
     report['elapsedSeconds'] = round(time.monotonic() - started, 3)
-    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'step-003-fix-browser.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'sentinel-planned-filter-browser.json' if case == 'filters' else 'specs-list.json' if case == 'specs-list' else 'specs-variants.json' if case == 'specs-variants' else 'specs-overview.json' if case == 'specs-overview' else 'specs-activity.json' if case == 'specs-activity' else 'specs-relaunch.json' if case == 'specs-relaunch' else 'files-workspace.json' if case == 'files-workspace' else 'files-sources.json' if case == 'files-sources' else 'files-continuity.json' if case == 'files-continuity' else 'step-002-fix-browser.json'
+    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'step-003-fix-browser.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'sentinel-planned-filter-browser.json' if case == 'filters' else 'specs-list.json' if case == 'specs-list' else 'specs-variants.json' if case == 'specs-variants' else 'specs-overview.json' if case == 'specs-overview' else 'specs-activity.json' if case == 'specs-activity' else 'specs-relaunch.json' if case == 'specs-relaunch' else 'files-workspace.json' if case == 'files-workspace' else 'files-sources.json' if case == 'files-sources' else 'files-continuity.json' if case == 'files-continuity' else 'files-recovery.json' if case == 'files-recovery' else 'step-002-fix-browser.json'
     target = evidence / filename
     temporary = target.with_name(target.name + '.tmp')
     temporary.write_text(json.dumps(report, indent=2) + '\n')
