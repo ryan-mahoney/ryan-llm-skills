@@ -396,12 +396,29 @@ never restarts a live host without explicit operator authority.
 The workspace detail lists the workspace's design packages
 (`projects/<id>/designs/<slug>/design.json`, read through `/api/workspace-designs`:
 up to 50 designs, 64 KiB per index) with posture and derived produced/captured
-counts, and reports invalid indexes beside them. Selecting a design opens a screen
-viewer in the file panel: previous/next by step, a width toggle from the declared
-widths, the screen in the same sandboxed iframe as other workspace HTML, and the
-index entry's person, job, kind, state, primary action, notes and deviations beside
-it. Workspace HTML may load fonts from inside the workspace (`font-src 'self'`);
-network access stays disabled. Read-only; nothing writes a design record. Contract:
+counts, and reports invalid indexes beside them. Designs has its own route grammar:
+`#/designs?ws=<workspace>&id=<slug>&path=<screen file>&tab=<declared width>` with an
+optional `q` row search. A missing design selects the first listed package; missing
+or invalid path/width parameters normalize through `history.replaceState`, while an
+explicit unknown `id` remains unavailable rather than selecting a neighbour.
+Choosing a design, step or width pushes an entry, and the selection is resolved
+against the unfiltered index so a search never clears the open detail. Selecting a design opens a master-detail viewer: previous/next by step, a
+labelled width select built from the declared widths, and the screen served
+read-only from the workspace folder through `/workspace-view/` in the same sandboxed
+`allow-scripts` iframe as other workspace HTML. A ResizeObserver scales the frame
+down to the pane and never upscales it, and step and width controls keep focus while
+the index refreshes. A coalesced five-second poll re-reads the index and refreshes derived
+metadata, and a per-screen HEAD probes only a produced ws/slug/file identity or an
+explicit retry, so width changes and polls never re-probe; neither reloads an
+unchanged frame: only a workspace, design, screen or retry identity change replaces
+it. The index entry's
+person, job, primary action, capture coverage, notes and same-step deviations sit in
+a compact disclosure beside the frame, and an optional `brief` opens through the
+workspace Files route from the planned-screen and read-error fallbacks (the ideal
+toolbar carries Open screen only). Workspace HTML may load fonts and relative
+scripts/styles
+from inside the workspace (`font-src 'self'`); network access stays disabled.
+Read-only; nothing writes a design record. Contract:
 [docs/design-packages.md](../../docs/design-packages.md).
 
 ### Launch flow and assignment handoff

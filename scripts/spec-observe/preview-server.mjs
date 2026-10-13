@@ -96,7 +96,7 @@ export function createPreviewServer({
         void servePage();
         return;
       }
-      if (!(url.pathname.startsWith('/api/') || url.pathname.startsWith('/package-view/'))) {
+      if (!(url.pathname.startsWith('/api/') || url.pathname.startsWith('/package-view/') || url.pathname.startsWith('/workspace-view/'))) {
         response.writeHead(404, STATIC_HEADERS); response.end('Not found'); return;
       }
 

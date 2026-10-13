@@ -103,6 +103,16 @@ test('mutation proxy rewrites to canonical public origin and preserves action to
       token: request.headers['x-sentinel-token'],
       body: Buffer.concat(chunks).toString(),
     };
+    if (request.url.startsWith('/workspace-view/')) {
+      response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': "sandbox allow-scripts; default-src 'none'" });
+      response.end(request.method === 'HEAD' ? undefined : '<h1>workspace view</h1>');
+      return;
+    }
+    if (request.url.startsWith('/package-view/')) {
+      response.writeHead(200, { 'Content-Type': /\.css$/.test(request.url) ? 'text/css; charset=utf-8' : 'text/javascript; charset=utf-8' });
+      response.end(request.method === 'HEAD' ? undefined : '/* view */');
+      return;
+    }
     response.writeHead(202, { 'Content-Type': 'application/json', 'Content-Security-Policy': 'default-src none' });
     response.end('{"accepted":true}');
   });
@@ -130,6 +140,22 @@ test('mutation proxy rewrites to canonical public origin and preserves action to
     token: 'live-token',
     body: '{"action":"start"}',
   });
+  const view = `/workspace-view/${Buffer.from('studio').toString('base64url')}/marker.html`;
+  const forwarded = await request(base, view, { headers: { host: PREVIEW_HOST, origin: PREVIEW_ORIGIN } });
+  assert.equal(forwarded.status, 200);
+  assert.equal(forwarded.headers['content-type'], 'text/html; charset=utf-8');
+  assert.equal(forwarded.headers['content-security-policy'], "sandbox allow-scripts; default-src 'none'");
+  assert.equal(forwarded.body, '<h1>workspace view</h1>');
+  assert.equal(observed.url, view);
+  assert.equal(observed.host, 'restory-box.tail57a257.ts.net');
+  const forwardedHead = await request(base, view, { method: 'HEAD', headers: { host: PREVIEW_HOST, origin: PREVIEW_ORIGIN } });
+  assert.equal(forwardedHead.status, 200);
+  assert.equal(forwardedHead.body, '');
+  assert.equal(observed.method, 'HEAD');
+  const forwardedScript = await request(base, '/package-view/abc/marker.js', { headers: { host: PREVIEW_HOST, origin: PREVIEW_ORIGIN } });
+  assert.match(forwardedScript.headers['content-type'], /javascript/);
+  const forwardedStyle = await request(base, '/package-view/abc/marker.css', { headers: { host: PREVIEW_HOST, origin: PREVIEW_ORIGIN } });
+  assert.match(forwardedStyle.headers['content-type'], /text\/css/);
 });
 
 test('SSE proxy streams promptly and cancels upstream when the client disconnects', async t => {

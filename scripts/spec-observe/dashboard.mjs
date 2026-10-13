@@ -126,6 +126,14 @@ const WORKSPACE_EXCLUDED = new Set(['.adjacent', 'sessions', 'threads', '.git', 
 function workspaceExclude(component) {
   return WORKSPACE_EXCLUDED.has(component) || component.startsWith('.env.');
 }
+// Path-style views (package-view, workspace-view) serve JS and CSS with the
+// types a module or stylesheet load requires; other names keep the reader's
+// detected type.
+function viewContentType(fileName, fileType) {
+  if (/\.(?:js|mjs)$/i.test(fileName)) return 'text/javascript; charset=utf-8';
+  if (/\.css$/i.test(fileName)) return 'text/css; charset=utf-8';
+  return fileType;
+}
 
 export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi/agent'), publicHost, storageRoot, discussion, sessionControl, previewService } = {}) {
   let cached, read;
@@ -223,7 +231,7 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
           response.end(request.method === 'HEAD' ? undefined : JSON.stringify(await listPackageFiles(root, url.searchParams.has('cursor')?Number(url.searchParams.get('cursor')):0, { exclude: workspaceExclude })));
         } else {
           const file = await readPackageFile(root, requestedFile, { exclude: workspaceExclude });
-          response.setHeader('Content-Type', view && /\.(?:js|mjs)$/i.test(requestedFile) ? 'text/javascript; charset=utf-8' : view && /\.css$/i.test(requestedFile) ? 'text/css; charset=utf-8' : file.type);
+          response.setHeader('Content-Type', view ? viewContentType(requestedFile, file.type) : file.type);
           response.setHeader('X-Package-File-Kind', file.kind);
           response.setHeader('X-Frame-Options', 'SAMEORIGIN');
           response.setHeader('Content-Security-Policy', "sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'");
@@ -252,6 +260,18 @@ export function createDashboardServer({ agentDir = process.env.PI_CODING_AGENT_D
         const directory = await authorizedWorkspace(url.searchParams.get('id'));
         const file = await readPackageFile(directory, url.searchParams.get('file'), { exclude: workspaceExclude });
         response.setHeader('Content-Type', file.type);
+        response.setHeader('X-Package-File-Kind', file.kind);
+        response.setHeader('X-Frame-Options', 'SAMEORIGIN');
+        response.setHeader('Content-Security-Policy', "sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'");
+        if (file.kind === 'download' || url.searchParams.has('download')) response.setHeader('Content-Disposition', 'attachment; filename="package-file"');
+        response.end(request.method === 'HEAD' ? undefined : file.bytes);
+      } else if (path.startsWith('/workspace-view/')) {
+        const segments = path.slice('/workspace-view/'.length).split('/');
+        const requestedWorkspace = Buffer.from(segments.shift(), 'base64url').toString('utf8');
+        const requestedFile = segments.map(decodeURIComponent).join('/');
+        const directory = await authorizedWorkspace(requestedWorkspace);
+        const file = await readPackageFile(directory, requestedFile, { exclude: workspaceExclude });
+        response.setHeader('Content-Type', viewContentType(requestedFile, file.type));
         response.setHeader('X-Package-File-Kind', file.kind);
         response.setHeader('X-Frame-Options', 'SAMEORIGIN');
         response.setHeader('Content-Security-Policy', "sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'");

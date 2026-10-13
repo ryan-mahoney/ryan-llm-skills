@@ -38,10 +38,14 @@ export const duration = (start: unknown, end: unknown) => {
   const s = Math.floor((b - a) / 1000), d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
   return d ? `${d}d ${h}h ${m}m` : h ? `${h}h ${m}m ${s % 60}s` : m ? `${m}m ${s % 60}s` : `${s}s`;
 };
-export const packageViewUrl = (packagePath: string, file: string) => {
-  const bytes = new TextEncoder().encode(packagePath);
+// UTF-8 base64url owner id plus per-segment path encoding, shared by the
+// package-view and workspace-view readers; packageViewUrl stays the package
+// wrapper so existing Observations work-tour links keep identical output.
+export const fileViewUrl = (kind: 'package' | 'workspace', owner: string, file: string): string => {
+  const bytes = new TextEncoder().encode(owner);
   let binary = '';
   for (const byte of bytes) binary += String.fromCharCode(byte);
   const encoded = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
-  return `/package-view/${encoded}/${file.split('/').map(encodeURIComponent).join('/')}`;
+  return `/${kind}-view/${encoded}/${file.split('/').map(encodeURIComponent).join('/')}`;
 };
+export const packageViewUrl = (packagePath: string, file: string) => fileViewUrl('package', packagePath, file);

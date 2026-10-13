@@ -1,12 +1,8 @@
 import Designs from '../Designs';
 import type { DestinationProps } from './index';
 
+// Designs owns its own master-detail grid and announcements, so the adapter
+// passes the destination props through without stacking layout wrappers.
 export default function DesignsDestination(props: DestinationProps) {
-  return (
-    <div class="full-page">
-      <div class="detail">
-        <Designs workspaceId={props.route.ws ?? ''} live={props.live} selectedSlug={props.route.id} />
-      </div>
-    </div>
-  );
+  return <Designs {...props} />;
 }

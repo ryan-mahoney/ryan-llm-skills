@@ -234,7 +234,28 @@ builds to the newer file silently.
 ## Sentinel
 
 The workspace detail lists the workspace's designs (`/api/workspace-designs`, up to 50,
-index under 64 KiB each) with posture and produced/total, and opens a selected design in a
-screen viewer: previous/next by step, a width toggle from the declared widths, the screen
-in the sandboxed iframe, and the index entry's person, job, kind, state, primary action,
-notes and deviations beside it. Read-only; Sentinel never writes a design record.
+index under 64 KiB each) with posture and produced/total. The Designs route grammar is
+`#/designs?ws=<workspace>&id=<slug>&path=<screen file>&tab=<declared width>` with an
+optional `q` row search; a missing design selects the first listed package, missing or
+invalid path/width parameters normalize with a history replace, an explicit unknown `id`
+stays unavailable rather than selecting a neighbour, and design, step and width choices
+push their own entries. A selected design renders a
+master-detail viewer: previous/next by step, a labelled width select from the declared
+widths, the screen read from the workspace folder through `/workspace-view/` in the
+sandboxed `allow-scripts` iframe, and the index entry's person, job, primary action,
+capture coverage, notes and same-step deviations in a compact disclosure. A
+ResizeObserver scales the frame down to the pane and never upscales. A coalesced
+five-second index poll refreshes derived metadata, and a per-screen HEAD probes only a
+produced ws/slug/file identity or an explicit retry, without reloading an unchanged
+frame; only a workspace, design, screen or retry identity change replaces it. The optional `brief` field links to the workspace Files route from the planned-screen
+and read-error fallbacks; the ideal toolbar carries Open screen.
+Read-only; Sentinel never writes a design record.
+
+## Host-restart deployment handoff
+
+The generated dashboard is served by the existing host process. After this change is merged, an
+authorized operator restarts that existing host process using the normal deployment procedure;
+this step does not restart, deploy or reconfigure the service and it invents no command or
+service authority. After the restart, validate the actual Designs surface, the
+`/api/workspace-designs` API and the workspace-view reader, hard-reload the client, and record
+the results separately. No deployment or broad regression claim is made by this step.
