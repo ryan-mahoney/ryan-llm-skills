@@ -13,6 +13,7 @@ import { catalogRead, type WorkspaceCatalog } from './destinations/workspace-sta
 import { memberRecords, visibleEpics as sharedVisibleEpics } from './destinations/epic-state';
 import { getLaunchDraft, seedLaunchDraft } from './launch-state';
 import { armLaunchPickerIntent, cancelLaunchPickerIntent, createLaunchPickerIntent, shouldApplyPickerReset, shouldResetAcknowledgedDraft } from './launch-picker-intent';
+import { agentCoverage, effectiveAgentFilter, retainSelectedAgent, visibleAgents } from './agent-state';
 
 type Filter = 'active' | 'attention' | 'completed' | 'planned';
 type Catalog = WorkspaceCatalog;
@@ -43,6 +44,9 @@ export default function App() {
   const [expectedCompletionKey, setExpectedCompletionKey] = createSignal<string | null>(null);
   const [expectedCompletionRoute, setExpectedCompletionRoute] = createSignal<RouteState | null>(null);
   const [endedSessions, setEndedSessions] = createSignal<string[]>([]);
+  // Bounded Agents retained selection: the last row resolved for an explicit
+  // route id, tagged with the scope/import context it was read under.
+  const [retainedAgent, setRetainedAgent] = createSignal<{ row: WireRecord | null; id: string; ws: string | undefined; imported: boolean } | null>(null);
   let stateGeneration = 0, catalogGeneration = 0, workspaceGeneration = 0;
   let workspaceBusyId: string | null = null;
   let catalogTimer: ReturnType<typeof setTimeout> | undefined;
@@ -77,6 +81,33 @@ export default function App() {
   const record = createMemo(() => scopedRecords().find(item => item.key === route().id) ?? null);
   const agent = createMemo(() => scopedAssignments().find(item => item.key === route().id) ?? null);
   const epic = createMemo(() => scopedEpics().find(item => item.key === route().id) ?? null);
+  const agentsFilter = createMemo(() => effectiveAgentFilter(route(), scopedAssignments()));
+  const visibleAgentRows = createMemo(() => visibleAgents(scopedAssignments(), agentsFilter(), route().q ?? ''));
+  // The stored pin feeds coverage only while it still matches the requested
+  // id/scope/import context; an unrelated previous row must not contaminate
+  // the selected-source facts.
+  const retainedCandidate = createMemo(() => {
+    const stored = retainedAgent();
+    if (!stored || stored.ws !== scopeWs() || stored.imported !== imported()) return null;
+    if (stored.id !== (route().id ?? '')) return null;
+    return stored.row;
+  });
+  // A retained row missing from this read still names its owning workspace so
+  // that an incomplete owning source qualifies the list; it is never added to
+  // the rendered rows or counts themselves.
+  const agentsCoverageRows = createMemo(() => {
+    const rows = scopedAssignments();
+    const retained = retainedCandidate();
+    if (!retained || rows.length === 0 || rows.some(row => row.key === retained.key)) return rows;
+    return [...rows, retained];
+  });
+  const agentsCoverage = createMemo(() => agentCoverage(payload(), agentsCoverageRows(), agent() ?? retainedCandidate()));
+  const agentsSelected = createMemo(() => {
+    const coverage = agentsCoverage();
+    const sourceComplete = payload() !== null && coverage.selectedSourceComplete;
+    return retainSelectedAgent(agent(), retainedCandidate(), true, sourceComplete);
+  });
+  const agentsSelectionRetained = createMemo(() => agent() === null && agentsSelected() !== null);
   const token = () => live() && !error() ? payload()?.thread_action_token || payload()?.action_token : undefined;
   const completionToken = () => live() && !error() ? payload()?.action_token : undefined;
   const observers = createMemo(() => authoritativeObservers(payload()?.observers ?? []));
@@ -341,8 +372,9 @@ export default function App() {
   }
   function notes() {
     const out: string[] = [];
-    // Workspaces, Epics and Specs own their connection/coverage recovery in the destination.
-    const destinationNotes = ['workspaces', 'epics', 'specs'].includes(route().dest) || pickerRequired();
+    // Workspaces, Epics, Specs and Agents own their connection/coverage and freshness
+    // recovery in the destination, so the global strip must not duplicate or shift it.
+    const destinationNotes = ['workspaces', 'epics', 'specs', 'agents'].includes(route().dest) || pickerRequired();
     if (error() && !destinationNotes) out.push(error());
     if (payload()?.truncated) out.push('Snapshot read budget reached; some observations are unavailable.');
     for (const e of payload()?.errors ?? []) out.push(`${e.source ? str(e.source) + ': ' : ''}${str(e.message)}`);
@@ -402,8 +434,29 @@ export default function App() {
         replaceId(followed?.key ?? rows[0]?.key ?? null);
       }
     } else if (currentRoute.dest === 'agents') {
-      const rows = visibleAssignments();
-      if (!rows.some(item => item.key === currentId)) replaceId(rows[0]?.key ?? null);
+      const current = currentId ? scopedAssignments().find(item => item.key === currentId) ?? null : null;
+      if (current) {
+        // A resolved selection pins the retained row and keeps the URL
+        // identity; polling never swaps it for a sibling row.
+        setRetainedAgent({ row: current, id: currentId ?? '', ws: scopeWs(), imported: imported() });
+      } else if (!currentId) {
+        const first = visibleAgentRows()[0]?.key ?? null;
+        if (first) replaceId(first);
+      } else {
+        // An explicit id absent from this read keeps its URL verbatim, but
+        // the stored pin must not survive invalidation: a complete
+        // owning-source absence drops it so a later partial read cannot
+        // resurrect it, and moving to another id drops the previous pin.
+        // Same-id incomplete reads keep their pin via the retained memo.
+        const stored = retainedAgent();
+        if (stored && stored.id !== currentId) {
+          setRetainedAgent(null);
+        } else if (stored) {
+          const coverage = agentsCoverage();
+          if (payload() !== null && coverage.selectedSourceComplete) setRetainedAgent(null);
+        }
+      }
+      // polling never swaps a resolved selection for a sibling row.
     } else if (currentRoute.dest === 'epics') {
       const rows = visibleEpics();
       if (!rows.some(item => item.key === currentId)) replaceId(rows[0]?.key ?? null);
@@ -436,6 +489,14 @@ export default function App() {
     });
     onCleanup(() => cancelAnimationFrame(frame));
   });
+
+  // Retained Agents facts belong to one scope/import context; a genuine
+  // scope/import change drops the stored row, while same-context navigation
+  // (selection, query, refresh) preserves the pin.
+  createEffect(on(() => [scopeWs(), imported()] as const, ([ws, imp]) => {
+    const stored = retainedAgent();
+    if (stored && (stored.ws !== ws || stored.imported !== imp)) setRetainedAgent(null);
+  }, { defer: true }));
 
   // An armed All-workspaces launch intent survives only inside the launch
   // picker (launch without a workspace). Any other arrival abandons it
@@ -494,6 +555,9 @@ export default function App() {
     get specsLive() { return live() && !error(); },
     get records() { return scopedRecords(); },
     get assignments() { return scopedAssignments(); },
+    get agentsSelected() { return agentsSelected(); },
+    get agentsSelectionRetained() { return agentsSelectionRetained(); },
+    get agentsCoverage() { return agentsCoverage(); },
     get epics() { return scopedEpics(); },
     get scopedObservers() { return scopedObservers(); },
     get epicSupport() { return epicSupport(); },

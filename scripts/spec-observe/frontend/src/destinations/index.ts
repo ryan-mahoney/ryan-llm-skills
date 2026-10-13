@@ -1,4 +1,5 @@
 import type { Component } from 'solid-js';
+import type { AgentCoverage } from '../agent-state';
 import type { Envelope, Observer, WireRecord } from '../model';
 import type { Destination, RouteState } from '../route';
 import type { CatalogEntry } from '../scope';
@@ -21,6 +22,11 @@ export type DestinationProps = {
   epics: WireRecord[];
   scopedObservers: Observer[];
   epicSupport?: string | null;
+  // Agents-only retained selection and resolved observation coverage; sibling
+  // adapters keep their existing required props unchanged.
+  agentsSelected?: WireRecord | null;
+  agentsSelectionRetained?: boolean;
+  agentsCoverage?: AgentCoverage | null;
   catalog: CatalogEntry[];
   catalogInvalid: WireRecord[];
   catalogStorage?: WireRecord;

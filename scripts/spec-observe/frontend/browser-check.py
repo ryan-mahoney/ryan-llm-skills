@@ -1018,7 +1018,9 @@ try:
         page.locator('[data-area="agents"]').click()
         page.locator('[data-assignment-key]').filter(has_text='run-1').first.click()
         expect(page.locator('main')).to_contain_text('Execution')
-        expect(page.locator('main')).to_contain_text('Lifecycle')
+        expect(page.locator('main')).to_contain_text('Safe next action')
+        expect(page.locator('main')).to_contain_text('Explicit operator command')
+        expect(page.locator('main')).to_contain_text('Not included in this observation')
         expect(page.get_by_role('button',name='Refresh session',exact=True)).to_be_visible()
         expect(page.locator('dialog[open]')).to_have_count(0)
         assert len(posts('endSession'))==end_posts_before,'viewing an agent ended a session'

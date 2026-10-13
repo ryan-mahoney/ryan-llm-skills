@@ -223,3 +223,34 @@
 :where(.files-destination) .paper .status-markdown pre code{background:none;color:inherit}
 :where(.files-destination) .reader pre{white-space:pre;overflow:auto;margin:0;font-size:13px;line-height:1.7}
 :where(.files-destination) .html-frame{display:block;width:100%;height:100%;min-height:570px;border:1px solid var(--ds-line-2);border-radius:3px;background:var(--ds-paper)}
+
+/* Agents list: the destination wrapper is layout-neutral so the scrolled
+   .records column keeps the same children, and the scoped button reset
+   trims legacy run-row chrome to the shared record geometry without
+   outranking hover/selected states. */
+.agents-list{display:contents}
+:where(.agents-list) .run-row{width:100%;min-height:90px;padding:18px 16px;border:0;border-bottom:1px solid var(--ds-line);border-radius:0;background:none;color:var(--ds-ink-2);font:inherit;text-align:left}
+:where(.agents-list) .run-row:hover{background:var(--ds-chrome-hi);text-decoration:none}
+:where(.agents-list) .run-row[aria-pressed="true"]{background:color-mix(in srgb,var(--ds-accent) 10%,var(--ds-panel));box-shadow:inset 3px 0 var(--ds-accent)}
+
+/* Agents loading keeps the four-row record rhythm: each bounded placeholder
+   row matches .record's 90px min-height using only shared tokens. */
+.agents-skeleton .skeletons{padding:0}
+.agents-skeleton .skeleton{min-height:90px;padding:18px 16px;border-bottom:1px solid var(--ds-line)}
+
+/* Agents detail keeps the object head and action bar visible while the body
+   scrolls, and lets recorded execution paths wrap inside the semantic table. */
+.agent-detail{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0;max-width:none;margin:0;width:100%}
+.agent-detail>.object-head{flex-shrink:0}
+.agent-detail .path{overflow-wrap:anywhere;word-break:break-word}
+.agent-detail .locate-command{width:100%;white-space:pre-wrap;overflow-wrap:anywhere}
+
+/* Terminal session controls: the production session extension borrows the
+   shared button/input surfaces. Scoped to .session-controls and its
+   end-session dialog so no other screen is restyled; the destructive End
+   keeps its semantic red while sharing the 44px button geometry and focus. */
+.session-controls textarea.ds-input{background:var(--ds-panel-2);border:1px solid var(--ds-input-border);border-radius:3px;color:var(--ds-ink)}
+.session-controls dialog{background:var(--ds-panel);color:var(--ds-ink);border:1px solid var(--ds-line-2);border-radius:4px}
+.session-controls .ds-btn.danger{min-height:44px;border-radius:3px}
+.session-controls .ds-btn.danger:focus-visible{outline:2px solid var(--ds-accent);outline-offset:3px}
+.session-controls dialog .actions{justify-content:flex-end}
