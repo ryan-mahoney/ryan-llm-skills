@@ -67,6 +67,59 @@ const object = (value: unknown): value is WireRecord =>
 const list = (value: unknown): WireRecord[] => Array.isArray(value) ? value.filter(object) : [];
 const bool = (value: unknown): boolean | null => value === true ? true : value === false ? false : null;
 
+export type CanonicalMember = { epic: WireRecord; member: WireRecord };
+
+// One workspace-scoped join for resolved launch records and observed inventory.
+export const canonicalMemberOf = (
+  epics: WireRecord[] | undefined,
+  record: WireRecord,
+  packageRef: string,
+): CanonicalMember | null => {
+  const workspace = text(record.workspace_id) || text(record.workspace);
+  const candidates = [text(record.package_ref), text(record.spec_package), text(record.package), text(packageRef)].filter(Boolean);
+  const identities = new Set<string>();
+  for (const candidate of candidates) {
+    identities.add(candidate);
+    const parts = candidate.split('/').filter(Boolean);
+    if (parts.length) identities.add(parts[parts.length - 1]);
+  }
+  for (const epic of epics ?? []) {
+    for (const member of list(epic.members)) {
+      const memberWorkspace = text(member.workspace) || text(epic.workspace);
+      if (workspace && memberWorkspace && memberWorkspace !== workspace) continue;
+      const ids = [text(member.package), text(member.name)].filter(Boolean);
+      if (ids.some(id => identities.has(id))) return { epic, member };
+    }
+  }
+  return null;
+};
+
+// Inventory rows do not carry requires: the containing epic owns them.
+// All Specs presentations and list ordering consume this observed context.
+export function observedSpecReadiness(record: WireRecord, epics: WireRecord[] = [], assignments: WireRecord[] = list(record.observer?.snapshot?.assignments)) {
+  const found = canonicalMemberOf(
+    [...list(record.observer?.snapshot?.epics), ...epics],
+    record, text(record.package_ref) || text(record.package),
+  );
+  const epic = found?.epic ?? null;
+  const member = found?.member ?? null;
+  const siblings = list(epic?.members);
+  const prerequisites: PrerequisiteFact[] | undefined = Array.isArray(member?.requires)
+    ? member.requires.filter((name: unknown): name is string => typeof name === 'string' && Boolean(name)).map((name: string) => {
+        const sibling = siblings.find(item => item.name === name);
+        const state: PrerequisiteFact['state'] = !sibling || sibling.status === 'unknown' ? 'unknown'
+          : landedStatus(sibling.status) ? 'landed'
+          : positivelyPrepared(memberPlanning(sibling)) ? 'prepared' : 'unresolved';
+        return { name, state };
+      })
+    : undefined;
+  return {
+    epic, member, prerequisites,
+    facts: planningFactsFor(record) ?? memberPlanning(member),
+    readiness: specReadiness(record, { assignments, prerequisites }),
+  };
+}
+
 export const landedStatus = (status: unknown): boolean => status === 'merged' || status === 'complete';
 
 // Every observed assignment state blocks a duplicate action except the two
@@ -148,7 +201,7 @@ export const positivelyPrepared = (facts: PlanningFacts | null | undefined): boo
 const usableDecision = (decision: WireRecord | null): WireRecord | null =>
   decision && !('outcome' in decision) ? decision : null;
 
-const coverageStateOf = (record: WireRecord | null | undefined, context: ReadinessContext): string => {
+export const coverageStateOf = (record: WireRecord | null | undefined, context: ReadinessContext = {}): string => {
   const coverage = context.coverage ?? record?.assignment_coverage ?? record?.observer?.snapshot?.assignment_coverage ?? null;
   return text(coverage?.state) || 'unknown';
 };
@@ -314,7 +367,7 @@ export const readinessRank = (state: ReadinessState): number => {
 // Shared row order for Ready/planned lists: readiness rank first, then
 // workspace and package, so counts and selection read the same sequence.
 export function compareReadiness(a: WireRecord | null | undefined, b: WireRecord | null | undefined): number {
-  const rank = readinessRank(specReadiness(a).state) - readinessRank(specReadiness(b).state);
+  const rank = readinessRank(observedSpecReadiness(a ?? {}).readiness.state) - readinessRank(observedSpecReadiness(b ?? {}).readiness.state);
   if (rank) return rank;
   return text(a?.workspace).localeCompare(text(b?.workspace)) || text(a?.package).localeCompare(text(b?.package));
 }

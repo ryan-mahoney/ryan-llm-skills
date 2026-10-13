@@ -10,11 +10,11 @@ import { Portal } from 'solid-js/web';
 import { base, str, time } from './format';
 import { ActionBar, StateNotice, StatusText } from './primitives';
 import {
-  landedStatus, memberPlanning, planningFactsFor, positivelyPrepared, specReadiness,
+  coverageStateOf, observedSpecReadiness, planningFactsFor, specReadiness,
   type PlanningFacts, type PrerequisiteFact,
 } from './readiness';
 import { plannedTargetChoices, startPackageHandoff, type HandoffInput, type PackagePlanningPlan, type PlannedTarget } from './launch-handoff';
-import { linkedAssignmentKey } from './spec-state';
+import { linkedAssignmentKey, packageRelative } from './spec-state';
 import { formatHash } from './route';
 import { packagePlanningPlan } from '../../../workspaces/spec-prompt.mjs';
 import type { WireRecord } from './model';
@@ -37,7 +37,7 @@ export type SpecReadinessProps = {
   token?: string;
   onOpenAgent: (key: string) => void;
   onOpenEpic: (key: string) => void;
-  onOpenSpec?: (key: string) => void;
+  onSelectPackage: (workspace: string, name: string) => void;
   onOpenPackageFiles: (record: WireRecord, path?: string) => void;
   canOpenPackageFiles: (record: WireRecord) => boolean;
   onNavigate: (next: RouteState) => void;
@@ -73,63 +73,12 @@ export default function SpecReadiness(props: SpecReadinessProps) {
   const [handoffError, setHandoffError] = createSignal('');
   const [handoffStatus, setHandoffStatus] = createSignal('');
 
-  // Identity candidates for the observed record and a tolerant member match:
-  // equality or basename equality against member.package/name, with the same
-  // rule prerequisiteRecord uses. The workspace guard stays.
-  const recordCandidates = (): string[] =>
-    [str(record().package), str(record().package_ref), str(record().name)].filter(Boolean);
-  const memberMatches = (member: WireRecord): boolean => {
-    const candidates = [text(member.package), text(member.name)].filter(Boolean);
-    if (!candidates.length) return false;
-    if (member.workspace != null && member.workspace !== record().workspace) return false;
-    return candidates.some(candidate =>
-      recordCandidates().some(value => value === candidate || base(value) === base(candidate)));
-  };
-  const epicOf = (): WireRecord | null => {
-    const reference = record().epic;
-    if (reference && reference.epic) {
-      const observed = list(record().observer?.snapshot?.epics).find(epic =>
-        epic.epic === reference.epic && (reference.workspace == null || epic.workspace === reference.workspace));
-      if (observed) return observed;
-      return list(props.epics).find(epic =>
-        epic.epic === reference.epic && (reference.workspace == null || epic.workspace === reference.workspace)) ?? null;
-    }
-    // Planned-package rows may carry no epic pointer: fall back to the epic
-    // that actually carries a member matching this record's identity.
-    const inScope = (epic: WireRecord): boolean =>
-      (epic.workspace == null || epic.workspace === record().workspace)
-      && list(epic.members).some(member => memberMatches(member));
-    return list(record().observer?.snapshot?.epics).find(inScope)
-      ?? list(props.epics).find(inScope) ?? null;
-  };
-  const memberOf = (): WireRecord | null => {
-    const epic = epicOf();
-    if (!epic) return null;
-    return list(epic.members).find(member => memberMatches(member)) ?? null;
-  };
-  // Observed epic-member prerequisite facts: a sibling that positively landed
-  // is landed, a positively prepared sibling is available when merged, and an
-  // absent or unknown sibling stays unknown.
-  const prerequisitesOf = (): PrerequisiteFact[] | undefined => {
-    const member = memberOf();
-    if (!member || !Array.isArray(member.requires)) return undefined;
-    const byName = new Map(list(epicOf()?.members).map(item => [text(item.name), item]));
-    return member.requires
-      .filter((name: unknown): name is string => typeof name === 'string' && Boolean(name))
-      .map(name => {
-        const sibling = byName.get(name);
-        const state = !sibling || text(sibling.status) === 'unknown' ? 'unknown' as const
-          : landedStatus(sibling.status) ? 'landed' as const
-          : positivelyPrepared(memberPlanning(sibling)) ? 'prepared' as const
-          : 'unresolved' as const;
-        return { name, state };
-      });
-  };
-  const facts = (): PlanningFacts | null => planningFactsFor(record()) ?? memberPlanning(memberOf());
-  const readiness = createMemo(() => specReadiness(record(), {
-    assignments: props.assignments,
-    prerequisites: prerequisitesOf(),
-  }));
+  const observed = createMemo(() => observedSpecReadiness(record(), props.epics ?? [], props.assignments));
+  const epicOf = () => observed().epic;
+  const memberOf = () => observed().member;
+  const prerequisitesOf = () => observed().prerequisites;
+  const facts = () => observed().facts;
+  const readiness = () => observed().readiness;
 
   const obligationTitle = (): string => {
     const value = readiness();
@@ -253,7 +202,7 @@ export default function SpecReadiness(props: SpecReadinessProps) {
   const reportPath = (): string => {
     const source = text(facts()?.preparation?.source);
     if (!source) return '';
-    if (source.startsWith('/')) return source;
+    if (source.startsWith('/')) return packageRelative(record(), source) ?? '';
     return source.split('/').includes('..') ? '' : source;
   };
   const ownerKey = (): string | null => {
@@ -277,6 +226,8 @@ export default function SpecReadiness(props: SpecReadinessProps) {
   const planGate = (): string => {
     const baseGate = gate();
     if (baseGate) return baseGate;
+    const coverage = coverageStateOf(record());
+    if (coverage !== 'complete') return `Assignment coverage ${coverage}; the owner is not confirmed, so this package cannot start.`;
     const value = facts();
     if (value?.proposal === true && value.critiqueRecommended === null) {
       return 'The proposal does not record whether critique is recommended; inspect the proposal and package files before resuming planning.';
@@ -358,7 +309,7 @@ export default function SpecReadiness(props: SpecReadinessProps) {
           href={formatHash({ dest: 'specs', id: key })}
           onClick={event => {
             event.preventDefault();
-            props.onOpenSpec?.(key);
+            props.onSelectPackage(text(target.workspace), base(target.package));
           }}
         >Open prerequisite</a>
       );
@@ -538,7 +489,7 @@ export default function SpecReadiness(props: SpecReadinessProps) {
                             href={formatHash({ dest: 'specs', id: text(item().key) })}
                             onClick={event => {
                               event.preventDefault();
-                              props.onOpenSpec?.(text(item().key));
+                              props.onSelectPackage(text(item().workspace), base(item().package));
                             }}
                           >{fact.name}</a>
                         )}

@@ -44,37 +44,8 @@ const authorityLabel = (value: string): string => {
 const packageRecordOf = (records: WireRecord[] | undefined, packageRef: string): WireRecord | undefined =>
   (records ?? []).find(record => [str(record.package), str(record.package_ref)].includes(packageRef));
 
-export type CanonicalMember = { epic: WireRecord; member: WireRecord };
-
-// Workspace-scoped canonical member join. The resolved record's workspace
-// (workspace_id first) scopes the match so an equal-named foreign member can
-// never supply status; within one workspace the member slug is the canonical
-// identity. Missing workspace or member data stays unknown instead of
-// claiming no prerequisites.
-export const canonicalMemberOf = (
-  epics: WireRecord[] | undefined,
-  record: WireRecord,
-  packageRef: string,
-): CanonicalMember | null => {
-  const workspace = str(record.workspace_id) || str(record.workspace) || '';
-  const candidates = [str(record.package_ref), str(record.spec_package), str(record.package), str(packageRef)].filter(Boolean);
-  const identities = new Set<string>();
-  for (const candidate of candidates) {
-    identities.add(candidate);
-    const parts = candidate.split('/').filter(Boolean);
-    if (parts.length) identities.add(parts[parts.length - 1]);
-  }
-  for (const epic of epics ?? []) {
-    const members = Array.isArray(epic.members) ? (epic.members as WireRecord[]) : [];
-    for (const member of members) {
-      const memberWorkspace = str(member.workspace) || str(epic.workspace) || '';
-      if (workspace && memberWorkspace && memberWorkspace !== workspace) continue;
-      const ids = [str(member.package), str(member.name)].filter(Boolean);
-      if (ids.some(id => identities.has(id))) return { epic, member };
-    }
-  }
-  return null;
-};
+import { canonicalMemberOf, type CanonicalMember } from './readiness';
+export { canonicalMemberOf, type CanonicalMember } from './readiness';
 
 // Next independent member after a confirmed planning launch. Observed
 // assignments reach the shared eligibility owner so live owners are never

@@ -557,6 +557,17 @@ try:
             def readiness_fact(key):
                 return page.locator(f"#spec-readiness [data-fact={key}]")
 
+            def reload_specs(**params):
+                control("specs-publish-snapshot")
+                # The real dashboard retains /api/state for one second.
+                # Publish first, then expire that cache rather than reading an
+                # earlier coverage/owner state as the controlled observation.
+                time.sleep(1.05)
+                page.goto(receipt["url"] + "/#/agents?ws=fixture", wait_until="domcontentloaded")
+                with page.expect_response(lambda response: "/api/state" in response.url):
+                    page.locator("header").get_by_role("button", name="Refresh state", exact=True).click()
+                page.goto(specs_route(filter="ready", **params), wait_until="domcontentloaded")
+
             check_deadline("start")
             page.goto(specs_route(filter="ready"), wait_until="domcontentloaded")
             expect(page.get_by_role("button", name="Ready", exact=True)).to_have_attribute("aria-pressed", "true")
@@ -601,6 +612,8 @@ try:
             page.goto(specs_route(filter="ready"), wait_until="domcontentloaded")
             page.locator(".records button.record").filter(has_text="waiting-browser").click()
             expect(page.locator("#spec-readiness")).to_have_attribute("data-state", "waiting")
+            expect(page.locator(".records button.record.selected")).to_contain_text("Prepared · waiting")
+            expect(page.locator(".object-head")).to_contain_text("Prepared · waiting")
             expect(readiness_fact("prerequisites")).to_contain_text("other-browser")
             saves_before_waiting = len(posts("dispatchSaveBrief"))
             disabled_implement = page.get_by_role("button", name="Implement spec", exact=True)
@@ -616,6 +629,24 @@ try:
             assert len(posts("dispatchSaveBrief")) == saves_before_waiting
             assert posts("create") == []
             report["scenarios"].append("Waiting keeps one Open prerequisite primary, disables Implement with its reason and opens the named prerequisite without a submission")
+
+            # Active prerequisite must escape Ready and an incompatible search.
+            control("publish-assignment", "a1b2c3d4-0000-4000-8000-000000000012", skill="spec-end-to-end", package=receipt["otherPackage"])
+            reload_specs(q="waiting-browser")
+            page.locator(".records button.record").filter(has_text="waiting-browser").click()
+            page.locator("#spec-readiness-actions [data-action=open-prerequisite]").click()
+            expect(page.locator(".object-head h2")).to_have_text("other-browser")
+            expect(page.get_by_role("button", name="Active", exact=True)).to_have_attribute("aria-pressed", "true")
+            expect(page.locator("#find-record")).to_have_value("")
+            reload_specs(q="waiting-browser")
+            page.locator(".records button.record").filter(has_text="waiting-browser").click()
+            page.locator("#spec-readiness a[data-prerequisite=other-browser]").click()
+            expect(page.locator(".object-head h2")).to_have_text("other-browser")
+            expect(page.get_by_role("button", name="Active", exact=True)).to_have_attribute("aria-pressed", "true")
+            assert len(posts("dispatchSaveBrief")) == saves_before_waiting
+            control("clear-launch-publications")
+            reload_specs()
+            report["scenarios"].append("Primary and related prerequisite links open the named Active package and clear the incompatible Ready search without submission")
 
             # Resume planning derives its stage from the intact proposal facts;
             # no architecture stage is re-run and no thread is created.
@@ -644,6 +675,37 @@ try:
             expect(page.locator("#spec-readiness-actions .ds-btn--primary")).to_have_count(1)
             expect(page.locator("#spec-readiness-actions .ds-btn--primary")).to_have_text("Open preparation report")
             expect(page.get_by_role("button", name="Resume planning", exact=True)).to_have_count(0)
+            with page.expect_response(lambda response: "/api/package-file?" in response.url) as report_response:
+                page.locator("#spec-readiness-actions .ds-btn--primary").click()
+            assert report_response.value.ok
+            assert "file=spec-prepare.md" in report_response.value.url
+            expect(page.locator(".files-destination .reader")).to_contain_text("Preparation report")
+            report["scenarios"].append("An absolute observer preparation source opens the relative report through the real Files API")
+
+            # Live planning ownership is consistent in list, header and detail.
+            control("publish-assignment", "a1b2c3d4-0000-4000-8000-000000000013", skill="spec-write", package="fixture/browser")
+            reload_specs()
+            page.locator(".records button.record").filter(has=page.locator(".run-title", has_text=re.compile("^browser$"))).click()
+            expect(page.locator(".records button.record.selected")).to_contain_text("Planning")
+            expect(page.locator(".object-head")).to_contain_text("Planning")
+            expect(page.locator("#spec-readiness")).to_have_attribute("data-state", "planning")
+            capture("planning-owner")
+            control("clear-launch-publications")
+            control("specs-assignment-coverage", "unknown")
+            reload_specs()
+            page.locator(".records button.record").filter(has_text="incomplete-browser").click()
+            expect(page.get_by_role("button", name="Resume planning", exact=True)).to_be_disabled()
+            expect(page.locator("#spec-readiness-actions [data-action-note=resume-planning]")).to_contain_text("Assignment coverage unknown")
+            saves_before_unknown = len(posts("dispatchSaveBrief"))
+            # Even a synthetic event cannot bypass the handler's coverage gate.
+            page.locator("[data-action=resume-planning]").dispatch_event("click")
+            assert len(posts("dispatchSaveBrief")) == saves_before_unknown
+            capture("planning-coverage-unknown")
+            control("specs-assignment-coverage", "complete")
+            reload_specs()
+            page.locator(".records button.record").filter(has_text="incomplete-browser").click()
+            expect(page.get_by_role("button", name="Resume planning", exact=True)).to_be_enabled()
+            report["scenarios"].append("Live planning ownership agrees across all Specs presentations; unknown assignment coverage refuses planning even on a synthetic click and complete coverage restores entry")
             report["scenarios"].append("A recorded decision keeps a discuss/read-files primary instead of resume planning")
 
             # Cold planned link normalizes to Ready; imported older fields stay

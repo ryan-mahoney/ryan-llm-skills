@@ -6,7 +6,7 @@ import { classifyCompletionError, linkedAssignmentKey, observationEnd, packageFr
 import SpecActivity, { hasActivityFacts } from '../SpecActivity';
 import { ActionBar, EmptyState, MasterDetail, RegionalSkeleton, SectionTabs, StateNotice, StatusText, type SectionTab, type StatusTone } from '../primitives';
 import { PackagePreview } from '../PackagePreview';
-import { landedStatus, memberPlanning, planningFactsFor, positivelyPrepared, specReadiness } from '../readiness';
+import { landedStatus, memberPlanning, planningFactsFor, positivelyPrepared, observedSpecReadiness } from '../readiness';
 import RelaunchAssignment from '../RelaunchAssignment';
 import SpecOverview from '../SpecOverview';
 import SpecReadiness, { SpecImplementEntry } from '../SpecReadiness';
@@ -47,9 +47,9 @@ const readyEmptyText = (epics: WireRecord[]): string => {
   return `A spec appears here when its package is prepared and nothing has been dispatched. ${count === 0 ? 'No unplanned epic members were observed.' : `${count} epic member${count === 1 ? ' is' : 's are'} not planned yet.`}`;
 };
 
-function SpecsRow(props: { record: WireRecord; selected: boolean; context: ObservationContext; assignments: WireRecord[]; onSelect: (key: string) => void }) {
+function SpecsRow(props: { record: WireRecord; selected: boolean; context: ObservationContext; assignments: WireRecord[]; epics: WireRecord[]; onSelect: (key: string) => void }) {
   const readiness = () => props.record.planned || props.record.implementation_starting === true
-    ? specReadiness(props.record, { assignments: props.assignments })
+    ? observedSpecReadiness(props.record, props.epics, props.assignments).readiness
     : null;
   const tone = (): StatusTone => props.record.recent_completion ? 'success' : readiness() ? readiness()!.tone : attention(props.record) ? 'warning' : activeRun(props.record) && str(props.record.execution) && props.record.execution !== 'unknown' ? 'info' : 'neutral';
   const summary = () => props.record.recent_completion ? completionLabel(props.record) : str(props.record.activity || props.record.obligation || 'No activity hint observed');
@@ -208,7 +208,7 @@ function SpecsList(props: DestinationProps) {
               </Show>
             </>}
           >
-            <For each={rows()}>{record => <SpecsRow record={record} selected={record.key === props.route.id} context={context()} assignments={props.assignments} onSelect={props.onSelect} />}</For>
+            <For each={rows()}>{record => <SpecsRow record={record} selected={record.key === props.route.id} context={context()} assignments={props.assignments} epics={props.epics} onSelect={props.onSelect} />}</For>
           </Show>
         </Show>
       </div>
@@ -224,12 +224,12 @@ const SPEC_TABS: SectionTab[] = [
 
 const tabOf = (route: RouteState): 'overview' | 'activity' => route.tab === 'activity' ? 'activity' : 'overview';
 
-const headTone = (record: WireRecord): StatusTone =>
+const headTone = (record: WireRecord, epics: WireRecord[], assignments: WireRecord[]): StatusTone =>
   record.recent_completion ? 'success'
-    : record.planned || record.implementation_starting === true ? specReadiness(record).tone
+    : record.planned || record.implementation_starting === true ? observedSpecReadiness(record, epics, assignments).readiness.tone
       : attention(record) ? 'warning' : activeRun(record) && str(record.execution) && record.execution !== 'unknown' ? 'info' : 'neutral';
-const headLabel = (record: WireRecord): string =>
-  record.planned || record.implementation_starting === true ? specReadiness(record).label : runState(record, runningUnconfirmed);
+const headLabel = (record: WireRecord, epics: WireRecord[], assignments: WireRecord[]): string =>
+  record.planned || record.implementation_starting === true ? observedSpecReadiness(record, epics, assignments).readiness.label : runState(record, runningUnconfirmed);
 
 export default function SpecsDestination(props: DestinationProps) {
   const record = () => props.records.find(item => item.key === props.route.id) ?? null;
@@ -470,7 +470,7 @@ export default function SpecsDestination(props: DestinationProps) {
           <div class="object-head">
             <div class="object-top">
               <h2>{headTitle()}</h2>
-              <Show when={record()}>{item => <StatusText tone={headTone(item())}>{headLabel(item())}</StatusText>}</Show>
+              <Show when={record()}>{item => <StatusText tone={headTone(item(), props.epics, props.assignments)}>{headLabel(item(), props.epics, props.assignments)}</StatusText>}</Show>
             </div>
             <p>{record() ? `${str(record()!.workspace)} / ${str(record()!.package_ref)}` : 'No observed record for this selection'}</p>
           </div>
@@ -490,7 +490,7 @@ export default function SpecsDestination(props: DestinationProps) {
                     token={props.token}
                     onOpenAgent={openAgent}
                     onOpenEpic={openEpic}
-                    onOpenSpec={key => props.onSelect(key)}
+                    onSelectPackage={props.onSelectPackage}
                     onOpenPackageFiles={props.onOpenPackageFiles}
                     canOpenPackageFiles={props.canOpenPackageFiles}
                     onNavigate={props.onNavigate}
@@ -513,7 +513,7 @@ export default function SpecsDestination(props: DestinationProps) {
                       token={props.token}
                       onOpenAgent={openAgent}
                       onOpenEpic={openEpic}
-                      onOpenSpec={key => props.onSelect(key)}
+                      onSelectPackage={props.onSelectPackage}
                       onOpenPackageFiles={props.onOpenPackageFiles}
                       canOpenPackageFiles={props.canOpenPackageFiles}
                       onNavigate={props.onNavigate}
