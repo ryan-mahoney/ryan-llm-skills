@@ -1,6 +1,7 @@
 import { For, Show, createEffect, createSignal, onCleanup } from 'solid-js';
 import { EmptyState, MasterDetail, RegionalSkeleton, StateNotice, StatusText } from '../primitives';
 import type { WireRecord } from '../model';
+import { time } from '../format';
 import { formatHash, type RouteState } from '../route';
 import { clearIncompatibleFields } from '../scope';
 import { EpicDetail } from './epic-detail';
@@ -121,6 +122,44 @@ export default function EpicsDestination(props: DestinationProps) {
   const refreshAction = () => (props.live
     ? <button type="button" class="ds-btn ds-btn--primary" onClick={() => void props.refresh()}>Refresh state</button>
     : undefined);
+
+  // Regional transport notice: offline wins over stale, and the notice is
+  // rebuilt only when its semantic signature changes so repeated polls keep
+  // identical text without re-announcing an unchanged live region.
+  const transport = () => (view().offline ? 'offline' : view().stale ? 'stale' : null);
+  const noticeSignature = () => {
+    const kind = transport();
+    if (!kind) return '';
+    return `${kind}|${view().observedAt ?? ''}|${String(selected()?.key ?? '')}`;
+  };
+  const transportNotice = () => {
+    const kind = transport();
+    if (!kind) return undefined;
+    const observedAt = view().observedAt;
+    const action = props.live
+      ? (kind === 'offline'
+        ? <button type="button" class="ds-btn ds-btn--primary" onClick={props.onRetryConnection}>Retry connection</button>
+        : <button type="button" class="ds-btn ds-btn--primary" onClick={() => void props.refresh()}>Refresh state</button>)
+      : undefined;
+    if (kind === 'offline') {
+      return (
+        <StateNotice tone="warning" title="Connection unavailable" action={action}>
+          {observedAt
+            ? `Last received at ${time(observedAt)}. These records may have changed on the host.`
+            : 'Last received time is unavailable. These records may have changed on the host.'}
+        </StateNotice>
+      );
+    }
+    return (
+      <StateNotice
+        tone="warning"
+        title={observedAt ? `Last checked at ${time(observedAt)}` : 'Observation time unavailable'}
+        action={action}
+      >
+        Existing content is kept while the host revalidates it.
+      </StateNotice>
+    );
+  };
 
   return (
     <div class="epics-destination">
@@ -264,7 +303,22 @@ export default function EpicsDestination(props: DestinationProps) {
               </>
             }
           >
-            {epic => <EpicDetail epic={epic()} records={props.records} onSelectPackage={props.onSelectPackage} />}
+            {epic => {
+              const notice = (
+                <Show keyed when={noticeSignature()}>
+                  {signature => (signature ? transportNotice() : undefined)}
+                </Show>
+              );
+              return (
+                <EpicDetail
+                  epic={epic()}
+                  records={props.records}
+                  onSelectPackage={props.onSelectPackage}
+                  notice={notice}
+                  transportPrimary={Boolean(transport())}
+                />
+              );
+            }}
           </Show>
         </Show>
       </MasterDetail>

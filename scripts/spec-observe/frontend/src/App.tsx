@@ -340,10 +340,10 @@ export default function App() {
   }
   function notes() {
     const out: string[] = [];
-    if (error() && route().dest !== 'workspaces' && !pickerRequired()) out.push(error());
+    if (error() && route().dest !== 'workspaces' && route().dest !== 'epics' && !pickerRequired()) out.push(error());
     if (payload()?.truncated) out.push('Snapshot read budget reached; some observations are unavailable.');
     for (const e of payload()?.errors ?? []) out.push(`${e.source ? str(e.source) + ': ' : ''}${str(e.message)}`);
-    if (!imported() && !error() && observers().length && !freshObservers().length && route().dest !== 'workspaces' && !pickerRequired()) out.push('Observer heartbeat is stale; work may have continued since this snapshot.');
+    if (!imported() && !error() && observers().length && !freshObservers().length && route().dest !== 'workspaces' && route().dest !== 'epics' && !pickerRequired()) out.push('Observer heartbeat is stale; work may have continued since this snapshot.');
     for (const observer of observers()) for (const a of observer.snapshot?.attention ?? []) if (a.kind === 'legacy-location') out.push(`Untracked .specs in ${a.repository} (${a.count} entries). Remedy: ${a.remedy}.`);
     return out;
   }

@@ -208,6 +208,7 @@ export function EpicDetail(props: {
   records: WireRecord[];
   onSelectPackage: (workspace: string, slug: string) => void;
   notice?: JSX.Element;
+  transportPrimary?: boolean;
 }) {
   const target = () => focusMember(props.epic);
   const openMember = () => {
@@ -247,7 +248,7 @@ export function EpicDetail(props: {
       <ActionBar>
         <button
           type="button"
-          class="ds-btn ds-btn--primary"
+          class={props.transportPrimary ? 'ds-btn' : 'ds-btn ds-btn--primary'}
           disabled={!openMember()}
           aria-describedby={!openMember() ? 'epic-open-spec-help' : undefined}
           onClick={openSpec}

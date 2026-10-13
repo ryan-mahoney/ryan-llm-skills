@@ -11,7 +11,9 @@ Run after `npm run build --prefix scripts/spec-observe/frontend`:
 
 `--case list` runs the complete list/cold suite (list, loading, cold, file and
 a11y/captures); `--case detail` runs the EV-6 facts/table/conflict gate with
-bound app-ui reference captures; the other choices run one group for debugging.
+bound app-ui reference captures; `--case observations` runs the EV-7 retained
+transport/import gate with bound app-ui reference captures; the other choices
+run one group for debugging.
 Only the final /api/state HTTP response is substituted through page.route; the
 fixture's real dashboard, catalog, files, the built App/registry and
 browser-fixture.mjs stay untouched. No live Sentinel is contacted.
@@ -33,7 +35,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--case', choices=['list', 'loading', 'cold', 'file', 'a11y', 'detail'], default='list')
+parser.add_argument('--case', choices=['list', 'loading', 'cold', 'file', 'a11y', 'detail', 'observations'], default='list')
 case = parser.parse_args().case
 root = Path(__file__).resolve().parent
 evidence = Path(os.environ.get('SENTINEL_EVIDENCE_DIR', '/tmp/sentinel-epics-evidence'))
@@ -933,8 +935,342 @@ try:
             }
             report['scenarios'].append('detail long table: 26 long slugs wrap without document horizontal scroll and detail actions stay reachable')
 
+        def group_observations(page):
+            # EV-7: retained transport/import behavior at the final HTTP boundary.
+            fresh = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+            old = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time() - 600))
+            control = {'value': 'pass'}
+            held = []
+            external = []
+
+            def track(request):
+                if request.url.startswith('http') and not request.url.startswith(receipt['url']):
+                    external.append(request.url)
+
+            page.on('request', track)
+
+            def handler(route):
+                value = control['value']
+                if value == 'pass':
+                    route.continue_()
+                elif value == 'hold':
+                    held.append(route)
+                elif value == 'fail':
+                    route.fulfill(status=503, content_type='application/json', body='{"error":"fixture-epics-observations"}')
+                else:
+                    route.fulfill(json=value)
+
+            page.route('**/api/state**', handler)
+
+            def observation_envelope(epic, mode, runs=()):
+                payload = detail_envelope(epic, runs=runs)
+                payload['generated_at'] = fresh
+                coverage = payload['observers'][0]['snapshot']['coverage']
+                if mode == 'missing':
+                    coverage.pop('observed_at', None)
+                else:
+                    coverage['observed_at'] = fresh if mode == 'fresh' else old
+                return payload
+
+            def measure(locator, label):
+                box = locator.bounding_box()
+                assert box, f'{label} has no bounding box'
+                assert box['width'] >= 44 and box['height'] >= 44, f'{label} is {box["width"]}x{box["height"]}, below 44x44'
+                report.setdefault('hitBoxes', {})[label] = {'width': round(box['width'], 1), 'height': round(box['height'], 1)}
+
+            def open_selected(payload):
+                control['value'] = payload
+                page.goto('about:blank')
+                open_epics(page, ws='fixture')
+                page.wait_for_function("() => location.hash.includes('id=')")
+                expect(page.locator('article.detail-pane .object-head h2')).to_be_visible()
+
+            observations_epic = {
+                'workspace': 'fixture', 'epic': 'observations-epic', 'title': 'Observations epic', 'state': 'active',
+                'members': [
+                    detail_member('landed-member', 'merged'),
+                    detail_member('active-member', 'in-progress', requires=['landed-member']),
+                ],
+                'summary': {'total': 2, 'merged': 1, 'complete': 0, 'attention': 0},
+                'next': 'active-member',
+                'coverage': {'state': 'complete', 'reasons': []},
+            }
+            observations_runs = [detail_run('active-member', 'obs-active')]
+            conflict_epic = {
+                'workspace': 'fixture', 'epic': 'conflict-epic', 'title': 'Conflict epic', 'state': 'complete',
+                'members': [
+                    detail_member('published-member', 'published'),
+                    detail_member('prepared-member', 'prepared'),
+                    detail_member('progress-member', 'in-progress', requires=['prepared-member']),
+                ],
+                'summary': {'total': 3, 'merged': 0, 'complete': 0, 'attention': 0},
+                'next': 'progress-member',
+                'coverage': {'state': 'complete', 'reasons': []},
+            }
+            conflict_runs = [
+                detail_run('published-member', 'obs-published'),
+                detail_run('prepared-member', 'obs-prepared'),
+                detail_run('progress-member', 'obs-progress'),
+            ]
+            pane = page.locator('article.detail-pane')
+            facts = pane.locator('.facts .fact')
+            table = pane.locator('table.epic-members')
+            transport_callouts = pane.locator('.detail-body .ds-callout').filter(has_text=re.compile('Connection unavailable|Last checked at|Observation time unavailable'))
+            conflict_callout = pane.locator('.detail-body .ds-callout').filter(has_text='Recorded state conflicts with member evidence')
+
+            # (1) A usable payload first, then a real header refresh failure,
+            # keeps the retained list/facts/table with one regional notice.
+            open_selected(observation_envelope(observations_epic, 'fresh', runs=observations_runs))
+            expect(rows_on(page)).to_have_count(1)
+            expect(facts).to_have_count(3)
+            expect(table.locator('tbody tr')).to_have_count(2)
+            control['value'] = 'fail'
+            page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+            expect(transport_callouts).to_have_count(1)
+            offline_notice = transport_callouts.first
+            expect(offline_notice).to_contain_text('Connection unavailable')
+            expect(offline_notice).to_contain_text('Last received at')
+            retry = offline_notice.get_by_role('button', name='Retry connection', exact=True)
+            expect(retry).to_have_count(1)
+            assert 'ds-btn--primary' in (retry.get_attribute('class') or ''), 'Retry connection is not the regional primary'
+            expect(rows_on(page)).to_have_count(1)
+            expect(facts).to_have_count(3)
+            expect(table.locator('tbody tr')).to_have_count(2)
+            assert page.locator('#notice').count() == 0, 'global #notice duplicated the Epics transport failure'
+            report['scenarios'].append('offline: 503 after a usable payload keeps list/facts/table with one regional Connection unavailable and no global #notice')
+            control['value'] = observation_envelope(observations_epic, 'fresh', runs=observations_runs)
+            retry.click()
+            expect(transport_callouts).to_have_count(0)
+            expect(rows_on(page)).to_have_count(1)
+            expect(facts).to_have_count(3)
+            expect(table.locator('tbody tr')).to_have_count(2)
+            report['scenarios'].append('offline recovery: Retry connection restores the notice-free retained read')
+
+            # (2) Stale real-time wording, the missing-time fallback, and a held
+            # refresh that clears only on a recent observation.
+            stale_payload = observation_envelope(observations_epic, 'old', runs=observations_runs)
+            open_selected(stale_payload)
+            expect(transport_callouts).to_have_count(1)
+            stale_notice = transport_callouts.first
+            expected_time = page.evaluate('iso => new Date(iso).toLocaleString()', old)
+            expect(stale_notice.locator('strong')).to_have_text(f'Last checked at {expected_time}')
+            expect(stale_notice).to_contain_text('Existing content is kept while the host revalidates it.')
+            refresh = stale_notice.get_by_role('button', name='Refresh state', exact=True)
+            expect(refresh).to_have_count(1)
+            assert 'ds-btn--primary' in (refresh.get_attribute('class') or ''), 'Refresh state is not the regional primary'
+            expect(facts).to_have_count(3)
+            expect(table.locator('tbody tr')).to_have_count(2)
+            report['scenarios'].append(f'stale: old observed_at shows real-time Last checked at {expected_time} with Refresh state')
+
+            open_selected(observation_envelope(observations_epic, 'missing', runs=observations_runs))
+            expect(transport_callouts).to_have_count(1)
+            expect(transport_callouts.first).to_contain_text('Observation time unavailable')
+            expect(transport_callouts.first).to_contain_text('Existing content is kept while the host revalidates it.')
+            report['scenarios'].append('stale: missing observed_at falls back to Observation time unavailable')
+
+            recent_payload = observation_envelope(observations_epic, 'fresh', runs=observations_runs)
+            control['value'] = 'hold'
+            transport_callouts.first.get_by_role('button', name='Refresh state', exact=True).click()
+            page.wait_for_timeout(300)
+            expect(transport_callouts).to_have_count(1)
+            expect(rows_on(page)).to_have_count(1)
+            expect(facts).to_have_count(3)
+            expect(table.locator('tbody tr')).to_have_count(2)
+            control['value'] = recent_payload
+            for pending in held:
+                try:
+                    pending.fulfill(json=recent_payload)
+                except Exception:
+                    pass
+            held.clear()
+            expect(transport_callouts).to_have_count(0)
+            expect(facts).to_have_count(3)
+            expect(table.locator('tbody tr')).to_have_count(2)
+            report['scenarios'].append('refresh held: readable contents stay while waiting and a recent observation clears the stale notice')
+
+            # (3) Conflict facts stay beside exactly one transport notice.
+            conflict_fresh = observation_envelope(conflict_epic, 'fresh', runs=conflict_runs)
+            conflict_stale = observation_envelope(conflict_epic, 'old', runs=conflict_runs)
+            status = page.locator('article.detail-pane .object-head .status')
+            open_selected(conflict_fresh)
+            expect(status).to_contain_text('Recorded complete')
+            expect(facts.nth(1)).to_contain_text('0 of 3')
+            control['value'] = 'fail'
+            page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+            expect(transport_callouts).to_have_count(1)
+            expect(transport_callouts.first).to_contain_text('Connection unavailable')
+            expect(conflict_callout).to_have_count(1)
+            expect(conflict_callout).to_contain_text('The records have not been rewritten')
+            expect(conflict_callout).to_contain_text('conflicting evidence is preserved')
+            expect(status).to_contain_text('Recorded complete')
+            expect(facts.nth(1)).to_contain_text('0 of 3')
+            report['scenarios'].append('offline conflict: Recorded complete and the no-rewrite explanation stay beside 0 of 3 landed with exactly one transport callout')
+            open_selected(conflict_stale)
+            expect(transport_callouts).to_have_count(1)
+            expect(transport_callouts.first).to_contain_text('Last checked at')
+            expect(conflict_callout).to_have_count(1)
+            expect(status).to_contain_text('Recorded complete')
+            expect(facts.nth(1)).to_contain_text('0 of 3')
+            report['scenarios'].append('stale conflict: the stale transport notice does not hide the Recorded complete conflict explanation')
+
+            # (4) Repeated identical payloads add no callout mutation, and each
+            # offline -> stale -> partial transition announces once.
+            check_deadline()
+            stale_one = observation_envelope(observations_epic, 'old', runs=observations_runs)
+            open_selected(stale_one)
+            expect(transport_callouts).to_have_count(1)
+            page.evaluate("""() => {
+              window.__epicsAnnouncements = [];
+              window.__epicsTextMutations = 0;
+              const region = document.querySelector('article.detail-pane .detail-body');
+              window.__epicsObserver = new MutationObserver(records => {
+                for (const record of records) {
+                  if (record.type === 'characterData') {
+                    const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
+                    if (target && target.closest('.ds-callout')) window.__epicsTextMutations += 1;
+                    continue;
+                  }
+                  for (const node of record.addedNodes) {
+                    const el = node.nodeType === 1 ? node : null;
+                    if (el && el.classList && el.classList.contains('ds-callout')) {
+                      window.__epicsAnnouncements.push(el.textContent.trim().slice(0, 80));
+                    }
+                  }
+                }
+              });
+              window.__epicsObserver.observe(region, {childList: true, subtree: true, characterData: true});
+            }""")
+
+            def settled_refresh():
+                with page.expect_response(lambda response: '/api/state' in response.url):
+                    page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                page.wait_for_function("() => { const b = document.querySelector('.head-actions button[aria-busy]'); return !b || b.getAttribute('aria-busy') !== 'true'; }")
+
+            for _ in range(3):
+                settled_refresh()
+            assert page.evaluate('() => window.__epicsAnnouncements.length') == 0, f'identical payload announced a new callout: {page.evaluate("() => window.__epicsAnnouncements")}'
+            assert page.evaluate('() => window.__epicsTextMutations') == 0, 'identical payload changed callout text'
+
+            control['value'] = 'fail'
+            settled_refresh()
+            expect(transport_callouts.first).to_contain_text('Connection unavailable')
+            page.wait_for_function('() => window.__epicsAnnouncements.length === 1')
+            settled_refresh()
+            page.wait_for_timeout(200)
+            assert page.evaluate('() => window.__epicsAnnouncements.length') == 1, 'offline signature announced more than once'
+
+            control['value'] = stale_one
+            settled_refresh()
+            expect(transport_callouts.first).to_contain_text('Last checked at')
+            page.wait_for_function('() => window.__epicsAnnouncements.length === 2')
+
+            control['value'] = conflict_fresh
+            settled_refresh()
+            expect(conflict_callout).to_have_count(1)
+            expect(conflict_callout).to_contain_text('Recorded state conflicts with member evidence')
+            expect(transport_callouts).to_have_count(0)
+            partial_baseline = page.evaluate('() => window.__epicsAnnouncements.length')
+            assert partial_baseline == 2, f'partial transition changed the transport announcement count: {page.evaluate("() => window.__epicsAnnouncements")}'
+            partial_text = page.evaluate('() => window.__epicsTextMutations')
+            settled_refresh()
+            page.wait_for_timeout(200)
+            assert page.evaluate('() => window.__epicsAnnouncements.length') == partial_baseline, f'partial repeat announced again: {page.evaluate("() => window.__epicsAnnouncements")}'
+            assert page.evaluate('() => window.__epicsTextMutations') == partial_text, 'identical conflict payload changed callout text'
+            expect(conflict_callout).to_have_count(1)
+            announcements = page.evaluate('() => window.__epicsAnnouncements')
+            assert 'Connection unavailable' in announcements[0], announcements
+            assert 'Last checked at' in announcements[1], announcements
+            report['scenarios'].append('signature: identical payloads add no callout mutation; offline and stale announce once each; the partial conflict callout appears once and its repeat adds no announcement')
+
+            # (5) A real #import-file snapshot offers no live recovery and keeps
+            # only the truncation/envelope diagnostics.
+            check_deadline()
+            control['value'] = 'pass'
+            imported_envelope = {
+                **real_state,
+                'generated_at': fresh,
+                'truncated': True,
+                'errors': [{'source': 'fixture-observation', 'message': 'Observation envelope diagnostic retained'}],
+                'observers': [{**real_observer, 'state': 'observing', 'published_at': old, 'snapshot': {**real_observer['snapshot'], 'epics': [observations_epic]}}],
+            }
+            import_file = evidence / 'epics-observations-import.json'
+            import_file.write_text(json.dumps(imported_envelope))
+            try:
+                page.goto('about:blank')
+                page.goto(receipt['url'] + '/#/specs', wait_until='domcontentloaded')
+                page.locator('#import-file').set_input_files(str(import_file))
+                expect(page.get_by_text('Imported snapshot', exact=True)).to_be_visible()
+                page.evaluate("() => { location.hash = '#/epics'; }")
+                expect(page.locator('h1')).to_have_text('Epics')
+                page.wait_for_function("() => location.hash.includes('id=')")
+                expect(rows_on(page)).to_have_count(1)
+                expect(facts).to_have_count(3)
+                expect(table.locator('tbody tr')).to_have_count(2)
+                expect(transport_callouts).to_have_count(0)
+                expect(pane.locator('.detail-body').get_by_role('button', name=re.compile('Retry connection|Refresh state'))).to_have_count(0)
+                notice = page.locator('#notice')
+                expect(notice).to_contain_text('Snapshot read budget reached')
+                expect(notice).to_contain_text('fixture-observation: Observation envelope diagnostic retained')
+                expect(notice).not_to_contain_text('Observer heartbeat is stale')
+                expect(notice).not_to_contain_text('Could not refresh workspace state')
+                report['scenarios'].append('import: real #import-file snapshot keeps facts without regional retry/refresh and retains truncation/envelope diagnostics only')
+            finally:
+                import_file.unlink(missing_ok=True)
+
+            # (6) Bound 45/46 references and retained-state captures.
+            check_deadline()
+            design_dir = resolve_designs_dir()
+            ref45 = verify_reference(design_dir, 'screens/45-epics-offline.html', 'f9bb2eb9a6955afa8bcf781d3656163db47a342ec6ba5c0acf98803d51fa9df6')
+            ref46 = verify_reference(design_dir, 'screens/46-epics-stale.html', '55065def2592a03d2246bf551c48ab31d730170e077ddb369bd70ef821c4b811')
+            ref44 = verify_reference(design_dir, 'screens/44-epics-partial.html', '1c73b1466711c2d98d68a550144095f5587a6fe67070767187a953cfdbb9ad5b')
+            report['references'] = {'designsDir': str(design_dir), 'files': [{'path': str(path), 'sha256': digest} for path, digest in (ref45, ref46, ref44)]}
+            for name, ref in (('45', ref45), ('46', ref46)):
+                for width in (1280, 1600):
+                    check_deadline()
+                    page.set_viewport_size({'width': width, 'height': 800})
+                    page.goto(detail_uri(ref[0]), wait_until='domcontentloaded')
+                    reference_pane = page.locator('article.detail-pane')
+                    expect(reference_pane).to_be_visible()
+                    ref_path = browser_evidence / f'epics-ref-{name}-{width}.png'
+                    reference_pane.screenshot(path=str(ref_path))
+                    report['screenshots'].append(str(ref_path))
+            control['value'] = observation_envelope(observations_epic, 'fresh', runs=observations_runs)
+            page.goto('about:blank')
+            open_epics(page, ws='fixture')
+            page.wait_for_function("() => location.hash.includes('id=')")
+            control['value'] = 'fail'
+            page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+            expect(transport_callouts).to_have_count(1)
+            expect(transport_callouts.first).to_contain_text('Connection unavailable')
+            for width in (1280, 1600):
+                page.set_viewport_size({'width': width, 'height': 800})
+                path = browser_evidence / f'epics-45-{width}.png'
+                pane.screenshot(path=str(path))
+                report['screenshots'].append(str(path))
+                assert page.evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth'), f'document overflow at {width}'
+            measure(transport_callouts.first.get_by_role('button', name='Retry connection', exact=True), 'observations Retry connection')
+            open_action = pane.locator('.detail-actions .ds-btn')
+            assert 'ds-btn--primary' not in (open_action.get_attribute('class') or ''), 'Open spec stayed primary beside the transport notice'
+            assert pane.locator('.detail-actions .ds-btn--primary').count() == 0, 'transport lost its sole primary'
+            measure(open_action, 'observations Open spec')
+            control['value'] = observation_envelope(observations_epic, 'old', runs=observations_runs)
+            page.goto('about:blank')
+            open_epics(page, ws='fixture')
+            page.wait_for_function("() => location.hash.includes('id=')")
+            expect(transport_callouts).to_have_count(1)
+            expect(transport_callouts.first).to_contain_text('Last checked at')
+            for width in (1280, 1600):
+                page.set_viewport_size({'width': width, 'height': 800})
+                path = browser_evidence / f'epics-46-{width}.png'
+                pane.screenshot(path=str(path))
+                report['screenshots'].append(str(path))
+                assert page.evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth'), f'document overflow at {width}'
+            measure(transport_callouts.first.get_by_role('button', name='Refresh state', exact=True), 'observations Refresh state')
+            assert not external, f'observations made a non-fixture request: {external}'
+            report['scenarios'].append('captures: bound 45/46/44 digests recorded; reference and production panes captured at 1280 and 1600 with single-primary hierarchy, 44px targets and no overflow')
+
         groups = {'list': group_list, 'loading': group_loading, 'cold': group_cold, 'file': group_file, 'a11y': group_a11y}
-        handlers = {**groups, 'detail': group_detail}
+        handlers = {**groups, 'detail': group_detail, 'observations': group_observations}
         selected = list(groups) if case == 'list' else [case]
         for name in selected:
             check_deadline()
@@ -955,7 +1291,7 @@ except BaseException:
 finally:
     stop_fixture()
     report['elapsedSeconds'] = round(time.monotonic() - started, 3)
-    report_file = evidence / ('epics-detail.json' if case == 'detail' else 'epics-list.json')
+    report_file = evidence / {'detail': 'epics-detail.json', 'observations': 'epics-observations.json'}.get(case, 'epics-list.json')
     report['reportPath'] = str(report_file)
     report_file.write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))
