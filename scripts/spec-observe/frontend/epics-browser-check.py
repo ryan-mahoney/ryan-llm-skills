@@ -151,7 +151,7 @@ try:
             return parse_qs(urlsplit(page.url).fragment.partition('?')[2])
 
         def rows_on(page):
-            return page.locator('.records button.record')
+            return page.locator('.records .record')
 
         def open_epics(page, **values):
             query = ('?' + urlencode(values)) if values else ''
@@ -252,14 +252,17 @@ try:
             expect(rows_on(page)).to_have_count(1)
             row = rows_on(page).first
             expect(row).to_contain_text('Demo epic')
-            expect(row).to_have_attribute('aria-current', 'true')
+            assert row.evaluate('el => el.tagName') == 'A', 'epic row is not a real route link'
+            expect(row).to_have_attribute('aria-current', 'page')
+            href = row.get_attribute('href')
+            assert href and href.startswith('#/epics') and 'id=' in href, f'epic row href is not a selectable route link: {href}'
             assert params_on(page)['ws'] == ['fixture'] and params_on(page).get('id'), page.url
             expect(page.locator('article.detail-pane .object-head h2')).to_have_text('Demo epic')
-            report['scenarios'].append('real /#/epics entry selects the existing demo epic and shows its detail')
+            report['scenarios'].append('real /#/epics entry selects the existing demo epic through a real route link and shows its detail')
 
             page.locator('#find-record').fill('browser')
             expect(rows_on(page)).to_have_count(1)
-            expect(rows_on(page).first).to_have_attribute('aria-current', 'true')
+            expect(rows_on(page).first).to_have_attribute('aria-current', 'page')
             assert params_on(page)['q'] == ['browser'] and params_on(page)['ws'] == ['fixture'], page.url
             report['scenarios'].append('member-name search matches the epic and keeps it selected')
 
@@ -275,9 +278,52 @@ try:
             expect(rows_on(page)).to_have_count(1)
             page.wait_for_function("() => location.hash.includes('id=')")
             assert params_on(page)['ws'] == ['fixture'] and 'q' not in params_on(page), page.url
-            expect(rows_on(page).first).to_have_attribute('aria-current', 'true')
+            expect(rows_on(page).first).to_have_attribute('aria-current', 'page')
             expect(page.locator('article.detail-pane .object-head h2')).to_have_text('Demo epic')
             report['scenarios'].append('Clear filters preserves ws and restores the available rows and detail')
+
+            def list_member(slug, status, attention=False):
+                return {'name': slug, 'package': slug, 'workspace': 'fixture', 'status': status, 'waiting_on': [], 'attention': attention}
+
+            def list_epic(slug, title, state, members, summary, next_name):
+                return {'workspace': 'fixture', 'epic': slug, 'title': title, 'state': state, 'members': members, 'summary': summary, 'next': next_name, 'coverage': {'state': 'complete', 'reasons': []}}
+
+            multi = [
+                list_epic('alpha', 'Alpha epic', 'active',
+                           [list_member('alpha-one', 'merged'), list_member('alpha-two', 'merged')],
+                           {'total': 2, 'merged': 2, 'complete': 0, 'attention': 0}, ''),
+                list_epic('beta', 'Beta epic', 'active',
+                           [list_member('beta-one', 'in-progress', attention=True), list_member('beta-two', 'unknown')],
+                           {'total': 2, 'merged': 0, 'complete': 0, 'attention': 1}, 'beta-two'),
+                list_epic('gamma', 'Gamma epic', 'complete',
+                           [list_member('gamma-one', 'merged')],
+                           {'total': 1, 'merged': 1, 'complete': 0, 'attention': 0}, ''),
+            ]
+            list_mode = {'value': {**real_state, 'observers': [{**real_observer, 'snapshot': {**real_observer['snapshot'], 'epics': multi}}]}}
+
+            def list_handler(route):
+                route.fulfill(json=list_mode['value'])
+
+            page.route('**/api/state**', list_handler)
+            page.goto('about:blank')
+            open_epics(page, ws='fixture')
+            expect(rows_on(page)).to_have_count(3)
+            expect(page.locator('.list-caption')).to_have_text('3 epic records · dependency order')
+            beta = page.locator('.records .record', has_text='Beta epic')
+            expect(beta).to_contain_text('0 of 2 landed · next: beta-two · 1 need attention · evidence incomplete')
+            assert beta.get_attribute('aria-current') is None, 'unselected row claims current selection'
+            expect(page.locator('.records .record', has_text='Alpha epic')).to_have_attribute('aria-current', 'page')
+            report['scenarios'].append('multi-epic list renders attention and evidence-incomplete cues on the affected row')
+
+            page.locator('#find-record').fill('beta')
+            expect(rows_on(page)).to_have_count(1)
+            expect(page.locator('.list-caption')).to_have_text('1 shown of 3 epics')
+            report['scenarios'].append('partial search reports the visible count against the scoped total')
+
+            page.locator('#find-record').fill('')
+            expect(rows_on(page)).to_have_count(3)
+            expect(page.locator('.list-caption')).to_have_text('3 epic records · dependency order')
+            report['scenarios'].append('clearing a partial search restores every scoped row and the unfiltered caption')
 
         def group_loading(page):
             held = []
@@ -301,7 +347,9 @@ try:
             page.wait_for_selector('.records .skeletons', state='visible', timeout=5000)
             elapsed = time.monotonic() - mark
             assert elapsed >= 0.25, f'list skeleton appeared after only {elapsed:.3f}s'
-            expect(page.locator('.detail-pane .skeletons')).to_be_visible()
+            expect(page.locator('.detail-pane .facts .skeletons')).to_have_count(3)
+            expect(page.locator('.detail-pane .skeletons-table')).to_have_count(1)
+            expect(page.locator('.detail-pane .skeletons').first).to_be_visible()
             expect(page.locator('.list-caption')).to_contain_text('Reading epics')
             report['timing'] = {'skeletonAfterSeconds': round(elapsed, 3)}
             report['scenarios'].append(f'held /api/state shows no skeleton before 300ms and list+detail skeleton after ({elapsed:.3f}s)')
@@ -345,15 +393,16 @@ try:
             expect(page.locator('h1')).to_have_text('Epics')
             expect(page.get_by_text('Epics could not be read', exact=True)).to_be_visible()
             expect(page.get_by_role('button', name='Retry connection', exact=True)).to_have_count(2)
-            expect(page.locator('.object-head h2')).to_have_text(selected_id)
+            selected_slug = json.loads(selected_id)[1]
+            expect(page.locator('.object-head h2')).to_have_text(selected_slug)
             expect(page.locator('.object-head .status')).to_contain_text('Not confirmed')
             expect(page.get_by_role('heading', name='Epic could not be read', exact=True)).to_be_visible()
-            report['scenarios'].append('cold HTTP 503 with a selected tuple retains its slug and Not confirmed state with Retry connection')
+            report['scenarios'].append(f'cold HTTP 503 with a selected tuple retains its slug ({selected_slug}) and Not confirmed state with Retry connection')
 
             mode['value'] = True
             page.get_by_role('button', name='Retry connection', exact=True).first.click()
             expect(rows_on(page)).to_have_count(1)
-            expect(page.locator('article.detail h2')).to_have_text('Demo epic')
+            expect(page.locator('article.detail-pane .object-head h2')).to_have_text('Demo epic')
             assert params_on(page).get('id') == [selected_id], page.url
             expect(page.get_by_text('Epics could not be read', exact=True)).to_have_count(0)
             report['scenarios'].append('Retry connection recovers to real rows while keeping the selected tuple')
@@ -370,6 +419,14 @@ try:
                 expect(rows_on(page)).to_have_count(0)
                 expect(page.get_by_role('heading', name='Choose an epic', exact=True)).to_be_visible()
                 report['scenarios'].append(f'controlled state shows its distinct guidance: {heading}')
+
+            mode['value'] = 'fail'
+            page.goto('about:blank')
+            page.goto(receipt['url'] + '/#/epics?' + urlencode({'ws': 'fixture', 'id': 'not-a-tuple'}), wait_until='domcontentloaded')
+            expect(page.get_by_text('Epics could not be read', exact=True)).to_be_visible()
+            expect(page.locator('.object-head h2')).to_have_text('Epic details')
+            expect(page.get_by_text('No selected epic in this route.', exact=True)).to_be_visible()
+            report['scenarios'].append('cold HTTP 503 with an invalid tuple falls back to the Epic details heading with no retained selection')
 
         def group_file(page):
             page.goto(dashboard.as_uri() + '#/epics', wait_until='domcontentloaded')
@@ -416,6 +473,29 @@ try:
             expect(rows_on(page)).to_have_count(1)
             selected_id = params_on(page).get('id', [None])[0]
             assert selected_id, page.url
+            selected_slug = json.loads(selected_id)[1]
+            design_dir = resolve_designs_dir()
+            bound = {}
+            for relative, expected in (
+                ('screens/03-epics.html', 'fe1742c3d469dd9efa7b860d2c30828ff68ee1aae7b1302c8536f6bb3f443d28'),
+                ('screens/40-epics-empty.html', 'e8aeb9f71b4113796084a68e859924b072c59f26e1f8198c394fcb19b328530b'),
+                ('screens/41-epics-no-matches.html', '8f6b99d0aefcd608e4e2060ad9265b08dd5b4ed1f869a2924b02f5142bbadb93'),
+                ('screens/42-epics-loading.html', 'aee86f28023c4784bfccfc23621ed006beac1a8de0202a8301ec664205ad461d'),
+                ('screens/43-epics-error.html', '7868a59d6ab479e907da28717efb0539ebc47c661a2f62b52c2fcedb329db248'),
+            ):
+                ref_path, digest = verify_reference(design_dir, relative, expected)
+                bound[relative] = {'path': str(ref_path), 'sha256': digest}
+            report['references'] = {'designsDir': str(design_dir), 'files': bound}
+            for screen, relative in (('40', 'screens/40-epics-empty.html'), ('41', 'screens/41-epics-no-matches.html'), ('42', 'screens/42-epics-loading.html'), ('43', 'screens/43-epics-error.html')):
+                check_deadline()
+                page.set_viewport_size({'width': 1280, 'height': 800})
+                page.goto(detail_uri(Path(bound[relative]['path'])), wait_until='domcontentloaded')
+                ref_shot = browser_evidence / f'epics-ref-{screen}-1280.png'
+                page.screenshot(path=str(ref_shot))
+                report['screenshots'].append(str(ref_shot))
+            report['scenarios'].append('bound app-ui references digest-checked and captured for inspection at 1280')
+            open_epics(page, ws='fixture')
+            expect(rows_on(page)).to_have_count(1)
             shoot('epics-list-03-1280.png', 1280)
             report['scenarios'].append('captured epics-list-03-1280.png for the ideal master region')
 
@@ -430,6 +510,7 @@ try:
 
             page.locator('#find-record').fill('no-such-item')
             expect(page.get_by_role('heading', name='No matching epics', exact=True)).to_be_visible()
+            expect(page.locator('article.detail-pane .object-head h2')).to_have_text('Epic details')
             measure(page.get_by_role('button', name='Clear filters', exact=True), 'Clear filters')
             shoot('epics-41-1280.png', 1280)
             shoot('epics-41-1600.png', 1600)
@@ -458,22 +539,35 @@ try:
             mode['value'] = {**real_state, 'observers': [{**real_observer, 'snapshot': {**real_observer['snapshot'], 'epics': []}}]}
             page.reload(wait_until='domcontentloaded')
             expect(page.get_by_role('heading', name='No epics recorded', exact=True)).to_be_visible()
+            destination = page.locator('.epics-destination')
+            expect(destination.get_by_role('button', name='Refresh state', exact=True)).to_have_count(1)
+            measure(destination.get_by_role('button', name='Refresh state', exact=True), 'Refresh state')
+            expect(page.locator('article.detail-pane .object-head h2')).to_have_text('Epic details')
+            expect(page.get_by_role('heading', name='Choose an epic', exact=True)).to_be_visible()
             shoot('epics-40-1280.png', 1280)
             shoot('epics-40-1600.png', 1600)
-            report['scenarios'].append('captured epics-40 at both widths from the controlled no-epics state')
+            report['scenarios'].append('captured epics-40 at both widths: regional Refresh primary with the Epic details header')
 
             mode['value'] = 'fail'
+            page.goto('about:blank')
             page.goto(receipt['url'] + '/#/epics?' + urlencode({'ws': 'fixture', 'id': selected_id}), wait_until='domcontentloaded')
-            page.reload(wait_until='domcontentloaded')
             expect(page.get_by_role('heading', name='Epic could not be read', exact=True)).to_be_visible()
+            page.wait_for_function("() => location.hash.includes('id=')")
+            assert params_on(page).get('id') == [selected_id], page.url
+            expect(page.locator('.object-head h2')).to_have_text(selected_slug)
+            expect(page.locator('.object-head .status')).to_contain_text('Not confirmed')
             shoot('epics-43-1280.png', 1280)
             shoot('epics-43-1600.png', 1600)
-            report['scenarios'].append('captured epics-43 at both widths from the cold HTTP 503 state')
+            report['scenarios'].append(f'captured epics-43 at both widths with the selected tuple retained as its slug ({selected_slug})')
 
             mode['value'] = 'hold'
+            page.goto('about:blank')
             page.goto(receipt['url'] + '/#/epics?' + urlencode({'ws': 'fixture'}), wait_until='domcontentloaded')
-            page.reload(wait_until='domcontentloaded')
             page.wait_for_selector('.records .skeletons', state='visible', timeout=5000)
+            expect(page.locator('.detail-pane .object-head h2')).to_have_text('Epic details')
+            expect(page.locator('.detail-pane .facts .skeletons')).to_have_count(3)
+            expect(page.locator('.detail-pane .skeletons-table')).to_have_count(1)
+            expect(page.locator('.detail-pane .section-heading h3', has_text='Dependency order')).to_be_visible()
             shoot('epics-42-1280.png', 1280)
             shoot('epics-42-1600.png', 1600)
             report['scenarios'].append('captured epics-42 at both widths while the first state read is held')

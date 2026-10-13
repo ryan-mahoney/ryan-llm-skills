@@ -1,6 +1,8 @@
 import { For, Show, createEffect, createSignal, onCleanup } from 'solid-js';
 import { EmptyState, MasterDetail, RegionalSkeleton, StateNotice, StatusText } from '../primitives';
 import type { WireRecord } from '../model';
+import { formatHash, type RouteState } from '../route';
+import { clearIncompatibleFields } from '../scope';
 import { EpicDetail } from './epic-detail';
 import { epicRecordedState, epicViewState, visibleEpics } from './epic-state';
 import { epicStats } from '../observation-format';
@@ -8,29 +10,59 @@ import type { DestinationProps } from './index';
 
 const text = (value: unknown): string => (typeof value === 'string' ? value : '');
 
-function EpicRow(props: { epic: WireRecord; selected: boolean; onSelect: (id: string) => void }) {
+// Route identity is a serialized [workspace, epic] tuple. Decode it for display
+// only: a valid tuple shows its epic slug, anything else is not a selection.
+const epicSlug = (id: unknown): string | null => {
+  if (typeof id !== 'string' || !id) return null;
+  try {
+    const parsed: unknown = JSON.parse(id);
+    if (!Array.isArray(parsed) || parsed.length !== 2) return null;
+    if (typeof parsed[0] !== 'string' || !parsed[0]) return null;
+    if (typeof parsed[1] !== 'string' || !parsed[1]) return null;
+    return parsed[1];
+  } catch {
+    return null;
+  }
+};
+
+function EpicRow(props: { epic: WireRecord; selected: boolean; route: RouteState; onSelect: (id: string) => void }) {
   const recorded = () => epicRecordedState(props.epic);
   const stats = () => epicStats(props.epic);
+  const incomplete = () => (Array.isArray(props.epic.members) ? props.epic.members : [])
+    .some(member => ['unknown', 'missing', 'unobserved'].includes(member?.status));
   const subtitle = () => {
     const workspace = text(props.epic.workspace);
     const summary = typeof props.epic.summary === 'string' ? props.epic.summary : '';
     return [workspace, summary].filter(Boolean).join(' · ') || text(props.epic.epic);
   };
+  const summary = () => {
+    const parts = [`${stats().landed} of ${stats().total} landed`];
+    if (text(props.epic.next)) parts.push(`next: ${text(props.epic.next)}`);
+    if (stats().attention > 0) parts.push(`${stats().attention} need attention`);
+    if (incomplete()) parts.push('evidence incomplete');
+    return parts.join(' · ');
+  };
+  const href = () => formatHash({ ...clearIncompatibleFields(props.route), id: String(props.epic.key ?? '') });
+  const select = (event: MouseEvent) => {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    props.onSelect(String(props.epic.key ?? ''));
+  };
   return (
-    <button
-      type="button"
+    <a
       class={props.selected ? 'record selected' : 'record'}
       data-epic={props.epic.key}
-      aria-current={props.selected ? 'true' : undefined}
-      onClick={() => props.onSelect(String(props.epic.key ?? ''))}
+      aria-current={props.selected ? 'page' : undefined}
+      href={href()}
+      onClick={select}
     >
       <div class="row-heading">
         <strong>{text(props.epic.title) || text(props.epic.epic) || 'Untitled epic'}</strong>
         <StatusText tone={recorded().tone}>{recorded().label}</StatusText>
       </div>
       <p>{subtitle()}</p>
-      <small>{`${stats().landed} of ${stats().total} landed${text(props.epic.next) ? ` · next: ${text(props.epic.next)}` : ''}`}</small>
-    </button>
+      <small>{summary()}</small>
+    </a>
   );
 }
 
@@ -78,10 +110,17 @@ export default function EpicsDestination(props: DestinationProps) {
         return 'No epics recorded';
       case 'no-matches':
         return '0 matching epics';
-      default:
+      default: {
+        const query = (props.route.q ?? '').trim();
+        if (query && rows().length !== props.epics.length) return `${rows().length} shown of ${props.epics.length} epics`;
         return `${props.epics.length} epic record${props.epics.length === 1 ? '' : 's'} · dependency order`;
+      }
     }
   };
+  // Regional primary for live empty regions. Cold file mode keeps no retry.
+  const refreshAction = () => (props.live
+    ? <button type="button" class="ds-btn ds-btn--primary" onClick={() => void props.refresh()}>Refresh state</button>
+    : undefined);
 
   return (
     <div class="epics-destination">
@@ -130,18 +169,21 @@ export default function EpicsDestination(props: DestinationProps) {
                   <EmptyState
                     title="No observer snapshots"
                     text="Connect a Sentinel observer or import a published snapshot to inspect epic records."
+                    action={refreshAction()}
                   />
                 </Show>
                 <Show when={view().empty === 'unsupported'}>
                   <EmptyState
                     title="Epic data unavailable"
                     text="The connected observers do not report epic records. Update the observer, then refresh this view."
+                    action={refreshAction()}
                   />
                 </Show>
                 <Show when={view().empty === 'no-epics'}>
                   <EmptyState
                     title="No epics recorded"
                     text="Epic plans appear when an operator registers their member specs."
+                    action={refreshAction()}
                   />
                 </Show>
                 <Show when={view().empty === 'no-matches'}>
@@ -153,7 +195,7 @@ export default function EpicsDestination(props: DestinationProps) {
                 </Show>
                 <Show when={view().empty === 'none'}>
                   <For each={rows()}>
-                    {epicRow => <EpicRow epic={epicRow} selected={epicRow.key === props.route.id} onSelect={props.onSelect} />}
+                    {epicRow => <EpicRow epic={epicRow} selected={epicRow.key === props.route.id} route={props.route} onSelect={props.onSelect} />}
                   </For>
                 </Show>
               </Show>
@@ -163,18 +205,32 @@ export default function EpicsDestination(props: DestinationProps) {
       >
         <Show when={read() === 'loading'}>
           <Show when={delayed()}>
+            <div class="object-head">
+              <div class="object-top">
+                <h2>Epic details</h2>
+              </div>
+              <p />
+            </div>
             <div class="detail-body">
-              <RegionalSkeleton rows={4} label="Reading epic details" />
+              <div class="facts">
+                <RegionalSkeleton rows={1} label="Reading epic facts" />
+                <RegionalSkeleton rows={1} label="Reading epic facts" />
+                <RegionalSkeleton rows={1} label="Reading epic facts" />
+              </div>
+              <section class="section">
+                <div class="section-heading"><h3>Dependency order</h3><span class="muted" /></div>
+                <RegionalSkeleton variant="table" rows={3} label="Reading epic members" />
+              </section>
             </div>
           </Show>
         </Show>
         <Show when={read() === 'error'}>
           <div class="object-head">
             <div class="object-top">
-              <h2>{text(props.route.id) || 'Epic details'}</h2>
+              <h2>{epicSlug(props.route.id) ?? 'Epic details'}</h2>
               <StatusText tone="neutral">Not confirmed</StatusText>
             </div>
-            <p>{text(props.route.id) ? 'Selected epic retained while the host is unavailable.' : 'No selected epic in this route.'}</p>
+            <p>{epicSlug(props.route.id) ? 'Selected epic retained while the host is unavailable.' : 'No selected epic in this route.'}</p>
           </div>
           <div class="detail-body">
             <EmptyState
@@ -189,15 +245,23 @@ export default function EpicsDestination(props: DestinationProps) {
           <Show
             when={read() === 'ready' ? selected() : null}
             fallback={
-              <div class="detail-body">
-                <EmptyState
-                  symbol="◇"
-                  title="Choose an epic"
-                  text={view().empty === 'no-matches'
-                    ? 'Clear the search to restore the available epic plans.'
-                    : 'Registered epics contain member specs and their dependency order.'}
-                />
-              </div>
+              <>
+                <div class="object-head">
+                  <div class="object-top">
+                    <h2>Epic details</h2>
+                  </div>
+                  <p />
+                </div>
+                <div class="detail-body">
+                  <EmptyState
+                    symbol="◇"
+                    title="Choose an epic"
+                    text={view().empty === 'no-matches'
+                      ? 'Clear the search to restore the available epic plans.'
+                      : 'Registered epics contain member specs and their dependency order.'}
+                  />
+                </div>
+              </>
             }
           >
             {epic => <EpicDetail epic={epic()} records={props.records} onSelectPackage={props.onSelectPackage} />}
