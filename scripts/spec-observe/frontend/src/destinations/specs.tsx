@@ -1,8 +1,9 @@
 import { Show } from 'solid-js';
-import { packageFilterMatches, str } from '../format';
+import { base, packageFilterMatches, str } from '../format';
 import Files from '../Files';
 import { PackageDetail, PackageList } from '../Observations';
 import { ActionBar, MasterDetail, SectionTabs, type SectionTab } from '../primitives';
+import PlannedAssignment from '../PlannedAssignment';
 import type { DestinationProps } from './index';
 
 type Filter = 'active' | 'attention' | 'completed' | 'planned';
@@ -61,17 +62,30 @@ export default function SpecsDestination(props: DestinationProps) {
       }
     >
       <div class="detail-body">
-        <PackageDetail
-          record={record()}
-          records={props.records}
-          live={props.specsLive}
-          previewToken={props.token}
-          completionToken={props.completionToken}
-          completionLocalOnly={props.completionLocalOnly}
-          onComplete={props.onComplete}
-          onOpenFile={props.onOpenFile}
-          onSelect={props.onSelect}
-        />
+        <Show when={record()?.planned ? record() : null}>
+          {item => <>
+            <article class="detail planned-spec-summary">
+              <div class="eyebrow">{str(item().workspace)} / Planned spec</div>
+              <div class="detail-title"><div><h2>{base(item().package)}</h2><p class="subtitle mono">{str(item().package_ref)}</p></div><span class="pill muted">Planned</span></div>
+              <p class="section">{str(item().activity || item().obligation || 'Resume this spec package.')}</p>
+              <p class="small muted">Choose a canonical package target, review the saved brief and launch contract, then start the independent agent session.</p>
+            </article>
+            <PlannedAssignment record={item()} live={props.live && props.specsLive} token={props.token} />
+          </>}
+        </Show>
+        <Show when={record()?.planned !== true}>
+          <PackageDetail
+            record={record()}
+            records={props.records}
+            live={props.specsLive}
+            previewToken={props.token}
+            completionToken={props.completionToken}
+            completionLocalOnly={props.completionLocalOnly}
+            onComplete={props.onComplete}
+            onOpenFile={props.onOpenFile}
+            onSelect={props.onSelect}
+          />
+        </Show>
         <Show when={record()?.package} keyed>
           {owner => (
             <Files
@@ -89,7 +103,7 @@ export default function SpecsDestination(props: DestinationProps) {
         {item => (
           <ActionBar>
             <button
-              class="ds-btn ds-btn--primary"
+              class={`ds-btn ${item().planned ? '' : 'ds-btn--primary'}`}
               type="button"
               disabled={!props.canOpenPackageFiles(item())}
               onClick={() => props.onOpenPackageFiles(item())}
