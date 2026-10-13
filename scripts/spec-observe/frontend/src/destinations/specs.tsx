@@ -7,9 +7,10 @@ import RelaunchAssignment from '../RelaunchAssignment';
 import PlannedAssignment from '../PlannedAssignment';
 import type { DestinationProps } from './index';
 
-type Filter = 'active' | 'attention' | 'completed' | 'planned';
+type Filter = 'all' | 'active' | 'attention' | 'completed' | 'planned';
 
 const FILTERS: SectionTab[] = [
+  { key: 'all', label: 'All' },
   { key: 'active', label: 'Active' },
   { key: 'attention', label: 'Blocked' },
   { key: 'completed', label: 'Done' },
@@ -19,7 +20,7 @@ const FILTERS: SectionTab[] = [
 export default function SpecsDestination(props: DestinationProps) {
   const filter = (): Filter => {
     const value = props.route.filter;
-    return value === 'attention' || value === 'completed' || value === 'planned' ? value : 'active';
+    return value === 'active' || value === 'attention' || value === 'completed' || value === 'planned' ? value : 'all';
   };
   const record = () => props.records.find(item => item.key === props.route.id) ?? null;
   const priorAssignment = () => props.assignments.filter(item =>
@@ -28,7 +29,6 @@ export default function SpecsDestination(props: DestinationProps) {
   const visibleCount = () => {
     const query = (props.route.q ?? '').trim().toLowerCase();
     return props.records.filter(item =>
-      (filter() === 'completed' ? item.recent_completion === true : filter() === 'planned' ? item.planned === true : !item.recent_completion && !item.planned) &&
       (!query || [item.workspace, item.package_ref, item.package, item.activity, item.obligation, item.execution, item.workflow_state].some(value => str(value).toLowerCase().includes(query))) &&
       packageFilterMatches(item, filter())
     ).length;
@@ -52,7 +52,7 @@ export default function SpecsDestination(props: DestinationProps) {
             />
             <SectionTabs label="Package filters" variant="filters" active={filter()} tabs={FILTERS} onSelect={props.onFilter} />
           </div>
-          <div class="list-caption">{filter() === 'completed' ? 'Done' : filter() === 'attention' ? 'Blocked' : filter() === 'planned' ? 'Planned' : 'Active'} · {visibleCount()} observed specs</div>
+          <div class="list-caption">{filter() === 'completed' ? 'Done' : filter() === 'attention' ? 'Blocked' : filter() === 'planned' ? 'Planned' : filter() === 'active' ? 'Active' : 'All'} · {visibleCount()} observed specs</div>
           <div class="records">
             <PackageList
               records={props.records}
