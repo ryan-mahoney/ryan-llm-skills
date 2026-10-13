@@ -122,6 +122,33 @@ snapshot.epics[] = {
 run.epic = { epic, workspace, position, total }   // on every run row whose package is a member
 ```
 
+Planned inventory rows (`snapshot.planned_packages[]`) publish the same
+read-only planning facts for standalone and epic-member packages:
+
+```
+snapshot.planned_packages[] = {
+  workspace, package_ref, package, planned_at,
+  targets[] = { id, primary },
+  source_paths[],
+  step_count,             // steps in a readable spec-steps.json, else null
+  prepared,               // true only for a valid flat 1..N index, an `Outcome: prepared`
+                          // report and no decision-required.md; false for known
+                          // missing/invalid/incomplete preparation; null when a read was unavailable
+  preparation = { outcome, reported_at, source, read, bytes },  // blocked/decision-required/invalid/missing stay explicit
+  decision,               // null when absent; validated front matter or an invalid/unavailable marker
+  receipts[] = { id, state },   // observed receipt history; a cancelled-only history stays history
+  worktree_recorded,      // locations.json target worktree, else the primary checkout; a recorded fact only
+  proposal, critique,     // true/false regular-file presence; null when present but unreadable
+  critique_recommended,   // true/false only from the proposal's explicit front matter; null when unknown
+  epic,                   // added when the package is an epic member
+}
+```
+
+Prepared facts are computed at read time from the package's own files through the
+same bounded reads and are never stored in the epic record. A recorded worktree
+never disqualifies a package, and standalone and epic-member rows carry identical
+facts; membership only adds `epic`.
+
 The dashboard shows the epic badge on package rows, an epic section in the
 package detail with every member's status, and an **Epics** view listing each
 epic's members. `sentinel status --format text` prints one line per epic.

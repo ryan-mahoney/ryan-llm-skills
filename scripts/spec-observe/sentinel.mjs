@@ -14,6 +14,7 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
 import { applicableMerge, validateMergeCache } from './merge-reconciliation.mjs';
 import { manualCompletion, COMPLETION_FILE } from './manual-completion.mjs';
+import { readPreparation, readDecision, readPlanningArtifacts } from './preparation.mjs';
 import { publicHint } from '../../pi/extensions/spec-runtime/monitor.mjs';
 import { discoverManaged } from './core.mjs';
 import { collectAssignments } from './assignments.mjs';
@@ -741,7 +742,8 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
       planned.push({ workspace: fact.workspace, package_ref: fact.ref, package: fact.packagePath,
         planned_at: await packagePlanTime(fact.packagePath),
         targets: fact.targets.map(({ id, primary }) => ({ id, primary })),
-        source_paths: [...fact.sources.values()].map(source => source.file) });
+        source_paths: [...fact.sources.values()].map(source => source.file),
+        ...await plannedRowFacts(fact, budget) });
     }
     if (fact.staleReceipts) staleReceipts = true;
   };
@@ -838,6 +840,35 @@ export async function collectWorkspace({ roots = [], packages = [], enrollmentEr
     spec_roots: [...new Set([...facts.values()].map(f => dirname(f.packagePath)), ...epicEntries.map(e => dirname(e.dir)))], ...(discovery ? { discovery } : {}) });
 }
 
+
+// Planned inventory facts are observations, not acceptance: planning files are
+// read once per package through the same bounded reader, shared memo and byte
+// budget. A recorded worktree never disqualifies a package, cancelled-only
+// receipts stay history, and unknown reads stay explicit instead of guessed.
+async function plannedRowFacts(fact, budget) {
+  const steps = await readStepIndex(fact, budget);
+  const preparation = await readPreparation(fact.packagePath, budget, { readBounded, memo: fact.reads });
+  const decision = await readDecision(fact.packagePath, budget, { readBounded, memo: fact.reads });
+  const planning = await readPlanningArtifacts(fact.packagePath, budget, { readBounded, memo: fact.reads });
+  const target = fact.targets[0] ?? null;
+  // A validated decision record is an unresolved decision; a present but
+  // invalid record is incomplete preparation. Only an unavailable read leaves
+  // readiness genuinely unknown.
+  const prepared = steps.readiness_valid === null || preparation.outcome === 'unavailable' || decision?.outcome === 'unavailable'
+    ? null
+    : steps.readiness_valid === true && preparation.outcome === 'prepared' && decision === null;
+  return {
+    step_count: steps.source ? steps.steps.length : null,
+    prepared,
+    preparation,
+    decision,
+    receipts: (fact.candidates ?? []).map(({ id, receipt }) => ({ id, state: receipt.state ?? 'unknown' })),
+    worktree_recorded: target ? (target.worktree ?? target.primary) : null,
+    proposal: planning.proposal,
+    critique: planning.critique,
+    critique_recommended: planning.critique_recommended,
+  };
+}
 
 // A scoped PR record permits lifecycle lookup even when planning and receipts
 // lag publication. Scoped remote or fetched Git merge proof can supersede older work records.
@@ -1230,29 +1261,36 @@ async function readStepIndex(fact, budget) {
     allow: value => {
       if (!value || typeof value !== 'object' || !Array.isArray(value.steps)) return null;
       const steps = [];
+      // Readiness mirrors the strict prepared shape used by runtime startup: a
+      // nonempty flat 1..N index whose entries carry the required step number
+      // and name string. Raw-index validity only; the sanitized steps below
+      // keep historic progress parsing unchanged.
+      const readiness_valid = value.steps.length > 0 && value.steps.every((item, index) =>
+        item && typeof item === 'object' && Number.isSafeInteger(item.step) && item.step === index + 1
+        && typeof item.name === 'string');
       for (const item of value.steps) {
         if (!item || typeof item !== 'object' || !Number.isSafeInteger(item.step) || item.step < 1
           || steps.some(existing => existing.step === item.step)) return null;
         steps.push({ step: item.step, name: typeof item.name === 'string' ? item.name : null });
       }
-      return steps.sort((a, b) => a.step - b.step);
+      return { steps: steps.sort((a, b) => a.step - b.step), readiness_valid };
     },
   });
-  if (result.outcome === 'read-budget') { fact.stepIndexNotes.push(result.reason); fact.stepIndex = { steps: [], source: null, digest: null }; return fact.stepIndex; }
+  if (result.outcome === 'read-budget') { fact.stepIndexNotes.push(result.reason); fact.stepIndex = { steps: [], source: null, digest: null, readiness_valid: null }; return fact.stepIndex; }
   if (result.outcome === 'missing') {
     // A package without a prepared step index is a legitimate absence.
-    fact.stepIndex = { steps: [], source: null, digest: null };
+    fact.stepIndex = { steps: [], source: null, digest: null, readiness_valid: false };
     return fact.stepIndex;
   }
   if (result.outcome === 'ok') {
     fact.sources.set('step-index', { file, digest: result.digest });
-    fact.stepIndex = { steps: result.record, source: file, digest: result.digest };
+    fact.stepIndex = { steps: result.record.steps, source: file, digest: result.digest, readiness_valid: result.record.readiness_valid };
   } else if (result.outcome === 'oversized' || result.outcome === 'invalid') {
     // A missing step index is not a defect; an unreadable or oversized one is.
     fact.stepIndexNotes.push(`step-index-invalid: ${fact.packagePath}`);
-    fact.stepIndex = { steps: [], source: null, digest: null };
+    fact.stepIndex = { steps: [], source: null, digest: null, readiness_valid: false };
   } else {
-    fact.stepIndex = { steps: [], source: null, digest: null };
+    fact.stepIndex = { steps: [], source: null, digest: null, readiness_valid: null };
   }
   return fact.stepIndex;
 }

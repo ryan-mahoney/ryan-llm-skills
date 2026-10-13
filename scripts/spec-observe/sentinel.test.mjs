@@ -789,6 +789,103 @@ test('planned inventory excludes legacy implementation artifacts and orders plan
   assert.deepEqual(snapshot.recently_completed, [], 'exclusion from Planned does not assert accepted completion');
 });
 
+// Run alone: node --test --test-name-pattern='planned inventory publishes readiness' scripts/spec-observe/sentinel.test.mjs
+test('planned inventory publishes readiness and planning facts for a standalone prepared package and its epic member', async t => {
+  const f = sandbox(t), repo = primary(f.dir, 'planned-facts');
+  const prepared = path => {
+    writeFileSync(join(path, 'spec-steps.json'), JSON.stringify({ steps: [
+      { step: 1, name: 'Prepare inputs' }, { step: 2, name: 'Draft reader' }] }));
+    writeFileSync(join(path, 'spec-prepare.md'), '# Preparation\n\nOutcome: prepared\nPrepared: 2026-10-06\n');
+    writeFileSync(join(path, 'proposal.md'), '---\nverdict: COMPATIBLE\ncritique_recommended: true\n---\n\n# Proposal\n');
+    writeFileSync(join(path, 'critique.md'), '# Critique\n');
+  };
+  const standalone = pack(repo, 'prepared-standalone');
+  const member = pack(repo, 'epic-member');
+  prepared(standalone);
+  prepared(member);
+  const epicDir = join(STORAGE, 'projects', basename(repo), 'epics', 'facts');
+  mkdirSync(epicDir, { recursive: true });
+  writeFileSync(join(epicDir, 'epic.json'), JSON.stringify({ schema_version: 1, epic: 'facts',
+    title: 'Facts epic', state: 'active', packages: [{ package: 'epic-member' }] }));
+
+  const snapshot = await collect({ roots: [repo], indexDir: f.indexDir, now });
+  const row = snapshot.planned_packages.find(item => item.package === standalone);
+  assert.ok(row, 'a standalone no-receipt package is planned inventory');
+  assert.equal(row.step_count, 2);
+  assert.equal(row.prepared, true);
+  assert.equal(row.preparation.outcome, 'prepared');
+  assert.equal(row.preparation.reported_at, '2026-10-06');
+  assert.equal(row.decision, null);
+  assert.deepEqual(row.receipts, []);
+  assert.equal(row.worktree_recorded, repo, 'a null recorded worktree falls back to the primary checkout');
+  assert.equal(row.proposal, true);
+  assert.equal(row.critique, true);
+  assert.equal(row.critique_recommended, true);
+
+  const memberRow = snapshot.planned_packages.find(item => item.package === member);
+  assert.ok(memberRow?.epic, 'an epic member package carries epic membership');
+  for (const field of ['step_count', 'prepared', 'decision', 'receipts', 'worktree_recorded', 'proposal', 'critique', 'critique_recommended'])
+    assert.deepEqual(memberRow[field], row[field], `standalone and epic member share ${field}`);
+  assert.equal(memberRow.preparation.outcome, row.preparation.outcome);
+});
+
+// Run alone: node --test --test-name-pattern='planned inventory never publishes prepared' scripts/spec-observe/sentinel.test.mjs
+test('planned inventory never publishes prepared for blocked, pending, malformed, or unreadable preparation', async t => {
+  const f = sandbox(t), repo = primary(f.dir, 'planned-unready');
+  const steps = JSON.stringify({ steps: [{ step: 1, name: 'One' }, { step: 2, name: 'Two' }] });
+  const blocked = pack(repo, 'blocked-prepare');
+  writeFileSync(join(blocked, 'spec-steps.json'), steps);
+  writeFileSync(join(blocked, 'spec-prepare.md'), 'Outcome: blocked\n');
+  const pending = pack(repo, 'pending-decision');
+  writeFileSync(join(pending, 'spec-steps.json'), steps);
+  writeFileSync(join(pending, 'spec-prepare.md'), 'Outcome: decision-required\n');
+  writeFileSync(join(pending, 'decision-required.md'), '---\nstage: architecture\nquestion: "Which seam?"\nrecommendation: "Keep it local"\nrecorded_at: 2026-10-06T12:00:00.000Z\n---\n');
+  const sparse = pack(repo, 'sparse-index');
+  writeFileSync(join(sparse, 'spec-steps.json'), JSON.stringify({ steps: [{ step: 1, name: 'One' }, { step: 3, name: 'Three' }] }));
+  writeFileSync(join(sparse, 'spec-prepare.md'), 'Outcome: prepared\n');
+  const unreadable = pack(repo, 'unreadable-prepare');
+  writeFileSync(join(unreadable, 'spec-steps.json'), steps);
+  writeFileSync(join(unreadable, 'spec-prepare.md'), 'x'.repeat(65537));
+  const noIndex = pack(repo, 'missing-index');
+  writeFileSync(join(noIndex, 'spec-prepare.md'), 'Outcome: prepared\n');
+
+  const snapshot = await collect({ roots: [repo], indexDir: f.indexDir, now });
+  const row = path => snapshot.planned_packages.find(item => item.package === path);
+  for (const path of [blocked, pending, sparse, unreadable, noIndex]) {
+    assert.ok(row(path), `${basename(path)} is still planned inventory`);
+    assert.equal(row(path).prepared, false, basename(path));
+  }
+  assert.equal(row(blocked).preparation.outcome, 'blocked');
+  assert.equal(row(pending).decision.stage, 'architecture');
+  assert.equal(row(pending).decision.question, 'Which seam?');
+  assert.equal(row(sparse).step_count, 2, 'a readable non-sequential index still reports its size');
+  assert.equal(row(noIndex).step_count, null);
+});
+
+// Run alone: node --test --test-name-pattern='planned inventory keeps cancelled receipts' scripts/spec-observe/sentinel.test.mjs
+test('planned inventory keeps cancelled receipts as history and a recorded worktree as a non-disqualifying fact', async t => {
+  const f = sandbox(t), repo = primary(f.dir, 'planned-history-facts');
+  const workspace = basename(repo);
+  const settled = pack(repo, 'settled-worktree');
+  receipt(settled, { id: 'settled', state: 'cancelled', started_at: ago(60000) });
+  writeFileSync(join(settled, 'spec-steps.json'), JSON.stringify({ steps: [{ step: 1, name: 'One' }] }));
+  const recorded = join(f.dir, 'recorded-worktree');
+  writeFileSync(join(settled, 'locations.json'), JSON.stringify({ schema_version: 1, package_ref: `${workspace}/settled-worktree`,
+    targets: [{ id: workspace, primary: repo, common: join(repo, '.git'), branch: 'spec-settled', worktree: recorded }] }));
+  const active = pack(repo, 'active-implementation');
+  receipt(active, { id: 'active', state: 'running', started_at: ago(1000) });
+  const completed = pack(repo, 'completed-implementation');
+  receipt(completed, { id: 'completed', state: 'completed', started_at: ago(2000) });
+
+  const snapshot = await collect({ roots: [repo], indexDir: f.indexDir, now });
+  const row = snapshot.planned_packages.find(item => item.package === settled);
+  assert.ok(row, 'a cancelled-only receipt history does not disqualify a package');
+  assert.deepEqual(row.receipts, [{ id: 'settled', state: 'cancelled' }]);
+  assert.equal(row.worktree_recorded, recorded, 'the recorded worktree is a fact, not a disqualifier');
+  assert.ok(!snapshot.planned_packages.some(item => item.package === active), 'active implementation stays outside planned inventory');
+  assert.ok(!snapshot.planned_packages.some(item => item.package === completed), 'completed implementation stays outside planned inventory');
+});
+
 test('completion history caps packages independently of monitored assignments and reports omitted history', async t => {
   const f = sandbox(t), repo = primary(f.dir, 'completion-cap');
   const active = pack(repo, 'active');
