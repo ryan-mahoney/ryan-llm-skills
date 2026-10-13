@@ -166,19 +166,3 @@ export function AgentDetail(props: { assignment: any; records: any[]; token?:str
     </article>;
   }}</Show>;
 }
-
-export function EpicList(props: { epics: any[]; query: string; selected: string | null; onSelect: (key: string) => void }) {
-  const visible = () => list(props.epics).filter(e => !props.query.trim() || [e.title, e.epic, e.workspace, ...list(e.members).map(m => m.name)].some(v => str(v).toLowerCase().includes(props.query.trim().toLowerCase()))).sort((a, b) => str(a.workspace).localeCompare(str(b.workspace)) || str(a.title).localeCompare(str(b.title)));
-  return <><div class="observation-rows"><Show when={visible().length} fallback={<div class="empty"><h3>{props.epics.length ? 'No matching epics' : 'No epics recorded'}</h3><p class="small" style={{ 'margin-top': '8px' }}>{props.epics.length ? 'Change the search or clear it to see every epic.' : 'Epic records provide grouped package status, dependencies and designs.'}</p></div>}><For each={visible()}>{e => { const s = epicStats(e); return <button type="button" class="run-row" data-epic={e.key} aria-pressed={e.key === props.selected} onClick={() => props.onSelect(e.key)}><div class="flex justify-between gap-3"><span class="run-title">{e.title}</span><span class="pill muted">{e.epic}</span></div><p class="summary">{s.landed}/{s.total} landed{ s.attention > 0 ? ` · ${s.attention} attention` : ''}</p></button>; }}</For></Show></div></>;
-}
-
-export function EpicDetail(props: { epic: any; onSelectPackage?: (workspace: string, name: string) => void }) {
-  return <Show when={props.epic} fallback={<div class="empty"><h2>Select an epic</h2><p>Choose an epic to see its members and derived status.</p></div>} keyed>{e => {
-    const s = epicStats(e), c = e.coverage || {};
-    return <article class="detail"><div class="eyebrow">{text(e.workspace)} / Epic</div><div class="detail-title"><div><h2>{e.title}</h2><p class="subtitle mono">{e.epic}</p></div><span class={`pill ${e.state === 'complete' ? 'good' : 'muted'}`}>{text(e.state, 'unknown')}</span></div>
-      <Show when={c.state && c.state !== 'complete'}><p class="small warn section">Epic coverage {c.state}{list(c.reasons).length ? `: ${list(c.reasons).join('; ')}` : ''}</p></Show><p class="section">{s.landed} of {s.total} landed · next {text(e.next, 'none')}{s.attention > 0 ? ` · ${s.attention} need attention` : ''}</p><Show when={e.note}><p class="small muted" style={{ 'margin-top': '8px' }}>{e.note}</p></Show>
-      <section class="section"><dl class="paths"><dt class="small muted">Workspace</dt><dd class="mono">{text(e.workspace)}</dd><dt class="small muted">Record</dt><dd class="mono">{text(e.record)}</dd><dt class="small muted">Plan</dt><dd class="mono">{text(e.plan, 'No plan recorded')}</dd><dt class="small muted">Designs</dt><dd class="mono"><Show when={list(e.designs).length} fallback="No designs recorded"><For each={list(e.designs)}>{(d, index) => <>{index() ? <br /> : null}{d.workspace}/{d.design}</>}</For></Show></dd></dl></section>
-      <EpicMembers epic={e} onSelectMember={props.onSelectPackage ? ((m: any) => props.onSelectPackage?.(m.workspace || e.workspace, m.package || m.name)) : undefined} /><Show when={e.summary}><section class="section"><h3>Summary</h3><Show when={typeof e.summary === 'string' || e.summary.text}><Markdown value={typeof e.summary === 'string' ? e.summary : e.summary.text} fallback="No summary recorded." /></Show><Show when={typeof e.summary === 'object' && !e.summary.text}><div class="rows"><For each={Object.entries(e.summary)}>{([label, value]) => <div class="info-row"><p>{label.replace(/_/g, ' ')}</p><small>{str(value)}</small></div>}</For></div></Show></section></Show>
-    </article>;
-  }}</Show>;
-}
