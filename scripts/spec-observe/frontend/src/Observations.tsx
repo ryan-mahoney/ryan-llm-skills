@@ -6,7 +6,7 @@ import { PackagePreview } from './PackagePreview';
 import { esc, age, attention, base, duration as sharedDuration, inlineMarkdown, packageFilterMatches, pendingWorkflow, runningUnconfirmed, serverNow, stale, statusMarkdown, str, terminal, time, activeRun } from './format';
 import { assignmentEnded, assignmentLabel, assignmentTone, completionLabel, duration, epicMemberTone, epicStats, packageViewUrl, runState, specProgress } from './observation-format';
 
-type Filter = 'active' | 'attention' | 'completed' | 'planned';
+type Filter = 'all' | 'active' | 'attention' | 'completed' | 'planned';
 type SelectionProps = { query: string; selected: string | null; onSelect: (key: string) => void };
 const list = (v: any) => Array.isArray(v) ? v : [];
 const text = (v: any, fallback = 'Unknown') => typeof v === 'string' && v ? v : fallback;
@@ -21,7 +21,7 @@ const rows = (items: any[], kind: string) => <Show when={items.length} fallback=
 const Markdown = (props: { value: any; class?: string; fallback: string }) => <div class={`status-markdown ${props.class || ''}`} innerHTML={statusMarkdown(props.value || props.fallback)} />;
 
 export function PackageList(props: { records: any[]; filter: Filter; query: string; selected: string | null; onSelect: (key: string) => void }) {
-  const all = () => list(props.records).filter(r => props.filter === 'completed' ? r.recent_completion === true : props.filter === 'planned' ? r.planned === true : !r.recent_completion && !r.planned);
+  const all = () => list(props.records);
   const visible = () => all().filter(r => {
     const q = props.query.trim().toLowerCase();
     return (!q || [r.workspace, r.package_ref, r.package, r.activity, r.obligation, r.execution, r.workflow_state].some(v => str(v).toLowerCase().includes(q))) &&

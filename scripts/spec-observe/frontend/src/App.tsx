@@ -12,7 +12,7 @@ import { catalogRead, type WorkspaceCatalog } from './destinations/workspace-sta
 import { getLaunchDraft, seedLaunchDraft } from './launch-state';
 import { armLaunchPickerIntent, cancelLaunchPickerIntent, createLaunchPickerIntent, shouldApplyPickerReset, shouldResetAcknowledgedDraft } from './launch-picker-intent';
 
-type Filter = 'active' | 'attention' | 'completed' | 'planned';
+type Filter = 'all' | 'active' | 'attention' | 'completed' | 'planned';
 type Catalog = WorkspaceCatalog;
 const liveBrowser = () => location.protocol !== 'file:';
 
@@ -68,7 +68,7 @@ export default function App() {
   const query = () => route().q ?? '';
   const filter = (): Filter => {
     const value = route().filter;
-    return value === 'attention' || value === 'completed' || value === 'planned' ? value : 'active';
+    return value === 'active' || value === 'attention' || value === 'completed' || value === 'planned' ? value : 'all';
   };
   const q = () => query().trim().toLowerCase();
   const visibleRecords = createMemo(() => scopedRecords().filter(record => (!q() || [record.workspace, record.package_ref, record.package, record.activity, record.obligation, record.execution, record.workflow_state].some(value => str(value).toLowerCase().includes(q()))) && packageFilterMatches(record, filter())).sort((a, b) => filter() === 'completed' ? Date.parse(b.completed_at) - Date.parse(a.completed_at) || str(a.package).localeCompare(str(b.package)) : 0));
