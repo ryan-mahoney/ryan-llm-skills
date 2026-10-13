@@ -168,6 +168,20 @@ For a step that promises runtime- or user-observable behavior, include at least 
 
 Do not write complete routine test bodies in the subspec. A minimal harness skeleton is allowed only when fake-timer ordering, fixture construction, or a non-obvious mock boundary is itself the key planning risk; justify that skeleton in Setup.
 
+For a refusal or failure case, identify the prerequisite that proves the fixture reaches
+the boundary under test. Assert that prerequisite before attributing failure downstream;
+use production-shaped identities and selection data, not convenient substitutes. For a
+navigation contract, enter through its real caller and observe the destination or result;
+include repeat entry, target changes or retained outcomes when those are the claimed
+behavior. Link text or a preselected destination cannot prove the transition. Required
+visual evidence includes populated lower content in the changed region, scrolling its
+actual pane when needed rather than capturing only the header.
+
+For concurrency or retained-resource work, state the relevant termination conditions in
+the existing verification plan: response timeout versus actual worker drain, reservation
+expiry versus released capacity, owner death/restart, and partial-result refusal. Select
+only conditions that apply to the promised behavior; no blanket lifecycle test matrix.
+
 ## Compact Agent Instructions
 
 After the two machine blocks, include only:

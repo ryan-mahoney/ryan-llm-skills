@@ -678,7 +678,8 @@ test('runtime carries a validated workflow_id and stable assignment_id into the 
   assert.equal(g.pids.length, 0);
 });
 
-test('step-scoped sessions isolate steps, retain retries and leave default package reuse unchanged', async t => {
+// Run alone: node --test --test-name-pattern='default step sessions' runtime.test.mjs
+test('default step sessions isolate steps, retain retries and support explicit package reuse', async t => {
   const f = await fixture(t, 'setInterval(()=>{},1000);'), runtime = new Runtime(f.options);
   const nextStep = join(f.packagePath, 'step-002-subspec.md'); writeFileSync(nextStep, 'Next prepared step');
   const run = async input => {
@@ -688,15 +689,20 @@ test('step-scoped sessions isolate steps, retain retries and leave default packa
     await runtime.cancel(f.packagePath, receipt.run_id, 1000);
     return record;
   };
-  const first = await run({ assignment_id: 'first', session_scope: 'step', attempt_kind: 'implementation' });
+  const first = await run({ assignment_id: 'first', attempt_kind: 'implementation' });
+  assert.equal(first.session_scope, 'step');
   assert.equal(summary(first).attempt_kind, 'implementation');
-  const retry = await run({ assignment_id: 'retry', session_scope: 'step', attempt_kind: 'verification-continuation' });
-  const second = await run({ assignment_id: 'second', step: nextStep, session_scope: 'step' });
+  const retry = await run({ assignment_id: 'retry', attempt_kind: 'verification-continuation' });
+  const second = await run({ assignment_id: 'second', step: nextStep });
   assert.equal(first.editor_session, retry.editor_session);
   assert.equal(first.owner_session, retry.owner_session);
   assert.notEqual(first.editor_session, second.editor_session);
-  const legacy1 = await run({ assignment_id: 'legacy1' });
-  const legacy2 = await run({ assignment_id: 'legacy2', step: nextStep });
+  const legacy1 = await run({ assignment_id: 'legacy1', session_scope: 'package' });
+  assert.equal((await runtime.start({ ...f.input, assignment_id: 'legacy1' })).run_id, legacy1.id);
+  const packageRetry = await run({ assignment_id: 'legacy-repair', attempt_kind: 'review-repair' });
+  assert.equal(packageRetry.session_scope, 'package');
+  assert.equal(packageRetry.owner_session, legacy1.owner_session);
+  const legacy2 = await run({ assignment_id: 'legacy2', step: nextStep, session_scope: 'package' });
   assert.equal(legacy1.editor_session, legacy2.editor_session);
   assert.notEqual(first.editor_session, legacy1.editor_session);
   await assert.rejects(() => runtime.start({ ...f.input, assignment_id: 'first', session_scope: 'package', attempt_kind: 'implementation' }), /different launch contract/);
@@ -705,6 +711,83 @@ test('step-scoped sessions isolate steps, retain retries and leave default packa
   await assert.rejects(() => other.start({ ...g.input, session_scope: 'discard' }), /session_scope/);
   assert.equal(g.pids.length, 0);
   assert.equal(existsSync(join(g.packagePath, 'runtime')), false);
+});
+
+// Run alone: node --test --test-name-pattern='legacy package assignments' runtime.test.mjs
+test('legacy package assignments remain idempotent without rewriting their sessions', async t => {
+  const f = await fixture(t, 'setInterval(()=>{},1000);'), runtime = new Runtime(f.options);
+  const receipt = await runtime.start({ ...f.input, assignment_id: 'legacy', session_scope: 'package' });
+  await runtime.cancel(f.packagePath, receipt.run_id, 1000);
+  const dir = join(f.packagePath, 'runtime/assignments');
+  const file = join(dir, readdirSync(dir)[0]);
+  const assignment = JSON.parse(readFileSync(file));
+  const parts = JSON.parse(assignment.contract); parts.pop();
+  assignment.contract = JSON.stringify(parts); writeFileSync(file, JSON.stringify(assignment));
+  const manifest = join(f.packagePath, 'runtime/runs', `${receipt.run_id}.json`);
+  const record = JSON.parse(readFileSync(manifest)); delete record.session_scope;
+  writeFileSync(manifest, JSON.stringify(record));
+  const before = readFileSync(manifest, 'utf8');
+  const resumed = await runtime.start({ ...f.input, assignment_id: 'legacy' });
+  assert.equal(resumed.run_id, receipt.run_id);
+  assert.equal(resumed.session_scope, 'package');
+  assert.equal(resumed.owner_session, record.owner_session);
+  assert.equal((await runtime.start({ ...f.input, assignment_id: 'legacy', session_scope: 'package' })).run_id, receipt.run_id);
+  assert.equal(readFileSync(manifest, 'utf8'), before);
+  assert.equal(f.pids.length, 1);
+  await assert.rejects(() => runtime.start({ ...f.input, assignment_id: 'legacy', session_scope: 'step' }), /different launch contract/);
+  const repair = await runtime.start({ ...f.input, assignment_id: 'legacy-retry', attempt_kind: 'implementation-repair' });
+  assert.equal(repair.session_scope, 'package');
+  assert.equal(repair.owner_session, record.owner_session);
+  await runtime.cancel(f.packagePath, repair.run_id, 1000);
+});
+
+// Run alone: node --test --test-name-pattern='CURRENT handoff' runtime.test.mjs
+test('CURRENT handoff carries bounded latest prerequisite facts and preserves explicit instructions', async t => {
+  const f = await fixture(t, 'setInterval(()=>{},1000);');
+  const dir = join(f.packagePath, 'runtime/runs'); mkdirSync(dir, { recursive: true });
+  const prerequisite = join(f.packagePath, 'step-000-subspec.md');
+  writeFileSync(f.step, 'Prerequisites: steps 0–0');
+  writeFileSync(join(dir, 'corrupt.json'), '{');
+  for (const [id, started_at, gap] of [['old', '2026-01-01', 'historical blocker'], ['new', '2026-01-02', 'current obligation']]) {
+    writeFileSync(join(dir, `${id}.json`), JSON.stringify({ id, step: prerequisite, state: 'completed', started_at }));
+    writeFileSync(join(dir, `${id}-completion.json`), JSON.stringify({ learning: { outcome: 'checkpoint', commit: id, remaining_work: ['finish owned evidence'], evidence: [{ id: 'large'.repeat(5000), artifact: 'a'.repeat(20000), proof_boundary: 'b'.repeat(20000), applicability: 'c'.repeat(20000) }] }, decisions: ['use existing helper'], gaps: [gap], findings: [] }));
+  }
+  let prompt;
+  const runtime = new Runtime({ ...f.options, launchProcess: (...args) => { prompt = args[2]; return f.options.launchProcess(...args); } });
+  const receipt = await runtime.start({ ...f.input, instructions: 'Preserve explicit direction' });
+  const current = JSON.parse(prompt.match(/CURRENT: ([^\n]+)/)[1]);
+  assert.equal(current.step, f.step);
+  assert.match(current.revision.commit, /^[a-f0-9]{40}$/);
+  assert.equal(current.observations.find(item => item.step === '000').run_id, 'new');
+  assert.deepEqual(current.observations.find(item => item.step === '000').unresolved_obligations, ['current obligation']);
+  assert.deepEqual(current.observations.find(item => item.step === '000').remaining_work, ['finish owned evidence']);
+  assert.ok(current.coverage_gaps.some(gap => gap.includes('corrupt.json')));
+  const context = current.observations.find(item => item.step === '000');
+  assert.match(context.relevance, /dependency not inferred/);
+  assert.equal(context.truncated, true);
+  assert.equal(context.evidence[0].artifact.length, 300);
+  assert.ok(JSON.stringify(current.observations).length <= 10000);
+  assert.ok(!prompt.includes('historical blocker'));
+  assert.ok(prompt.includes('use existing helper'));
+  assert.ok(prompt.includes('Preserve explicit direction'));
+  assert.ok(prompt.includes('do not establish acceptance'));
+  await runtime.cancel(f.packagePath, receipt.run_id, 1000);
+});
+
+// Run alone: node --test --test-name-pattern='prompt construction failure' runtime.test.mjs
+test('prompt construction failure leaves a terminal receipt and permits a later dispatch', async t => {
+  const f = await fixture(t, 'setInterval(()=>{},1000);'), runtime = new Runtime(f.options);
+  const prepared = await runtime.start({ ...f.input, assignment_id: 'prepare-checkout' });
+  await runtime.cancel(f.packagePath, prepared.run_id, 1000);
+  const unreadableCard = join(f.packagePath, 'step-002-subspec.md'); mkdirSync(unreadableCard);
+  await assert.rejects(() => runtime.start({ ...f.input, step: unreadableCard, assignment_id: 'bad-card' }), /EISDIR/);
+  const failed = loadRun(f.packagePath);
+  assert.equal(failed.state, 'failed');
+  assert.ok(failed.finished_at);
+  assert.equal(f.pids.length, 1);
+  const next = await runtime.start({ ...f.input, assignment_id: 'good-card' });
+  assert.equal(next.state, 'running');
+  await runtime.cancel(f.packagePath, next.run_id, 1000);
 });
 
 test('clarification redispatch reuses retained sessions and refuses the stale attempt ID', async t => {

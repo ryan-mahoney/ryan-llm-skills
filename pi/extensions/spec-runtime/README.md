@@ -63,10 +63,12 @@ step is a new assignment. Never use a new ID to bypass an active run.
 Optional `attempt_kind` records why an assignment exists: `implementation`,
 `verification-continuation`, `implementation-repair`, `review-repair`, or `launch-retry`.
 It does not authorize another attempt. Omitted legacy reasons remain unknown.
-Optional `session_scope: "step"` separates retained owner/editor sessions by canonical
-step while retaining context across that step's retries. The default `"package"`
-preserves existing session reuse. Opt in only at a step boundary with a concise
-dependency handoff; changing scope or a supplied attempt kind changes the launch
+New steps default to `session_scope: "step"`, separating retained owner/editor
+sessions by canonical step while retaining context across that step's retries. Explicit
+`"package"` preserves cross-step reuse. Supply a concise current dependency handoff;
+existing attempt receipts and active sessions retain their recorded scope. A new retry
+ID on the same step inherits its latest recorded scope when omitted. Changing
+an explicitly supplied scope or attempt kind changes the launch
 contract and cannot reuse an existing assignment ID. Models and thinking effort
 are never changed by this option. No existing transcript is removed or rewritten.
 
@@ -77,6 +79,18 @@ explicit recovery operation, not a polling loop:
 ```json
 {"action":"status","package":"transitops/feature","run_id":"<id>"}
 ```
+
+Once runtime returns a run, a later checkpoint or monitor bookkeeping failure returns
+that same receipt with `bookkeeping_error`, not a launch refusal. Reconcile the named
+run and await it if active; do not start a replacement. Checkpoint artifacts are readable
+package-contained paths. Legacy artifact `sha256` fields are ignored; intended edits
+do not invalidate a checkpoint. Inbox direction identity hashes are unchanged.
+
+Partial handoffs can carry `checkpoint_reason` (`blocker`, `deadline`, `decision`,
+`owner-transfer`, `interruption`) and concrete `remaining_work`. Legacy handoffs remain
+readable; gaps and unresolved owned evidence supply the continuation action. Ready,
+unattempted gates remain work for the current owner, not a routine reason to exit.
+These fields neither approve acceptance nor trigger automatic redispatch.
 
 Cancellation revokes the run's writer role, signals every tracked process group, and waits for
 termination. It returns `cancelled` only after those groups have stopped:
