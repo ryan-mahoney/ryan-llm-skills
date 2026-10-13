@@ -18,7 +18,7 @@ import { request as httpRequest } from "node:http";
 import { connect as netConnect } from "node:net";
 import { findAssignment } from "../workspaces/assignments.mjs";
 import { quote, verifyTerminal } from "../workspaces/session-control.mjs";
-import { windowSize } from "../workspaces/tmux.mjs";
+import { terminalIdentityCondition, windowSize } from "../workspaces/tmux.mjs";
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -456,15 +456,19 @@ export function createTerminalViews({
 
   function spawnChild(entry, size) {
     const record = entry.record;
+    const attach = ["attach-session", "-t", `=${record.tmux_session}`,
+      "-f", "read-only,ignore-size"].map(quote).join(" ");
     const command = [
       "tmux",
       "-S",
       record.tmux_socket,
-      "attach-session",
+      "if-shell",
+      "-F",
       "-t",
-      `=${record.tmux_session}`,
-      "-f",
-      "read-only,ignore-size",
+      `=${record.tmux_session}:`,
+      terminalIdentityCondition(record),
+      attach,
+      "display-message -p identity-changed",
     ].map(quote).join(" ");
     const env = { ...process.env };
     if (!env.TERM) env.TERM = "xterm-256color";
@@ -531,10 +535,40 @@ export function createTerminalViews({
       failEntry(entry, terminalError("not-live", 404, "The assignment terminal is not live."));
       return;
     }
+    try {
+      const resolved = await readTerminal(entry.id);
+      if (resolved.identity !== entry.identity) {
+        throw terminalError("changed", 409, "The assignment terminal identity changed. Reconcile it before viewing.");
+      }
+    } catch (error) {
+      failEntry(entry, error);
+      return;
+    }
+    // Verification also awaits record/process probes; preserve reservation
+    // ownership after that await, including shutdown and replacement.
+    if (entry.terminal || entry.stopping || !admitting || entries.get(entry.id) !== entry) return;
     spawnChild(entry, size);
   }
 
   async function resolveTerminal(id) {
+    const examined = entries.get(id);
+    try {
+      const resolved = await readTerminal(id);
+      if (examined && examined.identity !== resolved.identity) invalidateEntry(examined);
+      return resolved;
+    } catch (error) {
+      if (examined && (error.state === "changed" || error.state === "not-live")) invalidateEntry(examined);
+      throw error;
+    }
+  }
+
+  function invalidateEntry(entry) {
+    // A late observation belongs only to its original reservation. stopEntry
+    // closes viewers now but retains capacity until the owned child exits.
+    if (entries.get(entry.id) === entry) stopEntry(entry);
+  }
+
+  async function readTerminal(id) {
     let record;
     try {
       record = await findAssignment(storageRoot, id);

@@ -16,7 +16,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer, request as httpRequest } from "node:http";
@@ -27,6 +27,7 @@ import { fileURLToPath } from "node:url";
 import { quote } from "../workspaces/session-control.mjs";
 import { processIdentity, sameProcess } from "./process-identity.mjs";
 import { createTerminalViews } from "./terminal-view.mjs";
+import { terminalIdentityCondition } from "../workspaces/tmux.mjs";
 
 const FIXTURE = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "terminal-view-stream.mjs");
 
@@ -450,11 +451,13 @@ test("terminal view 1: concurrent open reserves before size and caps pending ent
     "tmux",
     "-S",
     record.tmux_socket,
-    "attach-session",
+    "if-shell",
+    "-F",
     "-t",
-    `=${record.tmux_session}`,
-    "-f",
-    "read-only,ignore-size",
+    `=${record.tmux_session}:`,
+    terminalIdentityCondition(record),
+    ["attach-session", "-t", `=${record.tmux_session}`, "-f", "read-only,ignore-size"].map(quote).join(" "),
+    "display-message -p identity-changed",
   ].map(quote).join(" ");
   const call = sharedSpawn[0];
   assert.deepEqual(call.args, [
@@ -466,7 +469,7 @@ test("terminal view 1: concurrent open reserves before size and caps pending ent
     "-c",
     command,
   ]);
-  assert.ok(call.args[6].includes("'read-only,ignore-size'"));
+  assert.ok(call.args[6].includes("read-only,ignore-size"));
   assert.equal(call.options.detached, false);
   assert.deepEqual(call.options.stdio, ["ignore", "pipe", "pipe"]);
   assert.equal(call.options.env.TERM, "xterm-256color");
@@ -995,7 +998,7 @@ test("terminal view 5: default verification against a live record identity", { t
   const id = randomUUID();
   const endedId = randomUUID();
   const absentId = randomUUID();
-  await addRecord(setup, { assignment_id: id, pi_identity: agentIdentity, pane_id: "%7" });
+  const liveRecord = await addRecord(setup, { assignment_id: id, pi_identity: agentIdentity, pane_id: "%7" });
   await addRecord(setup, { assignment_id: endedId, pi_identity: agentIdentity, pane_id: "%7", state: "ended" });
   await addRecord(setup, { assignment_id: absentId, pi_identity: agentIdentity, pane_id: "%7" });
   const before = await assignmentBytes(setup);
@@ -1020,6 +1023,13 @@ test("terminal view 5: default verification against a live record identity", { t
 
   const live = await views.open(id);
   assert.deepEqual(live, { assignment_id: id, state: "live", cols: 120, rows: 40 });
+  const server = createProxyServer(views);
+  resources.servers.push(server);
+  const port = await listen(server);
+  const viewer = rawUpgrade(port, `/api/terminal/${id}/ws`);
+  await viewer.ready;
+  await waitFor(() => viewer.data.includes(Buffer.from("101")));
+  const originalChild = spawns.children.at(-1);
 
   probe.paneId = "%8";
   await assert.rejects(
@@ -1030,6 +1040,8 @@ test("terminal view 5: default verification against a live record identity", { t
       return true;
     },
   );
+  await waitFor(() => viewer.closed, { label: "failed default verification closes existing viewer" });
+  await exited(originalChild);
   probe.paneId = "%7";
   // A mismatched session tag is an explicit changed identity, not a
   // transport failure.
@@ -1051,6 +1063,21 @@ test("terminal view 5: default verification against a live record identity", { t
     },
   );
   probe.pid = agentIdentity.pid;
+
+  // A newly saved, successfully verified record still invalidates the
+  // already-connected old identity, even though its pane is still present.
+  await views.open(id);
+  const recordViewer = rawUpgrade(port, `/api/terminal/${id}/ws`);
+  await recordViewer.ready;
+  await waitFor(() => recordViewer.data.includes(Buffer.from("101")));
+  const recordChild = spawns.children.at(-1);
+  await addRecord(setup, { ...liveRecord, launch_token: randomUUID() });
+  const changedRecordViewer = rawUpgrade(port, `/api/terminal/${id}/ws`);
+  await changedRecordViewer.ready;
+  await waitFor(() => changedRecordViewer.closed && recordViewer.closed);
+  assert.match(changedRecordViewer.data.toString(), /^HTTP\/1\.1 409/);
+  await exited(recordChild);
+  await addRecord(setup, liveRecord);
 
   await assert.rejects(
     views.open(endedId),
@@ -1086,4 +1113,157 @@ test("terminal view 5: default verification against a live record identity", { t
   assert.equal(agent.exitCode, null);
   assert.deepEqual(await assignmentBytes(setup), before);
   assert.ok(spawns.calls.every((entry) => entry.command === FIXTURE));
+});
+
+// node --test --test-name-pattern="terminal identity" scripts/spec-observe/terminal-view.test.mjs
+test("terminal identity: deferred size rejects changed and ended identities without spawning", { timeout: 15000 }, async (t) => {
+  const setup = await makeSetup();
+  const spawns = captureSpawn({});
+  const resources = { servers: [], views: [], children: spawns.children };
+  cleanupAll(t, setup, resources);
+  for (const state of ["changed", "not-live"]) {
+    const record = await addRecord(setup);
+    const gate = deferred();
+    const sizeRun = windowSizeRun({ gate: gate.promise });
+    let observed = { pane: { status: "present" }, exact: true, ended: false, identity: "original" };
+    const views = makeViews(setup, { spawns, tmuxRun: sizeRun.run, verify: async () => observed });
+    resources.views.push(views);
+    const pending = views.open(record.assignment_id);
+    const rejected = assert.rejects(pending, (error) => error.state === state);
+    await waitFor(() => sizeRun.calls.some((call) => call.args[0] === "display-message"));
+    observed = state === "changed"
+      ? { ...observed, identity: "replacement" }
+      : { ...observed, ended: true };
+    gate.resolve();
+    await rejected;
+    assert.equal(spawns.calls.length, 0);
+  }
+});
+
+test("terminal identity: queued attach refuses UUID, pane and PID replacements", { timeout: 15000 }, async (t) => {
+  const setup = await makeSetup();
+  const socket = join(setup.root, "guard.sock");
+  const session = "adj-012345abcdef";
+  const tmux = (args) => execFileSync("tmux", ["-S", socket, ...args], { encoding: "utf8", timeout: 3000 });
+  t.after(() => {
+    try { tmux(["kill-server"]); } catch { /* Test-owned server already gone. */ }
+  });
+  tmux(["new-session", "-d", "-s", session, "sleep 60"]);
+  const [pane, pid] = tmux(["display-message", "-p", "-t", `=${session}:`, "#{pane_id} #{pane_pid}"]).trim().split(" ");
+  const record = await addRecord(setup, { tmux_socket: socket, tmux_session: session,
+    pane_id: pane, pi_identity: processIdentity(Number(pid)) });
+  tmux(["set-option", "-t", `=${session}:`, "@adjacent_assignment_id", record.assignment_id]);
+  const spawns = captureSpawn({});
+  const views = makeViews(setup, { spawns, tmuxRun: windowSizeRun({}).run, verify: fixedVerify("guard") });
+  cleanupAll(t, setup, { servers: [], views: [views], children: spawns.children });
+  await views.open(record.assignment_id);
+  const command = spawns.calls[0].args[6];
+  assert.equal(tmux(["display-message", "-p", "-t", `=${session}:`, terminalIdentityCondition(record)]).trim(), "1");
+  const attach = spawn("/usr/bin/script", process.platform === "linux"
+    ? ["-q", "-c", command, "/dev/null"] : ["-q", "/dev/null", "/bin/sh", "-c", command],
+  { env: { ...process.env, TERM: "xterm-256color" }, stdio: ["ignore", "pipe", "pipe"] });
+  attach.stdout.resume();
+  attach.stderr.resume();
+  t.after(() => { if (attach.exitCode === null && attach.signalCode === null) attach.kill("SIGKILL"); });
+  const client = await waitFor(() => tmux(["list-clients", "-t", `=${session}`, "-F", "#{client_name} #{client_flags}"]).trim());
+  assert.match(client, /read-only/);
+  assert.match(client, /ignore-size/);
+  tmux(["detach-client", "-t", client.split(" ")[0]]);
+  await exited(attach);
+  // Execute the actual generated -c command after replacement, not an argv
+  // equality assertion or a fake that ignores the guard.
+  for (const mutation of ["uuid", "pane", "pid"]) {
+    if (mutation === "uuid") tmux(["set-option", "-t", `=${session}:`, "@adjacent_assignment_id", randomUUID()]);
+    if (mutation === "pane") {
+      tmux(["kill-session", "-t", `=${session}`]);
+      tmux(["new-session", "-d", "-s", session, "sleep 60"]);
+      tmux(["set-option", "-t", `=${session}:`, "@adjacent_assignment_id", record.assignment_id]);
+    }
+    if (mutation === "pid") {
+      // Use the current pane in a fresh command so only PID differs.
+      const [currentPane, currentPid] = tmux(["display-message", "-p", "-t", `=${session}:`, "#{pane_id} #{pane_pid}"]).trim().split(" ");
+      const current = { ...record, pane_id: currentPane, pi_identity: processIdentity(Number(currentPid)) };
+      const currentSpawns = captureSpawn({});
+      const currentViews = makeViews(setup, { spawns: currentSpawns, tmuxRun: windowSizeRun({}).run, verify: fixedVerify("pid") });
+      await addRecord(setup, current);
+      await currentViews.open(record.assignment_id);
+      tmux(["respawn-pane", "-k", "-t", currentPane, "sleep 60"]);
+      try {
+        assert.equal(execFileSync("/bin/sh", ["-c", currentSpawns.calls[0].args[6]], { encoding: "utf8", timeout: 3000 }).trim(), "identity-changed");
+      } finally {
+        await currentViews.closeAll();
+      }
+    } else {
+      assert.equal(execFileSync("/bin/sh", ["-c", command], { encoding: "utf8", timeout: 3000 }).trim(), "identity-changed");
+    }
+    assert.equal(tmux(["list-clients", "-t", `=${session}`]).trim(), "", "no replacement attachment");
+  }
+});
+
+test("terminal identity: known invalid observations close connected viewers and retain draining capacity", { timeout: 15000 }, async (t) => {
+  const setup = await makeSetup();
+  const spawns = captureSpawn({ TERMINAL_VIEW_MODE: "delayed-term" });
+  const resources = { servers: [], views: [], children: spawns.children };
+  cleanupAll(t, setup, resources);
+  for (const state of ["changed", "not-live", "verified-replacement"]) {
+    const record = await addRecord(setup);
+    const other = await addRecord(setup);
+    let observed = { pane: { status: "present" }, exact: true, ended: false, identity: "original" };
+    const views = makeViews(setup, { spawns, maxStreams: 1, tmuxRun: windowSizeRun({}).run, verify: async () => observed });
+    resources.views.push(views);
+    const server = createProxyServer(views);
+    resources.servers.push(server);
+    const port = await listen(server);
+    await views.open(record.assignment_id);
+    const child = spawns.children.at(-1);
+    const viewer = rawUpgrade(port, `/api/terminal/${record.assignment_id}/ws`);
+    await viewer.ready;
+    await waitFor(() => viewer.data.includes(Buffer.from("101")));
+    observed = state === "verified-replacement" ? { ...observed, identity: "new" }
+      : state === "changed" ? { ...observed, exact: false } : { ...observed, ended: true };
+    const refused = rawUpgrade(port, `/api/terminal/${record.assignment_id}/ws`);
+    await refused.ready;
+    await waitFor(() => refused.closed && viewer.closed);
+    assert.match(refused.data.toString(), state === "not-live" ? /^HTTP\/1\.1 404/ : /^HTTP\/1\.1 409/);
+    assert.equal(child.exitCode, null, "capacity is not released at socket close");
+    observed = { pane: { status: "present" }, exact: true, ended: false, identity: "other" };
+    await assert.rejects(views.open(other.assignment_id), (error) => error.state === "busy");
+    await exited(child);
+    assert.equal((await views.open(other.assignment_id)).state, "live");
+    await views.closeAll();
+  }
+});
+
+test("terminal identity: late failed verification cannot invalidate a newer entry", { timeout: 15000 }, async (t) => {
+  const setup = await makeSetup();
+  const record = await addRecord(setup);
+  const spawns = captureSpawn({});
+  const gate = deferred();
+  let identity = "original";
+  let deferNext = false;
+  let waiting = false;
+  const views = makeViews(setup, { spawns, tmuxRun: windowSizeRun({}).run, verify: async () => {
+    if (deferNext) {
+      deferNext = false;
+      waiting = true;
+      await gate.promise;
+      return { pane: { status: "present" }, exact: false, ended: false, identity: "original" };
+    }
+    return { pane: { status: "present" }, exact: true, ended: false, identity };
+  } });
+  cleanupAll(t, setup, { servers: [], views: [views], children: spawns.children });
+  await views.open(record.assignment_id);
+  deferNext = true;
+  const stale = views.open(record.assignment_id);
+  const rejected = assert.rejects(stale, (error) => error.state === "changed");
+  await waitFor(() => waiting);
+  identity = "replacement";
+  await views.open(record.assignment_id);
+  const replacement = spawns.children.at(-1);
+  gate.resolve();
+  await rejected;
+  assert.equal((await views.open(record.assignment_id)).state, "live");
+  assert.equal(replacement.exitCode, null);
+  assert.equal(replacement.signalCode, null);
+  assert.equal(spawns.calls.length, 2);
 });

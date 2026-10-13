@@ -519,6 +519,13 @@ export async function probeSession(record, { run = runTmux, includeAttached = fa
   };
 }
 
+// Evaluated inside tmux's queue, not by the shell or an earlier probe.
+export function terminalIdentityCondition(record) {
+  if (!/^%\d+$/.test(record.pane_id ?? "")
+    || !Number.isSafeInteger(record.pi_identity?.pid) || record.pi_identity.pid <= 0) return "0";
+  return `#{&&:#{==:#{@adjacent_assignment_id},${record.assignment_id}},#{&&:#{==:#{pane_id},${record.pane_id}},#{==:#{pane_pid},${record.pi_identity.pid}}}}`;
+}
+
 /** Close only the exact, freshly verified recorded terminal. Never kill a server. */
 export async function endSession(record,{run=runTmux}={}) {
   const observed=await probeSession(record,{run});
@@ -528,7 +535,7 @@ export async function endSession(record,{run=runTmux}={}) {
   }
   // Check the full UUID and pane again inside tmux's command queue. A session
   // replaced between the read-only probe and this command must survive.
-  const condition=`#{&&:#{==:#{@adjacent_assignment_id},${record.assignment_id}},#{&&:#{==:#{pane_id},${record.pane_id}},#{==:#{pane_pid},${record.pi_identity.pid}}}}`;
+  const condition=terminalIdentityCondition(record);
   const result=await run(record.tmux_socket,['if-shell','-F','-t',`=${record.tmux_session}:`,condition,
     `kill-session -t =${record.tmux_session}`,'display-message -p identity-changed']);
   if(!result.ok)throw tmuxFailure('end-session',result);
