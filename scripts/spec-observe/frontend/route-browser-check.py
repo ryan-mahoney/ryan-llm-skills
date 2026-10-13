@@ -1281,7 +1281,7 @@ try:
             assert rows.first.locator('small').inner_text() == offline_age, 'offline age advanced'
             capture_both('offline')
             state['fail'] = False
-            page.get_by_role('button', name='Retry connection', exact=True).click()
+            page.locator('.records .ds-callout').filter(has_text='Connection lost').get_by_role('button', name='Retry connection', exact=True).click()
             expect(page.locator('.records .ds-callout').filter(has_text='Connection lost')).to_have_count(0)
             report['scenarios'].append('Offline retains rows and fixed ages and disables completion while failure is visible')
 

@@ -7,7 +7,7 @@ import {randomUUID} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {createDashboardServer} from '../dashboard.mjs';
 import {createReferenceCatalog} from '../../workspaces/references.mjs';
-import {resolveAssignment} from '../../workspaces/assignments.mjs';
+import {resolveAssignment,prepareAssignmentSpecTarget} from '../../workspaces/assignments.mjs';
 import {setupStorage,createWorkspace,fetchWorkspace,resolveRepositoryPath} from '../../workspaces/store.mjs';
 import {newPackage} from '../../spec-location/index.mjs';
 const plannedLaunch=process.env.SENTINEL_PLANNED_LAUNCH==='1';
@@ -21,6 +21,8 @@ await writeFile(join(mismatchDirectory.directory,'kit.yaml'),'version: 1\nid: al
 await writeFile(join(neighborDirectory.directory,'kit.yaml'),'version: 1\nid: physical\nname: Physical neighbor\nrepositories: []\n');
 const checkout=join(root,'checkout');await mkdir(checkout,{recursive:true});execFileSync('git',['init','--quiet',checkout],{stdio:'ignore'});
 const secondCheckout=join(root,'checkout-two');if(plannedLaunch){await mkdir(secondCheckout,{recursive:true});execFileSync('git',['init','--quiet',secondCheckout],{stdio:'ignore'});}
+// Real spec-worktree preparation needs a base commit in each isolated repo.
+if(plannedLaunch)for(const directory of [checkout,secondCheckout])execFileSync('git',['-C',directory,'-c','user.name=Browser fixture','-c','user.email=fixture@example.invalid','commit','--quiet','--allow-empty','-m','Initialize fixture repository'],{stdio:'ignore'});
 // Checkout-scoped suggestion target: visible only when file suggestions are
 // requested for the fixture-repo target, never from the whole workspace.
 await writeFile(join(checkout,'fixture-repo-plan.md'),'# Fixture repository plan\nCheckout-scoped suggestion target.\n');
@@ -135,6 +137,7 @@ async function fixtureAssignmentTarget(threadId){
  return matches[0];
 }
 const discussion={
+ async prepareSpecTarget(input){posts.push({name:'prepareSpecTarget',input});return prepareAssignmentSpecTarget({storageRoot:storage,workspace_id:input.workspace_id,target:await fixtureAssignmentTarget(input.thread_id),specPackage:input.spec_package});},
  async suggestions(input){posts.push({name:'suggestions',input});if(delaySuggestions)await new Promise(r=>setTimeout(r,650));const thread=threads.find(item=>item.thread_id===input.thread_id);if(!thread)throw Object.assign(new Error('Thread not found'),{code:'thread-not-found'});const target=thread.target&&typeof thread.target==='object'?thread.target:{};let executionDir=workspace.directory;if(target.kind==='repository'){const match=dispatchRepos.find(repo=>repo.id===target.repository_id);if(match)executionDir=await realpath(match.path);}else if(target.kind==='worktree'&&typeof target.path==='string'){executionDir=await realpath(target.path);}return referenceCatalog.suggest({workspace:{...workspace,repositories:dispatchRepos.map(repo=>({id:repo.id,path:repo.path}))},executionDir,kind:input.kind,query:input.query});},
  async list({workspace_id}){return {threads:workspace_id==='fixture'?copied(threads):[],invalid:[]};},
  async history({before}){if(before)return {entries:[{id:'entry-old',message:{role:'user',content:'Older message'}}],truncated:false,incomplete_tail:false};return {entries:copied(entries),truncated:true,incomplete_tail:false};},

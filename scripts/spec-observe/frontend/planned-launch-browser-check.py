@@ -226,7 +226,14 @@ try:
         record = resolved["record"]
         assert record["spec_package"] == receipt["package"]
         assert record["package_ref"] == "fixture/browser"
-        assert record["execution_dir"] == receipt["checkout"]
+        prepared = posts("prepareSpecTarget")[-1]["input"]
+        assert prepared["spec_package"] == "fixture/browser"
+        assert prepared["thread_id"] == preview_input["thread_id"]
+        expected_worktree = str(Path(receipt["checkout"]).with_name("checkout-browser"))
+        assert record["execution_dir"] == expected_worktree
+        assert record["execution_branch"] == "spec-browser"
+        assert subprocess.check_output(["git", "-C", expected_worktree, "branch", "--show-current"], text=True).strip() == record["execution_branch"]
+        assert subprocess.check_output(["git", "-C", expected_worktree, "rev-parse", "--path-format=absolute", "--git-common-dir"], text=True).strip() == str(Path(receipt["checkout"]) / ".git")
         assert record["repository_id"] == "fixture-repo"
         assert record["publication_authority"] == "pr"
         assert record["skill"] == "spec-end-to-end"
@@ -255,7 +262,7 @@ try:
         expect(page.locator("#planned-assignment-launch")).to_be_enabled()
         report["scenarios"].append("Refreshing the planned inventory preserves the reviewed assignment id and explicit Launch control; launch later must match the captured resolver digest")
         report["scenarios"].append(
-            "Planned inventory resolves to its canonical package, selected repo checkout, fake-home skill, exact resume brief, PR-authority prompt and Pi argv"
+            "Planned inventory prepares and resolves its separate canonical spec worktree and branch, fake-home skill, exact resume brief, PR-authority prompt and Pi argv"
         )
 
         for capture_width in (1280, 1600):
