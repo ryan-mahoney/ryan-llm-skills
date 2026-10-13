@@ -15,7 +15,7 @@ type Catalog = WorkspaceCatalog;
 const liveBrowser = () => location.protocol !== 'file:';
 
 const registry = destinationEntries();
-const [SpecsAdapter, EpicsAdapter, AgentsAdapter, ConversationsAdapter, FilesAdapter, DesignsAdapter, WorkspacesAdapter] = registry.map(entry => entry.render);
+const [SpecsAdapter, EpicsAdapter, AgentsAdapter, ConversationsAdapter, FilesAdapter, DesignsAdapter, WorkspacesAdapter, LaunchAdapter] = registry.map(entry => entry.render);
 const primaryNav = registry.filter(entry => entry.nav === 'primary').sort((a, b) => a.order - b.order).map(entry => ({ dest: entry.dest, label: entry.label }));
 const directoryNav = registry.filter(entry => entry.nav === 'directory').sort((a, b) => a.order - b.order).map(entry => ({ dest: entry.dest, label: entry.label }));
 
@@ -49,6 +49,7 @@ export default function App() {
   const live = () => liveBrowser() && !imported();
   const scopeWs = () => route().ws;
   const title = () => registry.find(entry => entry.dest === route().dest)?.label ?? 'Specs';
+  const currentDestination = () => registry.find(entry => entry.dest === route().dest)?.parent ?? route().dest;
   const catalogEntries = () => catalog()?.valid ?? [];
   const records = createMemo(() => collectRecords(payload()));
   const scopedRecords = createMemo(() => records().filter(record => inWorkspaceScope(record, 'run', scopeWs(), catalogEntries())));
@@ -420,6 +421,7 @@ export default function App() {
   return <>
     <Shell
       route={route()}
+      currentDestination={currentDestination()}
       primaryNav={primaryNav}
       directoryNav={directoryNav}
       workspaceOptions={workspaceOptions()}
@@ -428,9 +430,11 @@ export default function App() {
       onDestination={goDestination}
       crumbs={crumbs()}
       title={title()}
-      headerActions={route().dest === 'workspaces'
-        ? <button class="ds-btn" type="button" aria-busy={catalogPending()} onClick={() => void loadCatalog()}>Refresh workspaces</button>
-        : <button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button>}
+      headerActions={route().dest === 'launch'
+        ? <button class="ds-btn" type="button" onClick={() => goDestination('agents')}>Return to agents</button>
+        : route().dest === 'workspaces'
+          ? <button class="ds-btn" type="button" aria-busy={catalogPending()} onClick={() => void loadCatalog()}>Refresh workspaces</button>
+          : <button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button>}
       connection={{ label: connectionLabel(), tone: connectionTone() }}
       observedAt={observedAt()}
       onRefresh={manualRefresh}
@@ -450,6 +454,7 @@ export default function App() {
             <Match when={route().dest === 'files'}><FilesAdapter {...outletProps} /></Match>
             <Match when={route().dest === 'designs'}><DesignsAdapter {...outletProps} /></Match>
             <Match when={route().dest === 'workspaces'}><WorkspacesAdapter {...outletProps} /></Match>
+            <Match when={route().dest === 'launch'}><LaunchAdapter {...outletProps} /></Match>
           </Switch>
         }
       >

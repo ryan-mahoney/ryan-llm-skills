@@ -232,3 +232,58 @@ test('workspace-required destinations request a picker and scope changes clear i
   assert.deepEqual(clearIncompatibleFields(route), { dest: 'files', ws: 'alpha', tab: 'overview', filter: 'open', q: 'needle' });
   assert.deepEqual(route, original);
 });
+
+test('launch destination round-trips its context, step and assignment fields', () => {
+  const route: RouteState = {
+    dest: 'launch',
+    ws: 'fixture',
+    tab: 'brief',
+    thread: 'thread-1',
+    target: 'repo-a',
+    package: 'fixture/pkg',
+    skill: 'general',
+  };
+  assert.deepEqual(parseHash(formatHash(route)), route);
+  assert.equal(
+    formatHash(route),
+    '#/launch?ws=fixture&tab=brief&thread=thread-1&target=repo-a&package=fixture%2Fpkg&skill=general',
+  );
+  assert.deepEqual(parseHash('#/launch?ws=fixture&tab=review&id=assignment-1'), {
+    dest: 'launch',
+    ws: 'fixture',
+    tab: 'review',
+    id: 'assignment-1',
+  });
+});
+
+test('launch requires a workspace and scope changes clear context back to the brief', () => {
+  assert.equal(requiresWorkspace('launch'), true);
+  assert.equal(needsWorkspacePicker({ dest: 'launch' }), true);
+  assert.equal(needsWorkspacePicker({ dest: 'launch', ws: 'fixture' }), false);
+  const route: RouteState = {
+    dest: 'launch',
+    ws: 'fixture',
+    tab: 'review',
+    id: 'assignment-1',
+    thread: 'thread-1',
+    target: 'repo-a',
+    package: 'fixture/pkg',
+    skill: 'general',
+  };
+  const original = { ...route };
+  assert.deepEqual(clearIncompatibleFields(route), { dest: 'launch', ws: 'fixture', tab: 'brief' });
+  assert.deepEqual(withWorkspace(route, 'other'), { dest: 'launch', ws: 'other', tab: 'brief' });
+  assert.deepEqual(route, original, 'normalizing a launch route must not mutate the caller state');
+  assert.equal(routeHistoryMode(route, { ...route }), 'replace');
+  assert.equal(routeHistoryMode(route, { ...route, target: 'repo-b' }), 'push');
+  assert.equal(routeHistoryMode(route, { ...route, thread: 'thread-2' }), 'push');
+  assert.equal(routeHistoryMode(route, { ...route, tab: 'brief' }), 'push');
+});
+
+test('a launch route without required workspace state invents nothing on mount', () => {
+  const route: RouteState = { dest: 'launch' };
+  assert.deepEqual(parseHash('#/launch'), route);
+  assert.equal(parseHash('#/launch').ws, undefined);
+  assert.deepEqual(clearIncompatibleFields(route), { dest: 'launch', tab: 'brief' });
+  assert.deepEqual(route, { dest: 'launch' });
+});

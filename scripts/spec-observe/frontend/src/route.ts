@@ -5,7 +5,8 @@ export type Destination =
   | 'conversations'
   | 'files'
   | 'designs'
-  | 'workspaces';
+  | 'workspaces'
+  | 'launch';
 
 export type RouteState = {
   dest: Destination;
@@ -16,6 +17,12 @@ export type RouteState = {
   path?: string;
   filter?: string;
   q?: string;
+  // Launch-flow context: set only by the hidden launch destination and kept
+  // separate from the workspace-directory fields above.
+  thread?: string;
+  target?: string;
+  package?: string;
+  skill?: string;
 };
 
 export type RouteMode = 'push' | 'replace';
@@ -29,12 +36,13 @@ export const DESTINATIONS: readonly Destination[] = [
   'files',
   'designs',
   'workspaces',
+  'launch',
 ];
 
-export const SUPPORTED_PARAMS = ['ws', 'id', 'tab', 'source', 'path', 'filter', 'q'] as const;
+export const SUPPORTED_PARAMS = ['ws', 'id', 'tab', 'source', 'path', 'filter', 'q', 'thread', 'target', 'package', 'skill'] as const;
 export type SupportedParam = (typeof SUPPORTED_PARAMS)[number];
 
-const HISTORY_FIELDS: readonly (keyof RouteState)[] = ['dest', 'ws', 'id', 'tab', 'source', 'path'];
+const HISTORY_FIELDS: readonly (keyof RouteState)[] = ['dest', 'ws', 'id', 'tab', 'source', 'path', 'thread', 'target', 'package', 'skill'];
 
 const isDestination = (value: unknown): value is Destination =>
   typeof value === 'string' && (DESTINATIONS as readonly string[]).includes(value);

@@ -126,3 +126,11 @@
 .skeletons-table .skeleton-cell{display:grid;gap:8px}
 .skeletons-table .skeleton-bar{height:10px;width:85%;background:var(--ds-chrome-hi);border-radius:2px}
 .skeletons-table .skeleton-bar--secondary{height:8px;width:60%}
+
+/* Launch brief flow: saved/review facts reuse the shared token surfaces and
+   do not restyle any non-launch screen. */
+.launch-facts{display:grid;gap:10px;margin:16px 0 0;padding:16px 0 0;border-top:1px solid var(--ds-line-2)}
+.launch-facts div{display:grid;grid-template-columns:160px minmax(0,1fr);gap:6px 20px;align-items:baseline}
+.launch-facts dt{font-size:13px;color:var(--ds-muted)}
+.launch-facts dd{margin:0;font-size:13px;overflow-wrap:anywhere}
+.launch-review{margin-top:20px}
