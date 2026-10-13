@@ -13,6 +13,7 @@ import { catalogRead, type WorkspaceCatalog } from './destinations/workspace-sta
 import { memberRecords, visibleEpics as sharedVisibleEpics } from './destinations/epic-state';
 import { getLaunchDraft, seedLaunchDraft } from './launch-state';
 import { armLaunchPickerIntent, cancelLaunchPickerIntent, createLaunchPickerIntent, shouldApplyPickerReset, shouldResetAcknowledgedDraft } from './launch-picker-intent';
+import { agentCoverage, effectiveAgentFilter, retainSelectedAgent, visibleAgents } from './agent-state';
 
 type Filter = 'active' | 'attention' | 'completed' | 'planned';
 type Catalog = WorkspaceCatalog;
@@ -43,6 +44,9 @@ export default function App() {
   const [expectedCompletionKey, setExpectedCompletionKey] = createSignal<string | null>(null);
   const [expectedCompletionRoute, setExpectedCompletionRoute] = createSignal<RouteState | null>(null);
   const [endedSessions, setEndedSessions] = createSignal<string[]>([]);
+  // Bounded Agents retained selection: the last row resolved for an explicit
+  // route id, tagged with the scope/import context it was read under.
+  const [retainedAgent, setRetainedAgent] = createSignal<{ row: WireRecord | null; id: string; ws: string | undefined; imported: boolean } | null>(null);
   let stateGeneration = 0, catalogGeneration = 0, workspaceGeneration = 0;
   let workspaceBusyId: string | null = null;
   let catalogTimer: ReturnType<typeof setTimeout> | undefined;
@@ -77,6 +81,18 @@ export default function App() {
   const record = createMemo(() => scopedRecords().find(item => item.key === route().id) ?? null);
   const agent = createMemo(() => scopedAssignments().find(item => item.key === route().id) ?? null);
   const epic = createMemo(() => scopedEpics().find(item => item.key === route().id) ?? null);
+  const agentsFilter = createMemo(() => effectiveAgentFilter(route(), scopedAssignments()));
+  const visibleAgentRows = createMemo(() => visibleAgents(scopedAssignments(), agentsFilter(), route().q ?? ''));
+  const agentsCoverage = createMemo(() => agentCoverage(payload(), scopedAssignments(), agent() ?? retainedAgent()?.row ?? null));
+  const agentsSelected = createMemo(() => {
+    const stored = retainedAgent();
+    const sameContext = stored !== null && stored.ws === scopeWs() && stored.imported === imported();
+    const coverage = agentsCoverage();
+    const sourceComplete = payload() !== null && !coverage.sourceUnavailable && !coverage.listPartial;
+    const previous = sameContext && stored !== null && stored.id === (route().id ?? '') ? stored.row : null;
+    const result = retainSelectedAgent(agent(), previous, sameContext, sourceComplete);
+    return result;
+  });
   const token = () => live() && !error() ? payload()?.thread_action_token || payload()?.action_token : undefined;
   const completionToken = () => live() && !error() ? payload()?.action_token : undefined;
   const observers = createMemo(() => authoritativeObservers(payload()?.observers ?? []));
@@ -402,8 +418,17 @@ export default function App() {
         replaceId(followed?.key ?? rows[0]?.key ?? null);
       }
     } else if (currentRoute.dest === 'agents') {
-      const rows = visibleAssignments();
-      if (!rows.some(item => item.key === currentId)) replaceId(rows[0]?.key ?? null);
+      const current = currentId ? scopedAssignments().find(item => item.key === currentId) ?? null : null;
+      if (current) {
+        // A resolved selection pins the retained row and keeps the URL
+        // identity; polling never swaps it for a sibling row.
+        setRetainedAgent({ row: current, id: currentId ?? '', ws: scopeWs(), imported: imported() });
+      } else if (!currentId) {
+        const first = visibleAgentRows()[0]?.key ?? null;
+        if (first) replaceId(first);
+      }
+      // An explicit id absent from this read keeps its URL verbatim; the
+      // retained memo alone decides whether previous facts stay qualified.
     } else if (currentRoute.dest === 'epics') {
       const rows = visibleEpics();
       if (!rows.some(item => item.key === currentId)) replaceId(rows[0]?.key ?? null);
@@ -436,6 +461,14 @@ export default function App() {
     });
     onCleanup(() => cancelAnimationFrame(frame));
   });
+
+  // Retained Agents facts belong to one scope/import context; a genuine
+  // scope/import change drops the stored row, while same-context navigation
+  // (selection, query, refresh) preserves the pin.
+  createEffect(on(() => [scopeWs(), imported()] as const, ([ws, imp]) => {
+    const stored = retainedAgent();
+    if (stored && (stored.ws !== ws || stored.imported !== imp)) setRetainedAgent(null);
+  }, { defer: true }));
 
   // An armed All-workspaces launch intent survives only inside the launch
   // picker (launch without a workspace). Any other arrival abandons it
@@ -494,6 +527,8 @@ export default function App() {
     get specsLive() { return live() && !error(); },
     get records() { return scopedRecords(); },
     get assignments() { return scopedAssignments(); },
+    get agentsSelected() { return agentsSelected(); },
+    get agentsCoverage() { return agentsCoverage(); },
     get epics() { return scopedEpics(); },
     get scopedObservers() { return scopedObservers(); },
     get epicSupport() { return epicSupport(); },
