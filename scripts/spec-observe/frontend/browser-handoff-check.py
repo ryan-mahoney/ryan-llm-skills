@@ -498,6 +498,7 @@ def run_result(browser, url, thread1):
             reset()
             _, page, errors = open_brief(width)
             assignment = launch(page, 'live')
+            old_request = page.locator('#launch-result-facts [data-fact="request"] dd').inner_text()
             expect(page.locator('#launch-heading')).to_have_text('Agent is live')
             expect(page.locator('#launch-heading')).to_be_focused()
             expect(page.locator('#launch-review .section-heading')).to_contain_text('Live')
@@ -521,6 +522,31 @@ def run_result(browser, url, thread1):
             page.locator('#launch-result-open-agent').click()
             expect(page).to_have_url(re.compile(r'#/agents\?ws=fixture&id='))
             expect(page.locator('.run-row', has_text=assignment)).to_have_attribute('aria-pressed', 'true')
+            # History restores the acknowledged result; only the explicit
+            # Agents entry starts independent work in the retained direct slot.
+            page.go_back()
+            expect(page.locator('#launch-result-facts [data-fact="assignment"] dd')).to_have_text(assignment)
+            page.go_forward()
+            expect(page.locator('#launch-agent-action')).to_be_visible()
+            saves_before = len(posts('dispatchSaveBrief'))
+            launches_before = len(posts('dispatchLaunch'))
+            page.locator('#launch-agent-action').click()
+            expect(page.locator('#launch-brief-title')).to_have_value('')
+            expect(page.locator('#launch-brief-content')).to_have_value('')
+            expect(page.locator('#launch-result-facts')).to_have_count(0)
+            page.locator('#launch-brief-title').fill('Prepare independent follow-up')
+            page.locator('#launch-brief-content').fill('Different work: document the navigation contract.')
+            page.locator('#launch-save').click()
+            expect(page.locator('#launch-assignment-launch')).to_be_enabled()
+            assert len(posts('dispatchSaveBrief')) == saves_before + 1
+            fresh_request = posts('dispatchSaveBrief')[-1]['input']['request_id']
+            fresh_assignment = page.locator('#launch-review [data-fact="assignment"] dd').inner_text()
+            assert UUID_RE.fullmatch(fresh_request) and fresh_request != old_request
+            assert UUID_RE.fullmatch(fresh_assignment) and fresh_assignment != assignment
+            assert posts('dispatchSaveBrief')[-1]['input']['title'] == 'Prepare independent follow-up'
+            expect(page.locator('#launch-review')).to_contain_text('Different work: document the navigation contract.')
+            assert len(posts('dispatchLaunch')) == launches_before
+            passed(f'explicit repeat entry saves and reviews different work with fresh identities ({width})')
             finish(errors, f'live result keeps started identity and open agent reaches the exact assignment ({width})')
         # Unconfirmed: locate only, no retry/reset, delayed observation.
         for width in widths:
@@ -550,6 +576,13 @@ def run_result(browser, url, thread1):
             page.wait_for_timeout(1200)
             page.locator('.head-actions .ds-btn', has_text='Refresh state').click()
             expect(page.locator('.run-row', has_text=assignment)).to_have_attribute('aria-pressed', 'true')
+            page.locator('#launch-agent-action').click()
+            expect(page.locator('#launch-brief-title')).to_have_value('Keep selected files in view')
+            expect(page.locator('#launch-save')).to_be_disabled()
+            page.go_back()
+            page.go_back()
+            expect(page.locator('#launch-heading')).to_have_text('Launch is unconfirmed')
+            expect(page.locator('#launch-result-facts [data-fact="assignment"] dd')).to_have_text(assignment)
             finish(errors, f'unconfirmed locates without retry and observes after publication ({width})')
         # Confirmed failure: correction preserves the text and mints both identities.
         for width in widths:
@@ -563,6 +596,15 @@ def run_result(browser, url, thread1):
             expect(page.locator('#launch-review .ds-callout')).to_contain_text('Process startup failed')
             expect(page.locator('#launch-result-facts [data-fact="observation"] dd')).to_contain_text('process confirmed gone')
             capture(page, f'launch-result-failed-{width}.png')
+            page.locator('#launch-result-open-agent').click()
+            expect(page.locator('#launch-agent-action')).to_be_visible()
+            page.locator('#launch-agent-action').click()
+            expect(page.locator('#launch-brief-title')).to_have_value('Keep selected files in view')
+            expect(page.locator('#launch-save')).to_be_disabled()
+            page.go_back()
+            page.go_back()
+            expect(page.locator('#launch-heading')).to_have_text('Agent could not start')
+            expect(page.locator('#launch-result-facts [data-fact="assignment"] dd')).to_have_text(assignment)
             saves_before = len(posts('dispatchSaveBrief'))
             page.locator('#launch-result-correct').click()
             expect(page).to_have_url(re.compile(r'#/launch\?ws=fixture&tab=brief'))

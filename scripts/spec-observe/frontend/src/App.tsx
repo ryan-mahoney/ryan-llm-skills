@@ -9,6 +9,7 @@ import { clearIncompatibleFields, firstUnmatchedTargetId, inWorkspaceScope, need
 import { destinationEntries, type DestinationProps } from './destinations';
 import { WorkspacePicker } from './destinations/workspaces';
 import { catalogRead, type WorkspaceCatalog } from './destinations/workspace-state';
+import { getLaunchDraft, seedLaunchDraft } from './launch-state';
 
 type Filter = 'active' | 'attention' | 'completed' | 'planned';
 type Catalog = WorkspaceCatalog;
@@ -94,6 +95,17 @@ export default function App() {
   }
   function goDestination(dest: Destination) {
     go({ dest, ...(route().ws !== undefined ? { ws: route().ws } : {}) });
+  }
+  function prepareAgentAssignment() {
+    const ws = scopeWs();
+    if (ws) {
+      const context = { ws };
+      const retained = getLaunchDraft(context);
+      if (!retained?.pending && retained?.result?.kind === 'launched') {
+        seedLaunchDraft(context, { title: '', content: '' });
+      }
+    }
+    goDestination('launch');
   }
   function selectId(id: string) {
     go({ ...clearIncompatibleFields(route()), id });
@@ -435,7 +447,7 @@ export default function App() {
         : route().dest === 'workspaces'
           ? <button class="ds-btn" type="button" aria-busy={catalogPending()} onClick={() => void loadCatalog()}>Refresh workspaces</button>
           : route().dest === 'agents'
-            ? <><button id="launch-agent-action" class="ds-btn ds-btn--primary" type="button" onClick={() => goDestination('launch')}>Launch agent</button><button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button></>
+            ? <><button id="launch-agent-action" class="ds-btn ds-btn--primary" type="button" onClick={prepareAgentAssignment}>Launch agent</button><button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button></>
             : <button class="ds-btn" type="button" aria-busy={fetching()} onClick={manualRefresh}>Refresh state</button>}
       connection={{ label: connectionLabel(), tone: connectionTone() }}
       observedAt={observedAt()}
