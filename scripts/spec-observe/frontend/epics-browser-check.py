@@ -711,10 +711,12 @@ try:
             }
             open_detail(detail_envelope(legacy_epic))
             expect(rows).to_have_count(3)
-            expect(rows.nth(1).locator('td').first).to_have_text('legacy-a')
-            expect(rows.nth(2).locator('td').first).to_have_text('legacy-b')
+            expect(rows.nth(1).locator('td').first).to_have_text('legacy-a \u00b7 waiting')
+            expect(rows.nth(2).locator('td').first).to_have_text('legacy-b \u00b7 waiting')
             expect(page.get_by_text('This observer reports only unmet requirements.', exact=True)).to_have_count(1)
-            report['scenarios'].append('detail older snapshot: unmet names shown with exactly one unmet-only table note')
+            expect(facts.nth(2)).to_contain_text('legacy-b')
+            expect(facts.nth(2)).to_contain_text('Only unmet requirements reported')
+            report['scenarios'].append('detail older snapshot: unmet names carry waiting markers with exactly one unmet-only table note and fact')
 
             # Card (c): order/scopes/caption, literal unknown status, unmatched
             # text-only member, distinct next candidate vs attention inspection,
@@ -758,6 +760,106 @@ try:
             focus_visible()
             measure(pane.locator('.detail-actions .ds-btn--primary'), 'Open spec')
             report['scenarios'].append('detail table: order/scopes/caption, literal ready, unmatched text-only, next candidate vs attention inspection distinct, keyboard focus and 44px hit boxes')
+
+            # Step-004 fix counterexamples: mixed landed/unmet declared
+            # dependencies keep the landed name bare and mark only the unmet one.
+            mixed_epic = {
+                'workspace': 'fixture', 'epic': 'mixed-epic', 'title': 'Mixed dependencies', 'state': 'active',
+                'members': [
+                    detail_member('landed-dep', 'merged'),
+                    detail_member('unmet-dep', 'prepared'),
+                    detail_member('mixed-member', 'in-progress', requires=['landed-dep', 'unmet-dep'], waiting_on=['unmet-dep']),
+                ],
+                'summary': {'total': 3, 'merged': 1, 'complete': 0, 'attention': 0},
+                'next': 'mixed-member',
+                'coverage': {'state': 'complete', 'reasons': []},
+            }
+            check_deadline()
+            open_detail(detail_envelope(mixed_epic))
+            expect(rows).to_have_count(3)
+            expect(rows.nth(2).locator('td').first).to_have_text('landed-dep, unmet-dep \u00b7 waiting')
+            expect(facts.nth(2)).to_contain_text('mixed-member')
+            expect(facts.nth(2)).to_contain_text('Requires landed-dep, unmet-dep')
+            report['scenarios'].append('detail mixed requires: landed name bare with only the unmet name marked waiting')
+
+            # Step-004 F1: snapshot next stays eligible under evidence-first focus,
+            # and null next renders None eligible instead of an inspection target.
+            evidence_epic = {
+                'workspace': 'fixture', 'epic': 'evidence-epic', 'title': 'Evidence first epic', 'state': 'active',
+                'members': [
+                    detail_member('unknown-member', 'unknown'),
+                    detail_member('eligible', 'prepared'),
+                ],
+                'summary': {'total': 2, 'merged': 0, 'complete': 0, 'attention': 0},
+                'next': 'eligible',
+                'coverage': {'state': 'complete', 'reasons': []},
+            }
+            check_deadline()
+            open_detail(detail_envelope(evidence_epic))
+            expect(facts.nth(2).locator('strong')).to_have_text('eligible')
+            expect(facts.nth(2)).to_contain_text('No requirements')
+            expect(facts.nth(2)).not_to_contain_text('Inspect')
+            expect(page.locator('.obligation')).to_contain_text('Inspect unknown-member')
+            report['scenarios'].append('detail next fact: snapshot eligible stays the candidate under evidence-first focus with inspection kept in Next member')
+
+            nullnext_epic = {
+                'workspace': 'fixture', 'epic': 'nullnext-epic', 'title': 'Null next epic', 'state': 'active',
+                'members': [
+                    detail_member('dep', 'prepared'),
+                    detail_member('active', 'in-progress', requires=['dep'], waiting_on=['dep']),
+                ],
+                'summary': {'total': 2, 'merged': 0, 'complete': 0, 'attention': 0},
+                'next': None,
+                'coverage': {'state': 'complete', 'reasons': []},
+            }
+            check_deadline()
+            open_detail(detail_envelope(nullnext_epic))
+            expect(facts.nth(2).locator('strong')).to_have_text('None eligible')
+            expect(facts.nth(2)).to_contain_text('wait on unlanded requirements')
+            report['scenarios'].append('detail next fact: null next renders None eligible instead of the blocked in-progress member')
+
+            # Step-004 F3: one-character slug keeps a 44x44 target.
+            tiny_epic = {
+                'workspace': 'fixture', 'epic': 'tiny-epic', 'title': 'Tiny slug epic', 'state': 'active',
+                'members': [
+                    detail_member('a', 'in-progress'),
+                ],
+                'summary': {'total': 1, 'merged': 0, 'complete': 0, 'attention': 0},
+                'next': 'a',
+                'coverage': {'state': 'complete', 'reasons': []},
+            }
+            check_deadline()
+            open_detail(detail_envelope(tiny_epic, runs=[detail_run('a', 'detail-a')]))
+            tiny_button = table.locator('tbody tr').first.locator('button')
+            expect(tiny_button).to_have_text('a')
+            measure(tiny_button, 'single-char member')
+            report['scenarios'].append('detail hit box: one-character member slug keeps a 44x44 target')
+
+            # Step-004 F4: evidence-first member without a record explains the
+            # missing spec, not missing landing evidence; with a record the
+            # action is available.
+            unknown_epic = {
+                'workspace': 'fixture', 'epic': 'unknown-epic', 'title': 'Unknown member epic', 'state': 'active',
+                'members': [
+                    detail_member('unknown-member', 'unknown'),
+                ],
+                'summary': {'total': 1, 'merged': 0, 'complete': 0, 'attention': 0},
+                'next': 'unknown-member',
+                'coverage': {'state': 'complete', 'reasons': []},
+            }
+            check_deadline()
+            open_detail(detail_envelope(unknown_epic, runs=[]))
+            absent_action = pane.locator('.detail-actions .ds-btn--primary')
+            expect(absent_action).to_be_disabled()
+            expect(absent_action).to_have_attribute('aria-describedby', 'epic-open-spec-help')
+            expect(page.locator('#epic-open-spec-help')).to_have_text('unknown-member has no observed spec in this snapshot.')
+            expect(page.locator('#epic-open-spec-help')).not_to_contain_text('Landing evidence')
+            report['scenarios'].append('detail open reason: evidence-first member without a record names the missing observed spec')
+            check_deadline()
+            open_detail(detail_envelope(unknown_epic, runs=[detail_run('unknown-member', 'detail-unknown')]))
+            expect(pane.locator('.detail-actions .ds-btn--primary')).to_be_enabled()
+            expect(page.locator('#epic-open-spec-help')).to_have_count(0)
+            report['scenarios'].append('detail open reason: evidence-first member with a record keeps Open spec available')
 
             # Card (d): bound reference digests, reference-vs-production region
             # captures at both widths, and the 26 long-slug table at 1280.

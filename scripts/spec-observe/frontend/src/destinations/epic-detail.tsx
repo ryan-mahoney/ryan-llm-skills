@@ -49,13 +49,18 @@ export function EpicConflictNotice(props: { epic: WireRecord }) {
 }
 
 function nextFact(epic: WireRecord): { label: string; note: string } {
-  const focus = focusMember(epic);
-  if (focus && focus.reason === 'evidence') return { label: `Inspect ${focus.name}`, note: 'Landing evidence missing' };
-  const candidate = text(epic.next) || focus?.name || '';
-  if (!candidate) return { label: 'None recorded', note: 'No member needs inspection in this observation' };
+  const candidate = text(epic.next) || '';
+  if (!candidate) {
+    const waiting = list(epic.members).filter(member => epicMemberRequires(member).waiting.length).length;
+    if (waiting > 0) return { label: 'None eligible', note: `${waiting} members wait on unlanded requirements` };
+    return { label: 'None eligible', note: 'All members landed' };
+  }
   const member = list(epic.members).find(item => memberName(item) === candidate) ?? null;
-  const requires = member ? epicMemberRequires(member).names : [];
-  return { label: candidate, note: requires.length ? `Requires ${requires.join(', ')}` : 'No declared dependency' };
+  if (!member) return { label: candidate, note: 'No requirements' };
+  const requires = epicMemberRequires(member);
+  if (!requires.declared) return { label: candidate, note: 'Only unmet requirements reported' };
+  if (requires.names.length) return { label: candidate, note: `Requires ${requires.names.join(', ')}` };
+  return { label: candidate, note: 'No requirements' };
 }
 
 export function EpicFacts(props: { epic: WireRecord }) {
@@ -129,7 +134,7 @@ export function EpicMembersTable(props: {
                         </button>
                       </Show>
                     </th>
-                    <td>{requires().names.length ? requires().names.join(', ') : '—'}</td>
+                    <td>{requires().names.length ? requires().names.map(name => requires().waiting.includes(name) ? `${name} \u00b7 waiting` : name).join(', ') : '—'}</td>
                     <td><StatusText tone={observed().tone}>{observed().label}</StatusText></td>
                   </tr>
                 );
@@ -215,8 +220,7 @@ export function EpicDetail(props: {
   const openReason = () => {
     const focus = target();
     if (!focus) return 'No member needs inspection in this observation.';
-    if (focus.reason === 'evidence') return `Landing evidence for ${focus.name} is missing in this observation.`;
-    return `No observed package matches ${focus.name} in this observation.`;
+    return `${focus.name} has no observed spec in this snapshot.`;
   };
   const openSpec = () => {
     const member = openMember();
