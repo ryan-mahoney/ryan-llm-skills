@@ -58,7 +58,8 @@ export function FileReader(props: FileReaderProps) {
     : statusMarkdown(props.file.text ?? ''));
   // Browser-owned resource loads keep the same authorized endpoint; the retry
   // nonce forces a new observable load only after a failed image/iframe
-  // display retry. No fetch happens here.
+  // display retry. HTML uses the destination's validated response bytes
+  // instead of an unobservable second navigation. No fetch happens here.
   const resourceSrc = (url: string): string => {
     if (!url || props.resourceRetryVersion === 0) return url;
     return `${url}${url.includes('?') ? '&' : '?'}resource_retry=${props.resourceRetryVersion}`;
@@ -80,7 +81,7 @@ export function FileReader(props: FileReaderProps) {
           class="html-frame"
           title={props.file.path}
           sandbox="allow-scripts"
-          src={resourceSrc(props.viewUrl || props.readUrl)}
+          srcdoc={props.file.text ?? ''}
           onLoad={() => props.onResourceReady()}
           onError={() => props.onResourceError('The isolated HTML document failed to load.')}
         />

@@ -291,7 +291,7 @@ try:
             expect(page.locator('.files-destination iframe.html-frame')).to_be_visible()
             expect(page.frame_locator('.files-destination iframe.html-frame').locator('h1')).to_have_text('Sandbox fixture')
             sandbox = page.get_attribute('.files-destination iframe.html-frame', 'sandbox')
-            frame_src = page.get_attribute('.files-destination iframe.html-frame', 'src')
+            frame_src = page.get_attribute('.files-destination iframe.html-frame', 'srcdoc')
             assert sandbox == 'allow-scripts' and 'allow-same-origin' not in sandbox, sandbox
             assert '/api/workspace-file' in frame_src, frame_src
             html_response = context.request.get(receipt['url'] + '/api/workspace-file?' + urlencode({'id': 'fixture', 'file': 'files/sandbox.html'}))
@@ -368,10 +368,10 @@ try:
             expect(page.locator('.files-destination iframe.html-frame')).to_be_visible()
             expect(page.frame_locator('.files-destination iframe.html-frame').locator('h1')).to_have_text('Package sandbox')
             sandbox = page.get_attribute('.files-destination iframe.html-frame', 'sandbox')
-            frame_src = page.get_attribute('.files-destination iframe.html-frame', 'src')
+            frame_src = page.frame_locator('.files-destination iframe.html-frame').locator('base').get_attribute('href')
             assert sandbox == 'allow-scripts' and 'allow-same-origin' not in sandbox, sandbox
-            assert frame_src.startswith('/package-view/') and frame_src.endswith('/assets/sandbox.html'), frame_src
-            view_response = context.request.get(receipt['url'] + frame_src)
+            assert '/package-view/' in frame_src and frame_src.endswith('/assets/sandbox.html'), frame_src
+            view_response = context.request.get(frame_src)
             view_csp = view_response.headers.get('content-security-policy') or ''
             assert view_response.ok and 'sandbox allow-scripts' in view_csp and 'allow-same-origin' not in view_csp, view_csp
             report['scenarios'].append('Package HTML uses packageViewUrl in a sandboxed frame without allow-same-origin and keeps the server CSP')
@@ -907,7 +907,7 @@ try:
             frame_src = page.evaluate("""() => {
                 const el = document.querySelector('.files-destination iframe.html-frame');
                 window.__continuityFrame = el;
-                return el.getAttribute('src');
+                return el.getAttribute('srcdoc');
             }""")
             assert frame_src and '/api/workspace-file' in frame_src, frame_src
             # A manual Refresh state increments refreshKey before the state
@@ -927,7 +927,7 @@ try:
             fail_reads('files/sandbox.html')
             expect(page.locator('.files-destination .reader')).to_contain_text('File could not be rechecked')
             assert page.evaluate("() => window.__continuityFrame === document.querySelector('.files-destination iframe.html-frame')") is True, 'offline recheck replaced the iframe node'
-            assert page.evaluate("() => document.querySelector('.files-destination iframe.html-frame').getAttribute('src')") == frame_src, 'offline recheck changed the iframe src'
+            assert page.evaluate("() => document.querySelector('.files-destination iframe.html-frame').getAttribute('srcdoc')") == frame_src, 'offline recheck changed the iframe document'
             expect(page.frame_locator('.files-destination iframe.html-frame').locator('h1')).to_have_text('Sandbox fixture')
             expect(page.locator('.files-destination').get_by_role('button', name='Download file', exact=True).first).to_be_disabled()
             report['scenarios'].append('Offline and failed sandbox recheck keep the exact mounted iframe node and src with readable content')
@@ -940,7 +940,7 @@ try:
             expect(page.locator('.files-destination .reader')).not_to_contain_text('Retry file')
             expect(page.locator('.files-destination').get_by_role('link', name='Download file', exact=True).first).to_be_visible()
             assert page.evaluate("() => window.__continuityFrame === document.querySelector('.files-destination iframe.html-frame')") is True, 'successful recheck replaced the iframe node'
-            assert page.evaluate("() => document.querySelector('.files-destination iframe.html-frame').getAttribute('src')") == frame_src, 'successful recheck changed the iframe src'
+            assert page.evaluate("() => document.querySelector('.files-destination iframe.html-frame').getAttribute('srcdoc')") == frame_src, 'successful recheck changed the iframe document'
             report['scenarios'].append('Successful sandbox recheck enables Download without replacing the mounted iframe node or src')
 
             # (8) Corrupt image bytes surface the regional display error and
@@ -949,6 +949,15 @@ try:
             open_route('files', ws='fixture', path='files/pixel.png')
             expect(page.locator('.files-destination .reader')).to_contain_text('File could not be displayed')
             report['scenarios'].append('A corrupt image response surfaces a readable regional display error')
+            page.get_by_role('button', name='Refresh files', exact=True).click()
+            expect(page.locator('.files-destination .reader')).not_to_contain_text('Rechecking')
+            expect(page.locator('.files-destination .reader')).to_contain_text('File could not be displayed')
+            page.get_by_role('button', name='Refresh state', exact=True).click()
+            expect(page.locator('.files-destination .reader')).not_to_contain_text('Rechecking')
+            expect(page.locator('.files-destination .reader')).to_contain_text('File could not be displayed')
+            expect(page.locator('.files-destination').get_by_role('button', name='Download file', exact=True).first).to_be_disabled()
+            expect(page.locator('.files-destination').get_by_role('button', name='Retry file', exact=True).first).to_be_visible()
+            report['scenarios'].append('Refresh files and App refreshKey preserve the corrupt-image error and Retry file with Download disabled')
             gate['reads']['corrupt'].discard('files/pixel.png')
             page.locator('.files-destination .ds-btn').filter(has_text=re.compile(r'^Retry file$')).first.click()
             expect(page.locator('.files-destination .reader')).not_to_contain_text('File could not be displayed')
@@ -956,6 +965,70 @@ try:
             page.wait_for_function("() => document.querySelector('.files-destination img.image-preview')?.naturalWidth > 0")
             expect(page.locator('.files-destination').get_by_role('link', name='Download file', exact=True).first).to_be_visible()
             report['scenarios'].append('Retry file after a corrupt image decodes real bytes and enables Download')
+
+            # A successful preliminary package-file read cannot certify the
+            # distinct package-view main document. HTTP error bytes must not
+            # reach the frame or enable Download.
+            def failed_document(route):
+                route.fulfill(status=503, content_type='text/html', body='<h1>Failed main document</h1>')
+
+            page.route('**/package-view/**', failed_document)
+            with page.expect_response(lambda response: '/api/package-file?' in response.url) as preliminary:
+                open_route('files', ws='fixture', source='package', id=receipt['package'], path='assets/sandbox.html')
+            assert preliminary.value.ok, 'preliminary package-file read must succeed'
+            expect(page.locator('.files-destination .reader')).to_contain_text('File could not be read')
+            expect(page.locator('.files-destination').get_by_role('button', name='Download file', exact=True).first).to_be_disabled()
+            expect(page.locator('.files-destination').get_by_role('button', name='Retry file', exact=True).first).to_be_visible()
+            expect(page.locator('.files-destination iframe')).to_have_count(0)
+            page.unroute('**/package-view/**', failed_document)
+            page.get_by_role('button', name='Retry file', exact=True).first.click()
+            expect(page.frame_locator('.files-destination iframe.html-frame').locator('h1')).to_have_text('Package sandbox')
+            expect(page.locator('.files-destination').get_by_role('link', name='Download file', exact=True).first).to_be_visible()
+            expect(page.locator('.files-destination iframe')).to_have_attribute('sandbox', 'allow-scripts')
+            policy = page.frame_locator('.files-destination iframe').locator('meta[http-equiv="Content-Security-Policy"]').get_attribute('content')
+            assert "connect-src 'none'" in policy and "form-action 'none'" in policy and 'allow-same-origin' not in policy, policy
+            isolation = page.frame_locator('.files-destination iframe').locator('h1').evaluate("""async () => {
+                let parentBlocked = false, networkBlocked = false;
+                try { void parent.document.body; } catch { parentBlocked = true; }
+                try { await fetch(new URL('/api/state', document.baseURI)); } catch { networkBlocked = true; }
+                return { parentBlocked, networkBlocked };
+            }""")
+            assert isolation == {'parentBlocked': True, 'networkBlocked': True}, isolation
+            report['scenarios'].append('Successful preliminary read followed by failed main-document GET keeps Download disabled and offers localized Retry; recovery displays validated package HTML under the unchanged sandbox/CSP')
+
+            # Scale only the browser's native deadline at the final boundary,
+            # recording the production 30s budget rather than waiting 30s.
+            open_route('files', ws='fixture', path='files/overview.md')
+            files_viewer('files/overview.md', 'Fixture overview')
+            gate['listings']['hold'].add('workspace-files')
+            page.evaluate("""() => {
+                window.__nativeFileTimeout = AbortSignal.timeout;
+                window.__fileTimeoutBudgets = [];
+                AbortSignal.timeout = milliseconds => {
+                    window.__fileTimeoutBudgets.push(milliseconds);
+                    return window.__nativeFileTimeout.call(AbortSignal, 100);
+                };
+            }""")
+            try:
+                page.get_by_role('button', name='Refresh files', exact=True).click()
+                wait_held(gate['listings']['held'], 'stalled listing')
+                expect(page.locator('.files-destination .list-pane')).to_contain_text('Workspace files unavailable. Refresh to retry.')
+                expect(page.get_by_role('button', name='Refresh files', exact=True).last).to_be_enabled()
+                expect(page.locator('.files-destination .paper')).to_contain_text('Fixture overview')
+                assert 30000 in page.evaluate('() => window.__fileTimeoutBudgets'), 'listing lost its bounded deadline'
+            finally:
+                page.evaluate('() => { AbortSignal.timeout = window.__nativeFileTimeout; }')
+                gate['listings']['hold'].discard('workspace-files')
+                for _, route, response in gate['listings']['held']:
+                    try:
+                        route.fulfill(response=response)
+                    except Exception:
+                        pass
+                gate['listings']['held'] = []
+            page.get_by_role('button', name='Refresh files', exact=True).last.click()
+            expect(page.locator('.files-destination .list-pane')).not_to_contain_text('Workspace files unavailable')
+            expect(files_row('files/overview.md')).to_be_visible()
+            report['scenarios'].append('A stalled listing uses the 30000ms deadline (native timeout scaled to 100ms), reaches localized recovery, retains rows/reader, and Refresh files successfully retries')
 
             # (9) Image node identity through offline + failed recheck.
             open_route('files', ws='fixture', path='files/overview.md')

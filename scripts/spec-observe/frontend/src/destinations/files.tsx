@@ -3,7 +3,7 @@
 // composes the shared MasterDetail/reader surfaces. No App/route/scope changes.
 import { createEffect, createMemo, createSignal, For, on, onCleanup, Show, untrack } from 'solid-js';
 import { getJson } from '../api';
-import { time } from '../format';
+import { esc, time } from '../format';
 import {
   contextRoutePath,
   fileKindLabel,
@@ -169,7 +169,10 @@ export default function FilesDestination(props: DestinationProps) {
       if (!props.workspace) return null;
       return fileUnavailableReason(path, { files: contextFiles() });
     }
-    return fileUnavailableReason(path, listing());
+    // During a source transition the outgoing complete listing may still be
+    // published until its reset effect runs. It cannot prove absence in the
+    // incoming source.
+    return fileUnavailableReason(path, renderedListKey === scopeId() ? listing() : null);
   };
 
   // Scroll is saved under the identity whose content is actually rendered: an
@@ -224,7 +227,7 @@ export default function FilesDestination(props: DestinationProps) {
     setLoadingList(true);
     setListError('');
     try {
-      const data = await getJson<FileListing>(url, controller.signal);
+      const data = await getJson<FileListing>(url, AbortSignal.any([controller.signal, AbortSignal.timeout(30000)]));
       if (token !== listGeneration || key !== scopeId()) return;
       const appending = next !== undefined && !refresh;
       const previous = appending ? listing() : null;
@@ -260,7 +263,6 @@ export default function FilesDestination(props: DestinationProps) {
     if (resourceError()) setResourceRetryVersion(version => version + 1);
     setReadError('');
     setRecheckError('');
-    setResourceError('');
     setReadVersion(version => version + 1);
   };
   const revalidateFiles = () => {
@@ -384,8 +386,8 @@ export default function FilesDestination(props: DestinationProps) {
     }
     setReadError('');
     setRecheckError('');
-    setResourceError('');
     if (!sameIdentity) {
+      setResourceError('');
       // A changed identity clears old bytes immediately; the 300 ms skeleton
       // timer runs only for this first load, never for a retained recheck.
       setLoaded(null);
@@ -407,7 +409,28 @@ export default function FilesDestination(props: DestinationProps) {
         if (!response.ok) throw new Error('unavailable');
         const kind = response.headers.get('X-Package-File-Kind') || 'text';
         const type = response.headers.get('Content-Type') || '';
-        const text = kind === 'text' || kind === 'markdown' || kind === 'json' ? await response.text() : null;
+        let text = kind === 'text' || kind === 'markdown' || kind === 'json' ? await response.text() : null;
+        if (kind === 'html') {
+          // Retain the mounted document on healthy same-file rechecks. For a
+          // new document, validate the exact response whose bytes the frame
+          // will display; iframe load alone cannot distinguish HTTP errors.
+          if (sameIdentity && prior?.kind === kind && prior.text !== null && !untrack(resourceError)) {
+            text = prior.text;
+          } else {
+            const documentUrl = requestedScope.source === 'package'
+              ? packageViewUrl(requestedScope.owner!, requested)
+              : url;
+            const documentResponse = requestedScope.source === 'package'
+              ? await fetch(documentUrl, { cache: 'no-store', signal: controller.signal })
+              : response;
+            if (!documentResponse.ok) throw new Error('document unavailable');
+            const policy = documentResponse.headers.get('Content-Security-Policy');
+            if (!policy) throw new Error('document policy unavailable');
+            // The trusted base precedes base-uri:none; subsequent document
+            // bases are refused. Attribute escaping keeps headers/URLs inert.
+            text = `<base href="${esc(new URL(documentUrl, location.href).href)}"><meta http-equiv="Content-Security-Policy" content="${esc(policy)}"><!-- resource_retry=${untrack(resourceRetryVersion)} -->${await documentResponse.text()}`;
+          }
+        }
         if (token !== fileGeneration) return;
         const headerLength = Number(response.headers.get('Content-Length'));
         renderedReaderKey = requestedKey;
@@ -1000,7 +1023,7 @@ export default function FilesDestination(props: DestinationProps) {
                     offline={props.connectionFailed}
                     downloadEnabled={downloadEnabled()}
                     resourceRetryVersion={resourceRetryVersion()}
-                    onResourceReady={() => { if (stillSelected()) setResourceReady(true); }}
+                    onResourceReady={() => { if (stillSelected()) { setResourceReady(true); setResourceError(''); } }}
                     onResourceError={message => { if (stillSelected()) { setResourceReady(false); setResourceError(message); } }}
                   />
                 );
