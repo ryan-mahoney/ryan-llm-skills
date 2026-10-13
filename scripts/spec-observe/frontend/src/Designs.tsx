@@ -366,14 +366,50 @@ export default function Designs(props: DestinationProps) {
     observer = undefined;
   });
 
-  const captureText = () => {
+  const widthList = (widths: number[]) => {
+    const ordered = [...widths].sort((a, b) => a - b).map(width => `${width}px`);
+    if (ordered.length === 0) return '';
+    if (ordered.length === 1) return ordered[0];
+    return `${ordered.slice(0, -1).join(', ')} and ${ordered[ordered.length - 1]}`;
+  };
+  const capturedWidths = () => {
+    const current = screen();
+    return (design()?.viewport?.widths ?? []).filter(width => current?.captured?.[String(width)] === true);
+  };
+  const missingWidths = () => {
+    const current = screen();
+    if (!current?.produced) return [];
+    return (design()?.viewport?.widths ?? []).filter(width => current.captured?.[String(width)] !== true);
+  };
+  const captureText = () => widthList(capturedWidths());
+  const missingText = () => widthList(missingWidths());
+  const indexDiagnostics = () => data()?.errors ?? [];
+  const captureGap = () => Boolean(screen()?.produced) && missingWidths().length > 0;
+  const partialEvidence = () => Boolean(design()) && (captureGap() || indexDiagnostics().length > 0);
+  const showCaptureCallout = () => Boolean(design()) && Boolean(screen()?.produced) && partialEvidence()
+    && !indexError() && !staleIndex() && probeState() !== 'failed';
+  const unreadableIndexText = () => {
+    const count = indexDiagnostics().length;
+    return `${count} design ${count === 1 ? 'index' : 'indexes'} could not be read.`;
+  };
+  const captureEvidenceText = () => {
     const current = screen();
     if (!current) return '';
-    return Object.entries(current.captured ?? {})
-      .filter(([, captured]) => captured)
-      .map(([width]) => `${width}px`)
-      .sort((a, b) => parseInt(a, 10) - parseInt(b, 10))
-      .join(' and ');
+    const captured = capturedWidths();
+    const missing = missingWidths();
+    const parts: string[] = [];
+    if (missing.length > 0) {
+      parts.push(captured.length === 0
+        ? `Screen ${current.step} has no captures recorded.`
+        : captured.length === 1
+          ? `Screen ${current.step} has a ${widthList(captured)} capture.`
+          : `Screen ${current.step} has ${widthList(captured)} captures.`);
+      parts.push(missing.length === 1 ? `Its ${widthList(missing)} capture is missing.` : `Its ${widthList(missing)} captures are missing.`);
+    } else {
+      parts.push('Capture coverage is complete for this screen.');
+    }
+    if (indexDiagnostics().length > 0) parts.push(unreadableIndexText());
+    return parts.join(' ');
   };
   const deviations = () => {
     const current = screen();
@@ -400,7 +436,10 @@ export default function Designs(props: DestinationProps) {
   };
   const emptyDetailText = () => {
     if (unavailableSelection()) return 'The selected design package is not in this workspace. Choose another package from the list.';
-    if (allInvalid()) return 'The recorded design indexes could not be read. Fix them in the workspace, then refresh.';
+    if (allInvalid()) {
+      const count = indexDiagnostics().length;
+      return `${count} design ${count === 1 ? 'index' : 'indexes'} could not be read. Fix them in the workspace, then refresh.`;
+    }
     return 'Choose a design package to inspect its planned screens, widths and captures.';
   };
   const announcement = createMemo(() => {
@@ -413,13 +452,15 @@ export default function Designs(props: DestinationProps) {
     if (current.unavailable && (props.route.id ?? '') !== '') return 'Design not found.';
     const failures = [indexError() ? 'Designs could not be read.' : '', probeState() === 'failed' ? 'Screen could not be read.' : ''].filter(Boolean).join(' ');
     if (failures) return failures;
-    if (allInvalid()) return 'Design indexes could not be read.';
+    if (allInvalid()) return unreadableIndexText();
     if (successfulEmpty()) return 'No designs recorded.';
     if (designs().length > 0 && visibleDesigns().length === 0) return 'No designs match. Clear search to restore the design list.';
     if (!current.design) return 'Choose a design package.';
     if (!current.screen) return `${current.design.title} has no planned screens.`;
     if (headDelayed() && current.screen.produced && probeState() === 'checking') return 'Checking screen.';
-    return `Screen ${current.screen.step} of ${current.design.screens.length} · ${current.design.title} · ${current.screen.title}`;
+    const base = `Screen ${current.screen.step} of ${current.design.screens.length} · ${current.design.title} · ${current.screen.title}`;
+    const evidence = [captureGap() ? `Missing captures: ${widthList(missingWidths())}.` : '', indexDiagnostics().length > 0 ? unreadableIndexText() : ''].filter(Boolean).join(' ');
+    return evidence ? `${base} ${evidence}` : base;
   });
 
   // Shared route link handler: modified clicks keep the native anchor, ordinary
@@ -613,7 +654,20 @@ export default function Designs(props: DestinationProps) {
               </Match>
               <Match when={allInvalid()}>
                 <div class="detail-body">
-                  <EmptyState symbol="◇" title={emptyDetailTitle()} text={emptyDetailText()} />
+                  <EmptyState
+                    symbol="◇"
+                    title="Design indexes could not be read"
+                    text={emptyDetailText()}
+                    action={
+                      <>
+                        <button type="button" class="ds-btn ds-btn--primary" onClick={refreshIndex}>Refresh designs</button>
+                        <a class="ds-btn" href={formatHash(filesRoute())} onClick={routeClick(filesRoute())}>Open files</a>
+                      </>
+                    }
+                  />
+                  <ul class="small">
+                    <For each={indexDiagnostics()}>{item => <li>{item.name}: {item.message}</li>}</For>
+                  </ul>
                 </div>
               </Match>
               <Match when={Boolean(indexError())}>
@@ -715,12 +769,29 @@ export default function Designs(props: DestinationProps) {
                     when={screen()?.produced && Boolean(screenUrl()) && probeState() === 'ok'}
                     fallback={<button type="button" class="ds-btn" disabled title={openScreenTitle()}>Open screen</button>}
                   >
-                    <a class="ds-btn ds-btn--primary" href={screenUrl()} target="_blank" rel="noopener">Open screen</a>
+                    <a class={showCaptureCallout() ? 'ds-btn' : 'ds-btn ds-btn--primary'} href={screenUrl()} target="_blank" rel="noopener">Open screen</a>
                   </Show>
                 </div>
               </div>
               <div class="design-canvas">
                 <Show when={screen()} fallback={<EmptyState symbol="◇" title="No screens planned" text="This design package records no screens yet." />}>
+                  <Show when={showCaptureCallout()}>
+                    <StateNotice
+                      announce={false}
+                      tone="warning"
+                      title="Capture evidence incomplete"
+                      action={
+                        <Show
+                          when={briefRoute()}
+                          fallback={<p class="small muted">No safe relative brief is recorded, so there is no brief link to open.</p>}
+                        >
+                          {route => <a class="ds-btn ds-btn--primary" href={formatHash(route())} onClick={routeClick(route())}>Open brief</a>}
+                        </Show>
+                      }
+                    >
+                      {captureEvidenceText()}
+                    </StateNotice>
+                  </Show>
                   <Show
                     when={viewerMount()}
                     keyed
@@ -794,10 +865,18 @@ export default function Designs(props: DestinationProps) {
                       {screen()!.person || 'Person not recorded'} · {screen()!.job || 'Job not recorded'}<br />
                       Primary action: {screen()!.primary_action || 'Not recorded'}<br />
                       <Show when={screen()!.produced} fallback={<>Produced: No · Captured: {captureText() || 'No'}</>}>
-                        Capture: {captureText() || 'Not captured'}
+                        Capture: {captureText() || 'none'} · Missing: {missingText() || 'none'}
                       </Show>
                       <Show when={screen()!.notes}><br />Note: {screen()!.notes}</Show>
                     </p>
+                    <Show when={indexDiagnostics().length}>
+                      <p>
+                        <strong>Unreadable design indexes</strong>
+                      </p>
+                      <ul class="small">
+                        <For each={indexDiagnostics()}>{item => <li>{item.name}: {item.message}</li>}</For>
+                      </ul>
+                    </Show>
                     <Show when={deviations().length}>
                       <p>
                         <strong>Deviations</strong><br />

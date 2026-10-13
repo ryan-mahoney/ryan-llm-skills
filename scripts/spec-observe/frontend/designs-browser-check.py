@@ -20,6 +20,9 @@ SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 180s uv run --script \
 SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 180s uv run --script \
   scripts/spec-observe/frontend/designs-browser-check.py --case error \
   --capture-reference /path/to/designs/app-ui/screens/78-designs-error.html
+SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 180s uv run --script \
+  scripts/spec-observe/frontend/designs-browser-check.py --case partial \
+  --capture-reference /path/to/designs/app-ui/screens/79-designs-partial.html
 
 Only the temporary fixture storage, one final index HTTP delay, and the imported
 snapshot are substituted; App, route, adapters, /api/workspace-designs and the
@@ -49,7 +52,7 @@ from urllib.parse import parse_qs, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--case', choices=['journey', 'unproduced', 'empty', 'loading', 'error'], default='journey')
+parser.add_argument('--case', choices=['journey', 'unproduced', 'empty', 'loading', 'error', 'partial'], default='journey')
 parser.add_argument('--capture-reference', default=None)
 options = parser.parse_args()
 case = options.case
@@ -263,6 +266,30 @@ def seed_designs(storage):
             'fixture/designs/planned/captures/02-kickoff@1280.png',
             'fixture/designs/missing-brief/design.json', 'fixture/designs/unsafe-brief/design.json',
         ])
+    if case == 'partial':
+        # Real disk evidence for the partial case: one missing declared capture,
+        # a marker brief, an unrelated invalid index, and an all-invalid other scope.
+        (demo / 'captures' / '01-screen-1@1600.png').unlink(missing_ok=True)
+        partial_brief = '# Demo marker brief\n\nMarker brief for the partial case.\n'
+        (demo / 'brief.md').write_text(partial_brief)
+        broken_index = '{ invalid json'
+        broken = fixture_root / 'broken'
+        broken.mkdir(parents=True, exist_ok=True)
+        (broken / 'design.json').write_text(broken_index)
+        other_demo = other_root / 'other-demo'
+        if other_demo.exists():
+            shutil.rmtree(other_demo)
+        other_broken = other_root / 'broken-other'
+        other_broken.mkdir(parents=True, exist_ok=True)
+        (other_broken / 'design.json').write_text(broken_index)
+        seeded['partialMode'] = {
+            'removedCapture': 'fixture/designs/demo/captures/01-screen-1@1600.png',
+            'brief': partial_brief,
+            'brokenIndex': broken_index,
+            'otherBrokenIndex': broken_index,
+            'validFixtureDesigns': ['demo', 'second'],
+            'validOtherDesigns': [],
+        }
     return seeded
 
 
@@ -419,6 +446,241 @@ try:
                     reference_state.append(state)
                 reference_page.close()
                 report['reference'] = {'html': str(reference_html), 'url': reference_url, 'captures': reference_state}
+
+            if case == 'partial':
+                partial_state = {}
+                report['partialState'] = partial_state
+
+                def wait_until(condition, label, timeout=5):
+                    deadline = time.monotonic() + timeout
+                    while time.monotonic() < deadline:
+                        if condition():
+                            return
+                        page.wait_for_timeout(25)
+                    raise AssertionError(f'{label} not observed')
+
+                page.clock.install(time=datetime(2026, 1, 1, 12, 0, 0))
+                page.clock.pause_at(datetime(2026, 1, 1, 12, 0, 0))
+
+                # Cold real entry into the partial demo.
+                page.goto(base + '/#/designs?ws=fixture&id=demo&path=screens%2F01-screen-1.html&tab=1280', wait_until='domcontentloaded')
+                wait_until(lambda: page.locator('#design-detail-heading').text_content() == 'Design fixture', 'partial demo detail')
+                expect(page.get_by_text('Screen 1 · Screen one', exact=True)).to_be_visible()
+                expect(frame().locator('h1')).to_have_text('Marker screen one')
+                assert frame().locator('html').get_attribute('data-marker') == '42'
+                expect(page.locator('.list-pane .record')).to_have_count(2)
+                expect(page.locator('.list-pane .record.selected')).to_contain_text('Design fixture')
+                expect(page.locator('.list-pane .record.selected')).to_contain_text('screens produced')
+                callout = page.locator('.design-canvas .ds-callout')
+                expect(callout).to_contain_text('Capture evidence incomplete')
+                expect(callout).to_contain_text('Screen 1 has a 1280px capture. Its 1600px capture is missing. 1 design index could not be read.')
+                brief_primary = callout.get_by_role('link', name='Open brief', exact=True)
+                expect(brief_primary).to_have_class(re.compile(r'ds-btn--primary'))
+                open_screen_link = page.get_by_role('link', name='Open screen', exact=True)
+                assert (open_screen_link.get_attribute('class') or '') == 'ds-btn', 'Open screen was not secondary'
+                details = page.locator('.design-canvas details')
+                details.locator('summary').click()
+                expect(details).to_contain_text('Capture: 1280px · Missing: 1600px')
+                expect(details).to_contain_text('designs/broken/design.json')
+                assert 'review complete' not in page.locator('main').inner_text().lower()
+                partial_state['entry'] = {'validRows': 2, 'marker': '42', 'callout': 'partial', 'openScreen': 'secondary'}
+
+                # Producer truth for the demo fixture: real API maps, summary and error count.
+                producer = context.request.get(base + '/api/workspace-designs?id=fixture')
+                assert producer.ok, producer.status
+                producer_body = producer.json()
+                producer_demo = next((item for item in producer_body.get('designs', []) if item.get('slug') == 'demo'), None)
+                assert producer_demo is not None, producer_body
+                producer_screen = next((item for item in producer_demo.get('screens', []) if item.get('step') == 1), None)
+                assert producer_screen is not None and producer_screen.get('produced') is True, producer_screen
+                assert producer_screen.get('captured', {}).get('1280') is True, producer_screen
+                assert producer_screen.get('captured', {}).get('1600') is False, producer_screen
+                assert producer_demo.get('summary', {}).get('total') == 2, producer_demo.get('summary')
+                assert producer_demo.get('summary', {}).get('produced') == 2, producer_demo.get('summary')
+                assert producer_demo.get('summary', {}).get('captured') == 0, producer_demo.get('summary')
+                partial_state['producer'] = {
+                    'demoSummary': producer_demo.get('summary'),
+                    'screenProduced': producer_screen.get('produced'),
+                    'screenCaptured': producer_screen.get('captured'),
+                    'errorCount': len(producer_body.get('errors', [])),
+                    'errorNames': [item.get('name') for item in producer_body.get('errors', [])],
+                }
+
+                for width in (1280, 1600):
+                    page.locator('#design-width').focus()
+                    page.select_option('#design-width', str(width))
+                    page.set_viewport_size({'width': width, 'height': 900})
+                    assert_frame_geometry(width)
+                    details = page.locator('.design-canvas details')
+                    if not details.evaluate('element => element.open'):
+                        details.locator('summary').click()
+                    assert details.evaluate('element => element.open'), 'details disclosure closed before the top capture'
+                    page.evaluate("() => { const canvas = document.querySelector('.design-canvas'); if (canvas) canvas.scrollTop = 0; }")
+                    path = browser_evidence / f'designs-partial@{width}.png'
+                    page.screenshot(path=str(path))
+                    report['captures'].append(str(path))
+                    page.evaluate("() => { const canvas = document.querySelector('.design-canvas'); if (canvas) { const target = canvas.querySelector('details'); if (target) target.scrollIntoView({ block: 'start' }); } }")
+                    assert details.evaluate('element => element.open'), 'details disclosure closed after scrolling'
+                    expect(details).to_be_visible()
+                    expect(details).to_contain_text('Capture: 1280px · Missing: 1600px')
+                    expect(details).to_contain_text('designs/broken/design.json')
+                    path = browser_evidence / f'designs-partial-details@{width}.png'
+                    page.screenshot(path=str(path))
+                    report['captures'].append(str(path))
+                if reference_html:
+                    capture_reference('reference-79', details=True)
+                page.locator('#design-width').focus()
+                page.select_option('#design-width', '1280')
+
+                # 44px, keyboard and 200% zoom reachability for the partial actions.
+                page.set_viewport_size({'width': 1600, 'height': 900})
+                controls = [page.locator('#find-record'), brief_primary, open_screen_link, page.locator('#design-width'),
+                            page.get_by_role('button', name='Next screen', exact=True)]
+                for control in controls:
+                    box = control.bounding_box()
+                    assert box and box['width'] >= 44 and box['height'] >= 44, (control, box)
+                page.locator('#find-record').focus()
+                reachable = []
+                for _ in range(24):
+                    reachable.append(active_control())
+                    page.keyboard.press('Tab')
+                reachable_text = [item['text'] for item in reachable if item]
+                reachable_ids = [item['id'] for item in reachable if item]
+                assert 'Open brief' in reachable_text and 'Open screen' in reachable_text, reachable_text
+                assert 'Next screen' in reachable_text and 'design-width' in reachable_ids, (reachable_text, reachable_ids)
+                page.evaluate("document.documentElement.style.zoom = '2'")
+                page.wait_for_timeout(50)
+                for control in controls:
+                    control.scroll_into_view_if_needed()
+                    box = control.bounding_box()
+                    assert box and box['x'] >= 0 and box['y'] >= 0 and box['y'] < 900, (control, box)
+                page.evaluate("document.documentElement.style.zoom = ''")
+                passed('partial demo shows the exact capture-gap and index callout with a real frame, primary Open brief, secondary Open screen and named diagnostics')
+
+                # Open screen reads the actual HTML; Open brief crosses the real Files route.
+                with context.expect_page(timeout=5000) as popup_info:
+                    open_screen_link.click()
+                popup = popup_info.value
+                popup.wait_for_load_state('domcontentloaded')
+                assert 'workspace-view' in popup.url and '01-screen-1.html' in popup.url, popup.url
+                assert 'Marker screen one' in popup.content()
+                popup.close()
+                brief_primary.click()
+                expect(page).to_have_url(re.compile(r'#/files\?ws=fixture&source=workspace&path=designs%2Fdemo%2Fbrief\.md'))
+                expect(page.locator('#file-content')).to_contain_text('Demo marker brief')
+                page.go_back()
+                wait_until(lambda: page.locator('#design-frame').count() == 1, 'frame after brief return')
+                expect(page.locator('#design-detail-heading')).to_have_text('Design fixture')
+                assert params().get('id') == ['demo'] and params().get('path') == ['screens/01-screen-1.html'] and params().get('tab') == ['1280'], page.url
+                expect(frame().locator('h1')).to_have_text('Marker screen one')
+                page.evaluate("document.getElementById('design-frame').dataset.viewer = 'stable'")
+                handle = page.locator('#design-frame').element_handle()
+                nonce = frame().locator('html').get_attribute('data-nonce')
+                heads = head_count()
+                partial_state['navigation'] = {'popup': 'real-html', 'brief': 'real-files', 'route': 'preserved'}
+
+                # Restore the 1600 capture: coverage becomes complete, unrelated index error stays.
+                capture_1600 = Path(receipt['root']) / 'storage' / 'projects' / 'fixture' / 'designs' / 'demo' / 'captures' / '01-screen-1@1600.png'
+                capture_1600.parent.mkdir(parents=True, exist_ok=True)
+                capture_1600.write_bytes(PNG_1X1)
+                demo_index = Path(receipt['root']) / 'storage' / 'projects' / 'fixture' / 'designs' / 'demo' / 'design.json'
+                original_record = json.loads(demo_index.read_text())
+                report['fixtureInputsDelta'] = {'restoredCapture': 'fixture/designs/demo/captures/01-screen-1@1600.png'}
+                page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                wait_until(lambda: 'Capture coverage is complete for this screen.' in callout.text_content(), 'complete coverage callout')
+                expect(callout).to_contain_text('1 design index could not be read.')
+                expect(details).to_contain_text('Capture: 1280px and 1600px · Missing: none')
+                expect(details).to_contain_text('designs/broken/design.json')
+                assert page.evaluate("document.getElementById('design-frame').dataset.viewer") == 'stable'
+                assert frame().locator('html').get_attribute('data-nonce') == nonce
+                assert head_count() == heads, 'capture restore triggered a HEAD'
+                expect(page.locator('#design-width')).to_have_value('1280')
+
+                # Null optional brief: explanation without a forged link, frame retained.
+                without_brief = {key: value for key, value in original_record.items() if key != 'brief'}
+                demo_index.write_text(json.dumps(without_brief))
+                report['fixtureInputsDelta']['withoutBrief'] = without_brief
+                page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                wait_until(lambda: 'No safe relative brief is recorded' in callout.text_content(), 'brief absence explanation')
+                assert callout.get_by_role('link', name='Open brief', exact=True).count() == 0
+                assert page.evaluate("document.getElementById('design-frame').dataset.viewer") == 'stable'
+                assert frame().locator('html').get_attribute('data-nonce') == nonce
+
+                # Restore the brief and remove the unrelated broken index: callout clears.
+                demo_index.write_text(json.dumps(original_record))
+                broken_dir = Path(receipt['root']) / 'storage' / 'projects' / 'fixture' / 'designs' / 'broken'
+                (broken_dir / 'design.json').unlink()
+                broken_dir.rmdir()
+                report['fixtureInputsDelta']['removedBrokenDirectory'] = 'fixture/designs/broken'
+                page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                wait_until(lambda: page.locator('.design-canvas .ds-callout').count() == 0, 'callout cleared after recovery')
+                expect(details).to_contain_text('Capture: 1280px and 1600px · Missing: none')
+                assert (page.get_by_role('link', name='Open screen', exact=True).get_attribute('class') or '') == 'ds-btn ds-btn--primary'
+                assert page.evaluate("document.getElementById('design-frame').dataset.viewer") == 'stable'
+                assert frame().locator('html').get_attribute('data-nonce') == nonce
+                assert head_count() == heads, 'recovery triggered a HEAD'
+                assert handle.evaluate('(el) => el.isConnected')
+                partial_state['recovery'] = {'callout': 'none', 'openScreen': 'primary', 'nonce': nonce}
+
+                # Same-data poll stays silent on the single announcer.
+                announcer = page.locator('main [role="status"][aria-atomic="true"]')
+                announcement_before = announcer.text_content()
+                page.clock.fast_forward(5000)
+                page.wait_for_timeout(50)
+                expect(announcer).to_have_count(1)
+                assert announcer.text_content() == announcement_before, 'same-data poll changed the announcement'
+                partial_state['pollSilent'] = announcement_before
+
+                # Real other scope with only an invalid index: cold entry, observable prerequisites.
+                page.goto('about:blank')
+                page.goto(base + '/#/designs?ws=other', wait_until='domcontentloaded')
+                partial_state['otherEntry'] = {'url': page.url, 'params': dict(params())}
+                other_api = context.request.get(base + '/api/workspace-designs?id=other')
+                assert other_api.ok, other_api.status
+                other_body = other_api.json()
+                assert other_body.get('designs') == [], other_body
+                assert other_body.get('errors'), other_body
+                partial_state['otherProducer'] = {
+                    'designs': other_body.get('designs'),
+                    'errorCount': len(other_body.get('errors', [])),
+                    'errorNames': [item.get('name') for item in other_body.get('errors', [])],
+                }
+                assert params().get('id') is None, page.url
+                wait_until(lambda: 'Design indexes could not be read' in page.locator('.detail-body').text_content(), 'other all-invalid detail')
+                expect(page.locator('.list-caption')).to_have_text('Design indexes could not be read')
+                expect(page.locator('.detail-body')).to_contain_text('1 design index could not be read. Fix them in the workspace, then refresh.')
+                expect(page.locator('.detail-body')).to_contain_text('designs/broken-other/design.json')
+                assert 'No designs recorded' not in page.locator('main').inner_text()
+                assert 'No design selected' not in page.locator('main').inner_text()
+                assert page.locator('#design-frame').count() == 0
+                assert page.locator('#design-width').count() == 0
+                expect(page.locator('.detail-body').get_by_role('button', name='Refresh designs', exact=True)).to_be_visible()
+                expect(page.locator('.detail-body').get_by_role('link', name='Open files', exact=True)).to_be_visible()
+                for width in (1280, 1600):
+                    page.set_viewport_size({'width': width, 'height': 900})
+                    path = browser_evidence / f'designs-partial-invalid@{width}.png'
+                    page.screenshot(path=str(path))
+                    report['captures'].append(str(path))
+                page.locator('.detail-body').get_by_role('link', name='Open files', exact=True).click()
+                expect(page).to_have_url(re.compile(r'#/files\?ws=other&source=workspace'))
+                page.go_back()
+                wait_until(lambda: 'Design indexes could not be read' in page.locator('.detail-body').text_content(), 'diagnostics after back')
+                page.locator('.detail-body').get_by_role('button', name='Refresh designs', exact=True).click()
+                page.clock.fast_forward(50)
+                expect(page.locator('.detail-body')).to_contain_text('designs/broken-other/design.json')
+                assert params().get('id') is None, page.url
+                partial_state['otherInvalid'] = {'rows': 0, 'diagnostics': 'kept', 'fabricated': False}
+                passed('other scope with zero valid designs and an invalid index keeps diagnostics with safe Refresh designs/Open files actions and no fabricated selection')
+
+                report['partialState'] = partial_state
+                assert not report['pageErrors'], report['pageErrors']
+                assert not report['consoleErrors'], report['consoleErrors']
+                unexpected = [failure for failure in report['requestFailures'] if 'ERR_ABORTED' not in failure['failure']]
+                assert not unexpected, unexpected
+                mutations = [r for r in requests if r['method'] not in ('GET', 'HEAD')]
+                assert not mutations, f'mutation requests observed: {mutations}'
+                report['status'] = 'passed'
+                raise CaseComplete()
 
             if case == 'error':
                 error_state = {}
