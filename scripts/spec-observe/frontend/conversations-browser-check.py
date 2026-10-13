@@ -871,6 +871,7 @@ def run_response_states(url, thread1, thread2):
         expect(draft).to_have_value('Responding retained draft')
         assert 'terminated' not in page.locator('.composer').inner_text().lower()
         expect(page.locator('#thread-stop')).to_have_class(primary)
+        capture('conversations-response-responding@1280.png')
         sends_before = send_count()
         with page.expect_response('**/api/thread/stop') as stop_response:
             page.locator('#thread-stop').click()
@@ -880,6 +881,7 @@ def run_response_states(url, thread1, thread2):
         assert stop_posts[-1]['input'] == {'workspace_id': 'fixture', 'thread_id': thread1}, stop_posts[-1]['input']
         expect(page.locator('#thread-resume')).to_have_class(primary)
         expect(page.locator('#thread-resume')).to_be_enabled()
+        expect(page.locator('.detail-pane')).to_contain_text('Queue paused')
         capture('conversations-response-stop-paused@1280.png')
         passed('response-states responding: partial/tool note retain the transcript and draft; Stop response posts one exact pause with no send or termination copy')
 
@@ -892,6 +894,15 @@ def run_response_states(url, thread1, thread2):
         expect(page.locator('.thread-transcript')).to_contain_text('Ready to discuss.')
         expect(page.locator('#thread-send')).to_be_disabled()
         expect(page.locator('#thread-resume')).to_have_class(primary)
+        expect(page.locator('#thread-queue')).to_contain_text('Queue paused')
+        expect(page.locator('#thread-queue')).to_contain_text('Nothing is being delivered')
+        expect(page.locator('#thread-queue')).to_contain_text('1 persisted message')
+        paused_queue_text = page.locator('#thread-queue').inner_text()
+        assert 'Another thread currently owns' not in paused_queue_text, paused_queue_text
+        assert 'owns the response slot' not in paused_queue_text, paused_queue_text
+        paused_details_text = page.locator('#thread-queue-details').inner_text()
+        assert 'position 0' not in paused_details_text.lower(), paused_details_text
+        assert 'position' not in paused_details_text.lower(), paused_details_text
         capture('conversations-response-paused@1280.png')
         with page.expect_response('**/api/thread/resume') as resume_response:
             page.locator('#thread-resume').click()
@@ -929,6 +940,21 @@ def run_response_states(url, thread1, thread2):
         assert 'Discussion two' not in page.locator('#thread-queue').inner_text()
         capture('conversations-response-queued-absent@1280.png')
         passed('response-states queued absent-owner: generic another-thread fallback with persisted positions')
+
+        # 4b. Queued blocked-head (production null): a delivering head with a
+        #     queued follower carrying a null position omits the rank entirely
+        #     with no fabricated zero.
+        open_state('queued-blocked')
+        page.locator('#thread-draft').wait_for()
+        expect(page.locator('#thread-queue')).to_contain_text('Your message is saved.')
+        blocked_queue_text = page.locator('#thread-queue').inner_text()
+        assert 'position 0' not in blocked_queue_text.lower(), blocked_queue_text
+        blocked_details_text = page.locator('#thread-queue-details').inner_text()
+        assert 'position' not in blocked_details_text.lower(), blocked_details_text
+        assert 'Position' not in blocked_details_text, blocked_details_text
+        expect(page.locator('#thread-queue-details')).to_contain_text('Use the existing file reader contract')
+        capture('conversations-response-queued-blocked@1280.png')
+        passed('response-states queued blocked-head: null follower position omits the rank with no fabricated zero')
 
         # 5. Uncertain: persisted item with duplicate-risk copy; Discard is
         #    primary, cancelling posts zero mutations, confirming removes
@@ -997,7 +1023,16 @@ def run_response_states(url, thread1, thread2):
         expect(page.locator('#thread-stop')).to_have_count(0)
         expect(page.locator('[data-thread-refresh]')).to_have_class(primary)
         capture('conversations-response-stalled-unowned@1280.png')
+        open_state('stalled-elsewhere')
+        page.locator('#thread-draft').wait_for()
+        expect(page.locator('#thread-queue')).to_contain_text('Discussion two owns the response slot')
+        expect(page.locator('#thread-queue')).to_contain_text('silence is not proof the response stopped')
+        assert 'no confirmed response owner' not in page.locator('#thread-queue').inner_text().lower()
+        expect(page.locator('#thread-stop')).to_have_count(0)
+        expect(page.locator('[data-thread-refresh]')).to_have_class(primary)
+        capture('conversations-response-stalled-elsewhere@1280.png')
         passed('response-states stalled: refresh keeps ownership server-authoritative with conditional Stop and no death inference')
+        passed('response-states stalled scoped-owner: selected unowned names the scoped owner without workspace-wide absence claim')
 
         # 8. History-only: history and Load older retained with zero
         #    composer/Stop/Resume/Prepare controls.
@@ -1065,11 +1100,11 @@ def run_response_states(url, thread1, thread2):
         '# Conversations response-state inspection (step 7)',
         '',
         '- Case: response-states at 1280x900; production captures plus reference screens 20-25 at 1280.',
-        '- Observed: responding shows the partial answer and tool rail with the latest transcript retained; Stop response is primary and posts one exact pause with no send or termination copy.',
-        '- Observed: queued shows the saved message naming the in-scope owner (or the generic another-thread fallback) with Open queue primary; the disclosure exposes persisted queue_position values and Send stays secondary.',
-        '- Observed: paused retains the draft/transcript with Resume queue primary and Send disabled; Resume posts the exact thread and restores ready.',
+        '- Observed: responding (pre-Stop capture against reference 20) shows the partial answer and tool rail with the latest transcript retained; Stop response is primary and posts one exact pause with no send or termination copy; the post-Stop capture is separate transition evidence showing Paused status with Resume queue primary.',
+        '- Observed: queued eligible shows the saved message naming the in-scope owner with Open queue primary and persisted position 2; queued-absent uses the generic another-thread fallback; queued-blocked (delivering head, null follower position) omits the rank with no fabricated zero; Send stays secondary.',
+        '- Observed: paused (queue_paused, no scoped owner) retains the draft/transcript with Resume queue primary and Send disabled; the queue notice reads paused copy without owner attribution and omits the rank for null positions; Resume posts the exact thread and restores ready.',
         '- Observed: uncertain shows the persisted item with duplicate-risk copy; cancelling Discard posts zero mutations and confirming removes exactly that item; Retry posts resend:true only on click.',
-        '- Observed: stalled keeps last-observed ownership facts with Refresh thread primary and Stop only for a confirmed owner; refreshing never infers death from silence.',
+        '- Observed: stalled keeps last-observed ownership facts with Refresh thread primary and Stop only for the confirmed selected owner; selected-owner, scoped-elsewhere-owner (names Discussion two) and no-owner variants are distinct; refreshing never infers death from silence.',
         '- Observed: history-only retains history and Load older with zero composer/Stop/Resume/Prepare controls; other attention kinds keep existing help with Send disabled.',
         '- Recorded deviation: Prepare assignment stays in the detail ActionBar; the reference has no detail action bar.',
         '',

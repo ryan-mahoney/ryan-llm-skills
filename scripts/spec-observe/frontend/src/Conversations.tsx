@@ -746,7 +746,7 @@ export default function Conversations(props: Props) {
   const queue = () => queueSummary(threads() ?? [], thread() ?? null);
   const queuedItems = () => queue().items.filter(item => item.state === 'queued');
   const minimumQueuePosition = () => {
-    const positions = queuedItems().map(item => Number(item.queue_position)).filter(value => Number.isFinite(value));
+    const positions = queuedItems().map(item => item.queue_position).filter(value => value !== null && value !== undefined).map(value => Number(value)).filter(value => Number.isFinite(value));
     return positions.length ? Math.min(...positions) : null;
   };
   // Composer-foot context copy from the reference screens: responding points
@@ -892,10 +892,12 @@ export default function Conversations(props: Props) {
                 <p>{thread()?.owns_response === true ? 'One host response slot in use · This thread owns the response' : 'One host response slot in use · Ownership is not confirmed for this thread'}</p>
               </Show>
               <Show when={state() === 'stalled'}>
-                <p>{thread()?.owns_response === true ? 'Last observed ownership: this thread retains the response slot.' : 'Last observed ownership: no confirmed response owner in this workspace; silence is not proof the response stopped.'}</p>
+                <p>{thread()?.owns_response === true ? 'Last observed ownership: this thread retains the response slot.' : queue().ownerTitle ? `Last observed ownership: ${queue().ownerTitle} owns the response slot; silence is not proof the response stopped.` : 'Last observed ownership: no confirmed response owner in this workspace; silence is not proof the response stopped.'}</p>
               </Show>
               <Show when={queue().waiting}>
-                <p>{queue().ownerTitle ? `Your message is saved; ${queue().ownerTitle} owns the response slot.` : 'Your message is saved. Another thread currently owns the host response slot.'}</p>
+                <Show when={queue().paused} fallback={<p>{queue().ownerTitle ? `Your message is saved; ${queue().ownerTitle} owns the response slot.` : 'Your message is saved. Another thread currently owns the host response slot.'}</p>}>
+                  <p>{`Queue paused · ${queue().waiting} persisted message${queue().waiting === 1 ? '' : 's'} waiting · Nothing is being delivered.`}</p>
+                </Show>
                 <details id="thread-queue-details" ref={el => (queueDetailsEl = el)}>
                   <summary>{`${queue().waiting} queued message${queue().waiting === 1 ? '' : 's'}${minimumQueuePosition() !== null ? ` · position ${minimumQueuePosition()}` : ''}`}</summary>
                   <For each={queuedItems()}>{item => <p class="small thread-text">{item.queue_position != null ? `Position ${item.queue_position} · ` : ''}{item.text || ''}</p>}</For>
