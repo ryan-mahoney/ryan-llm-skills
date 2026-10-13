@@ -3,6 +3,7 @@ import { base, packageFilterMatches, str } from '../format';
 import Files from '../Files';
 import { PackageDetail, PackageList } from '../Observations';
 import { ActionBar, MasterDetail, SectionTabs, type SectionTab } from '../primitives';
+import RelaunchAssignment from '../RelaunchAssignment';
 import PlannedAssignment from '../PlannedAssignment';
 import type { DestinationProps } from './index';
 
@@ -21,6 +22,9 @@ export default function SpecsDestination(props: DestinationProps) {
     return value === 'attention' || value === 'completed' || value === 'planned' ? value : 'active';
   };
   const record = () => props.records.find(item => item.key === props.route.id) ?? null;
+  const priorAssignment = () => props.assignments.filter(item =>
+    item.skill === 'spec-end-to-end' && (item.workspace === record()?.workspace || item.workspace_id === record()?.workspace) && [record()?.package, record()?.package_ref].filter(Boolean).includes(item.spec_package)
+  ).sort((a,b) => (Date.parse(b.created_at || '') || 0) - (Date.parse(a.created_at || '') || 0))[0];
   const visibleCount = () => {
     const query = (props.route.q ?? '').trim().toLowerCase();
     return props.records.filter(item =>
@@ -75,6 +79,11 @@ export default function SpecsDestination(props: DestinationProps) {
         </Show>
         <Show when={record()?.planned !== true}>
           <PackageDetail
+            actions={<Show when={record() && !record()?.planned}>
+          <Show when={priorAssignment()} keyed fallback={<details class="section"><summary>Run spec again</summary><PlannedAssignment record={record()} live={props.live && props.specsLive} token={props.token}/></details>}>
+            {assignment => <RelaunchAssignment assignment={assignment} live={props.live && props.specsLive} token={props.token}/>}
+          </Show>
+        </Show>}
             record={record()}
             records={props.records}
             live={props.specsLive}
@@ -103,7 +112,7 @@ export default function SpecsDestination(props: DestinationProps) {
         {item => (
           <ActionBar>
             <button
-              class={`ds-btn ${item().planned ? '' : 'ds-btn--primary'}`}
+              class="ds-btn"
               type="button"
               disabled={!props.canOpenPackageFiles(item())}
               onClick={() => props.onOpenPackageFiles(item())}

@@ -1,3 +1,5 @@
+import type { JSX } from 'solid-js';
+import RelaunchAssignment from './RelaunchAssignment';
 import SessionPanel from './SessionPanel';
 import { For, Show } from 'solid-js';
 import { PackagePreview } from './PackagePreview';
@@ -81,11 +83,11 @@ function EpicMembers(props: { epic: any; current?: any; records?: any[]; onSelec
   </section>;
 }
 
-export function PackageDetail(props: { record: any; live: boolean; previewToken?: string; completionToken?: string; completionLocalOnly?: boolean; onComplete: () => void; onOpenFile: (name: string) => void; onSelect: (key: string) => void; records: any[] }) {
-  return <Show when={props.record} fallback={<div class="empty"><h2>Select an observed package</h2><p>Choose a package to inspect its obligation, activity, coverage and source paths.</p></div>}><PackageDetailBody record={props.record} live={props.live} previewToken={props.previewToken} completionToken={props.completionToken} completionLocalOnly={props.completionLocalOnly} onComplete={props.onComplete} onOpenFile={props.onOpenFile} onSelect={props.onSelect} records={props.records} /></Show>;
+export function PackageDetail(props: { actions?: JSX.Element; record: any; live: boolean; previewToken?: string; completionToken?: string; completionLocalOnly?: boolean; onComplete: () => void; onOpenFile: (name: string) => void; onSelect: (key: string) => void; records: any[] }) {
+  return <Show when={props.record} fallback={<div class="empty"><h2>Select an observed package</h2><p>Choose a package to inspect its obligation, activity, coverage and source paths.</p></div>}><PackageDetailBody actions={props.actions} record={props.record} live={props.live} previewToken={props.previewToken} completionToken={props.completionToken} completionLocalOnly={props.completionLocalOnly} onComplete={props.onComplete} onOpenFile={props.onOpenFile} onSelect={props.onSelect} records={props.records} /></Show>;
 }
 
-function PackageDetailBody(props: { record: any; live: boolean; previewToken?: string; completionToken?: string; completionLocalOnly?: boolean; onComplete: () => void; onOpenFile: (name: string) => void; onSelect: (key: string) => void; records: any[] }) {
+function PackageDetailBody(props: { actions?: JSX.Element; record: any; live: boolean; previewToken?: string; completionToken?: string; completionLocalOnly?: boolean; onComplete: () => void; onOpenFile: (name: string) => void; onSelect: (key: string) => void; records: any[] }) {
   const record = new Proxy({}, { get: (_target, property: string | symbol) => props.record?.[property] }) as any;
   const r = () => record, o = () => r()?.observer || {}, c = () => r()?.coverage || {}, observed = () => o().snapshot?.coverage?.observed_at;
   const specElapsed = (record: any) => {
@@ -98,6 +100,7 @@ function PackageDetailBody(props: { record: any; live: boolean; previewToken?: s
   const completionHelp = () => props.completionToken ? 'Move this package to Recently completed.' : !props.live ? 'Completion is available on the live dashboard.' : props.completionLocalOnly ? "Mark complete is available on the host's local dashboard." : 'Reconnect to the live dashboard to enable completion.';
   return <article class="detail" data-key={record.key}>
     <div class="eyebrow">{text(record.workspace)} / Spec package</div><div class="detail-title"><div><h2>{base(record.package)}</h2><p class="subtitle mono">{text(record.workflow_id, 'Workflow unknown')} · {text(record.assignment_id, 'Assignment unknown')}</p></div><span class={`pill ${tone(record)}`}>{state(record)}</span></div>
+    {props.actions}
     <PackagePreview package={record.package} live={props.live} token={props.previewToken} />
     <Show when={record.recent_completion}><section class="section activity"><h3>{completionLabel(record)}</h3><p>Completed {time(record.completed_at)} · {age(record.completed_at)}</p><p class="small muted">{record.completion_basis === 'manual' ? 'Marked complete by an operator. Step evidence and PR status remain as recorded.' : record.merge?.state === 'merged' ? 'Merge confirmed from the matching PR and branch head.' : 'Recorded workflow completion; merge status is unknown.'}</p></section></Show>
     <Show when={!record.recent_completion}><Show when={record.is_current_assignment === true}><div class="completion-control"><button type="button" disabled={!props.completionToken} aria-describedby="completion-help" onClick={props.onComplete}>Mark complete</button><p id="completion-help" class="small muted">{completionHelp()}</p></div></Show><Show when={record.execution === 'running' && (record.coverage?.reasons || []).some((v: string) => /^coordinator-gone$|^checkout-unavailable:/.test(v))}><p class="small muted section">The saved run says running, but its coordinator process or checkout is unavailable. Current activity is not confirmed.</p></Show><Progress record={record} detail /></Show>
@@ -149,6 +152,7 @@ export function AgentDetail(props: { assignment: any; records: any[]; token?:str
     const action = () => a().nextAction || a().safeAction || 'No safe action recorded';
     const hold = () => run()?.workflow_state === 'user-held' || list(run()?.conditions).some(c => c.state !== 'resolved' && (c.kind === 'user-held' || c.kind === 'hold-active' || String(c.kind || '').includes('hold')));
     return <article class="detail"><div class="eyebrow">{text(a().workspace, 'observer')} / Agent</div><div class="detail-title"><div><h2 class="mono">{a().assignment_id}</h2><p class="subtitle mono">{a().spec_package || 'No spec package'} · {text(a().workflow_id, 'Workflow unknown')}</p></div><span class={`pill ${assignmentTone(a())}`}>{assignmentLabel(a())}</span></div><p class="small muted section">Safe next action: {action()}</p>
+      <Show when={a().spec_package && a().skill === 'spec-end-to-end'}><RelaunchAssignment assignment={a()} token={props.token} live={props.live}/></Show>
       <SessionPanel assignment={a()} token={props.token} live={props.live} refresh={props.refresh} onEnded={props.onEnded}/>
       <Show when={a().task_activity?.state && a().task_activity.state!=='unknown'}><section class="section"><h3>Response status</h3><p>{a().task_activity.reason}</p><Show when={a().task_activity.finished_at}><p class="small muted">Finished {time(a().task_activity.finished_at)}. A finished response does not certify the proposed work was implemented or accepted.</p></Show><Show when={a().task_activity.last_reply}><details><summary>Last response</summary><pre style={{'white-space':'pre-wrap','overflow-wrap':'anywhere'}}>{a().task_activity.last_reply}</pre></details></Show></section></Show>
       <section class="section"><h3>Execution</h3><div class="rows"><div class="info-row"><p>{assignmentLabel(a())}</p><small>Recorded {text(a().recordedState, 'unknown')} · observed {text(a().observedState, 'unknown')}</small><Show when={a().unrecorded}><small class="warn">The record differs from the observation; reconcile with the explicit locate command.</small></Show></div><For each={list(a().coverageReasons)}>{v => <div class="info-row"><p>{v}</p></div>}</For></div><p class="small muted">Coverage {text(a().coverage, 'complete')} · read-only observation; the record is never rewritten here.</p></section>

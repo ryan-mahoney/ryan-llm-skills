@@ -1,5 +1,6 @@
 // Explicit operator actions. All paths and terminal identities come from the
 // unique durable assignment, never from browser-supplied terminal arguments.
+import {createAssignmentRelaunch} from './relaunch.mjs';
 import {createHash} from 'node:crypto';
 import {hostname,userInfo} from 'node:os';
 import {join} from 'node:path';
@@ -42,5 +43,5 @@ export function createSessionControl({storageRoot,publicHost,transport}={}) {
       return {assignment_id:r.assignment_id,state:'ended'};
     }finally{claim.release();}
   }
-  return {describe,end};
+  return {describe,end,...createAssignmentRelaunch({storageRoot})};
 }

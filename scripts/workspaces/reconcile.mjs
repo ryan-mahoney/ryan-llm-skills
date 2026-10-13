@@ -136,7 +136,7 @@ function deadlinePassed(deadline) {
  * - live -> ended only after confirmed gone; otherwise live.
  * - launch_failed/ended never revive.
  *
- * Gone requires a dead launcher, an absent terminal, a recorded Pi identity
+ * Gone requires a finished launch (or dead launcher), an absent terminal, a recorded Pi identity
  * that is dead or replaced by a reused PID, and — when no Pi identity was
  * recorded — a complete process listing that shows the UUID is absent. With
  * `observations.requireCompleteUuid`, even a dead recorded Pi additionally
@@ -215,7 +215,10 @@ export function classify(record, observations = {}) {
   // always blocks gone, even with an otherwise dead saved identity. Callers
   // that require a complete process listing additionally demand confirmed
   // UUID absence before gone, even for a dead recorded Pi.
-  const gone = launcher.status === "dead"
+  // A completed launch no longer depends on its long-lived host exiting.
+  // Unresolved launch attempts still require confirmed launcher death.
+  const launchFinished = current === "live" || TERMINAL_STATES.has(current) || typeof record.launch_completed_at === "string";
+  const gone = (launcher.status === "dead" || launchFinished)
     && terminal.status === "absent"
     && piAbsent
     && uuidProcesses.status !== "present"
