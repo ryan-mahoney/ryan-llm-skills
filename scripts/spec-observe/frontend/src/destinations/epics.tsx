@@ -1,7 +1,7 @@
 import { For, Show, createEffect, createSignal, onCleanup } from 'solid-js';
-import { EpicDetail } from '../Observations';
 import { EmptyState, MasterDetail, RegionalSkeleton, StateNotice, StatusText } from '../primitives';
 import type { WireRecord } from '../model';
+import { EpicDetail } from './epic-detail';
 import { epicRecordedState, epicViewState, visibleEpics } from './epic-state';
 import { epicStats } from '../observation-format';
 import type { DestinationProps } from './index';
@@ -187,7 +187,7 @@ export default function EpicsDestination(props: DestinationProps) {
         </Show>
         <Show when={read() === 'file' || read() === 'ready'}>
           <Show
-            when={read() === 'ready' && selected()}
+            when={read() === 'ready' ? selected() : null}
             fallback={
               <div class="detail-body">
                 <EmptyState
@@ -200,9 +200,7 @@ export default function EpicsDestination(props: DestinationProps) {
               </div>
             }
           >
-            <div class="detail-body">
-              <EpicDetail epic={selected()} onSelectPackage={props.onSelectPackage} />
-            </div>
+            {epic => <EpicDetail epic={epic()} records={props.records} onSelectPackage={props.onSelectPackage} />}
           </Show>
         </Show>
       </MasterDetail>

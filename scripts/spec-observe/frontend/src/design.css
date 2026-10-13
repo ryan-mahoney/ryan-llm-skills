@@ -129,6 +129,16 @@
 :where(.epics-destination) .text-link{background:none;border:0;border-radius:0;padding:0;color:var(--ds-accent-text);min-height:44px}
 :where(.epics-destination) .record:focus-visible{outline:2px solid var(--ds-accent);outline-offset:-2px}
 
+/* Epic detail member table (screens 03/44): long member slugs wrap inside the
+   scrolling detail region, tbody row headers keep data-cell positioning instead
+   of the sticky column-header layout, and member slug controls keep the 44px
+   hit box with an inset focus ring the scrolling region cannot clip. */
+.epic-members{width:100%}
+.epic-members th,.epic-members td{overflow-wrap:anywhere;min-width:0}
+.epic-members tbody th[scope=row]{position:static;top:auto;background:none;white-space:normal;color:var(--ds-ink-2);font-size:13px;vertical-align:top;padding-top:14px;padding-bottom:14px}
+.epic-members .text-link{display:inline-flex;align-items:center;min-height:44px;max-width:100%;white-space:normal;overflow-wrap:anywhere;text-align:left}
+.epic-members .text-link:focus-visible{outline:2px solid var(--ds-accent);outline-offset:-2px}
+
 /* Production compatibility: table-shaped regional skeletons keep the screen-71
    row geometry instead of the directory-sized stacked skeleton. */
 .skeletons-table{padding:0}
