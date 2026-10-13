@@ -173,6 +173,14 @@
 #completion-dialog .actions{justify-content:flex-end}
 #completion-dialog button:focus-visible{outline:2px solid var(--ds-accent);outline-offset:3px;border-radius:3px}
 
+/* Designs toolbar: the inline action group sits flush inside the flex toolbar
+   like the reference; the shared .actions top margin still applies to
+   standalone action rows. */
+.design-toolbar .actions{margin-top:0}
+/* Boundary buttons keep keyboard focus; aria-disabled carries the unavailable
+   state with the same visuals as a native disabled button. */
+.design-toolbar button[aria-disabled="true"]{cursor:default;color:var(--ds-muted);background:var(--ds-chrome);border-color:var(--ds-line-2)}
+
 /* Launch brief composition reuses the reference textarea.ds-input surface.
    Scoped to the launch form so the still-mounted thread caller keeps its
    own thread-handoff textarea treatment. */
