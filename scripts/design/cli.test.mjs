@@ -26,6 +26,12 @@ test('parseDesign accepts a valid index, derives file names and keeps allowliste
   assert.equal('extra' in design, false);
 });
 
+test('parseDesign accepts numbered design package slugs with a two-digit prefix', () => {
+  assert.equal(parseDesign(record({ design: '01-home-split' }), { slug: '01-home-split' }).error, undefined);
+  assert.match(parseDesign(record({ design: '1-home-split' }), { slug: '1-home-split' }).error ?? '', /valid slug/);
+  assert.match(parseDesign(record({ design: '01-home-split' }), { slug: '02-home-split' }).error ?? '', /does not match directory/);
+});
+
 test('parseDesign accepts the kit-shaped design_system and the legacy absolute form, and rejects malformed ones', () => {
   const parse = design_system => parseDesign(record({ design_system }), { slug: 'demo' });
   assert.deepEqual(parse({ repository: 'cms', paths: ['public/design-system/index.html', 'app/design-system.css'] }).design.design_system,
