@@ -29,7 +29,7 @@ const RECORDED_STATE_LABELS: Record<string, string> = {
 export function epicRecordedState(epic: WireRecord): { label: string; tone: StatusTone; conflict: boolean } {
   const state = text(epic?.state);
   if (!state) return { label: 'Not recorded', tone: 'neutral', conflict: false };
-  const label = RECORDED_STATE_LABELS[state];
+  const label = Object.hasOwn(RECORDED_STATE_LABELS, state) ? RECORDED_STATE_LABELS[state] : undefined;
   if (!label) return { label: state, tone: 'neutral', conflict: false };
   if (state !== 'complete') return { label, tone: 'neutral', conflict: false };
   const { landed, total } = epicStats(epic);
@@ -52,7 +52,7 @@ const MEMBER_STATUSES: Record<string, { label: string; tone: StatusTone }> = {
 export function epicMemberStatus(member: WireRecord): { label: string; tone: StatusTone } {
   const status = text(member?.status);
   if (!status) return { label: 'Not recorded', tone: 'neutral' };
-  const known = MEMBER_STATUSES[status];
+  const known = Object.hasOwn(MEMBER_STATUSES, status) ? MEMBER_STATUSES[status] : undefined;
   if (!known) return { label: status, tone: 'neutral' };
   if (status !== 'in-progress') return known;
   const position = Number.isSafeInteger(member?.step?.position) ? member.step.position : null;
@@ -169,10 +169,7 @@ export function epicDocumentLinks(epic: WireRecord, catalog: CatalogEntry[], pre
       if (!name) return [];
       const declared = text(design?.workspace);
       const idMatch = declared ? entries.find(entry => entry?.id === declared) : undefined;
-      const basenameMatches = declared && !idMatch
-        ? entries.filter(entry => Boolean(text(entry?.directory)) && base(entry.directory) === declared)
-        : [];
-      const entry = idMatch ?? (basenameMatches.length === 1 ? basenameMatches[0] : undefined);
+      const entry = idMatch ?? (declared ? catalogEntryForRecord({ workspace: declared }, 'epic', entries, preferredId) : undefined);
       return [{
         name,
         source: text(design?.path) ?? declared ?? name,

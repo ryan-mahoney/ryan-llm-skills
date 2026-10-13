@@ -219,10 +219,23 @@ test('catalog and path helpers keep the kit boundary and reject escapes', () => 
   assert.equal(ambiguous.designs[0].route, null);
   const preferred = epicDocumentLinks(epic, catalog, 'alpha');
   assert.deepEqual(preferred.plan?.route, { dest: 'files', ws: 'alpha', source: 'workspace', path: 'plans/newui-epic.md' });
+  assert.deepEqual(preferred.designs, [{
+    name: 'app-ui',
+    source: '/store/projects/physical/designs/app-ui',
+    route: { dest: 'designs', ws: 'alpha', id: 'app-ui' },
+  }]);
+  assert.equal(epicDocumentLinks(epic, catalog, 'gamma').designs[0].route, null);
 
   const idMatch = epicDocumentLinks(
     { ...epic, designs: [{ workspace: 'alpha', design: 'app-ui' }] },
     [{ id: 'beta', directory: '/store/projects/physical' }, { id: 'alpha', directory: '/store/projects/other/alpha' }],
   );
   assert.deepEqual(idMatch.designs[0].route, { dest: 'designs', ws: 'alpha', id: 'app-ui' });
+});
+
+test('prototype-name vocabulary stays literal with neutral tone', () => {
+  for (const key of ['__proto__', 'constructor', 'toString'] as const) {
+    assert.deepEqual(epicRecordedState({ state: key }), { label: key, tone: 'neutral', conflict: false });
+    assert.deepEqual(epicMemberStatus({ status: key }), { label: key, tone: 'neutral' });
+  }
 });
