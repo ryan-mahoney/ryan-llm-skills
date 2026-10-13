@@ -213,7 +213,10 @@ if case == 'list':
                 page = open_page(live_state)
                 began = time.monotonic()
                 open_list(page, live_state)
+                expect(page.locator('.records .skeleton')).to_have_count(0)
+                expect(page.locator('.detail-pane .skeleton')).to_have_count(0)
                 page.wait_for_selector('.records .skeleton', state='visible', timeout=5000)
+                page.wait_for_selector('.detail-pane .skeleton', state='visible', timeout=5000)
                 elapsed = time.monotonic() - began
                 assert elapsed >= 0.25, elapsed
                 capture(page, 'loading')
@@ -241,6 +244,8 @@ if case == 'list':
                 page = open_page(live_state)
                 open_list(page, live_state)
                 expect(page.locator('.records .ds-callout')).to_contain_text('Agents could not be read')
+                expect(page.locator('.workspace .ds-btn--primary')).to_have_count(1)
+                expect(page.locator('.detail-pane .ds-btn--primary')).to_have_count(0)
                 expect(page.locator('.list-caption')).not_to_contain_text('0 observed')
                 expect(page.locator('main')).not_to_contain_text('No agents observed')
                 expect(page.locator('[data-assignment-key]')).to_have_count(0)
@@ -260,6 +265,7 @@ if case == 'list':
                 expect(row(page, key_a)).to_have_count(1)
                 expect(page.locator('.records .ds-callout')).to_contain_text('Assignment coverage incomplete')
                 expect(page.locator('.records .ds-callout')).to_contain_text('assignment-read-partial')
+                expect(page.locator('.list-caption')).to_contain_text('(partial)')
                 capture(page, 'partial')
                 report['scenarios'].append(f'partial@{width}: rows stay and the observer assignment-coverage reason is readable')
                 page.close()
@@ -275,6 +281,7 @@ if case == 'list':
                 page.locator('#refresh-button').click()
                 expect(page.locator('.records .ds-callout')).to_contain_text('Connection unavailable')
                 expect(row(page, key_a)).to_have_count(1)
+                expect(page.locator('.list-caption')).to_contain_text('(last-known)')
                 expect(page.locator('main')).not_to_contain_text('No agents observed')
                 capture(page, 'offline')
                 report['scenarios'].append(f'offline@{width}: a failed refresh keeps the known rows and qualifies the last received time')
@@ -290,8 +297,24 @@ if case == 'list':
                 expect(stale_callout).to_contain_text('Last checked at')
                 expect(stale_callout).to_contain_text(page.evaluate('new Date(' + json.dumps(old_at) + ').toLocaleString()'))
                 expect(row(page, key_a)).to_have_count(1)
+                expect(page.locator('.list-caption')).to_contain_text('(last-known)')
                 capture(page, 'stale')
                 report['scenarios'].append(f'stale@{width}: a connected old observation keeps rows and shows the qualified time')
+                page.close()
+
+                # partial-stale: an old partial snapshot keeps both the freshness warning and the coverage reasons.
+                live_state = {'value': envelope([observer([assignment('active-one')], coverage='partial', observed_at=old_at, published_at=old_at)]), 'fail': False, 'delay': 0.0}
+                scenario_name['value'] = 'partial-stale'
+                note('partial-stale', live_state['value'])
+                page = open_page(live_state)
+                open_list(page, live_state)
+                stale_partial_callout = page.locator('.records .ds-callout')
+                expect(stale_partial_callout).to_contain_text('Last checked at')
+                expect(stale_partial_callout).to_contain_text('assignment-read-partial')
+                expect(page.locator('.list-caption')).to_contain_text('(partial, last-known)')
+                expect(row(page, key_a)).to_have_count(1)
+                capture(page, 'partial-stale')
+                report['scenarios'].append(f'partial-stale@{width}: an old partial snapshot keeps the freshness warning with readable coverage reasons')
                 page.close()
 
                 # unavailable: retained rows and selected identity survive with no empty copy or zero counts.

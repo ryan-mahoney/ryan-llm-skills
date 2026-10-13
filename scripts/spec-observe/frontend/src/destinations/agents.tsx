@@ -70,7 +70,13 @@ export default function AgentsDestination(props: DestinationProps) {
     if (sourceUnavailable() || view() === 'error') return `${label()} · counts unavailable`;
     const counts = agentCounts(props.assignments);
     const count = label() === 'Active' ? counts.active : counts.ended;
-    return `${label()} · ${count} observed agent${count === 1 ? '' : 's'}`;
+    const base = `${label()} · ${count} observed agent${count === 1 ? '' : 's'}`;
+    const partial = listPartial();
+    const lastKnown = view() === 'offline' || view() === 'stale';
+    if (partial && lastKnown) return `${base} (partial, last-known)`;
+    if (partial) return `${base} (partial)`;
+    if (lastKnown) return `${base} (last-known)`;
+    return base;
   };
 
   // Loading appears only after a bounded initial delay. A later refresh with
@@ -100,6 +106,12 @@ export default function AgentsDestination(props: DestinationProps) {
       );
     }
     if (props.connectionFailed) {
+      const partialReasons = listPartial() ? coverageReasons(props.payload) : [];
+      const partialSuffix = listPartial()
+        ? partialReasons.length
+          ? ` Partial coverage: ${partialReasons.join(' · ')}`
+          : ' One or more observers returned an incomplete assignment read.'
+        : '';
       return (
         <StateNotice
           tone="warning"
@@ -110,14 +122,20 @@ export default function AgentsDestination(props: DestinationProps) {
             </button>
           }
         >
-          {`Last received at ${time(listObservedAt())}. These records may have changed on the host.`}
+          {`Last received at ${time(listObservedAt())}. These records may have changed on the host.${partialSuffix}`}
         </StateNotice>
       );
     }
     if (view() === 'stale') {
+      const partialReasons = listPartial() ? coverageReasons(props.payload) : [];
+      const partialSuffix = listPartial()
+        ? partialReasons.length
+          ? ` Partial coverage: ${partialReasons.join(' · ')}`
+          : ' One or more observers returned an incomplete assignment read.'
+        : '';
       return (
         <StateNotice tone="warning" title={`Last checked at ${time(listObservedAt())}`}>
-          Existing content is kept while the host revalidates it.
+          {`Existing content is kept while the host revalidates it.${partialSuffix}`}
         </StateNotice>
       );
     }
@@ -286,7 +304,7 @@ export default function AgentsDestination(props: DestinationProps) {
       }
     >
       <div class="detail-body">
-        <Show when={view() === 'loading'}>
+        <Show when={view() === 'loading' && initialDelayElapsed()}>
           <RegionalSkeleton rows={3} label="Loading agents" />
         </Show>
         <Show when={view() !== 'loading' && errorDetail()}>
@@ -294,7 +312,7 @@ export default function AgentsDestination(props: DestinationProps) {
             tone="error"
             title="Agent observation unavailable"
             action={
-              <button type="button" class="ds-btn ds-btn--primary" onClick={props.onRetryConnection}>
+              <button type="button" class="ds-btn" onClick={props.onRetryConnection}>
                 Retry state
               </button>
             }
