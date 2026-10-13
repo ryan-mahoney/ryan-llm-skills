@@ -66,6 +66,7 @@ if(filesFixture){
  const overflowLines=Array.from({length:72},(_,index)=>`Line ${index+1}: independent reader overflow fixture text.`).join('\n');
  await writeFile(join(filesDir,'overview.md'),`# Fixture overview\n\n${overflowLines}\n\n<script>window.__fixtureUnsafe=true</script>\n`);
  await writeFile(join(filesDir,'valid.json'),JSON.stringify({schema_version:1,name:'fixture',items:[1,2,3],nested:{ok:true}},null,2));
+ await writeFile(join(filesDir,'data.json'),JSON.stringify({schema_version:1,kind:'continuity',items:[1,2,3],nested:{stable:true}},null,2));
  await writeFile(join(filesDir,'invalid.json'),'{"broken": [1, 2,\n');
  await writeFile(join(filesDir,'indented.py'),'def fixture(value):\n    if value:\n        return {\n            "value": value,\n        }\n    return None\n\n\nfixture(1)\n');
  const pixel=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==','base64');

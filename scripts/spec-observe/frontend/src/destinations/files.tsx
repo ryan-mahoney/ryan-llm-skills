@@ -3,6 +3,7 @@
 // composes the shared MasterDetail/reader surfaces. No App/route/scope changes.
 import { createEffect, createMemo, createSignal, For, on, onCleanup, Show, untrack } from 'solid-js';
 import { getJson } from '../api';
+import { time } from '../format';
 import {
   contextRoutePath,
   fileKindLabel,
@@ -27,8 +28,32 @@ const textValue = (value: unknown): string => (typeof value === 'string' ? value
 const list = (value: unknown): any[] => (Array.isArray(value) ? value : []);
 const distinct = (values: string[]): string[] => [...new Set(values)];
 
+// Feature-local continuity metadata, deliberately not persisted. It remembers
+// the last selected path, the listing scroll and each path's reader scroll in
+// the [workspace,source,owner] scope key so a source switch or destination
+// return restores where the operator was reading.
+type FilesMemory = {
+  path?: string;
+  listScroll: number;
+  readerScroll: Record<string, number>;
+};
+const filesMemory = new Map<string, FilesMemory>();
+// Multiselect owner memory answers the chooser's workspace+source question.
+const sourceOwnerMemory = new Map<string, string>();
+
+function memoryFor(key: string): FilesMemory {
+  let entry = filesMemory.get(key);
+  if (!entry) {
+    entry = { listScroll: 0, readerScroll: {} };
+    filesMemory.set(key, entry);
+  }
+  return entry;
+}
+
+const ownerMemoryKey = (workspace: string | undefined, source: FileSource): string => `${workspace ?? ''}|${source}`;
+
 export default function FilesDestination(props: DestinationProps) {
-  const source = (): FileSource => fileSource(props.route.source);
+  const source = createMemo((): FileSource => fileSource(props.route.source));
   const suppliedOwner = () => textValue(props.route.id);
   // Declared workspace repositories are the repository owners; observed scoped
   // package paths are the package owners. A single repository is its own owner
@@ -64,10 +89,10 @@ export default function FilesDestination(props: DestinationProps) {
     return { source: current, workspace: props.route.ws };
   };
   const scopeId = createMemo(() => scopeKey(scope()));
-  const requestedPath = () => {
+  const requestedPath = createMemo(() => {
     const path = props.route.path ?? '';
     return path.endsWith('/') ? '' : path;
-  };
+  });
   const pathPrefix = () => {
     const path = props.route.path ?? '';
     return path.endsWith('/') ? path : undefined;
@@ -101,84 +126,222 @@ export default function FilesDestination(props: DestinationProps) {
   const [listError, setListError] = createSignal('');
   const [loadingList, setLoadingList] = createSignal(false);
   const [cursor, setCursor] = createSignal<string | number | undefined>(undefined);
-  const [refreshVersion, setRefreshVersion] = createSignal(0);
-  const [fileVersion, setFileVersion] = createSignal(0);
-  const [query, setQuery] = createSignal('');
+  const [listVersion, setListVersion] = createSignal(0);
+  const [readVersion, setReadVersion] = createSignal(0);
+  const [query, setQuery] = createSignal(props.route.q ?? '');
+  const [announcement, setAnnouncement] = createSignal('');
   const [loaded, setLoaded] = createSignal<LoadedFile | null>(null);
-  const [fileError, setFileError] = createSignal('');
-  const [loadingFile, setLoadingFile] = createSignal(false);
+  const [readError, setReadError] = createSignal('');
+  const [recheckError, setRecheckError] = createSignal('');
+  const [resourceError, setResourceError] = createSignal('');
+  const [pendingRead, setPendingRead] = createSignal(false);
+  const [slowRead, setSlowRead] = createSignal(false);
+  const [resourceReady, setResourceReady] = createSignal(false);
+  const [resourceRetryVersion, setResourceRetryVersion] = createSignal(0);
   let listGeneration = 0;
+  let listController: AbortController | null = null;
   let fileGeneration = 0;
+  let readController: AbortController | null = null;
+  let skeletonTimer: ReturnType<typeof setTimeout> | undefined;
+  let refreshKeySeen = props.refreshKey;
+  let recordsRef: HTMLDivElement | undefined;
+  let readerRef: HTMLDivElement | undefined;
+  let suppressScrollSave = 0;
+  let renderedListKey = '';
+  let renderedReaderKey = '';
+  let renderedReaderPath = '';
+  let listRestoreFrame: number | undefined;
+  let readerRestoreFrame: number | undefined;
+  let listRestoreToken = 0;
+  let readerRestoreToken = 0;
+  let restoreReaderOnPublish = false;
+
+  // Scroll is saved under the identity whose content is actually rendered: an
+  // in-flight route change must never write its clamped scroll into the
+  // incoming scope or path entry.
+  function saveScroll(key: string, path: string) {
+    if (renderedListKey === key && recordsRef) memoryFor(key).listScroll = recordsRef.scrollTop;
+    if (path && renderedReaderKey === key && renderedReaderPath === path && readerRef) {
+      memoryFor(key).readerScroll[path] = readerRef.scrollTop;
+    }
+  }
+  function saveRenderedScroll() {
+    // Unmount safety net: only the identity whose content belongs to the
+    // current route is written, never clamped post-route geometry.
+    if (renderedListKey && renderedListKey === scopeId() && recordsRef) memoryFor(renderedListKey).listScroll = recordsRef.scrollTop;
+    if (renderedReaderKey && renderedReaderKey === scopeId() && renderedReaderPath === requestedPath() && readerRef) {
+      memoryFor(renderedReaderKey).readerScroll[renderedReaderPath] = readerRef.scrollTop;
+    }
+  }
+  const onRecordsScroll = () => {
+    if (suppressScrollSave > 0 || !renderedListKey || !recordsRef) return;
+    memoryFor(renderedListKey).listScroll = recordsRef.scrollTop;
+  };
+  const onReaderScroll = () => {
+    if (suppressScrollSave > 0 || !renderedReaderKey || !renderedReaderPath || !readerRef) return;
+    memoryFor(renderedReaderKey).readerScroll[renderedReaderPath] = readerRef.scrollTop;
+  };
 
   const recentCompletion = () => source() === 'package' && Boolean(props.records.find(item => textValue(item?.package) === owner())?.recent_completion);
   const listNoun = () => (source() === 'package' ? 'Package' : source() === 'repository' ? 'Repository' : 'Workspace');
 
   const fetchListing = async (next?: string | number, refresh = false) => {
     if (!props.live || source() === 'context') return;
-    const url = listFileUrl(scope(), next);
+    const requestedScope = scope();
+    const key = scopeKey(requestedScope);
+    const url = listFileUrl(requestedScope, next);
     if (!url) {
       // Missing owner/workspace is guidance, not a failure: the caller keeps
       // the chooser/empty state and no endpoint is invented.
       setListing(null);
+      renderedListKey = '';
       setListError('');
       return;
     }
+    listController?.abort();
+    const controller = new AbortController();
+    listController = controller;
     const token = ++listGeneration;
     setLoadingList(true);
     setListError('');
     try {
-      const data = await getJson<FileListing>(url);
-      if (token !== listGeneration) return;
+      const data = await getJson<FileListing>(url, controller.signal);
+      if (token !== listGeneration || key !== scopeId()) return;
       const prior = next !== undefined && !refresh ? listing()?.files ?? [] : [];
+      renderedListKey = key;
       setListing({ ...data, files: [...prior, ...(data.files ?? [])] });
       setCursor(data.next_cursor ?? undefined);
     } catch {
-      if (token === listGeneration) setListError(`${listNoun()} files unavailable. Refresh to retry.`);
+      // A failed listing keeps the published rows (including prior append
+      // pages) and only surfaces the regional list error.
+      if (token === listGeneration && !controller.signal.aborted && key === scopeId()) {
+        setListError(`${listNoun()} files unavailable. Refresh to retry.`);
+      }
     } finally {
       if (token === listGeneration) setLoadingList(false);
     }
   };
 
+  const revalidateRead = () => {
+    // Only an explicit failed-resource retry changes the browser-owned
+    // resource URL; healthy same-file rechecks keep the exact src/node.
+    if (resourceError()) setResourceRetryVersion(version => version + 1);
+    setReadError('');
+    setRecheckError('');
+    setResourceError('');
+    setReadVersion(version => version + 1);
+  };
+  const revalidateFiles = () => {
+    saveScroll(scopeId(), requestedPath());
+    if (source() === 'context') props.onRetryWorkspace(String(props.route.ws ?? ''));
+    else setListVersion(version => version + 1);
+    setReadVersion(version => version + 1);
+  };
+
   createEffect(on(scopeId, () => {
-    // The file effect owns its own generation token; bumping it here would
-    // strand an in-flight read as stale after a scope transition.
+    // A scope change owns a fresh listing lifetime; the read effect below
+    // clears its own controller, retained bytes and readiness on the same
+    // identity change.
+    listController?.abort();
     listGeneration++;
     setListing(null);
     setCursor(undefined);
     setListError('');
-    setQuery('');
-    setLoaded(null);
-    setFileError('');
-    setLoadingFile(false);
+    renderedListKey = '';
     untrack(() => { void fetchListing(); });
   }));
-  createEffect(on(refreshVersion, version => {
+  createEffect(on(listVersion, version => {
     if (version > 0) untrack(() => { void fetchListing(undefined, true); });
   }));
+  createEffect(() => {
+    // The App header refresh revalidates the listing and the selected read.
+    const key = props.refreshKey;
+    if (key === refreshKeySeen) return;
+    refreshKeySeen = key;
+    untrack(revalidateFiles);
+  });
+  createEffect(() => {
+    // Remember a valid resolved owner observed in any source-qualified scope
+    // (route, history or chooser) so a later source switch can select it
+    // without a manual chooser step. Authoritative options decide validity:
+    // an explicit unknown owner is never remembered and no other entry is
+    // guessed.
+    const current = source();
+    if (current !== 'repository' && current !== 'package') return;
+    const resolved = owner();
+    if (!resolved) return;
+    const options = current === 'package' ? packageOwners() : repositoryOwners();
+    if (!options.includes(resolved)) return;
+    sourceOwnerMemory.set(ownerMemoryKey(props.route.ws, current), resolved);
+  });
 
-  createEffect(on(() => [scopeId(), requestedPath(), fileVersion()] as const, ([, path]) => {
+  createEffect(on(() => [scopeId(), requestedPath(), readVersion()] as const, ([, requested]) => {
+    // The read owns its controller and generation. The concrete scope and path
+    // are captured before the await so a late response can never publish into
+    // a newer selection, and a same-identity recheck retains the current
+    // object. The outgoing rendered identity's scroll is saved first.
+    const requestedScope = scope();
+    const requestedKey = scopeKey(requestedScope);
     fileGeneration++;
-    if (!path) {
+    const token = fileGeneration;
+    readController?.abort();
+    readController = null;
+    if (skeletonTimer !== undefined) {
+      clearTimeout(skeletonTimer);
+      skeletonTimer = undefined;
+    }
+    setSlowRead(false);
+    setAnnouncement('');
+
+    const prior = untrack(loaded);
+    const sameIdentity = Boolean(requested && prior && prior.scopeKey === requestedKey && prior.path === requested);
+    // A same-identity recheck keeps retained content, so capture its current
+    // position before the refresh. Identity changes were already saved by the
+    // chooser/select and native scroll handlers, never from post-route DOM.
+    if (sameIdentity) saveScroll(requestedKey, requested);
+
+    if (!requested || !props.live) {
       setLoaded(null);
-      setFileError('');
-      setLoadingFile(false);
+      renderedReaderKey = '';
+      renderedReaderPath = '';
+      setReadError('');
+      setRecheckError('');
+      setResourceError('');
+      setPendingRead(false);
+      setResourceReady(false);
       return;
     }
-    if (!props.live) {
-      setLoaded(null);
-      setFileError('');
-      return;
-    }
-    const url = readFileUrl(scope(), path);
+    const url = readFileUrl(requestedScope, requested);
     if (!url) {
       setLoaded(null);
-      setFileError('File unavailable. Choose another file.');
+      renderedReaderKey = '';
+      renderedReaderPath = '';
+      setReadError('File unavailable. Choose another file.');
+      setRecheckError('');
+      setResourceError('');
+      setPendingRead(false);
+      setResourceReady(false);
       return;
     }
-    const token = fileGeneration;
+    setReadError('');
+    setRecheckError('');
+    setResourceError('');
+    if (!sameIdentity) {
+      // A changed identity clears old bytes immediately; the 300 ms skeleton
+      // timer runs only for this first load, never for a retained recheck.
+      setLoaded(null);
+      renderedReaderKey = '';
+      renderedReaderPath = '';
+      setResourceReady(false);
+      skeletonTimer = setTimeout(() => {
+        skeletonTimer = undefined;
+        if (token === fileGeneration) setSlowRead(true);
+      }, 300);
+    }
+    setPendingRead(true);
+
     const controller = new AbortController();
-    setLoadingFile(true);
-    setFileError('');
+    readController = controller;
     void (async () => {
       try {
         const response = await fetch(url, { cache: 'no-store', signal: controller.signal });
@@ -186,24 +349,119 @@ export default function FilesDestination(props: DestinationProps) {
         const kind = response.headers.get('X-Package-File-Kind') || 'text';
         const type = response.headers.get('Content-Type') || '';
         const text = kind === 'text' || kind === 'markdown' || kind === 'json' ? await response.text() : null;
-        const headerLength = Number(response.headers.get('Content-Length'));
         if (token !== fileGeneration) return;
+        const headerLength = Number(response.headers.get('Content-Length'));
+        renderedReaderKey = requestedKey;
+        renderedReaderPath = requested;
+        restoreReaderOnPublish = !sameIdentity;
         setLoaded({
-          scopeKey: scopeKey(scope()),
-          path,
+          scopeKey: requestedKey,
+          path: requested,
           kind,
           text,
           type,
           size: Number.isFinite(headerLength) ? headerLength : 0,
           receivedAt: Date.now(),
         });
+        memoryFor(requestedKey).path = requested;
+        const resourceKind = kind === 'image' || kind === 'html';
+        if (resourceKind) {
+          // A same-identity same-kind recheck keeps the exact image/iframe
+          // node and src, so no new load fires: retain the actual prior state
+          // instead of disabling Download forever.
+          setResourceReady(sameIdentity && prior?.kind === kind ? untrack(resourceReady) : false);
+        } else {
+          setResourceReady(true);
+        }
+        setAnnouncement(`Read ${requested}`);
       } catch {
-        if (token === fileGeneration && !controller.signal.aborted) setFileError('File unavailable or exceeds the 8 MiB limit. Choose another file.');
+        if (token === fileGeneration && !controller.signal.aborted) {
+          if (sameIdentity) setRecheckError('The file could not be rechecked. The last received copy is still shown.');
+          else setReadError('File unavailable or exceeds the 8 MiB limit. Choose another file.');
+        }
       } finally {
-        if (token === fileGeneration) setLoadingFile(false);
+        if (token === fileGeneration) {
+          setPendingRead(false);
+          setSlowRead(false);
+          if (skeletonTimer !== undefined) {
+            clearTimeout(skeletonTimer);
+            skeletonTimer = undefined;
+          }
+        }
       }
     })();
-    onCleanup(() => controller.abort());
+    onCleanup(() => {
+      controller.abort();
+      if (skeletonTimer !== undefined) {
+        clearTimeout(skeletonTimer);
+        skeletonTimer = undefined;
+      }
+    });
+  }));
+
+  onCleanup(() => {
+    if (listRestoreFrame !== undefined) cancelAnimationFrame(listRestoreFrame);
+    if (readerRestoreFrame !== undefined) cancelAnimationFrame(readerRestoreFrame);
+    saveRenderedScroll();
+    listController?.abort();
+    readController?.abort();
+  });
+
+  createEffect(() => {
+    // The route owns the filter value; local typing only mirrors it and never
+    // refetches a listing or a read.
+    const value = props.route.q ?? '';
+    setQuery(current => (current === value ? current : value));
+  });
+  // Context rows render from the workspace detail, not a listing response.
+  const listRendered = () => (source() === 'context' ? (props.workspace ? contextFiles() : null) : listing());
+  createEffect(on(() => [scopeId(), listRendered()] as const, ([key, rendered]) => {
+    // Any dependency change cancels a scheduled restore frame.
+    const token = ++listRestoreToken;
+    if (listRestoreFrame !== undefined) {
+      cancelAnimationFrame(listRestoreFrame);
+      listRestoreFrame = undefined;
+    }
+    if (!rendered) return;
+    listRestoreFrame = requestAnimationFrame(() => {
+      listRestoreFrame = undefined;
+      // The captured identity must still be the current rendering target.
+      if (token !== listRestoreToken || !recordsRef) return;
+      if (untrack(scopeId) !== key) return;
+      const target = filesMemory.get(key)?.listScroll;
+      if (target == null) return;
+      renderedListKey = key;
+      suppressScrollSave += 1;
+      recordsRef.scrollTop = target;
+      requestAnimationFrame(() => { suppressScrollSave = Math.max(0, suppressScrollSave - 1); });
+    });
+  }));
+  createEffect(on(() => [scopeId(), requestedPath(), loaded()] as const, ([key, path, file]) => {
+    // Any identity change (including pending/null) cancels a scheduled frame.
+    const token = ++readerRestoreToken;
+    if (readerRestoreFrame !== undefined) {
+      cancelAnimationFrame(readerRestoreFrame);
+      readerRestoreFrame = undefined;
+    }
+    // Only a fresh identity restore consumes memory. A same-identity recheck
+    // republishes while the content stays visible, so keep the current scroll.
+    if (!file || file.scopeKey !== key || file.path !== path) return;
+    if (!restoreReaderOnPublish) return;
+    restoreReaderOnPublish = false;
+    readerRestoreFrame = requestAnimationFrame(() => {
+      readerRestoreFrame = undefined;
+      if (token !== readerRestoreToken || !readerRef) return;
+      const current = untrack(loaded);
+      if (untrack(scopeId) !== key || untrack(requestedPath) !== path) return;
+      if (!current || current.scopeKey !== key || current.path !== path) return;
+      const target = filesMemory.get(key)?.readerScroll?.[path];
+      if (target == null) return;
+      renderedReaderKey = key;
+      renderedReaderPath = path;
+      suppressScrollSave += 1;
+      readerRef.scrollTop = target;
+      requestAnimationFrame(() => { suppressScrollSave = Math.max(0, suppressScrollSave - 1); });
+    });
   }));
 
   const listingReady = () => (source() === 'context' ? Boolean(props.workspace) : listing() !== null);
@@ -211,19 +469,46 @@ export default function FilesDestination(props: DestinationProps) {
   const contextError = () => (source() === 'context' && !props.workspace ? props.workspaceError : '');
   const listMessage = () => listError() || contextError();
   const listedSize = (path: string) => (listing()?.files ?? []).find(entry => entry.name === path)?.size;
+  const currentLoaded = () => {
+    const file = loaded();
+    const path = requestedPath();
+    return Boolean(file && path && file.scopeKey === scopeId() && file.path === path);
+  };
   const readerFile = (): LoadedFile | null => {
     const file = loaded();
-    if (!file || file.size > 0) return file;
+    const path = requestedPath();
+    if (!file || !path || file.scopeKey !== scopeId() || file.path !== path) return null;
+    if (file.size > 0) return file;
     const size = listedSize(file.path);
     return size == null ? file : { ...file, size };
   };
+  const rechecking = () => pendingRead() && currentLoaded();
+  const firstLoading = () => pendingRead() && !currentLoaded();
+  const readNotice = () => recheckError() || readError() || resourceError();
+  const noticeTitle = () => (recheckError() ? 'File could not be rechecked' : readError() ? 'File could not be read' : 'File could not be displayed');
+  const noticeText = () => (recheckError()
+    ? `${recheckError()} Last received at ${currentLoaded() ? time(loaded()!.receivedAt) : 'an earlier read'}.`
+    : readError() || resourceError());
   const visible = () => filterLoadedFiles(source() === 'context' ? contextFiles() : listing()?.files ?? [], query(), pathPrefix());
   const selected = (name: string) => requestedPath() === name;
-  const selectFile = (name: string) => { if (name !== requestedPath()) props.onOpenFile(name); };
+  const selectFile = (name: string) => {
+    if (name === requestedPath()) return;
+    saveScroll(scopeId(), requestedPath());
+    memoryFor(scopeId()).path = name;
+    props.onOpenFile(name);
+  };
   const readUrl = () => (requestedPath() ? readFileUrl(scope(), requestedPath()) : null);
   const downloadUrl = () => (requestedPath() ? readFileUrl(scope(), requestedPath(), true) : null);
   const viewUrl = () => (source() === 'package' && requestedPath() && owner() ? packageViewUrl(owner(), requestedPath()) : '');
-  const downloadable = () => Boolean(loaded() && loaded()!.kind !== 'download' && downloadUrl());
+  const downloadEnabled = () => Boolean(downloadUrl())
+    && currentLoaded()
+    && !pendingRead()
+    && !readError()
+    && !recheckError()
+    && !resourceError()
+    && !props.connectionFailed
+    && resourceReady();
+  const headDownloadVisible = () => Boolean(requestedPath()) && loaded()?.kind !== 'download';
   const checkoutIdentity = () => {
     const checkout = listing()?.checkout;
     const repository = checkout ? textValue(checkout.repository) : '';
@@ -260,21 +545,47 @@ export default function FilesDestination(props: DestinationProps) {
     props.onNavigate(next);
   };
 
+  // Concrete scope for a chooser target that has not become the route yet.
+  const targetScope = (sourceValue: FileSource, ownerValue: string): FileScope => {
+    if (sourceValue === 'package') return { source: sourceValue, owner: ownerValue, workspace: props.route.ws };
+    if (sourceValue === 'repository') return { source: sourceValue, workspace: props.route.ws, owner: ownerValue };
+    return { source: sourceValue, workspace: props.route.ws };
+  };
+  const explicitlyRememberedOwner = (sourceValue: FileSource): string => {
+    if (sourceValue !== 'package' && sourceValue !== 'repository') return '';
+    const remembered = sourceOwnerMemory.get(ownerMemoryKey(props.route.ws, sourceValue)) ?? '';
+    const options = sourceValue === 'package' ? packageOwners() : repositoryOwners();
+    return remembered && options.includes(remembered) ? remembered : '';
+  };
+  const rememberedPath = (sourceValue: FileSource, ownerValue: string): string =>
+    filesMemory.get(scopeKey(targetScope(sourceValue, ownerValue)))?.path ?? '';
+
   const changeSource = (event: Event & { currentTarget: HTMLSelectElement }) => {
     const next = fileSource(event.currentTarget.value);
     if (next === source()) return;
-    // A source change keeps only the scope workspace; owner, path and filter
-    // belong to the previous source identity and are dropped deliberately.
+    // A source change is a user transition: the target route carries the
+    // remembered owner and last selected path for that scope. An external or
+    // history route never triggers this navigation itself.
+    saveScroll(scopeId(), requestedPath());
     const route: DestinationProps['route'] = { dest: 'files' };
     if (props.route.ws !== undefined) route.ws = props.route.ws;
     if (next !== 'workspace') route.source = next;
+    const explicitOwner = explicitlyRememberedOwner(next);
+    if (explicitOwner) route.id = explicitOwner;
+    const ownerValue = explicitOwner || (next === 'repository' && repositoryOwners().length === 1 ? repositoryOwners()[0] : '');
+    const nextPath = rememberedPath(next, ownerValue);
+    if (nextPath) route.path = nextPath;
     props.onNavigate(route);
   };
   const changeOwner = (event: Event & { currentTarget: HTMLSelectElement }) => {
     const id = event.currentTarget.value;
     if (!id || id === owner()) return;
+    saveScroll(scopeId(), requestedPath());
+    sourceOwnerMemory.set(ownerMemoryKey(props.route.ws, source()), id);
     const route: DestinationProps['route'] = { dest: 'files', source: source(), id };
     if (props.route.ws !== undefined) route.ws = props.route.ws;
+    const nextPath = rememberedPath(source(), id);
+    if (nextPath) route.path = nextPath;
     props.onNavigate(route);
   };
 
@@ -298,11 +609,6 @@ export default function FilesDestination(props: DestinationProps) {
     if (source() === 'workspace' && !props.route.ws) return 'Choose a workspace to list files.';
     return pathPrefix() ? `The listing has no loaded filenames under ${pathPrefix()} yet.` : 'The directory has no readable files, or the listing could not complete.';
   };
-  const refreshList = () => {
-    if (source() === 'context') props.onRetryWorkspace(String(props.route.ws ?? ''));
-    else setRefreshVersion(version => version + 1);
-  };
-
   const caption = () => {
     if (!props.live) return '';
     if (source() === 'context' ? contextLoading() : !listing() && loadingList()) return 'Reading files…';
@@ -344,11 +650,11 @@ export default function FilesDestination(props: DestinationProps) {
               type="search"
               placeholder="Filter loaded filenames"
               value={query()}
-              onInput={event => setQuery(event.currentTarget.value)}
+              onInput={event => { setQuery(event.currentTarget.value); props.onQuery(event.currentTarget.value); }}
             />
           </div>
           <div class="list-caption">{caption()}</div>
-          <div class="records">
+          <div class="records" ref={recordsRef} onScroll={onRecordsScroll}>
             <Show when={!props.live}>
               <StateNotice announce={false} tone="warning" title="A live dashboard is required">
                 Workspace, context, spec package and repository files are read from the local dashboard server. Import a published snapshot to inspect other data.
@@ -360,7 +666,7 @@ export default function FilesDestination(props: DestinationProps) {
                   announce={false}
                   tone="error"
                   title="Files could not be listed"
-                  action={<button type="button" class="ds-btn" onClick={refreshList}>Retry listing</button>}
+                  action={<button type="button" class="ds-btn" onClick={revalidateFiles}>Retry listing</button>}
                 >
                   {listMessage()}
                 </StateNotice>
@@ -368,7 +674,7 @@ export default function FilesDestination(props: DestinationProps) {
               <Show when={!listMessage() && !listingReady() && (loadingList() || contextLoading())}>
                 <RegionalSkeleton announce={false} rows={5} label="Loading files" />
               </Show>
-              <Show when={!listMessage() && listingReady()}>
+              <Show when={listingReady()}>
                 <Show
                   when={visible().length > 0}
                   fallback={<EmptyState
@@ -421,7 +727,7 @@ export default function FilesDestination(props: DestinationProps) {
             </Show>
           </div>
           <div class="detail-foot">
-            <button type="button" class="ds-btn" disabled={!props.live || loadingList()} onClick={refreshList}>
+            <button type="button" class="ds-btn" disabled={!props.live || loadingList()} onClick={revalidateFiles}>
               Refresh files
             </button>
           </div>
@@ -433,15 +739,24 @@ export default function FilesDestination(props: DestinationProps) {
             <p>{sourceLine()}</p>
           </div>
           <div class="reader-actions">
-            <Show when={downloadable()}>
-              <a class="ds-btn ds-btn--primary" href={downloadUrl() ?? ''} download="">Download file</a>
+            <Show when={headDownloadVisible()}>
+              <Show
+                when={downloadEnabled()}
+                fallback={<button type="button" class="ds-btn ds-btn--primary" disabled>Download file</button>}
+              >
+                <a class="ds-btn ds-btn--primary" href={downloadUrl() ?? ''} download="">Download file</a>
+              </Show>
+            </Show>
+            <Show when={Boolean(requestedPath())}>
+              <button type="button" class="ds-btn" disabled={!props.live || pendingRead()} onClick={revalidateRead}>Refresh file</button>
             </Show>
             <Show when={openSpecTarget()}>
               <button type="button" class="ds-btn" onClick={openSpec}>Open spec</button>
             </Show>
           </div>
         </header>
-        <div class="reader" aria-live="polite">
+        <div class="reader" ref={readerRef} onScroll={onReaderScroll}>
+          <p class="sr-only" role="status">{announcement()}</p>
           <Show when={!props.live}>
             <StateNotice announce={false} tone="warning" title="Files require a live dashboard server">
               The selected file is read from the local dashboard server. Retry after it is available.
@@ -459,32 +774,72 @@ export default function FilesDestination(props: DestinationProps) {
                 </Show>
               }
             >
-              <Show when={fileError()}>
+              <Show when={props.connectionFailed}>
                 <StateNotice
-                  announce={false}
-                  tone="error"
-                  title="File could not be read"
-                  action={<button type="button" class="ds-btn" onClick={() => setFileVersion(version => version + 1)}>Retry file</button>}
+                  tone="warning"
+                  title="Reading a retained copy"
+                  action={<button type="button" class="ds-btn" onClick={props.onRetryConnection}>Retry connection</button>}
                 >
-                  {fileError()}
+                  {currentLoaded()
+                    ? `Last received at ${time(loaded()!.receivedAt)}. A fresh download is unavailable while disconnected.`
+                    : 'The dashboard connection failed. Retry the connection to read this file.'}
                 </StateNotice>
               </Show>
-              <Show when={!fileError() && loadingFile() && !loaded()}>
+              <Show when={firstLoading()}>
+                <p class="muted" role="status">Reading {requestedPath()}…</p>
+              </Show>
+              <Show when={rechecking()}>
+                <StateNotice
+                  tone="info"
+                  title="Rechecking this file"
+                  action={<button type="button" class="ds-btn" onClick={revalidateRead}>Refresh file</button>}
+                >
+                  The existing document stays visible until its latest content can be read.
+                </StateNotice>
+              </Show>
+              <Show when={readNotice()}>
+                <StateNotice
+                  tone="error"
+                  title={noticeTitle()}
+                  action={<button type="button" class="ds-btn" onClick={revalidateRead}>Retry file</button>}
+                >
+                  {noticeText()}
+                </StateNotice>
+              </Show>
+              <Show when={firstLoading() && slowRead()}>
                 <RegionalSkeleton announce={false} rows={6} label="Loading file" />
               </Show>
-              <Show when={!fileError() && readerFile()}>{file => (
-                <FileReader
-                  file={file()}
-                  source={source()}
-                  owner={owner()}
-                  readUrl={readUrl() ?? ''}
-                  downloadUrl={downloadUrl() ?? ''}
-                  viewUrl={viewUrl()}
-                />
-              )}</Show>
+              <Show when={readerFile()}>{file => {
+                // Readiness callbacks belong to the mounted selection, not to
+                // an object identity: a size-fallback clone must not disable
+                // the current selection's resource state.
+                const mountedScope = untrack(scopeId);
+                const mountedPath = untrack(requestedPath);
+                const stillSelected = () => untrack(scopeId) === mountedScope && untrack(requestedPath) === mountedPath;
+                return (
+                  <FileReader
+                    file={file()}
+                    source={source()}
+                    owner={owner()}
+                    readUrl={readUrl() ?? ''}
+                    downloadUrl={downloadUrl() ?? ''}
+                    viewUrl={viewUrl()}
+                    offline={props.connectionFailed}
+                    downloadEnabled={downloadEnabled()}
+                    resourceRetryVersion={resourceRetryVersion()}
+                    onResourceReady={() => { if (stillSelected()) setResourceReady(true); }}
+                    onResourceError={message => { if (stillSelected()) { setResourceReady(false); setResourceError(message); } }}
+                  />
+                );
+              }}</Show>
             </Show>
           </Show>
         </div>
+        <Show when={props.live && currentLoaded()}>
+          <footer class="detail-foot">
+            {sourceLine()} · {time(loaded()!.receivedAt)} last received{props.connectionFailed ? ' · disconnected' : ''}
+          </footer>
+        </Show>
       </MasterDetail>
     </div>
   );

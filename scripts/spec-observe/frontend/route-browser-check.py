@@ -6,12 +6,15 @@
 
 After npm run build --prefix scripts/spec-observe/frontend:
 SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 120s uv run --script \
-  scripts/spec-observe/frontend/route-browser-check.py [--case rail|files|specs|context|catalog|member|search|filters|specs-list|specs-overview|specs-variants|specs-activity|specs-relaunch|files-workspace|files-sources]
+  scripts/spec-observe/frontend/route-browser-check.py [--case rail|files|specs|context|catalog|member|search|filters|specs-list|specs-overview|specs-variants|specs-activity|specs-relaunch|files-workspace|files-sources|files-continuity]
 Only the fixture substitutes workers; App, adapters and file APIs are real.
 """
 import argparse
+import datetime
+import hashlib
 import json
 import os
+import re
 import select
 import shutil
 import subprocess
@@ -23,7 +26,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 args = argparse.ArgumentParser()
-args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog', 'member', 'search', 'filters', 'specs-list', 'specs-overview', 'specs-variants', 'specs-activity', 'specs-relaunch', 'files-workspace', 'files-sources'])
+args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog', 'member', 'search', 'filters', 'specs-list', 'specs-overview', 'specs-variants', 'specs-activity', 'specs-relaunch', 'files-workspace', 'files-sources', 'files-continuity'])
 case = args.parse_args().case
 root = Path(__file__).resolve().parent
 evidence = Path(os.environ.get('SENTINEL_EVIDENCE_DIR', '/tmp/sentinel-route-evidence'))
@@ -33,7 +36,7 @@ report = {'status': 'failed', 'scenarios': [], 'pageErrors': []}
 fixture_env = dict(os.environ)
 if case == 'context':
     fixture_env['SENTINEL_NONCANONICAL_CONTEXT'] = '1'
-if case in ('files-workspace', 'files-sources'):
+if case in ('files-workspace', 'files-sources', 'files-continuity'):
     fixture_env['SENTINEL_REPOSITORY_FILES'] = '1'
 fixture = subprocess.Popen(['node', str(root / 'browser-fixture.mjs')], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=fixture_env)
 try:
@@ -99,10 +102,14 @@ try:
             assert abs(metrics['list']['y'] - metrics['detail']['y']) < 1, (label, metrics)
             assert metrics['records']['scrollHeight'] > metrics['records']['clientHeight'], (label, metrics)
             assert metrics['reader']['scrollHeight'] > metrics['reader']['clientHeight'], (label, metrics)
+            # Files continuity memory may have restored a reader position; the
+            # list-only scroll must leave that observed position untouched
+            # instead of assuming a specific zero.
+            initial_reader_position = metrics['reader']['scrollTop']
             page.eval_on_selector('.files-destination .records', 'el => { el.scrollTop = el.scrollHeight; }')
             records_position = page.eval_on_selector('.files-destination .records', 'el => el.scrollTop')
             assert records_position > 0, (label, metrics)
-            assert page.eval_on_selector('.files-destination .reader', 'el => el.scrollTop') == 0, (label, metrics)
+            assert page.eval_on_selector('.files-destination .reader', 'el => el.scrollTop') == initial_reader_position, (label, metrics)
             page.eval_on_selector('.files-destination .reader', 'el => { el.scrollTop = el.scrollHeight; }')
             assert page.eval_on_selector('.files-destination .reader', 'el => el.scrollTop') > 0, (label, metrics)
             assert page.eval_on_selector('.files-destination .records', 'el => el.scrollTop') == records_position, (label, metrics)
@@ -368,10 +375,14 @@ try:
             assert view_response.ok and 'sandbox allow-scripts' in view_csp and 'allow-same-origin' not in view_csp, view_csp
             report['scenarios'].append('Package HTML uses packageViewUrl in a sandboxed frame without allow-same-origin and keeps the server CSP')
 
+            # Fresh document loaded the package sandbox; no workspace memory
+            # survives the earlier reload/goto, so the chooser remains
+            # unselected and the workspace source opens without a path.
             page.locator('#file-source').select_option('workspace')
             expect(page.locator('#file-source')).to_have_value('workspace')
             expect(page.locator('.files-destination .reader-head h2')).to_have_text('Files')
             assert files_params().get('source') is None, page.url
+            assert files_params().get('path') is None, page.url
             expect(page.locator('.files-destination button.file-record', has_text='briefs/browser.md')).to_have_count(1)
             page.locator('#file-source').select_option('package')
             expect(page.locator('#file-source')).to_have_value('package')
@@ -557,6 +568,538 @@ try:
             files_viewer('spec.md', 'Browser specification')
             page.screenshot(path=str(evidence / 'files-17-1600.png'))
             report['scenarios'].append('Context, Repository and package sources keep row/reader agreement at 1600x900')
+
+        if case == 'files-continuity':
+            # Real built Files destination. Every request crosses the real
+            # server and APIs; only the final HTTP response is held, failed,
+            # corrupted or transformed at the browser boundary. Captures reuse
+            # the same held journey states at both widths.
+            open_route('files', ws='fixture', path='files/overview.md')
+            files_viewer('files/overview.md', 'Fixture overview')
+
+            gate = {
+                'reads': {'hold': set(), 'fail': set(), 'corrupt': set(), 'transform': {}, 'held': [], 'counts': {}},
+                'listings': {'hold': set(), 'held': [], 'append': False},
+            }
+
+            def held_http(route):
+                split = urlsplit(route.request.url)
+                parsed = parse_qs(split.query)
+                if split.path == '/api/workspace-file':
+                    file = (parsed.get('file') or [''])[0]
+                    gate['reads']['counts'][file] = gate['reads']['counts'].get(file, 0) + 1
+                    if file in gate['reads']['corrupt']:
+                        route.fulfill(status=200, content_type='image/png', headers={'X-Package-File-Kind': 'image'}, body='not an image')
+                        return
+                    if file in gate['reads']['fail']:
+                        route.fulfill(status=503, content_type='application/json', body='{"error":"fixture-file-failure"}')
+                        return
+                    if file in gate['reads']['transform']:
+                        response = route.fetch()
+                        payload = response.json()
+                        payload.update(gate['reads']['transform'][file])
+                        route.fulfill(response=response, json=payload)
+                        return
+                    if file in gate['reads']['hold']:
+                        response = route.fetch()
+                        gate['reads']['held'].append((file, route, response))
+                        return
+                    route.continue_()
+                    return
+                if split.path in ('/api/workspace-files', '/api/repository-files', '/api/package-files'):
+                    name = split.path.rsplit('/', 1)[-1]
+                    if gate['listings']['append'] and split.path == '/api/workspace-files':
+                        if (parsed.get('cursor') or [''])[0]:
+                            route.fulfill(status=503, content_type='application/json', body='{"error":"fixture-append-failure"}')
+                            return
+                        response = route.fetch()
+                        payload = response.json()
+                        payload['next_cursor'] = 'fixture-page-2'
+                        route.fulfill(response=response, json=payload)
+                        return
+                    if name in gate['listings']['hold']:
+                        response = route.fetch()
+                        gate['listings']['held'].append((name, route, response))
+                        return
+                    route.continue_()
+                    return
+                route.continue_()
+
+            page.route('**/api/**', held_http)
+
+            def wait_held(container, label):
+                deadline = time.monotonic() + 5
+                while not container and time.monotonic() < deadline:
+                    page.wait_for_timeout(20)
+                assert container, label
+
+            def release_reads(*files):
+                remaining = []
+                for held_file, route, response in gate['reads']['held']:
+                    if not files or held_file in files:
+                        try:
+                            route.fulfill(response=response)
+                        except Exception:
+                            pass
+                    else:
+                        remaining.append((held_file, route, response))
+                gate['reads']['held'] = remaining
+
+            def fail_reads(*files):
+                remaining = []
+                for held_file, route, response in gate['reads']['held']:
+                    if not files or held_file in files:
+                        try:
+                            route.fulfill(status=503, content_type='application/json', body='{"error":"fixture-file-failure"}')
+                        except Exception:
+                            pass
+                    else:
+                        remaining.append((held_file, route, response))
+                gate['reads']['held'] = remaining
+
+            def release_listings(*names):
+                remaining = []
+                for held_name, route, response in gate['listings']['held']:
+                    if not names or held_name in names:
+                        try:
+                            route.fulfill(response=response)
+                        except Exception:
+                            pass
+                    else:
+                        remaining.append((held_name, route, response))
+                gate['listings']['held'] = remaining
+
+            def focused_row_name():
+                return page.evaluate("""() => {
+                    const el = document.activeElement;
+                    if (!el || !el.classList || !el.classList.contains('file-record')) return null;
+                    const strong = el.querySelector('strong');
+                    return strong ? strong.textContent : null;
+                }""")
+
+            def refresh_file():
+                page.locator('.files-destination .ds-btn').filter(has_text=re.compile(r'^Refresh file$')).first.click()
+
+            def assert_memory_scroll(records_target, reader_target, label):
+                deadline = time.monotonic() + 3
+                state = {}
+                while time.monotonic() < deadline:
+                    state = page.evaluate("""() => {
+                        const records = document.querySelector('.files-destination .records');
+                        const reader = document.querySelector('.files-destination .reader');
+                        const selected = document.querySelector('.files-destination button.file-record[aria-pressed="true"] strong');
+                        const params = new URLSearchParams(location.hash.split('?')[1] || '');
+                        return {
+                            records: records ? {scrollTop: records.scrollTop, clientHeight: records.clientHeight, scrollHeight: records.scrollHeight} : null,
+                            reader: reader ? {scrollTop: reader.scrollTop, clientHeight: reader.clientHeight, scrollHeight: reader.scrollHeight} : null,
+                            selected: selected ? selected.textContent : null,
+                            path: params.get('path'),
+                        };
+                    }""")
+                    if (state['records'] or {}).get('scrollTop') == records_target and (state['reader'] or {}).get('scrollTop') == reader_target:
+                        return
+                    page.wait_for_timeout(50)
+                page.screenshot(path=str(evidence / 'files-continuity-memory-failure.png'))
+                assert False, (label, state)
+
+            # (1) Slow first read with a controlled clock for the exact 300 ms
+            # threshold, capture 62, completion and same-file revalidation.
+            gate['reads']['hold'].add('files/data.json')
+            # The clock is installed and paused only around the threshold; the
+            # held final HTTP response cannot complete on its own.
+            page.clock.install()
+            page.clock.pause_at(datetime.datetime.now() + datetime.timedelta(seconds=1))
+            row = files_row('files/data.json')
+            expect(row).to_have_count(1)
+            row.focus()
+            page.keyboard.press('Enter')
+            expect(page.locator('.files-destination .reader').get_by_text('Reading files/data.json').first).to_be_visible(timeout=250)
+            files_viewer('files/data.json', 'Reading files/data.json')
+            assert focused_row_name() == 'files/data.json', 'selection moved focus out of the file list'
+            polite = page.evaluate("""() => {
+                const reader = document.querySelector('.files-destination .reader');
+                if (!reader || !(reader.textContent || '').includes('Reading files/data.json')) return null;
+                const local = reader.getAttribute('aria-live') || (reader.getAttribute('role') === 'status' ? 'polite' : null);
+                if (local) return local;
+                const announcing = [...reader.querySelectorAll('[role="status"], [aria-live]')].find(node => (node.textContent || '').includes('Reading files/data.json'));
+                return announcing ? (announcing.getAttribute('aria-live') || (announcing.getAttribute('role') === 'status' ? 'polite' : null)) : null;
+            }""")
+            assert polite == 'polite', polite
+            expect(page.locator('.files-destination').get_by_role('button', name='Download file', exact=True).first).to_be_disabled()
+            report['scenarios'].append('Keyboard selection keeps the focused row and politely announces Reading files/data.json with Download disabled')
+
+            assert page.locator('.files-destination .reader .skeletons').count() == 0, 'reader skeleton rendered before the 300 ms threshold'
+            page.clock.run_for(299)
+            assert page.locator('.files-destination .reader .skeletons').count() == 0, 'reader skeleton rendered before 300 ms'
+            page.clock.run_for(1)
+            expect(page.locator('.files-destination .reader .skeletons')).to_be_visible(timeout=1000)
+            assert page.locator('.files-destination .reader .skeletons').count() == 1
+            assert page.locator('.files-destination .records .skeletons').count() == 0
+            page.clock.resume()
+            report['scenarios'].append('A controlled clock shows no skeleton through 299 ms and the reader-only skeleton at 300 ms')
+            page.screenshot(path=str(evidence / 'files-62-1280.png'))
+            page.set_viewport_size({'width': 1600, 'height': 900})
+            page.screenshot(path=str(evidence / 'files-62-1600.png'))
+            page.set_viewport_size({'width': 1280, 'height': 860})
+            report['scenarios'].append('The slow first read shows a reader-only skeleton after the 300 ms threshold and captures 62 at 1280/1600')
+
+            wait_held(gate['reads']['held'], 'initial read')
+            assert gate['reads']['counts'].get('files/data.json') == 1, gate['reads']['counts']
+            release_reads('files/data.json')
+            files_viewer('files/data.json', '"kind": "continuity"')
+            expect(page.locator('.files-destination .reader [role="status"]').filter(has_text='Read files/data.json')).to_have_count(1)
+            expect(page.locator('.files-destination .reader .skeletons')).to_have_count(0)
+            download_link = page.locator('.files-destination').get_by_role('link', name='Download file', exact=True).first
+            expect(download_link).to_be_visible()
+            assert 'file=files%2Fdata.json' in (download_link.get_attribute('href') or ''), download_link.get_attribute('href')
+            expect(page.locator('.files-destination .reader')).not_to_contain_text('Reading files/data.json')
+            stamp = page.locator('.files-destination').get_by_text(re.compile(r'last (received|checked)', re.I)).first
+            expect(stamp).to_be_visible()
+            stamp_token = re.search(r'\d{1,2}:\d{2}(?::\d{2})?', stamp.inner_text())
+            assert stamp_token, stamp.inner_text()
+            page.eval_on_selector('.files-destination .paper pre', "el => { el.dataset.continuityMark = 'retained'; }")
+            assert focused_row_name() == 'files/data.json', 'read completion moved the list focus'
+            report['scenarios'].append('Releasing the real response renders JSON, enables Download and reports completion without moving the focused row')
+
+            expect(page.locator('.files-destination .ds-btn').filter(has_text=re.compile(r'^Refresh file$')).first).to_be_visible()
+            refresh_file()
+            expect(page.locator('.files-destination .reader')).to_contain_text('Rechecking')
+            expect(page.locator('.files-destination .paper pre')).to_contain_text('"kind": "continuity"')
+            assert page.eval_on_selector('.files-destination .paper pre', 'el => el.dataset.continuityMark') == 'retained', 'recheck remounted the readable node'
+            expect(page.locator('.files-destination').get_by_role('button', name='Download file', exact=True).first).to_be_disabled()
+            expect(page.locator('.files-destination').get_by_role('link', name='Download file', exact=True)).to_have_count(0)
+            wait_held(gate['reads']['held'], 'recheck')
+            fail_reads('files/data.json')
+            expect(page.locator('.files-destination .paper pre')).to_contain_text('"kind": "continuity"')
+            assert page.eval_on_selector('.files-destination .paper pre', 'el => el.dataset.continuityMark') == 'retained', 'failed recheck dropped the retained node'
+            expect(page.locator('.files-destination .reader')).not_to_contain_text('Rechecking')
+            expect(page.locator('.files-destination')).to_contain_text(stamp_token.group(0))
+            expect(page.locator('.files-destination .ds-btn').filter(has_text=re.compile(r'^Retry file$')).first).to_be_visible()
+            report['scenarios'].append('A failed recheck keeps the retained bytes, the unchanged last-received time and Retry file')
+
+            gate['reads']['hold'].discard('files/data.json')
+            # The retry crosses the real server and transforms only the final
+            # response body, so recovery is proven by fresh content.
+            gate['reads']['transform']['files/data.json'] = {'kind': 'refreshed', 'items': [9, 9, 9]}
+            page.locator('.files-destination .ds-btn').filter(has_text=re.compile(r'^Retry file$')).first.click()
+            files_viewer('files/data.json', '"kind": "refreshed"')
+            expect(page.locator('.files-destination .reader')).not_to_contain_text('"kind": "continuity"')
+            expect(page.locator('.files-destination .reader')).not_to_contain_text('Retry file')
+            expect(page.locator('.files-destination').get_by_role('link', name='Download file', exact=True).first).to_be_visible()
+            assert gate['reads']['counts'].get('files/data.json') == 3, gate['reads']['counts']
+            gate['reads']['transform'].pop('files/data.json', None)
+            report['scenarios'].append('Retry file re-reads fresh transformed real bytes and restores the readable JSON with an enabled Download')
+
+            # (2) Rapid path race: select overview first so the held data.json
+            # click actually changes the selection before the newer read.
+            files_row('files/overview.md').click()
+            files_viewer('files/overview.md', 'Fixture overview')
+            gate['reads']['hold'].add('files/data.json')
+            files_row('files/data.json').click()
+            wait_held(gate['reads']['held'], 'race read')
+            files_row('files/overview.md').click()
+            files_viewer('files/overview.md', 'Fixture overview')
+            release_reads('files/data.json')
+            page.wait_for_timeout(150)
+            files_viewer('files/overview.md', 'Fixture overview')
+            expect(page.locator('.files-destination .reader')).not_to_contain_text('"kind": "continuity"')
+            gate['reads']['hold'].discard('files/data.json')
+            report['scenarios'].append('Releasing a stale read for a previous path never replaces the newer overview name or bytes')
+
+            # (3) Source transition with a stale held workspace listing and read.
+            gate['listings']['hold'].add('workspace-files')
+            gate['reads']['hold'].add('files/overview.md')
+            page.get_by_role('button', name='Refresh files', exact=True).click()
+            # Refresh files revalidates both lifetimes; the head Refresh file
+            # is disabled while pending, so wait on the two held responses.
+            wait_held(gate['listings']['held'], 'stale listing')
+            wait_held(gate['reads']['held'], 'stale read')
+            page.evaluate("location.hash = '#/files?ws=fixture&source=repository&id=fixture-repo&path=fixture-repo-plan.md'")
+            files_viewer('fixture-repo-plan.md', 'Checkout-scoped suggestion target.')
+            expect(page.locator('.files-destination .list-caption')).to_contain_text('fixture-repo')
+            release_listings('workspace-files')
+            release_reads('files/overview.md')
+            page.wait_for_timeout(150)
+            files_viewer('fixture-repo-plan.md', 'Checkout-scoped suggestion target.')
+            expect(page.locator('.files-destination .reader')).not_to_contain_text('Fixture overview')
+            assert page.locator('.files-destination button.file-record', has_text='notes/browser.md').count() == 0
+            gate['listings']['hold'].discard('workspace-files')
+            gate['reads']['hold'].discard('files/overview.md')
+            report['scenarios'].append('Stale workspace listing and read released after a source transition never replace repository rows, name or bytes')
+
+            # (3b) A route-addressed repository owner is remembered for the
+            # source chooser, so switching away and back needs no manual owner
+            # selection and restores the source-qualified path and bytes.
+            page.locator('#file-source').select_option('workspace')
+            expect(page.locator('#file-source')).to_have_value('workspace')
+            files_viewer('files/overview.md', 'Fixture overview')
+            page.locator('#file-source').select_option('repository')
+            expect(page.locator('#file-source')).to_have_value('repository')
+            expect(page.locator('#file-owner')).to_have_value('fixture-repo')
+            assert files_params()['id'] == ['fixture-repo'], page.url
+            assert files_params().get('path') == ['fixture-repo-plan.md'], page.url
+            files_viewer('fixture-repo-plan.md', 'Checkout-scoped suggestion target.')
+            report['scenarios'].append('A route-addressed repository owner is remembered so the source chooser restores its path and bytes without a manual owner selection')
+
+            # (4) Independent lifetimes: the current-path read publishes before
+            # its held listing, and the later listing publish keeps the read.
+            gate['listings']['hold'].add('repository-files')
+            page.evaluate("location.hash = '#/files?ws=fixture'")
+            expect(page.locator('.files-destination .reader')).to_contain_text('Select a file')
+            page.evaluate("location.hash = '#/files?ws=fixture&source=repository&id=fixture-docs&path=fixture-docs-guide.md'")
+            wait_held(gate['listings']['held'], 'held listing')
+            # The listing is intentionally held, so assert the read identity
+            # directly instead of the row-dependent files_viewer helper.
+            expect(page.locator('.files-destination .reader-head h2')).to_have_text('fixture-docs-guide.md')
+            expect(page.locator('.files-destination .reader')).to_contain_text('Second-repository suggestion target.')
+            assert files_params().get('path') == ['fixture-docs-guide.md'], page.url
+            assert page.locator('.files-destination button.file-record', has_text='fixture-docs-guide.md').count() == 0
+            release_listings('repository-files')
+            expect(page.locator('.files-destination button.file-record', has_text='fixture-docs-guide.md').first).to_be_visible()
+            files_viewer('fixture-docs-guide.md', 'Second-repository suggestion target.')
+            gate['listings']['hold'].discard('repository-files')
+            report['scenarios'].append('A current-path read publishes before its held listing, and the later listing publish does not cancel the read')
+
+            # (5) Offline retained text with capture 66 and Retry connection.
+            open_route('files', ws='fixture', path='files/overview.md')
+            files_viewer('files/overview.md', 'Fixture overview')
+            context.request.get(receipt['url'] + '/__fixture/control?' + urlencode({'action': 'state-fail', 'value': 'true'}))
+            page.get_by_role('button', name='Refresh state', exact=True).click()
+            expect(page.locator('.files-destination .reader')).to_contain_text('Reading a retained copy')
+            expect(page.locator('.files-destination .reader').get_by_role('button', name='Retry connection', exact=True)).to_be_visible()
+            expect(page.locator('.files-destination .paper')).to_contain_text('Fixture overview')
+            expect(page.locator('.files-destination').get_by_role('button', name='Download file', exact=True).first).to_be_disabled()
+            page.screenshot(path=str(evidence / 'files-66-1280.png'))
+            page.set_viewport_size({'width': 1600, 'height': 900})
+            page.screenshot(path=str(evidence / 'files-66-1600.png'))
+            page.set_viewport_size({'width': 1280, 'height': 860})
+            report['scenarios'].append('A failed /api/state keeps the loaded overview readable and disables Download behind Retry connection and captures 66 at 1280/1600')
+
+            context.request.get(receipt['url'] + '/__fixture/control?' + urlencode({'action': 'state-fail', 'value': 'false'}))
+            page.locator('.files-destination .reader').get_by_role('button', name='Retry connection', exact=True).click()
+            expect(page.locator('.files-destination .reader')).not_to_contain_text('Reading a retained copy')
+            expect(page.locator('.files-destination .paper')).to_contain_text('Fixture overview')
+            expect(page.locator('.files-destination').get_by_role('link', name='Download file', exact=True).first).to_be_visible()
+            report['scenarios'].append('Retry connection clears the offline warning and re-enables Download over the retained overview')
+
+            # (6) Rechecking overview with capture 67.
+            gate['reads']['hold'].add('files/overview.md')
+            refresh_file()
+            expect(page.locator('.files-destination .reader')).to_contain_text('Rechecking')
+            expect(page.locator('.files-destination .paper')).to_contain_text('Fixture overview')
+            expect(page.locator('.files-destination').get_by_role('button', name='Download file', exact=True).first).to_be_disabled()
+            page.screenshot(path=str(evidence / 'files-67-1280.png'))
+            page.set_viewport_size({'width': 1600, 'height': 900})
+            page.screenshot(path=str(evidence / 'files-67-1600.png'))
+            page.set_viewport_size({'width': 1280, 'height': 860})
+            wait_held(gate['reads']['held'], 'overview recheck')
+            release_reads('files/overview.md')
+            expect(page.locator('.files-destination .reader')).not_to_contain_text('Rechecking')
+            gate['reads']['hold'].discard('files/overview.md')
+            report['scenarios'].append('Rechecking overview retains readable content with Download disabled and captures 67 at 1280/1600')
+
+            # (7) Sandboxed HTML node identity through offline + failed recheck.
+            open_route('files', ws='fixture', path='files/sandbox.html')
+            expect(page.locator('.files-destination iframe.html-frame')).to_be_visible()
+            expect(page.frame_locator('.files-destination iframe.html-frame').locator('h1')).to_have_text('Sandbox fixture')
+            expect(page.locator('.files-destination .section-note')).to_contain_text('Only document load is observed; sandbox subresources are not verified.')
+            frame_src = page.evaluate("""() => {
+                const el = document.querySelector('.files-destination iframe.html-frame');
+                window.__continuityFrame = el;
+                return el.getAttribute('src');
+            }""")
+            assert frame_src and '/api/workspace-file' in frame_src, frame_src
+            # A manual Refresh state increments refreshKey before the state
+            # result, so it supersedes the held read. Switch the path to fail
+            # so every newly issued recheck returns 503, then drain the prior
+            # held request; a canceled older hold can otherwise leave the
+            # newer recheck pending and the reader stuck on Rechecking.
+            gate['reads']['hold'].add('files/sandbox.html')
+            refresh_file()
+            expect(page.locator('.files-destination .reader')).to_contain_text('Rechecking')
+            wait_held(gate['reads']['held'], 'held sandbox recheck')
+            gate['reads']['hold'].discard('files/sandbox.html')
+            gate['reads']['fail'].add('files/sandbox.html')
+            context.request.get(receipt['url'] + '/__fixture/control?' + urlencode({'action': 'state-fail', 'value': 'true'}))
+            page.get_by_role('button', name='Refresh state', exact=True).click()
+            expect(page.locator('.files-destination .reader')).to_contain_text('Reading a retained copy')
+            fail_reads('files/sandbox.html')
+            expect(page.locator('.files-destination .reader')).to_contain_text('File could not be rechecked')
+            assert page.evaluate("() => window.__continuityFrame === document.querySelector('.files-destination iframe.html-frame')") is True, 'offline recheck replaced the iframe node'
+            assert page.evaluate("() => document.querySelector('.files-destination iframe.html-frame').getAttribute('src')") == frame_src, 'offline recheck changed the iframe src'
+            expect(page.frame_locator('.files-destination iframe.html-frame').locator('h1')).to_have_text('Sandbox fixture')
+            expect(page.locator('.files-destination').get_by_role('button', name='Download file', exact=True).first).to_be_disabled()
+            report['scenarios'].append('Offline and failed sandbox recheck keep the exact mounted iframe node and src with readable content')
+
+            context.request.get(receipt['url'] + '/__fixture/control?' + urlencode({'action': 'state-fail', 'value': 'false'}))
+            page.locator('.files-destination .reader').get_by_role('button', name='Retry connection', exact=True).click()
+            expect(page.locator('.files-destination .reader')).not_to_contain_text('Reading a retained copy')
+            gate['reads']['fail'].discard('files/sandbox.html')
+            page.locator('.files-destination .ds-btn').filter(has_text=re.compile(r'^Retry file$')).first.click()
+            expect(page.locator('.files-destination .reader')).not_to_contain_text('Retry file')
+            expect(page.locator('.files-destination').get_by_role('link', name='Download file', exact=True).first).to_be_visible()
+            assert page.evaluate("() => window.__continuityFrame === document.querySelector('.files-destination iframe.html-frame')") is True, 'successful recheck replaced the iframe node'
+            assert page.evaluate("() => document.querySelector('.files-destination iframe.html-frame').getAttribute('src')") == frame_src, 'successful recheck changed the iframe src'
+            report['scenarios'].append('Successful sandbox recheck enables Download without replacing the mounted iframe node or src')
+
+            # (8) Corrupt image bytes surface the regional display error and
+            # Retry file reloads the real bytes into a decoded image.
+            gate['reads']['corrupt'].add('files/pixel.png')
+            open_route('files', ws='fixture', path='files/pixel.png')
+            expect(page.locator('.files-destination .reader')).to_contain_text('File could not be displayed')
+            report['scenarios'].append('A corrupt image response surfaces a readable regional display error')
+            gate['reads']['corrupt'].discard('files/pixel.png')
+            page.locator('.files-destination .ds-btn').filter(has_text=re.compile(r'^Retry file$')).first.click()
+            expect(page.locator('.files-destination .reader')).not_to_contain_text('File could not be displayed')
+            expect(page.locator('.files-destination img.image-preview')).to_be_visible()
+            page.wait_for_function("() => document.querySelector('.files-destination img.image-preview')?.naturalWidth > 0")
+            expect(page.locator('.files-destination').get_by_role('link', name='Download file', exact=True).first).to_be_visible()
+            report['scenarios'].append('Retry file after a corrupt image decodes real bytes and enables Download')
+
+            # (9) Image node identity through offline + failed recheck.
+            open_route('files', ws='fixture', path='files/overview.md')
+            open_route('files', ws='fixture', path='files/pixel.png')
+            expect(page.locator('.files-destination img.image-preview')).to_be_visible()
+            page.wait_for_function("() => document.querySelector('.files-destination img.image-preview')?.naturalWidth === 1")
+            image_src = page.evaluate("""() => {
+                const el = document.querySelector('.files-destination img.image-preview');
+                window.__continuityImage = el;
+                return el.getAttribute('src');
+            }""")
+            assert image_src and 'file=files%2Fpixel.png' in image_src, image_src
+            # Same manual-refresh generation switch as the sandbox case: fail
+            # every newly issued recheck, then drain the prior held request.
+            gate['reads']['hold'].add('files/pixel.png')
+            refresh_file()
+            expect(page.locator('.files-destination .reader')).to_contain_text('Rechecking')
+            wait_held(gate['reads']['held'], 'held image recheck')
+            gate['reads']['hold'].discard('files/pixel.png')
+            gate['reads']['fail'].add('files/pixel.png')
+            context.request.get(receipt['url'] + '/__fixture/control?' + urlencode({'action': 'state-fail', 'value': 'true'}))
+            page.get_by_role('button', name='Refresh state', exact=True).click()
+            expect(page.locator('.files-destination .reader')).to_contain_text('Reading a retained copy')
+            fail_reads('files/pixel.png')
+            expect(page.locator('.files-destination .reader')).to_contain_text('File could not be rechecked')
+            assert page.evaluate("() => window.__continuityImage === document.querySelector('.files-destination img.image-preview')") is True, 'offline recheck replaced the image node'
+            assert page.evaluate("() => document.querySelector('.files-destination img.image-preview').getAttribute('src')") == image_src, 'offline recheck changed the image src'
+            page.wait_for_function("() => document.querySelector('.files-destination img.image-preview')?.naturalWidth === 1")
+            expect(page.locator('.files-destination').get_by_role('button', name='Download file', exact=True).first).to_be_disabled()
+            report['scenarios'].append('Offline and failed image recheck keep the exact mounted image node and src with readable bytes')
+
+            context.request.get(receipt['url'] + '/__fixture/control?' + urlencode({'action': 'state-fail', 'value': 'false'}))
+            page.locator('.files-destination .reader').get_by_role('button', name='Retry connection', exact=True).click()
+            expect(page.locator('.files-destination .reader')).not_to_contain_text('Reading a retained copy')
+            gate['reads']['fail'].discard('files/pixel.png')
+            page.locator('.files-destination .ds-btn').filter(has_text=re.compile(r'^Retry file$')).first.click()
+            expect(page.locator('.files-destination .reader')).not_to_contain_text('Retry file')
+            expect(page.locator('.files-destination').get_by_role('link', name='Download file', exact=True).first).to_be_visible()
+            assert page.evaluate("() => window.__continuityImage === document.querySelector('.files-destination img.image-preview')") is True, 'successful recheck replaced the image node'
+            assert page.evaluate("() => document.querySelector('.files-destination img.image-preview').getAttribute('src')") == image_src, 'successful recheck changed the image src'
+            report['scenarios'].append('Successful image recheck enables Download without replacing the mounted image node or src')
+
+            # (10) Source switch and history restore path and exact scroll.
+            open_route('files', ws='fixture', path='files/overview.md')
+            files_viewer('files/overview.md', 'Fixture overview')
+            files_row('files/overview.md').click()
+            files_viewer('files/overview.md', 'Fixture overview')
+            page.eval_on_selector('.files-destination .records', "el => { el.scrollTop = 120; el.dispatchEvent(new Event('scroll')); }")
+            page.eval_on_selector('.files-destination .reader', "el => { el.scrollTop = 180; el.dispatchEvent(new Event('scroll')); }")
+            assert page.eval_on_selector('.files-destination .records', 'el => el.scrollTop') == 120
+            assert page.eval_on_selector('.files-destination .reader', 'el => el.scrollTop') == 180
+            page.locator('#file-source').select_option('repository')
+            expect(page.locator('#file-source')).to_have_value('repository')
+            page.locator('#file-owner').select_option('fixture-repo')
+            expect(page.locator('#file-owner')).to_have_value('fixture-repo')
+            files_viewer('fixture-repo-plan.md', 'Checkout-scoped suggestion target.')
+            page.locator('#file-source').select_option('workspace')
+            files_viewer('files/overview.md', 'Fixture overview')
+            assert_memory_scroll(120, 180, 'source-chooser return')
+            report['scenarios'].append('Switching sources back to workspace restores the remembered overview path with exact list and reader scroll')
+
+            page.locator('[data-area="specs"]').click()
+            expect(page.locator('h1')).to_have_text('Specs')
+            page.go_back()
+            files_viewer('files/overview.md', 'Fixture overview')
+            assert_memory_scroll(120, 180, 'history return')
+            report['scenarios'].append('Rail departure and history Back to the path-bearing Files route restore the overview and exact scroll')
+
+            open_route('files', ws='fixture', path='files/overview.md')
+            open_route('files', ws='fixture', path='files/valid.json')
+            files_viewer('files/valid.json', '"schema_version": 1')
+            page.go_back()
+            files_viewer('files/overview.md', 'Fixture overview')
+            page.go_forward()
+            files_viewer('files/valid.json', '"schema_version": 1')
+            report['scenarios'].append('History Back/Forward selects the supplied route path instead of the newest remembered path')
+
+            open_route('files', ws='fixture')
+            expect(page.locator('.files-destination .reader-head h2')).to_have_text('Files')
+            expect(page.locator('.files-destination .reader')).to_contain_text('Select a file')
+            assert files_params().get('path') is None, page.url
+            report['scenarios'].append('An explicit route with no path clears selection instead of restoring remembered state')
+
+            open_route('files', ws='fixture', path='files/overview.md')
+            files_viewer('files/overview.md', 'Fixture overview')
+            observed = []
+
+            def observe_file_request(request):
+                if '/api/workspace-file' in request.url or '/api/workspace-files' in request.url:
+                    observed.append(request.url)
+
+            page.on('request', observe_file_request)
+            page.locator('#find-record').fill('OVERVIEW')
+            expect(page.locator('.files-destination button.file-record').filter(has_text='files/overview.md')).to_have_count(1)
+            page.locator('#find-record').fill('no-match')
+            expect(page.locator('.files-destination button.file-record')).to_have_count(0)
+            page.locator('#find-record').fill('')
+            page.wait_for_timeout(150)
+            page.remove_listener('request', observe_file_request)
+            assert observed == [], observed
+            files_viewer('files/overview.md', 'Fixture overview')
+            report['scenarios'].append('Filter edits never refetch the listing or read and retain the selected path')
+
+            # (11) Failed cursor append keeps prior rows and reader.
+            gate['listings']['append'] = True
+            page.get_by_role('button', name='Refresh files', exact=True).click()
+            expect(page.get_by_role('button', name='Load more files', exact=True)).to_be_visible()
+            rows_before = page.locator('.files-destination button.file-record').count()
+            assert rows_before > 0, rows_before
+            page.get_by_role('button', name='Load more files', exact=True).click()
+            expect(page.get_by_text('Files could not be listed', exact=True)).to_be_visible()
+            assert page.locator('.files-destination button.file-record').count() == rows_before
+            files_viewer('files/overview.md', 'Fixture overview')
+            gate['listings']['append'] = False
+            report['scenarios'].append('A failed cursor append keeps the prior listing rows and the loaded reader with only the regional list error')
+
+            # (12) Bound reference screens: verify card sha256 before render.
+            design_candidates = [
+                Path('/Users/ryanmahoney/Documents/adjacent-storage/projects/agent-tooling/designs/app-ui/screens'),
+                Path('/home/ryanmahoney/Documents/adjacent-storage/projects/agent-tooling/designs/app-ui/screens'),
+            ]
+            design_root = next((candidate for candidate in design_candidates if candidate.is_dir()), None)
+            assert design_root is not None, 'Bound app-ui design screens were not found'
+            references = {}
+            reference_page = context.new_page()
+            try:
+                for screen, filename, digest in [
+                    ('62', '62-files-loading.html', 'dc62acfc3d8ff825d59c3a579619f291b8c806774bd4827c8225a4ea11df3119'),
+                    ('66', '66-files-offline.html', 'a7849160af81783ca0b9f00b62e2283e852170eded9294d58356f6add42124a5'),
+                    ('67', '67-files-stale.html', '1b50989bdaf92f838cd22821d4f4654d5f8a8b1594324cdd85d18ee6524e6a01'),
+                ]:
+                    asset = design_root / filename
+                    assert asset.is_file(), asset
+                    actual = hashlib.sha256(asset.read_bytes()).hexdigest()
+                    references[screen] = {'file': str(asset), 'sha256': actual, 'bound': digest}
+                    assert actual == digest, (screen, actual, digest)
+                    for width, height in [(1280, 860), (1600, 900)]:
+                        reference_page.set_viewport_size({'width': width, 'height': height})
+                        reference_page.goto(asset.as_uri(), wait_until='load')
+                        reference_page.wait_for_timeout(150)
+                        reference_page.screenshot(path=str(evidence / f'reference-{screen}-{width}.png'))
+            finally:
+                reference_page.close()
+            report['references'] = references
+            report['scenarios'].append('Bound reference screens 62/66/67 match their card sha256 digests and render at 1280/1600')
 
         if case in (None, 'specs'):
             open_route('specs', ws='fixture')
@@ -1857,7 +2400,7 @@ finally:
         fixture.kill()
         fixture.wait()
     report['elapsedSeconds'] = round(time.monotonic() - started, 3)
-    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'step-003-fix-browser.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'sentinel-planned-filter-browser.json' if case == 'filters' else 'specs-list.json' if case == 'specs-list' else 'specs-variants.json' if case == 'specs-variants' else 'specs-overview.json' if case == 'specs-overview' else 'specs-activity.json' if case == 'specs-activity' else 'specs-relaunch.json' if case == 'specs-relaunch' else 'files-workspace.json' if case == 'files-workspace' else 'files-sources.json' if case == 'files-sources' else 'step-002-fix-browser.json'
+    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'step-003-fix-browser.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'sentinel-planned-filter-browser.json' if case == 'filters' else 'specs-list.json' if case == 'specs-list' else 'specs-variants.json' if case == 'specs-variants' else 'specs-overview.json' if case == 'specs-overview' else 'specs-activity.json' if case == 'specs-activity' else 'specs-relaunch.json' if case == 'specs-relaunch' else 'files-workspace.json' if case == 'files-workspace' else 'files-sources.json' if case == 'files-sources' else 'files-continuity.json' if case == 'files-continuity' else 'step-002-fix-browser.json'
     target = evidence / filename
     temporary = target.with_name(target.name + '.tmp')
     temporary.write_text(json.dumps(report, indent=2) + '\n')
