@@ -187,7 +187,8 @@ On a planned spec's live detail page, **Start implementation** provides an edita
 brief prefilled with `/spec-end-to-end Resume after spec-write` and the package's
 reference. The orchestrator uses `deepseek:deepseek-flash:high`; the initial
 step-owner and other worker model roles remain in the editable brief. **Preview settings**
-saves the brief and shows the package, execution target, model, publication
+prepares the package’s separate worktree, saves the brief and shows the package,
+actual working directory and branch, model, publication
 authority, and assignment instructions. **Start agent** starts an independent
 Pi agent in tmux using that reviewed contract. The launch receives the package
 context and the `spec-end-to-end` skill, with authority to publish a ready PR.
@@ -201,6 +202,17 @@ package target is selected automatically; multiple targets require a choice.
 The server resolves that checkout to a unique usable workspace repository and
 validates its package binding before previewing. Imported snapshots cannot
 launch agents.
+
+Spec preparation uses the same canonical worktree helper as runtime step dispatch:
+it creates the recorded branch in the recorded worktree, or the usual sibling
+`<repository>-<spec-slug>` when no worktree is recorded. Existing worktrees must
+match the repository and branch; preparation never resets or cleans them. Different
+packages can run concurrently in distinct worktrees. The launch lease still rejects
+another writer in the same directory **or** another live/unconfirmed assignment
+for the same package, including older coordinators launched from the primary checkout.
+Existing conversation threads keep their primary repository binding; only their
+spec assignment uses the prepared worktree. Relaunch of a confirmed stopped legacy
+assignment can use its package worktree, with the same repository and agent settings.
 
 **Done** retains one entry per spec completed in the last seven days,
 newest first, with its recorded completion time and completion basis. A complete
@@ -375,7 +387,19 @@ Direct defaults are the whole workspace when no repository is selected, the
 `general` skill, the `pi` harness, no publication authority, and the fixed
 assignment instruction; references cross the wire as identity only (`kind`,
 `id`). Thread-bound preview and launch reuse the target recorded with the saved
-brief, so the server remains the binding authority.
+brief, so the server remains the binding authority. For a spec assignment, the
+client first posts to `/api/dispatch/prepare-spec-target` with
+`{workspace_id, spec_package, repository_id}` or
+`{workspace_id, spec_package, thread_id}`. This authenticated mutation accepts no
+checkout path, branch or base override, returns `execution_dir` and
+`execution_branch`, and never starts an agent. Preview and launch remain read-only
+with respect to worktree preparation; both resolve the recorded worktree and the
+approved digest includes its directory and branch. Missing or mismatched worktrees
+refuse launch rather than falling back to the primary checkout. CLI operators first run
+`node scripts/workspaces/cli.mjs prepare-spec-target WORKSPACE --target REPOSITORY --spec-package PACKAGE_REF --root STORAGE_ROOT`;
+then use the ordinary `launch` preview and digest confirmation. CLI launch previews
+remain read-only. For a stopped legacy retry, preparation also accepts
+`--supersedes ASSIGNMENT_ID` and verifies that the predecessor is gone.
 
 **Save brief** publishes one canonical markdown brief for the typed title and
 content, and never starts an agent. The submitted title, content, target and

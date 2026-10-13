@@ -66,6 +66,7 @@ export function AssignmentContract(props: { preview: LaunchPreview }) {
     { key: 'workspace', label: 'Workspace', value: str(record().workspace_id) || 'Workspace' },
     { key: 'target', label: 'Target', value: str(record().repository_id) || 'Whole workspace' },
     { key: 'execution', label: 'Execution directory', value: str(record().execution_dir) || 'Unresolved' },
+    ...(record().execution_branch ? [{ key: 'branch', label: 'Branch', value: str(record().execution_branch) }] : []),
     { key: 'brief', label: 'Saved brief', value: str(record().brief) || 'Recorded' },
     { key: 'skill', label: 'Skill', value: str(record().skill) || 'General' },
     { key: 'model', label: 'Model', value: str(record().model) || 'Pi default' },

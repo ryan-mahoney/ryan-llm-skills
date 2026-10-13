@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { activityRecorder } from './monitor.mjs';
 import { SCOUT_MODEL } from './scout.mjs';
 import { createLogSummary } from '../../../scripts/spec-facts/core.mjs';
-import { checkPackage, locatePackage, setWorktree, stamp } from '../../../scripts/spec-location/index.mjs';
+import { checkPackage, locatePackage } from '../../../scripts/spec-location/index.mjs';
+import { prepareSpecWorktree } from '../../../scripts/spec-location/worktree.mjs';
 import { decide, collectFacts } from '../../../scripts/jev/core.mjs';
 import { preparedEntry } from './startup.mjs';
 import { splitModelSelector, configurationFailure, configurationAction } from './model-selector.mjs';
@@ -257,24 +258,7 @@ export async function resolveInput(input, location = {}) {
   const step = realpathSync(input.step);
   if (!inside(packagePath, step)) throw new Error('step must be inside the package');
   const target = stepTarget(locations, packagePath, step);
-  const primary = realpathSync(target.primary);
-  const common = realpathSync(target.common);
-  const worktree = target.worktree ?? resolve(join(dirname(primary), `${basename(primary)}-${basename(packagePath)}`));
-  if (!existsSync(worktree)) {
-    let existing = false;
-    try { git(primary, 'show-ref', '--verify', `refs/heads/${target.branch}`); existing = true; } catch { /* new branch */ }
-    git(primary, 'worktree', 'add', ...(existing ? [worktree, target.branch] : ['-b', target.branch, worktree, input.base || 'HEAD']));
-  }
-  const actual = realpathSync(worktree);
-  if (realpathSync(git(actual, 'rev-parse', '--path-format=absolute', '--git-common-dir')) !== common) throw new Error('worktree is not in the target repository');
-  if (git(actual, 'branch', '--show-current') !== target.branch) throw new Error(`worktree is not on the target branch ${target.branch}`);
-  if (target.worktree !== actual) {
-    const recorded = await setWorktree(locations.package_ref, target.id, actual, location);
-    if (!recorded.ok) throw refusalError(recorded);
-    // Cards written after the package was created get their Locations block on first dispatch; stamp is idempotent.
-    const stamped = await stamp(locations.package_ref, location);
-    if (!stamped.ok) throw refusalError(stamped);
-  }
+  const { primary, worktree: actual } = await prepareSpecWorktree(locations, target, { ...location, base: input.base || 'HEAD' });
   // Other targets' recorded worktrees are read-only context for the owner and editor.
   const others = locations.targets.filter(entry => entry.id !== target.id && entry.worktree).map(({ id, worktree }) => ({ id, worktree }));
   return { ...input, scout_model: input.scout_model || SCOUT_MODEL, package: packagePath, package_ref: locations.package_ref, target: target.id, primary, step, checkout: actual, other_targets: others };

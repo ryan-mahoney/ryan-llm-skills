@@ -122,10 +122,14 @@ export default function PlannedAssignment(props: Props) {
     const chosen = target();
     if (!actionable() || pending() || !chosen || targetProblem() || !packageRef() || !title().trim() || !brief().trim()) return;
     const key = contextKey(), expectedSignature = inputSignature(), request = ++operation;
-    setPending('preview'); setError(''); setStatus('Preparing the saved brief and assignment preview…'); setResult(null);
+    setPending('preview'); setError(''); setStatus('Preparing the spec worktree and assignment preview…'); setResult(null);
     try {
       const thread = await findOrCreateThread(request, key, expectedSignature, chosen);
       if (!thread || !requestIsCurrent(request, key, expectedSignature)) return;
+      await postJson('/api/dispatch/prepare-spec-target', {
+        workspace_id: workspaceId(), thread_id: thread, spec_package: packageRef(),
+      }, props.token || '');
+      if (!requestIsCurrent(request, key, expectedSignature)) return;
       let save = saveIdentity();
       if (!save || save.signature !== expectedSignature) { save = { signature: expectedSignature, id: uuid() }; setSaveIdentity(save); }
       await postJson('/api/thread/save-brief', {
@@ -202,6 +206,7 @@ export default function PlannedAssignment(props: Props) {
       <Show when={gateMessage()}><p class="small warn" role="status">{gateMessage()}</p></Show>
     <Show when={status()}><p id="planned-assignment-status" data-testid="planned-assignment-status" class="thread-state" role="status">{status()}</p></Show>
     <Show when={error()}><p class="thread-state bad" role="alert">{error()}</p></Show>
+    <p class="small muted">Preview creates or reuses this spec’s own worktree. Other specs can run in their own worktrees at the same time.</p>
     <div class="thread-actions">
       <Show when={!currentPreview()}><button id="planned-assignment-preview" data-testid="planned-assignment-preview" class="primary" type="button" disabled={!actionable() || !!pending() || !!targetProblem() || !target() || !packageRef() || !title().trim() || !brief().trim()} onClick={() => void previewAgent()}>{pending() === 'preview' ? 'Preparing preview…' : changed() ? 'Preview changes' : 'Preview settings'}</button></Show>
       <Show when={currentPreview()}>{value => <button id="planned-assignment-launch" data-testid="planned-assignment-launch" class="primary" type="button" disabled={!actionable() || !!pending() || !!result()} onClick={() => void launchAgent()}>{pending() === 'launch' ? 'Starting…' : 'Start agent'}</button>}</Show>
@@ -210,6 +215,7 @@ export default function PlannedAssignment(props: Props) {
       <div class="section-head"><h4>Review before start</h4><span class="pill good">Ready</span></div>
       <dl class="thread-facts">
         <div><dt>Target</dt><dd class="mono">{str(value().record?.repository_id || target()?.id)} · {str(value().record?.execution_dir || target()?.path)}</dd></div>
+        <div><dt>Branch</dt><dd class="mono">{str(value().record?.execution_branch)}</dd></div>
         <div><dt>Package</dt><dd class="mono">{packageRef()}</dd></div>
         <div><dt>Agent settings</dt><dd class="mono">{HARNESS} · {PROVIDER} / {MODEL}:{THINKING}</dd></div>
         <div><dt>Skill · PR access</dt><dd class="mono">{SKILL} · {AUTHORITY}</dd></div>

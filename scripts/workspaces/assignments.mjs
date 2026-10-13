@@ -22,6 +22,7 @@ import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { inspectSpecWorktree, prepareSpecWorktree, specWorktreePath } from "../spec-location/worktree.mjs";
 import { checkPackage } from "../spec-location/index.mjs";
 import { resolveCheckout } from "../repo-search/identity.mjs";
 import { processIdentity, sameProcess } from "../spec-observe/process-identity.mjs";
@@ -85,6 +86,7 @@ const IMMUTABLE_RECORD_FIELDS = [
   "thinking",
   "project_trust",
   "execution_dir",
+  "execution_branch",
   "repository_id",
   "spec_package",
   "package_ref",
@@ -273,7 +275,7 @@ function projectTrustFlags(projectTrust) {
  * @returns {Promise<{execution_dir: string, repository_id: string|null,
  *   spec_package: string|null, package_ref: string|null, attention: string[]}>}
  */
-export async function resolveTarget({ workspace, target = null, specPackage = null } = {}) {
+export async function resolveTarget({ workspace, target = null, specPackage = null, specWorktree = false } = {}) {
   if (workspace === null || typeof workspace !== "object" || Array.isArray(workspace)) {
     throw new TypeError("workspace must be a workspace detail object");
   }
@@ -324,6 +326,7 @@ export async function resolveTarget({ workspace, target = null, specPackage = nu
 
   let specPackagePath = null;
   let packageRef = null;
+  let executionBranch = null;
   if (specPackage !== null && specPackage !== undefined) {
     if (typeof specPackage !== "string" || specPackage === "") {
       throw new Error("specPackage must be a non-empty string");
@@ -345,17 +348,67 @@ export async function resolveTarget({ workspace, target = null, specPackage = nu
         "execution directory is not a target worktree or primary checkout of the spec package",
       );
     }
-    specPackagePath = locations.package_dir;
+    if (specWorktree) {
+      const matches = locations.targets.filter(entry => entry.id === repositoryId);
+      if (matches.length !== 1 || await fs.realpath(matches[0].primary) !== executionDir)
+        throw typedAssignmentError('spec-worktree-unavailable', 'Choose a registered repository target of this spec package.');
+      const prepared = inspectSpecWorktree(locations, matches[0]);
+      executionDir = prepared.worktree;
+      executionBranch = prepared.branch;
+    }
+    specPackagePath = await fs.realpath(locations.package_dir);
     packageRef = locations.package_ref;
   }
 
   return {
     execution_dir: executionDir,
+    execution_branch: executionBranch,
     repository_id: repositoryId,
     spec_package: specPackagePath,
     package_ref: packageRef,
     attention,
   };
+}
+
+/** Explicit mutating preparation; previews and launch resolution remain read-only.
+ * Browser callers supply repository/package identities, never paths or branches.
+ * The launch lease serializes preparation with writer reservations.
+ */
+export async function prepareAssignmentSpecTarget({storageRoot, workspace_id, target, specPackage, supersedes = null, probes = {}}) {
+  const claim = await acquireRootClaim(storageRoot);
+  try {
+    const workspace = await fetchWorkspace(storageRoot, workspace_id);
+    const primary = await resolveTarget({workspace, target, specPackage});
+    if (!primary.spec_package || !primary.repository_id)
+      throw typedAssignmentError('spec-worktree-unavailable', 'Choose a spec package and its repository.');
+    const checked = await checkPackage(primary.spec_package, {root: storageRoot});
+    if (!checked.ok) throw typedAssignmentError('spec-package-unavailable', checked.message);
+    const locations = checked.locations;
+    const matches = locations.targets.filter(entry => entry.id === primary.repository_id);
+    if (matches.length !== 1 || await fs.realpath(matches[0].primary) !== primary.execution_dir)
+      throw typedAssignmentError('spec-worktree-unavailable', 'Spec target does not match the registered repository.');
+    const destination = specWorktreePath(locations, matches[0]);
+    const physicalDestination = await fs.realpath(destination).catch(() => resolve(destination));
+    const records = await listAssignments(storageRoot);
+    if (supersedes && records.some(entry => entry.supersedes === supersedes))
+      throw typedAssignmentError('target-busy', 'This assignment already has a successor.');
+    for (const entry of records) {
+      const samePackage = entry.spec_package === primary.spec_package;
+      if (!samePackage && entry.execution_dir !== physicalDestination) continue;
+      if (samePackage) await assertNoAssignmentWorkers(entry);
+      if (!EXCLUSION_STATES.has(entry.state)) continue;
+      if (entry.assignment_id === supersedes && samePackage && entry.repository_id === target) {
+        const observation = await observeAssignment(entry, probes);
+        if (observation.gone === true) continue;
+      }
+      throw Object.assign(new Error('This spec package or worktree already has an assignment.'),
+        {code:'target-busy', assignment_id:entry.assignment_id});
+    }
+    await assertNoActiveRun(primary);
+    await assertNoAssignmentWorkers(primary);
+    const prepared = await prepareSpecWorktree(locations, matches[0], {root:storageRoot, repairStamp:true});
+    return {...primary, execution_dir:prepared.worktree, execution_branch:prepared.branch};
+  } finally { claim.release(); }
 }
 
 /**
@@ -499,6 +552,7 @@ export async function resolveAssignment(input = {}, options = {}) {
     workspace,
     target: input.target ?? null,
     specPackage: input.specPackage ?? null,
+    specWorktree: true,
   });
 
   // Read the reviewed brief bytes once; the hash and returned bytes bind this
@@ -576,6 +630,7 @@ export async function resolveAssignment(input = {}, options = {}) {
     piSessionDir,
     harness,
   ];
+  if (target.spec_package) canonical.push(target.execution_branch);
   const contractDigest = sha256Hex(Buffer.from(JSON.stringify(canonical), "utf8"));
 
   // The context block comes first so every harness sees exact paths and the
@@ -680,6 +735,7 @@ export async function resolveAssignment(input = {}, options = {}) {
     thinking,
     project_trust: projectTrust,
     execution_dir: target.execution_dir,
+    execution_branch: target.execution_branch,
     repository_id: target.repository_id,
     spec_package: target.spec_package,
     package_ref: target.package_ref,
@@ -1386,7 +1442,9 @@ async function approveLaunchInput(input, resolved, expectedDigest) {
 
 function immutableFieldsEqual(existing, approved) {
   return IMMUTABLE_RECORD_FIELDS.every(
-    (field) => isDeepStrictEqual(existing[field], approved[field]),
+    (field) => field === 'execution_branch' && !existing.spec_package && !approved.spec_package
+      ? (existing[field] ?? null) === (approved[field] ?? null)
+      : isDeepStrictEqual(existing[field], approved[field]),
   );
 }
 
@@ -1554,11 +1612,12 @@ export async function launchAssignment(input = {}, options = {}) {
     workspace,
     target: record.repository_id,
     specPackage: record.spec_package,
+    specWorktree: true,
   });
   if (target.package_ref !== record.package_ref) {
     throw new Error("approved package_ref is not the canonical package reference");
   }
-  if (target.execution_dir !== record.execution_dir) {
+  if (target.execution_dir !== record.execution_dir || target.execution_branch !== record.execution_branch) {
     throw new Error("approved execution_dir is not the canonical target directory");
   }
   // Reuse the catalog's persisted-schema owner before acquiring a writing
@@ -1583,6 +1642,13 @@ export async function launchAssignment(input = {}, options = {}) {
       throw new Error(`assignment ${id} already exists with a different effective contract`);
     }
 
+    // Preparation uses this same lease; recheck the exact approved target after
+    // waiting for it so another preparation cannot retarget this reservation.
+    const lockedTarget = await resolveTarget({workspace, target:record.repository_id,
+      specPackage:record.spec_package, specWorktree:true});
+    if (lockedTarget.execution_dir !== record.execution_dir || lockedTarget.execution_branch !== record.execution_branch
+      || lockedTarget.spec_package !== record.spec_package || lockedTarget.package_ref !== record.package_ref)
+      throw typedAssignmentError('stale-preview', 'The prepared spec target changed. Preview again.');
     let supersededId = null;
     if (record.attempt_kind === "launch-retry") {
       supersededId = record.supersedes;
@@ -1590,9 +1656,11 @@ export async function launchAssignment(input = {}, options = {}) {
       if (successor) throw new Error(`Assignment already relaunched as ${successor.assignment_id}; inspect that attempt.`);
       const old = records.find((entry) => entry.assignment_id === supersededId);
       if (!old) throw new Error(`launch-retry supersedes an unknown assignment: ${supersededId}`);
-      if (old.execution_dir !== record.execution_dir) {
+      if (old.execution_dir !== record.execution_dir && !(old.spec_package
+        && old.spec_package === record.spec_package && old.repository_id === record.repository_id
+        && old.workspace_id === record.workspace_id)) {
         throw new Error(
-          "launch-retry must supersede an assignment in the same execution directory",
+          "launch-retry must preserve its execution directory or its canonical spec target",
         );
       }
       await assertNoAssignmentWorkers(old);
@@ -1610,7 +1678,9 @@ export async function launchAssignment(input = {}, options = {}) {
 
     for (const entry of records) {
       if (entry.assignment_id === id || entry.assignment_id === supersededId) continue;
-      if (entry.execution_dir === record.execution_dir && EXCLUSION_STATES.has(entry.state)) {
+      if (record.spec_package && entry.spec_package === record.spec_package) await assertNoAssignmentWorkers(entry);
+      if ((entry.execution_dir === record.execution_dir
+        || (record.spec_package && entry.spec_package === record.spec_package)) && EXCLUSION_STATES.has(entry.state)) {
         throw Object.assign(
           new Error(
             `another ${entry.state} assignment reserves ${record.execution_dir}: ${entry.assignment_id}`,

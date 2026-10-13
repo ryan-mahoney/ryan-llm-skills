@@ -105,6 +105,10 @@ export function saveLaunchBrief(ctx: LaunchContext, requestId: string, brief: La
 }
 
 export async function previewLaunchAssignment(ctx: LaunchContext, input: LaunchPreviewInput, token: string, signal?: AbortSignal): Promise<LaunchPreview> {
+  if (ctx.package) await postJson('/api/dispatch/prepare-spec-target', {
+    workspace_id: ctx.ws, spec_package: ctx.package,
+    ...(ctx.thread ? { thread_id: ctx.thread } : { repository_id: ctx.target }),
+  }, token, signal);
   const data = ctx.thread
     ? await postJson<WireRecord>(THREAD_PREVIEW, threadAssignmentBody(ctx, input), token, signal)
     : await postJson<WireRecord>(DIRECT_PREVIEW, directAssignmentBody(ctx, input), token, signal);
