@@ -307,6 +307,16 @@ Atomically write `spec-prepare.md` on every run. Include:
 
 If blocked or awaiting a merge-relevant decision, stop after the report. Do not declare a partial package prepared.
 
+When the outcome is `decision-required`, also write the sibling `decision-required.md` in `package_dir`
+atomically: write the full content to a temporary file in the destination directory, then rename it
+over the final path. It is a runtime optional package artifact, not a canonical planning Markdown
+output. Lead with front matter followed by an H1 heading; the four scalar front-matter fields are
+`stage` (`architecture` or `specification`), `question` (JSON double-quoted), `recommendation`
+(JSON double-quoted; may be empty), and `recorded_at` (ISO timestamp). On a new run or resume, keep
+an unresolved record; remove it only after that question is resolved or explicitly superseded.
+Never delete other package data, and the `spec-prepare.md` `decision-required` outcome stays
+authoritative until a subsequent report is produced.
+
 Declare the package prepared only when its required artifacts exist, indexed steps have exactly one canonical card each, and all cards have a `ready` verdict. Do not emit `preparation.json` or another fingerprint/manifest replacement. Discard a legacy `preparation.json` during re-preparation.
 
 ## Exceptional Deep-Planning Fallback
@@ -329,7 +339,16 @@ Do not use fallback delegation for routine grounding, formatting, or validation 
 ## Output
 
 Return `outcome: prepared` only after validating the required artifacts and ready cards, with `next: spec-run`.
-For unresolved work return `decision-required` or `blocked` and do not claim readiness.
+For unresolved work return `decision-required` or `blocked` and do not claim readiness. A
+`decision-required` return also writes the durable sibling `decision-required.md` exactly as
+section 7 specifies: it is a runtime optional package artifact, not a canonical planning Markdown
+output, written atomically via a temporary file in the destination directory renamed over the
+final path, with front matter followed by an H1 heading and the four scalar fields `stage`
+(`architecture` or `specification`), `question` (JSON double-quoted), `recommendation` (JSON
+double-quoted; may be empty), and `recorded_at` (ISO timestamp); on a new run or resume keep an
+unresolved record and remove it only after the question is resolved or explicitly superseded;
+never delete other package data; the `spec-prepare.md` decision-required outcome stays
+authoritative until a subsequent report is produced.
 Report the canonical paths for `context.md`, `spec.md`, `spec-prepare.md`, `spec-steps.json`, `evidence-plan.json`, optional `criteria.md`/`invariants.md`, and each step subspec. State evidence posture and traceability counts, corrections, selected verification strategies, automation gaps, and whether the package is prepared.
 
 Do not add attribution footers or co-author trailers.

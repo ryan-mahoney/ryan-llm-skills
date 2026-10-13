@@ -24,8 +24,17 @@ Resolve ordinary engineering choices from sourced context and repository facts. 
 and current project policy before writing. If missing, resolve them through the shared context
 contract. Escalate unresolved data preservation, compatibility, release, cost, authority, or
 material risk decisions to the coordinator as `decision-required`; a direct invocation handles
-that check-in itself. Complete independent work while waiting. Do not turn unknown consequences
-into assumed requirements. If no proposal, existing spec, or conversation analysis is available, report a named input blocker.
+that check-in itself. Record that check-in durably as a sibling `decision-required.md` in
+`package_dir`, written atomically: write the full content to a temporary file in the destination
+directory, then rename it over the final path. It is a runtime optional package artifact, not a
+canonical planning Markdown output. Lead with front matter followed by an H1 heading; the four
+scalar front-matter fields are `stage` (`architecture` or `specification`), `question` (JSON
+double-quoted), `recommendation` (JSON double-quoted; may be empty), and `recorded_at` (ISO
+timestamp). On a new run or resume, keep an unresolved record; remove it only after that question
+is resolved or explicitly superseded. Never delete other package data, and keep the existing
+`spec-prepare.md` `decision-required` outcome authoritative until a subsequent report is produced.
+Complete independent work while waiting. Do not turn unknown consequences into assumed
+requirements. If no proposal, existing spec, or conversation analysis is available, report a named input blocker.
 
 ## Output Contract
 
