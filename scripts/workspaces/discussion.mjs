@@ -15,7 +15,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { readSessionBranch } from "../spec-observe/core.mjs";
 import { inspectProcess, processIdentity } from "../spec-observe/process-identity.mjs";
-import { findAssignment, launchAssignment as launchAssignmentOwner, resolveAssignment, resolveTarget } from "./assignments.mjs";
+import { prepareAssignmentSpecTarget, findAssignment, launchAssignment as launchAssignmentOwner, resolveAssignment, resolveTarget } from "./assignments.mjs";
 import { observeAssignment } from "./reconcile.mjs";
 import { closeOwnedPiChild, createPiRpc } from "./pi-rpc.mjs";
 import { createReferenceCatalog, validateReferences } from "./references.mjs";
@@ -2662,13 +2662,35 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
     };
   }
 
-  // Fresh resolution for one trusted input. A thread handoff additionally
-  // requires the resolved execution directory to equal its stored binding;
-  // direct dispatch passes null and keeps only the canonical resolver result.
+  async function prepareSpecTarget(input = {}) {
+    if (closed) throw serviceClosed();
+    if (!isPlainObject(input) || Object.keys(input).some(key => !['workspace_id','thread_id','repository_id','spec_package'].includes(key))
+      || !WORKSPACE_ID_PATTERN.test(input.workspace_id ?? '') || typeof input.spec_package !== 'string' || !input.spec_package
+      || (input.thread_id !== undefined && (!isUuid(input.thread_id) || input.repository_id !== undefined)))
+      throw typedError('invalid-handoff', 'Choose a workspace, spec package and one target identity.');
+    const prepare = target => prepareAssignmentSpecTarget({storageRoot:configuredRoot,
+      workspace_id:input.workspace_id, target, specPackage:input.spec_package});
+    if (input.thread_id) return withThreadLock(input.workspace_id, input.thread_id, async () => {
+      if (closed) throw serviceClosed();
+      const {record,workspace} = await loadServiceRecord(input.workspace_id,input.thread_id);
+      const target = await adj4TargetFor(workspace,record.target);
+      const binding = await resolveTarget({workspace,target,specPackage:input.spec_package});
+      if (binding.execution_dir !== record.execution_dir) throw typedError('stale-preview','The conversation target changed.');
+      return prepare(target);
+    });
+    return prepare(input.repository_id ?? null);
+  }
+
+  // A conversation stays bound to its registered repository. A spec handoff
+  // deliberately runs in that repository's canonical package worktree instead.
+  // Validate both bindings separately; never accept a browser execution path.
   async function resolveFreshAssignment(trustedInput, executionBinding, label) {
     const fresh = await resolveAssignment(trustedInput, { referenceCatalog });
-    if (executionBinding !== null && (!fresh.record || fresh.record.execution_dir !== executionBinding)) {
-      throw typedError("stale-preview", `${label} target no longer matches the stored execution binding`);
+    if (executionBinding !== null) {
+      const workspace = await fetchWorkspace(configuredRoot, trustedInput.workspace_id);
+      const conversation = await resolveTarget({workspace, target:trustedInput.target, specPackage:trustedInput.specPackage});
+      if (conversation.execution_dir !== executionBinding)
+        throw typedError("stale-preview", `${label} target no longer matches the stored conversation binding`);
     }
     return fresh;
   }
@@ -2708,7 +2730,7 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
       stored.assignment_id !== assignmentId ||
       stored.workspace_id !== trustedInput.workspace_id ||
       stored.brief !== trustedInput.brief ||
-      stored.execution_dir !== (executionBinding ?? fresh.record.execution_dir) ||
+      stored.execution_dir !== fresh.record.execution_dir ||
       stored.contract_digest !== fresh.contractDigest
     ) {
       throw typedError("stale-preview", "launched assignment record does not match the approved contract");
@@ -2972,5 +2994,5 @@ export function createDiscussionService({ root, agentDir = null, spawn = nodeSpa
     return referenceCatalog.suggest({ workspace, executionDir: record.execution_dir, kind, query });
   }
 
-  return { create, list, history, send, saveBrief, suggestions, dispatchSaveBrief, dispatchPreview, dispatchLaunch, dispatchSuggestions, previewAssignment, launchAssignment, discard, subscribe, resume, stop, close };
+  return { create, list, history, send, saveBrief, suggestions, prepareSpecTarget, dispatchSaveBrief, dispatchPreview, dispatchLaunch, dispatchSuggestions, previewAssignment, launchAssignment, discard, subscribe, resume, stop, close };
 }

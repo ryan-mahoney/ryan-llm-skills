@@ -51,6 +51,7 @@ const SSE_HEADERS = {
 const LARGE_BODY_PATHS = new Set(["/api/thread/send", "/api/thread/save-brief", DISPATCH_SAVE_BRIEF_PATH]);
 
 const POST_ROUTES = new Map([
+  ["/api/dispatch/prepare-spec-target", "prepareSpecTarget"],
   ["/api/thread/create", "create"],
   ["/api/thread/send", "send"],
   ["/api/thread/stop", "stop"],
@@ -74,6 +75,7 @@ const STATUS_BY_CODE = new Map([
   ["invalid-reference", 400],
   ["reference-unavailable", 409],
   ["spec-package-unavailable", 409],
+  ["spec-worktree-unavailable", 409],
   ["invalid-cursor", 400],
   ["invalid-query", 400],
   ["thread-not-found", 404],
@@ -123,7 +125,9 @@ function sendStatus(response, status, headers) {
 const REFUSAL_BY_CODE = new Map([
   ["stale-preview", { reason: "stale-preview", error: "The reviewed assignment changed. Review it again." }],
   ["request-conflict", { reason: "request-conflict", error: "This request conflicts with saved state." }],
-  ["target-busy", { reason: "target-busy", error: "This execution directory already has an assignment." }],
+  ["target-busy", { reason: "target-busy", error: "This spec package or execution directory already has an assignment." }],
+  ["spec-worktree-unavailable", { reason: "spec-worktree-unavailable", error: "The spec worktree could not be verified. Check its recorded repository and branch before trying again." }],
+  ["spec-package-unavailable", { reason: "spec-package-unavailable", error: "The spec package is unavailable. Check its recorded locations before trying again." }],
   ["run-active", { reason: "run-active", error: "This spec package has an active run." }],
 ]);
 const DISPATCH_UNAVAILABLE_BODY = { error: "Dispatch service unavailable.", reason: "service-unavailable" };

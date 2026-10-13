@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Single workspace CLI. Strict argv handling runs completely before any store
 // mutation; refusals print one {error,path} JSON object to stderr and exit 1.
-// Reads never create anything and no target repository is ever written.
+// Reads never create anything. Explicit spec preparation creates a Git worktree.
 
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -32,6 +32,7 @@ import {
   listAssignments,
   locateAssignment,
   resolveAssignment,
+  prepareAssignmentSpecTarget,
 } from './assignments.mjs';
 import { locatePackage } from '../spec-location/index.mjs';
 import { readCheckpointRecord, readInboxGuard } from '../../pi/extensions/spec-runtime/sentinel.mjs';
@@ -67,6 +68,7 @@ Commands:
   add-note ID --title TITLE [--from FILE]
   add-artifact ID (--repository RID --path REL | --url URL) [--title T] [--note N]
   launch ID --brief REL (--instructions TEXT | --instructions-file PATH) [--id UUID] [--target RID] [--harness pi|claude|codex]
+  prepare-spec-target ID --target RID --spec-package REF    Create or verify the package worktree before launch preview
   locate ID --json                                           Reconcile and print one assignment envelope
   assignments [--workspace ID]                               List assignment envelopes
   attach ID                                                  Attach this terminal to a live assignment session
@@ -136,6 +138,7 @@ const COMMANDS = {
     positionals: 1,
     flags: { '--repository': 'value', '--path': 'value', '--url': 'value', '--title': 'value', '--note': 'value' },
   },
+  'prepare-spec-target': { positionals: 1, required: ['--target', '--spec-package'], flags: { '--target': 'value', '--spec-package': 'value', '--supersedes': 'value' } },
   launch: {
     positionals: 1,
     flags: {
@@ -392,6 +395,7 @@ function previewObject(preview) {
     workspace_directory: record.workspace_directory,
     storage_root: record.storage_root,
     execution_dir: record.execution_dir,
+    execution_branch: record.execution_branch ?? null,
     repository_id: record.repository_id,
     spec_package: record.spec_package,
     package_ref: record.package_ref ?? null,
@@ -802,6 +806,11 @@ async function execute(command, root, options, positionals, resolved) {
         kind: 'note', title: options['--title'], content: await readContent(options),
       });
     case 'add-artifact': return addArtifact(root, positionals[0], artifactOptions(options));
+    case 'prepare-spec-target':
+      await print(JSON.stringify(await prepareAssignmentSpecTarget({storageRoot:root,
+        workspace_id:positionals[0],target:options['--target'],specPackage:options['--spec-package'],
+        supersedes:options['--supersedes'] ?? null})));
+      return;
     case 'launch':
       await launchCommand(root, positionals[0], options);
       return undefined;
