@@ -17,7 +17,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFile, spawn } from "node:child_process";
+import { execFile, fork, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
@@ -26,15 +26,14 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createDirectDashboard } from "../../pi/extensions/spec-runtime/sentinel-dashboard.mjs";
+import { createDirectDashboard, createSentinelDashboard } from "../../pi/extensions/spec-runtime/sentinel-dashboard.mjs";
 import { setupStorage, createWorkspace } from "../workspaces/store.mjs";
 import { createDashboardServer } from "./dashboard.mjs";
-import { processIdentity } from "./process-identity.mjs";
+import { inspectProcess, processIdentity, sameProcess } from "./process-identity.mjs";
 import { createTerminalViews } from "./terminal-view.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = join(HERE, "fixtures", "terminal-view-stream.mjs");
-const DASHBOARD = join(HERE, "dashboard.mjs");
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -633,7 +632,7 @@ test("terminal routes 3: owned shutdown drains the terminal child before the sto
   assert.equal(failing.stop(), failingStop, "the rejected stop remains the shared promise");
 });
 
-test("terminal routes 4: the standalone dashboard CLI drains its child on SIGTERM and exits 0", { timeout: 30000 }, async (t) => {
+test("terminal routes 4: the Sentinel owner stops the standalone helper and drains its stream child", { timeout: 30000 }, async (t) => {
   const setup = await makeSetup();
   const resources = trackResources(setup);
   cleanupAll(t, setup, resources);
@@ -654,48 +653,57 @@ test("terminal routes 4: the standalone dashboard CLI drains its child on SIGTER
     `#!/bin/sh\nexec "${process.execPath}" "${FIXTURE}" "$@"\n`,
     { mode: 0o755 },
   );
-  const child = spawn(
-    process.execPath,
-    [DASHBOARD, "--port", "0", "--agent-dir", join(setup.root, "agent"), "--storage-root", setup.storageRoot],
-    {
-      env: {
-        ...process.env,
-        PATH: `${binDir}:${process.env.PATH}`,
-        TERMINAL_VIEW_LOG: logPath,
-        TERMINAL_VIEW_MODE: "delayed-term",
-        TERMINAL_VIEW_TERM_DELAY_MS: "200",
-      },
-      stdio: ["ignore", "pipe", "pipe"],
+  let child;
+  const service = createSentinelDashboard({
+    agentDir: join(setup.root, "agent"),
+    storageRoot: setup.storageRoot,
+    open: async () => {},
+    launch: (file, args, options) => {
+      child = fork(file, args, {
+        ...options,
+        env: {
+          ...process.env,
+          PATH: `${binDir}:${process.env.PATH}`,
+          TERMINAL_VIEW_LOG: logPath,
+          TERMINAL_VIEW_MODE: "delayed-term",
+          TERMINAL_VIEW_TERM_DELAY_MS: "200",
+        },
+      });
+      resources.children.push(child);
+      return child;
     },
-  );
-  resources.children.push(child);
+  });
   // Cleanup on a failed assertion terminates the helper gracefully so its
   // owned stream drains before the bounded SIGKILL fallback.
-  resources.stops.push(async () => {
-    if (child.exitCode !== null || child.signalCode !== null) return;
-    child.kill("SIGTERM");
-    await bounded(exited(child), 3000);
-  });
-  let output = "";
-  child.stdout.on("data", (chunk) => { output += chunk; });
+  resources.stops.push(() => service.stop());
+  const ready = await service.start();
   let earlyExit = null;
   child.once("exit", (code, signal) => { earlyExit = { code, signal }; });
 
-  const match = await waitFor(() => /http:\/\/127\.0\.0\.1:(\d+)\//.exec(output), {
-    label: "standalone dashboard URL",
-    timeout: 5000,
-  });
-  const port = Number(match[1]);
+  const port = Number(new URL(ready.url).port);
   const token = await stateToken(port);
   const live = await postOpen(port, openHeaders(port, token), JSON.stringify({ assignment_id: id }));
   assert.equal(live.status, 200);
+  const stream = (await readLog(logPath)).find(entry => entry.event === "start");
+  assert.ok(stream, "fixture stream process started");
+  const streamIdentity = await processIdentity(stream.pid);
+  assert.ok(streamIdentity);
+  // Failure cleanup covers the descendant too, without signalling a reused PID.
+  resources.stops.push(async () => {
+    if (sameProcess(streamIdentity)) {
+      process.kill(stream.pid, "SIGTERM");
+      await waitFor(() => inspectProcess(stream.pid).state === "dead", { label: "fixture cleanup exit" });
+    }
+  });
   const viewer = rawUpgrade(port, `/api/assignment-terminal/${id}/ws`, { origin: `http://127.0.0.1:${port}` });
   resources.viewers.push(viewer);
   await viewer.ready;
   await waitFor(() => viewer.data.includes(Buffer.from("101 Switching Protocols")), { label: "CLI viewer 101" });
 
   const signalledAt = Date.now();
-  child.kill("SIGTERM");
+  const stopped = service.stop();
+  assert.equal(service.stop(), stopped, "repeated owner stops share the drain");
+  await stopped;
   await waitFor(() => viewer.closed, { label: "CLI viewer destroyed" });
   const outcome = await waitFor(() => earlyExit, { label: "helper exit", timeout: 5000 });
   assert.deepEqual(outcome, { code: 0, signal: null }, "the helper exits cleanly after the drain");
@@ -703,6 +711,7 @@ test("terminal routes 4: the standalone dashboard CLI drains its child on SIGTER
   const log = await readLog(logPath);
   assert.ok(log.some((entry) => entry.event === "term"), "fixture saw SIGTERM");
   assert.ok(log.some((entry) => entry.event === "exit"), "fixture exited before the helper");
+  assert.equal(inspectProcess(stream.pid).state, "dead", "the owned stream process actually exited");
 });
 
 test("terminal routes 5: shell CSP carries the scoped player allowances, documents do not", { timeout: 20000 }, async (t) => {

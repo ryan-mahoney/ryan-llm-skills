@@ -18,10 +18,13 @@ function fixture(options = {}) {
       child.signalCode = null;
       child.kill = signal => {
         child.kills++;
-        child.signalCode = signal ?? null;
-        // A real ChildProcess emits exit asynchronously after SIGKILL; mirror
+        // A real ChildProcess emits exit asynchronously after shutdown; mirror
         // that terminal boundary so an awaited stop can settle.
-        process.nextTick(() => child.emit('exit', null, signal ?? null));
+        process.nextTick(() => {
+          child.exitCode = signal === 'SIGTERM' ? 0 : null;
+          child.signalCode = signal === 'SIGTERM' ? null : signal;
+          child.emit('exit', child.exitCode, child.signalCode);
+        });
         return true;
       };
       child.unref = () => {};
@@ -133,6 +136,7 @@ test('stop settles on the owned child exit and repeated stops share the promise'
   child.kill = signal => { child.kills++; child.signalCode = signal ?? null; return true; };
   const first = f.service.stop();
   const second = f.service.stop();
+  assert.equal(child.signalCode, 'SIGTERM', 'normal stop requests the helper drain');
   assert.equal(first, second, 'repeated stops share one tracked promise');
   let settled = false;
   first.then(() => { settled = true; }, () => { settled = true; });
@@ -142,6 +146,29 @@ test('stop settles on the owned child exit and repeated stops share the promise'
   child.emit('exit', 0, null);
   await first;
   assert.equal(f.service.stop(), first, 'the settled stop remains the shared promise');
+});
+
+test('helper stop escalates a stalled drain and retains its shared failure', async t => {
+  const f = fixture();
+  const started = f.service.start();
+  f.children[0].emit('message', { type: 'ready', url: 'http://127.0.0.1:12345/' });
+  await started;
+  const signals = [];
+  const child = f.children[0];
+  child.kill = signal => { signals.push(signal); return true; };
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const stop = f.service.stop();
+  assert.deepEqual(signals, ['SIGTERM']);
+  t.mock.timers.tick(1000);
+  assert.deepEqual(signals, ['SIGTERM', 'SIGKILL']);
+  let settled = false;
+  stop.catch(() => { settled = true; });
+  await Promise.resolve();
+  assert.equal(settled, false, 'forced cleanup still waits for exit within its final bound');
+  t.mock.timers.tick(1000);
+  await assert.rejects(stop, /cleanup exceeded 1000 ms/);
+  assert.equal(f.service.stop(), stop);
+  child.emit('exit', null, 'SIGKILL');
 });
 
 test('direct dashboard is inert, shares startup, serves state and repeats its ready URL', async t => {

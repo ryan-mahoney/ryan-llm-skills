@@ -18,9 +18,19 @@ export function createSentinelDashboard({ agentDir, port = 0, publicHost, storag
     if (stopping && stopping.child === child) return stopping.promise;
     const promise = new Promise((resolve, reject) => {
       if (child.exitCode != null || child.signalCode != null) { resolve(); return; }
-      const timer = setTimeout(() => reject(new Error('Dashboard helper cleanup exceeded 1000 ms.')), 1000);
-      child.once('exit', () => { clearTimeout(timer); resolve(); });
-      child.kill('SIGKILL');
+      let failure = null;
+      let timer = setTimeout(() => {
+        failure = new Error('Dashboard helper cleanup exceeded 1000 ms.');
+        child.kill('SIGKILL');
+        timer = setTimeout(() => reject(failure), 1000);
+      }, 1000);
+      child.once('exit', (code, signal) => {
+        clearTimeout(timer);
+        if (failure) reject(failure);
+        else if (code !== 0) reject(new Error(`Dashboard helper exited without a clean drain: ${signal ?? code}.`));
+        else resolve();
+      });
+      child.kill('SIGTERM');
       child.unref();
     });
     stopping = { child, promise };
