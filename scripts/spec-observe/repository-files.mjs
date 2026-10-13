@@ -61,12 +61,18 @@ async function entryFor(root, name, exclude) {
   return { entry: { name, size: info.size, available: true, reason: null } };
 }
 
-// HEAD is provenance only: a symbolic ref names the branch, a detached HEAD has
-// no branch and an unborn branch still carries a symbolic ref.
+// HEAD is provenance only: prefer the branch name (including unborn branches),
+// otherwise use the detached short HEAD identity.
 async function repositoryBranch(root, deadline) {
   try {
     const branch = await git(root, ['symbolic-ref', '--short', '--quiet', 'HEAD'], deadline);
     return branch.endsWith('\n') ? branch.slice(0, -1) : branch;
+  } catch (error) {
+    if (error.code !== 1) throw error;
+  }
+  try {
+    const head = await git(root, ['rev-parse', '--verify', '--quiet', '--short', 'HEAD'], deadline);
+    return head.endsWith('\n') ? head.slice(0, -1) : head;
   } catch (error) {
     if (error.code === 1) return null;
     throw error;

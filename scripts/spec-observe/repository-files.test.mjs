@@ -312,6 +312,39 @@ test('repository HTTP accepts the configured public host and refuses lookalikes 
 
 const EIGHT_MIB = 8 * 1024 * 1024;
 
+// Run independently: node --test --test-name-pattern='branch and detached revision provenance' scripts/spec-observe/repository-files.test.mjs
+test('repository listing retains branch and detached revision provenance and accepts unborn HEAD', async t => {
+  const base = fixture(t);
+  const storageRoot = join(base, 'storage');
+  await setupStorage(storageRoot);
+  await createWorkspace(storageRoot, { id: 'writer' });
+  const workspace = join(storageRoot, 'projects', 'writer');
+  const checkout = makeCheckout(base, 'checkout', { tracked: { 'readme.md': '# Fixture\n' } });
+  writeKit(workspace, 'writer', [{ id: 'docs', path: checkout }]);
+  const port = await startServer(t, { agentDir: base, storageRoot });
+
+  const named = await call(port, listingPath('writer', 'docs'));
+  assert.equal(named.status, 200);
+  assert.deepEqual(JSON.parse(named.body).checkout, { repository: 'docs', branch: 'main' });
+
+  git(checkout, 'checkout', '--detach', '-q', 'HEAD');
+  const shortHead = git(checkout, 'rev-parse', '--short', 'HEAD');
+  const detached = await call(port, listingPath('writer', 'docs'));
+  assert.equal(detached.status, 200);
+  assert.deepEqual(JSON.parse(detached.body).checkout, { repository: 'docs', branch: shortHead });
+  assert.deepEqual(JSON.parse(detached.body).files.map(entry => entry.name), ['readme.md']);
+
+  const unborn = join(base, 'unborn');
+  mkdirSync(unborn);
+  git(unborn, 'init', '-q', '-b', 'main');
+  writeFileSync(join(unborn, 'notes.txt'), 'uncommitted fixture\n');
+  writeKit(workspace, 'writer', [{ id: 'docs', path: unborn }]);
+  const emptyHead = await call(port, listingPath('writer', 'docs'));
+  assert.equal(emptyHead.status, 200);
+  assert.deepEqual(JSON.parse(emptyHead.body).checkout, { repository: 'docs', branch: 'main' });
+  assert.deepEqual(JSON.parse(emptyHead.body).files.map(entry => entry.name), ['notes.txt']);
+});
+
 // Recursive content/size/mtime snapshot for the non-mutation check: after
 // fixture setup, reads must leave the checkout and storage as captured.
 function snapshot(directory) {
