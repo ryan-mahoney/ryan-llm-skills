@@ -47,6 +47,7 @@ export default function Designs(props: DestinationProps) {
   const [probe, setProbe] = createSignal<{ key: string; state: 'checking' | 'ok' | 'failed' } | null>(null);
   const [retryNonce, setRetryNonce] = createSignal(0);
   const [probeRetry, setProbeRetry] = createSignal(0);
+  const [indexTransportFailed, setIndexTransportFailed] = createSignal(false);
   const [initialDelayed, setInitialDelayed] = createSignal(false);
   const [headDelayed, setHeadDelayed] = createSignal(false);
 
@@ -104,10 +105,22 @@ export default function Designs(props: DestinationProps) {
         setIndexResult({ scope: requestScope, body: result });
         setLoadedAt(new Date(serverNow() ?? Date.now()).toISOString());
         setIndexError('');
+        setIndexTransportFailed(false);
       })
       .catch(error => {
         if (generation !== indexGeneration) return;
-        setIndexError(error instanceof HttpError && error.message ? error.message : 'Could not load designs. Refresh to retry.');
+        if (error instanceof HttpError) {
+          setIndexError(error.message || 'Could not load designs. Refresh to retry.');
+          setIndexTransportFailed(false);
+          return;
+        }
+        if (controller.signal.aborted) {
+          setIndexError('Could not load designs. Refresh to retry.');
+          setIndexTransportFailed(false);
+          return;
+        }
+        setIndexError('Could not load designs. Refresh to retry.');
+        setIndexTransportFailed(true);
       })
       .finally(() => {
         clearTimeout(deadline);
@@ -150,6 +163,7 @@ export default function Designs(props: DestinationProps) {
     stopProbe();
     setIndexResult(null);
     setIndexError('');
+    setIndexTransportFailed(false);
     setLoadedAt(null);
     setBusy(false);
     setPending(false);
@@ -187,6 +201,26 @@ export default function Designs(props: DestinationProps) {
   const allInvalid = () => Boolean(data()) && designs().length === 0 && (data()!.errors?.length ?? 0) > 0;
   const unavailableSelection = () => selection().unavailable && (props.route.id ?? '') !== '';
   const filesRoute = (): RouteState => ({ dest: 'files', ws: props.route.ws, source: 'workspace' });
+
+  // Local transport loss: a fetch exception that is not an HTTP status and not
+  // an intentional scope abort or read deadline keeps retained data with the
+  // offline treatment instead of inventing removal or a first-use error.
+  const offline = () => props.live && (props.route.ws ?? '') !== '' && Boolean(data())
+    && (props.connectionFailed || indexTransportFailed());
+  const retryConnection = () => {
+    props.onRetryConnection();
+    refreshIndex();
+  };
+  const offlineNotice = () => (
+    <StateNotice
+      announce={false}
+      tone="warning"
+      title="Connection unavailable"
+      action={<button type="button" class="ds-btn ds-btn--primary" onClick={retryConnection}>Retry connection</button>}
+    >
+      {`Last received at ${time(loadedAt())}. These records may have changed on the host.`}
+    </StateNotice>
+  );
 
   // Complete catalog read semantics: a workspace is only declared removed after a
   // successful whole-catalog read omits it; degraded reads and invalid entries
@@ -473,7 +507,7 @@ export default function Designs(props: DestinationProps) {
   const captureGap = () => Boolean(screen()?.produced) && missingWidths().length > 0;
   const partialEvidence = () => Boolean(design()) && (captureGap() || indexDiagnostics().length > 0);
   const showCaptureCallout = () => Boolean(design()) && Boolean(screen()?.produced) && partialEvidence()
-    && !indexError() && !staleIndex() && probeState() !== 'failed';
+    && !indexError() && !staleIndex() && probeState() !== 'failed' && !offline();
   const unreadableIndexText = () => {
     const count = indexDiagnostics().length;
     return `${count} design ${count === 1 ? 'index' : 'indexes'} could not be read.`;
@@ -511,7 +545,7 @@ export default function Designs(props: DestinationProps) {
     if (!props.live) return '';
     if (!data()) return indexError() ? 'Designs unavailable' : 'Reading designs…';
     const text = countText();
-    if (!indexError()) return text;
+    if (!indexError() || offline()) return text;
     const retained = text === 'No designs recorded' ? 'no designs recorded' : text === 'Design indexes could not be read' ? 'no readable design packages' : text || 'no readable design packages';
     return `Last known catalog: ${retained}`;
   };
@@ -537,6 +571,11 @@ export default function Designs(props: DestinationProps) {
     }
     const current = selection();
     if (current.unavailable && (props.route.id ?? '') !== '') return 'Design not found.';
+    if (offline()) {
+      return probeState() === 'failed'
+        ? 'Connection unavailable. Screen could not be read.'
+        : 'Connection unavailable. These records may have changed on the host.';
+    }
     const failures = [indexError() ? 'Designs could not be read.' : '', probeState() === 'failed' ? 'Screen could not be read.' : ''].filter(Boolean).join(' ');
     if (failures) return failures;
     if (allInvalid()) return unreadableIndexText();
@@ -601,7 +640,10 @@ export default function Designs(props: DestinationProps) {
                     </Show>
                   </div>
                 </Show>
-                <Show when={Boolean(data()) && Boolean(indexError())}>
+                <Show when={offline() && !screen()}>
+                  {offlineNotice()}
+                </Show>
+                <Show when={Boolean(data()) && Boolean(indexError()) && !offline()}>
                   <div class="designs-index-error">
                     <StateNotice
                       announce={false}
@@ -613,7 +655,7 @@ export default function Designs(props: DestinationProps) {
                     </StateNotice>
                   </div>
                 </Show>
-                <Show when={staleIndex() && !indexError()}>
+                <Show when={staleIndex() && !indexError() && !offline()}>
                   <StateNotice
                     announce={false}
                     tone="warning"
@@ -907,12 +949,13 @@ export default function Designs(props: DestinationProps) {
                     when={screen()?.produced && Boolean(screenUrl()) && probeState() === 'ok'}
                     fallback={<button type="button" class="ds-btn" disabled title={openScreenTitle()}>Open screen</button>}
                   >
-                    <a class={showCaptureCallout() ? 'ds-btn' : 'ds-btn ds-btn--primary'} href={screenUrl()} target="_blank" rel="noopener">Open screen</a>
+                    <a class={showCaptureCallout() || offline() ? 'ds-btn' : 'ds-btn ds-btn--primary'} href={screenUrl()} target="_blank" rel="noopener">Open screen</a>
                   </Show>
                 </div>
               </div>
               <div class="design-canvas">
                 <Show when={screen()} fallback={<EmptyState symbol="◇" title="No screens planned" text="This design package records no screens yet." />}>
+                  <Show when={offline()}>{offlineNotice()}</Show>
                   <Show when={showCaptureCallout()}>
                     <StateNotice
                       announce={false}

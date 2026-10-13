@@ -26,6 +26,9 @@ SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 180s uv run --script \
 SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 180s uv run --script \
   scripts/spec-observe/frontend/designs-browser-check.py --case unavailable \
   --capture-reference /path/to/designs/app-ui/screens/80-designs-unavailable.html
+SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 180s uv run --script \
+  scripts/spec-observe/frontend/designs-browser-check.py --case offline \
+  --capture-reference /path/to/designs/app-ui/screens/81-designs-offline.html
 
 Only the temporary fixture storage, one final index HTTP delay, and the imported
 snapshot are substituted; App, route, adapters, /api/workspace-designs and the
@@ -55,7 +58,7 @@ from urllib.parse import parse_qs, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--case', choices=['journey', 'unproduced', 'empty', 'loading', 'error', 'partial', 'unavailable'], default='journey')
+parser.add_argument('--case', choices=['journey', 'unproduced', 'empty', 'loading', 'error', 'partial', 'unavailable', 'offline'], default='journey')
 parser.add_argument('--capture-reference', default=None)
 options = parser.parse_args()
 case = options.case
@@ -449,6 +452,312 @@ try:
                     reference_state.append(state)
                 reference_page.close()
                 report['reference'] = {'html': str(reference_html), 'url': reference_url, 'captures': reference_state}
+
+            if case == 'offline':
+                offline_state = {}
+                report['offlineState'] = offline_state
+                modes = {'hold_index': False, 'abort_designs': False, 'abort_head': False}
+                held_index = []
+
+                def wait_until(condition, label, timeout=5):
+                    deadline = time.monotonic() + timeout
+                    while time.monotonic() < deadline:
+                        if condition():
+                            return
+                        page.wait_for_timeout(25)
+                    raise AssertionError(f'{label} not observed')
+
+                def index_reads():
+                    return len([r for r in requests if '/api/workspace-designs' in r['url']])
+
+                def set_state_fail(value):
+                    control = context.request.get(base + f'/__fixture/control?action=state-fail&value={str(value).lower()}')
+                    assert control.ok
+
+                def designs_boundary(route):
+                    if '/api/workspace-designs' in route.request.url and 'id=fixture' in route.request.url:
+                        if modes['hold_index']:
+                            held_index.append(route)
+                            return
+                        if modes['abort_designs']:
+                            report['expectedFailures'].append({'method': route.request.method, 'url': route.request.url,
+                                                               'failure': 'net::ERR_FAILED', 'intentional': 'designs-abort'})
+                            route.abort()
+                            return
+                    route.continue_()
+
+                def head_boundary(route):
+                    if modes['abort_head'] and route.request.method == 'HEAD' and 'workspace-view' in route.request.url:
+                        report['expectedFailures'].append({'method': route.request.method, 'url': route.request.url,
+                                                           'failure': 'net::ERR_FAILED', 'intentional': 'head-abort'})
+                        route.abort()
+                    else:
+                        route.continue_()
+                page.route('**/api/workspace-designs**', designs_boundary)
+                page.route('**/workspace-view/**', head_boundary)
+
+                page.clock.install(time=datetime(2026, 1, 1, 12, 0, 0))
+                page.clock.pause_at(datetime(2026, 1, 1, 12, 0, 0))
+                try:
+                    # Cold confirmed demo at the explicit screen/width/query.
+                    page.goto(base + '/#/designs?ws=fixture&id=demo&path=screens%2F01-screen-1.html&tab=1280&q=fixture', wait_until='domcontentloaded')
+                    expect(page.locator('#design-detail-heading')).to_have_text('Design fixture')
+                    expect(frame().locator('h1')).to_have_text('Marker screen one')
+                    assert frame().locator('html').get_attribute('data-marker') == '42'
+                    page.evaluate("document.getElementById('design-frame').dataset.viewer = 'stable'")
+                    confirmed_handle = page.locator('#design-frame').element_handle()
+                    confirmed_nonce = frame().locator('html').get_attribute('data-nonce')
+                    confirmed_identity = page.locator('#design-frame-wrap').get_attribute('data-viewer-identity')
+                    confirmed_route = page.url
+                    heads_before = head_count()
+                    announcer = page.locator('main [role="status"][aria-atomic="true"]')
+                    offline_state['confirmed'] = {'route': confirmed_route, 'nonce': confirmed_nonce, 'identity': confirmed_identity,
+                                                  'headReads': heads_before, 'indexReads': index_reads()}
+
+                    # 1. State read failure with a held designs index read.
+                    modes['hold_index'] = True
+                    set_state_fail(True)
+                    with page.expect_response(lambda response: '/api/state' in response.url) as state_failure:
+                        page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    assert state_failure.value.status == 503
+                    wait_until(lambda: page.locator('.design-canvas .ds-callout').count() == 1, 'state-failure offline callout')
+                    callout = page.locator('.design-canvas .ds-callout')
+                    expect(callout).to_contain_text('Connection unavailable')
+                    expect(callout).to_contain_text('Last received at')
+                    expect(callout).to_contain_text('These records may have changed on the host.')
+                    offline_text = callout.text_content()
+                    expect(announcer).to_have_count(1)
+                    assert announcer.text_content() == 'Connection unavailable. These records may have changed on the host.'
+                    assert page.evaluate("document.getElementById('design-frame').dataset.viewer") == 'stable'
+                    assert frame().locator('html').get_attribute('data-nonce') == confirmed_nonce
+                    assert confirmed_handle.evaluate('(el) => el.isConnected')
+                    assert page.url == confirmed_route
+                    assert head_count() == heads_before
+                    held_before = len(held_index)
+                    reads_before = index_reads()
+                    page.clock.fast_forward(5000)
+                    expect(announcer).to_have_text('Connection unavailable. These records may have changed on the host.')
+                    assert held_before == 1 and len(held_index) == 1, (held_before, len(held_index))
+                    assert index_reads() == reads_before, 'poll issued a second in-flight index read'
+                    assert announcer.text_content() == 'Connection unavailable. These records may have changed on the host.'
+                    assert callout.text_content() == offline_text
+                    offline_state['stateFailure'] = {'status': 503, 'indexReads': index_reads(), 'held': len(held_index),
+                                                      'announcement': announcer.text_content(), 'timestamp': offline_text}
+                    report['offlineState']['detailsCapture'] = []
+                    for width in (1280, 1600):
+                        page.set_viewport_size({'width': width, 'height': 900})
+                        page.locator('#design-width').focus()
+                        page.select_option('#design-width', str(width))
+                        page.wait_for_function("(selected) => location.hash.includes('tab=' + selected)", arg=str(width))
+                        expect(page.locator('#design-width')).to_have_value(str(width))
+                        page.clock.fast_forward(16)
+                        assert_frame_geometry(width)
+                        page.evaluate("() => { const canvas = document.querySelector('.design-canvas'); if (canvas) canvas.scrollTop = 0; }")
+                        path = browser_evidence / f'designs-offline@{width}.png'
+                        page.screenshot(path=str(path))
+                        report['captures'].append(str(path))
+                        details = page.locator('.design-canvas details')
+                        observed = {
+                            'width': width,
+                            'route': page.url,
+                            'tab': params().get('tab'),
+                            'beforeOpen': details.evaluate('element => element.open'),
+                        }
+                        if not observed['beforeOpen']:
+                            summary = details.locator('summary')
+                            page.evaluate("""() => {
+                              window.__detailsLog = [];
+                              const node = document.querySelector('.design-canvas details');
+                              const head = node && node.querySelector('summary');
+                              if (node) node.addEventListener('toggle', () => window.__detailsLog.push({kind:'toggle', open: node.open, at: Date.now()}));
+                              if (head) head.addEventListener('click', event => window.__detailsLog.push({kind:'click', open: node.open, target: event.target.tagName, at: Date.now()}));
+                            }""")
+                            summary.focus()
+                            observed['summaryFocused'] = page.evaluate("document.activeElement && document.activeElement.tagName")
+                            summary.click()
+                            observed['afterClickOpen'] = details.evaluate('element => element.open')
+                            observed['afterClickCount'] = page.locator('.design-canvas details').count()
+                            observed['afterClickHtml'] = page.locator('.design-canvas details').first.evaluate('element => element.outerHTML.slice(0, 160)') if observed['afterClickCount'] else None
+                            observed['afterClickLog'] = page.evaluate('() => window.__detailsLog')
+                            page.clock.fast_forward(16)
+                            observed['afterClockOpen'] = page.locator('.design-canvas details').first.evaluate('element => element.open') if page.locator('.design-canvas details').count() else None
+                            observed['afterClockLog'] = page.evaluate('() => window.__detailsLog')
+                            if not observed['afterClickOpen'] and not observed['afterClockOpen']:
+                                summary.press('Enter')
+                                observed['afterKeyboardOpen'] = details.evaluate('element => element.open')
+                                page.clock.fast_forward(16)
+                                observed['afterKeyboardClockOpen'] = details.evaluate('element => element.open')
+                                observed['afterKeyboardLog'] = page.evaluate('() => window.__detailsLog')
+                        report['offlineState']['detailsCapture'].append(observed)
+                        details = page.locator('.design-canvas details')
+                        assert details.evaluate('element => element.open'), 'details disclosure closed before scrolling'
+                        details_paragraph = details.locator('p').first
+                        expect(details_paragraph).to_be_visible()
+                        expect(details_paragraph).to_contain_text('Capture: 1280px and 1600px')
+                        expect(details_paragraph).to_contain_text('First screen note.')
+                        page.evaluate("() => { const canvas = document.querySelector('.design-canvas'); if (canvas) { const target = canvas.querySelector('details'); if (target) target.scrollIntoView({ block: 'start' }); } }")
+                        details = page.locator('.design-canvas details')
+                        assert details.evaluate('element => element.open'), 'details disclosure closed after scrolling'
+                        path = browser_evidence / f'designs-offline-details@{width}.png'
+                        page.screenshot(path=str(path))
+                        report['captures'].append(str(path))
+                    if reference_html:
+                        capture_reference('reference-81', details=False, select_width=True, wait_for_frame=True)
+                    page.locator('#find-record').fill('demo')
+                    assert page.evaluate("document.getElementById('design-frame').dataset.viewer") == 'stable'
+                    assert frame().locator('html').get_attribute('data-nonce') == confirmed_nonce
+                    assert head_count() == heads_before, 'offline edits re-probed the frame'
+                    retry_button = page.get_by_role('button', name='Retry connection', exact=True)
+                    box = retry_button.bounding_box()
+                    assert box and box['width'] >= 44 and box['height'] >= 44, box
+                    page.evaluate("document.documentElement.style.zoom = '2'")
+                    retry_button.scroll_into_view_if_needed()
+                    zoom_box = retry_button.bounding_box()
+                    assert zoom_box and zoom_box['x'] >= 0 and zoom_box['y'] >= 0 and zoom_box['y'] < 900, zoom_box
+                    page.evaluate("document.documentElement.style.zoom = ''")
+                    set_state_fail(False)
+                    retry_button.focus()
+                    assert page.evaluate("document.activeElement && document.activeElement.textContent") == 'Retry connection'
+                    recovery_reads = index_reads()
+                    with page.expect_response(lambda response: '/api/state' in response.url) as state_recovery:
+                        page.keyboard.press('Enter')
+                    assert state_recovery.value.status == 200
+                    modes['hold_index'] = False
+                    released = 0
+                    while held_index:
+                        held_index.pop(0).continue_()
+                        released += 1
+                    expect(page.locator('.design-canvas .ds-callout')).to_have_count(0)
+                    assert page.evaluate("document.getElementById('design-frame').dataset.viewer") == 'stable'
+                    assert frame().locator('html').get_attribute('data-nonce') == confirmed_nonce
+                    assert confirmed_handle.evaluate('(el) => el.isConnected')
+                    offline_state['stateRecovery'] = {'state': 200, 'released': released,
+                                                      'indexReadsDelta': index_reads() - recovery_reads}
+                    passed('a state read failure with a held index keeps one in-flight read, the retained frame, timestamp and route while offline, and Retry connection restores the real paths')
+
+                    # 2. Designs transport abort with a healthy state.
+                    transport_before = {'route': page.url, 'nonce': confirmed_nonce,
+                                        'lifetime': frame().locator('html').get_attribute('data-lifetime')}
+                    modes['abort_designs'] = True
+                    with page.expect_response(lambda response: '/api/state' in response.url) as state_ok:
+                        page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    assert state_ok.value.status == 200
+                    wait_until(lambda: page.locator('.design-canvas .ds-callout').count() == 1, 'transport offline callout')
+                    transport_callout = page.locator('.design-canvas .ds-callout')
+                    expect(transport_callout).to_contain_text('Connection unavailable')
+                    assert (page.get_by_role('link', name='Open screen', exact=True).get_attribute('class') or '') == 'ds-btn'
+                    assert page.evaluate("document.getElementById('design-frame').dataset.viewer") == 'stable'
+                    assert frame().locator('html').get_attribute('data-nonce') == confirmed_nonce
+                    transport_text = transport_callout.text_content()
+                    transport_after = {'route': page.url, 'nonce': frame().locator('html').get_attribute('data-nonce'),
+                                       'lifetime': frame().locator('html').get_attribute('data-lifetime'),
+                                       'timestamp': transport_text}
+                    assert transport_after['route'] == transport_before['route']
+                    assert transport_after['nonce'] == transport_before['nonce'] == confirmed_nonce
+                    assert transport_after['lifetime'] == transport_before['lifetime']
+                    announcer_before = announcer.text_content()
+                    page.clock.fast_forward(5000)
+                    expect(announcer).to_have_text(announcer_before)
+                    assert transport_callout.text_content() == transport_text
+                    offline_state['transportAbort'] = {'before': transport_before, 'after': transport_after,
+                                                       'announcement': announcer_before}
+                    modes['abort_designs'] = False
+                    demo_index = Path(receipt['root']) / 'storage' / 'projects' / 'fixture' / 'designs' / 'demo' / 'design.json'
+                    original_record = json.loads(demo_index.read_text())
+                    changed_record = {**original_record, 'title': 'Design fixture offline recovered'}
+                    demo_index.write_text(json.dumps(changed_record))
+                    report['fixtureInputsDelta'] = {'fixture/designs/demo/design.json': changed_record}
+                    recovery_reads = index_reads()
+                    page.get_by_role('button', name='Retry connection', exact=True).click()
+                    expect(page.locator('.design-canvas .ds-callout')).to_have_count(0)
+                    expect(page.locator('#design-detail-heading')).to_have_text('Design fixture offline recovered')
+                    offline_state['transportRecovery'] = {'indexReadsDelta': index_reads() - recovery_reads}
+                    assert page.evaluate("document.getElementById('design-frame').dataset.viewer") == 'stable'
+                    assert frame().locator('html').get_attribute('data-nonce') == confirmed_nonce
+                    passed('a designs transport abort shows the same offline callout with a secondary Open screen and recovers the changed real title without replacing the frame')
+
+                    # 3. Aborted designs establish the offline callout, then an aborted HEAD for a new step-2 screen.
+                    modes['abort_designs'] = True
+                    page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    wait_until(lambda: page.locator('.design-canvas .ds-callout').count() == 1, 'transport offline before next')
+                    expect(page.locator('.design-canvas .ds-callout')).to_contain_text('Connection unavailable')
+                    modes['abort_head'] = True
+                    page.get_by_role('button', name='Next screen', exact=True).click()
+                    page.wait_for_function("() => location.hash.includes('path=screens%2F02-screen-2.html')")
+                    wait_until(lambda: 'Screen could not be read' in page.locator('.design-canvas').text_content(), 'step-2 failure preview')
+                    expect(page.locator('.design-canvas')).to_contain_text('Connection unavailable')
+                    assert page.locator('#design-frame').count() == 0, 'old frame rendered as the new identity'
+                    assert not confirmed_handle.evaluate('(el) => el.isConnected')
+                    expect(page.get_by_role('button', name='Open screen', exact=True)).to_be_disabled()
+                    offline_state['newScreenFailure'] = {'route': page.url, 'oldFrameConnected': False}
+                    modes['abort_head'] = False
+                    modes['abort_designs'] = False
+                    page.get_by_role('button', name='Retry connection', exact=True).click()
+                    wait_until(lambda: page.locator('.design-canvas').get_by_role('button', name='Retry screen', exact=True).count() == 1, 'retry screen available')
+                    page.locator('.design-canvas').get_by_role('button', name='Retry screen', exact=True).click()
+                    expect(frame().locator('h1')).to_have_text('Marker screen two')
+                    assert frame().locator('html').get_attribute('data-marker') == '42'
+                    assert params().get('path') == ['screens/02-screen-2.html'] and params().get('tab') == ['1600'] and params().get('q') == ['demo'], page.url
+                    passed('an uncached screen selected while aborting shows its own retry failure without reusing the old marker and recovers the real step-2 bytes')
+
+                    # 4. An HTTP 503 index alone is a normal read error, not offline.
+                    index_modes = {'on': True}
+                    def fail_index_503(route):
+                        if index_modes['on'] and '/api/workspace-designs' in route.request.url and 'id=fixture' in route.request.url:
+                            route.fulfill(status=503, content_type='application/json', body=json.dumps({'error': 'Fixture generic 503'}))
+                        else:
+                            route.continue_()
+                    page.route('**/api/workspace-designs**', fail_index_503)
+                    with page.expect_response(lambda response: '/api/workspace-designs' in response.url) as index_503:
+                        page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    assert index_503.value.status == 503
+                    expect(page.locator('.designs-index-error')).to_contain_text('Designs could not be read')
+                    expect(page.locator('.design-canvas .ds-callout')).to_have_count(0)
+                    index_modes['on'] = False
+                    page.unroute('**/api/workspace-designs**', fail_index_503)
+                    page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    expect(page.locator('.designs-index-error')).to_have_count(0)
+                    passed('an HTTP 503 index read alone stays the normal read error and never becomes the offline treatment')
+
+                    # 5. A scope change while transport failed never inherits the old state.
+                    modes['abort_designs'] = True
+                    page.locator('.head-actions').get_by_role('button', name='Refresh state', exact=True).click()
+                    wait_until(lambda: page.locator('.design-canvas .ds-callout').count() == 1, 'offline before scope change')
+                    page.evaluate("location.hash = '#/designs?ws=other'")
+                    expect(frame().locator('h1')).to_have_text('Other workspace screen')
+                    assert frame().locator('html').get_attribute('data-marker') == '42'
+                    expect(page.locator('#design-detail-heading')).to_have_text('Other fixture')
+                    expect(page.get_by_text('Connection unavailable', exact=True)).to_have_count(0)
+                    other_notices = page.locator('.design-canvas .ds-callout')
+                    notice_title = other_notices.first.locator('strong').text_content() if other_notices.count() else None
+                    offline_state['scopeIsolation'] = {'route': page.url, 'inheritedOffline': False, 'noticeTitle': notice_title}
+                    assert page.locator('#design-frame').count() == 1
+                    modes['abort_designs'] = False
+                    passed('a scope change while transport failed clears the old offline and index data and the other workspace does not inherit them')
+
+                    assert not report['pageErrors'], report['pageErrors']
+                    intentional = {(item['method'], item['url']) for item in report['expectedFailures'] if item.get('intentional')}
+                    unexpected = []
+                    for failure in report['requestFailures']:
+                        if 'ERR_ABORTED' in failure['failure']:
+                            continue
+                        if 'ERR_FAILED' in failure['failure'] and (failure['method'], failure['url']) in intentional:
+                            continue
+                        unexpected.append(failure)
+                    assert not unexpected, unexpected
+                    mutations = [r for r in requests if r['method'] not in ('GET', 'HEAD')]
+                    assert not mutations, f'mutation requests observed: {mutations}'
+                finally:
+                    while held_index:
+                        try:
+                            held_index.pop(0).continue_()
+                        except Exception:
+                            pass
+                    set_state_fail(False)
+                    page.unroute('**/api/workspace-designs**', designs_boundary)
+                    page.unroute('**/workspace-view/**', head_boundary)
+                report['status'] = 'passed'
+                raise CaseComplete()
 
             if case == 'unavailable':
                 unavailable_state = {}
