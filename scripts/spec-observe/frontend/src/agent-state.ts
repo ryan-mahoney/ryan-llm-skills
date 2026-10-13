@@ -14,6 +14,10 @@ export type AgentGuidance = {
 export type AgentCoverage = {
   sourceUnavailable: boolean;
   listPartial: boolean;
+  // True only when the selected row's own owning authoritative observer
+  // reports assignment_coverage.state === 'complete'. Unrelated observers
+  // never decide retention through the aggregate list flags.
+  selectedSourceComplete: boolean;
   selectedObservedAt: string | null;
   listObservedAt: string | null;
 };
@@ -181,9 +185,21 @@ export function agentCoverage(
     !selectedOwner ||
     !selectedCoverage ||
     selectedCoverage.state === "unavailable";
-  let selectedObservedAt = coverageObservedAt(selectedCoverage);
-  if (selectedObservedAt === null && selectedOwner && selectedCoverage == null)
-    selectedObservedAt = coverageObservedAt(selectedOwner.snapshot?.coverage);
+  const selectedSourceComplete = selectedCoverage?.state === "complete";
+  // A retained row carries the owning observer from the read that produced
+  // it; resolve its timestamp against that saved observation rather than the
+  // latest attempted read. Current rows embed the current owner, so their
+  // timing is unchanged, and a row without an embedded observer keeps the
+  // existing owner/legacy fallbacks.
+  const savedOwner =
+    selected?.observer && selected.observer.snapshot
+      ? (selected.observer as WireRecord)
+      : null;
+  const timeOwner = savedOwner ?? selectedOwner;
+  const timeCoverage = timeOwner?.snapshot?.assignment_coverage ?? null;
+  let selectedObservedAt = coverageObservedAt(timeCoverage);
+  if (selectedObservedAt === null && timeOwner && timeCoverage == null)
+    selectedObservedAt = coverageObservedAt(timeOwner.snapshot?.coverage);
   if (selectedObservedAt === null)
     selectedObservedAt = coverageObservedAt(selected?.assignment_coverage);
 
@@ -227,6 +243,7 @@ export function agentCoverage(
     listPartial:
       mapped.length > 0 &&
       (partial || (unavailable > 0 && unavailable < mapped.length)),
+    selectedSourceComplete,
     selectedObservedAt,
     listObservedAt,
   };

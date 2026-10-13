@@ -7,6 +7,7 @@ import { stale, time } from '../format';
 import { authoritativeObservers } from '../model';
 import type { Envelope, WireRecord } from '../model';
 import { formatHash } from '../route';
+import type { RouteState } from '../route';
 import type { DestinationProps } from './index';
 
 // Adapter-owned in-memory scroll offsets, keyed by the exact rendered route.
@@ -38,6 +39,9 @@ export default function AgentsDestination(props: DestinationProps) {
   // Detail facts come from the bounded retained row; a local find would
   // silently fall through to another assignment when the id is absent.
   const selected = () => props.agentsSelected ?? null;
+  const selectionRetained = () => props.agentsSelectionRetained === true;
+  const requestedId = () => (typeof props.route.id === 'string' && props.route.id !== '' ? props.route.id : null);
+  const missingRequested = () => requestedId() !== null && selected() === null;
 
   // Shared state owner decisions: source/coverage facts come from the
   // App-level agentCoverage memo, never re-derived locally.
@@ -63,9 +67,23 @@ export default function AgentsDestination(props: DestinationProps) {
   // inspect; a retained selection keeps its rows and receives a warning.
   const errorList = () => view() === 'error' && (props.payload === null || selected() === null);
   // The detail error placeholder applies when there is no retained context
-  // at all; with rows present the bounded AgentDetail contract keeps its own
-  // missing-selection copy.
+  // at all; an explicit requested id gets its own addressed placeholder, and
+  // a genuinely missing id without a request falls through to the generic
+  // selection copy.
   const errorDetail = () => view() === 'error' && selected() === null && props.assignments.length === 0;
+  // With zero current rows a retained selection still names its last-known
+  // identity; an incomplete read cannot establish absence, so the empty copy
+  // is qualified instead of claiming no agents were observed.
+  const retainedPartialEmpty = () =>
+    view() === 'empty' && selected() !== null && selectionRetained() && listPartial();
+  // Recovery stays the detail pane's job while its own view is error, offline
+  // or stale; the list keeps a refresh affordance but not a second primary
+  // action.
+  const detailOwnsRecovery = () =>
+    selected() !== null &&
+    (view(selectedObservedAt()) === 'error' ||
+      view(selectedObservedAt()) === 'offline' ||
+      view(selectedObservedAt()) === 'stale');
 
   const label = () => (filter() === 'ended' ? 'Ended' : 'Active');
   const caption = () => {
@@ -236,25 +254,10 @@ export default function AgentsDestination(props: DestinationProps) {
     if (settledRouteKey) agentScrollOffsets.set(settledRouteKey, scrollSnapshot());
   });
 
-  // Clear both parts of the filter in one user action; App.setQuery/setFilter
-  // compose synchronously and preserve ws.
-  const clearFilters = () => {
-    saveOutgoingScroll();
-    props.onQuery('');
-    props.onFilter('all');
-  };
-
-  // Agents-specific search transaction: settle the visible list for the next
-  // query under the preserved explicit filter, then clear or reselect the
-  // identity in the same navigation so a stale id can neither hide the new
-  // rows nor linger beside them. A still-visible selection is kept (so
-  // clearing the query preserves it); otherwise the id is dropped and the
-  // query alone settles the group, selecting the first settled row.
-  const onAgentsSearch = (value: string) => {
-    saveOutgoingScroll();
-    const next = { ...props.route };
-    if (value) next.q = value;
-    else delete next.q;
+  // One settled navigation transaction for search, tabs and Clear filters:
+  // settle the visible rows for the next route, keep a still-visible selected
+  // key, otherwise select the first settled row or clear the id.
+  const settleNavigation = (next: RouteState) => {
     const previousId = typeof next.id === 'string' && next.id ? next.id : null;
     const settled = visibleAgents(props.assignments, effectiveAgentFilter(next, props.assignments), next.q ?? '');
     if (previousId && settled.some(row => row.key === previousId)) {
@@ -266,6 +269,27 @@ export default function AgentsDestination(props: DestinationProps) {
       if (first) next.id = first;
     }
     props.onNavigate(next);
+  };
+
+  const onAgentsSearch = (value: string) => {
+    saveOutgoingScroll();
+    const next = { ...props.route };
+    if (value) next.q = value;
+    else delete next.q;
+    settleNavigation(next);
+  };
+
+  // Clear removes the query and any explicit filter. An id that no longer
+  // matches a current assignment is dropped before group inference; a still
+  // visible selected key is kept by the settled transaction.
+  const clearFilters = () => {
+    saveOutgoingScroll();
+    const next = { ...props.route };
+    delete next.q;
+    delete next.filter;
+    const id = typeof next.id === 'string' && next.id ? next.id : null;
+    if (id && !props.assignments.some(row => row.key === id)) delete next.id;
+    settleNavigation(next);
   };
 
   return (
@@ -292,7 +316,7 @@ export default function AgentsDestination(props: DestinationProps) {
               tabs={[{ key: 'active', label: 'Active' }, { key: 'ended', label: 'Ended' }]}
               onSelect={value => {
                 saveOutgoingScroll();
-                props.onFilter(value);
+                settleNavigation({ ...props.route, filter: value });
               }}
             />
           </div>
@@ -319,10 +343,18 @@ export default function AgentsDestination(props: DestinationProps) {
             {listNotice()}
             <Show when={!errorList() && view() === 'empty'}>
               <EmptyState
-                title="No agents observed"
-                text="An absent assignment snapshot differs from an empty one; refresh to read the host again."
+                title={retainedPartialEmpty() ? 'No agents in this partial read' : 'No agents observed'}
+                text={
+                  retainedPartialEmpty()
+                    ? 'The incomplete read does not establish that assignments are absent. The selected last-known identity remains; refresh to read the host again.'
+                    : 'An absent assignment snapshot differs from an empty one; refresh to read the host again.'
+                }
                 action={
-                  <button type="button" class="ds-btn ds-btn--primary" onClick={props.onRetryConnection}>
+                  <button
+                    type="button"
+                    class={detailOwnsRecovery() ? 'ds-btn' : 'ds-btn ds-btn--primary'}
+                    onClick={props.onRetryConnection}
+                  >
                     Refresh state
                   </button>
                 }
@@ -398,7 +430,30 @@ export default function AgentsDestination(props: DestinationProps) {
           </div>
         </article>
       </Show>
-      <Show when={view() !== 'loading' && !errorDetail()}>
+      <Show when={view() !== 'loading' && !errorDetail() && missingRequested()}>
+        <article class="detail agent-detail">
+          <div class="object-head">
+            <div class="object-top detail-title">
+              <h2 class="mono" title={props.route.id}>{requestedId()}</h2>
+              <StatusText tone="neutral">Not confirmed</StatusText>
+            </div>
+          </div>
+          <div class="detail-body">
+            <StateNotice
+              tone="warning"
+              title="Agent observation unavailable"
+              action={
+                <button type="button" class="ds-btn" onClick={props.onRetryConnection}>
+                  Retry state
+                </button>
+              }
+            >
+              The latest read did not report this assignment; its identity and state are not confirmed. No process failure has been inferred.
+            </StateNotice>
+          </div>
+        </article>
+      </Show>
+      <Show when={view() !== 'loading' && !errorDetail() && !missingRequested()}>
         <AgentDetail
           assignment={selected()}
           records={props.records}
@@ -419,6 +474,7 @@ export default function AgentsDestination(props: DestinationProps) {
           view={view(selectedObservedAt())}
           sourceUnavailable={sourceUnavailable()}
           listPartial={listPartial()}
+          retained={selectionRetained()}
           selectedObservedAt={selectedObservedAt()}
           connectionFailed={props.connectionFailed}
           observationStale={stale(selectedObservedAt())}

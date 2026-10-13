@@ -21,6 +21,14 @@ const text = (value: any, fallback = 'Not included in this observation'): string
 const displayState = (value: any): string =>
   typeof value === 'string' && value ? value.charAt(0).toUpperCase() + value.slice(1) : 'Not included in this observation';
 const statusTone = (tone: string): StatusTone => (tone === 'good' ? 'success' : tone === 'warn' ? 'warning' : 'neutral');
+// The assignment projection publishes coverage as a state string; legacy
+// saved fixtures may still carry an object with a state field.
+const coverageState = (value: any): string =>
+  typeof value === 'string' && value
+    ? value
+    : typeof value?.state === 'string' && value.state
+      ? value.state
+      : 'unknown';
 
 export type AgentDetailProps = {
   assignment: any;
@@ -35,6 +43,7 @@ export type AgentDetailProps = {
   view: AgentViewState;
   sourceUnavailable: boolean;
   listPartial: boolean;
+  retained?: boolean;
   selectedObservedAt: string | null;
   connectionFailed: boolean;
   observationStale: boolean;
@@ -100,7 +109,17 @@ function AgentDetailBody(props: AgentDetailProps) {
   // confirm the selected assignment; current status facts must not read as a
   // current observation.
   const sourceUnconfirmed = () => props.view === 'error' && props.sourceUnavailable;
+  // A retained row is the last-known saved observation: it qualifies status
+  // and facts exactly like a source-unavailable read, and no recovery copy
+  // may let the saved facts read as current.
+  const retained = () => props.retained === true;
+  const lastKnown = () => retained() || sourceUnconfirmed();
   const safeAction = (): { headline: string; caution?: string } => {
+    if (retained())
+      return {
+        headline: 'The latest incomplete read did not include this assignment; its retained identity is last-known.',
+        caution: 'Do not start another writer while this assignment’s liveness is uncertain; the retained identity is not a current observation.',
+      };
     if (sourceUnconfirmed())
       return {
         headline: 'The source cannot confirm this assignment in the latest read.',
@@ -111,33 +130,43 @@ function AgentDetailBody(props: AgentDetailProps) {
   const coverageReasons = (): string[] =>
     [...new Set([...list(a().coverageReasons), ...list(ac()?.reasons)].filter((value): value is string => typeof value === 'string' && value !== ''))];
   // One qualification or recovery notice at most, highest-confidence first.
+  // A retained row appends the last-known qualification to whichever notice
+  // is shown and never borrows freshness from the latest attempt.
   const notice = (): { title: string; body: string } | null => {
+    const qualifier = retained()
+      ? ' This row is the last-known retained identity, not a current observation.'
+      : '';
     if (recovery() === 'Retry state')
       return {
         title: 'Source unavailable',
-        body: `Assignment coverage could not be read${props.selectedObservedAt ? ` as of ${time(props.selectedObservedAt)}` : ''}. The selected assignment is retained; no process failure has been inferred.`,
+        body: `Assignment coverage could not be read${props.selectedObservedAt ? ` as of ${time(props.selectedObservedAt)}` : ''}. The selected assignment is retained; no process failure has been inferred.${qualifier}`,
       };
     if (recovery() === 'Retry connection')
       return {
         title: 'Connection unavailable',
-        body: `Last received at ${time(props.selectedObservedAt)}. These records may have changed on the host.`,
+        body: `Last received at ${time(props.selectedObservedAt)}. These records may have changed on the host.${qualifier}`,
       };
     if (recovery() === 'Refresh state')
-      return { title: `Last checked at ${time(props.selectedObservedAt)}`, body: 'Existing content is kept while the host revalidates it.' };
+      return { title: `Last checked at ${time(props.selectedObservedAt)}`, body: `Existing content is kept while the host revalidates it.${qualifier}` };
     if (a().unrecorded)
       return {
         title: 'Identity and record disagree',
-        body: 'The terminal is missing, but a matching process may still exist; this assignment has not been marked ended. Reconcile with the explicit locate command below.',
+        body: `The terminal is missing, but a matching process may still exist; this assignment has not been marked ended. Reconcile with the explicit locate command below.${qualifier}`,
       };
     if (a().workersUnconfirmed)
       return {
         title: 'Workers unconfirmed',
-        body: 'The linked run is recorded as running but its coordinator process is gone; inspect recorded workers before considering another writer.',
+        body: `The linked run is recorded as running but its coordinator process is gone; inspect recorded workers before considering another writer.${qualifier}`,
       };
     if (props.listPartial)
       return {
         title: 'Assignment coverage incomplete',
-        body: coverageReasons().length ? coverageReasons().join(' · ') : 'One or more observers returned an incomplete assignment read.',
+        body: `${coverageReasons().length ? coverageReasons().join(' · ') : 'One or more observers returned an incomplete assignment read.'}${qualifier}`,
+      };
+    if (retained())
+      return {
+        title: 'Last-known observation',
+        body: 'This assignment was not included in the latest incomplete read; its retained identity is last-known, not a current observation.',
       };
     return null;
   };
@@ -185,7 +214,7 @@ function AgentDetailBody(props: AgentDetailProps) {
         <div class="object-top detail-title">
           <h2 class="mono" tabindex={-1} ref={heading} title={a().assignment_id}>{a().assignment_id}</h2>
           <Show
-            when={sourceUnconfirmed()}
+            when={lastKnown()}
             fallback={<StatusText tone={statusTone(assignmentTone(a()))}>{assignmentLabel(a())}</StatusText>}
           >
             <StatusText tone="neutral">Not confirmed</StatusText>
@@ -204,7 +233,7 @@ function AgentDetailBody(props: AgentDetailProps) {
             <Show when={safeAction().caution}><p>{safeAction().caution}</p></Show>
           </div>
         </section>
-        <Show when={!sourceUnconfirmed()}>
+        <Show when={!lastKnown()}>
           <div class="facts">
             <div class="fact"><label>Recorded state</label><strong>{displayState(a().recordedState)}</strong><p>Saved assignment record</p></div>
             <div class="fact"><label>Observed state</label><strong>{displayState(a().observedState)}</strong><p>Presence only; no control.</p></div>
@@ -215,7 +244,7 @@ function AgentDetailBody(props: AgentDetailProps) {
         </Show>
         <section class="section">
           <Show
-            when={sourceUnconfirmed()}
+            when={lastKnown()}
             fallback={<div class="section-head"><h3>Execution</h3><span class="small muted">Read-only observation</span></div>}
           >
             <div class="section-head"><h3>Last-known execution identity</h3><span class="small muted">Not the current observation</span></div>
@@ -239,12 +268,12 @@ function AgentDetailBody(props: AgentDetailProps) {
             <p class="small warn">Automatic continuation can still act. Use takeover to hold it.</p>
           </Show>
           <Show when={a().unrecorded}><p class="small warn">The record differs from the observation; reconcile with the explicit locate command.</p></Show>
-          <p class="small muted">Coverage {text(a().coverage?.state, 'unknown')} · read-only observation; the record is never rewritten here.</p>
+          <p class="small muted">Coverage {coverageState(a().coverage)} · read-only observation; the record is never rewritten here.</p>
         </section>
         <Show when={a().key} keyed={true}>
           {(key: string) => <SessionPanel assignment={a()} token={props.token} live={props.live} refresh={props.refresh} onEnded={showEndedSession} />}
         </Show>
-        <Show when={a().task_activity?.state && a().task_activity.state !== 'unknown'}>
+        <Show when={!retained() && a().task_activity?.state && a().task_activity.state !== 'unknown'}>
           <section class="section">
             <div class="section-head"><h3>Response status</h3></div>
             <p>{a().task_activity.reason}</p>

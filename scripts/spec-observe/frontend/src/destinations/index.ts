@@ -25,6 +25,7 @@ export type DestinationProps = {
   // Agents-only retained selection and resolved observation coverage; sibling
   // adapters keep their existing required props unchanged.
   agentsSelected?: WireRecord | null;
+  agentsSelectionRetained?: boolean;
   agentsCoverage?: AgentCoverage | null;
   catalog: CatalogEntry[];
   catalogInvalid: WireRecord[];

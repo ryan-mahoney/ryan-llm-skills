@@ -714,7 +714,7 @@ if case == 'detail':
                 'execution': 'running',
                 'task_activity': {'state': 'idle', 'reason': 'Fixture assignment is waiting for input.'},
                 'nextAction': 'Attach to ' + assignment_id,
-                'coverage': {'state': 'complete', 'reasons': []},
+                'coverage': 'complete',
                 'recordedState': 'live',
                 'observedState': 'live',
                 'unrecorded': False,
@@ -885,6 +885,7 @@ if case == 'detail':
             null_facts = page.locator('.facts .fact')
             assert sum('Not included in this observation' in null_facts.nth(index).inner_text() for index in range(null_facts.count())) >= 3
             expect(page.locator('.agent-detail table')).to_contain_text('Not included in this observation')
+            expect(page.locator('.agent-detail .detail-body')).to_contain_text('Coverage complete')
             report['scenarios'].append('detail separation: recorded/observed, execution_dir and repository_id stay separate; null fields render Not included in this observation')
 
             # 2. Copy locate writes the exact literal full-UUID command through
@@ -1470,6 +1471,37 @@ try:
         note_state('retry-healthy', envelope(live_observers))
         state['value'] = envelope(live_observers)
 
+        # 3d. Active/Ended tabs and Clear filters settle the visible rows and
+        #     the selected id in one transaction while preserving q/ws. Clear
+        #     keeps a still-visible key and drops an incompatible id before
+        #     re-inferring the group.
+        open_route('agents', ws='fixture', id=key_a)
+        expect(page.locator('article.detail .detail-title h2')).to_have_text('selected-a')
+        page.get_by_role('button', name='Ended', exact=True).click()
+        expect(row(key_e)).to_have_attribute('aria-pressed', 'true')
+        expect(page.locator('article.detail .detail-title h2')).to_have_text('shared-ended')
+        expect(row(key_a)).to_have_count(0)
+        assert params()['filter'] == ['ended'] and params()['ws'] == ['fixture'], page.url
+        page.get_by_role('button', name='Active', exact=True).click()
+        expect(row(key_b)).to_have_attribute('aria-pressed', 'true')
+        expect(page.locator('article.detail .detail-title h2')).to_have_text('b-row')
+        assert params()['filter'] == ['active'] and params()['ws'] == ['fixture'], page.url
+        native_hash('#/agents?' + urlencode({'ws': 'fixture', 'filter': 'ended', 'q': 'no-such-match', 'id': key_e}))
+        expect(page.get_by_text('No matching agents', exact=True)).to_be_visible()
+        page.get_by_role('button', name='Clear filters', exact=True).click()
+        assert 'q' not in params() and 'filter' not in params() and params()['ws'] == ['fixture'], page.url
+        expect(row(key_e)).to_have_attribute('aria-pressed', 'true')
+        expect(page.locator('article.detail .detail-title h2')).to_have_text('shared-ended')
+        absent_clear = record_key('absent-clear')
+        native_hash('#/agents?' + urlencode({'ws': 'fixture', 'filter': 'active', 'q': 'no-such-match', 'id': absent_clear}))
+        expect(page.get_by_text('No matching agents', exact=True)).to_be_visible()
+        expect(page.locator('article.detail .object-head h2')).to_have_text(absent_clear)
+        page.get_by_role('button', name='Clear filters', exact=True).click()
+        assert 'q' not in params() and 'filter' not in params(), page.url
+        expect(row(key_b)).to_have_attribute('aria-pressed', 'true')
+        expect(page.locator('article.detail .detail-title h2')).to_have_text('b-row')
+        report['scenarios'].append('Active/Ended tabs and Clear filters settle visible rows and selected id in one transaction, preserving ws and keeping or clearing the selection')
+
         # 4. Unavailable/partial omission retains the exact id and its
         #    qualified source timestamp; complete absence withholds facts and
         #    never falls through to B.
@@ -1490,6 +1522,8 @@ try:
         expect(row(key_b)).to_contain_text('unavailable-read')
         expect(page.locator('article.detail .detail-title h2')).to_have_text('selected-a')
         assert params()['id'] == [key_a], page.url
+        expect(page.locator('article.detail .object-head .status')).to_have_text('Not confirmed')
+        expect(page.locator('article.detail .ds-callout')).to_contain_text('last-known')
         expect(page.locator('article.detail .footer')).to_contain_text(retained_label)
         expect(page.locator('article.detail .footer')).not_to_contain_text(omitted_label)
         expect(row(key_b)).to_have_attribute('aria-pressed', 'false')
@@ -1504,6 +1538,8 @@ try:
         expect(row(key_b)).to_contain_text('partial-read')
         expect(page.locator('article.detail .detail-title h2')).to_have_text('selected-a')
         assert params()['id'] == [key_a], page.url
+        expect(page.locator('article.detail .object-head .status')).to_have_text('Not confirmed')
+        expect(page.locator('article.detail .ds-callout')).to_contain_text('last-known')
         expect(page.locator('article.detail .footer')).to_contain_text(retained_label)
 
         complete_absence = envelope([observer(
@@ -1514,12 +1550,15 @@ try:
         state['value'] = complete_absence
         page.locator('#refresh-button').click()
         expect(row(key_b)).to_contain_text('complete-read')
-        expect(page.get_by_role('heading', name='Select an observed agent', exact=True)).to_be_visible()
-        expect(page.locator('article.detail')).to_have_count(0)
+        expect(page.locator('article.detail .object-head h2')).to_have_text(key_a)
+        expect(page.locator('article.detail .object-head .status')).to_have_text('Not confirmed')
+        expect(page.locator('article.detail .ds-callout')).to_contain_text('did not report this assignment')
+        expect(page.locator('article.detail .facts')).to_have_count(0)
+        expect(page.locator('article.detail .footer')).to_have_count(0)
+        expect(page.locator('article.detail .detail-actions')).to_have_count(0)
         assert params()['id'] == [key_a], page.url
         expect(row(key_b)).to_have_attribute('aria-pressed', 'false')
-        expect(page.locator('main')).not_to_contain_text('selected-a')
-        report['scenarios'].append('HTTP 200 unavailable/partial omission retains A with its qualified timestamp; complete absence withholds facts, keeps the URL id and never picks B')
+        report['scenarios'].append('HTTP 200 unavailable/partial omission retains A with its qualified timestamp; complete absence renders the addressed Not confirmed header, withholds assignment facts and never picks B')
 
         # 4b. Complete absence invalidates the pin: a later partial read
         #     omitting A must not resurrect its facts.
@@ -1531,22 +1570,126 @@ try:
         state['value'] = partial_after_complete
         page.locator('#refresh-button').click()
         expect(row(key_b)).to_contain_text('partial-after-complete')
-        expect(page.get_by_role('heading', name='Select an observed agent', exact=True)).to_be_visible()
-        expect(page.locator('article.detail')).to_have_count(0)
+        expect(page.locator('article.detail .object-head h2')).to_have_text(key_a)
+        expect(page.locator('article.detail .object-head .status')).to_have_text('Not confirmed')
+        expect(page.locator('article.detail .facts')).to_have_count(0)
+        expect(page.locator('article.detail .footer')).to_have_count(0)
         assert params()['id'] == [key_a], page.url
-        expect(page.locator('main')).not_to_contain_text('selected-a')
 
         # 4c. Moving to an absent id drops the old pin; returning to A under
         #     the same partial read cannot revive it.
         absent_c = record_key('absent-c')
         open_route('agents', ws='fixture', id=absent_c)
-        expect(page.get_by_role('heading', name='Select an observed agent', exact=True)).to_be_visible()
-        expect(page.locator('main')).not_to_contain_text('selected-a')
+        expect(page.locator('article.detail .object-head h2')).to_have_text(absent_c)
+        expect(page.locator('article.detail .object-head .status')).to_have_text('Not confirmed')
+        expect(page.locator('article.detail .facts')).to_have_count(0)
         native_hash('#/agents?' + urlencode({'ws': 'fixture', 'id': key_a}))
-        expect(page.get_by_role('heading', name='Select an observed agent', exact=True)).to_be_visible()
-        expect(page.locator('main')).not_to_contain_text('selected-a')
+        expect(page.locator('article.detail .object-head h2')).to_have_text(key_a)
+        expect(page.locator('article.detail .object-head .status')).to_have_text('Not confirmed')
+        expect(page.locator('article.detail .footer')).to_have_count(0)
         assert params()['id'] == [key_a], page.url
+        expect(row(key_b)).to_have_attribute('aria-pressed', 'false')
         report['scenarios'].append('Complete absence invalidates the retained pin and id changes drop it; later partial reads never resurrect A')
+
+        # 4d. All workspaces: the selected row's own owning source decides
+        #     retention. A complete owning read that omits A invalidates the
+        #     retained row even though an unrelated B source is partial.
+        key_b_beta = record_key('b-row', 'beta')
+        all_partial_a = envelope([
+            observer([assignment('selected-a')], coverage='partial', observed_at=old_at, published_at=old_at, workspace='fixture', observer_id='fixture'),
+            observer([assignment('b-row')], coverage='partial', observed_at=old_at, published_at=old_at, workspace='beta', observer_id='beta'),
+        ])
+        note_state('all-workspaces-partial-a', all_partial_a)
+        state['value'] = all_partial_a
+        open_route('agents', id=key_a)
+        expect(page.locator('article.detail .detail-title h2')).to_have_text('selected-a')
+        complete_a_partial_b = envelope([
+            observer([assignment('other-row')], coverage='complete', observed_at=fresh_at, published_at=fresh_at, workspace='fixture', observer_id='fixture'),
+            observer([assignment('b-row')], coverage='partial', observed_at=old_at, published_at=old_at, workspace='beta', observer_id='beta'),
+        ])
+        note_state('complete-a-partial-b-omission', complete_a_partial_b)
+        state['value'] = complete_a_partial_b
+        page.locator('#refresh-button').click()
+        expect(page.locator('article.detail .object-head h2')).to_have_text(key_a)
+        expect(page.locator('article.detail .object-head .status')).to_have_text('Not confirmed')
+        expect(page.locator('article.detail .facts')).to_have_count(0)
+        expect(page.locator('article.detail .footer')).to_have_count(0)
+        assert params()['id'] == [key_a] and 'ws' not in params(), page.url
+        expect(row(key_b_beta)).to_have_attribute('aria-pressed', 'false')
+        report['scenarios'].append('All-workspaces complete owning A omission invalidates the retained row despite an unrelated partial B')
+
+        # 4e. All workspaces: a partial owning A omission keeps A retained
+        #     beside a complete unrelated B, with A's own saved timestamp and
+        #     the last-known qualification instead of the fresh attempt.
+        old_a_current = envelope([
+            observer([assignment('selected-a')], coverage='partial', observed_at=old_at, published_at=old_at, workspace='fixture', observer_id='fixture'),
+            observer([assignment('b-row')], coverage='complete', observed_at=old_at, published_at=old_at, workspace='beta', observer_id='beta'),
+        ])
+        note_state('partial-a-old-selected', old_a_current)
+        state['value'] = old_a_current
+        page.locator('#refresh-button').click()
+        expect(page.locator('article.detail .detail-title h2')).to_have_text('selected-a')
+        saved_a_label = locale_label(old_at)
+        fresh_label = locale_label(fresh_at)
+        assert saved_a_label != fresh_label
+        omit_a_partial = envelope([
+            observer([], coverage='partial', observed_at=fresh_at, published_at=fresh_at, workspace='fixture', observer_id='fixture'),
+            observer([assignment('b-row')], coverage='complete', observed_at=fresh_at, published_at=fresh_at, workspace='beta', observer_id='beta'),
+        ])
+        note_state('partial-a-complete-b-omission', omit_a_partial)
+        state['value'] = omit_a_partial
+        page.locator('#refresh-button').click()
+        expect(row(key_b_beta)).to_contain_text('Attach to b-row')
+        expect(page.locator('article.detail .object-head h2')).to_have_text('selected-a')
+        expect(page.locator('article.detail .object-head .status')).to_have_text('Not confirmed')
+        expect(page.locator('article.detail .facts')).to_have_count(0)
+        expect(page.locator('article.detail .footer')).to_contain_text(saved_a_label)
+        expect(page.locator('article.detail .footer')).not_to_contain_text(fresh_label)
+        expect(page.locator('article.detail .ds-callout')).to_contain_text('last-known')
+        expect(page.locator('article.detail .ds-callout')).to_contain_text(saved_a_label)
+        expect(page.locator('article.detail .ds-callout')).not_to_contain_text(fresh_label)
+        expect(page.locator('.records .ds-callout')).to_contain_text('Assignment coverage incomplete')
+        assert params()['id'] == [key_a] and 'ws' not in params(), page.url
+        expect(row(key_b_beta)).to_have_attribute('aria-pressed', 'false')
+        report['scenarios'].append('All-workspaces partial owning A omission retains A beside complete B with its saved old timestamp and last-known/Not confirmed')
+
+        # 4f. Zero current rows under a fresh partial read: the retained old A
+        #     keeps its own timestamp and last-known identity, the empty list
+        #     copy names the incomplete read instead of claiming absence, and
+        #     only the detail pane owns the primary recovery action.
+        state['value'] = old_a_current
+        page.locator('#refresh-button').click()
+        expect(row(key_a)).to_have_count(1)
+        expect(page.locator('article.detail .detail-title h2')).to_have_text('selected-a')
+        empty_partial = envelope([observer([], coverage='partial', observed_at=fresh_at, published_at=fresh_at)])
+        note_state('partial-empty-omission', empty_partial)
+        state['value'] = empty_partial
+        page.locator('#refresh-button').click()
+        expect(page.locator('[data-assignment-key]')).to_have_count(0)
+        expect(page.get_by_role('heading', name='No agents in this partial read', exact=True)).to_be_visible()
+        expect(page.get_by_text('No agents observed', exact=True)).to_have_count(0)
+        expect(page.locator('article.detail .object-head h2')).to_have_text('selected-a')
+        expect(page.locator('article.detail .object-head .status')).to_have_text('Not confirmed')
+        expect(page.get_by_role('heading', name='Last-known execution identity', exact=True)).to_be_visible()
+        expect(page.locator('article.detail .footer')).to_contain_text(saved_a_label)
+        expect(page.locator('article.detail .footer')).not_to_contain_text(fresh_label)
+        list_refresh = page.locator('.list-pane .empty').get_by_role('button', name='Refresh state', exact=True)
+        expect(list_refresh).to_be_enabled()
+        assert 'ds-btn--primary' not in (list_refresh.get_attribute('class') or ''), list_refresh.get_attribute('class')
+        primaries = page.locator('.workspace .ds-btn--primary')
+        expect(primaries).to_have_count(1)
+        expect(page.locator('.agent-detail .ds-btn--primary')).to_have_count(1)
+        expect(primaries).to_have_text('Refresh state')
+        assert params()['id'] == [key_a], page.url
+        report['urls']['partial-empty-omission'] = urlsplit(page.url).fragment
+        shots = evidence / 'final-review'
+        shots.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(shots / 'retained-partial-fixed@1280.png'))
+        page.set_viewport_size({'width': 1600, 'height': 860})
+        page.screenshot(path=str(shots / 'retained-partial-fixed@1600.png'))
+        page.set_viewport_size({'width': 1280, 'height': 860})
+        report['screenshots'] = ['final-review/retained-partial-fixed@1280.png', 'final-review/retained-partial-fixed@1600.png']
+        report['scenarios'].append('Zero current rows under a fresh partial read keeps retained A Not confirmed with its saved timestamp, Last-known identity, qualified incomplete-empty copy, and only the detail pane owning the primary recovery; the list refresh stays enabled and secondary')
 
         # 5. Selected stale A is never qualified by fresh healthy B; another
         #    scope cannot show A, and returning re-resolves it.
@@ -1587,8 +1730,10 @@ try:
         expect(primaries).to_have_text('Refresh state')
         report['scenarios'].append('All-workspaces portfolio keeps selected old A stale despite fresh B, with its own timestamp and one recovery primary; offline and retry preserve A time')
         native_hash('#/agents?' + urlencode({'ws': 'other', 'id': key_a}))
-        expect(page.get_by_role('heading', name='Select an observed agent', exact=True)).to_be_visible()
-        expect(page.locator('main')).not_to_contain_text('selected-a')
+        expect(page.locator('article.detail .object-head h2')).to_have_text(key_a)
+        expect(page.locator('article.detail .object-head .status')).to_have_text('Not confirmed')
+        expect(page.locator('article.detail .facts')).to_have_count(0)
+        expect(page.locator('article.detail .footer')).to_have_count(0)
         assert params()['ws'] == ['other'], page.url
         native_hash('#/agents?' + urlencode({'ws': 'fixture', 'id': key_a}))
         expect(page.locator('article.detail .detail-title h2')).to_have_text('selected-a')
@@ -1615,8 +1760,9 @@ try:
         expect(page.locator('h1')).to_have_text('Specs')
         native_hash('#/agents?' + urlencode({'id': key_a}))
         expect(page.locator('h1')).to_have_text('Agents')
-        expect(page.get_by_role('heading', name='Select an observed agent', exact=True)).to_be_visible()
-        expect(page.locator('main')).not_to_contain_text('selected-a')
+        expect(page.locator('article.detail .object-head h2')).to_have_text(key_a)
+        expect(page.locator('article.detail .object-head .status')).to_have_text('Not confirmed')
+        expect(page.locator('article.detail .footer')).to_have_count(0)
         report['urls']['post-import'] = urlsplit(page.url).fragment
         report['scenarios'].append('Importing an unavailable snapshot drops the retained live row instead of inheriting A')
 

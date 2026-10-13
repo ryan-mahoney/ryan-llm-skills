@@ -577,6 +577,134 @@ test("agentCoverage: mixed mapped coverage is listPartial", () => {
   assert.equal(coverage.listObservedAt, T_FRESH);
 });
 
+// New retention cases are individually selectable, e.g.
+// node --import tsx --test --test-name-pattern "selectedSourceComplete" src/agent-state.test.ts
+// node --import tsx --test --test-name-pattern "retained row keeps its saved" src/agent-state.test.ts
+test("agentCoverage: selectedSourceComplete follows the selected owning source, not an unrelated partial", () => {
+  setClock(T);
+  const payload = {
+    observers: [
+      {
+        observer_id: "obs-a",
+        state: "observing",
+        published_at: T_OLD,
+        snapshot: {
+          workspace: "alpha",
+          runs: [],
+          assignment_coverage: { state: "complete", observed_at: T_OLD },
+          coverage: { state: "complete", observed_at: T_OLD },
+        },
+      },
+      {
+        observer_id: "obs-b",
+        state: "observing",
+        published_at: T_OLD,
+        snapshot: {
+          workspace: "beta",
+          runs: [],
+          assignment_coverage: { state: "partial", observed_at: T_FRESH },
+          coverage: { state: "partial", observed_at: T_FRESH },
+        },
+      },
+    ],
+  };
+  const selected = {
+    key: "k-alpha",
+    workspace: "alpha",
+    assignment_id: "a-1",
+    display: "live",
+  };
+  const coverage = agentCoverage(
+    payload,
+    [selected, { workspace: "beta" }],
+    selected,
+  );
+  assert.equal(coverage.selectedSourceComplete, true);
+  assert.equal(coverage.listPartial, true);
+  assert.equal(coverage.selectedObservedAt, T_OLD);
+});
+
+test("agentCoverage: selectedSourceComplete stays false beside an unrelated complete source", () => {
+  const payload = {
+    observers: [
+      {
+        observer_id: "obs-a",
+        state: "observing",
+        published_at: T_OLD,
+        snapshot: {
+          workspace: "alpha",
+          runs: [],
+          assignment_coverage: { state: "partial", observed_at: T_FRESH },
+          coverage: { state: "partial", observed_at: T_FRESH },
+        },
+      },
+      {
+        observer_id: "obs-b",
+        state: "observing",
+        published_at: T_OLD,
+        snapshot: {
+          workspace: "beta",
+          runs: [],
+          assignment_coverage: { state: "complete", observed_at: T_FRESH },
+          coverage: { state: "complete", observed_at: T_FRESH },
+        },
+      },
+    ],
+  };
+  const selected = {
+    key: "k-alpha",
+    workspace: "alpha",
+    assignment_id: "a-1",
+    display: "live",
+  };
+  const coverage = agentCoverage(
+    payload,
+    [selected, { workspace: "beta" }],
+    selected,
+  );
+  assert.equal(coverage.selectedSourceComplete, false);
+  assert.equal(coverage.listPartial, true);
+});
+
+test("agentCoverage: a retained row keeps its saved owning observer's timestamp", () => {
+  const payload = {
+    observers: [
+      {
+        observer_id: "obs-a",
+        state: "observing",
+        published_at: T_FRESH,
+        snapshot: {
+          workspace: "alpha",
+          runs: [],
+          assignment_coverage: { state: "partial", observed_at: T_FRESH },
+          coverage: { state: "partial", observed_at: T_FRESH },
+        },
+      },
+    ],
+  };
+  const selected = {
+    key: "k-alpha",
+    workspace: "alpha",
+    assignment_id: "a-1",
+    display: "live",
+    observer: {
+      observer_id: "obs-a",
+      state: "observing",
+      published_at: T_OLD,
+      snapshot: {
+        workspace: "alpha",
+        runs: [],
+        assignment_coverage: { state: "partial", observed_at: T_OLD },
+        coverage: { state: "partial", observed_at: T_OLD },
+      },
+    },
+  };
+  const coverage = agentCoverage(payload, [selected], selected);
+  assert.equal(coverage.selectedObservedAt, T_OLD);
+  assert.notEqual(coverage.selectedObservedAt, T_FRESH);
+  assert.equal(coverage.selectedSourceComplete, false);
+});
+
 test("agentCoverage: explicit partial coverage is listPartial", () => {
   const payload = {
     observers: [
@@ -614,6 +742,7 @@ test("agentCoverage: no mapped sources means null timestamps and false flags", (
   assert.deepEqual(noPayload, {
     sourceUnavailable: false,
     listPartial: false,
+    selectedSourceComplete: false,
     selectedObservedAt: null,
     listObservedAt: null,
   });
@@ -625,6 +754,7 @@ test("agentCoverage: no mapped sources means null timestamps and false flags", (
   assert.deepEqual(noObservers, {
     sourceUnavailable: false,
     listPartial: false,
+    selectedSourceComplete: false,
     selectedObservedAt: null,
     listObservedAt: null,
   });

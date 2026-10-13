@@ -83,16 +83,31 @@ export default function App() {
   const epic = createMemo(() => scopedEpics().find(item => item.key === route().id) ?? null);
   const agentsFilter = createMemo(() => effectiveAgentFilter(route(), scopedAssignments()));
   const visibleAgentRows = createMemo(() => visibleAgents(scopedAssignments(), agentsFilter(), route().q ?? ''));
-  const agentsCoverage = createMemo(() => agentCoverage(payload(), scopedAssignments(), agent() ?? retainedAgent()?.row ?? null));
-  const agentsSelected = createMemo(() => {
+  // The stored pin feeds coverage only while it still matches the requested
+  // id/scope/import context; an unrelated previous row must not contaminate
+  // the selected-source facts.
+  const retainedCandidate = createMemo(() => {
     const stored = retainedAgent();
-    const sameContext = stored !== null && stored.ws === scopeWs() && stored.imported === imported();
-    const coverage = agentsCoverage();
-    const sourceComplete = payload() !== null && !coverage.sourceUnavailable && !coverage.listPartial;
-    const previous = sameContext && stored !== null && stored.id === (route().id ?? '') ? stored.row : null;
-    const result = retainSelectedAgent(agent(), previous, sameContext, sourceComplete);
-    return result;
+    if (!stored || stored.ws !== scopeWs() || stored.imported !== imported()) return null;
+    if (stored.id !== (route().id ?? '')) return null;
+    return stored.row;
   });
+  // A retained row missing from this read still names its owning workspace so
+  // that an incomplete owning source qualifies the list; it is never added to
+  // the rendered rows or counts themselves.
+  const agentsCoverageRows = createMemo(() => {
+    const rows = scopedAssignments();
+    const retained = retainedCandidate();
+    if (!retained || rows.length === 0 || rows.some(row => row.key === retained.key)) return rows;
+    return [...rows, retained];
+  });
+  const agentsCoverage = createMemo(() => agentCoverage(payload(), agentsCoverageRows(), agent() ?? retainedCandidate()));
+  const agentsSelected = createMemo(() => {
+    const coverage = agentsCoverage();
+    const sourceComplete = payload() !== null && coverage.selectedSourceComplete;
+    return retainSelectedAgent(agent(), retainedCandidate(), true, sourceComplete);
+  });
+  const agentsSelectionRetained = createMemo(() => agent() === null && agentsSelected() !== null);
   const token = () => live() && !error() ? payload()?.thread_action_token || payload()?.action_token : undefined;
   const completionToken = () => live() && !error() ? payload()?.action_token : undefined;
   const observers = createMemo(() => authoritativeObservers(payload()?.observers ?? []));
@@ -438,7 +453,7 @@ export default function App() {
           setRetainedAgent(null);
         } else if (stored) {
           const coverage = agentsCoverage();
-          if (payload() !== null && !coverage.sourceUnavailable && !coverage.listPartial) setRetainedAgent(null);
+          if (payload() !== null && coverage.selectedSourceComplete) setRetainedAgent(null);
         }
       }
       // polling never swaps a resolved selection for a sibling row.
@@ -541,6 +556,7 @@ export default function App() {
     get records() { return scopedRecords(); },
     get assignments() { return scopedAssignments(); },
     get agentsSelected() { return agentsSelected(); },
+    get agentsSelectionRetained() { return agentsSelectionRetained(); },
     get agentsCoverage() { return agentsCoverage(); },
     get epics() { return scopedEpics(); },
     get scopedObservers() { return scopedObservers(); },
