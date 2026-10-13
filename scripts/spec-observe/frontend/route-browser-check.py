@@ -6,7 +6,7 @@
 
 After npm run build --prefix scripts/spec-observe/frontend:
 SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 120s uv run --script \
-  scripts/spec-observe/frontend/route-browser-check.py [--case rail|files|specs|context|catalog|member|search|filters|specs-list|specs-overview|specs-variants|specs-activity|specs-relaunch|files-workspace]
+  scripts/spec-observe/frontend/route-browser-check.py [--case rail|files|specs|context|catalog|member|search|filters|specs-list|specs-overview|specs-variants|specs-activity|specs-relaunch|files-workspace|files-sources]
 Only the fixture substitutes workers; App, adapters and file APIs are real.
 """
 import argparse
@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 args = argparse.ArgumentParser()
-args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog', 'member', 'search', 'filters', 'specs-list', 'specs-overview', 'specs-variants', 'specs-activity', 'specs-relaunch', 'files-workspace'])
+args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog', 'member', 'search', 'filters', 'specs-list', 'specs-overview', 'specs-variants', 'specs-activity', 'specs-relaunch', 'files-workspace', 'files-sources'])
 case = args.parse_args().case
 root = Path(__file__).resolve().parent
 evidence = Path(os.environ.get('SENTINEL_EVIDENCE_DIR', '/tmp/sentinel-route-evidence'))
@@ -33,7 +33,7 @@ report = {'status': 'failed', 'scenarios': [], 'pageErrors': []}
 fixture_env = dict(os.environ)
 if case == 'context':
     fixture_env['SENTINEL_NONCANONICAL_CONTEXT'] = '1'
-if case == 'files-workspace':
+if case in ('files-workspace', 'files-sources'):
     fixture_env['SENTINEL_REPOSITORY_FILES'] = '1'
 fixture = subprocess.Popen(['node', str(root / 'browser-fixture.mjs')], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=fixture_env)
 try:
@@ -372,6 +372,8 @@ try:
             expect(page.locator('.files-destination button.file-record', has_text='briefs/browser.md')).to_have_count(1)
             page.locator('#file-source').select_option('package')
             expect(page.locator('#file-source')).to_have_value('package')
+            page.locator('#file-owner').select_option(package)
+            expect(page.locator('#file-owner')).to_have_value(package)
             assert files_params()['source'] == ['package'] and files_params()['id'] == [package], page.url
             expect(page.locator('.files-destination button.file-record', has_text='spec.md')).to_have_count(1)
             assert page.locator('.files-destination button.file-record', has_text='notes/browser.md').count() == 0
@@ -390,6 +392,158 @@ try:
             page.screenshot(path=str(evidence / 'files-19-1600.png'))
             files_accessibility('files 1600')
             report['scenarios'].append('Files retains adjacent layout, containment and accessibility contract at 1600x900')
+
+        if case == 'files-sources':
+            # Real built Files destination over Context/Repository/package HTTP.
+            # Only the gated fixture bytes and the owned fixture controls are
+            # test-owned; every source read crosses the real server APIs.
+            context_bytes = context.request.get(receipt['url'] + '/api/workspace-file?' + urlencode({'id': 'fixture', 'file': 'context/project-context.md'}))
+            assert context_bytes.ok and 'Browser context note.' in context_bytes.text()
+            open_route('files', ws='fixture')
+            open_route('files', ws='fixture', source='context', path='context/project-context.md')
+            expect(page.locator('#file-source')).to_have_value('context')
+            files_viewer('context/project-context.md', 'Browser context note.')
+            expect(page.locator('.files-destination button.file-record')).to_have_count(1)
+            expect(page.locator('.files-destination button.file-record')).to_contain_text('context/project-context.md')
+            assert page.locator('.files-destination button.file-record', has_text='notes/browser.md').count() == 0
+            page.screenshot(path=str(evidence / 'files-15-1280.png'))
+            page.reload()
+            files_viewer('context/project-context.md', 'Browser context note.')
+            page.go_back()
+            expect(page.locator('#file-source')).to_have_value('workspace')
+            assert files_params().get('source') is None, page.url
+            page.go_forward()
+            files_viewer('context/project-context.md', 'Browser context note.')
+            assert files_params()['source'] == ['context'], page.url
+            report['scenarios'].append('Context cold route lists only registered entries, reads workspace-file bytes, and reload/Back/Forward keep row/reader/URL agreement')
+
+            repository_listing = context.request.get(receipt['url'] + '/api/repository-files?' + urlencode({'id': 'fixture', 'repository': 'fixture-repo'})).json()
+            assert repository_listing['checkout']['repository'] == 'fixture-repo', repository_listing['checkout']
+            repository_branch = repository_listing['checkout']['branch']
+            assert isinstance(repository_branch, str) and repository_branch, repository_listing['checkout']
+            repository_bytes = context.request.get(receipt['url'] + '/api/repository-file?' + urlencode({'id': 'fixture', 'repository': 'fixture-repo', 'file': 'fixture-repo-plan.md'}))
+            assert repository_bytes.ok and 'Checkout-scoped suggestion target.' in repository_bytes.text()
+            open_route('files', ws='fixture')
+            open_route('files', ws='fixture', source='repository', id='fixture-repo', path='fixture-repo-plan.md')
+            expect(page.locator('#file-source')).to_have_value('repository')
+            expect(page.locator('#file-owner')).to_have_value('fixture-repo')
+            files_viewer('fixture-repo-plan.md', 'Checkout-scoped suggestion target.')
+            expect(page.locator('.files-destination .reader-head p')).to_contain_text('fixture-repo')
+            expect(page.locator('.files-destination .reader-head p')).to_contain_text(repository_branch)
+            expect(page.locator('.files-destination .list-caption')).to_contain_text('fixture-repo')
+            expect(page.locator('.files-destination .list-caption')).to_contain_text(repository_branch)
+            page.screenshot(path=str(evidence / 'files-16-1280.png'))
+            page.reload()
+            files_viewer('fixture-repo-plan.md', 'Checkout-scoped suggestion target.')
+            page.go_back()
+            assert files_params().get('source') is None, page.url
+            page.go_forward()
+            files_viewer('fixture-repo-plan.md', 'Checkout-scoped suggestion target.')
+            assert files_params()['id'] == ['fixture-repo'], page.url
+            report['scenarios'].append('Repository cold route reads checkout bytes and shows the live repository/branch identity through reload and Back/Forward')
+
+            owner_options = page.eval_on_selector_all('#file-owner option', 'els => els.map(el => el.value)')
+            assert {'fixture-repo', 'fixture-docs'} <= set(owner_options), owner_options
+            page.locator('#file-owner').select_option('fixture-docs')
+            expect(page.locator('#file-owner')).to_have_value('fixture-docs')
+            assert files_params()['id'] == ['fixture-docs'], page.url
+            expect(page.locator('.files-destination button.file-record', has_text='fixture-docs-guide.md')).to_have_count(1)
+            report['scenarios'].append('Multiple repositories show the explicit owner chooser and switching owners changes the listing identity and URL')
+
+            open_route('files', ws='fixture', source='repository', id='unknown-owner')
+            expect(page.get_by_text('Files could not be listed', exact=True)).to_be_visible()
+            expect(page.locator('#file-owner')).to_have_value('unknown-owner')
+            assert files_params()['id'] == ['unknown-owner'], page.url
+            report['scenarios'].append('An explicit unknown repository owner stays unavailable without being retargeted')
+
+            open_route('files', ws='fixture', path='files/overview.md')
+            files_viewer('files/overview.md', 'Fixture overview')
+            open_route('files', ws='fixture', source='repository', id='fixture-repo', path='files/overview.md')
+            expect(page.get_by_text('File could not be read', exact=True)).to_be_visible()
+            expect(page.locator('.files-destination .reader')).not_to_contain_text('Fixture overview')
+            assert files_params()['source'] == ['repository'] and files_params()['path'] == ['files/overview.md'], page.url
+            report['scenarios'].append('The same relative filename in workspace and repository sources reads distinct bytes without aliasing')
+
+            package = receipt['package']
+            open_route('files', ws='fixture')
+            open_route('files', ws='fixture', source='package', id=package, path='spec.md')
+            expect(page.locator('#file-source')).to_have_value('package')
+            expect(page.locator('#file-owner')).to_have_value(package)
+            files_viewer('spec.md', 'Browser specification')
+            page.screenshot(path=str(evidence / 'files-17-1280.png'))
+            page.get_by_role('button', name='Open spec', exact=True).click()
+            expect(page.locator('h1')).to_have_text('Specs')
+            assert params()['ws'] == ['fixture'], page.url
+            spec_id = params().get('id')
+            assert spec_id, page.url
+            page.go_back()
+            files_viewer('spec.md', 'Browser specification')
+            page.reload()
+            files_viewer('spec.md', 'Browser specification')
+            page.go_forward()
+            expect(page.locator('h1')).to_have_text('Specs')
+            assert params()['ws'] == ['fixture'] and params().get('id') == spec_id, page.url
+            report['scenarios'].append('Package cold route reads observed files, and Open spec returns by record.key with reload and history agreement')
+
+            open_route('files', source='package', id=package, path='spec.md')
+            expect(page.locator('.files-destination')).to_be_visible()
+            expect(page.locator('.workspace-picker')).to_have_count(0)
+            expect(page.locator('.files-destination .reader-head h2')).to_have_text('spec.md')
+            expect(page.locator('.files-destination .reader')).to_contain_text('Browser specification')
+            page.locator('#file-source').select_option('workspace')
+            expect(page.locator('.workspace-picker')).to_be_visible()
+            expect(page.locator('.files-destination')).to_have_count(0)
+            report['scenarios'].append('Package-with-id stays reachable without ws, and switching to a workspace source opens the existing picker')
+
+            context.request.get(receipt['url'] + '/__fixture/control?' + urlencode({'action': 'catalog-mode', 'value': 'partial'}))
+            # The owned partial kit registers two context entries, one of them
+            # outside the workspace root. Poll the live API until the detail
+            # read reflects the just-applied control instead of the healthy kit.
+            partial_context_count = 2
+            partial_deadline = time.monotonic() + 5
+            while True:
+                workspace_detail = context.request.get(receipt['url'] + '/api/workspace?' + urlencode({'id': 'fixture'})).json()
+                unavailable_context = [entry for entry in workspace_detail['context'] if entry['status'] != 'ok']
+                if len(workspace_detail['context']) == partial_context_count and unavailable_context:
+                    break
+                assert time.monotonic() < partial_deadline, workspace_detail['context']
+                time.sleep(0.1)
+            open_route('files', ws='fixture', source='context')
+            expect(page.locator('#file-source')).to_have_value('context')
+            expect(page.locator('.files-destination button.file-record')).to_have_count(len(workspace_detail['context']))
+            disabled_rows = page.locator('.files-destination button.file-record:disabled')
+            expect(disabled_rows).to_have_count(len(unavailable_context))
+            for entry in unavailable_context:
+                expect(disabled_rows.filter(has_text=entry['status'])).to_have_count(1)
+            context.request.get(receipt['url'] + '/__fixture/control?' + urlencode({'action': 'workspace-reset'}))
+            # The App may retain the partial workspace detail; poll the live API
+            # until the healthy kit is visible, then remount the App so its own
+            # workspace-detail fetch is fresh before asserting the reset state.
+            reset_deadline = time.monotonic() + 5
+            while True:
+                reset_context = context.request.get(receipt['url'] + '/api/workspace?' + urlencode({'id': 'fixture'})).json()['context']
+                if len(reset_context) == 1 and reset_context[0]['status'] == 'ok' and reset_context[0]['path'] == 'context/project-context.md':
+                    break
+                assert time.monotonic() < reset_deadline, reset_context
+                time.sleep(0.1)
+            open_route('files', ws='fixture', source='context', path='context/project-context.md')
+            page.reload()
+            expect(page.locator('.files-destination button.file-record:disabled')).to_have_count(0)
+            expect(page.locator('.files-destination button.file-record')).to_have_count(1)
+            files_viewer('context/project-context.md', 'Browser context note.')
+            report['scenarios'].append('Partial kit context rows show their real missing/outside status disabled, and workspace-reset restores the registered entry')
+
+            page.set_viewport_size({'width': 1600, 'height': 900})
+            open_route('files', ws='fixture', source='context', path='context/project-context.md')
+            files_viewer('context/project-context.md', 'Browser context note.')
+            page.screenshot(path=str(evidence / 'files-15-1600.png'))
+            open_route('files', ws='fixture', source='repository', id='fixture-repo', path='fixture-repo-plan.md')
+            files_viewer('fixture-repo-plan.md', 'Checkout-scoped suggestion target.')
+            page.screenshot(path=str(evidence / 'files-16-1600.png'))
+            open_route('files', ws='fixture', source='package', id=package, path='spec.md')
+            files_viewer('spec.md', 'Browser specification')
+            page.screenshot(path=str(evidence / 'files-17-1600.png'))
+            report['scenarios'].append('Context, Repository and package sources keep row/reader agreement at 1600x900')
 
         if case in (None, 'specs'):
             open_route('specs', ws='fixture')
@@ -1690,7 +1844,7 @@ finally:
         fixture.kill()
         fixture.wait()
     report['elapsedSeconds'] = round(time.monotonic() - started, 3)
-    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'step-003-fix-browser.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'sentinel-planned-filter-browser.json' if case == 'filters' else 'specs-list.json' if case == 'specs-list' else 'specs-variants.json' if case == 'specs-variants' else 'specs-overview.json' if case == 'specs-overview' else 'specs-activity.json' if case == 'specs-activity' else 'specs-relaunch.json' if case == 'specs-relaunch' else 'files-workspace.json' if case == 'files-workspace' else 'step-002-fix-browser.json'
+    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'step-003-fix-browser.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'sentinel-planned-filter-browser.json' if case == 'filters' else 'specs-list.json' if case == 'specs-list' else 'specs-variants.json' if case == 'specs-variants' else 'specs-overview.json' if case == 'specs-overview' else 'specs-activity.json' if case == 'specs-activity' else 'specs-relaunch.json' if case == 'specs-relaunch' else 'files-workspace.json' if case == 'files-workspace' else 'files-sources.json' if case == 'files-sources' else 'step-002-fix-browser.json'
     target = evidence / filename
     temporary = target.with_name(target.name + '.tmp')
     temporary.write_text(json.dumps(report, indent=2) + '\n')

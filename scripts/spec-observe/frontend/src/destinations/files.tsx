@@ -4,14 +4,18 @@
 import { createEffect, createMemo, createSignal, For, on, onCleanup, Show, untrack } from 'solid-js';
 import { getJson } from '../api';
 import {
+  contextRoutePath,
   fileKindLabel,
   fileSizeLabel,
+  fileSource,
   filterLoadedFiles,
   listFileUrl,
   readFileUrl,
   scopeKey,
+  type FileEntry,
   type FileListing,
   type FileScope,
+  type FileSource,
   type LoadedFile,
 } from '../files-model';
 import { packageViewUrl } from '../observation-format';
@@ -19,16 +23,46 @@ import { EmptyState, MasterDetail, RegionalSkeleton, StateNotice } from '../prim
 import { FileReader } from '../FileReader';
 import type { DestinationProps } from './index';
 
-type FileKindSource = 'workspace' | 'package';
-const sourceOf = (route: DestinationProps['route']): FileKindSource => (route.source === 'package' ? 'package' : 'workspace');
 const textValue = (value: unknown): string => (typeof value === 'string' ? value : '');
+const list = (value: unknown): any[] => (Array.isArray(value) ? value : []);
+const distinct = (values: string[]): string[] => [...new Set(values)];
 
 export default function FilesDestination(props: DestinationProps) {
-  const source = (): FileKindSource => sourceOf(props.route);
-  const owner = () => (source() === 'package' ? props.route.id ?? '' : props.route.ws ?? '');
-  const scope = (): FileScope => (source() === 'package'
-    ? { source: 'package', owner: props.route.id, workspace: props.route.ws }
-    : { source: 'workspace', workspace: props.route.ws });
+  const source = (): FileSource => fileSource(props.route.source);
+  const suppliedOwner = () => textValue(props.route.id);
+  // Declared workspace repositories are the repository owners; observed scoped
+  // package paths are the package owners. A single repository is its own owner
+  // (`owner()` derives it), while every other owner is chosen explicitly. An
+  // explicit unknown owner is kept exactly as supplied so it stays unavailable
+  // instead of being retargeted to a valid entry.
+  const repositoryOwners = () => distinct(list(props.workspace?.repositories).map(entry => textValue(entry?.id)).filter(Boolean));
+  const packageOwners = () => distinct(props.records.map(record => textValue(record?.package)).filter(Boolean));
+  const ownerOptions = () => (source() === 'repository' ? repositoryOwners() : source() === 'package' ? packageOwners() : []);
+  const owner = (): string => {
+    if (source() === 'package') return suppliedOwner();
+    if (source() === 'repository') {
+      if (suppliedOwner()) return suppliedOwner();
+      const owners = repositoryOwners();
+      return owners.length === 1 ? owners[0] : '';
+    }
+    return '';
+  };
+  const ownerValues = () => {
+    const options = ownerOptions();
+    const supplied = suppliedOwner();
+    return supplied && !options.includes(supplied) ? [...options, supplied] : options;
+  };
+  const showOwner = () => {
+    if (source() === 'package') return ownerOptions().length > 0 || suppliedOwner() !== '';
+    if (source() === 'repository') return ownerOptions().length > 1 || (suppliedOwner() !== '' && !ownerOptions().includes(suppliedOwner()));
+    return false;
+  };
+  const scope = (): FileScope => {
+    const current = source();
+    if (current === 'package') return { source: current, owner: owner(), workspace: props.route.ws };
+    if (current === 'repository') return { source: current, workspace: props.route.ws, owner: owner() };
+    return { source: current, workspace: props.route.ws };
+  };
   const scopeId = createMemo(() => scopeKey(scope()));
   const requestedPath = () => {
     const path = props.route.path ?? '';
@@ -38,11 +72,30 @@ export default function FilesDestination(props: DestinationProps) {
     const path = props.route.path ?? '';
     return path.endsWith('/') ? path : undefined;
   };
-  // A package select option needs a canonical package id. Cold links carry it
-  // in the route; otherwise the scoped record set supplies a published package.
-  const candidatePackage = () => props.route.id
-    || props.records.map(item => textValue(item?.package)).find(Boolean)
-    || '';
+  // Context rows are the registered kit entries, mapped to workspace-relative
+  // paths. Only available entries become selectable rows reading through the
+  // workspace-file API; unavailable entries keep their real status text.
+  const contextFiles = (): FileEntry[] => {
+    if (source() !== 'context' || !props.workspace) return [];
+    const directory = textValue(props.workspace.directory);
+    const seen = new Set<string>();
+    const entries: FileEntry[] = [];
+    for (const entry of list(props.workspace.context)) {
+      const path = contextRoutePath(directory, textValue(entry?.path));
+      if (entry?.status === 'ok' && path) {
+        if (seen.has(path)) continue;
+        seen.add(path);
+        entries.push({ name: path, available: true });
+      } else {
+        entries.push({
+          name: textValue(entry?.label) || textValue(entry?.name) || path || 'Context',
+          available: false,
+          reason: textValue(entry?.reason) || (entry?.status === 'ok' ? 'Unavailable path' : textValue(entry?.status)) || 'Unavailable',
+        });
+      }
+    }
+    return entries;
+  };
 
   const [listing, setListing] = createSignal<FileListing | null>(null);
   const [listError, setListError] = createSignal('');
@@ -57,16 +110,17 @@ export default function FilesDestination(props: DestinationProps) {
   let listGeneration = 0;
   let fileGeneration = 0;
 
-  const recentCompletion = () => {
-    if (source() !== 'package') return false;
-    return Boolean(props.records.find(item => item.package === owner())?.recent_completion);
-  };
+  const recentCompletion = () => source() === 'package' && Boolean(props.records.find(item => textValue(item?.package) === owner())?.recent_completion);
+  const listNoun = () => (source() === 'package' ? 'Package' : source() === 'repository' ? 'Repository' : 'Workspace');
 
   const fetchListing = async (next?: string | number, refresh = false) => {
-    if (!props.live) return;
+    if (!props.live || source() === 'context') return;
     const url = listFileUrl(scope(), next);
     if (!url) {
-      setListError('Choose a workspace or spec package to list files.');
+      // Missing owner/workspace is guidance, not a failure: the caller keeps
+      // the chooser/empty state and no endpoint is invented.
+      setListing(null);
+      setListError('');
       return;
     }
     const token = ++listGeneration;
@@ -79,7 +133,7 @@ export default function FilesDestination(props: DestinationProps) {
       setListing({ ...data, files: [...prior, ...(data.files ?? [])] });
       setCursor(data.next_cursor ?? undefined);
     } catch {
-      if (token === listGeneration) setListError(`${source() === 'package' ? 'Package' : 'Workspace'} files unavailable. Refresh to retry.`);
+      if (token === listGeneration) setListError(`${listNoun()} files unavailable. Refresh to retry.`);
     } finally {
       if (token === listGeneration) setLoadingList(false);
     }
@@ -152,6 +206,10 @@ export default function FilesDestination(props: DestinationProps) {
     onCleanup(() => controller.abort());
   }));
 
+  const listingReady = () => (source() === 'context' ? Boolean(props.workspace) : listing() !== null);
+  const contextLoading = () => source() === 'context' && !props.workspace && props.workspacePending;
+  const contextError = () => (source() === 'context' && !props.workspace ? props.workspaceError : '');
+  const listMessage = () => listError() || contextError();
   const listedSize = (path: string) => (listing()?.files ?? []).find(entry => entry.name === path)?.size;
   const readerFile = (): LoadedFile | null => {
     const file = loaded();
@@ -159,33 +217,100 @@ export default function FilesDestination(props: DestinationProps) {
     const size = listedSize(file.path);
     return size == null ? file : { ...file, size };
   };
-  const visible = () => filterLoadedFiles(listing()?.files ?? [], query(), pathPrefix());
+  const visible = () => filterLoadedFiles(source() === 'context' ? contextFiles() : listing()?.files ?? [], query(), pathPrefix());
   const selected = (name: string) => requestedPath() === name;
   const selectFile = (name: string) => { if (name !== requestedPath()) props.onOpenFile(name); };
   const readUrl = () => (requestedPath() ? readFileUrl(scope(), requestedPath()) : null);
   const downloadUrl = () => (requestedPath() ? readFileUrl(scope(), requestedPath(), true) : null);
   const viewUrl = () => (source() === 'package' && requestedPath() && owner() ? packageViewUrl(owner(), requestedPath()) : '');
   const downloadable = () => Boolean(loaded() && loaded()!.kind !== 'download' && downloadUrl());
-  const sourceLine = () => (source() === 'package' ? `Spec package · ${owner()}` : `Workspace · ${props.route.ws ?? ''}`);
+  const checkoutIdentity = () => {
+    const checkout = listing()?.checkout;
+    const repository = checkout ? textValue(checkout.repository) : '';
+    const branch = checkout ? textValue(checkout.branch) : '';
+    return [repository || (source() === 'repository' ? owner() : ''), branch].filter(Boolean).join(' @ ');
+  };
+  const sourceLine = () => {
+    if (source() === 'context') return `Workspace context · ${props.route.ws ?? ''}`;
+    if (source() === 'package') return `Spec package · ${owner() || 'Choose package'}`;
+    if (source() === 'repository') return `Repository · ${checkoutIdentity() || owner() || 'unavailable'}`;
+    return `Workspace · ${props.route.ws ?? ''}`;
+  };
+
+  // Open spec uses the observed record whose canonical package matches the
+  // chosen owner. Multiple matches prefer a current non-completion, then a
+  // planned one, then the most recent completion, with a stable key tie-break.
+  const openSpecTarget = () => {
+    if (source() !== 'package' || !owner()) return null;
+    const matches = props.records.filter(record => textValue(record?.package) === owner()).sort((a, b) => textValue(a.key).localeCompare(textValue(b.key)));
+    if (!matches.length) return null;
+    const key = (value: unknown) => textValue(value);
+    return matches.find(record => !record.recent_completion && !record.planned)
+      ?? matches.find(record => record.planned)
+      ?? matches.find(record => !record.recent_completion)
+      ?? [...matches.filter(record => record.recent_completion)]
+        .sort((a, b) => Date.parse(textValue(b.completed_at)) - Date.parse(textValue(a.completed_at)) || key(a.key).localeCompare(key(b.key)))[0]
+      ?? matches[0];
+  };
+  const openSpec = () => {
+    const target = openSpecTarget();
+    if (!target) return;
+    const next: DestinationProps['route'] = { dest: 'specs', id: textValue(target.key) };
+    if (props.route.ws !== undefined) next.ws = props.route.ws;
+    props.onNavigate(next);
+  };
 
   const changeSource = (event: Event & { currentTarget: HTMLSelectElement }) => {
-    const next: FileKindSource = event.currentTarget.value === 'package' ? 'package' : 'workspace';
+    const next = fileSource(event.currentTarget.value);
     if (next === source()) return;
-    if (next === 'package') {
-      const id = candidatePackage();
-      if (!id) return;
-      props.onNavigate({ dest: 'files', ws: props.route.ws, source: 'package', id });
-    } else {
-      props.onNavigate({ dest: 'files', ws: props.route.ws });
+    // A source change keeps only the scope workspace; owner, path and filter
+    // belong to the previous source identity and are dropped deliberately.
+    const route: DestinationProps['route'] = { dest: 'files' };
+    if (props.route.ws !== undefined) route.ws = props.route.ws;
+    if (next !== 'workspace') route.source = next;
+    props.onNavigate(route);
+  };
+  const changeOwner = (event: Event & { currentTarget: HTMLSelectElement }) => {
+    const id = event.currentTarget.value;
+    if (!id || id === owner()) return;
+    const route: DestinationProps['route'] = { dest: 'files', source: source(), id };
+    if (props.route.ws !== undefined) route.ws = props.route.ws;
+    props.onNavigate(route);
+  };
+
+  const emptyTitle = (): string => {
+    if (source() === 'context') return 'No registered context';
+    if (source() === 'repository') {
+      if (repositoryOwners().length === 0) return 'No repositories registered';
+      if (!owner()) return 'Choose a repository';
     }
+    if (source() === 'package' && !owner()) return 'Choose a spec package';
+    if (source() === 'workspace' && !props.route.ws) return 'Choose a workspace';
+    return 'No files found';
+  };
+  const emptyText = (): string => {
+    if (source() === 'context') return 'The workspace kit registers no context entries.';
+    if (source() === 'repository') {
+      if (repositoryOwners().length === 0) return 'The selected workspace declares no repositories.';
+      if (!owner()) return 'Choose a declared repository to list its tracked files.';
+    }
+    if (source() === 'package' && !owner()) return 'Choose an observed spec package to list its files.';
+    if (source() === 'workspace' && !props.route.ws) return 'Choose a workspace to list files.';
+    return pathPrefix() ? `The listing has no loaded filenames under ${pathPrefix()} yet.` : 'The directory has no readable files, or the listing could not complete.';
+  };
+  const refreshList = () => {
+    if (source() === 'context') props.onRetryWorkspace(String(props.route.ws ?? ''));
+    else setRefreshVersion(version => version + 1);
   };
 
   const caption = () => {
     if (!props.live) return '';
-    if (!listing()) return loadingList() ? 'Reading files…' : '';
+    if (source() === 'context' ? contextLoading() : !listing() && loadingList()) return 'Reading files…';
+    if (source() === 'context' ? !props.workspace : !listing() && !loadingList()) return '';
     const count = visible().length;
     const noun = count === 1 ? 'filename' : 'filenames';
-    return pathPrefix() ? `${count} loaded ${noun} under ${pathPrefix()} · read only` : `${count} loaded ${noun} · read only`;
+    const identity = source() === 'repository' && checkoutIdentity() ? ` · ${checkoutIdentity()}` : '';
+    return pathPrefix() ? `${count} loaded ${noun} under ${pathPrefix()}${identity} · read only` : `${count} loaded ${noun}${identity} · read only`;
   };
 
   return (
@@ -198,9 +323,20 @@ export default function FilesDestination(props: DestinationProps) {
               <label for="file-source">Source</label>
               <select id="file-source" class="ds-input" value={source()} onChange={changeSource}>
                 <option value="workspace">Workspace</option>
-                <option value="package" disabled={!candidatePackage()}>Spec package</option>
+                <option value="context">Context</option>
+                <option value="package">Spec package</option>
+                <option value="repository">Repository</option>
               </select>
             </div>
+            <Show when={showOwner()}>
+              <div class="source-choice">
+                <label for="file-owner">{source() === 'repository' ? 'Repository' : 'Package'}</label>
+                <select id="file-owner" class="ds-input" value={owner()} onChange={changeOwner}>
+                  <option value="">{source() === 'repository' ? 'Choose repository' : 'Choose package'}</option>
+                  <For each={ownerValues()}>{value => <option value={value}>{value}</option>}</For>
+                </select>
+              </div>
+            </Show>
             <label class="sr-only" for="find-record">Filter loaded filenames</label>
             <input
               class="ds-input"
@@ -215,32 +351,32 @@ export default function FilesDestination(props: DestinationProps) {
           <div class="records">
             <Show when={!props.live}>
               <StateNotice announce={false} tone="warning" title="A live dashboard is required">
-                Workspace and spec package files are read from the local dashboard server. Import a published snapshot to inspect other data.
+                Workspace, context, spec package and repository files are read from the local dashboard server. Import a published snapshot to inspect other data.
               </StateNotice>
             </Show>
             <Show when={props.live}>
-              <Show when={listError()}>
+              <Show when={listMessage()}>
                 <StateNotice
                   announce={false}
                   tone="error"
                   title="Files could not be listed"
-                  action={<button type="button" class="ds-btn" onClick={() => setRefreshVersion(version => version + 1)}>Retry listing</button>}
+                  action={<button type="button" class="ds-btn" onClick={refreshList}>Retry listing</button>}
                 >
-                  {listError()}
+                  {listMessage()}
                 </StateNotice>
               </Show>
-              <Show when={!listing() && loadingList()}>
+              <Show when={!listMessage() && !listingReady() && (loadingList() || contextLoading())}>
                 <RegionalSkeleton announce={false} rows={5} label="Loading files" />
               </Show>
-              <Show when={listing()}>
+              <Show when={!listMessage() && listingReady()}>
                 <Show
                   when={visible().length > 0}
                   fallback={<EmptyState
                     symbol="▤"
-                    title={pathPrefix() ? 'No loaded files in this selection' : 'No files found'}
+                    title={pathPrefix() ? 'No loaded files in this selection' : emptyTitle()}
                     text={pathPrefix()
                       ? `The listing has no loaded filenames under ${pathPrefix()} yet.`
-                      : 'The directory has no readable files, or the listing could not complete.'}
+                      : emptyText()}
                   />}
                 >
                   <For each={visible()}>{file => (
@@ -255,18 +391,20 @@ export default function FilesDestination(props: DestinationProps) {
                         <strong>{file.name}</strong>
                         <span class="file-kind">{fileKindLabel(file.name)}</span>
                       </div>
-                      <small>{file.available ? (fileSizeLabel(file.size) || 'Available') : (file.reason || 'Unavailable')}</small>
+                      <small>{file.available
+                        ? (source() === 'context' ? 'Registered context' : (fileSizeLabel(file.size) || 'Available'))
+                        : (file.reason || 'Unavailable')}</small>
                     </button>
                   )}</For>
                 </Show>
-                <For each={listing()?.errors ?? []}>{error => <p class="warn" role="status">{error.name}: {error.message}</p>}</For>
+                <For each={source() === 'context' ? [] : listing()?.errors ?? []}>{error => <p class="warn" role="status">{error.name}: {error.message}</p>}</For>
                 <Show when={source() === 'package' && recentCompletion() && cursor() === undefined && !(listing()?.files ?? []).some(file => file.name === 'work-tour.html')}>
                   <p class="small muted">No work-tour.html in this package.</p>
                 </Show>
-                <Show when={listing()?.truncated}>
+                <Show when={source() !== 'context' && listing()?.truncated}>
                   <p class="warn">Listing reached the 10,000 entry or 12 directory level limit.</p>
                 </Show>
-                <Show when={cursor() !== undefined}>
+                <Show when={source() !== 'context' && cursor() !== undefined}>
                   <div class="list-more">
                     <button type="button" class="ds-btn" disabled={loadingList()} onClick={() => void fetchListing(cursor())}>
                       {loadingList() ? 'Loading…' : 'Load more files'}
@@ -277,10 +415,13 @@ export default function FilesDestination(props: DestinationProps) {
                   </div>
                 </Show>
               </Show>
+              <Show when={!listMessage() && !listingReady() && !loadingList() && !contextLoading()}>
+                <EmptyState symbol="▤" title={emptyTitle()} text={emptyText()} />
+              </Show>
             </Show>
           </div>
           <div class="detail-foot">
-            <button type="button" class="ds-btn" disabled={!props.live || loadingList()} onClick={() => setRefreshVersion(version => version + 1)}>
+            <button type="button" class="ds-btn" disabled={!props.live || loadingList()} onClick={refreshList}>
               Refresh files
             </button>
           </div>
@@ -294,6 +435,9 @@ export default function FilesDestination(props: DestinationProps) {
           <div class="reader-actions">
             <Show when={downloadable()}>
               <a class="ds-btn ds-btn--primary" href={downloadUrl() ?? ''} download="">Download file</a>
+            </Show>
+            <Show when={openSpecTarget()}>
+              <button type="button" class="ds-btn" onClick={openSpec}>Open spec</button>
             </Show>
           </div>
         </header>
