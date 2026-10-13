@@ -199,9 +199,9 @@ export function EpicDocuments(props: {
     return links.plan ? [links.plan, ...links.designs] : links.designs;
   };
   return (
-    <Show when={rows().length}>
-      <section class="section epic-documents">
-        <div class="section-heading"><h3>Supporting documents</h3><span class="muted" /></div>
+    <section class="section epic-documents">
+      <div class="section-heading"><h3>Supporting documents</h3><span class="muted" /></div>
+      <Show when={rows().length} fallback={<p class="section-note">No plan or designs recorded.</p>}>
         <div class="table-wrap">
           <table class="epic-documents">
             <caption class="sr-only">{`Supporting documents of ${epicTitle(props.epic)}`}</caption>
@@ -216,8 +216,8 @@ export function EpicDocuments(props: {
             </tbody>
           </table>
         </div>
-      </section>
-    </Show>
+      </Show>
+    </section>
   );
 }
 

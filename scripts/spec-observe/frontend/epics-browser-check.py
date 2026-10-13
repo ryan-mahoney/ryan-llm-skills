@@ -1766,6 +1766,34 @@ try:
             served_designs = context.request.get(receipt['url'] + '/api/workspace-designs?' + urlencode({'id': workspace_id})).json()
             assert any(design.get('slug') == 'demo' for design in served_designs.get('designs', [])), 'real /api/workspace-designs does not expose the fixture demo design'
 
+            mismatch_entry = next((entry for entry in catalog_entries if entry.get('id') == 'alpha'), None)
+            assert mismatch_entry is not None, f'mismatched catalog workspace alpha missing from the real catalog: {catalog_entries}'
+            mismatch_id = str(mismatch_entry['id'])
+            mismatch_dir = str(mismatch_entry.get('directory'))
+            mismatch_basename = Path(mismatch_dir).name
+            assert mismatch_basename == 'physical', f'catalog alpha directory is not the physical workspace: {mismatch_dir}'
+            assert mismatch_id != mismatch_basename, 'mismatch fixture id equals its directory basename; catalog mismatch is not covered'
+
+            mismatch_marker = f'Mismatch marker {os.getpid()} independently written plan sentence for the catalog-id Files reader.'
+            mismatch_relative = f'plans/mismatch-plan-{os.getpid()}.md'
+            mismatch_name = Path(mismatch_relative).name
+            mismatch_file = Path(mismatch_dir) / mismatch_relative
+            mismatch_file.parent.mkdir(parents=True, exist_ok=True)
+            mismatch_file.write_text(f'# Mismatch plan fixture\n\n{mismatch_marker}\n')
+            mismatch_absolute = str(mismatch_file)
+            served_mismatch_plan = context.request.get(receipt['url'] + '/api/workspace-file?' + urlencode({'id': mismatch_id, 'file': mismatch_relative}))
+            assert served_mismatch_plan.ok and mismatch_marker in served_mismatch_plan.text(), 'real /api/workspace-file did not serve the mismatched catalog-id plan'
+            mismatch_design_slug = 'mismatch-demo'
+            mismatch_design_dir = Path(mismatch_dir) / 'designs' / mismatch_design_slug
+            mismatch_design_dir.mkdir(parents=True, exist_ok=True)
+            (mismatch_design_dir / 'brief.md').write_text('# Mismatch design fixture\n')
+            (mismatch_design_dir / 'screens').mkdir(parents=True, exist_ok=True)
+            for step in (1, 2):
+                (mismatch_design_dir / f'screens/0{step}-screen-{step}.html').write_text(f'<html><body><h1>Mismatch screen {step}</h1></body></html>')
+            (mismatch_design_dir / 'design.json').write_text(json.dumps({'schema_version': 1, 'design': mismatch_design_slug, 'title': 'Mismatch design fixture', 'brief': 'brief.md', 'viewport': {'posture': 'responsive', 'widths': [390, 1280]}, 'screens': [{'step': step, 'id': f'screen-{step}', 'file': f'screens/0{step}-screen-{step}.html', 'title': f'Screen {step}', 'person': 'Operator', 'job': 'Review work', 'kind': 'action', 'state': 'ideal', 'primary_action': 'Review work', 'captured': {}} for step in (1, 2)]}))
+            served_mismatch_designs = context.request.get(receipt['url'] + '/api/workspace-designs?' + urlencode({'id': mismatch_id})).json()
+            assert any(design.get('slug') == mismatch_design_slug for design in served_mismatch_designs.get('designs', [])), 'real /api/workspace-designs does not expose the mismatched catalog-id design'
+
             linked_epic = {
                 'workspace': fixture_basename, 'epic': 'documents-linked', 'title': 'Documents linked epic', 'state': 'active',
                 'plan': plan_absolute,
@@ -1784,8 +1812,24 @@ try:
                 'next': 'fallback-member',
                 'coverage': {'state': 'complete', 'reasons': []},
             }
+            empty_epic = {
+                'workspace': fixture_basename, 'epic': 'documents-empty', 'title': 'Documents empty epic', 'state': 'active',
+                'members': [detail_member('empty-member', 'prepared')],
+                'summary': {'total': 1, 'merged': 0, 'complete': 0, 'attention': 0},
+                'next': 'empty-member',
+                'coverage': {'state': 'complete', 'reasons': []},
+            }
+            mismatch_epic = {
+                'workspace': mismatch_basename, 'epic': 'documents-mismatch', 'title': 'Documents mismatch epic', 'state': 'active',
+                'plan': mismatch_absolute,
+                'designs': [{'workspace': mismatch_id, 'design': mismatch_design_slug, 'path': f'{mismatch_dir}/designs/{mismatch_design_slug}'}],
+                'members': [detail_member('mismatch-member', 'merged')],
+                'summary': {'total': 1, 'merged': 1, 'complete': 0, 'attention': 0},
+                'next': '',
+                'coverage': {'state': 'complete', 'reasons': []},
+            }
             mode = {'value': detail_envelope(linked_epic, runs=[])}
-            mode['value']['observers'][0]['snapshot']['epics'] = [linked_epic, fallback_epic]
+            mode['value']['observers'][0]['snapshot']['epics'] = [linked_epic, fallback_epic, empty_epic, mismatch_epic]
 
             def handler(route):
                 if mode['value'] is None:
@@ -1827,7 +1871,7 @@ try:
 
             pane = page.locator('article.detail-pane')
             open_epics(page, ws=workspace_id)
-            expect(rows_on(page)).to_have_count(2)
+            expect(rows_on(page)).to_have_count(3)
             page.locator('.records .record', has_text='Documents linked epic').click()
             expect(pane.locator('.object-head h2')).to_have_text('Documents linked epic')
             linked_id = params_on(page).get('id', [None])[0]
@@ -1888,6 +1932,55 @@ try:
             expect(page.get_by_text('No plan or designs recorded', exact=False)).to_have_count(0)
             report['scenarios'].append('documents: an unresolved plan/design outside the catalog renders source and name as plain text with no fabricated destination')
 
+            page.locator('.records .record', has_text='Documents empty epic').click()
+            expect(pane.locator('.object-head h2')).to_have_text('Documents empty epic')
+            empty_documents = pane.locator('section.epic-documents')
+            expect(empty_documents).to_have_count(1)
+            expect(empty_documents.get_by_role('heading', name='Supporting documents', exact=True)).to_be_visible()
+            expect(empty_documents.locator('table.epic-documents')).to_have_count(0)
+            expect(empty_documents.get_by_text('No plan or designs recorded', exact=False)).to_be_visible()
+            report['scenarios'].append('documents: an epic with no plan or designs keeps the Supporting documents region with the explicit empty explanation')
+
+            open_epics(page, ws=mismatch_id)
+            expect(rows_on(page)).to_have_count(1)
+            page.locator('.records .record', has_text='Documents mismatch epic').click()
+            expect(pane.locator('.object-head h2')).to_have_text('Documents mismatch epic')
+            mismatch_documents = pane.locator('section.epic-documents')
+            expect(mismatch_documents).to_have_count(1)
+            mismatch_table = mismatch_documents.locator('table.epic-documents')
+            mismatch_rows = mismatch_table.locator('tbody tr')
+            expect(mismatch_rows).to_have_count(2)
+            assert mismatch_id != mismatch_basename, 'mismatched catalog id equals its directory basename'
+            mismatch_plan_link = mismatch_rows.nth(0).locator('a.text-link.mono')
+            expect(mismatch_plan_link).to_have_text(mismatch_name)
+            mismatch_plan_params = href_params(mismatch_plan_link.get_attribute('href'))
+            assert mismatch_plan_params.get('ws') == [mismatch_id], mismatch_plan_link.get_attribute('href')
+            assert mismatch_plan_params.get('source') == ['workspace'], mismatch_plan_link.get_attribute('href')
+            assert mismatch_plan_params.get('path') == [mismatch_relative], mismatch_plan_link.get_attribute('href')
+            expect(mismatch_rows.nth(0).locator('td')).to_contain_text(mismatch_absolute)
+            mismatch_design_link = mismatch_rows.nth(1).locator('a.text-link.mono')
+            expect(mismatch_design_link).to_have_text(mismatch_design_slug)
+            mismatch_design_params = href_params(mismatch_design_link.get_attribute('href'))
+            assert mismatch_design_params.get('ws') == [mismatch_id] and mismatch_design_params.get('id') == [mismatch_design_slug], mismatch_design_link.get_attribute('href')
+            expect(mismatch_rows.nth(1).locator('td')).to_contain_text(f'{mismatch_dir}/designs/{mismatch_design_slug}')
+            report['scenarios'].append('documents mismatch: catalog id alpha resolves the physical-directory plan and design to ws=alpha reader routes, not the directory basename')
+            mismatch_plan_link.click()
+            expect(page.locator('h1')).to_have_text('Files')
+            assert params_on(page).get('ws') == [mismatch_id] and params_on(page).get('source') == ['workspace'] and params_on(page).get('path') == [mismatch_relative], page.url
+            expect(page.locator('section.file-viewer h4')).to_have_text(mismatch_relative)
+            expect(page.locator('section.file-viewer #file-content')).to_contain_text(mismatch_marker)
+            report['scenarios'].append('documents mismatch: clicking the mismatched plan opens the real catalog-id Files reader with the independently written text')
+            page.go_back()
+            expect(page.locator('h1')).to_have_text('Epics')
+            page.locator('.records .record', has_text='Documents mismatch epic').click()
+            expect(pane.locator('.object-head h2')).to_have_text('Documents mismatch epic')
+            pane.locator('table.epic-documents tbody tr').nth(1).locator('a.text-link.mono').click()
+            expect(page.locator('h1')).to_have_text('Designs')
+            assert params_on(page).get('ws') == [mismatch_id] and params_on(page).get('id') == [mismatch_design_slug], page.url
+            expect(page.locator('section.design-viewer h4')).to_contain_text('Mismatch design fixture')
+            report['scenarios'].append('documents mismatch: clicking the mismatched design routes ws=alpha and the real workspace-designs listing selects that design')
+            open_epics(page, ws=workspace_id)
+            expect(rows_on(page)).to_have_count(3)
             page.locator('.records .record', has_text='Documents linked epic').click()
             expect(pane.locator('.object-head h2')).to_have_text('Documents linked epic')
             page.locator('table.epic-documents tbody tr').nth(1).locator('a.text-link.mono').click()
@@ -1945,6 +2038,12 @@ try:
                 page.goto(detail_uri(ref_path), wait_until='domcontentloaded')
                 reference_pane = page.locator('article.detail-pane')
                 expect(reference_pane).to_be_visible()
+                ref_documents = reference_pane.locator('section', has=reference_pane.get_by_role('heading', name='Supporting documents', exact=True))
+                expect(ref_documents).to_have_count(1)
+                expect(ref_documents.get_by_role('heading', name='Supporting documents', exact=True)).to_be_visible()
+                expect(ref_documents.locator('thead th[scope=col]').nth(0)).to_have_text('Document')
+                expect(ref_documents.locator('thead th[scope=col]').nth(1)).to_have_text('Source')
+                ref_documents.scroll_into_view_if_needed()
                 capture(reference_pane, f'epics-ref-03-{width}.png')
                 page.goto(receipt['url'] + '/#/epics?' + urlencode({'ws': workspace_id, 'id': linked_id}), wait_until='domcontentloaded')
                 expect(pane.locator('.object-head h2')).to_have_text('Documents linked epic')
