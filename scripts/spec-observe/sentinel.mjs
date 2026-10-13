@@ -1271,12 +1271,25 @@ async function readStepIndex(fact, budget) {
       if (!value || typeof value !== 'object' || !Array.isArray(value.steps)) return null;
       const steps = [];
       // Readiness mirrors the strict prepared shape used by runtime startup: a
-      // nonempty flat 1..N index whose entries carry the required step number
-      // and name string. Raw-index validity only; the sanitized steps below
-      // keep historic progress parsing unchanged.
-      const readiness_valid = value.steps.length > 0 && value.steps.every((item, index) =>
-        item && typeof item === 'object' && Number.isSafeInteger(item.step) && item.step === index + 1
-        && typeof item.name === 'string');
+      // nonempty flat 1..N index whose entries carry the required step number,
+      // name, description, difficulty, visualDesign and evidence, plus repository
+      // membership when the package routes across targets. Raw-index validity
+      // only; the sanitized steps below keep historic progress parsing unchanged.
+      const targetIds = Array.isArray(fact.targets)
+        ? fact.targets.map(target => target?.id).filter(id => typeof id === 'string') : [];
+      const readiness_valid = value.steps.length > 0 && value.steps.every((item, index) => {
+        if (!item || typeof item !== 'object') return false;
+        if (!(Number.isSafeInteger(item.step) && item.step === index + 1)) return false;
+        if (typeof item.name !== 'string') return false;
+        if (typeof item.description !== 'string' || item.description.length === 0) return false;
+        if (!['easy', 'medium', 'hard'].includes(item.difficulty)) return false;
+        if (typeof item.visualDesign !== 'boolean') return false;
+        if (!Array.isArray(item.evidence)) return false;
+        const repository = item.repository;
+        if (targetIds.length > 1) return typeof repository === 'string' && targetIds.includes(repository);
+        if (repository !== undefined) return typeof repository === 'string' && (targetIds.length === 0 || targetIds.includes(repository));
+        return true;
+      });
       for (const item of value.steps) {
         if (!item || typeof item !== 'object' || !Number.isSafeInteger(item.step) || item.step < 1
           || steps.some(existing => existing.step === item.step)) return null;

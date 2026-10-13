@@ -794,7 +794,8 @@ test('planned inventory publishes readiness and planning facts for a standalone 
   const f = sandbox(t), repo = primary(f.dir, 'planned-facts');
   const prepared = path => {
     writeFileSync(join(path, 'spec-steps.json'), JSON.stringify({ steps: [
-      { step: 1, name: 'Prepare inputs' }, { step: 2, name: 'Draft reader' }] }));
+      { step: 1, name: 'Prepare inputs', description: 'Prepare bounded inputs.', difficulty: 'medium', visualDesign: false, evidence: [] },
+      { step: 2, name: 'Draft reader', description: 'Draft the bounded reader.', difficulty: 'medium', visualDesign: false, evidence: [] }] }));
     writeFileSync(join(path, 'spec-prepare.md'), '# Preparation\n\nOutcome: prepared\nPrepared: 2026-10-06\n');
     writeFileSync(join(path, 'proposal.md'), '---\nverdict: COMPATIBLE\ncritique_recommended: true\n---\n\n# Proposal\n');
     writeFileSync(join(path, 'critique.md'), '# Critique\n');
@@ -862,11 +863,58 @@ test('planned inventory never publishes prepared for blocked, pending, malformed
   assert.equal(row(noIndex).step_count, null);
 });
 
+// Run alone: node --test --test-name-pattern='planned inventory refuses incomplete multi-target routing' scripts/spec-observe/sentinel.test.mjs
+test('planned inventory refuses incomplete multi-target routing without repository membership', async t => {
+  const f = sandbox(t);
+  const repoA = primary(f.dir, 'multi-a');
+  const repoB = primary(f.dir, 'multi-b');
+  const workspace = basename(repoA);
+  const twoTargets = [
+    { id: 'multi-a', primary: repoA, common: join(repoA, '.git'), branch: 'spec-multi', worktree: null },
+    { id: 'multi-b', primary: repoB, common: join(repoB, '.git'), branch: 'spec-multi', worktree: null },
+  ];
+  const makeMulti = name => {
+    const path = pack(repoA, name);
+    writeFileSync(join(path, 'locations.json'), JSON.stringify({ schema_version: 1,
+      package_ref: `${workspace}/${name}`, targets: twoTargets }));
+    writeFileSync(join(path, 'spec-prepare.md'), 'Outcome: prepared\n');
+    return path;
+  };
+  const valid = entry => ({ step: entry.step, name: entry.name, description: 'Do the bounded step.',
+    difficulty: 'medium', visualDesign: false, evidence: [], ...(entry.repository === undefined ? {} : { repository: entry.repository }) });
+  const missing = makeMulti('multi-missing');
+  writeFileSync(join(missing, 'spec-steps.json'), JSON.stringify({ steps: [valid({ step: 1, name: 'One' })] }));
+  const unknown = makeMulti('multi-unknown');
+  writeFileSync(join(unknown, 'spec-steps.json'), JSON.stringify({ steps: [valid({ step: 1, name: 'One', repository: 'unknown-target' })] }));
+  const incomplete = makeMulti('multi-incomplete');
+  writeFileSync(join(incomplete, 'spec-steps.json'), JSON.stringify({ steps: [valid({ step: 1, name: 'One', repository: 'multi-a' }), { step: 2, name: 'Two' }] }));
+  const routed = makeMulti('multi-routed');
+  writeFileSync(join(routed, 'spec-steps.json'), JSON.stringify({ steps: [valid({ step: 1, name: 'One', repository: 'multi-a' })] }));
+  const singleIncomplete = pack(repoA, 'single-incomplete');
+  writeFileSync(join(singleIncomplete, 'spec-steps.json'), JSON.stringify({ steps: [{ step: 1, name: 'One' }] }));
+  writeFileSync(join(singleIncomplete, 'spec-prepare.md'), 'Outcome: prepared\n');
+  const singleUnknown = pack(repoA, 'single-unknown');
+  writeFileSync(join(singleUnknown, 'spec-steps.json'), JSON.stringify({ steps: [valid({ step: 1, name: 'One', repository: 'unknown-target' })] }));
+  writeFileSync(join(singleUnknown, 'spec-prepare.md'), 'Outcome: prepared\n');
+
+  const snapshot = await collect({ roots: [repoA, repoB], indexDir: f.indexDir, now });
+  const row = path => snapshot.planned_packages.find(item => item.package === path);
+  for (const path of [missing, unknown, incomplete, singleIncomplete, singleUnknown]) {
+    assert.ok(row(path), `${basename(path)} is still planned inventory`);
+    assert.equal(row(path).prepared, false, basename(path));
+    assert.equal(row(path).step_count, path === incomplete ? 2 : 1, 'a readable index still reports its size');
+  }
+  assert.ok(row(routed), 'a routed multi-target package is planned inventory');
+  assert.equal(row(routed).prepared, true, 'a valid repository membership publishes prepared true');
+});
+
 // Run alone: node --test --test-name-pattern='epic planning' scripts/spec-observe/sentinel.test.mjs
 test('epic planning facts match planned inventory truth and blocked, missing members stay unlaunchable', async t => {
   const f = sandbox(t), repo = primary(f.dir, 'epic-planning');
   const prepared = pack(repo, 'prepared-member');
-  writeFileSync(join(prepared, 'spec-steps.json'), JSON.stringify({ steps: [{ step: 1, name: 'One' }, { step: 2, name: 'Two' }] }));
+  writeFileSync(join(prepared, 'spec-steps.json'), JSON.stringify({ steps: [
+    { step: 1, name: 'One', description: 'Prepare bounded inputs.', difficulty: 'medium', visualDesign: false, evidence: [] },
+    { step: 2, name: 'Two', description: 'Draft the bounded reader.', difficulty: 'medium', visualDesign: false, evidence: [] }] }));
   writeFileSync(join(prepared, 'spec-prepare.md'), 'Outcome: prepared\nPrepared: 2026-10-06\n');
   writeFileSync(join(prepared, 'proposal.md'), '---\ncritique_recommended: true\n---\n# Proposal\n');
   writeFileSync(join(prepared, 'critique.md'), '# Critique\n');
