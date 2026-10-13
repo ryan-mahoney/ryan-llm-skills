@@ -11,6 +11,7 @@ import {resolveAssignment,prepareAssignmentSpecTarget} from '../../workspaces/as
 import {setupStorage,createWorkspace,fetchWorkspace,resolveRepositoryPath} from '../../workspaces/store.mjs';
 import {newPackage} from '../../spec-location/index.mjs';
 const plannedLaunch=process.env.SENTINEL_PLANNED_LAUNCH==='1';
+const filesFixture=process.env.SENTINEL_REPOSITORY_FILES==='1';
 const root=await realpath(await mkdtemp(join(tmpdir(),'sentinel-solid-browser-')));
 const storage=join(root,'storage');await setupStorage(storage);
 const workspace=await createWorkspace(storage,{id:'fixture',name:'Browser fixture'});
@@ -58,6 +59,25 @@ await writeFile(join(physicalKitPackage,'spec.md'),'# Physical kit specification
 await writeFile(join(physicalKitPackage,'work-tour.html'),'<html><body><h1>Physical kit tour</h1></body></html>');
 await mkdir(join(workspace.directory,'notes'),{recursive:true});
 await writeFile(join(workspace.directory,'notes','browser.md'),'# Browser note\nA recorded note.\n');
+// Gated Files reader bytes: real markdown/JSON/code/image/HTML/binary kinds for
+// the files-workspace case only; the default fixture stays unchanged.
+if(filesFixture){
+ const filesDir=join(workspace.directory,'files');await mkdir(filesDir,{recursive:true});
+ const overflowLines=Array.from({length:72},(_,index)=>`Line ${index+1}: independent reader overflow fixture text.`).join('\n');
+ await writeFile(join(filesDir,'overview.md'),`# Fixture overview\n\n${overflowLines}\n\n<script>window.__fixtureUnsafe=true</script>\n`);
+ await writeFile(join(filesDir,'valid.json'),JSON.stringify({schema_version:1,name:'fixture',items:[1,2,3],nested:{ok:true}},null,2));
+ await writeFile(join(filesDir,'invalid.json'),'{"broken": [1, 2,\n');
+ await writeFile(join(filesDir,'indented.py'),'def fixture(value):\n    if value:\n        return {\n            "value": value,\n        }\n    return None\n\n\nfixture(1)\n');
+ const pixel=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==','base64');
+ await writeFile(join(filesDir,'pixel.png'),pixel);
+ await writeFile(join(filesDir,'sandbox.html'),'<!doctype html><html><body><h1>Sandbox fixture</h1><script>document.body.dataset.fixtureScript="ran"</script></body></html>');
+ const bundle=Buffer.alloc(2048,0x42);bundle[0]=0;bundle[1]=0x50;bundle[2]=0x4b;
+ await writeFile(join(filesDir,'capture-bundle.zip'),bundle);
+ const assetsDir=join(pkg,'assets');await mkdir(assetsDir,{recursive:true});
+ await writeFile(join(assetsDir,'pixel.png'),pixel);
+ await writeFile(join(assetsDir,'linked-assets.md'),'# Package assets\n\n![Pixel](pixel.png)\n\n[Spec](../spec.md)\n');
+ await writeFile(join(assetsDir,'sandbox.html'),'<!doctype html><html><body><h1>Package sandbox</h1><img src="pixel.png" alt="Pixel"><script>document.body.dataset.fixtureScript="ran"</script></body></html>');
+}
 const designDir=join(workspace.directory,'designs','demo');await mkdir(designDir,{recursive:true});
 await writeFile(join(designDir,'brief.md'),'# Design fixture\n');
 await mkdir(join(designDir,'screens'));

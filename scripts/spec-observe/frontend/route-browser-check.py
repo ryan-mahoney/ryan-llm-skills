@@ -6,7 +6,7 @@
 
 After npm run build --prefix scripts/spec-observe/frontend:
 SENTINEL_EVIDENCE_DIR=<package>/evidence timeout 120s uv run --script \
-  scripts/spec-observe/frontend/route-browser-check.py [--case rail|files|specs|context|catalog|member|search|filters|specs-list|specs-overview|specs-variants|specs-activity|specs-relaunch]
+  scripts/spec-observe/frontend/route-browser-check.py [--case rail|files|specs|context|catalog|member|search|filters|specs-list|specs-overview|specs-variants|specs-activity|specs-relaunch|files-workspace]
 Only the fixture substitutes workers; App, adapters and file APIs are real.
 """
 import argparse
@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 args = argparse.ArgumentParser()
-args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog', 'member', 'search', 'filters', 'specs-list', 'specs-overview', 'specs-variants', 'specs-activity', 'specs-relaunch'])
+args.add_argument('--case', choices=['rail', 'files', 'specs', 'context', 'catalog', 'member', 'search', 'filters', 'specs-list', 'specs-overview', 'specs-variants', 'specs-activity', 'specs-relaunch', 'files-workspace'])
 case = args.parse_args().case
 root = Path(__file__).resolve().parent
 evidence = Path(os.environ.get('SENTINEL_EVIDENCE_DIR', '/tmp/sentinel-route-evidence'))
@@ -33,6 +33,8 @@ report = {'status': 'failed', 'scenarios': [], 'pageErrors': []}
 fixture_env = dict(os.environ)
 if case == 'context':
     fixture_env['SENTINEL_NONCANONICAL_CONTEXT'] = '1'
+if case == 'files-workspace':
+    fixture_env['SENTINEL_REPOSITORY_FILES'] = '1'
 fixture = subprocess.Popen(['node', str(root / 'browser-fixture.mjs')], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=fixture_env)
 try:
     if not select.select([fixture.stdout], [], [], 10)[0]:
@@ -65,6 +67,63 @@ try:
             expect(page.locator('.file-viewer')).to_contain_text(text)
             expect(page.get_by_role('button', name=name, exact=True)).to_have_attribute('aria-pressed', 'true')
             assert params()['path'] == [name], page.url
+
+        def files_params():
+            return parse_qs(urlsplit(page.url).fragment.partition('?')[2])
+
+        def files_row(name):
+            return page.locator('.files-destination button.file-record').filter(has=page.get_by_text(name, exact=True)).first
+
+        def files_viewer(name, text):
+            expect(page.locator('.files-destination .reader-head h2')).to_have_text(name)
+            expect(page.locator('.files-destination .reader')).to_contain_text(text)
+            expect(page.locator('.files-destination button.file-record[aria-pressed="true"]')).to_contain_text(name)
+            assert files_params().get('path') == [name], page.url
+
+        def files_contrast(selector):
+            return page.eval_on_selector(selector, """(el) => {
+                const nums = c => (c.match(/[0-9.]+/g) || []).map(Number);
+                const lum = c => { const [r, g, b] = nums(c); const f = v => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b); };
+                let node = el, background = 'rgb(11, 12, 14)';
+                while (node) { const candidate = getComputedStyle(node).backgroundColor; if (candidate && candidate !== 'transparent' && candidate !== 'rgba(0, 0, 0, 0)') { background = candidate; break; } node = node.parentElement; }
+                const a = lum(getComputedStyle(el).color), b = lum(background);
+                return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+            }""")
+
+        def files_layout(label):
+            metrics = page.evaluate("""() => {
+                const rect = selector => { const el = document.querySelector(selector); const box = el.getBoundingClientRect(); return { x: box.x, y: box.y, width: box.width, height: box.height, scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight }; };
+                return { list: rect('.files-destination .list-pane'), detail: rect('.files-destination .detail-pane'), records: rect('.files-destination .records'), reader: rect('.files-destination .reader') };
+            }""")
+            assert metrics['list']['x'] + metrics['list']['width'] <= metrics['detail']['x'] + 1, (label, metrics)
+            assert abs(metrics['list']['y'] - metrics['detail']['y']) < 1, (label, metrics)
+            assert metrics['records']['scrollHeight'] > metrics['records']['clientHeight'], (label, metrics)
+            assert metrics['reader']['scrollHeight'] > metrics['reader']['clientHeight'], (label, metrics)
+            page.eval_on_selector('.files-destination .records', 'el => { el.scrollTop = el.scrollHeight; }')
+            records_position = page.eval_on_selector('.files-destination .records', 'el => el.scrollTop')
+            assert records_position > 0, (label, metrics)
+            assert page.eval_on_selector('.files-destination .reader', 'el => el.scrollTop') == 0, (label, metrics)
+            page.eval_on_selector('.files-destination .reader', 'el => { el.scrollTop = el.scrollHeight; }')
+            assert page.eval_on_selector('.files-destination .reader', 'el => el.scrollTop') > 0, (label, metrics)
+            assert page.eval_on_selector('.files-destination .records', 'el => el.scrollTop') == records_position, (label, metrics)
+            assert page.locator('.files-destination .file-viewer').count() == 0, label
+
+        def files_accessibility(label):
+            for target, selector in [('Source select', '#file-source'), ('Find input', '#find-record'), ('File row', '.files-destination .records button.file-record'), ('Refresh files', '.files-destination .detail-foot .ds-btn')]:
+                size = page.eval_on_selector(selector, 'el => { const box = el.getBoundingClientRect(); return { width: box.width, height: box.height }; }')
+                assert size['height'] >= 44, (label, target, size)
+            for selector in ['.files-destination .reader-head h2', '.files-destination .reader-head p', '.files-destination .list-caption', '.files-destination .records button.file-record small']:
+                ratio = files_contrast(selector)
+                assert ratio >= 4.5, (label, selector, ratio)
+            page.locator('#find-record').focus()
+            page.keyboard.press('Tab')
+            focused = page.evaluate("""() => ({ tag: document.activeElement.tagName, cls: String(document.activeElement.className), outline: getComputedStyle(document.activeElement).outlineStyle, width: getComputedStyle(document.activeElement).outlineWidth })""")
+            assert focused['tag'] == 'BUTTON' and 'file-record' in focused['cls'], (label, focused)
+            assert focused['outline'] != 'none' and focused['width'] not in ('0px', ''), (label, focused)
+            focused_name = page.evaluate("() => document.activeElement.querySelector('strong') ? document.activeElement.querySelector('strong').textContent : ''")
+            page.keyboard.press('Enter')
+            expect(page.locator('.files-destination .reader-head h2')).to_have_text(focused_name)
+            assert files_params().get('path') == [focused_name], page.url
 
         if case == 'catalog':
             # Real App and dashboard composition; only the final catalog HTTP
@@ -185,6 +244,152 @@ try:
             page.go_forward()
             viewer('linked.md', 'Linked evidence')
             report['scenarios'].append('package Files selection/reload/history uses the same retained reader')
+
+        if case == 'files-workspace':
+            # Real built Files destination through the workspace/package file
+            # APIs; only the gated fixture bytes and browser are test-owned.
+            open_route('files', ws='fixture', path='files/overview.md')
+            files_viewer('files/overview.md', 'Fixture overview')
+            expect(page.locator('.files-destination .paper')).to_be_visible()
+            expect(page.locator('.files-destination .paper script')).to_have_count(0)
+            expect(page.locator('.files-destination .paper')).to_contain_text('<script>window.__fixtureUnsafe=true</script>')
+            assert page.evaluate('window.__fixtureUnsafe === undefined')
+            files_layout('files 1280')
+            page.screenshot(path=str(evidence / 'files-6-1280.png'))
+            files_accessibility('files 1280')
+            report['scenarios'].append('Workspace Markdown renders through the safe renderer with scripts inert at 1280x860')
+
+            open_route('files', ws='fixture', path='files/valid.json')
+            files_viewer('files/valid.json', '"schema_version": 1')
+            expect(page.locator('.files-destination .paper pre')).to_contain_text('"schema_version": 1')
+            open_route('files', ws='fixture', path='files/invalid.json')
+            files_viewer('files/invalid.json', '{"broken": [1, 2,')
+            open_route('files', ws='fixture', path='files/indented.py')
+            files_viewer('files/indented.py', 'def fixture(value):')
+            code_text = page.locator('.files-destination .paper pre').inner_text()
+            assert '\n    if value:' in code_text and '\n        return {' in code_text, code_text
+            assert page.eval_on_selector('.files-destination .paper pre', 'el => getComputedStyle(el).whiteSpace') == 'pre'
+            report['scenarios'].append('Valid JSON formats, invalid JSON stays text, and code indentation is preserved')
+
+            open_route('files', ws='fixture', path='files/pixel.png')
+            expect(page.locator('.files-destination img.image-preview')).to_be_visible()
+            page.wait_for_function("() => document.querySelector('.files-destination img.image-preview')?.naturalWidth === 1")
+            image = page.eval_on_selector('.files-destination img.image-preview', 'el => ({ width: el.naturalWidth, src: el.getAttribute("src") })')
+            assert 'file=files%2Fpixel.png' in image['src'], image
+            report['scenarios'].append('Workspace image renders real PNG bytes from the workspace file API')
+
+            open_route('files', ws='fixture', path='files/sandbox.html')
+            expect(page.locator('.files-destination iframe.html-frame')).to_be_visible()
+            sandbox = page.get_attribute('.files-destination iframe.html-frame', 'sandbox')
+            frame_src = page.get_attribute('.files-destination iframe.html-frame', 'src')
+            assert sandbox == 'allow-scripts' and 'allow-same-origin' not in sandbox, sandbox
+            assert '/api/workspace-file' in frame_src, frame_src
+            html_response = context.request.get(receipt['url'] + '/api/workspace-file?' + urlencode({'id': 'fixture', 'file': 'files/sandbox.html'}))
+            assert html_response.ok
+            assert html_response.headers.get('x-package-file-kind') == 'html'
+            assert 'sandbox allow-scripts' in (html_response.headers.get('content-security-policy') or '')
+            assert 'allow-same-origin' not in (html_response.headers.get('content-security-policy') or '')
+            page.screenshot(path=str(evidence / 'files-18-1280.png'))
+            report['scenarios'].append('Workspace HTML renders in a sandboxed frame without allow-same-origin and keeps the server CSP')
+
+            open_route('files', ws='fixture', path='files/capture-bundle.zip')
+            expect(page.locator('.files-destination .reader .empty')).to_be_visible()
+            expect(page.locator('.files-destination .reader .empty')).to_contain_text('2 KiB')
+            expect(page.locator('.files-destination .reader .empty')).to_contain_text('zip')
+            assert page.get_by_role('link', name='Download file', exact=True).count() == 1
+            assert page.locator('.files-destination .reader-head a[download]').count() == 0
+            page.screenshot(path=str(evidence / 'files-19-1280.png'))
+            report['scenarios'].append('Binary shows actual size/type with a single Download file action')
+
+            open_route('files', ws='fixture', path='files/overview.md')
+            files_viewer('files/overview.md', 'Fixture overview')
+            files_row('files/valid.json').click()
+            files_viewer('files/valid.json', '"schema_version": 1')
+            page.reload()
+            files_viewer('files/valid.json', '"schema_version": 1')
+            page.go_back()
+            files_viewer('files/overview.md', 'Fixture overview')
+            page.go_forward()
+            files_viewer('files/valid.json', '"schema_version": 1')
+            report['scenarios'].append('Reload and Back/Forward preserve the explicit workspace path')
+
+            open_route('files', ws='fixture', path='files/')
+            expect(page.locator('.files-destination .reader .paper')).to_have_count(0)
+            assert files_params()['path'] == ['files/'], page.url
+            names = page.eval_on_selector_all('.files-destination .records button.file-record strong', 'els => els.map(el => el.textContent)')
+            assert names and all(name.startswith('files/') for name in names), names
+            assert page.locator('.files-destination button.file-record', has_text='notes/browser.md').count() == 0
+            page.screenshot(path=str(evidence / 'files-6-prefix-1280.png'))
+            files_row('files/indented.py').click()
+            files_viewer('files/indented.py', 'def fixture(value):')
+            page.go_back()
+            assert files_params()['path'] == ['files/'], page.url
+            expect(page.locator('.files-destination .reader .paper')).to_have_count(0)
+            report['scenarios'].append('Directory prefix lists only matching loaded rows and restores through Back')
+
+            package = receipt['package']
+            open_route('files', ws='fixture', source='package', id=package, path='spec.md')
+            expect(page.locator('#file-source')).to_have_value('package')
+            expect(page.locator('.files-destination .reader-head h2')).to_have_text('spec.md')
+            expect(page.locator('.files-destination .reader')).to_contain_text('Browser specification')
+            linked_href = page.get_attribute('.files-destination .paper a', 'href')
+            assert linked_href.startswith('/package-view/') and linked_href.endswith('/linked.md'), linked_href
+            assert page.evaluate('window.__fixtureUnsafe === undefined')
+            files_row('linked.md').click()
+            files_viewer('linked.md', 'Linked evidence')
+            page.reload()
+            files_viewer('linked.md', 'Linked evidence')
+            page.go_back()
+            files_viewer('spec.md', 'Browser specification')
+            page.go_forward()
+            files_viewer('linked.md', 'Linked evidence')
+            report['scenarios'].append('Package links read actual file APIs through packageViewUrl; reload and Back/Forward preserve the package path')
+
+            open_route('files', ws='fixture', source='package', id=package, path='assets/linked-assets.md')
+            expect(page.locator('.files-destination .paper')).to_contain_text('Package assets')
+            page.wait_for_function("() => document.querySelector('.files-destination .paper img')?.naturalWidth === 1")
+            asset_src = page.get_attribute('.files-destination .paper img', 'src')
+            hrefs = page.eval_on_selector_all('.files-destination .paper a', 'els => els.map(el => el.getAttribute("href"))')
+            assert asset_src.startswith('/package-view/') and asset_src.endswith('/assets/pixel.png'), asset_src
+            assert any(href and href.startswith('/package-view/') and href.endswith('/spec.md') for href in hrefs), hrefs
+            report['scenarios'].append('Package Markdown relative resources resolve through packageViewUrl with real bytes')
+
+            open_route('files', ws='fixture', source='package', id=package, path='assets/sandbox.html')
+            expect(page.locator('.files-destination iframe.html-frame')).to_be_visible()
+            sandbox = page.get_attribute('.files-destination iframe.html-frame', 'sandbox')
+            frame_src = page.get_attribute('.files-destination iframe.html-frame', 'src')
+            assert sandbox == 'allow-scripts' and 'allow-same-origin' not in sandbox, sandbox
+            assert frame_src.startswith('/package-view/') and frame_src.endswith('/assets/sandbox.html'), frame_src
+            view_response = context.request.get(receipt['url'] + frame_src)
+            view_csp = view_response.headers.get('content-security-policy') or ''
+            assert view_response.ok and 'sandbox allow-scripts' in view_csp and 'allow-same-origin' not in view_csp, view_csp
+            report['scenarios'].append('Package HTML uses packageViewUrl in a sandboxed frame without allow-same-origin and keeps the server CSP')
+
+            page.locator('#file-source').select_option('workspace')
+            expect(page.locator('#file-source')).to_have_value('workspace')
+            expect(page.locator('.files-destination .reader-head h2')).to_have_text('Files')
+            assert files_params().get('source') is None, page.url
+            expect(page.locator('.files-destination button.file-record', has_text='briefs/browser.md')).to_have_count(1)
+            page.locator('#file-source').select_option('package')
+            expect(page.locator('#file-source')).to_have_value('package')
+            assert files_params()['source'] == ['package'] and files_params()['id'] == [package], page.url
+            expect(page.locator('.files-destination button.file-record', has_text='spec.md')).to_have_count(1)
+            assert page.locator('.files-destination button.file-record', has_text='notes/browser.md').count() == 0
+            report['scenarios'].append('Source-qualified selection reloads workspace and package listings through their own file APIs')
+
+            page.set_viewport_size({'width': 1600, 'height': 900})
+            open_route('files', ws='fixture', path='files/overview.md')
+            files_viewer('files/overview.md', 'Fixture overview')
+            files_layout('files 1600')
+            page.screenshot(path=str(evidence / 'files-6-1600.png'))
+            open_route('files', ws='fixture', path='files/sandbox.html')
+            expect(page.locator('.files-destination iframe.html-frame')).to_be_visible()
+            page.screenshot(path=str(evidence / 'files-18-1600.png'))
+            open_route('files', ws='fixture', path='files/capture-bundle.zip')
+            expect(page.locator('.files-destination .reader .empty')).to_be_visible()
+            page.screenshot(path=str(evidence / 'files-19-1600.png'))
+            files_accessibility('files 1600')
+            report['scenarios'].append('Files retains adjacent layout, containment and accessibility contract at 1600x900')
 
         if case in (None, 'specs'):
             open_route('specs', ws='fixture')
@@ -1485,7 +1690,7 @@ finally:
         fixture.kill()
         fixture.wait()
     report['elapsedSeconds'] = round(time.monotonic() - started, 3)
-    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'step-003-fix-browser.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'sentinel-planned-filter-browser.json' if case == 'filters' else 'specs-list.json' if case == 'specs-list' else 'specs-variants.json' if case == 'specs-variants' else 'specs-overview.json' if case == 'specs-overview' else 'specs-activity.json' if case == 'specs-activity' else 'specs-relaunch.json' if case == 'specs-relaunch' else 'step-002-fix-browser.json'
+    filename = 'carried-loadcatalog-browser.json' if case == 'catalog' else 'step-003-fix-browser.json' if case == 'context' else 'final-review-member-browser.json' if case == 'member' else 'final-review-search-browser.json' if case == 'search' else 'sentinel-planned-filter-browser.json' if case == 'filters' else 'specs-list.json' if case == 'specs-list' else 'specs-variants.json' if case == 'specs-variants' else 'specs-overview.json' if case == 'specs-overview' else 'specs-activity.json' if case == 'specs-activity' else 'specs-relaunch.json' if case == 'specs-relaunch' else 'files-workspace.json' if case == 'files-workspace' else 'step-002-fix-browser.json'
     target = evidence / filename
     temporary = target.with_name(target.name + '.tmp')
     temporary.write_text(json.dumps(report, indent=2) + '\n')
